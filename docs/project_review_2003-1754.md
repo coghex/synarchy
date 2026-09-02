@@ -32,12 +32,12 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. A declined queued piece can still leave a location stamped complete
-- [ ] PRR-2. Bindless-capacity comments deny the effective limit the code enforces
+- [x] PRR-1. A declined queued piece can still leave a location stamped complete — [#2051]
+- [x] PRR-2. Bindless-capacity comments deny the effective limit the code enforces — [#2053]
 
 ## 1. Atomic location materialization
 
-### PRR-1. A declined queued piece can still leave a location stamped complete
+### [#2051] PRR-1. A declined queued piece can still leave a location stamped complete
 
 > **Captured note:** Make PR #1779's durable completion marker depend on the
 > world thread actually committing every accepted structure placement, not on
@@ -119,7 +119,7 @@ queue or the second residency check.
 
 ## 2. Vulkan descriptor-capacity documentation
 
-### PRR-2. Bindless-capacity comments deny the effective limit the code enforces
+### [#2053] PRR-2. Bindless-capacity comments deny the effective limit the code enforces
 
 > **Captured note:** Finish PR #1775's final effective-capacity correction by
 > updating the round-nine comments it left above `CapacityScope` and

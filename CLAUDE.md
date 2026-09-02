@@ -67,13 +67,30 @@ seconds and the expensive gates at the end.
    | a module-budget guard | a capped module |
    | `test_audit.py` | `world_audit.py` / `world_check.py` |
    | `test_run_probes.py` (~15 s, GPU-free) | `run_probes.py` |
-   | `test_persistence_contract_sweep.py` (pure, no engine, <1 s) | `persistence_contract_sweep.py`'s `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` or `run_probes.PROBES` |
+   | `test_persistence_contract_sweep.py` (pure, no engine, <1 s) | `persistence_contract_sweep.py`'s `SELECTABLE_CROSS_REFERENCED_PROBE_KEYS` or `probe_runner_registry.PROBES` |
    | `test_save_compat_audit.py --only-reproducibility` (~26 s, spawns a `cabal repl`) | the save format, the tracked fixture corpus, `save_compat_audit.py`, or a Cabal path — `ci_expensive_gates.py --gate save-compat` is the authority; `--without-reproducibility` covers the rest of the module and is cheap |
    | `findings_report_audit.py` | a findings report |
    | unit-asset gate (`test_pack_atlas.py` + `pack_atlas.py --validate-only --strict`, ~2 s) | `assets/textures/units/` (source frames or generated `atlas/`), `data/units/`, `tools/unit_texture_budget.json`, `src/Unit/Atlas/`, or the unit-YAML / preview / registration decoders |
 
    Do NOT run the whole headless suite, the 21-seed world check, or
    `make ci` by default — CI is the full-suite authority.
+
+   **A headless fixture logs nothing (#1925).** Every `test-headless`
+   engine boots through `Test.Headless.Harness.Log`, never
+   `Engine.Core.Init.initializeEngineHeadless` — a preference-free
+   fixture takes `initializeEngineHeadlessQuiet` (a discarding callback,
+   chosen BEFORE initialization, which is the only point the
+   initializer's own entries can still be steered), and a spec that
+   wants the entries takes `initializeEngineHeadlessLogging` with
+   `newLogCapture`'s atomic backend. To get a quiet fixture's output
+   back with no source edit, rerun with `SYNARCHY_TEST_LOG=stderr`
+   (`stdout` restores the pre-#1925 stream; unset, empty and `quiet` are
+   quiet; anything else is a hard error, not a silent quiet run). The
+   variable steers only the quiet default, so it never overrules a spec
+   that named its own backend. Production is unchanged:
+   `initializeEngineHeadless` still logs to stdout for `App.Headless`,
+   and `App.Dump` still picks stderr. Gate: hspec
+   `--match "headless fixture logging"`.
 3. **Worldgen-OUTPUT changes only (full tier).**
    `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` (+~11 s on
    a warm macOS/aarch64 tree; +~64 s of hspec wall on CI's Linux
@@ -1099,10 +1116,12 @@ before touching each area:
   `docs/engine_contracts.md` §The expedition loop. Read it before
   editing this gate.
 - **Blood decals (#603 epic)** — architecture record:
-  [`docs/blood_decals.md`](docs/blood_decals.md). Five `--match`-able
+  [`docs/blood_decals.md`](docs/blood_decals.md). Six `--match`-able
   hspec groups under `test-headless/Test/Headless/Blood/`:
   `Blood.Types`, `Blood.Texture`, `Blood.Impact`, `Blood.Trail`
-  (includes `Blood.Pool`), `Blood.Teardown`. Probes:
+  (includes `Blood.Pool`), `Blood.Teardown`, and `Blood.LuaApi` (the
+  registered-Lua `blood.gpuHandles` query, #1585, on its own isolated
+  engine). Probes:
   `blood_decal_probe.py`, `blood_impact_probe.py`,
   `bleeding_trail_probe.py`, and the needs-GPU
   `blood_gpu_lifecycle_probe.py` (manual-only). **Transience contract**:

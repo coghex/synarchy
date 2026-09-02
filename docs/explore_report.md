@@ -48,32 +48,32 @@ cited lines.
 
 ## Status
 
-- [ ] EXPL-1. `climateRegionSize`'s comment calls the climate grid coarser than the geological grid, when it is finer
-- [ ] EXPL-2. `preRenderWorkers` justifies the sim thread's teardown position with a dataflow the sim thread does not have
-- [ ] EXPL-3. `Engine.Core.Workers`'s module haddock says "the two windowless modes" when there are three
-- [ ] EXPL-4. `shutdownEngineWorkers`'s stated reason for not announcing is false for both of its normal-path callers
-- [ ] EXPL-5. `stopWorkers` claims to be the only `WorkerSlot` traversal in the tree; `App.Boot` has another
-- [ ] EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported
-- [ ] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
-- [ ] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
-- [ ] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
-- [ ] EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
-- [ ] EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
-- [ ] EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
-- [ ] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
-- [ ] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
-- [ ] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
-- [ ] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
-- [ ] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
-- [ ] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
-- [ ] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
-- [ ] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
+- [x] EXPL-1. `climateRegionSize`'s comment calls the climate grid coarser than the geological grid, when it is finer — [#2176]
+- [x] EXPL-2. `preRenderWorkers` justifies the sim thread's teardown position with a dataflow the sim thread does not have — [#2182]
+- [x] EXPL-3. `Engine.Core.Workers`'s module haddock says "the two windowless modes" when there are three — [#2186]
+- [x] EXPL-4. `shutdownEngineWorkers`'s stated reason for not announcing is false for both of its normal-path callers — [#2188]
+- [x] EXPL-5. `stopWorkers` claims to be the only `WorkerSlot` traversal in the tree; `App.Boot` has another — [#2193]
+- [x] EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported — [no-issue]
+- [x] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it — [#2195]
+- [x] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name — [#2199]
+- [x] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced — [#2201]
+- [x] EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear — [#2206]
+- [x] EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it — [#2208]
+- [x] EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd — [#2209]
+- [x] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped — [no-issue]
+- [x] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning — [#2210]
+- [x] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely — [#2211]
+- [x] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers — [#2213]
+- [x] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply — [#2214]
+- [x] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do — [#2215]
+- [x] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different — [#2216]
+- [x] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false` — [#2218]
 - [x] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it — [#1494]
-- [ ] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
-- [ ] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
-- [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
-- [ ] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
-- [ ] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
+- [x] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself — [#2219]
+- [x] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)` — [#2223]
+- [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported — [deferred]: EXPL-27 dispositioned
+- [x] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse` — [#2225]
+- [x] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal — [#2226]
 - [ ] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
 - [ ] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
 - [ ] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
@@ -96,7 +96,7 @@ cited lines.
 
 ## Worldgen configuration and region grids
 
-### EXPL-1. `climateRegionSize`'s comment calls the climate grid coarser than the geological grid, when it is finer
+### [#2176] EXPL-1. `climateRegionSize`'s comment calls the climate grid coarser than the geological grid, when it is finer
 
 `src/World/Weather/Types.hs:46-50` declares the climate region grid:
 
@@ -171,7 +171,7 @@ adding a worker or reordering the list, and four of them do not survive being
 checked against the code. They are recorded separately because each is wrong
 about a different thing and each would be fixed by a different edit.
 
-### EXPL-2. `preRenderWorkers` justifies the sim thread's teardown position with a dataflow the sim thread does not have
+### [#2182] EXPL-2. `preRenderWorkers` justifies the sim thread's teardown position with a dataflow the sim thread does not have
 
 `src/Engine/Core/Workers.hs:50-59`:
 
@@ -216,7 +216,7 @@ have no way to discover sim's actual one from this file.
 Verification: `grep -rn "UnitKill\|UnitCollapse" src/Combat/ src/Sim/` and
 `grep -rn "Unit" src/Sim/` (the latter returns nothing).
 
-### EXPL-3. `Engine.Core.Workers`'s module haddock says "the two windowless modes" when there are three
+### [#2186] EXPL-3. `Engine.Core.Workers`'s module haddock says "the two windowless modes" when there are three
 
 `src/Engine/Core/Workers.hs:4-12`:
 
@@ -248,7 +248,7 @@ around and one pass is correct. Naming the set by "windowless" both
 mis-identifies which modes are meant and implies, wrongly, that offscreen
 collapses its teardown into a single pass.
 
-### EXPL-4. `shutdownEngineWorkers`'s stated reason for not announcing is false for both of its normal-path callers
+### [#2188] EXPL-4. `shutdownEngineWorkers`'s stated reason for not announcing is false for both of its normal-path callers
 
 `src/Engine/Core/Workers.hs:86-90`:
 
@@ -283,7 +283,7 @@ lifecycle reason instead of the real one invites a future maintainer to "fix"
 the missing announcements by threading the logger in, and to be surprised that
 the two non-fatal callers already had one.
 
-### EXPL-5. `stopWorkers` claims to be the only `WorkerSlot` traversal in the tree; `App.Boot` has another
+### [#2193] EXPL-5. `stopWorkers` claims to be the only `WorkerSlot` traversal in the tree; `App.Boot` has another
 
 `src/Engine/Core/Workers.hs:74-80`:
 
@@ -311,7 +311,9 @@ behaviour from being duplicated. As written it is an exhaustiveness claim about
 traversal, which a reader can falsify with one grep and will then distrust the
 rest of the block.
 
-### EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported
+### [no-issue] EXPL-6. `App.Boot` haddock links to `Engine.Core.Workers.allWorkers`, which is not exported
+
+> **Disposition:** No issue — the two `@Engine.Core.Workers.allWorkers@` mentions are code spans, not links: PR #1407 (#1083, requirement 4) deliberately rewrote them from `'…'` when it un-exported `allWorkers`, and the qualified name still denotes the real definition at `Workers.hs:71`.
 
 `app/App/Boot.hs:90` and `app/App/Boot.hs:122` both refer to
 `@Engine.Core.Workers.allWorkers@`:
@@ -342,7 +344,7 @@ documentation is complete.
 
 ## Preview asset discovery
 
-### EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
+### [#2195] EXPL-7. `sortFrameFiles` claims to be shared by the units and buildings viewers; the units viewer no longer calls it
 
 `src/Engine/Preview/Discovery.hs:131-140`:
 
@@ -399,7 +401,7 @@ Verification: `grep -rn "sortFrameFiles" src/ app/ test-headless/` returns the
 definition, the `Building.hs` call, the `Unit.hs` export/import pair, and the
 test — no call site in `Unit.hs`.
 
-### EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
+### [#2199] EXPL-8. `discoverBuildingEntries` claims every frame is lstat-proved regular; its static-entry branch tests only the name
 
 `src/Engine/Preview/Building.hs:249-255` states an unqualified invariant about
 every frame the buildings viewer produces:
@@ -467,7 +469,7 @@ absent check, but it makes no regular-file claim anywhere, so it is not a
 finding. The defect recorded here is that `Engine.Preview.Building` asserts an
 invariant that one of its two frame producers does not enforce.
 
-### EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
+### [#2201] EXPL-9. `buildPreviewUnit`'s pipeline summary still describes the filesystem-first flow #1261 replaced
 
 `src/Engine/Preview/Unit.hs:392-395`:
 
@@ -546,7 +548,7 @@ also why the two files now read as if they share a design they no longer share.
 
 ## Report and dump entry points
 
-### EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
+### [#2206] EXPL-10. `App.LanguageReport` claims constant runtime "regardless of how many seeds are requested"; the work is linear
 
 `app/App/LanguageReport.hs:1-7`:
 
@@ -604,7 +606,7 @@ carry its own literal `OUTPUT_INVENTORY`, and `:1098-1108` does `fail()` on any
 divergence from the emitted value, naming the generator-only and checker-only
 characters in both directions.
 
-### EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
+### [#2208] EXPL-11. `runPreview`'s `mBrowse` haddock says a `Nothing` is "the degenerate no-target case"; that case never reaches it
 
 `app/App/Preview.hs:34-42`:
 
@@ -661,7 +663,7 @@ topology really is trimmed (`ewCombat`/`ewSim`/`ewUnit`/`ewWorld` all `Nothing`
 at `:58-61`), and the input thread really is kept and really is passed as the
 already-started worker to `luaThreadOrAbort` at `:53`.
 
-### EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
+### [#2209] EXPL-12. `anySegmentIsSymlink` says it checks "any prefix" and "every ancestor"; the root itself is never lstat'd
 
 `src/Engine/Preview/Discovery.hs:289-303`:
 
@@ -716,7 +718,9 @@ base case to discover it is not.
 haddock is the containment argument for a pre-boot security check, and an
 absolute quantifier in that position should be literally true.
 
-### EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
+### [no-issue] EXPL-13. `shutdownEngine`'s inline safety argument says Vulkan teardown precedes "the worker threads" stopping; two are already stopped
+
+> **Disposition:** No issue — already fixed by #1408 (PR #1555, `e51b4e96d`, merged 2026-08-22, two days after this report was opened): `src/Engine/Loop/Shutdown.hs:78-83` now says the pre-render phase has already stopped and the Vulkan teardown precedes only the post-render phase, which is the precise statement this finding asked for.
 
 `src/Engine/Loop/Shutdown.hs:50-61`:
 
@@ -768,7 +772,7 @@ same boundary and only one of them is right.
 
 ## Engine initialization
 
-### EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
+### [#2210] EXPL-14. `migrateLegacyConfig` reports a destination write failure as a malformed legacy file, in a user-facing warning
 
 `src/Engine/Core/Init.hs:112-130`:
 
@@ -852,7 +856,7 @@ OverridesFile` (`:262`) matches `loadOverrides`'s
 
 ## Unit animation atlases
 
-### EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
+### [#2211] EXPL-15. `Unit.Atlas.Digest`'s description of the digest stream omits the tag's length prefix and the label field entirely
 
 `src/Unit/Atlas/Digest.hs:2-10`:
 
@@ -950,7 +954,7 @@ the compiler records as `fps`"), and `-0.0` can never BE an fps —
 before compilation. Negative non-zero rates are accepted there and are
 formatted correctly.
 
-### EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
+### [#2213] EXPL-16. `pickFrame`'s "used by the render path and the hit-tester" omits both Lua API consumers
 
 `src/Unit/Render.hs:46-64`:
 
@@ -1052,7 +1056,7 @@ The two findings below are the comments left behind, recorded separately
 because they are in different files, make different claims, and would be fixed
 by different edits.
 
-### EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
+### [#2214] EXPL-17. `unitToQuad`'s climb-occlusion branch is justified by a `spriteRowSpan` push the same function says it does not apply
 
 `src/Unit/Render.hs:269-278`, nineteen lines below the passage above:
 
@@ -1083,7 +1087,7 @@ still on the base side (its tile ≠ the dest column)" matches the
 `baseTile ≢ dest` guard, and the fallback to `normalSort` once the pullup
 carries the unit onto the top tile is real.
 
-### EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
+### [#2215] EXPL-18. `Building.Render`'s sort comment says units add a `spriteRowSpan` term "as units do"; they no longer do
 
 `src/Building/Render.hs:203-212`:
 
@@ -1122,7 +1126,7 @@ key, and both describe a mechanism that no longer exists.
 
 ## Unit hit testing
 
-### EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
+### [#2216] EXPL-19. `Unit.HitTest` claims to mirror a tile hit-test that no longer holds the math, and to use the "same math" the engine documents as different
 
 Two claims, one in the module haddock and one inside `hitTestUnitAt`.
 
@@ -1223,7 +1227,7 @@ Verified truthful in the same module, so a fix does not disturb any of it:
   in ten places across nine files — duplication, but with no drift, and not a
   comment defect.)
 
-### EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
+### [#2218] EXPL-20. `resolveTexture`'s haddock credits itself with animation mirroring; animations never reach it and it cannot honour `flip: false`
 
 `src/Unit/Sprite.hs:49-56`:
 
@@ -1428,7 +1432,7 @@ count is complete either way.
 
 ## EngineEnv capability split
 
-### EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
+### [#2219] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself
 
 `docs/engineenv_capability_inventory.md:109-113`:
 
@@ -1531,7 +1535,7 @@ authoritative document.
 
 ## UI input ownership
 
-### EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
+### [#2223] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)`
 
 `src/UI/InputOwnership.hs:125-134`:
 
@@ -1616,7 +1620,9 @@ input boundary by default; every other layer defaults pass-through"
 (`src/UI/Manager/Page.hs:34-38`) matches `upInputExclusive = layer ≡ LayerModal`
 exactly.
 
-### EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
+### [deferred] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
+
+> **Deferred:** EXPL-27's tree-wide dead-link sweep already lists both of this finding's sites (`UI/Manager/Query.hs`, `UI/FocusNavigation.hs`), so a standalone fix would collide with whatever that finding files — cleared once EXPL-27 carries a `[#N]`, `[no-issue]` or `[deferred]` marker, at which point this links to its issue (adding the `scopedPageOk` wording point and the third site, `UI/Types.hs:481`) or files alone if excluded there.
 
 `src/UI/Manager/Query.hs:182-186`:
 
@@ -1649,7 +1655,7 @@ and recorded separately for the same reason: it is a distinct file naming a
 distinct symbol, and would be fixed by a distinct edit — either by exporting
 `pagesInScope` or by pointing at something a reader can reach.
 
-### EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
+### [#2225] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse`
 
 Two places in `src/UI/InputOwnership.hs` attribute the middle-click check to
 the wrong module.
@@ -1705,7 +1711,7 @@ describes.
 
 ## Save publication
 
-### EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
+### [#2226] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal
 
 `src/World/Save/Storage.hs:11-16`:
 

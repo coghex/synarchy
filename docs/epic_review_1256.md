@@ -21,12 +21,12 @@ concrete precondition
 
 ## Status
 
-- [ ] ER-1. Gameplay unit atlases ignore the global texture-filter setting
-- [ ] ER-2. The image/slot budget counts atlas files, not runtime registrations
+- [x] ER-1. Gameplay unit atlases ignore the global texture-filter setting — [#2085]
+- [x] ER-2. The image/slot budget counts atlas files, not runtime registrations — [#2217]
 
 ## 1. Sampling policy
 
-### ER-1. Gameplay unit atlases ignore the global texture-filter setting
+### [#2085] ER-1. Gameplay unit atlases ignore the global texture-filter setting
 
 > **Captured note:** Restore #1256's explicit sampling contract: gameplay
 > unit atlases must follow the player-selected global nearest/linear filter,
@@ -92,7 +92,7 @@ Current steering docs repeat the pre-epic nearest-only D-6 wording even though
 
 ## 2. Operational gate accuracy
 
-### ER-2. The image/slot budget counts atlas files, not runtime registrations
+### [#2217] ER-2. The image/slot budget counts atlas files, not runtime registrations
 
 > **Captured note:** Make TEX-7's one-image/slot gate prove what it claims, or
 > rename and re-scope it honestly. `pack_atlas.py` currently labels generated

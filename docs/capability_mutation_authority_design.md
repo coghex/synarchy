@@ -22,7 +22,7 @@ concrete precondition
 - [x] EPIC. Make capability records enforce mutation authority, not just field visibility — [#1890]
 - [x] CMA-1. Gate every capability field's write sites against a checked-in writing-module map — [#1892]
 - [x] CMA-2. Give `ContentRegistries` a structural mutation-authority boundary — [#1896]
-- [ ] CMA-3. Record the pilot's verdict and the rollout recommendation
+- [x] CMA-3. Record the pilot's verdict and the rollout recommendation — [#2240]
 
 ## Epic contract
 
