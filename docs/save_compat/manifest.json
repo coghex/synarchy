@@ -364,11 +364,11 @@
       "fixtures": [
         {
           "id": "historical-b1-session-recovered",
-          "path": "test-headless/Test/Headless/World/Save/Compat.hs",
+          "path": "test-headless/Test/Headless/World/Save/Compat/B1Fixture.hs",
           "kind": "component-focused",
           "sha256": null,
           "sizeBytes": null,
-          "provenance": "Recovered verbatim from git history: commit 988c2727 (\"Introduce the tagged, checksummed save envelope (#759, save-overhaul B1)\"), Test.Headless.World.Save.Envelope's trackedEnvelopeFixtureHex constant. Stored as an inline hex literal (matching that historical file's own convention) rather than a tracked binary blob, since a `git show` of that exact commit is the authoritative, independently-reproducible source -- see the module haddock.",
+          "provenance": "Recovered verbatim from git history: commit 988c2727 (\"Introduce the tagged, checksummed save envelope (#759, save-overhaul B1)\"), Test.Headless.World.Save.Envelope's trackedEnvelopeFixtureHex constant. Stored as an inline hex literal (matching that historical file's own convention) rather than a tracked binary blob, since a `git show` of that exact commit is the authoritative, independently-reproducible source -- see Test.Headless.World.Save.Compat.B1Fixture's module haddock.",
           "expectedCanonicalSummary": null
         }
       ]

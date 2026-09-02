@@ -47,7 +47,7 @@ import save_compat_audit_common as common
 # decoded SessionSnapshot/SaveMetadata -- not from live engine queries,
 # several of which (hour/minute of day, in particular) have no debug-
 # console verb to read at all. Mirrors EXACTLY the schema
-# test-headless/Test/Headless/World/Save/Compat.hs's ExpectedSummary/
+# test-headless/Test/Headless/World/Save/Compat/Baselines.hs's ExpectedSummary/
 # ExpectedPage/Expected* Aeson types parse -- the two must be kept in
 # sync by hand if that schema ever grows a field.
 GHCI_DUMP_SUMMARY_TEMPLATE = r"""
