@@ -26,6 +26,7 @@ import Engine.Core.State (EngineEnv, EngineLifecycle(..), lifecycleRef
                          , inputQueue, saveBarrierRef)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM)
+import Engine.Loop.Timing (primeFrameTiming)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
 
@@ -137,6 +138,13 @@ runStartupHandshake mode env = do
     promoted ← liftIO $ promoteToRunning env
     when promoted $
         maybe (pure ()) (logDebugM CatSystem) (lmRunningLog mode)
+
+    -- The render loop's initial monotonic sample (#2204), taken here
+    -- because this is the one step every mode runs exactly once before
+    -- its first 'EngineRunning' tick: the first frame's delta is then
+    -- measured from this instant, never from the zero
+    -- 'Engine.Core.Defaults.defaultEngineState' starts with.
+    primeFrameTiming
 
 -- | Promote a STARTING engine to 'EngineRunning', leaving any lifecycle
 --   another thread has already advanced exactly as it found it:

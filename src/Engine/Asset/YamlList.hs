@@ -11,6 +11,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON)
+import GHC.Stack (HasCallStack)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | Decode a keyed YAML list file (`FromJSON f`), extract its list via
@@ -22,8 +23,18 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 --   @successPhrase@ names what was counted in the debug line (e.g.
 --   "recipes", "item definitions") — kept separate since the two
 --   messages don't always share a plural.
+--
+--   The 'HasCallStack' constraint is load-bearing and must stay
+--   (#2167). These two calls are the family's ONLY logging calls, so
+--   without it the logger's outermost-frame rule
+--   ('Engine.Core.Log.extractCallSite', #945) stops here and every
+--   loader's entry reports @YamlList@ instead of the domain module that
+--   failed — the attribution each loader had before #1008 extracted
+--   them. With it the chain runs out to the owning @load\<Thing\>Yaml@,
+--   which carries no constraint of its own, so attribution stops there
+--   and never reaches that loader's own callers.
 loadYamlList
-    ∷ FromJSON f
+    ∷ (HasCallStack, FromJSON f)
     ⇒ LoggerState
     → Text            -- ^ parseNoun
     → Text            -- ^ successPhrase

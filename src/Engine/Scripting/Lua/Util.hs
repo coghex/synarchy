@@ -13,8 +13,7 @@ import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import Control.Concurrent.STM (readTVarIO)
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Engine.Core.Clock (monotonicSeconds)
 
 isValidRef ∷ Lua.Reference → Bool
 isValidRef (Lua.Reference n) = n ≢ fromIntegral Lua.refnil
@@ -53,12 +52,20 @@ isDenseArray idx = do
     total ← tableEntryCount idx
     pure (total ≡ fromIntegral n)
 
--- | Wall-clock seconds since the POSIX epoch. The tick scheduler must
---   use this, not 'utctDayTime' — day time wraps to 0 at UTC midnight,
---   which left every scriptNextTick a full day in the future and
---   stalled all script ticks.
+-- | The scheduler's clock, in seconds: the MONOTONIC source from
+--   "Engine.Core.Clock" (#2204), shared with the render, world and unit
+--   ticks. Every 'scriptNextTick' is a value of this clock and every
+--   due-check compares against it, so the origin is irrelevant; what
+--   matters is that it never steps. The wall clock it replaced could,
+--   and a host sleep or clock correction then left every timed script
+--   badly overdue and replaying its missed intervals as a burst — see
+--   'Engine.Scripting.Lua.TickPolicy.advanceTick' for the deadline rule
+--   that closes the rest of that. (The predecessor of THAT, 'utctDayTime',
+--   wrapped to 0 at UTC midnight and stalled every script tick for a
+--   day; a monotonic source cannot wrap either.) Wall-clock consumers —
+--   @engine.realTime()@, log and save timestamps — keep their own source.
 nowSeconds ∷ IO Double
-nowSeconds = realToFrac ∘ utcTimeToPOSIXSeconds ⊚ getCurrentTime
+nowSeconds = monotonicSeconds
 
 -- | Broadcast a callback to all loaded Lua modules.
 --   Thread safety: only called from the Lua thread (via processLuaMsg
