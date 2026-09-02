@@ -14,6 +14,7 @@ module Test.Headless.Language.Suggest (spec) where
 
 import UPrelude
 import Test.Hspec
+import Data.Either (isRight)
 import Data.List (nub, sort)
 import Data.IORef (newIORef, readIORef)
 import qualified Data.Text as T
@@ -254,6 +255,34 @@ spec = describe "world-name suggestions" $ do
                 Left err → suggestErrorText err `shouldSatisfy`
                     T.isInfixOf "unsupported language-generator version"
 
+        -- #2206. A profile this build CAN construct, whose root space
+        -- still cannot give all 151 concepts a distinct root. Before
+        -- the capacity gate this seed did not fail — it never returned,
+        -- taking the shared Lua thread with it.
+        it "refuses a world seed whose language has too small a root \
+           \space" $ do
+            case mkNameSuggester prodCat (provFor insufficientWorldSeed) of
+                Right _  → expectationFailure
+                    "suggested from a 137-root language"
+                Left err → do
+                    case err of
+                        SuggestGenerator _ → pure ()
+                        _ → expectationFailure
+                            "expected the failure to arrive as SuggestGenerator"
+                    let msg = suggestErrorText err
+                    forM_ ["version 5", "137", "151", "shortfall 14"] $
+                        \needle → msg `shouldSatisfy` T.isInfixOf needle
+
+        -- Not vacuous: the adjacent world seed still suggests, so the
+        -- refusal above is that language's own and not the path
+        -- breaking for every seed.
+        it "still suggests for the adjacent world seed" $
+            case mkNameSuggester prodCat
+                     (provFor (insufficientWorldSeed - 1)) of
+                Right _  → pure ()
+                Left err → expectationFailure
+                    (T.unpack (suggestErrorText err))
+
         it "refuses a catalogue with no concepts" $ do
             let noOrdinals = either (error ∘ T.unpack ∘ catalogueErrorText)
                                     id (mkConceptOrdinals [])
@@ -338,13 +367,11 @@ spec = describe "world-name suggestions" $ do
     around withHeadlessEngine $
       describe "the ordinal bound at world.suggestName" $ do
         let atOrdinal ∷ Int → Text
-            atOrdinal k = T.concat
-                [ "local sug, err = world.suggestName(42, ", tshow k, "); "
-                , "if sug == nil then return 'nil|' .. tostring(err) end; "
-                , "return 'ok|' .. sug.name .. '|' .. sug.gloss" ]
+            atOrdinal = suggestAt 42
             expectedAt k = case suggestNameAt (suggesterFor prodCat 42) k of
                 Left err  → error (T.unpack (suggestErrorText err))
                 Right sug → T.concat ["ok|", nsName sug, "|", nsGloss sug]
+            step p c = suggestionStepLabel (suggestionStep p c)
 
         it "accepts the documented maximum and suggests the real name" $ \env → do
             ls ← newBareLuaBackend env
@@ -378,6 +405,43 @@ spec = describe "world-name suggestions" $ do
             _ ← evalDebug ls (atOrdinal 0)
             cached ≫= (`shouldBe` True)
 
+        -- #2206 requirement 8. The whole point of returning rather
+        -- than looping: the shared Lua thread survives the failure, so
+        -- everything after it still works. Each assertion here runs on
+        -- the SAME 'LuaBackendState' the failing call used.
+        it "reports an insufficient-root-space seed and leaves the \
+           \backend usable" $ \env → do
+            ls ← newBareLuaBackend env
+            reply ← evalDebug ls (suggestAt insufficientWorldSeed 1)
+            reply `shouldSatisfy` T.isPrefixOf "nil|"
+            forM_ ["137", "151", "shortfall 14"] $
+                \needle → reply `shouldSatisfy` T.isInfixOf needle
+
+            -- An immediately subsequent request is served at all...
+            evalDebug ls "return world.generatedNameCharacters()"
+                ≫= (`shouldSatisfy` (not ∘ T.null))
+            -- ...and a valid later suggestName still returns a normal
+            -- suggestion, byte-for-byte what the pure producer offers.
+            evalDebug ls (suggestAt 42 1) ≫= (`shouldBe` expectedAt 1)
+
+        -- A per-language failure must not be recorded as a catalogue
+        -- failure: 'StepFailed' is sticky, so doing so would poison
+        -- every later seed in the session. The cache must hold the
+        -- catalogue it DID resolve, with no suggester.
+        it "caches the catalogue, not the failure, for an insufficient \
+           \seed" $ \env → do
+            ls ← newBareLuaBackend env
+            _ ← evalDebug ls (suggestAt insufficientWorldSeed 0)
+            cached ← readIORef (lbsLanguageCache ls)
+            case cached of
+                Nothing → expectationFailure "the failing call cached nothing"
+                Just lc → do
+                    lcCatalogue lc `shouldSatisfy` isRight
+                    isJust (lcSuggester lc) `shouldBe` False
+            -- And the step it now reports for another language is a
+            -- cached-catalogue REBUILD, never the sticky failure.
+            step (provFor 42) cached `shouldBe` "build"
+
         -- Preserved from before the bound: an omitted, non-numeric, or
         -- negative ordinal is still normalized to 0 rather than refused.
         it "still normalizes an omitted or negative ordinal to zero" $ \env → do
@@ -388,6 +452,21 @@ spec = describe "world-name suggestions" $ do
                 [ "local sug = world.suggestName(42); "
                 , "return 'ok|' .. sug.name .. '|' .. sug.gloss" ])
                 ≫= (`shouldBe` zero)
+
+-- | One @world.suggestName@ call, reported as @ok|name|gloss@ or
+--   @nil|reason@. Shared by the ordinal-bound cases and #2206's
+--   insufficient-root-space ones, which differ only in the seed.
+suggestAt ∷ Word64 → Int → Text
+suggestAt seed k = T.concat
+    [ "local sug, err = world.suggestName(", tshow seed, ", ", tshow k, "); "
+    , "if sug == nil then return 'nil|' .. tostring(err) end; "
+    , "return 'ok|' .. sug.name .. '|' .. sug.gloss" ]
+
+-- | A world seed whose derived language cannot name the catalogue
+--   (#2206): 137 distinct roots against 151 concepts. Before the
+--   capacity gate this seed hung the shared Lua thread.
+insufficientWorldSeed ∷ Word64
+insufficientWorldSeed = 1647
 
 -- | A real Lua backend with the full API registered and nothing
 --   preloaded — the same helper 'Test.Headless.UI.Slider' uses, so

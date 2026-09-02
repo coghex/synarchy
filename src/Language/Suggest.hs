@@ -109,7 +109,8 @@ data SuggestError
       -- ^ The catalogue has no concepts to name anything with.
     | SuggestGenerator !GeneratorError
       -- ^ The provenance names a generator version this build cannot
-      --   construct a profile for.
+      --   construct a profile for, or one whose profile has too small a
+      --   root space to name the catalogue (#2206).
     | SuggestNative !NativeRenderError
     | SuggestGloss !RenderError
 
@@ -150,24 +151,27 @@ worldLanguageSeed s = LangSeed (fmix64 (s `xor` worldLanguageDomain))
 -- | Build a suggester for one language. Fails when the provenance names
 --   an unconstructible generator version (#710 requirement 15 — never
 --   silently substituted with the current version, which would suggest
---   names in a DIFFERENT language than the one being recorded), or when
---   the catalogue is empty.
+--   names in a DIFFERENT language than the one being recorded), when
+--   that version's profile has too small a root space to name the
+--   catalogue (#2206), or when the catalogue is empty.
 mkNameSuggester
     ∷ Catalogue → LanguageProvenance → Either SuggestError NameSuggester
 mkNameSuggester cat prov
     | null ids  = Left SuggestNoConcepts
     | otherwise = case generateProfile (lpVersion prov) (lpSeed prov) of
         Left gErr → Left (SuggestGenerator gErr)
-        Right prof → Right NameSuggester
-            { nsuProfile     = prof
-            , nsuRoots       = assignLanguageRoots prof (catOrdinals cat) ids
-            , nsuCatalogue   = cat
-            , nsuHeads       = ids
-            , nsuModifiers   = withForm FormModifier
-            , nsuPlurals     = withForm FormPlural
-            , nsuPossessives = withForm FormPossessive
-            , nsuBase        = suggestionBase prof
-            }
+        Right prof → case assignLanguageRoots prof (catOrdinals cat) ids of
+            Left gErr → Left (SuggestGenerator gErr)
+            Right roots → Right NameSuggester
+                { nsuProfile     = prof
+                , nsuRoots       = roots
+                , nsuCatalogue   = cat
+                , nsuHeads       = ids
+                , nsuModifiers   = withForm FormModifier
+                , nsuPlurals     = withForm FormPlural
+                , nsuPossessives = withForm FormPossessive
+                , nsuBase        = suggestionBase prof
+                }
   where
     ids = conceptIds cat
     withForm k =
@@ -217,7 +221,7 @@ slotDependent = 2
 --   press is still one render.
 --
 --   A one-concept catalogue has no second head to move to and pins the
---   index at 0; the shipped catalogue has 150.
+--   index at 0; the shipped catalogue has 151.
 headIndexAt ∷ Word64 → Int → Int → Int
 headIndexAt base n ordinal
     | n ≤ 1     = 0

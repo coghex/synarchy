@@ -54,18 +54,23 @@ data Namer = Namer
     , nmrCatalogue ∷ !Catalogue
     }
 
--- | Build a namer for a world's recorded language. Fails only when the
---   provenance names a generator version this build cannot construct —
---   which is #710 requirement 15's error, reported rather than silently
---   substituted with the current version (that would render names in a
---   DIFFERENT language than the one that named the world).
+-- | Build a namer for a world's recorded language. Two failures, both
+--   reported rather than silently substituted with another language —
+--   that would render names in a DIFFERENT language than the one that
+--   named the world:
+--
+--   * the provenance names a generator version this build cannot
+--     construct (#710 requirement 15);
+--   * the profile builds, but its root space is too small to give every
+--     catalogue concept a distinct root (#2206), so no assignment over
+--     this catalogue exists.
 mkNamer ∷ Catalogue → LanguageProvenance → Either GeneratorError Namer
 mkNamer cat prov = do
     prof ← generateProfile (lpVersion prov) (lpSeed prov)
+    roots ← assignLanguageRoots prof (catOrdinals cat) (conceptIds cat)
     pure Namer
         { nmrProfile   = prof
-        , nmrRoots     = assignLanguageRoots prof (catOrdinals cat)
-                                              (conceptIds cat)
+        , nmrRoots     = roots
         , nmrCatalogue = cat
         }
 

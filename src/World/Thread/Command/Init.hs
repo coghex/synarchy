@@ -509,13 +509,16 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
 --
 --   'Nothing' is the ordinary, expected result for every page whose
 --   identity carries no #1092 provenance — a custom-named world, an
---   unnamed one, an arena — and is silent. The two ways a page that
---   DOES declare a language can still end up unnamed are both logged:
---   a catalogue that will not load, and a provenance naming a generator
---   version this build cannot construct. Neither substitutes another
---   language; the locations fall back to their definition labels and
---   the rivers to no name at all, which is what "this world has no
---   language" already means everywhere else.
+--   unnamed one, an arena — and is silent. The ways a page that DOES
+--   declare a language can still end up unnamed are all logged: a
+--   catalogue that will not load, a provenance naming a generator
+--   version this build cannot construct, and a constructible profile
+--   whose root space is too small to give every catalogue concept a
+--   distinct root (#2206 — the case that used to hang world init here
+--   instead of failing). None substitutes another language; the
+--   locations fall back to their definition labels and the rivers to no
+--   name at all, which is what "this world has no language" already
+--   means everywhere else.
 resolvePageNamer
     ∷ LoggerState → Maybe WorldIdentity → IO (Maybe Namer)
 resolvePageNamer logger identity = case wiLanguage =≪ identity of
