@@ -549,7 +549,7 @@ def run(check) -> None:
               "sampling point (#1750)",
               c_oracle["widgets"][0]["inScope"] is True,
               str(c_oracle.get("widgets")))
-        from critic import build_signals as _build_signals
+        from critic_signals import build_signals as _build_signals
         c_signals = _build_signals(cdir, cturns)
         check("the critic correlates the click against the pre-injection "
               "context, not the post-callback one (#1750)",
