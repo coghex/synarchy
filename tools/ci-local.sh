@@ -574,6 +574,16 @@ python3 tools/test_item_list_widget_probe.py
 step "review-gate decision self-test"
 python3 tools/review_gate_decision.py --self-test
 
+# The other half of that gate (#2184): what the workflow DOES with the
+# decision. The removal used to be `|| true` and the required check read
+# the event payload, so a strip that failed and a strip that never
+# reached the required check both looked like a healthy gate. This pins
+# the applied-and-verified outcome policy and the review-gate.yml wiring
+# it is useless without -- that workflow runs on an event nothing here
+# ever sees. Pure, network-free, sub-second.
+step "review-gate label policy self-test"
+python3 tools/review_gate_label_policy.py --self-test
+
 # Cheap, no-engine self-test of CI's cache-outcome report (#1358). The
 # report itself runs only in CI -- `make ci` restores no GitHub Actions
 # cache, so it has no outcome to classify -- but its classification and
