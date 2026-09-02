@@ -177,14 +177,16 @@ def find_chop_fixture(port):
     already uses for tree discovery, and it filters on exactly the
     predicate the chop designation itself applies — the species' harvest
     tags contain "wood" and no live regrowth timer — so a coordinate it
-    returns is one chop.designate will really designate. The point query
-    it replaces (world.getFloraAt) reports ANY flora instance, grass and
+    returns names a plant chop will really designate. Searching with
+    world.getFloraAt instead reports ANY flora instance, grass and
     wildflowers included, so the old loop spent designate-and-drain round
-    trips on candidates that could only ever record "rejected".
+    trips on candidates that could only ever record "rejected". (The
+    stage still uses that point query afterwards, to read the DISCOVERED
+    tile's instance id — a different job from finding the tile.)
 
     Runs while the generated 'probe' page is the ACTIVE world:
     findHarvestableFlora resolves through the active page and takes no
-    page argument, whereas chop.designate takes an explicit page id — so
+    page argument, whereas the chop verbs take an explicit page id — so
     called after the portal stage's world.show('portal_probe') this would
     silently search the empty arena while designating on 'probe'."""
     origins = chop_search_origins()
@@ -202,20 +204,41 @@ def find_chop_fixture(port):
     return None
 
 
-def evaluate_chop_designation(port, cx, cy):
-    """Designate the REAL public 5x5 chop request centred on a discovered
-    tile and evaluate the drained record; returns (ok, drained).
+# A well-formed PLANTED-namespace id that names no plant: bit 62 set
+# (World.Flora.Identity's planted tag), bit 63 clear, and a counter value
+# far past any page's live allocator. `chop.designateInstances` accepts
+# it as an id and the world thread then drops it, because it resolves to
+# nothing resident — which is exactly the "requested but not applied"
+# leg this stage exists to observe.
+UNRESOLVABLE_INSTANCE_ID = (1 << 62) + 999_999_999
 
-    The contract, unchanged from before the fixture repair: a
-    chop.designate record, outcome "partial", at least one applied and
-    one dropped tile, requested == 25 (the full swept-TILE count, not the
-    flora-INSTANCE count — the exact miscount that reported 1/1/0
-    accepted instead of 25/1/24 partial), and requested == applied +
-    dropped. Nothing here substitutes a synthetic record for the real
-    designation and the real destructive drain."""
+
+def evaluate_chop_designation(port, cx, cy):
+    """Designate the REAL public chop request and evaluate the drained
+    record; returns (ok, drained).
+
+    #1856 replaced the two-click tile rectangle with a screen-space
+    press-drag, so the request that crosses the queue is an EXACT set of
+    plant identities. The contract this stage pins moved with it and did
+    not weaken: a `chop.designate` record, outcome "partial", at least
+    one applied and one dropped, `requested` equal to the number of ids
+    SUBMITTED (not the number the filter went on to accept — the same
+    miscount that once reported 1/1/0 accepted instead of a partial),
+    and requested == applied + dropped.
+
+    The submitted set is deliberately mixed and deterministically so:
+    the discovered tree, which the eligibility re-check accepts, plus one
+    well-formed id naming no resident plant, which it must drop. Nothing
+    here substitutes a synthetic record for the real designation and the
+    real destructive drain."""
     send(port, "return debug.drainActionOutcomes()")  # clear noise
-    send(port, f"chop.designate('probe',{cx - 2},{cy - 2},{cx + 2},{cy + 2},"
-               f"'wood'); return 'ok'")
+    tree = send_json(port, f"return world.getFloraAt({cx},{cy})")
+    iid = tree.get("instanceId") if isinstance(tree, dict) else None
+    if not isinstance(iid, (int, float)) or isinstance(iid, bool):
+        return False, [{"error": f"no instance id at {cx},{cy}: {tree}"}]
+    send(port, f"chop.designateInstances('probe',"
+               f"{{{int(iid)},{UNRESOLVABLE_INSTANCE_ID}}},'wood'); "
+               f"return 'ok'")
     drained = send_json(port, "return debug.drainActionOutcomes()")
     records = drained if isinstance(drained, list) else []
     rec = records[0] if records and isinstance(records[0], dict) else {}
@@ -230,7 +253,7 @@ def evaluate_chop_designation(port, cx, cy):
               and rec.get("outcome") == "partial"
               and count(applied) and applied >= 1
               and count(dropped) and dropped >= 1
-              and count(requested) and requested == 25
+              and count(requested) and requested == 2
               and requested == applied + dropped)
     return ok, drained
 
@@ -278,9 +301,9 @@ def run_and_report_chop_stage(port):
         return False, True
     cx, cy, species, drained = chop_detail
     ok = chop_class == CHOP_OK
-    print(f"  [{'PASS' if ok else 'FAIL'}] mixed chop sweep at ({cx},{cy}) "
-          f"[{species}] reports the full 5x5=25 tile count as requested: "
-          f"{drained}")
+    print(f"  [{'PASS' if ok else 'FAIL'}] mixed chop selection at "
+          f"({cx},{cy}) [{species}] reports the full SUBMITTED id count "
+          f"as requested: {drained}")
     return ok, False
 
 
@@ -515,10 +538,12 @@ def main():
             print(f"  [{'PASS' if ok5 else 'FAIL'}] mixed till sweep at "
                   f"({sx},{sy}) reports partial: {drained2}")
 
-        # The exact 5x5-one-tree regression review round 1 flagged: chop's
-        # requested must be the full swept-tile count (25), not the
-        # flora-instance count (1) — a naive count previously reported
-        # 1/1/0 accepted instead of 25/1/24 partial. Runs HERE, while the
+        # The partial-count regression review round 1 flagged: chop's
+        # requested must be everything the request ASKED for, not just
+        # what the filter accepted — a naive count previously reported
+        # 1/1/0 accepted instead of a partial. #1856 changed the request
+        # from a tile rectangle to an exact identity set; the invariant
+        # moved with it and did not weaken. Runs HERE, while the
         # generated 'probe' page is still the active world, for the
         # reason find_chop_fixture documents.
         chop_ok, chop_setup_failed = run_and_report_chop_stage(port)

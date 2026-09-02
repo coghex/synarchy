@@ -112,6 +112,7 @@ module World.Save.Component.WorldGen
     , WorldGenParamsDTOv4(..)
     , WorldGenParamsDTOv5(..)
     , WorldGenParamsDTOv6(..)
+    , WorldGenParamsDTOv7(..)
     , NameExprDTO(..)
     , EtymologySourceDTO(..)
     , RiverNameDTO(..)
@@ -127,6 +128,10 @@ module World.Save.Component.WorldGen
     , LocationInstancesDTOv2(..)
     , LocationInstanceDTOv3(..)
     , LocationInstancesDTOv3(..)
+    , LocationEncounterDTOv1(..)
+    , LocationSignificantItemDTO(..)
+    , LocationInstanceDTOv5(..)
+    , LocationInstancesDTOv5(..)
     , LocationInstanceDTOv4(..)
     , LocationInstancesDTOv4(..)
     , LocationEncounterOccupantDTO(..)
@@ -166,11 +171,15 @@ module World.Save.Component.WorldGen
     , toWorldGenParamsDTOv5
     , fromWorldGenParamsDTOv6
     , toWorldGenParamsDTOv6
+    , toWorldGenParamsDTOv7
+    , fromWorldGenParamsDTOv7
     , toEtymologySourceDTO
     , fromEtymologySourceDTO
     , toRiverNamesDTO
     , toLocationInstancesDTOv3
     , toLocationInstancesDTOv4
+    , toLocationInstancesDTOv5
+    , fromLocationInstancesDTOv5
     ) where
 
 import World.Save.Component.WorldGenClimate

@@ -1,14 +1,21 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
--- | Chop-designation state (issue #97, re-keyed by issue #1854).
+-- | Chop-designation state (issue #97, re-keyed by #1854, re-shaped by
+--   #1856).
 --
 --   A chop designation marks one PLANT slated for felling. The third
---   per-tile designation layer, after mining ('World.Mine.Types',
---   removes terrain) and construction ('World.Construct.Types', adds
---   it): chopping removes FLORA — the target must be a @wood@-tagged
---   harvestable species (#94's interactive-flora backend), and the
---   commit handler filters the designated rectangle down to such
---   plants, at ANY surface z (forests span slopes, so there is no
---   per-z-level semantics like the dig tool's).
+--   designation layer, after mining ('World.Mine.Types', removes
+--   terrain) and construction ('World.Construct.Types', adds it):
+--   chopping removes FLORA — the target must be a @wood@-tagged
+--   harvestable species (#94's interactive-flora backend) with no live
+--   regrowth timer, at ANY surface z (forests span slopes, so there is
+--   no per-z-level semantics like the dig tool's).
+--
+--   Unlike those two it is not a tile-rectangle layer at all any more.
+--   #1856 replaced the two-click rectangle with a screen-space
+--   press-drag whose oracle picks trees by where they are DRAWN
+--   ('World.Flora.HitTest'), so the commit handler receives an exact
+--   list of plant identities and re-checks eligibility against live
+--   state rather than filtering a rectangle.
 --
 --   #1854: the map is keyed by 'World.Flora.Identity.FloraInstanceId',
 --   NOT by tile. Two wood-tagged trees can legitimately share one tile
@@ -53,9 +60,14 @@ import World.Flora.Identity (FloraInstanceId)
 --   Generic Serialize — append, don't reorder).
 data ChopDesignation = ChopDesignation
     { chZ ∷ !Int
-      -- ^ Surface z captured at designation time (markers render from
-      --   it; chop progress itself is Lua AI state, not persisted —
-      --   an interrupted fell restarts, there is no mid-chop visual).
+      -- ^ Surface z captured at designation time. Since #1856 the
+      --   MARKER no longer reads it: it is anchored to the live flora
+      --   instance's own projected ground contact
+      --   ('World.Render.FloraMarker'), because a captured z drifts the
+      --   annotation off the sprite as soon as the column changes. What
+      --   still reads it is the @z@ the @chop.*@ query verbs report to
+      --   the AI. Chop progress itself is Lua AI state, not persisted —
+      --   an interrupted fell restarts, there is no mid-chop visual.
     , chGX ∷ !Int
       -- ^ CANONICAL global tile x the designated plant stands on
       --   (#1854). The map is keyed by instance identity now, so the
