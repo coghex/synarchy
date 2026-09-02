@@ -24,7 +24,7 @@
 --   layer with synchronous stubs, which is exactly why it cannot see this
 --   race.
 --
---   The engine is 'initializeEngineHeadless' with NO worker threads (the
+--   The engine is 'initializeEngineHeadlessQuiet' with NO worker threads (the
 --   "Test.Headless.World.StructureStage" shape), so a queued command
 --   waits to be dequeued here rather than being raced away by a drainer,
 --   and queue order is asserted rather than hoped for.
@@ -45,7 +45,8 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import qualified Engine.Core.Queue as Q
@@ -310,7 +311,7 @@ spec = describe "location stamp commit gating (#2051)" $ aroundAll setup $ do
     -- Isolation wraps the boot (#1357): engine init is itself a config
     -- writer, so a scratch root established afterwards is too late.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         act (env, ls)
 

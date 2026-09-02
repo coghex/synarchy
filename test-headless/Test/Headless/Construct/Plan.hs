@@ -22,7 +22,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Structure.Types
     ( StructureSlot(..), StructurePieceData(..), StructureStage
@@ -63,7 +64,7 @@ ghostPiece = StructurePiece "no_such_pack" "floor" Nothing
 spec ∷ Spec
 spec = describe "structure plan" $ do
     extentSpec
-    beforeAll initializeEngineHeadless resolverSpec
+    beforeAll initializeEngineHeadlessQuiet resolverSpec
 
 -- * The bounded-drag helper
 

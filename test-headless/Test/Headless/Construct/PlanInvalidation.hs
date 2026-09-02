@@ -17,7 +17,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log (LoggerState)
 import Engine.Core.State (EngineEnv(..))
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
@@ -95,7 +96,7 @@ drainLuaQueue env = go []
             Just x  → go (x : acc)
 
 spec ∷ Spec
-spec = beforeAll initializeEngineHeadless $
+spec = beforeAll initializeEngineHeadlessQuiet $
   describe "structure plan invalidation" $ do
 
     it "keeps a designation whose plan still resolves" $

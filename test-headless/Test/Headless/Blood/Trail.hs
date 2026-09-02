@@ -26,7 +26,8 @@ import Control.Exception (finally)
 import System.Directory (removePathForcibly)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
@@ -315,7 +316,7 @@ textureMappingSpec =
 
 initEnv ∷ IO EngineEnv
 initEnv = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     pure env
 
 pageA, pageB ∷ WorldPageId
