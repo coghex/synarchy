@@ -3,18 +3,21 @@
 `CLAUDE.md` is auto-loaded into every session, so it carries the rules
 that prevent damage: what you must not undo, and which gate proves it.
 This file carries the layer below that — the as-built mechanics behind
-those rules, extracted from CLAUDE.md in two passes (2026-08-18 and
-2026-08-20) to keep the always-loaded file navigable.
+those rules, extracted from CLAUDE.md in three passes (2026-08-18,
+2026-08-20 and 2026-09-02 — the last also introduced the nested
+per-directory `CLAUDE.md` files) to keep the always-loaded file
+navigable.
 
 **This is not a design document.** The design docs
 (`docs/texture_infrastructure.md`, `docs/unified_item_transfers.md`,
 `docs/expedition_gameplay_loop.md`, `docs/persistence_contract.md`, …)
 record what was *decided*; this records what was *built*, and it is the
 only prose record of most of it. Read the section here before changing
-code in the area it covers — CLAUDE.md points you at each one by name.
+code in the area it covers — the root `CLAUDE.md` and the nested
+per-directory `CLAUDE.md` files point you at each one by name.
 
-Every contract below is mechanically enforced by the gate its CLAUDE.md
-entry names, so a breach fails loudly rather than silently. That is
+Every contract below is mechanically enforced by the gate its
+`CLAUDE.md` entry names, so a breach fails loudly rather than silently. That is
 exactly why the detail could move out of the always-loaded file.
 
 ---
@@ -24,6 +27,8 @@ exactly why the detail could move out of the always-loaded file.
 **Build & CI**
 
 - [The `make ci` gate set](#the-make-ci-gate-set)
+- [Headless fixture logging (#1925)](#headless-fixture-logging-1925)
+- [The full test tier: `SYNARCHY_FULL_TESTS` (#1364)](#the-full-test-tier-synarchy_full_tests-1364)
 
 **Assets and rendering**
 
@@ -58,6 +63,15 @@ exactly why the detail could move out of the always-loaded file.
 - [Player transfers: the three player-facing modes](#player-transfers-the-three-player-facing-modes)
 - [Commanded-order stall budget (#920/#1291)](#commanded-order-stall-budget-9201291)
 - [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
+- [Unit and combat animations headless](#unit-and-combat-animations-headless)
+- [Movement arenas](#movement-arenas)
+- [Construction (#95/#96)](#construction-9596)
+- [Roles (#265)](#roles-265)
+- [Crafting and bills (#325/#326/#329/#343/#795)](#crafting-and-bills-325326329343795)
+- [Power (#358-#361, #590/#591, #1206)](#power-358-361-590591-1206)
+- [Farming (#331-#336)](#farming-331-336)
+- [Blood decals: transience (#603)](#blood-decals-transience-603)
+- [Logging streams](#logging-streams)
 
 **Persistence**
 
@@ -65,6 +79,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Save/load transaction: phases and failure semantics](#saveload-transaction-phases-and-failure-semantics)
 - [Enum append-only audit: baseline and payload normalization](#enum-append-only-audit-baseline-and-payload-normalization)
 - [Config-writing tests: the isolation fixture (#1357)](#config-writing-tests-the-isolation-fixture-1357)
+- [Config state and legacy migration (#638/#786/#1937)](#config-state-and-legacy-migration-6387861937)
 
 **CLI and boot modes**
 
@@ -461,9 +476,9 @@ hidden behind a flag.
 
 Enforced by `python3 tools/test_pack_atlas.py` (fixture-based, isolated
 temp trees, never touching shipped assets) plus the strict
-`pack_atlas.py --validate-only --strict` run. CLAUDE.md keeps the
-one-atlas-per-animation shape and the index-aware validation rule; these
-are the exact invariants.
+`pack_atlas.py --validate-only --strict` run. `src/Unit/Atlas/CLAUDE.md`
+keeps the one-atlas-per-animation shape and the index-aware validation
+rule; these are the exact invariants.
 
 - **Rows** are the AUTHORED directions in `ATLAS_DIRECTION_ORDER` — the
   engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE` —
@@ -701,6 +716,67 @@ TSR-3 depends on TSR-2 rather than on an inset.
 ---
 
 ## Preview mode: the two viewers and the dump contract
+
+**Category contract and pre-boot rejection (moved from CLAUDE.md).**
+Canonical category contract (`App.Cli.classifyPreviewCategory`) — the
+unknown-category error lists exactly this set, no compatibility aliases:
+**simple** (a flat, recursively-browsable asset folder): `icons`,
+`items`, `ui`, `world`; **grouped** (one named entry per item — a bare
+grouped category prints "select a specific ..." and exits without
+booting): `units`, `flora`, `buildings`, `structures`. `equipment`,
+`hud`, `facemap`, `utility`, `vegetation` are NOT exposed.
+
+Pre-boot rejection is the load-bearing rule (`Engine.Preview.Discovery`
+/ `.Unit` / `.Building`; `resolveItemDir` shared by all four grouped
+categories): an unknown name, a name with path structure or `.`/`..`/
+absolute traversal, a symlinked directory (BOTH levels for
+`units/<name>` — `doesDirectoryExist` follows links), and a FILE where a
+directory was expected all exit 1 **before a window exists**. Trimmed
+loading: only its font, the list widget's own chrome textures, and
+textures within the requested category/item — never `data/*.yaml`
+gameplay catalogs, with exactly TWO single-file exceptions: the units
+viewer's `data/units/<name>.yaml` and the buildings viewer's
+`data/buildings/<name>.yaml`.
+
+`flora/<name>` and `structures/<name>` reuse the shared browser
+(`scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`, #888) rooted at
+the ITEM's folder — anything beyond routing the resolved folder into
+`discoverEntries` means the routing is wrong, not the reuse. The units
+viewer (#887/#1261) samples the compiled atlas through the SAME loader
+(`Unit.Atlas.Yaml.resolveUnitAtlases`) and frozen cell arithmetic
+(`atlasCellUV`) the game uses — a preview-only decoder would miss the
+regressions the viewer exists to catch — and a rejected, missing,
+animation-less or uncompiled index is a PRE-BOOT failure, never a quiet
+fallback to source frames. The buildings viewer (#888) is the opposite
+authority split: the filesystem is authoritative and
+`data/buildings/<name>.yaml` only AUGMENTS a matched animation
+(association by CONTENT, never by equal names; playback defaults
+`fps=8`, `loop=false` — NOT the units viewer's `loop=true`).
+
+Centered bounded zoom (#1907): every main preview display has ONE
+per-session zoom multiplier, `1` (the initial value AND the maximum,
+i.e. the aspect fit) down to `1/8`, centered on its region with NO
+anchor, pan or crop — the complete texture is inside its region at every
+level by construction. The region owns a scroll-CAPTURING invisible
+element and nothing else (#743's three policies stay independent), which
+is what makes plain and Shift wheel identical; `dy < 0` ENLARGES, the
+gameplay camera's sign, not the list's. Reset follows preview-OBJECT
+identity — a different BARE-category texture resets, while another
+animation, direction, building entry, flora stage, structure piece,
+playback frame or a resize preserves — discriminated by
+`engine.getPreviewTarget()`'s `item`, never the mode string. Unit mode's
+region is the enlarged sub-rect, never `panelBounds`.
+
+Gates: `tools/preview_cli_probe.py` (CI-eligible, no boot at all — every
+rejection above) and `tools/preview_probe.py` (manual-only, `needs-gpu` —
+discovery/selection/scroll/resize via the dump, forced nearest
+filtering, both viewers, trimmed loading verified against the engine's
+own authoritative texture record, and zoom on all six display kinds via
+real `input.moveMouse`/`input.scroll`). Pure logic: hspec
+`--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
+`"Preview.Building"` / `"Preview.Zoom"` — the last is the only BLOCKING
+automated gate zoom has, the probe being manual-only.
+
 
 Enforced by `tools/preview_cli_probe.py` (CI-eligible, no boot) and
 `tools/preview_probe.py` (manual-only, `needs-gpu`); pure logic by hspec
@@ -1008,8 +1084,8 @@ FILE once, so a dual-use texture holding two slots still appears once.
 ## UI input routing (#742-#749)
 
 Enforced by hspec `Test.Headless.UI.*` (InputOwnership, Clipping,
-PopupPlacement, InteractiveBounds). CLAUDE.md keeps the on-sight digest;
-these are the six contracts in full.
+PopupPlacement, InteractiveBounds). `scripts/CLAUDE.md` keeps the
+on-sight digest; these are the six contracts in full.
 
 **Layers + modal boundary (#742).** Pages live on six `UILayer`s,
 painted bottom-to-top `LayerHUD < LayerOverlay < LayerMenu < LayerModal
@@ -1165,8 +1241,8 @@ change, a HUD hide, Escape, or another container replacing it all end it.
 ## Responsive UI lifecycle (#748/#750)
 
 Enforced by hspec `Test.Headless.UI.ResponsiveMenus` /
-`ResponsiveGameplay`. CLAUDE.md keeps the registry split and the
-one-line resize rules; these are the numbers and the full rules.
+`ResponsiveGameplay`. `scripts/CLAUDE.md` keeps the registry split and
+the one-line resize rules; these are the numbers and the full rules.
 
 `scripts/ui/responsive.lua` owns the supported envelope — bands
 (inclusive): framebuffer height 600-900 @ 0.5-1x UI scale, 901-1200 @
@@ -1218,9 +1294,9 @@ Rules that keep resizes correct — follow them for any new screen/panel:
 
 Enforced by hspec `--match "random stream ownership"`, which pairs
 behavioural isolation and per-instance-entropy cases with two source
-guards. CLAUDE.md keeps the two rules (no `math.randomseed` under
-`scripts/`; non-gameplay code keeps its own stream); this is the story
-behind them.
+guards. The root `CLAUDE.md` and `scripts/CLAUDE.md` keep the two rules
+(no `math.randomseed` under `scripts/`; non-gameplay code keeps its own
+stream); this is the story behind them.
 
 A Lua state has exactly one `math.random` stream, and eleven gameplay
 modules draw from it (AI cadence, thoughts, mental state, wildlife,
@@ -1401,6 +1477,17 @@ each stored source across untouched.
 ---
 
 ## Location instances (#911)
+
+**Placement-time ids, one-way lifecycle (moved from CLAUDE.md).** A
+placed location is a persisted per-page record (`Location.Instance`)
+keyed by a stable `LocationInstanceId` (from 1), allocated at PLACEMENT
+time in the deterministic overlay's `overlayToList` order — never at
+stamp time, never from hashmap order — so ids survive save/load and
+chunk eviction. Consumers read the STORED values, never re-derive from
+the live registry. Lifecycle transitions are one-way (`promoteLifecycle`
+refuses backward AND same-state — what makes discovery fire exactly one
+event).
+
 
 Enforced by hspec `--match "Location instance identity"` and
 `tools/location_content_probe.py`. CLAUDE.md keeps the
@@ -1708,6 +1795,45 @@ implementation is what would drift.
 
 ## Location discovery, map icons, and per-unit knowledge (#780/#781/#915)
 
+**The three rules on sight (moved from CLAUDE.md).**
+
+- **Discovery (#780, sight-based since #1230)** is a one-way promotion
+  to `discovered`, fired when a player-faction unit SEES the location:
+  its visible-tile set intersects the instance's stored `liBounds`,
+  seam-aware, one tile being enough (the `discovery_margin` halo is GONE
+  from YAML, def, instance, Lua and wire). Sight is
+  `Unit.LineOfSight.visibleTilesOnPage` — the SAME calculation
+  `unit.getVisibleTiles` runs, minus its `wmVisible` gate, so reveal
+  works on a loaded-but-hidden page. Ticks for EVERY loaded page,
+  independent of pause; emits exactly one `location_discovery` event. A
+  night-scaled radius is intentionally shorter — any distance-sensitive
+  expectation over `unit.getVisibleTiles` must pin the clock. Gates:
+  `location_content_probe.py`, `location_embark_probe.py`; hspec
+  `--match "Location discovery"` / `"Location map icons"` /
+  `"Unit.LineOfSight"`.
+- **Map icons (#781/#1230)**: all six lifecycle constructors map
+  explicitly (`World.Render.Zoom.Icons.locationIconAppearance`):
+  `unknown`/`hinted` draw the ONE shared `location_unknown.png` so the
+  zoom map never leaks WHAT is there before a unit has seen it;
+  `discovered`/`active` draw the def's own `map_icon`;
+  `cleared`/`depleted` draw that SAME bitmap darkened — an explicit,
+  enumerated exception to the no-tinting rule, confined to the icon
+  quad. A def with no `map_icon` places no annotation. Asset gate:
+  `tools/location_map_icon_asset_check.py`.
+- **Per-unit knowledge (#915)** is the EXPERIENTIAL layer beside that
+  CARTOGRAPHIC one, and neither derives from the other: global
+  lifecycle = "the player has mapped it", `aiState[uid].knownLocations`
+  = "this acolyte knows where it is". Keyed by the durable `(page,
+  instance id)` pair — dedup is by IDENTITY, never by distance (don't
+  copy `knownWaterSources`' 6-tile rule across). Both layers come from
+  ONE containment enumeration in `Location.Discovery`, so they cannot
+  drift; awareness ignores lifecycle, so a unit arriving at an
+  already-mapped ruin still learns it. Persisted via `lua.unit_ai` v4
+  typed refs; v1-v3 decode with the field ABSENT, never inferred.
+  Gates: hspec `--match "unit location knowledge"`,
+  `location_content_probe.py`.
+
+
 Enforced by `tools/location_content_probe.py`,
 `tools/location_embark_probe.py`,
 `tools/location_map_icon_asset_check.py`; hspec
@@ -1752,9 +1878,9 @@ at reconcile. Radio sharing/range deliberately deferred.
 
 Enforced by hspec `--match "World.Render.PickSeam"` /
 `"World.DesignationSeam"` / `"a seam-frame unit"`. The contract is also
-stated in full on `World.Render.HitTest`. CLAUDE.md keeps the
-canonical-coords rule, the rectangle exception and the lookup-wrap rule;
-this is the full enumeration.
+stated in full on `World.Render.HitTest`. `src/World/CLAUDE.md` and the
+root's domain list keep the canonical-coords rule, the rectangle
+exception and the lookup-wrap rule; this is the full enumeration.
 
 Chunks are STORED u-wrapped, so one physical tile has two names near
 the seam. Picking (`pickWorldTile` and every Lua caller it backs —
@@ -1823,6 +1949,58 @@ inferred.
 ---
 
 ## Player transfers: the three player-facing modes
+
+**The shared policy, the lax AI verbs, and the reveal rule (moved from
+CLAUDE.md).** Design authority:
+[`docs/unified_item_transfers.md`](unified_item_transfers.md). ONE pure
+policy (`src/Unit/Transfer.hs`) decides whether exact item instances may
+move between two endpoints (a unit inventory or a built building's loose
+storage, on BOTH sides; direction DERIVED from the pair): Chebyshev ≤ 1
+between occupied RECTANGLES, capacity weighs the actual instance,
+batches are ordered and report per-item outcomes, and no item ever
+half-moves. The lax AI verbs
+(`transferItemToUnit`/`transferItemToBuilding`/`depositToCargo`/
+`withdrawFromCargo`) are a SEPARATE path the fetch/repair/medic ladders
+depend on — never route AI work through the strict one, and never
+delete them. What is unchecked there is adjacency and receiver
+eligibility (and unit-to-unit capacity), **never the world PAGE**
+(#1673): all four refuse a cross-page endpoint pair, mutating nothing
+and revealing nothing, which is the floor `Unit.Transfer.reachable`
+holds even where it defers adjacency. The AI finders page-qualify every
+candidate against the ACTING unit (`scripts/unit_ai_page.lua`) instead
+of trusting the active page that `unit.getAllIds` /
+`building.getActiveIds` / `craft.getBills` each snapshot separately, and
+revalidate every PERSISTED building reference (`deliveryClaim.bid`,
+`craftJob.bid`, `repairJob.bid`) before it can steer a walk or reach a
+verb. Gates: hspec `--match "Unit cargo"` / `"AI page pairing"`.
+
+**TWO player modes, ONE commit policy.** Mode B queues a durable order
+and Mode A commits on the spot, but both build the IDENTICAL request
+and both reach `checkTransfer`/`commitTransfer`. The player-facing
+IMMEDIATE paths retired with #1249 must not come back — the Store /
+Retrieve gestures replaced them and NEITHER requires adjacency; only
+the PLAYER paths retired, the verbs stay registered for the AI (D-7).
+
+**Contents are REMEMBERED, never live (D-2).** A container window
+renders the player's last observation. Exactly four things reveal
+(`Building.Knowledge.Live`): a completed transfer commit into or out of
+the container, the lax AI cargo verbs, a Mode A session OPENING on it
+(`building.refreshContainerKnowledge`'s only in-game caller), and the
+first completion of a storage-capable building (seeds KNOWN-EMPTY
+because the player watched it go up). Walking past, selecting,
+right-clicking and opening the window reveal NOTHING; every unit-driven
+reveal is gated on `isPlayerCommandable`; knowledge is player-global,
+never per-unit.
+
+Beyond the gates listed below, the reveal rule is pinned by hspec
+`--match "Container knowledge"`, and the arc's INTEGRATED gate is
+`tools/unified_transfer_probe.py` (#1255, manual-only `needs-gpu`): one
+fixed-seed session proving an exact instance moves both ways between
+all three endpoint classes through BOTH modes, plus the partial batch,
+the reveal rule, one widget rendering every container view, and a Mode
+B order surviving a fresh-process reload while a Mode A session does
+not.
+
 
 Design authority for the *decisions* is
 `docs/unified_item_transfers.md`; this is the as-built behavior. The pure
@@ -2063,6 +2241,18 @@ re-read positions after pausing.
 
 ## Autosave: staging, rotation order, and the intent mutex
 
+**The rules on sight (moved from CLAUDE.md).** Autosave is OFF by
+default (`config/save_default.yaml` + key-level `save.local.yaml`
+overlay; Settings → General edits it). `scripts/autosave.lua` owns the
+WALL-CLOCK interval and fires only when `uiManager.isGameplayView()` —
+a deadline reached in a menu / with no world / mid save-or-load is
+SKIPPED silently, and menus never suspend or reset the cadence.
+Interval autosaves ride the SAME save transaction — they only add a
+request-time `AutosaveRequest` (pre-request pause, visible time scale,
+player-intent generation) plus the durable `smAutosave` classification
+`engine.listSaves()` exposes. Slot ownership, rotation order and the
+failure disposition follow.
+
 Enforced by `tools/autosave_probe.py` (manual-only). Slots are the
 reserved `autosave-<n>` family, `autosave-1` newest; ownership is the
 durable `smAutosave` metadata flag (`"metadata"` v2; v1 migrates to manual),
@@ -2086,10 +2276,10 @@ one stays paused and zero-scaled. Gate: `autosave_probe.py`
 
 ## Save/load transaction: phases and failure semantics
 
-CLAUDE.md carries the four architectural bullets (the Lua save-module
-registry, `publishGeneration`'s write-fsync-revalidate-rotate transaction,
-the whole-session load transaction, and the typed-reference integrity
-graph). This is the phase and failure detail it defers.
+`src/World/Save/CLAUDE.md` carries the architectural bullets (the Lua
+save-module registry, `publishGeneration`'s write-fsync-revalidate-rotate
+transaction, the whole-session load transaction, and the typed-reference
+integrity graph). This is the phase and failure detail it defers.
 
 **`engine.getLoadStatus()` exposes a 12-phase lifecycle plus a 13th
 terminal phase, `LoadReconciliationFailed` (#1204):** publication
@@ -2116,9 +2306,9 @@ dirs/files are refused.
 ## Enum append-only audit: baseline and payload normalization
 
 Enforced by `tools/enum_append_only_audit.py` (CI + `make ci`, with its
-own `--self-test`). CLAUDE.md states the rule and the two hard facts about
-the baseline (it is GENERATED; a pure append ratchets it with
-`--update-baseline`). This is the rest.
+own `--self-test`). `src/World/Save/CLAUDE.md` states the rule and the
+two hard facts about the baseline (it is GENERATED; a pure append
+ratchets it with `--update-baseline`). This is the rest.
 
 **Coverage.** Of the 43 guarded types, 38 are on the save wire and 28 are
 named by a live component today; the rest are guarded pre-emptively, which
@@ -2147,6 +2337,31 @@ recorded attribution because there is nothing left in the tree to walk.
 is the one exhaustive gate owning payload drift INSIDE a
 multi-constructor sum. Single-constructor record field order stays the
 frozen-DTO boundary's and `save_compat_audit.py`'s.
+
+**Retaining a version means still DECODING it (moved from CLAUDE.md).**
+Anything beyond appending is a per-component migration, never a
+`currentSaveVersion` change — that marker does not gate on-disk
+compatibility. Find EVERY component storing the enum — `Direction` is
+stored by both `units` (`UnitInstanceDTO.uidFacing`) and `unit-sim`
+(`UnitSimStateDTO.simFacing`), while `Pose` and `UnitActivity` are
+`unit-sim`'s alone — and for each: raise its `csVersion`, freeze the
+outgoing DTO, and register that frozen type in `csOlderVersions` via
+`atVersion` with an explicit migration. `componentCodec` derives
+`ccInputVers` from those declarations, so the reader gains the new
+version while retaining every version it already accepted.
+
+Freezing the OUTGOING DTO is only half the job: **every** version left
+in `csOlderVersions` needs a wire type that reaches a frozen COPY of the
+constructor order that version was written with — transitively, the
+`Pose` nested in `UnitActivity` included. Today's frozen DTOs do not
+satisfy that. `UnitSimStateDTOv1` (which `unit-sim` v1 AND v2 both
+decode through) still names the live `Pose`/`UnitActivity`/`Direction`,
+and `UnitInstanceDTOv1.uid1Facing` still names the live `Direction`, so
+a reorder that froze only the current shape would decode every retained
+legacy payload against the new order anyway. `unitSimCodec`'s v1/v2
+entries are the exemplar for version dispatch and explicit migration
+only — no codec has needed a frozen enum yet, so they do not
+demonstrate that half.
 
 ---
 
@@ -2188,7 +2403,7 @@ passed while the developer's bindings were being replaced.
 ## CLI value validation (#1191)
 
 Enforced by hspec `--match "App.Cli"` and `tools/preview_cli_probe.py`
-(no boot). CLAUDE.md states the rule, the flags it covers, and
+(no boot). `app/CLAUDE.md` states the rule, the flags it covers, and
 `--region`'s exclusion. This is the rest.
 
 **Empty selections and empty segments** are errors too, not just unknown
@@ -2209,9 +2424,10 @@ default is `docs/code_health_findings.md` CH-67, sequenced after #1081.
 ## Debug-console listener policy (#1190)
 
 Enforced by hspec `--match "debug-console listener policy"` and
-`tools/debug_console_boot_probe.py` (CI-eligible). CLAUDE.md keeps the
-rule — `--headless`/`--offscreen` ABORT when the listener can't start;
-this is the detail.
+`tools/debug_console_boot_probe.py` (CI-eligible). The root `CLAUDE.md`
+§Launch rules and `app/CLAUDE.md` keep the rule —
+`--headless`/`--offscreen` ABORT when the listener can't start; this is
+the detail.
 
 Those two modes have no window, so the console is their only
 interactive control surface. If the listener can't start — an occupied
@@ -2277,3 +2493,208 @@ the differing name) — use the explicit refspec above. That push prints
 `Cannot update this protected ref` and `N of N required status checks are
 expected` and then **succeeds anyway** under admin bypass — judge it by
 `git rev-list --left-right --count HEAD...origin/master`, not the warning.
+
+---
+
+## Headless fixture logging (#1925)
+
+Every `test-headless` engine boots through `Test.Headless.Harness.Log`,
+never `Engine.Core.Init.initializeEngineHeadless` — a preference-free
+fixture takes `initializeEngineHeadlessQuiet` (a discarding callback,
+chosen BEFORE initialization, which is the only point the initializer's
+own entries can still be steered), and a spec that wants the entries
+takes `initializeEngineHeadlessLogging` with `newLogCapture`'s atomic
+backend. To get a quiet fixture's output back with no source edit, rerun
+with `SYNARCHY_TEST_LOG=stderr` (`stdout` restores the pre-#1925 stream;
+unset, empty and `quiet` are quiet; anything else is a hard error, not a
+silent quiet run). The variable steers only the quiet default, so it
+never overrules a spec that named its own backend. Production is
+unchanged: `initializeEngineHeadless` still logs to stdout for
+`App.Headless`, and `App.Dump` still picks stderr. Gate: hspec
+`--match "headless fixture logging"`.
+
+---
+
+## The full test tier: `SYNARCHY_FULL_TESTS` (#1364)
+
+`SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless` costs +~11 s
+on a warm macOS/aarch64 tree and +~64 s of hspec wall on CI's Linux
+runner — measure each platform, don't port one number. Since #1364 this
+tier is no longer local-only: CI's `Headless test suite` step sets the
+variable whenever the SAME worldgen selector that gates `world_check
+--quick` fires — so every worldgen-output PR and every push to master
+runs it and a failure blocks — and `tools/ci-local.sh` (`make ci`) sets
+it unconditionally. Running it by hand is still the fast way to see a
+failure before pushing; it is no longer the only thing standing between
+a full-tier regression and master.
+
+**The variable is wholesale, not per-test.** It has exactly one consumer
+today (`Test.Headless.WorldGen.Exposure`'s w128 seed-42 volcano case),
+and any new example added behind it automatically joins BOTH of those
+gates. Add one only after deliberately accepting that recurring CI
+cost. The guard matches any present value: `SYNARCHY_FULL_TESTS=`
+(empty) reads as ENABLED, so anything turning it off must leave it
+unset.
+
+---
+
+## Unit and combat animations headless
+
+No pixels headless, but `unit.getInfo(uid)` returns
+`currentAnim`/`animStart` (the unit thread runs headless); poll over
+time to verify timelines. Gate: `combat_anim_probe.py`. Drive by hand:
+load `scripts/unit_stats.lua` + `unit_resources` + `unit_ai`, then
+`require('scripts.unit_ai').commandAttack(atk,tgt)`.
+
+---
+
+## Movement arenas
+
+`scripts/movement_arena.lua` builds obstacle courses on a flat
+`world.initArena` world via the tile-edit API
+(`world.addTile`/`deleteTile`/`setFluidTile`/`setSlope` — `setSlope` is
+the ONLY way to make a step walkable). `startFall` clears the move
+target on landing, so fall checks assert the fall + landing z, not
+arrival. Gate: `movement_probe.py` (neutralises the unit_ai wander tick
+so `moveTo` is the only steering).
+
+---
+
+## Construction (#95/#96)
+
+`construction.*` designations + construct_job AI (claim → source
+materials → progress → place → stake); build costs in
+`data/structure_packs/*.yaml` `build:` blocks. Gate:
+`construction_probe.py` (stake phase runs LAST).
+
+---
+
+## Roles (#265)
+
+DERIVED labels, never assigned: highest work skill ≥ 30 (+5 switch
+hysteresis). Roles multiply work-action ENTRY utilities only (on-role
+×1.4, off-role ×0.7) — never the 6.0 in-progress locks, never
+survival/combat/orders. `unitAi.getRole`. Gate: `role_probe.py`.
+
+---
+
+## Crafting and bills (#325/#326/#329/#343/#795)
+
+Recipes in `data/recipes/*.yaml` (station tag, inputs, optional
+fuel/knowledge/skill, work, outputs, optional `power_draw`).
+`craft.execute(uid, recipeId)` is station-blind (tests/console);
+`craft.executeAt(uid, recipeId, bid[, billId])` needs a Built station
+offering the operation with the unit adjacent (Chebyshev ≤ 1). Bills
+(`Craft.Bills`, per-page, engine-side atomic claims, persisted) have
+three modes: fixed count, repeat-forever, until-stock — the last
+re-checks LIVE ground stock via `unit_ai_fetch.untilStockSatisfied`,
+the same formula the crafting panel uses. Skill-tagged recipes derive
+output quality from the crafter, then shift by live mental
+effectiveness (±10), so quality assertions must pin the
+neutral-effectiveness precondition (#878). Gates: `craft_probe.py`,
+`craft_bill_probe.py`.
+
+---
+
+## Power (#358-#361, #590/#591, #1206)
+
+Solar/battery nodes are item-consuming placements (`power.placeNode`
+via `buildTool.commitPlacement`); networks (wire 4-adjacency +
+nodes/consumers) are recomputed fresh every tick — only battery
+`storedWh` persists. Solar follows the sun angle and
+`world.setTimeScale`. Electrical load lives on the RECIPE
+(`power_draw`), not the building: a bill draws only while claimed AND
+`cbWorking`; `power.isStationPoweredForRecipe(bid, recipeId[, billId])`
+is the gating query — pass the bill's own id so its already-registered
+draw isn't double-counted. A node's LIFETIME is its building's:
+`BuildingDestroy` retires it in the same live transaction that removes
+the instance (`Power.Live.retirePowerNodeEverywhere`), so a demolition
+never reaches the save — but that is NOT load-time pruning: a save
+already carrying a dangling node still restores it verbatim.
+Retirement is a delete, never a compaction (`pnsNextId` keeps
+advancing; a retired id is never reissued), and there is deliberately
+no public `power.removeNode`. Gates: `power_probe.py`,
+`power_workshop_probe.py`, `machine_shop_probe.py`, hspec
+`--match "power node demolition"`; pure algorithm in
+`Test.Headless.Power.Network`.
+
+---
+
+## Farming (#331-#336)
+
+Flora growth is DERIVED state from the advancing calendar (nothing
+per-instance in saves; `world.getDate`/`setDate`,
+`world.getFloraGrowthAt`). Fruiting windows gate bare food-harvest
+calls only; tagged calls (chop's `"wood"`) skip the window, and
+chop-claim keys on `regrowthRemaining`+`tags`, not `harvestable`.
+Tilling: `till.*` mirrors `chop.*`; completion writes `world.setVegAt`
+(edit-log — survives eviction/saves); consumers must use
+`world.isPlantable`, never compare `getVegAt` to raw id 77. Gates:
+`flora_growth_probe.py` (registers a max-tolerance `probe_berry`
+species), `till_probe.py`.
+
+---
+
+## Blood decals: transience (#603)
+
+Architecture record: [`docs/blood_decals.md`](blood_decals.md). Six
+`--match`-able hspec groups under `test-headless/Test/Headless/Blood/`:
+`Blood.Types`, `Blood.Texture`, `Blood.Impact`, `Blood.Trail` (includes
+`Blood.Pool`), `Blood.Teardown`, and `Blood.LuaApi` (the registered-Lua
+`blood.gpuHandles` query, #1585, on its own isolated engine). Probes:
+`blood_decal_probe.py`, `blood_impact_probe.py`,
+`bleeding_trail_probe.py`, and the needs-GPU
+`blood_gpu_lifecycle_probe.py` (manual-only). **Transience contract**:
+blood is transient BY DESIGN — `wsBloodStoreRef` and every unit's
+`TrailState` are deliberately never persisted, and a loaded session
+always starts with no decals and no accumulators. A test asserting a
+mark survives a save/load round trip is testing for behavior this
+engine deliberately does not have (closed issue #884 is the spec for
+reversing it).
+
+---
+
+## Logging streams
+
+Event log: `engine.getEventLog()`, emit via `engine.emitEvent(cat,text)`
+/ `emitEventAt` / `emitEventForUnit(cat,text,uid[,gx,gy])`; a category
+lands only if its notifications YAML has `log: true`. Combat:
+`combat.drainEvents()`. Injury (NON-combat only — falls, hazards, wound
+deaths): `injury.drainEvents()`. These are DRAINED streams — don't
+drain manually in a test while the panel script is loaded, or you'll
+race it. Gate: `injury_log_probe.py`.
+
+---
+
+## Config state and legacy migration (#638/#786/#1937)
+
+Settings save to gitignored `config/*.local.yaml`; boot falls back to
+tracked `*_default.yaml` (notifications self-materializes from
+`data/notification_categories.yaml`; `save` resolves as an explicit
+KEY-LEVEL overlay instead, so a sparse local file keeps every tracked
+default it doesn't mention). The tracked legacy
+`video.yaml`/`keybinds.yaml`/`notifications.yaml` exist ONLY as a
+one-time migration source: `Engine.Core.Init.migrateLegacyConfig`
+copies a legacy file to the local path iff the local file is absent AND
+the legacy file decodes against the real target schema; failures fall
+back to defaults and never touch a valid local file.
+
+**A neutral placeholder is NOT promoted (#1937).** Those tracked legacy
+files hold the versioned default's own content, and copying that was
+never a no-op — it froze the then-current defaults as durable local
+state that outranks the template for ever after, so a revised shipped
+value never reached anyone who booted once and never saved. Video and
+keybindings therefore pass a `LegacyNeutralityCheck`: a legacy file
+whose DECODED value (not its bytes) equals the tracked
+`_default.yaml`'s is recognized, not copied — the local file stays
+absent and the log line is deliberately not the migration line. The
+determination is recorded in a gitignored
+`config/*.legacy-neutral.local.yaml` so a LATER revision of that
+template cannot make the untouched placeholder look like player state;
+a legacy file the player really edited still migrates, with the
+unchanged `Migrated legacy config <legacy> -> <local>` message.
+Notifications get no check (`Nothing`) and keep the unconditional copy:
+they have no tracked template to be neutral against, and an absent
+overrides file already defers to `data/notification_categories.yaml`.
+Gates: hspec `--match "config"`, `tools/config_migration_probe.py`,
+`tools/config_state_probe.py`.
