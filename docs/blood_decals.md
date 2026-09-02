@@ -451,10 +451,10 @@ capability this doc is merely under-explaining.
 
 ## Testing
 
-See the **Blood decals (#603 epic)** entry under CLAUDE.md's
-"Subsystem probes & domain contracts" for the turnkey probes, hspec
-`--match` targets, and the transience contract restated for anyone
-writing a new blood test.
+See the **Blood decals (#603)** entry under CLAUDE.md's "Domain
+contracts" and `docs/engine_contracts.md` §Blood decals: transience for
+the turnkey probes, hspec `--match` targets, and the transience contract
+restated for anyone writing a new blood test.
 
 ## Implementation history
 

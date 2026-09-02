@@ -406,8 +406,8 @@ Exit codes: 0 pass, 1 check failure, 2 bad invocation.
 
 Unlike the worldgen tools above (which shell out to `--dump`, no TCP), these
 scripts boot a **real headless engine** (`--headless --port NNNN`), drive it
-over the debug-console TCP protocol (see the repo-root `CLAUDE.md` "Headless
-Mode & Debug Console" section for the protocol itself), and assert on the
+over the debug-console TCP protocol (see `docs/headless_console.md` for the
+protocol itself and the repo-root `CLAUDE.md` "Launch rules"), and assert on the
 result. They're first-class regression harnesses — each one is the gate for
 a specific system or bug, referenced from `CLAUDE.md` and PR descriptions —
 but because they boot a full engine (and some generate a real world on top
@@ -598,7 +598,7 @@ once:
   is a full engine process.
 
 A full run (any `--jobs`) is slow; it is *not* part of any default test
-tier — see `CLAUDE.md` Testing Tiers. Prefer `--only` for day-to-day use.
+tier — see `CLAUDE.md` "Testing tiers". Prefer `--only` for day-to-day use.
 
 `--retries N` re-runs a failed probe SOLO (never concurrently, regardless
 of `--jobs`) up to `N` more times before it's counted as failed — a probe
@@ -1177,7 +1177,7 @@ python3 tools/test_location_probe_config_isolation.py
 ### `ci_probes.py` — CI probe selection + eligibility (#530, #540)
 
 Computes which probes CI should run for a given set of changed files (see
-`.github/workflows/ci.yml` and the CLAUDE.md "Testing Tiers" section for
+`.github/workflows/ci.yml` and the CLAUDE.md "Testing tiers" section for
 the gate this feeds). It also owns `CI_ELIGIBLE` — the curated,
 small smoke subset of the full registry that's actually allowed to run in
 the blocking CI gate. Deterministic probes can still be manual-only when
