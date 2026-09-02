@@ -44,6 +44,20 @@ function thoughtLog.update(dt)
     end
 end
 
+-- Load-replacement reset (#2156). A published load replaces the whole
+-- session, and byUnit is keyed by raw integer UID, so a UID the
+-- replacement session reuses would otherwise inherit the replaced
+-- session's thoughts. Emptied IN PLACE -- the table is published on the
+-- module and other code may hold a direct reference. The engine-side
+-- stream was already cleared by World.Load.Publish.resetTransientState
+-- before the onSaveLoaded broadcast that reaches this, so nothing old
+-- can drain in afterwards. Swept from scripts/ui/view_teardown.lua's
+-- "saveLoaded" transition.
+function thoughtLog.clearSession()
+    local byUnit = thoughtLog.byUnit
+    for uid in pairs(byUnit) do byUnit[uid] = nil end
+end
+
 -- Rendered thought-log entries for `uid`, newest-first — the shape
 -- scripts/unit_log.lua's Thought tab (and All-tab merge) expects, same
 -- as combat_log.unitEntries / injury_log_panel.unitEntries.

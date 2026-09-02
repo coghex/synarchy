@@ -18,14 +18,14 @@ concrete precondition
 
 ## Status
 
-- [ ] ER-1. Item-contents identity examples compare signatures to themselves
-- [ ] ER-2. Arena seed contract examples reduce both sides to seed zero
-- [ ] ER-3. Encounter-roll stability compares one result vector to itself
-- [ ] ER-4. Repeated capability projections cannot prove that pure projections allocate no refs
+- [x] ER-1. Item-contents identity examples compare signatures to themselves — [#2063]
+- [x] ER-2. Arena seed contract examples reduce both sides to seed zero — [#2065]
+- [x] ER-3. Encounter-roll stability compares one result vector to itself — [#2068]
+- [x] ER-4. Repeated capability projections cannot prove that pure projections allocate no refs — [#2071]
 
 ## 1. Same-input assertions added by later feature work
 
-### ER-1. Item-contents identity examples compare signatures to themselves
+### [#2063] ER-1. Item-contents identity examples compare signatures to themselves
 
 > **Captured note:** PR #1625 added two examples named for equal flat and nested
 > item signatures, but each compares the same pure `Text` expression to itself.
@@ -69,7 +69,7 @@ real flat/deep coverage and remain green.
   false-green test concern.
 - **Remaining uncertainty:** None.
 
-### ER-2. Arena seed contract examples reduce both sides to seed zero
+### [#2065] ER-2. Arena seed contract examples reduce both sides to seed zero
 
 > **Captured note:** PR #1798's pure arena-seeding group contains one textual
 > self-comparison and one semantic self-comparison through a fixture whose
@@ -122,7 +122,7 @@ comparison, and fresh-process save probe remain the meaningful coverage.
   compatibility surface or only the fresh/load agreement is contractual; that
   choice determines removal versus a small golden.
 
-### ER-3. Encounter-roll stability compares one result vector to itself
+### [#2068] ER-3. Encounter-roll stability compares one result vector to itself
 
 > **Captured note:** PR #1900 added a persistent-encounter example whose final
 > assertion compares `map rolled [0 .. 255]` to an identical copy, so it does not
@@ -174,7 +174,7 @@ mapping.
 
 ## 2. Pure capability projections repeat an impossible failure mode
 
-### ER-4. Repeated capability projections cannot prove that pure projections allocate no refs
+### [#2071] ER-4. Repeated capability projections cannot prove that pure projections allocate no refs
 
 > **Captured note:** Ten capability modules contain eleven “stable across
 > repeated projection (no fresh containers)” examples, and the read-only view

@@ -8,11 +8,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Parenthesizing a capability projection silently removes its writers from the audit
+- [x] PRR-1. Parenthesizing a capability projection silently removes its writers from the audit — [#2059]
 
 ## 1. EngineEnv capability writer enforcement
 
-### PRR-1. Parenthesizing a capability projection silently removes its writers from the audit
+### [#2059] PRR-1. Parenthesizing a capability projection silently removes its writers from the audit
 
 > **Captured note:** Make the EngineEnv capability writer audit either parse semantically inert parentheses around a projection's right-hand side or fail closed when it cannot derive a capability accessor. Today changing `fcField = fieldOne env` to the equivalent `fcField = (fieldOne env)` erases that capability field from the derived accessor map, so a direct `IORef` write through it is classified as an ordinary non-write and passes every blocking check.
 

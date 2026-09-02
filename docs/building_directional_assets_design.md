@@ -7,12 +7,14 @@ clear contract for which directional and lifecycle assets every building owns,
 which scene elements remain separate structure art, and how those assets are
 validated and reviewed.
 
-The same destruction rule covers structure pieces: every building and every
-structure requires a dedicated forward-authored destruction animation. The
-structure renderer's already-settled camera-facing identity remains its own
-contract; this arc adds the missing destruction lifecycle and art.
+The same lifecycle discipline covers structure pieces. Architectural variants
+such as walls, floors, pillars/posts, and stairs need full construction, static,
+and destruction sprites so future ruins can use visibly distinct states rather
+than a generic effect. Every building and structure still requires dedicated
+forward-authored destruction. The structure renderer's already-settled
+camera-facing identity remains its own contract.
 
-Design state: `exploring`
+Design state: `ready for issue processing`
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -20,11 +22,14 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Give buildings directional lifecycle assets and every constructible dedicated destruction art
-- [ ] BDA-1. Introduce camera-facing building asset declarations and distinct lifecycle roles
-- [ ] BDA-2. Render and hit-test the correct building view at every camera facing
-- [ ] BDA-3. Add a non-looping building destruction presentation lifecycle
+- [x] EPIC. Give buildings and structures explicit directional lifecycle art — [#2078]
+- [x] BDA-1. Introduce camera-facing building asset declarations and distinct lifecycle roles — [#2080]
+- [x] BDA-2. Render and hit-test the correct building view at every camera facing — [#2088]
+- [x] BDA-3. Add a non-looping building destruction presentation lifecycle — [#2091]
+- [ ] BDA-18. Render structure construction from authored progress frames
+- [ ] BDA-14. Add immediate structure teardown with transient destruction playback
 - [ ] BDA-4. Make the building preview inspect every direction and lifecycle role
+- [ ] BDA-17. Make structure preview inspect construction and destruction sets
 - [ ] BDA-5. Author the directional Workbench asset set
 - [ ] BDA-6. Author the directional Cargo Hold asset set
 - [ ] BDA-7. Author the directional Acolyte Portal asset set
@@ -33,21 +38,25 @@ concrete precondition
 - [ ] BDA-10. Redesign and author the directional Kitchen asset set
 - [ ] BDA-11. Author the directional Solar Panel asset set
 - [ ] BDA-12. Author the directional High-Voltage Battery asset set
-- [ ] BDA-13. Enforce the complete building asset contract before play
+- [ ] BDA-15. Author Dungeon structure lifecycle sets
+- [ ] BDA-16. Author Wire structure lifecycle sets
+- [ ] BDA-13. Enforce the complete constructible asset contract before play
 
 ## Epic contract
 
 - **Goal:** Every gameplay building presents the correct authored view as the
   camera rotates and has an explicit, reviewable asset inventory for each
   lifecycle it supports, without baking room walls or floors into an indoor
-  fixture; every building and structure piece also has dedicated destruction
-  art.
+  fixture; every buildable structure appearance has authored construction/
+  static/destruction sprites, and every building and structure piece has
+  dedicated destruction art.
 - **Done when:** All eight shipped building definitions use the settled
   directional schema; construction, appearance, built, and destruction roles
   resolve consistently at all four camera facings; destruction has settled
-  gameplay timing for buildings and structures; the preview exposes the
-  complete matrix; and automated guards reject incomplete or inconsistent
-  building or structure destruction art.
+  gameplay timing for buildings and structures; buildable structure variants
+  render authored progress frames and settle continuously into their exact
+  static appearance; the preview exposes the complete matrix; and automated
+  guards reject incomplete or inconsistent lifecycle art.
 - **Users and operators:** Players rotating the world camera, artists adding
   buildings, reviewers approving generated art, and maintainers extending the
   building catalog.
@@ -95,6 +104,40 @@ Verified against `b4631ca6` on 2026-08-31:
 - The building preview treats each animation directory as one list entry. It
   has no building direction strip or lifecycle matrix, and deliberately exposes
   undeclared numbered directories such as `demolish`.
+- Structures are a separate persistent per-chunk overlay. Each placed entry
+  stores only texture-palette id, facemap-palette id, z, and its tile/slot key;
+  it does not retain pack name, logical kind, variant name, lifecycle, or an
+  animation identity (`Structure.Types.StructurePieceData`).
+- `structure.clear` removes the staged entry immediately and queues a
+  persistent `WeClearStructure` edit; the world thread deletes the live overlay
+  when loaded and records the clear even when the chunk is unloaded. There is
+  no retained structure visual or destruction clock. `structure.clearAll` is a
+  separate bulk wipe that removes every structure edit and live overlay.
+- Two structure packs ship. `dungeon_1` has 13 distinct visible texture paths:
+  seven default appearances (floor, ceiling, post, and four wall identities)
+  plus six damaged overrides (floor, post, and four walls). Walls additionally
+  select among four cap facemaps. `wire` has 16 connection-specific texture
+  appearances. No pack declares construction/destruction frames or per-frame
+  facemaps.
+- The world fragment shader samples facemap RGB as lighting weights and
+  multiplies final texture alpha by facemap alpha. Reusing an intact facemap
+  unchanged would therefore hide destruction pixels that move outside its
+  original alpha silhouette. The same shader already falls back to top-light
+  weights when facemap RGB is empty, so a transient-only policy can reuse the
+  source RGB while taking visibility from the destruction texture's own alpha.
+  `dungeon_1`'s damaged variants are the checked-in precedent for reusing the
+  intact facemap when geometry permits it.
+- `--preview structures/<name>` is currently the generic static-folder browser;
+  it does not read structure-pack YAML, group construction/destruction
+  sequences, expose resolved variants, or play an animation.
+- A structure construction designation already stores pack, kind, optional wall
+  edge, and progress. Its renderer ignores that resolved appearance and draws
+  one generic `constructStructTexture`, fading it from 45% alpha to opaque;
+  structure construction has no authored progress frames today.
+- The current structure vocabulary contains floor, ceiling, post, four wall
+  slots, and Wire. `dungeon_1` has no stair kind or stair art. A stair lifecycle
+  can be part of the asset contract now, but adding playable stairs would also
+  require a new structure kind and its placement/navigation behavior.
 - The eight gameplay definitions and their currently declared roles are:
 
   | Building | Work | Declared gameplay art |
@@ -120,12 +163,17 @@ Verified against `b4631ca6` on 2026-08-31:
   fixture, while walls, floors, and other room structure are separate assets.
   Workbench and Machine Shop already read as isolated fixtures; Cargo Hold,
   Furnace, Battery, and Solar Panel read as self-contained installations.
-- Existing tracker overlap is real but not a duplicate of this arc. Epic #1837
-  and children #1845/#1848/#1849/#1850/#1853 cover designation ghosts and
-  south-facing construction progress. Closed #1712 explicitly left building
-  rendering out of its camera-facing structure-wall fix. No searched issue
-  defines directional building art, player orientation, or a destruction
-  lifecycle contract.
+- A live tracker recheck on 2026-08-31 found epic #1837 and children
+  #1845/#1846/#1848/#1849/#1853 open; #1850 is closed. They cover designation
+  ghosts and south-facing construction progress, not this complete lifecycle
+  arc. In particular, #1846 correctly gives planned structures their target art
+  but explicitly makes them invisible after material payment until completion;
+  BDA-18 must preserve its preview/designation behavior and supersede only that
+  work-start invisibility with authored construction playback. Closed #1712
+  explicitly left building rendering out of its camera-facing structure-wall
+  fix. No searched issue defines four-facing building art, dedicated
+  destruction for every constructible, or per-variant structure lifecycles, so
+  this umbrella is not a silent duplicate.
 
 ## Desired experience
 
@@ -138,6 +186,14 @@ Verified against `b4631ca6` on 2026-08-31:
 - Removing a building gives the player a readable non-looping destruction
   presentation without leaving a usable, collidable, powered, or selectable
   building behind after the gameplay removal point.
+- Removing one structure piece clears its persistent gameplay identity
+  immediately, then plays the dedicated destruction sequence for the exact
+  appearance that occupied that slot. Rotating the camera during playback uses
+  the structure renderer's existing facing identity without reviving the piece.
+- Constructing any buildable structure plays the exact variant's authored
+  progress sprites rather than fading a generic blueprint. The final frame
+  hands off continuously to that variant's static sprite; ruined/damaged
+  variants remain visually distinct throughout their lifecycle.
 - `--preview buildings/<name>` makes omissions obvious by allowing the reviewer
   to inspect every lifecycle role at all four camera facings. Every generated
   texture remains behind explicit owner signoff.
@@ -156,6 +212,9 @@ Verified against `b4631ca6` on 2026-08-31:
 - Direction-correct static, animated, ghost, render, sizing, and hit-test paths.
 - Distinct construction, timed appearance, built, and destruction roles.
 - A settled destruction presentation and removal boundary.
+- Full construction/static/destruction sprite inventories for every buildable
+  structure appearance, including current floors, ceilings, pillars/posts,
+  walls, and Wire connections; future stairs inherit the same rule.
 - Dedicated forward-authored destruction animations for every building and
   every structure piece, including the Portal.
 - Direction/lifecycle-aware building preview and diagnostic dump state.
@@ -163,11 +222,13 @@ Verified against `b4631ca6` on 2026-08-31:
   room enclosure art.
 - One isolated art slice per shipped building, each with PixelLab or
   owner-supplied source, gameplay-scale evidence, and explicit signoff.
+- One isolated lifecycle-art slice per shipped structure pack, covering every
+  resolved appearance required by the settled structure identity rule.
 - A repository guard for path containment, direction coverage, frame ordering,
-  image decoding, dimensions, anchor continuity, role completeness, and
-  lifecycle handoffs.
-- Coordination or supersession of #1845, #1848, #1849, and #1853 once this
-  design is ready and its replacement tracker artifacts exist.
+  image decoding, source-facemap resolution, dimensions, anchor continuity,
+  role completeness, variant coverage, and lifecycle handoffs.
+- Coordination or supersession of #1845, #1846, #1848, #1849, and #1853 once
+  this design is ready and its replacement tracker artifacts exist.
 
 ### Out of scope
 
@@ -176,7 +237,10 @@ Verified against `b4631ca6` on 2026-08-31:
   orientation, orientation-dependent footprint, or save migration.
 - Structure wall/floor/post directional identity and remapping; structure packs
   already own that facing contract. This arc consumes the resolved view for
-  destruction playback but does not redesign it.
+  lifecycle playback but does not redesign it.
+- Stair traversal, vertical pathfinding, placement rules, or save
+  representation. Stairs inherit the asset contract when they become
+  buildable, but implementing that still-nonexistent kind is a later feature.
 - Changing building footprints, recipes, materials, work rates, storage,
   operations, power behavior, or placement validity.
 - A generic mechanically recolored, cropped, erased, mirrored, or placeholder
@@ -221,6 +285,24 @@ animation machinery. A role the definition does not support is absent; it is
 never synthesized from another role at runtime. The guard, rather than a
 renderer fallback, explains a missing required role before play.
 
+Structures use their own, variant-aware lifecycle matrix:
+
+| Role | Required when | Selection model | Handoff invariant |
+|---|---|---|---|
+| Static | Every resolved appearance | exact pack/kind/variant/facing sprite | canonical visible state |
+| Construction | Every buildable structure appearance | progress-indexed, non-looping | final frame is continuous with that exact static variant |
+| Destruction | Every gameplay structure appearance | time-indexed, non-looping | first frame is continuous with that exact static variant and ends with no structure quad |
+
+Construction and destruction entries contain full color/alpha sprite frames.
+Fading the static sprite, mechanically erasing it, or layering a generic effect
+over it does not satisfy either role. A resolved appearance may reuse its
+existing/default facemap across every lifecycle frame under D-10.
+
+Frame selection is deterministic: construction derives only from durable build
+progress, while appearance, built loops, and destruction derive from their one
+recorded lifecycle clock. Camera rotation changes only the selected authored
+view, never the semantic stage, and no lifecycle path chooses frames randomly.
+
 ### Visual ownership classes
 
 - **Indoor fixture:** apparatus, furniture, directly owned plinth, contact
@@ -251,6 +333,43 @@ existing destroy command boundary; only the non-interactive visual remains
 until its last frame. The effect owns no inventory, power, jobs, collision,
 selection, or other gameplay state. It is session-transient, is not serialized,
 and does not change the building save format.
+
+The same functional boundary applies to an individual structure removal: the
+`WeClearStructure` edit remains the immediate persistent authority, while a
+separate transient effect renders afterward. Bulk world/structure maintenance
+paths remain immediate and silent under D-13.
+
+### Proposed structure lifecycle identity
+
+For construction, the designation already supplies pack, kind, optional wall
+edge, and progress; the art catalogue can combine those with wall-cap or Wire
+connection context to resolve the target static appearance. The lifecycle
+manifest keys authored construction frames to that resolved appearance rather
+than the current generic blueprint texture. If a future ruined variant is made
+player-buildable, its variant identity must be explicit enough to select its own
+frames; silently falling back to the default variant is forbidden.
+
+A placed structure does not persist its pack, logical kind, or variant, so the
+destruction catalog should resolve from the exact static texture identity it
+already stores through the texture palette. Before `structure.clear` removes a
+present piece, it captures the piece's texture path, facemap path, slot, z, page,
+and canonical tile into a render-only effect. No structure save-format field is
+added.
+
+The contract does not require a new facemap file per construction or
+destruction frame. Each lifecycle uses the resolved static appearance's
+existing/default facemap RGB as lighting weights, while a lifecycle-only render
+flag makes the animation texture's own alpha authoritative for visibility.
+Pixels outside the reused facemap's painted RGB use the shader's existing
+top-light fallback. Walls continue through the existing `Structure.Facing`
+identity/remapping path; lifecycle playback does not invent another
+wall-direction convention.
+
+Every resolved sprite variant has its own authored construction and destruction
+frame lists under D-11. Wall cap facemap variants do not multiply those sprite
+lists because they change lighting/capping rather than the underlying wall
+texture; playback uses whichever existing cap facemap the resolved appearance
+already selected.
 
 ### Preview and review
 
@@ -324,21 +443,67 @@ is part of the freestanding machine; it is not a room wall.
 
 ### D-8. Every frame has four separately authored camera views
 
-Every static sprite and every animation frame owns distinct south, west, north,
-and east files, including art that currently appears symmetric. The completed
-schema permits no facing aliases, horizontal mirroring, shared paths, or
-`default` substitution. All four cells are inspected independently during
-preview signoff. This uniform inventory prevents a later asymmetrical detail
-from silently invalidating a reuse assumption.
+Every building static sprite and every building animation frame owns distinct
+south, west, north, and east files, including art that currently appears
+symmetric. The completed building schema permits no facing aliases, horizontal
+mirroring, shared paths, or `default` substitution. All four cells are inspected
+independently during preview signoff. This uniform inventory prevents a later
+asymmetrical detail from silently invalidating a reuse assumption. Structure
+pieces keep their separate, already-settled slot/facing identity contract.
 
 ### D-9. Every building and structure has dedicated forward destruction art
 
 Destruction is its own authored animation for every gameplay building and every
 structure piece. The Portal is not exempt. A destruction sequence may not be a
 construction sequence played backward, mechanically reversed, or substituted
-from another lifecycle. Its four camera-facing views depict credible teardown,
-breakage, collapse, discharge, extinguishing, or dispersal appropriate to the
-subject, and each asset set receives explicit preview and gameplay signoff.
+from another lifecycle. Building destruction follows D-8's four-view contract;
+structure destruction follows the structure pack's existing slot/facing
+identity. Both depict credible teardown, breakage, collapse, discharge,
+extinguishing, or dispersal appropriate to the subject, and each asset set
+receives explicit preview and gameplay signoff.
+
+### D-10. Structure lifecycle animations do not require per-frame facemaps
+
+Structure construction and destruction author color/alpha animation frames
+only. Each sequence reuses its resolved static appearance's existing/default
+facemap RGB for lighting, while a lifecycle-only render flag ignores facemap
+alpha so the animation frame's own alpha controls visibility. Destruction
+captures that facemap before removal; construction resolves it from the target
+appearance. Frame pixels without painted facemap RGB use the shader's existing
+top-light fallback. Dedicated frame facemaps are not part of the required asset
+inventory; if preview evidence later exposes a concrete lighting defect, an
+explicit override can be designed as a separate follow-up rather than
+pre-authoring one map per frame.
+
+### D-11. Every architectural structure variant owns full lifecycle sprites
+
+Walls, floors, pillars/posts, stairs, and other architectural structure
+appearances use complete authored construction, static, and destruction sprite
+sequences for each resolved visual variant. A generic overlay, fade, mechanical
+erase, or geometry-family effect is not a substitute. Construction converges
+on the exact static variant and destruction begins from it, so damaged and
+future ruin variants remain identifiable throughout playback. Existing/default
+facemaps may be shared across those frames under D-10. D-12 extends the same
+construction requirement to every buildable structure kind, including ceiling
+and Wire.
+
+### D-12. Every buildable structure requires authored construction sprites
+
+The construction lifecycle applies uniformly to every buildable structure kind
+and every resolved gameplay appearance. The current ceiling and all 16 Wire
+connection appearances are included alongside floors, pillars/posts, and
+walls; none may retain the generic blueprint fade as its construction
+presentation. Any future stair kind inherits this contract when it becomes
+buildable, but stair placement, traversal, and art are not added by this epic.
+
+### D-13. Bulk structure and world teardown does not animate
+
+Only ordinary gameplay demolition of one present structure piece spawns its
+destruction presentation. `structure.clearAll`, world teardown, load
+replacement, and debug/test reset remove their structures immediately and
+silently. Those maintenance paths do not enqueue transient effects for a render
+world that is disappearing or being replaced, and they do not change their
+existing completion semantics.
 
 ## Proposals
 
@@ -367,6 +532,28 @@ art slice lands.
 The Workbench construction sequence and PR #2023's approved Machine Shop
 sequence can remain the south-facing source for their later directional sets.
 Their current YAML wiring is transitional, not the finished contract.
+
+### P-5. Reuse each structure appearance's facemap without requiring frame facemaps
+
+Structure construction and destruction frames provide color/alpha art only.
+Playback uses the target or removed appearance's existing/default facemap RGB
+for lighting, while a lifecycle-only render flag ignores facemap alpha and uses
+the frame texture's own alpha for visibility. Empty facemap RGB continues
+through the shader's existing top-light fallback. This avoids a second
+hand-authored image for every lifecycle frame while preserving established
+lighting where it still applies. Adopted by D-10.
+
+### P-6. Compose structure destruction from the exact source sprite and a geometry-family effect
+
+Keep and fade the removed piece's exact source texture/facemap while playing a
+forward-authored destruction overlay selected by logical geometry: floor,
+ceiling, post, the four existing wall identities, or Wire. Damaged Dungeon
+overrides and the 16 Wire connection textures would therefore retain their
+exact starting silhouette without each requiring a full bespoke frame set.
+This still gives every removed piece forward destruction playback under D-9;
+it changes only the granularity at which authored effect art may be shared.
+Rejected by D-11 because ruin variants must retain full, independently authored
+construction and destruction sprites rather than borrowing a family overlay.
 
 ## Open questions
 
@@ -402,6 +589,34 @@ Resolved by D-9. Every building and every structure piece requires separately
 authored, forward-playing destruction art. The Portal is not exempt, and
 construction playback in reverse is forbidden.
 
+### Q-6. Does every resolved structure appearance require its own destruction sequence?
+
+Resolved by D-11. Every resolved architectural sprite variant owns full
+construction and destruction frame lists; a geometry-family overlay is not
+sufficient. Existing wall cap facemap variants may reuse the same wall sprite
+sequence because the cap changes only the selected default facemap, not the
+underlying static sprite identity.
+
+### Q-7. Do bulk structure/world wipes play destruction animations?
+
+Resolved by D-13. Gameplay demolition of one present piece animates;
+`structure.clearAll`, world teardown, load replacement, and test/debug reset
+remain immediate silent maintenance operations.
+
+### Q-8. Must structure destruction frames have hand-authored facemaps?
+
+Resolved by D-10. Construction and destruction frames supply color/alpha only,
+reuse the resolved appearance's existing/default facemap RGB for lighting, and
+make frame alpha authoritative through a lifecycle-only render flag. Per-frame
+facemaps are not part of the required inventory.
+
+### Q-9. Which structure kinds must supply authored construction sequences in this arc?
+
+Resolved by D-12. Every buildable structure kind and resolved appearance must
+supply authored construction sprites, including the current ceiling and Wire
+kinds. A future stair kind becomes subject to the same contract when it is
+introduced; this epic does not itself add stair gameplay or art.
+
 ## Verification strategy
 
 - Pure schema tests reject unknown/missing facing keys, duplicate or escaping
@@ -413,9 +628,17 @@ construction playback in reverse is forbidden.
 - Construction tests pin the same progress stage through all four camera
   rotations; appearance/built/destruction tests pin one shared clock and
   expected phase behavior.
+- Structure-construction tests resolve the designation's exact
+  pack/kind/variant/facing art, select the expected progress frame, reuse the
+  target facemap without alpha clipping, and hand off continuously to the
+  static sprite. A generic blueprint cannot satisfy the shipped contract.
 - Destruction tests prove gameplay registries are cleaned at the chosen
   boundary, the transient is non-interactive, and the last frame removes the
   visual. Save tests prove the settled persistence behavior.
+- Structure-clear tests prove the persistent edit/overlay disappears before
+  playback, the effect captured the exact former texture/facemap/slot/z, wall
+  facing still follows `Structure.Facing`, and D-13's bulk paths enqueue no
+  transient effects.
 - Preview headless coverage asserts lifecycle ordering, facing availability,
   path/frame dump data, selection preservation, resize behavior, and playback
   phase. Gameplay-scale evidence supplies four fixed-camera captures for each
@@ -443,7 +666,7 @@ construction playback in reverse is forbidden.
   still re-resolve definitions.
 - **Out of scope:** Runtime camera selection, shipped art, preview UI,
   destruction timing, and final no-legacy enforcement.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-2. Render and hit-test the correct building view at every camera facing
 
@@ -469,12 +692,56 @@ construction playback in reverse is forbidden.
 - **Phase:** Foundation
 - **Depends on:** BDA-1, BDA-2
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-3, D-6, D-8
+- **Relevant decisions:** D-3, D-6, D-8, D-9
 - **Acceptance signals:** Removal semantics stay authoritative; effects cannot
   be selected or used; a camera turn during playback resolves the same phase in
   the matching view; cleanup is complete after the last frame.
 - **Out of scope:** Authoring destruction frames.
-- **Open questions:** Q-5
+- **Open questions:** `None`
+
+### BDA-18. Render structure construction from authored progress frames
+
+- **Outcome:** A structure designation displays the target appearance's full
+  authored construction sequence as work progresses and hands off continuously
+  to its static sprite.
+- **Scope:** Structure-pack lifecycle manifest, exact appearance/variant lookup,
+  progress-indexed frame selection, target-facemap reuse and alpha policy,
+  compatibility with saved designations, removal of the generic blueprint as a
+  shipped-art fallback, and focused render/decoder tests.
+- **Phase:** Foundation
+- **Depends on:** #1846 (existing approved structure-ghost slice; no dependency
+  within this arc)
+- **Ordering:** `critical path`; process after existing #1846 is either landed
+  or revised, so its work-start invisibility cannot overwrite this lifecycle
+- **Relevant decisions:** D-3, D-10, D-11, D-12
+- **Acceptance signals:** Floor, ceiling, post/pillar, every wall identity, and
+  every Wire connection appearance select their own authored frames;
+  damaged/future variants cannot silently substitute default art; progress and
+  save/load preserve the same semantic stage; the final frame matches the
+  resolved static appearance.
+- **Out of scope:** Authoring production frames and adding stair traversal or
+  placement behavior.
+- **Open questions:** `None`
+
+### BDA-14. Add immediate structure teardown with transient destruction playback
+
+- **Outcome:** Clearing one present structure piece removes its persistent and
+  functional identity immediately, then plays its dedicated non-interactive
+  destruction animation.
+- **Scope:** Pre-clear identity capture, structure-pack destruction manifest,
+  source-facemap inheritance, transient alpha/lighting render policy, existing
+  `Structure.Facing` reuse, clear ordering, and focused persistence/render tests.
+- **Phase:** Foundation
+- **Depends on:** BDA-3, BDA-18
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-6, D-9, D-10, D-11, D-13
+- **Acceptance signals:** The `WeClearStructure` edit remains authoritative and
+  immediately observable; the removed piece cannot be queried or used; its
+  exact former appearance animates at the same page/tile/slot/z; camera rotation
+  follows existing structure identity; no transient enters a save.
+- **Out of scope:** Structure art authoring and any redesign of wall-facing
+  remapping.
+- **Open questions:** `None`
 
 ### BDA-4. Make the building preview inspect every direction and lifecycle role
 
@@ -485,12 +752,32 @@ construction playback in reverse is forbidden.
 - **Phase:** Foundation
 - **Depends on:** BDA-1, BDA-3
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-4, D-7, D-8
+- **Relevant decisions:** D-4, D-7, D-8, D-9
 - **Acceptance signals:** Every declared role and facing is selectable; camera
   order and gameplay paths agree; selection/phase survive resize; missing views
   are visible rather than substituted.
 - **Out of scope:** Generating or approving art.
-- **Open questions:** Q-5
+- **Open questions:** `None`
+
+### BDA-17. Make structure preview inspect construction and destruction sets
+
+- **Outcome:** `--preview structures/<pack>` exposes each resolved structure
+  appearance beside its full construction and destruction sequences and reused
+  default-facemap policy.
+- **Scope:** Structure-pack-aware discovery, appearance/variant grouping,
+  construction/destruction playback, facemap/alpha-policy diagnostics, dump
+  state, and focused preview tests.
+- **Phase:** Foundation
+- **Depends on:** BDA-18, BDA-14
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-4, D-9, D-10, D-11, D-12
+- **Acceptance signals:** Dungeon defaults/damaged variants and all Wire
+  connections are discoverable under their owning appearance; playback reports
+  every construction/destruction frame plus its reused facemap and alpha policy;
+  selection and phase survive resize; undeclared or missing sets are visible
+  rather than substituted.
+- **Out of scope:** Authoring or approving structure art.
+- **Open questions:** `None`
 
 ### BDA-5. Author the directional Workbench asset set
 
@@ -501,11 +788,11 @@ construction playback in reverse is forbidden.
 - **Phase:** Art pilots
 - **Depends on:** BDA-4
 - **Ordering:** `critical path`; indoor-fixture and construction pilot
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** Four-view construction remains stage-aligned and
   completes without an anchor or pixel handoff; no room enclosure is present.
 - **Out of scope:** Other buildings or engine behavior.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-6. Author the directional Cargo Hold asset set
 
@@ -516,11 +803,11 @@ construction playback in reverse is forbidden.
 - **Phase:** Art pilots
 - **Depends on:** BDA-4
 - **Ordering:** `critical path`; construction/destruction pilot
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** Tile-bottom anchoring and the built/construction/
   destruction handoffs remain continuous at all facings.
 - **Out of scope:** Other buildings.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-7. Author the directional Acolyte Portal asset set
 
@@ -530,11 +817,11 @@ construction playback in reverse is forbidden.
 - **Phase:** Art pilots
 - **Depends on:** BDA-4
 - **Ordering:** `critical path`; appearance/built-loop pilot
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** Four views retain animation phase and transition
   continuously through appearance, built loop, and destruction.
 - **Out of scope:** Portal spawning/gameplay behavior.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-8. Author the directional Furnace asset set
 
@@ -545,11 +832,11 @@ construction playback in reverse is forbidden.
 - **Phase:** Art backfill
 - **Depends on:** BDA-4
 - **Ordering:** `independent` after the pilots
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** Housing, anchor, progress stages, and handoffs remain
   stable at four facings.
 - **Out of scope:** Furnace crafting/gameplay.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-9. Author the directional Machine Shop asset set
 
@@ -560,11 +847,11 @@ construction playback in reverse is forbidden.
 - **Phase:** Art backfill
 - **Depends on:** BDA-4
 - **Ordering:** `independent` after the pilots
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** All views depict the same machinery and progress
   stages without a room enclosure; handoffs and anchor are continuous.
 - **Out of scope:** Machine Shop gameplay and power behavior.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-10. Redesign and author the directional Kitchen asset set
 
@@ -575,12 +862,12 @@ construction playback in reverse is forbidden.
 - **Phase:** Art backfill
 - **Depends on:** BDA-4, BDA-5
 - **Ordering:** `critical path`; follows the indoor-fixture pilot
-- **Relevant decisions:** D-1, D-2, D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-1, D-2, D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** Every frame contains only Kitchen-owned equipment and
   reads correctly inside independently rendered structure walls/floor at all
   camera facings.
 - **Out of scope:** Kitchen recipes, operations, materials, and room generation.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-11. Author the directional Solar Panel asset set
 
@@ -590,11 +877,11 @@ construction playback in reverse is forbidden.
 - **Phase:** Art backfill
 - **Depends on:** BDA-4
 - **Ordering:** `independent` after the pilots
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** The panel's asymmetry, base, anchor, and destruction
   read correctly across four facings.
 - **Out of scope:** Power generation and placement inventory behavior.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
 ### BDA-12. Author the directional High-Voltage Battery asset set
 
@@ -604,25 +891,70 @@ construction playback in reverse is forbidden.
 - **Phase:** Art backfill
 - **Depends on:** BDA-4
 - **Ordering:** `independent` after the pilots
-- **Relevant decisions:** D-3, D-4, D-7, D-8
+- **Relevant decisions:** D-3, D-4, D-7, D-8, D-9
 - **Acceptance signals:** Terminals, housing, base, anchor, and destruction read
   consistently across four facings.
 - **Out of scope:** Storage ratings and power-network behavior.
-- **Open questions:** Q-5
+- **Open questions:** `None`
 
-### BDA-13. Enforce the complete building asset contract before play
+### BDA-15. Author Dungeon structure lifecycle sets
 
-- **Outcome:** CI rejects any shipped building whose direction/lifecycle matrix
-  is incomplete, inconsistent, undecodable, untracked, or still uses the legacy
-  singular/default form.
+- **Outcome:** Every required `dungeon_1` structure appearance has
+  owner-approved static, construction, and forward destruction sprites under
+  the settled kind inventory.
+- **Scope:** Default floor, ceiling, post/pillar, and four wall identities;
+  every currently declared damaged variant's independent lifecycle frames;
+  pack manifest wiring; preview/gameplay evidence; and focused asset tests.
+- **Phase:** Structure art
+- **Depends on:** BDA-17
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-4, D-9, D-10, D-11, D-12
+- **Acceptance signals:** Each covered construction converges on its exact
+  static variant; each destruction begins without a static-frame snap;
+  playback preserves slot/z and existing wall-facing behavior, reuses the
+  default facemap without allowing facemap alpha to clip frames, and ends with
+  no visual residue.
+- **Out of scope:** Changes to wall cap/rotation semantics and stair gameplay
+  or art.
+- **Open questions:** `None`
+
+### BDA-16. Author Wire structure lifecycle sets
+
+- **Outcome:** Every Wire connection appearance has owner-approved static,
+  construction, and forward destruction sprites.
+- **Scope:** Full construction and destruction sequences for all 16 shipped
+  connection appearances, pack manifest wiring, preview/gameplay evidence, and
+  focused asset tests.
+- **Phase:** Structure art
+- **Depends on:** BDA-17
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-4, D-9, D-10, D-12
+- **Acceptance signals:** Construction converges on the exact resolved
+  connection appearance; removal begins from that silhouette, animates without
+  becoming operable again, retains flat-surface registration/lighting, and
+  leaves no visual residue.
+- **Out of scope:** Wire connectivity, power-network behavior, and automatic
+  neighbor retile policy.
+- **Open questions:** `None`
+
+### BDA-13. Enforce the complete constructible asset contract before play
+
+- **Outcome:** CI rejects any shipped building or structure appearance whose
+  required lifecycle matrix is incomplete, inconsistent, undecodable,
+  untracked, or still uses a forbidden fallback.
 - **Scope:** Self-tested audit, CI/local parity wiring, final removal of legacy
-  runtime fallback, catalog/ownership documentation, and migration sweep.
+  building runtime fallback, building visual-class documentation,
+  structure-variant/lifecycle coverage, default-facemap validation, and
+  migration sweep.
 - **Phase:** Enforcement
-- **Depends on:** BDA-5, BDA-6, BDA-7, BDA-8, BDA-9, BDA-10, BDA-11, BDA-12
+- **Depends on:** BDA-5, BDA-6, BDA-7, BDA-8, BDA-9, BDA-10, BDA-11, BDA-12,
+  BDA-15, BDA-16
 - **Ordering:** `critical path`, lands last
-- **Relevant decisions:** D-3, D-7, D-8
-- **Acceptance signals:** All eight production definitions pass; fixtures prove
-  each missing role/direction/path/frame/count/dimension/anchor failure; runtime
-  has no silent south/default substitution.
+- **Relevant decisions:** D-3, D-7, D-8, D-9, D-10, D-11, D-12, D-13
+- **Acceptance signals:** All eight building definitions and every required
+  Dungeon/Wire appearance pass; fixtures prove each missing
+  role/direction/variant/path/frame/facemap/count/dimension/anchor failure;
+  runtime has no silent building south/default or structure-lifecycle
+  substitution.
 - **Out of scope:** Visual-quality judgment, which remains owner signoff.
-- **Open questions:** Q-5
+- **Open questions:** `None`

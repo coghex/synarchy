@@ -21,7 +21,7 @@ Two proportionate observations were used instead of a full CI run: Hspec's dry-r
 - [x] STDOUT-7. The parity spec prints its passing diagnostic unconditionally — [#1926]
 - [x] STDOUT-8. Notification-registry success is logged on every engine allocation — [#1928]
 - [x] STDOUT-9. Content loading reports the same success at multiple layers — [#1930]
-- [ ] STDOUT-10. Lua module lifecycle boilerplate is logged at Info — [deferred]: conflicts with #1930
+- [x] STDOUT-10. Lua module lifecycle boilerplate is logged at Info — [#2174]
 - [x] STDOUT-11. Worldgen tectonic and climate banners are ordinary Info logs — [#1933]
 - [x] STDOUT-12. Worker and engine startup emit paired lifecycle lines — [#1934]
 - [x] STDOUT-13. Internal Lua state and action telemetry bypasses Debug — [#1935]
@@ -198,9 +198,7 @@ Several asset families log successful loading both in the Haskell/YAML owner and
 - **Scope and constraints:** Preserve errors, validation failures, missing references, and counts that are genuinely needed as a user-facing boot health signal. The finding is about duplicate success narration, not removing observability.
 - **Remaining uncertainty:** Each asset family's intended ownership boundary should be mapped during processing; the examples establish a category, not an exhaustive loader list.
 
-### [deferred] STDOUT-10. Lua module lifecycle boilerplate is logged at Info
-
-> **Deferred:** 15 of the 48 lifecycle-shaped `engine.logInfo` calls sit in the eight loader scripts #1930 already rewrites, under a directly conflicting instruction — #1930 keeps one aggregate Info line per family, which a blanket demotion would delete. Precondition: #1930 merges, after which the remaining 33 non-loader sites can be scoped against the Info/Debug boundary it establishes. Already settled and not blocking: `CatLua` is reachable via `ENGINE_DEBUG=Lua`/`all` (#1915's gap is `CatWorld`/`CatRender`/`CatUnit`), and the in-game log panels read `engine.getEventLog()`, a separate stream.
+### [#2174] STDOUT-10. Lua module lifecycle boilerplate is logged at Info
 
 The main Lua initializer loads a large module graph whose components frequently announce routine `load`, `initialize`, and `ready` transitions with `engine.logInfo`. The Lua logging API maps all of those calls to the single `CatLua` Info stream even though it already exposes a debug-level operation, so normal startup is dominated by deterministic lifecycle boilerplate.
 

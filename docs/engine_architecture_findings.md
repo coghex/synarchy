@@ -16,7 +16,7 @@ Repository-wide counts were used only to establish scale and were not treated as
 
 - [x] EA-1. Capability projections narrow visibility without enforcing ownership — [#1890]
 - [x] EA-2. Inter-thread queues have neither workload bounds nor backlog telemetry — [#1910]
-- [ ] EA-3. The Lua API is a large manually maintained runtime ABI
+- [x] EA-3. The Lua API is a large manually maintained runtime ABI — [#1995]
 - [x] EA-4. Persistence discards structured information and decodes components twice — [#1919]
 - [ ] EA-5. Integrated and graphical behavior remains mostly outside blocking validation — [deferred]: #1426 census 3/91 migrated; no GPU host exists
 - [x] EA-6. Dynamic scene assembly relies on unmeasured small-colony assumptions — [#1921]
@@ -65,7 +65,7 @@ The common queue abstraction is an unbounded STM `TQueue`, and several important
 
 ## Runtime interfaces and persistence
 
-### EA-3. The Lua API is a large manually maintained runtime ABI
+### [#1995] EA-3. The Lua API is a large manually maintained runtime ABI
 
 The Haskell/Lua boundary now comprises hundreds of functions registered by string, with argument conventions and result-table fields implemented manually. The registration structure is sensibly divided by namespace, but there is no single machine-readable contract from which registration, documentation, result shapes, and compatibility checks are derived.
 

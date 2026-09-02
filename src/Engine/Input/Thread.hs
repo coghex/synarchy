@@ -43,7 +43,8 @@ import Engine.Input.Thread.Dispatch (processInputs, processInput)
 
 startInputThread ∷ EngineEnv → IO ThreadState
 startInputThread env = startWorkerThread WorkerSpec
-    { wsLoggerRef   = ccLoggerRef (toCoreCapability env)
+    { wsName        = "Input"
+    , wsLoggerRef   = ccLoggerRef (toCoreCapability env)
     , wsCategory    = CatInput
     , wsStartingMsg = "Starting input thread..."
       -- This worker has never logged a post-fork line.
