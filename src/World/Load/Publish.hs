@@ -38,6 +38,7 @@ import Engine.Scripting.Lua.Types (LuaMsg(..))
 import Engine.Input.Types (defaultInputState)
 import UI.ShellFocus (FocusManager(..))
 import UI.Manager (clearElementFocus, clearControlFocus)
+import UI.Tooltip (clearTooltipLock)
 import UI.Types (UIPageManager(upmHovered))
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
@@ -340,6 +341,19 @@ dedupPageIds = go HS.empty
 --   Lua-owned and rebuilt/reconciled by the same 'sendSaveLoaded'
 --   broadcast as before.
 --
+--   'uiManagerRef' also runs 'clearTooltipLock' (#2156): a tooltip the
+--   player had LOCKED before the load is session UI that nothing else
+--   reconciles — 'UI.Tooltip.State.tickLocked' freezes it and ignores
+--   hover and source validity while locked, and a page deletion does
+--   not touch the separately owned tooltip state — so it would stay on
+--   screen over the replacement session and
+--   'UI.Tooltip.Lock.isPointInLockedTooltip' would keep swallowing
+--   clicks inside its box. 'clearTooltipLock' is the existing
+--   unlock-AND-hide: it releases the lock, destroys the visuals and
+--   hides the tooltip page synchronously, so no locked box survives
+--   the publish (a merely hovered, unlocked tooltip is hidden too, and
+--   the very next tick re-evaluates hover against the new tree).
+--
 --   'hudActivePageRef' additionally resets to
 --   'Nothing': 'World.Thread.Cursor.pollCursorInfo' compares the
 --   active page id against this ref to detect an active-WORLD switch
@@ -360,6 +374,10 @@ resetTransientState env = do
     writeIORef (hudActivePageRef env) Nothing
     atomicModifyIORef' (focusManagerRef env) $ \fm →
         (fm { fmCurrentFocus = Nothing }, ())
+    atomicModifyIORef' (uiManagerRef env) $ \mgr →
+        ( (clearTooltipLock ∘ clearControlFocus ∘ clearElementFocus)
+              (mgr { upmHovered = Nothing })
+        , () )
     atomicModifyIORef' (uiManagerRef env) $ \mgr →
         ( (clearControlFocus ∘ clearElementFocus)
               (mgr { upmHovered = Nothing })

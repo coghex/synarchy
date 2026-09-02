@@ -9,6 +9,8 @@ module Engine.Scripting.Lua.API.Save
     , prepareAutosaveCycleFn
     , finalizeAutosaveRotationFn
     , loadSaveFn
+    , guardAcceptedLoad
+    , renderEscapedLoadException
     , acceptSaveRequest
     , loadStatusFn
     , applyLuaLoad
@@ -17,6 +19,9 @@ module Engine.Scripting.Lua.API.Save
 
 import UPrelude
 import qualified HsLua as Lua
+import qualified Control.Monad.Catch as Catch
+import Control.Exception (SomeException, SomeAsyncException
+                         , fromException, displayException)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text.Encoding as TE
@@ -83,6 +88,7 @@ import qualified Data.Set as Set
 import Engine.Save.Barrier
 import Engine.Load.Status
     ( LoadPhase(..), LoadStatus(..), ReconciliationFailure(..)
+    , LoadStatusRef
     , beginLoad, advanceLoad, failLoad, readLoadStatus, loadInProgress )
 
 -- | engine.listSaves() → returns a Lua table of {name, seed, worldSize, timestamp}
@@ -657,34 +663,130 @@ loadSaveFn env = do
                         "loadSave rejected for '" <> saveName <> "': " <> err
                     Lua.pushboolean False
                   Right requestId → do
-                    -- Pause synchronously at acceptance (requirement 3),
-                    -- before the potentially slower decode/validate work
-                    -- below. A failed load leaves this pause in place —
-                    -- deliberately not restored on any failure path.
-                    Lua.liftIO $ do
-                        imposePause (toWorldSimCapability env)
-                        advanceLoad (loadStatusRef env) requestId LoadPaused
-                    descriptorsOrErr ← describeLuaComponents logger
-                    case descriptorsOrErr of
-                        Left err → do
-                            Lua.liftIO $ do
-                                logWarn logger CatWorld $
-                                    "loadSave rejected for '" <> saveName
-                                    <> "': " <> err
-                                failLoad (loadStatusRef env) requestId err
-                            Lua.pushboolean False
-                        Right descriptors →
-                            continueLoad env logger requestId saveName descriptors
+                    -- #2162: from here until the transaction is handed
+                    -- to the world thread, the request is ACCEPTED and
+                    -- only this thread can end it — so a Haskell
+                    -- exception escaping any step must terminalize it
+                    -- ('guardAcceptedLoad') instead of leaving it parked
+                    -- non-terminal forever. The single Lua result is
+                    -- pushed OUTSIDE the guarded interval: a successful
+                    -- hand-off is the last effect inside it, so nothing
+                    -- after the world thread owns the transaction can
+                    -- retroactively fail it.
+                    accepted ← guardAcceptedLoad (loadStatusRef env) logger
+                                                 requestId saveName $ do
+                        -- Pause synchronously at acceptance (requirement 3),
+                        -- before the potentially slower decode/validate work
+                        -- below. A failed load leaves this pause in place —
+                        -- deliberately not restored on any failure path.
+                        Lua.liftIO $ do
+                            imposePause (toWorldSimCapability env)
+                            advanceLoad (loadStatusRef env) requestId LoadPaused
+                        descriptorsOrErr ← describeLuaComponents logger
+                        case descriptorsOrErr of
+                            Left err → do
+                                Lua.liftIO $ do
+                                    logWarn logger CatWorld $
+                                        "loadSave rejected for '" <> saveName
+                                        <> "': " <> err
+                                    failLoad (loadStatusRef env) requestId err
+                                pure False
+                            Right descriptors →
+                                continueLoad env logger requestId saveName
+                                             descriptors
+                    Lua.pushboolean accepted
                 return 1
+
+-- | #2162: the exception boundary of an ACCEPTED load. Runs the
+--   Lua-thread half of the transaction — everything between
+--   'beginLoad' returning a request id and 'Q.writeQueue' handing the
+--   'WorldLoadTransaction' to the world thread — and guarantees the
+--   transaction reaches a terminal state if a Haskell exception escapes
+--   it.
+--
+--   Before this existed, one bare IO site inside that interval was
+--   enough to strand the whole engine: a legacy flat-file save whose
+--   'BS.readFile' threw (permission error, file replaced by a special
+--   file, vanished between the existence check and the read) escaped
+--   'loadWorld' as an 'IOException', so 'failLoad' never ran.
+--   'Engine.Scripting.Lua.API.Internal.registerLuaFunction' turned it
+--   into a Lua error — the Lua thread survived — but the status stayed
+--   at 'LoadPaused' with no outcome, 'loadInProgress' kept answering
+--   'True', and every later @engine.saveWorld@ / @engine.loadSave@ was
+--   rejected as "a load transaction is already active" until the
+--   process restarted.
+--
+--   The taxonomy is exactly 'registerLuaFunction''s, so the two guards
+--   compose rather than disagree:
+--
+--     * A 'SomeAsyncException' ('ThreadKilled' included) propagates
+--       UNCHANGED and is not converted into a load failure — shutdown's
+--       @killThread@ keeps working, and an interrupted transaction is
+--       not reported as a decode failure it never had.
+--     * A 'Lua.Exception' keeps its HsLua propagation semantics
+--       (re-thrown for hslua's own richer conversion) — but the
+--       transaction is terminalized FIRST, so an accepted request can
+--       never be left non-terminal by it.
+--     * Every other synchronous exception terminalizes the request and
+--       yields the same single @false@ result every other rejected load
+--       returns; @engine.loadSave@ never raises a Lua error for it.
+--
+--   Terminalizing means 'failLoad' for THIS request, recorded before the
+--   fallible logging that follows it, against whatever phase the
+--   interval had reached (the same "retain real progress" rule the
+--   'Left' path follows), with a diagnostic naming the save and carrying
+--   the exception's own 'displayException' text
+--   ('renderEscapedLoadException'). 'failLoad' is a no-op once the
+--   request already has an outcome, so a failure that was already
+--   recorded through the ordinary 'Left' path is never overwritten.
+--
+--   The pause imposed at acceptance is deliberately left in place, as on
+--   every other failure path (@docs/persistence_contract.md@: a failed
+--   load leaves the old session unchanged and paused).
+--
+--   Exported so the headless suite can drive the boundary with injected
+--   exceptions (an 'ErrorCall', a 'ThreadKilled', a 'Lua.Exception')
+--   without needing a production site that raises each one.
+guardAcceptedLoad
+    ∷ LoadStatusRef → LoggerState → Int → Text
+    → Lua.LuaE Lua.Exception Bool → Lua.LuaE Lua.Exception Bool
+guardAcceptedLoad statusRef logger requestId saveName action =
+    action `Catch.catch` handler
+  where
+    handler ∷ SomeException → Lua.LuaE Lua.Exception Bool
+    handler e
+        | Just (ae ∷ SomeAsyncException) ← fromException e = Catch.throwM ae
+        | Just (le ∷ Lua.Exception) ← fromException e = do
+            terminalize e
+            Catch.throwM le
+        | otherwise = do
+            terminalize e
+            pure False
+    terminalize e = Lua.liftIO $ do
+        let diag = renderEscapedLoadException saveName e
+        failLoad statusRef requestId diag
+        logWarn logger CatWorld ("loadSave failed: " <> diag)
+
+-- | The 'LoadAborted' diagnostic 'guardAcceptedLoad' records: names the
+--   save whose load the exception ended and carries the exception's own
+--   rendering — for an 'IOException' that is the path, the failing
+--   operation and the OS error text.
+renderEscapedLoadException ∷ Text → SomeException → Text
+renderEscapedLoadException saveName e =
+    "unhandled exception while loading '" <> saveName <> "': "
+        <> T.pack (displayException e)
 
 -- | Continue 'loadSaveFn' once the current Lua registry's component
 --   descriptors are known (issue #761): split out so a
 --   malformed descriptor list can reject the load in 'loadSaveFn' BEFORE
 --   this ever runs, rather than proceeding with an incomplete
---   known/required id set.
+--   known/required id set. Returns the single boolean @engine.loadSave@
+--   answers with — 'True' only once the transaction has been handed to
+--   the world thread — rather than pushing it itself, so the push
+--   happens outside 'guardAcceptedLoad''s protected interval (#2162).
 continueLoad
     ∷ EngineEnv → LoggerState → Int → Text → [(Text, Word32, Bool)]
-    → Lua.LuaE Lua.Exception ()
+    → Lua.LuaE Lua.Exception Bool
 continueLoad env logger requestId saveName descriptors = do
     let luaKnownNames    = HS.fromList [ n | (n, _, _)   ← descriptors ]
         luaRequiredNames = HS.fromList [ n | (n, _, req) ← descriptors, req ]
@@ -700,7 +802,7 @@ continueLoad env logger requestId saveName descriptors = do
                     "loadSave failed for '" <> saveName <> "': " <> err
                 advanceLoad (loadStatusRef env) requestId phase
                 failLoad (loadStatusRef env) requestId err
-            Lua.pushboolean False
+            pure False
         Right (saveData, luaComponents, isMigratedLegacyBaseline) → do
             -- 'loadWorld' already selected the storage generation,
             -- validated the envelope, decoded + migrated every Haskell
@@ -850,7 +952,7 @@ continueLoad env logger requestId saveName descriptors = do
                     logWarn logger CatWorld $
                         "loadSave rejected for '" <> saveName <> "': " <> msg
                     failLoad (loadStatusRef env) requestId msg
-                Lua.pushboolean False
+                pure False
               else case traverse (resolveLegacyLocations locReg)
                                  (sdWorlds saveData) of
                 -- #1796: the legacy reconstruction below builds
@@ -869,7 +971,7 @@ continueLoad env logger requestId saveName descriptors = do
                         logWarn logger CatWorld $
                             "loadSave rejected for '" <> saveName <> "': " <> msg
                         failLoad (loadStatusRef env) requestId msg
-                    Lua.pushboolean False
+                    pure False
                 Right resolvedWorlds → do
                     -- #911: a pre-instance-identity save carries its
                     -- locations as per-chunk discovered / contents-spawned
@@ -915,7 +1017,7 @@ continueLoad env logger requestId saveName descriptors = do
                                 "loadSave rejected for '" <> saveName
                                 <> "': " <> err
                             failLoad (loadStatusRef env) requestId err
-                        Lua.pushboolean False
+                        pure False
                       Right luaRefs → do
                         Lua.liftIO $ do
                             -- Issue #764 (save-overhaul C3): cross-validate
@@ -946,4 +1048,4 @@ continueLoad env logger requestId saveName descriptors = do
                             -- nothing here needs to wait for it.
                             Q.writeQueue (worldQueue env)
                                 (WorldLoadTransaction requestId resolvedSaveData matReg)
-                        Lua.pushboolean True
+                        pure True

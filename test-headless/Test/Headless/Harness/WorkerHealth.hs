@@ -19,7 +19,7 @@ module Test.Headless.Harness.WorkerHealth (spec) where
 
 import UPrelude
 import Control.Concurrent (myThreadId)
-import Control.Concurrent.MVar (newEmptyMVar, newMVar, isEmptyMVar)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, newMVar, isEmptyMVar)
 import Control.Exception (try, evaluate, throwIO, SomeException)
 import Data.IORef (newIORef, writeIORef)
 import Data.List (isInfixOf)
@@ -31,17 +31,36 @@ import Test.Headless.Harness
     , withHeadlessWorkerCheck
     , withHeadlessEngine
     )
+import Engine.Core.Log (LogCategory(..), defaultLogConfig, initLogger)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Thread (ThreadState(..), ThreadControl(..))
 
+-- | A synthetic 'ThreadState' around the given done-'MVar'. The name,
+--   logger and category exist only because 'shutdownThread' needs them
+--   to report; nothing here ever shuts one of these down.
+syntheticWorker ∷ IO (MVar ()) → IO ThreadState
+syntheticWorker mkDone = do
+    running ← newIORef ThreadRunning
+    tid ← myThreadId
+    done ← mkDone
+    loggerRef ← newIORef =≪ initLogger defaultLogConfig
+    pure ThreadState
+        { tsRunning   = running
+        , tsThreadId  = tid
+        , tsDone      = done
+        , tsName      = "Synthetic"
+        , tsLoggerRef = loggerRef
+        , tsCategory  = CatThread
+        }
+
 -- | A worker whose loop is still running: @tsDone@ is empty.
 liveWorker ∷ IO ThreadState
-liveWorker = ThreadState ⊚ newIORef ThreadRunning ⊛ myThreadId ⊛ newEmptyMVar
+liveWorker = syntheticWorker newEmptyMVar
 
 -- | A worker whose loop has already exited: @tsDone@ is filled, exactly
 --   as the @finally@ at the fork site leaves it.
 exitedWorker ∷ IO ThreadState
-exitedWorker = ThreadState ⊚ newIORef ThreadRunning ⊛ myThreadId ⊛ newMVar ()
+exitedWorker = syntheticWorker (newMVar ())
 
 -- | Run the check and report the failure message it produced, if any.
 runCheck ∷ [HeadlessWorker] → [(HeadlessWorker, ThreadState)] → IO (Maybe String)
@@ -84,9 +103,10 @@ spec = describe "headless harness worker health" $ do
                 ("beta"  `isInfixOf` msg) `shouldBe` True
 
     it "does not consume tsDone, so teardown still sees it filled" $ do
-        -- shutdownThread takes tsDone with takeMVar; a consuming probe
-        -- here would make failure-path teardown wait out its 10 s
-        -- timeout instead of returning at once.
+        -- shutdownThread joins on tsDone (a non-consuming readMVar,
+        -- #2165); a probe that TOOK it would make failure-path teardown
+        -- wait out its full graceful timeout and then kill a thread
+        -- that had already exited, instead of returning at once.
         ts ← exitedWorker
         _ ← runCheck [] [(worldWorker, ts)]
         isEmptyMVar (tsDone ts) ⌦ (`shouldBe` False)

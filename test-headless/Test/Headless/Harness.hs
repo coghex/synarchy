@@ -86,8 +86,10 @@ headlessWorkerLabel (HeadlessWorker name) = name
 --
 --   The probe is 'isEmptyMVar': non-blocking (the healthy case is an
 --   empty @MVar@ and never waits) and non-consuming. 'shutdownThread'
---   takes @tsDone@ with @takeMVar@, so a consuming probe here would
---   make failure-path teardown sit out its full 10 s timeout.
+--   joins on @tsDone@ with a non-consuming @readMVar@ (#2165), so a
+--   consuming probe here would make failure-path teardown sit out its
+--   full graceful timeout and then kill a thread that had already
+--   exited.
 --
 --   @expectedStopped@ names workers this caller stopped on purpose;
 --   every other worker is still checked strictly.
@@ -235,16 +237,18 @@ withHeadlessEngineExpectingStopped expectedStopped action =
     -- No settling delay after 'shutdownThread' (#1363).
     --
     -- 'shutdownThread' is a join, not a signal: on the normal path it
-    -- blocks on @takeMVar (tsDone ts)@, and 'World.Thread.startWorldThread'
+    -- blocks on @readMVar (tsDone ts)@, and 'World.Thread.startWorldThread'
     -- fills that @MVar@ from a @finally@ at the fork site. So the worker's
     -- loop has provably exited by the time this returns, and the harness
     -- starts no other thread — @initializeEngineHeadlessQuiet@ binds no socket
     -- and starts no debug server. A fixed sleep here waited for nothing
     -- and cost 100 ms per engine, ~27 s across the suite's 270 boots.
     --
-    -- @shutdownThread@'s exceptional path (10 s timeout, then
-    -- @killThread@ with no subsequent join) is out of scope: a fixed
-    -- 100 ms would not have been a valid join there either.
+    -- @shutdownThread@'s exceptional path joins too (#2165): after the
+    -- 10 s graceful timeout it force-kills, waits again, bounded, and
+    -- reports a worker that still has not exited as fatal rather than
+    -- returning. There is no path on which a sleep here would have
+    -- stood in for that join.
     --
     -- If a spec ever needs settling time, it waits in that spec for the
     -- condition it actually needs. A blanket delay charged to every
