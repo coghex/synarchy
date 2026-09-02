@@ -21,6 +21,7 @@ import Engine.Graphics.Vulkan.Screenshot (recordScreenshotCopy)
 import Engine.Graphics.Vulkan.Types.Descriptor
 import Engine.Graphics.Vulkan.Command.Sprite (renderSpritesBindless, renderSpritesBindlessUI)
 import Engine.Graphics.Vulkan.Command.Text (renderTextBatches, ensureTextInstanceBuffer, uploadTextInstances)
+import Engine.Scene.Assembly (layerSprites, layerTexts, textBatchesInDrawOrder)
 import Engine.Scene.Base (LayerId(..))
 import Engine.Scene.Types
 import World.Grid (uiLayerThreshold)
@@ -83,11 +84,11 @@ recordSceneCommandBuffer cmdBuf imageIndex frameInFlight dynamicBuffer layeredBa
         else logAndThrowM CatVulkan (ExGraphics DescriptorError)
                           "frameInFlight out of descriptor-set bounds"
 
-    -- Collect all text batches across layers for a single upload pass.
-    -- Layers are walked in ascending order so the global index stays aligned.
-    let allTextBatches = V.concatMap
-            (\(_, items) → V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items)
-            (V.fromList $ Map.toAscList layeredBatches)
+    -- Collect all text batches across layers for a single upload pass,
+    -- in the recorder's own draw order (ascending layer, item order
+    -- within a layer — 'Engine.Scene.Assembly') so the per-layer slices
+    -- taken below stay aligned with the upload.
+    let allTextBatches = textBatchesInDrawOrder layeredBatches
         totalGlyphs = V.sum $ V.map (fromIntegral . V.length . trbInstances) allTextBatches
 
     let mTib0 = case textInstanceBuffers state V.!? frameInFlight of
@@ -183,7 +184,9 @@ renderLayerItems ∷ CommandBuffer → GraphicsState → Viewport → Rect2D
 renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer items
                  vertexOffsetRef isUI
                  tib drawInfos batchIdxRef = do
-    let spriteBatches = V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing) items
+    -- Every sprite of the layer draws before any of its text (#2192's
+    -- equal-layer contract); both halves keep the items' own order.
+    let spriteBatches = layerSprites items
     
     if isUI
         then renderSpritesBindlessUI cmdBuf state viewport scissor
@@ -191,7 +194,7 @@ renderLayerItems cmdBuf state viewport scissor uniformSet dynamicBuffer items
         else renderSpritesBindless cmdBuf state viewport scissor
                                    uniformSet dynamicBuffer spriteBatches vertexOffsetRef
     
-    let textItems = V.mapMaybe (\case TextItem trb → Just trb; _ → Nothing) items 
+    let textItems = layerTexts items
     unless (V.null textItems) $ do
         let maybePipeline = if isUI 
                             then fontUIPipeline state 

@@ -260,6 +260,10 @@ PROBES = [
      "refusal, ordered rotation, and depth-reduction/disable retention"),
     ("save_pause", "save_pause_probe.py",
      "save/load pause-semantics regression (#42)"),
+    ("scene_primitives", "scene_primitives_probe.py",
+     "offscreen: engine.spawnText and a UI-layer engine.spawnSprite render at "
+     "their declared layers and every mutation verb is reflected next frame, "
+     "pixel-attributed per primitive (#2192; needs a GPU)"),
     ("scene_stats", "scene_stats_probe.py",
      "World.Render scene-assembly telemetry: debug.getSceneStats()'s ten-row "
      "shape and sequence, per-category scanned counts moving by exactly the "

@@ -1,3 +1,26 @@
+-- | Font loading and the scene TEXT primitive family (@engine.loadFont@,
+--   @spawnText@, @setText@, @getText@, @getTextWidth@). A text node is
+--   moved, recoloured, hidden and destroyed through the shared verbs in
+--   "Engine.Scripting.Lua.API.Graphics"; @setText@ here changes only its
+--   string (the size given to @spawnText@ is its font size — @setSize@
+--   is a sprite dimension and does nothing a text node renders).
+--
+--   __Where scene text sits relative to UI pages (#2192).__ The @layer@
+--   argument is the node's render 'LayerId' and it is drawn at exactly
+--   that layer on either side of 'World.Grid.uiLayerThreshold' (10):
+--   below it the text is laid out through the world camera and drawn by
+--   the world font pipeline among that layer's world content; at or
+--   above it the text is laid out in framebuffer pixels (@x@\/@y@ the
+--   pen origin) and drawn by the UI font pipeline, ordered against the
+--   UI pages' elements by layer number — pages start at the threshold
+--   and climb by 'UI.Types.uiLayerBand'. Within one layer every sprite
+--   draws before every text, and scene text draws before that layer's
+--   UI-page text ("Engine.Scene.Assembly"). Every @setText@ \/ move \/
+--   hide \/ destroy is reflected in the next frame.
+--
+--   Note @engine.setText@ is NOT the UI element @UI.setText@
+--   ("Engine.Scripting.Lua.API.Register.UI"): this one names a scene
+--   object id, that one a UI element handle.
 module Engine.Scripting.Lua.API.Text
   ( loadFontFn
   , spawnTextFn

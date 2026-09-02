@@ -145,6 +145,7 @@ import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.Plan as ConstructPlan
 import qualified Test.Headless.Render.StructureGhost as StructureGhost
+import qualified Test.Headless.Render.FrameAssembly as FrameAssembly
 import qualified Test.Headless.Construct.PlanInvalidation as ConstructPlanInvalidation
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
@@ -255,6 +256,7 @@ import qualified Test.Headless.Core.LoopStartup as LoopStartup
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
+import qualified Test.Headless.Core.DebugSocket as DebugSocket
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
@@ -281,6 +283,7 @@ import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Load.Status as LoadStatus
+import qualified Test.Headless.Load.Terminalize as LoadTerminalize
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
@@ -378,6 +381,10 @@ main = hspec $ do
         -- own active scene rather than leaking one into this shared
         -- environment.
         describe "Lua.SceneText" LuaSceneText.spec
+        -- Same technique (#2192): the sprite half of the scene route —
+        -- a spawn through processLuaMessages, the manager's own
+        -- rebuild, then the pure frame assembly — against the live env.
+        FrameAssembly.envSpec
         -- Same technique as Lua.DebugQueue above: the live EngineEnv's
         -- queues/refs are only there to build a real Lua backend, whose
         -- console boundary is what #1955's key contract lives on.
@@ -668,6 +675,7 @@ main = hspec $ do
     MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Load.Status" LoadStatus.spec
+    describe "Load.Terminalize" LoadTerminalize.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
     describe "Lua shared helpers" LuaSharedHelpers.spec
@@ -735,6 +743,7 @@ main = hspec $ do
     describe "Construct.Footprint" ConstructFootprint.spec
     ConstructPlan.spec
     StructureGhost.spec
+    FrameAssembly.spec
     ConstructPlanInvalidation.spec
     ConstructAttemptIdentity.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec
@@ -873,6 +882,7 @@ main = hspec $ do
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
     DebugListener.spec
+    DebugSocket.spec
     AppCli.spec
     AppChunkRegion.spec
     AppResourceRoot.spec

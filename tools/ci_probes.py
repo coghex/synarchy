@@ -375,6 +375,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                   "exhaustively by the pure hspec groups "
                                   "World.Render.StructureRotation and "
                                   "World.Render.FrontWallLift, which DO gate on CI"),),
+    "scene_primitives": (Reason(NEEDS_GPU, "offscreen boot: attributes engine.spawnText "
+                                            "and a UI-layer engine.spawnSprite to bounded "
+                                            "screenshot regions across every mutation verb "
+                                            "(#2192) — no GPU on the CI runner"),),
     "scene_stats": (Reason(NEEDS_GPU, "offscreen boot: the #1921 telemetry's "
                            "non-zero unit/ground-item/building EMITTED counts "
                            "exist only with a live texture system, which the "
