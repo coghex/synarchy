@@ -134,11 +134,15 @@ concrete precondition
   default/noface path and makes each authored designation texture's own alpha
   mask the authority for its visible surface shape.
 - `construct_designate_structure.png` and `construct_designate_building.png`
-  are category-level placeholders from #1780. That proposed solution is now
+  were category-level placeholders from #1780. That proposed solution is
   intentionally abandoned: planned construction should not use replacement
-  category marker art at all. #1780 and any documentation that still describes
-  that solution are stale and should point to the new epic/replacement child
-  once those tracker artifacts exist.
+  category marker art at all. #1780 is closed as superseded against epic
+  #1837 (D-23), and the stale narrative in `docs/asset_system_findings.md`
+  (ASSET-5) now redirects here and to the two replacement children. #1846
+  removed the STRUCTURE placeholder, its handle, its HUD wiring and the
+  structure branch of `construction.setDesignateTexture`; #1845 (DTV-10) owns
+  the building half, so `construct_designate_building.png` is the only
+  category marker still shipped.
 - A planned `CtBuilding` already names a building definition whose
   `bdSouthTexture`, pixel dimensions, footprint anchor, and `bdSpriteAnchor` drive
   the placement ghost and final renderer. The current committed designation

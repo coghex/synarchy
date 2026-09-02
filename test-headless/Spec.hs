@@ -14,6 +14,7 @@ import qualified Test.Headless.WorldGen.SoilShed as SoilShed
 import qualified Test.Headless.WorldGen.SoilRedistribution as SoilRedistribution
 import qualified Test.Headless.WorldGen.Exposure as Exposure
 import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
+import qualified Test.Headless.WorldGen.ZoomArtifact as ZoomArtifact
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
@@ -85,6 +86,7 @@ import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
+import qualified Test.Headless.World.GeneratedLibrary as GeneratedLibrary
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -142,6 +144,7 @@ import qualified Test.Headless.Construct.AttemptIdentity as ConstructAttemptIden
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.Plan as ConstructPlan
+import qualified Test.Headless.Render.StructureGhost as StructureGhost
 import qualified Test.Headless.Construct.PlanInvalidation as ConstructPlanInvalidation
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
@@ -323,6 +326,7 @@ import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
 main ∷ IO ()
 main = hspec $ do
+    describe "World.ZoomMap.Artifact" ZoomArtifact.spec
     -- ONE engine for all worldgen specs. Worlds are memoized by
     -- (seed, size, plateCount) via Test.Headless.Harness.sharedWorld
     -- — generation is the entire cost of this suite, so specs share
@@ -341,6 +345,7 @@ main = hspec $ do
         describe "Biome Flatness" Flatness.spec
         describe "Column Exposure" Exposure.spec
         describe "Zoom/Detail Parity" ZoomParity.spec
+        ZoomArtifact.worldSpec
         describe "Border Probe" BorderProbe.spec
         Climate.spec
         describe "Asset.TextureFallback" TextureFallback.spec
@@ -654,6 +659,7 @@ main = hspec $ do
     describe "persistence reference integrity" SaveIntegrity.spec
     describe "persistence reference integrity" LuaSaveBridge.spec
     describe "atomic save storage" SaveStorage.spec
+    describe "generated world library" GeneratedLibrary.spec
     describe "persistence contract" SaveContract.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
     MenuListingOrder.spec
@@ -725,6 +731,7 @@ main = hspec $ do
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
     ConstructPlan.spec
+    StructureGhost.spec
     ConstructPlanInvalidation.spec
     ConstructAttemptIdentity.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec

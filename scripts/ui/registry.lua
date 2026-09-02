@@ -117,7 +117,7 @@ function registry.dumpWidgets()
             widget.controlFocused = (info and info.controlFocused) or false
             -- #749: the effective (clip-intersected) interactive rect a
             -- real pointer hit resolves against — the phantom-affordance
-            -- join (tools/playtest/critic.py's widget_at) prefers this
+            -- join (tools/playtest/critic_click.py's widget_at) prefers this
             -- over the content `bounds` above so a click on a migrated
             -- control's visible border correlates to the control. When
             -- the engine says the control is non-hittable (fully clipped

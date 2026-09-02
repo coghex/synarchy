@@ -10,7 +10,9 @@
 --
 --   This is the construction parallel to 'World.Mine.Types': a per-tile
 --   designation layer keyed by global tile coords, persisted in saves,
---   and rendered as a blueprint ghost. Unlike mining (which removes
+--   and rendered as a ghost — since #1846 a STRUCTURE ghost is the
+--   piece's own art at the z the placer will use, while a BUILDING is
+--   still a category blueprint. Unlike mining (which removes
 --   material) construction ADDS it; the execution side is issue #96, so
 --   this module is purely the data the designation tool stores.
 module World.Construct.Types
@@ -77,8 +79,18 @@ data ConstructStatus = CsPending | CsClaimed | CsComplete | CsPlacing
 --   Generic Serialize — append, don't reorder).
 data ConstructDesignation = ConstructDesignation
     { cdZ        ∷ !Int
-      -- ^ Surface z captured at designation time (the ghost renders from
-      --   it, no per-frame column reads — same trick as MineDesignation).
+      -- ^ Surface z captured at designation time.
+      --
+      --   A BUILDING marker still renders straight from it, no per-frame
+      --   column reads — the same trick as MineDesignation.
+      --
+      --   A STRUCTURE ghost does not (#1846). This is a SURFACE level and
+      --   the piece sits above it (floor, wall and wire at + 1, a ceiling
+      --   at + 2, a post at its supporting floor's z), so the ghost draws
+      --   at the final grid z 'World.Construct.Plan' resolves against
+      --   live terrain. What 'cdZ' contributes there is the REQUIRED
+      --   surface level: a site whose terrain has since drifted is
+      --   invalid, never silently retargeted (#1844 requirement 4).
     , cdTarget   ∷ !ConstructTarget
     , cdStatus   ∷ !ConstructStatus
     , cdProgress ∷ !Float
@@ -150,14 +162,19 @@ textToConstructStatus "complete" = Just CsComplete
 textToConstructStatus "placing"  = Just CsPlacing
 textToConstructStatus _          = Nothing
 
--- | "structure" | "building" — used to pick which ghost texture a
---   designation renders with.
+-- | "structure" | "building" — the designation's target CLASS, as the
+--   debug log line and @construction.getDesignationAt@ report it.
+--
+--   It no longer picks a ghost texture. #1846 gave every structure piece
+--   its own art, so a structure ghost is resolved from the piece's own
+--   descriptor and only a BUILDING still has a category placeholder —
+--   which DTV-10 (#1845) retires in turn.
 constructTargetCategory ∷ ConstructTarget → Text
 constructTargetCategory (CtStructure _) = "structure"
 constructTargetCategory (CtBuilding  _) = "building"
 
--- | Tile footprint one designation renders across (#95 blueprint ghost
---   requirement, completed by #807). A structure piece is already one
+-- | Tile footprint one BUILDING designation renders across (#95
+--   blueprint ghost requirement, completed by #807). A structure piece is already one
 --   map entry PER TILE — the designation tool tiles the whole
 --   rectangle at commit time (Construct.hs's handleWorldDesignateConstructCommand),
 --   so it renders as just its own anchor here. A building target is
