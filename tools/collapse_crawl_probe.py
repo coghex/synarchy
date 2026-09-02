@@ -34,12 +34,26 @@ tools/test_collapse_hysteresis.lua.
 
 Usage: python3 tools/collapse_crawl_probe.py [--port 9304]
 Exit 0 = pass.
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 import argparse, glob, json, socket, subprocess, sys, time
+import probe_protocol
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/collapse_crawl_probe_engine.log"
+LOG_NAME = "collapse_crawl_probe_engine.log"
+PROBE_KEY = "collapse_crawl"
+CHECKS = [
+    ("hold_exercised", "the collapsed hold sampled the consciousness band"),
+    ("no_premature_crawl", "the unit stayed collapsed below the rise threshold"),
+    ("rise_gate_releases", "the unit crawled once consciousness reached the rise threshold"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 RISE_AT = 0.40            # brain.lua RISE_AT — collapsed→up gate
 UNCONSCIOUS_BELOW = 0.15  # brain.lua collapse trigger
 
@@ -83,27 +97,38 @@ def snap(port):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9304)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
-    P = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(P, log=LOG)
+
+def _run(P: int, rep: probe_protocol.Reporter) -> int:
+    proc = boot(P, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     try:
         bootstrap(P)
         uid = send(P, "local u=unit.spawn('acolyte',1,0); _U=u; return u")
         try:
             uid = int(float(uid))
         except ValueError:
-            print(f"[FAIL] could not spawn acolyte: {uid}")
-            return 1
-        print(f"spawned acolyte uid={uid}")
+            rep.abort(f"could not spawn acolyte: {uid}")
+            return 2
+        rep.note(f"spawned acolyte uid={uid}")
 
         # Break both legs → cannotWalk (bandaged so they don't bleed out).
         for part in ("l_thigh", "r_thigh"):
             send(P, f"return unit.injure({uid},'{part}','fracture',0.9,0.0)")
         if send(P, "return require('scripts.injuries').cannotWalk(_U) and 1 or 0") != "1":
-            print("[FAIL] unit not cannotWalk after leg breaks")
-            return 1
-        print("legs broken: cannotWalk = true")
+            rep.abort("unit not cannotWalk after leg breaks")
+            return 2
+        rep.note("legs broken: cannotWalk = true")
 
         def force_collapse():
             """Drive blood_oxygen hard to 0 until the unit is collapsed."""
@@ -139,28 +164,28 @@ def main():
         sev, landed = 0.21, False
         send(P, f"return unit.injure({uid},'lungs','internal',{sev:.2f},0.0)")
         if not force_collapse():
-            print("[FAIL] unit never collapsed under forced deep dip")
-            return 1
+            rep.abort("unit never collapsed under forced deep dip")
+            return 2
         for attempt in range(16):
             lift_and_settle(5.0)
             s = snap(P)
             c_eq, pose = float(s.get("c", 1.0)), s.get("pose")
-            print(f"    cap attempt {attempt}: lung_sev={sev:.2f} c={c_eq:.3f} pose={pose}")
+            rep.note(f"    cap attempt {attempt}: lung_sev={sev:.2f} c={c_eq:.3f} pose={pose}")
             # Require comfortable margin from BOTH band edges so the hold has
             # headroom (the sev=0 equilibrium asymptotes right at ~0.39).
             if pose == "collapsed" and 0.18 < c_eq < 0.36:
                 landed = True
                 break
             if pose == "collapsed" and c_eq <= UNCONSCIOUS_BELOW:
-                print(f"[FAIL] overshot — collapsed-state c stuck at {c_eq:.3f}")
-                return 1
+                rep.abort(f"overshot — collapsed-state c stuck at {c_eq:.3f}")
+                return 2
             sev = round(sev + 0.03, 2)
             send(P, f"return unit.injure({uid},'lungs','internal',{sev:.2f},0.0)")
             force_collapse()
         if not landed:
-            print("[FAIL] could not pin a collapsed unit's consciousness in the band")
-            return 1
-        print(f"  pinned: COLLAPSED with consciousness in band (lung_sev={sev:.2f})")
+            rep.abort("could not pin a collapsed unit's consciousness in the band")
+            return 2
+        rep.note(f"  pinned: COLLAPSED with consciousness in band (lung_sev={sev:.2f})")
 
         # ---- 2b. HOLD: poll without writing; cardio holds consciousness at the
         # capped band value. With the fix the unit STAYS collapsed; the old code
@@ -174,8 +199,8 @@ def main():
         premature = [round(c, 3) for p, c in hold if p == "crawling" and c < RISE_AT]
         band_held = [c for p, c in hold
                      if p == "collapsed" and UNCONSCIOUS_BELOW < c < RISE_AT]
-        print(f"  band hold: {len(hold)} samples, consciousness {min(cs):.3f}..{max(cs):.3f}, "
-              f"poses={sorted(set(p for p,_ in hold))}")
+        rep.note(f"  band hold: {len(hold)} samples, consciousness {min(cs):.3f}..{max(cs):.3f}, "
+                 f"poses={sorted(set(p for p,_ in hold))}")
 
         # ---- 3. RISE: drive consciousness above RISE_AT; the unit must finally
         # crawl (legs broken → crawl, not stand). Confirms the gate releases.
@@ -188,30 +213,30 @@ def main():
                 break
             time.sleep(0.25)
 
-        ok = True
-        if len(band_held) < 3:
-            ok = False
-            print(f"  [FAIL] only {len(band_held)} collapsed sample(s) in band "
-                  f"— hold not exercised")
-        else:
-            print(f"  [pass] hold exercised: {len(band_held)} collapsed sample(s) in band "
-                  f"(c {min(band_held):.3f}..{max(band_held):.3f})")
+        hold_ok = len(band_held) >= 3
+        ok = rep.check(
+            "hold_exercised", hold_ok,
+            (f"hold exercised: {len(band_held)} collapsed sample(s) in band"
+             if hold_ok else
+             f"only {len(band_held)} collapsed sample(s) in band — hold not exercised"),
+            {"samples": len(band_held),
+             "minimum": min(band_held) if band_held else None,
+             "maximum": max(band_held) if band_held else None})
+        no_premature = not premature
+        ok &= rep.check(
+            "no_premature_crawl", no_premature,
+            ("stayed collapsed across the whole band — no premature crawl"
+             if no_premature else
+             f"{len(premature)} sample(s) crawled below {RISE_AT}"),
+            {"threshold": RISE_AT, "premature_samples": premature[:5]})
+        ok &= rep.check(
+            "rise_gate_releases", rise_ok,
+            (f"crawls once consciousness reaches {RISE_AT}"
+             if rise_ok else
+             f"unit never crawled with consciousness at least {RISE_AT}"),
+            {"threshold": RISE_AT, "consciousness": rise_c})
 
-        if premature:
-            ok = False
-            print(f"  [FAIL] {len(premature)} sample(s) crawling while consciousness "
-                  f"< {RISE_AT} (the #304 flap): c={premature[:5]}")
-        else:
-            print(f"  [pass] stayed collapsed across the whole band — no premature crawl")
-
-        if not rise_ok:
-            ok = False
-            print(f"  [FAIL] unit never crawled even with consciousness ≥ {RISE_AT} "
-                  f"(rise gate stuck)")
-        else:
-            print(f"  [pass] crawls once consciousness ≥ {RISE_AT} (rise works, c={rise_c:.3f})")
-
-        print(f"\n{'PASS' if ok else 'FAIL'} — collapse↔crawl hysteresis (#304)")
+        rep.note(f"\n{'PASS' if ok else 'FAIL'} — collapse↔crawl hysteresis (#304)")
         return 0 if ok else 1
     finally:
         quit_engine(P, proc)

@@ -1925,11 +1925,14 @@ def test_manifest_real_registry() -> None:
            f"{ci} entries are CI-eligible, matching tools/ci_probes.py")
     migrated = [e["key"] for e in manifest["probes"]
                 if e["protocol"] != "legacy"]
-    expect(migrated == ["blood_impact", "circadian", "concussion_revive", "disarm",
-                        "lua_strict_msg", "meal_waste", "position_hold",
-                        "remote_warning_page_guard", "role",
-                        "state_of_mind", "text_encoding", "thermo_altitude"],
-           f"the twelve migrated probes are probe-result/v1 probes in "
+    expect(migrated == ["blood_decal", "blood_impact", "circadian",
+                        "circadian_species", "collapse_crawl", "concussion_revive",
+                        "config_state", "disarm", "injury_log", "lua_orphan_prune",
+                        "lua_strict_msg", "machine_shop", "meal_waste",
+                        "mental_efficiency", "position_hold",
+                        "remote_warning_page_guard", "role", "state_of_mind",
+                        "text_encoding", "thermo_altitude", "thought", "wire"],
+           f"the twenty-two migrated probes are probe-result/v1 probes in "
            f"probe_runner_registry.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
@@ -1967,6 +1970,146 @@ def _migration_descriptor(script: str, probe: str, expected_ids: tuple[str, ...]
            f"{probe} declares its stable checks in execution order "
            f"(got {descriptor.ids})")
     return descriptor
+
+
+def test_ten_probe_batch_migrations() -> None:
+    """The explicit ten-probe batch shares one compatibility contract.
+
+    Each descriptor is pure, standalone reporting remains bracketed, failure
+    attribution names a stable check, and the probe's real `_run` entry point
+    passes isolated log/RTS wiring to its first engine boot.
+    """
+    import io
+
+    cases = {
+        "blood_decal": ("blood_decal_probe.py", 9011,
+            ("near_requests_reuse", "distinct_requests_mint", "fifo_order_reported",
+             "oldest_texture_evicted", "eviction_removes_decals",
+             "pixel_data_bounded", "render_quads_live_only", "dry_tint_ages",
+             "clear_empties_registry")),
+        "circadian_species": ("circadian_species_probe.py", 9016,
+            ("species_urge_phases", "utility_crossover", "wake_boundaries",
+             "bear_selects_sleep", "bear_reaches_sleeping",
+             "public_wake_standing", "sleeps_through_dawn",
+             "wakes_at_own_boundary")),
+        "collapse_crawl": ("collapse_crawl_probe.py", 9304,
+            ("hold_exercised", "no_premature_crawl", "rise_gate_releases")),
+        "config_state": ("config_state_probe.py", 9165,
+            tuple(check_id for check_id, _ in __import__(
+                "config_state_probe").PROBE_CHECKS)),
+        "injury_log": ("injury_log_probe.py", 9140,
+            ("emit_roundtrip", "drain_destructive", "injure_event",
+             "event_log_uid", "fall_lane_damaging", "fall_event")),
+        "lua_orphan_prune": ("lua_orphan_prune_probe.py", 9008,
+            ("snapshot_filters_orphan", "load_pauses_immediately",
+             "load_reconcile_prunes_orphan", "nested_references_scrubbed",
+             "per_entity_apply")),
+        "machine_shop": ("machine_shop_probe.py", 9391,
+            tuple(check_id for check_id, _ in __import__(
+                "machine_shop_probe").PROBE_CHECKS)),
+        "mental_efficiency": ("mental_efficiency_probe.py", 9353,
+            tuple(check_id for check_id, _ in __import__(
+                "mental_efficiency_probe").PROBE_CHECKS)),
+        "thought": ("thought_probe.py", 9351,
+            ("emit_roundtrip", "drain_destructive", "catalogue_loaded",
+             "state_thought_fired", "state_thought_moves_mood",
+             "cold_thought_fired", "world_patches_restored",
+             "mood_biases_valence", "thought_log_surfaces_text")),
+        "wire": ("wire_probe.py", 9359,
+            tuple(check_id for check_id, _ in __import__(
+                "wire_probe").PROBE_CHECKS)),
+    }
+
+    class StopBeforeEngine(BaseException):
+        pass
+
+    for key, (script, port, ids) in cases.items():
+        descriptor = _migration_descriptor(script, key, ids)
+        if descriptor is None:
+            continue
+        module = __import__(script.removesuffix(".py"))
+
+        stream = io.StringIO()
+        standalone = probe_protocol.Reporter(descriptor, stream=stream)
+        standalone.check(ids[0], False, descriptor.label(ids[0]))
+        standalone.close()
+        expect("[FAIL]" in stream.getvalue(),
+               f"{key} standalone failures remain human-readable")
+
+        with tempfile.TemporaryDirectory(prefix=f"{key}-migration-") as tmp:
+            events = Path(tmp) / "events.jsonl"
+            protocol = probe_protocol.Reporter(
+                descriptor, events_path=str(events), stream=io.StringIO())
+            protocol.check(ids[0], False, descriptor.label(ids[0]),
+                           {"synthetic": True})
+            protocol.close()
+            _, outcomes = probe_protocol.parse_event_stream(
+                events.read_text(encoding="utf-8"), descriptor)
+            expect(outcomes[ids[0]] == probe_protocol.FAIL,
+                   f"{key} attributes a failed assertion to its stable first id")
+
+            launches = []
+            saved_boot = module.boot
+            saved_config = None
+
+            def fake_boot(got_port, *pos, **kwargs):
+                launches.append({
+                    "port": got_port,
+                    "log": kwargs.get("log", pos[0] if pos else None),
+                    "args": list(kwargs.get("args") or []),
+                })
+                raise StopBeforeEngine()
+
+            module.boot = fake_boot
+            if key == "config_state":
+                saved_config = (module.git_status, module.backup_local_files,
+                                module.restore_local_files)
+                module.git_status = lambda _paths: ""
+                module.backup_local_files = lambda: {}
+                module.restore_local_files = lambda _backups: None
+
+            def invoke(rep):
+                if key in ("config_state", "injury_log"):
+                    return module._run(argparse.Namespace(
+                        port=port, no_fall=False), rep)
+                if key == "lua_orphan_prune":
+                    return module._run(argparse.Namespace(
+                        port=port, seed=42, size=64), rep)
+                if key == "wire":
+                    return module._run(argparse.Namespace(
+                        port=port, phase="all"), rep)
+                return module._run(port, rep)
+
+            try:
+                for rep in (
+                    probe_protocol.Reporter(descriptor, stream=io.StringIO()),
+                    probe_protocol.Reporter(
+                        descriptor, engine_log_dir=tmp, rts_caps=3,
+                        stream=io.StringIO()),
+                ):
+                    try:
+                        invoke(rep)
+                    except StopBeforeEngine:
+                        pass
+                    finally:
+                        rep.close()
+            finally:
+                module.boot = saved_boot
+                if saved_config is not None:
+                    (module.git_status, module.backup_local_files,
+                     module.restore_local_files) = saved_config
+
+            expect(len(launches) == 2,
+                   f"{key} reaches the same engine launch in standalone and protocol modes")
+            if len(launches) == 2:
+                expect(launches[0]["args"] == [],
+                       f"{key} standalone run preserves the default RTS settings")
+                expect(launches[0]["log"] == module.LOG,
+                       f"{key} standalone run preserves its historical engine log")
+                expect(launches[1]["args"] == ["+RTS", "-N3", "-RTS"],
+                       f"{key} protocol run applies the harness RTS capability count")
+                expect(launches[1]["log"] == os.path.join(tmp, module.LOG_NAME),
+                       f"{key} protocol run isolates its engine log")
 
 
 def _drive_blood_impact(rep, *, high_opacity=0.9, setup_failure=False):
@@ -3630,7 +3773,8 @@ def main() -> int:
                  test_concurrency_accounting, test_artifacts,
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,
-                 test_manifest_real_registry, test_blood_impact_standalone,
+                 test_manifest_real_registry, test_ten_probe_batch_migrations,
+                 test_blood_impact_standalone,
                  test_meal_waste_standalone,
                  test_role_standalone,
                  test_circadian_standalone,

@@ -75,18 +75,28 @@ RESULT_SCHEMA = "probe-flake-result/v1"
 # harness works on a checkout with no docs worktree. Later migration
 # issues add one key each.
 PROTOCOL_PROBES: dict[str, str] = {
+    "blood_decal": probe_protocol.PROTOCOL_VERSION,
     "blood_impact": probe_protocol.PROTOCOL_VERSION,
     "circadian": probe_protocol.PROTOCOL_VERSION,
+    "circadian_species": probe_protocol.PROTOCOL_VERSION,
+    "collapse_crawl": probe_protocol.PROTOCOL_VERSION,
     "concussion_revive": probe_protocol.PROTOCOL_VERSION,
+    "config_state": probe_protocol.PROTOCOL_VERSION,
     "disarm": probe_protocol.PROTOCOL_VERSION,
+    "injury_log": probe_protocol.PROTOCOL_VERSION,
+    "lua_orphan_prune": probe_protocol.PROTOCOL_VERSION,
     "lua_strict_msg": probe_protocol.PROTOCOL_VERSION,
+    "machine_shop": probe_protocol.PROTOCOL_VERSION,
     "meal_waste": probe_protocol.PROTOCOL_VERSION,
+    "mental_efficiency": probe_protocol.PROTOCOL_VERSION,
     "position_hold": probe_protocol.PROTOCOL_VERSION,
     "remote_warning_page_guard": probe_protocol.PROTOCOL_VERSION,
     "role": probe_protocol.PROTOCOL_VERSION,
     "state_of_mind": probe_protocol.PROTOCOL_VERSION,
     "text_encoding": probe_protocol.PROTOCOL_VERSION,
     "thermo_altitude": probe_protocol.PROTOCOL_VERSION,
+    "thought": probe_protocol.PROTOCOL_VERSION,
+    "wire": probe_protocol.PROTOCOL_VERSION,
 }
 
 # 8008 is the user's graphical instance. It is outside the range below
