@@ -147,11 +147,22 @@ newListener sock = DebugListener sock
 --   The whole teardown is bounded: a client that somehow refuses to die
 --   must not hold up engine shutdown, so each join is time-boxed and
 --   the process's own exit reclaims whatever is left.
+--
+--   The loss latch is claimed in the SAME transaction as the stopping
+--   flag, which closes the one window the flag alone leaves open: an
+--   accept loop that has already failed terminally and already read
+--   'dlStopping' as 'False' would otherwise go on to announce a lost
+--   listener — and, in a console-required mode, ask for a shutdown that
+--   is already under way — for a console its owner deliberately tore
+--   down.
 stopDebugConsole ∷ DebugConsole → IO ()
 stopDebugConsole console = case consoleListener console of
     Nothing       → return ()
     Just listener → do
-        alreadyStopping ← atomically $ swapTVarBool (dlStopping listener) True
+        alreadyStopping ← atomically $ do
+            wasStopping ← swapTVarBool (dlStopping listener) True
+            writeTVar (dlLossReported listener) True
+            return wasStopping
         unless alreadyStopping $ do
             void ∘ tryAny ∘ close $ dlSocket listener
             joinAcceptThread listener
