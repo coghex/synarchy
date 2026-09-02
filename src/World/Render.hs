@@ -220,7 +220,8 @@ updateWorldTiles env = do
                 -- it is lit by that page (#1869).
                 activeSolarSlot = maybe solarPageNone (solarSlotOf . fst)
                                         (resolveActiveWorld worldManager)
-            renderGhostQuadScanned env activeSolarSlot facing zSlice tileAlpha
+            renderGhostQuadScanned env activeSolarSlot facing zSlice
+                                   effDepth tileAlpha
 
     (zoomStat, zoomQuads) ← measureCategory ScZoomMap forcedQuadCount $
         generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH

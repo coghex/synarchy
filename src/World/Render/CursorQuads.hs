@@ -23,6 +23,7 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingManager(..))
 import Building.Render (buildingGhostQuad)
+import Building.Placement (buildingAnchorZ)
 import Building.Visual (buildingStakedAt, designatedGhostAlpha)
 import Engine.Graphics.Vulkan.Types.Vertex (noFaceMapVertexId)
 import World.Types
@@ -407,12 +408,20 @@ renderWorldCursorQuadsScanned env pageId worldState tileAlpha = do
     -- both are the same 60 % ghost of the same def at the same anchor
     -- (requirement 3). Drawing them together would double the opacity
     -- for the width of that hand-off.
-    let constructDesignQuads
+    -- The z the ghost sits at is the z the STAKE will land on, read
+    -- live from the anchor's own terrain by the very function
+    -- 'building.spawn' stamps 'biGridZ' from. 'cdZ' — the surface level
+    -- captured at designation time — is the fallback for a
+    -- non-resident chunk, the one state nobody can answer for. Reading
+    -- the stored value instead would leave a designation whose ground
+    -- has since been edited drawing at a z the building will not land
+    -- on, and the hand-off this slice makes invisible would move it.
+    let designationZ ax ay cd =
+            fromMaybe (cdZ cd) (buildingAnchorZ worldSize tileData ax ay)
+        constructDesignQuads
             | HM.null constructDesigns = V.empty
             | otherwise = V.fromList
-                [ buildingGhostQuad lookupSlot noFaceMapVertexId facing
-                      zSlice texSizes tileAlpha designatedGhostAlpha True
-                      def ax ay (cdZ cd)
+                [ quad
                 | ((ax, ay), cd) ← HM.toList constructDesigns
                 , CtBuilding defName ← [cdTarget cd]
                 , Just def ← [HM.lookup defName (bmDefs bm)]
@@ -421,6 +430,10 @@ renderWorldCursorQuadsScanned env pageId worldState tileAlpha = do
                 , let (chunkCoord, _) = globalToChunk ax ay
                 , Just _ ← [isChunkVisibleWrapped facing worldSize
                                 vb camX camY chunkCoord]
+                , Just quad ← [buildingGhostQuad lookupSlot noFaceMapVertexId
+                                   facing zSlice effectiveDepth texSizes
+                                   tileAlpha designatedGhostAlpha True def
+                                   ax ay (designationZ ax ay cd)]
                 ]
 
     -- Hover quads (bg + fg) — used by both info and mine tools.

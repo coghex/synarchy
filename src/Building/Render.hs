@@ -204,10 +204,10 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
 --   The ghost has no page of its own — it previews a placement on
 --   whichever page is active — so it takes the ACTIVE page's solar slot
 --   (#1869), which is the page the placement will land on.
-renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int → Float
+renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int → Int → Float
                 → IO (V.Vector SortableQuad)
-renderGhostQuad env solarSlot facing zSlice tileAlpha =
-    snd ⊚ renderGhostQuadScanned env solarSlot facing zSlice tileAlpha
+renderGhostQuad env solarSlot facing zSlice effDepth tileAlpha =
+    snd ⊚ renderGhostQuadScanned env solarSlot facing zSlice effDepth tileAlpha
 
 -- | 'renderGhostQuad' with the scene-assembly telemetry (#1921) this
 --   pass contributes: the optional ghost CANDIDATE — zero or one —
@@ -217,9 +217,9 @@ renderGhostQuad env solarSlot facing zSlice tileAlpha =
 --   definition lookup and the texture-system check reject it, since
 --   those rejections are exactly what an emitted count of zero beside
 --   a scanned count of one records.
-renderGhostQuadScanned ∷ EngineEnv → Word32 → CameraFacing → Int → Float
+renderGhostQuadScanned ∷ EngineEnv → Word32 → CameraFacing → Int → Int → Float
                        → IO (Int, V.Vector SortableQuad)
-renderGhostQuadScanned env solarSlot facing zSlice tileAlpha = do
+renderGhostQuadScanned env solarSlot facing zSlice effDepth tileAlpha = do
     mGhost ← readIORef (buildingGhostRef env)
     case mGhost of
         Nothing → return (0, V.empty)
@@ -236,11 +236,15 @@ renderGhostQuadScanned env solarSlot facing zSlice tileAlpha = do
                             -- Stable handle id resolved in the shader (#286);
                             -- buildings carry no directional face map (#1696).
                             let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                            in return $ (,) 1 $ V.singleton
-                                $ setQuadSolarPage solarSlot
+                                -- The camera band culls the preview
+                                -- exactly as it culls the building it
+                                -- previews: one scanned candidate, and
+                                -- no quad.
+                            in return $ (,) 1 $ maybe V.empty
+                                (V.singleton . setQuadSolarPage solarSlot)
                                 $ ghostToQuad lookupSlot noFaceMapVertexId
-                                              facing zSlice texSizes tileAlpha
-                                              ghost def
+                                              facing zSlice effDepth texSizes
+                                              tileAlpha ghost def
 
 -- | The ONE ghost quad body (#1845): the facing's STATIC view of a
 --   definition, placed exactly where 'buildingToQuad' would place the
@@ -256,26 +260,38 @@ renderGhostQuadScanned env solarSlot facing zSlice tileAlpha = do
 --   'designatedGhostAlpha' — because it has an instance to draw from and
 --   this does not.
 --
---   The sort key is the PLACED key, not a sprite-height one: preview,
---   designation and staked instance must not reorder against their
---   surroundings as a plan turns into a building (#2088 left the
---   preview's own formula alone; this slice is where the three are
---   unified). Pure, so both the choice and the placement are assertable
---   without a texture system.
+--   The sort key is the PLACED key, not a sprite-height one, and the
+--   camera BAND is the placed band: preview, designation and staked
+--   instance must not reorder against their surroundings, nor appear or
+--   vanish at different z levels, as a plan turns into a building (#2088
+--   left the preview's own formula alone; this slice is where the three
+--   are unified). Without the shared band a designation above the slice
+--   drew while the building staked from it did not, and the hand-off
+--   this slice exists to make invisible blanked the site instead.
+--   'Nothing' is that cull — the same one 'buildingToQuad' applies.
+--
+--   Pure, so both the choice and the placement are assertable without a
+--   texture system.
 buildingGhostQuad
     ∷ (TextureHandle → Word32)
     → Float                                 -- ^ face-map slot
     → CameraFacing
     → Int                                   -- ^ camera z slice
+    → Int                                   -- ^ effDepth (terrain view depth)
     → HM.HashMap TextureHandle (Int, Int)   -- ^ texture pixel sizes
     → Float                                 -- ^ frame tileAlpha
     → Float                                 -- ^ lifecycle factor
     → Bool                                  -- ^ valid? (invalid ⇒ red)
     → BuildingDef
     → Int → Int → Int                       -- ^ anchor gx, gy, grid z
-    → SortableQuad
-buildingGhostQuad lookupSlot defFmSlot facing zSlice texSizes
-                  tileAlpha factor valid def gx gy gz =
+    → Maybe SortableQuad
+buildingGhostQuad lookupSlot defFmSlot facing zSlice effDepth texSizes
+                  tileAlpha factor valid def gx gy gz
+  -- Match the terrain band exactly as 'buildingToQuad' does: cull only
+  -- above the slice or past the view depth, never for being below the
+  -- camera.
+  | gz > zSlice ∨ gz < (zSlice - effDepth) = Nothing
+  | otherwise =
     let texHandle = previewBuildingTexture facing def
         -- Lifted to the terrain Z the building will land at, with the
         -- same sprite-anchor drop, by the same function the placed path
@@ -306,7 +322,7 @@ buildingGhostQuad lookupSlot defFmSlot facing zSlice texSizes
                     , qpFlags     = 0
                     , qpWorldUV   = wuv
                     }
-    in SortableQuad
+    in Just SortableQuad
         { sqSortKey = sortKey
         , sqV0      = v0
         , sqV1      = v1
@@ -325,12 +341,14 @@ ghostToQuad
     → Float
     → CameraFacing
     → Int
+    → Int                                   -- ^ effDepth
     → HM.HashMap TextureHandle (Int, Int)
     → Float                                 -- ^ frame tileAlpha
     → BuildingGhost
     → BuildingDef
-    → SortableQuad
-ghostToQuad lookupSlot defFmSlot facing zSlice texSizes tileAlpha ghost def =
-    buildingGhostQuad lookupSlot defFmSlot facing zSlice texSizes
+    → Maybe SortableQuad
+ghostToQuad lookupSlot defFmSlot facing zSlice effDepth texSizes tileAlpha
+            ghost def =
+    buildingGhostQuad lookupSlot defFmSlot facing zSlice effDepth texSizes
                       tileAlpha previewGhostAlpha (bgValid ghost) def
                       (bgGridX ghost) (bgGridY ghost) (bgGridZ ghost)

@@ -206,6 +206,14 @@ end
 --
 -- Page-qualified against the JOB's own page (#1673): `getActiveIds`
 -- snapshots whatever page is active, which is not necessarily this one.
+--
+-- Deliberately z-blind, exactly as its render-side mirror
+-- (Building.Visual.buildingStakedAt) is: `building.spawn` stamps the
+-- instance with the anchor's terrain z READ AT SPAWN TIME, so a terrain
+-- edit under a live designation leaves the two at different levels.
+-- Requiring them to agree would make this job fail to recognize its own
+-- completed stake, re-spawn onto the now-occupied tile, be refused, and
+-- cancel a designation whose building really is standing there.
 function M.stakedBuildingAt(wid, job)
     if not (building.getActiveIds and building.getInfo) then return false end
     local page = require("scripts.unit_ai_page")

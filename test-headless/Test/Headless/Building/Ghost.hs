@@ -217,27 +217,46 @@ anchorZ ∷ Int
 anchorZ = 0
 
 designationGhost ∷ BuildingDef → SortableQuad
-designationGhost def =
-    buildingGhostQuad (const 0) noFaceMapVertexId facing zSlice texSizes
-                      tileAlpha designatedGhostAlpha True def
-                      (fst anchorTile) (snd anchorTile) anchorZ
+designationGhost def = designationGhostAt def anchorZ
+
+-- | The designation ghost at an arbitrary grid z, so the camera band
+--   can be exercised on its own.
+designationGhostAt ∷ BuildingDef → Int → SortableQuad
+designationGhostAt def z =
+    fromMaybe (error "the fixture ghost was culled by the camera band")
+              (designationGhostMaybe def z)
+
+designationGhostMaybe ∷ BuildingDef → Int → Maybe SortableQuad
+designationGhostMaybe def z =
+    buildingGhostQuad (const 0) noFaceMapVertexId facing zSlice effDepth
+                      texSizes tileAlpha designatedGhostAlpha True def
+                      (fst anchorTile) (snd anchorTile) z
 
 previewGhost ∷ BuildingDef → Bool → SortableQuad
 previewGhost def valid =
-    ghostToQuad (const 0) noFaceMapVertexId facing zSlice texSizes tileAlpha
+    fromMaybe (error "the fixture preview was culled by the camera band")
+              (previewGhostAt def valid anchorZ)
+
+previewGhostAt ∷ BuildingDef → Bool → Int → Maybe SortableQuad
+previewGhostAt def valid z =
+    ghostToQuad (const 0) noFaceMapVertexId facing zSlice effDepth texSizes
+        tileAlpha
         BuildingGhost { bgDefName = bdName def
                       , bgGridX = fst anchorTile
                       , bgGridY = snd anchorTile
-                      , bgGridZ = anchorZ
+                      , bgGridZ = z
                       , bgValid = valid }
         def
 
 -- | The staked pre-delivery instance's own quad, from the PLACED path.
 stakedGhost ∷ BuildingDef → Maybe SortableQuad
-stakedGhost def =
+stakedGhost def = stakedGhostAt def anchorZ
+
+stakedGhostAt ∷ BuildingDef → Int → Maybe SortableQuad
+stakedGhostAt def z =
     buildingToQuad (const 0) noFaceMapVertexId facing zSlice effDepth
                    tileAlpha False
-                   (instanceOf def (fst anchorTile) (snd anchorTile) anchorZ 0)
+                   (instanceOf def (fst anchorTile) (snd anchorTile) z 0)
                    (Just def) 0 texSizes
 
 -- * Quad readers
@@ -333,6 +352,20 @@ presentationSpec = describe "the two building ghost states" $ do
         bvGhost (placedBuildingVisual facing 0
                     (instanceOf workDef 0 0 0 0) (Just workDef))
             `shouldBe` True
+
+    it "appear and disappear at the SAME camera band as the building" $ do
+        -- Requirement 3 under the camera band, not only at one z: a
+        -- designation that draws where its own staked building would be
+        -- culled produces the blank hand-off this slice forbids — the
+        -- ghost is suppressed by the stake, and the stake draws nothing.
+        forM_ [zSlice + 1, zSlice - effDepth - 1] $ \z → do
+            designationGhostMaybe workDef z `shouldSatisfy` isNothing
+            previewGhostAt workDef True z   `shouldSatisfy` isNothing
+            stakedGhostAt workDef z         `shouldSatisfy` isNothing
+        forM_ [zSlice, zSlice - effDepth] $ \z → do
+            designationGhostMaybe workDef z `shouldSatisfy` isJust
+            previewGhostAt workDef True z   `shouldSatisfy` isJust
+            stakedGhostAt workDef z         `shouldSatisfy` isJust
 
     it "hand off to progress art once delivery completes and work\
        \ begins" $ do
@@ -471,6 +504,47 @@ renderSpec = describe "the committed designation render pass" $ do
             let Vec4 r g b a = quadTint (V.head quads)
             (r, g, b) `shouldBe` (1, 1, 1)
             a `shouldSatisfy` closeTo (tileAlpha * designatedGhostAlpha)
+
+    it "follows the ground the stake will land on, not the level stored\
+       \ at designation time" $ \env → do
+        -- The elevation-drift case. `cdZ` is captured when the player
+        -- clicks; `building.spawn` stamps `biGridZ` from the terrain as
+        -- it is at STAKE time. A uniform edit keeps the footprint
+        -- placeable and moves only the level, so a ghost drawn from the
+        -- stored value would sit where the building is not — and the
+        -- hand-off would move it. It draws from
+        -- 'Building.Placement.buildingAnchorZ', the very read the spawn
+        -- makes, so there is no drift left to jump over.
+        ws ← scene env
+        plan ws workDef
+        (_, before) ← cursorPass env ws
+        V.length before `shouldBe` 1
+        quadBounds (V.head before)
+            `shouldSatisfy` boundsAgree (quadBounds (designationGhostAt workDef 0))
+        -- The ground under the site drops three levels; the designation
+        -- still says 0.
+        raiseTerrain ws (-3)
+        designations ← readIORef (wsConstructDesignationsRef ws)
+        fmap cdZ (HM.lookup anchorTile designations) `shouldBe` Just 0
+        (_, after) ← cursorPass env ws
+        V.length after `shouldBe` 1
+        quadBounds (V.head after)
+            `shouldSatisfy` boundsAgree (quadBounds (designationGhostAt workDef (-3)))
+        quadBounds (V.head after)
+            `shouldNotSatisfy` boundsAgree (quadBounds (V.head before))
+        -- …and the stake that lands at the moved level is still
+        -- recognized as THIS designation's, so the pass yields to it
+        -- rather than drawing a second 60 % quad beside it.
+        bm ← readIORef (buildingManagerRef env)
+        writeIORef (buildingManagerRef env) bm
+            { bmInstances = HM.singleton (BuildingId 1)
+                (instanceOf workDef (fst anchorTile) (snd anchorTile) (-3) 0) }
+        (_, staked) ← cursorPass env ws
+        V.length staked `shouldBe` 0
+        -- The staked instance draws exactly where the designation just
+        -- did: the hand-off moved nothing.
+        fmap quadBounds (stakedGhostAt workDef (-3))
+            `shouldSatisfy` maybe False (boundsAgree (quadBounds (V.head after)))
 
     it "leaves a structure designation to its own ghost pass" $ \env → do
         ws ← scene env
@@ -753,6 +827,16 @@ fixtureTiles = WorldTileData
         , lcMagma             = Nothing
         , lcStructures        = emptyChunkStructures
         }
+
+-- | Move the whole fixture chunk's terrain surface to @z@ — the
+--   "uniform edit that keeps the footprint placeable" case.
+raiseTerrain ∷ WorldState → Int → IO ()
+raiseTerrain ws z = do
+    wtd ← readIORef (wsTilesRef ws)
+    let bump lc = lc { lcTerrainSurfaceMap =
+                         VU.replicate (chunkSize * chunkSize) z }
+    writeIORef (wsTilesRef ws) wtd
+        { wtdChunks = HM.map bump (wtdChunks wtd) }
 
 plan ∷ WorldState → BuildingDef → IO ()
 plan ws def = writeIORef (wsConstructDesignationsRef ws) $

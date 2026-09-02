@@ -94,12 +94,19 @@ zSlice = 0
 tileAlpha ∷ Float
 tileAlpha = 0.8
 
+-- | Terrain view depth, generous enough that nothing here is culled by
+--   the camera band the ghost now shares with the placed building.
+effDepth ∷ Int
+effDepth = 64
+
 -- | The designation ghost for @def@ at @(ax, ay, z)@, exactly as
 --   'World.Render.CursorQuads' builds it.
 designationGhost ∷ BuildingDef → Int → Int → Int → SortableQuad
 designationGhost def ax ay z =
-    buildingGhostQuad (const 0) noFaceMapVertexId facing zSlice texSizes
-                      tileAlpha designatedGhostAlpha True def ax ay z
+    fromMaybe (error "the fixture ghost was culled by the camera band") $
+        buildingGhostQuad (const 0) noFaceMapVertexId facing zSlice effDepth
+                          texSizes tileAlpha designatedGhostAlpha True
+                          def ax ay z
 
 quadBounds ∷ SortableQuad → (Float, Float, Float, Float)
 quadBounds q =
@@ -151,9 +158,9 @@ spec = describe "Construction blueprint footprint" $ do
         -- function, including the tile_bottom sprite-anchor drop and the
         -- 192x192 canvas that is neither the 96x64 tile nor the
         -- placeholder's size.
-        let ghost = designationGhost tallDef 100 200 5
+        let ghost = designationGhost tallDef 100 200 (-5)
             placed = buildingQuadRect facing zSlice texSizes
-                         (spriteAnchorOffset (Just tallDef)) 100 200 5
+                         (spriteAnchorOffset (Just tallDef)) 100 200 (-5)
                          tallHandle
         quadBounds ghost `shouldSatisfy` boundsAgree (rectBounds placed)
         bqW placed `shouldSatisfy` (> 0)
@@ -195,12 +202,12 @@ spec = describe "Construction blueprint footprint" $ do
         -- the same anchor and the same z, so the two are equal by
         -- construction — which is what lets the render pass drop one of
         -- them mid-hand-off without a visible change.
-        let ghost = designationGhost tallDef 100 200 5
+        let ghost = designationGhost tallDef 100 200 (-5)
             inst = BuildingInstance
                 { biDefName = bdName tallDef
                 , biPage = WorldPageId "p"
                 , biTexture = tallHandle
-                , biAnchorX = 100, biAnchorY = 200, biGridZ = 5
+                , biAnchorX = 100, biAnchorY = 200, biGridZ = -5
                 , biSpawnedAt = 0
                 , biTileW = bdTileW tallDef, biTileH = bdTileH tallDef
                 , biSpawnRemaining = -1

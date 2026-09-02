@@ -412,6 +412,14 @@ rotationSpec = describe "rotation changes only the directional handle" $ do
 
 -- * Ghosts
 
+-- | The preview quad, failing loudly if the camera band culled it —
+--   every fixture here sits inside the band on purpose.
+previewOrFail ∷ CameraFacing → BuildingGhost → BuildingDef → SortableQuad
+previewOrFail f ghost def =
+    fromMaybe (error "the preview fixture was culled by the camera band")
+              (ghostToQuad (const 0) 0 f zSlice effDepth texSizes tileAlpha
+                           ghost def)
+
 ghostSpec ∷ Spec
 ghostSpec = describe "ghost paths" $ do
     it "the placement preview uses the facing-selected static handle" $
@@ -419,13 +427,11 @@ ghostSpec = describe "ghost paths" $ do
             let ghost = BuildingGhost { bgDefName = bdName workerDef
                                       , bgGridX = 3, bgGridY = 1, bgGridZ = 0
                                       , bgValid = True }
-                q = ghostToQuad (const 0) 0 f zSlice texSizes tileAlpha
-                                ghost workerDef
+                q = previewOrFail f ghost workerDef
             sqTexture q `shouldBe` staticHandle f
             quadTint q `shouldBe`
                 ghostPieceTint tileAlpha previewGhostAlpha True
-            quadTint (ghostToQuad (const 0) 0 f zSlice texSizes tileAlpha
-                                  ghost { bgValid = False } workerDef)
+            quadTint (previewOrFail f ghost { bgValid = False } workerDef)
                 `shouldBe` ghostPieceTint tileAlpha previewGhostAlpha False
 
     it "the preview sits exactly where the placed building will" $
@@ -433,11 +439,30 @@ ghostSpec = describe "ghost paths" $ do
             let ghost = BuildingGhost { bgDefName = bdName tileBottomDef
                                       , bgGridX = 3, bgGridY = 1, bgGridZ = 0
                                       , bgValid = True }
-                q = ghostToQuad (const 0) 0 f zSlice texSizes tileAlpha
-                                ghost tileBottomDef
+                q = previewOrFail f ghost tileBottomDef
                 placed = instanceOf tileBottomDef 0 0 False
             quadBounds q `shouldSatisfy`
                 boundsAgree (rectBounds (hitRect f 0 placed (Just tileBottomDef)))
+
+    it "the preview is culled by the same camera band as the building" $
+        forM_ canonicalFacings $ \f → do
+            -- #1845: preview, committed designation and staked instance
+            -- share one band, so a plan cannot be visible at a z the
+            -- building staked from it would not be.
+            let at z = BuildingGhost { bgDefName = bdName workerDef
+                                     , bgGridX = 3, bgGridY = 1, bgGridZ = z
+                                     , bgValid = True }
+                preview z = ghostToQuad (const 0) 0 f zSlice effDepth
+                                        texSizes tileAlpha (at z) workerDef
+                placed z = renderQuad f False 0
+                               ((instanceOf workerDef 0 0 False)
+                                    { biGridZ = z }) (Just workerDef)
+            forM_ [zSlice + 1, zSlice - effDepth - 1] $ \z → do
+                preview z `shouldSatisfy` isNothing
+                placed z  `shouldSatisfy` isNothing
+            forM_ [zSlice, zSlice - effDepth] $ \z → do
+                preview z `shouldSatisfy` isJust
+                placed z  `shouldSatisfy` isJust
 
     it "a placed pre-delivery ghost uses the facing-selected static handle at ghost opacity" $
         forM_ canonicalFacings $ \f → do

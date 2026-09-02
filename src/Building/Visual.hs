@@ -331,6 +331,19 @@ ghostPieceTint tileAlpha factor valid =
 --   other definition at the anchor is not this designation's stake, and
 --   an instance on another page is not on screen for this pass at all
 --   (#1673's page-qualification discipline).
+--
+--   Deliberately NOT on grid z. A designation's stake is its stake
+--   however the ground under it has moved, and the two failures of
+--   requiring z are both worse than the drift it would notice: the
+--   designation and the instance would BOTH draw, which is exactly the
+--   doubled 60 % this predicate exists to prevent, and the Lua mirror
+--   ('unit_ai_construct_site.stakedBuildingAt') would fail to recognize
+--   its own completed stake, try to re-spawn onto the occupied tile and
+--   cancel a job that had really been built. Elevation drift is handled
+--   where it arises instead: the designation ghost draws at the z
+--   'Building.Placement.buildingAnchorZ' says the stake will land on,
+--   not at the level stored when the player clicked, so there is no
+--   drift left for the hand-off to jump over.
 buildingStakedAt ∷ WorldPageId → Text → (Int, Int)
                  → HM.HashMap BuildingId BuildingInstance → Bool
 buildingStakedAt page defName (ax, ay) =
