@@ -54,20 +54,40 @@ IMPORTERS = sorted(
     if path.name not in {"selftestlib.py", Path(__file__).name}
     and IMPORT.search(path.read_text(encoding="utf-8")))
 
-#: The subset that is a self-test in its own right, and so has a verdict
-#: to route and a command line to carry the flag. The rest are shared
-#: modules a self-test is composed from -- since #2100 the probe-claim
-#: gate keeps its assertion helper in `probe_claim_selftest_support`,
-#: which owns no `main` and offers no CLI.
-SCRIPTS = [path for path in IMPORTERS if path.name.startswith("test_")]
+def _is_script(path: Path) -> bool:
+    """Whether a file carries a module-level ``if __name__ == "__main__"`` guard.
+
+    That guard is what makes a file a command rather than a module; the
+    name of the function it dispatches to varies (`main`, `main_`), so it
+    is the guard and not the function that is looked for.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(isinstance(node, ast.If)
+               and isinstance(node.test, ast.Compare)
+               and isinstance(node.test.left, ast.Name)
+               and node.test.left.id == "__name__"
+               for node in tree.body)
+
+
+#: The subset that is a self-test in its own right -- it is a command --
+#: and so has a verdict to route and a command line to carry the flag.
+#: The rest are shared modules a self-test is composed from: since #2100
+#: the probe-claim gate keeps its assertion helper in
+#: `probe_claim_selftest_support`, and since #2070 `test_audit_support`
+#: re-exports it to `test_audit.py`'s six case owners under the
+#: `test_audit_*` name that split's acceptance command compiles. Neither
+#: has an entry point or offers a CLI, so a `test_` prefix alone no
+#: longer tells a script from a module composed into one.
+SCRIPTS = [path for path in IMPORTERS if _is_script(path)]
 
 #: #1922 converted thirty self-tests, one of them (`test_probe_claim.py`)
-#: through a shared support module. A roster that shrinks below either
-#: figure is a file that stopped importing the helper, which is exactly
-#: the regression the static half exists to catch -- and, like every
-#: check here, one an emptied glob would otherwise report as green.
+#: through a shared support module; #2070 added the second support module
+#: (`test_audit_support.py`). A roster that shrinks below either figure is
+#: a file that stopped importing the helper, which is exactly the
+#: regression the static half exists to catch -- and, like every check
+#: here, one an emptied glob would otherwise report as green.
 MINIMUM_SCRIPTS = 30
-MINIMUM_IMPORTERS = 31
+MINIMUM_IMPORTERS = 32
 
 #: The two narrating bodies #1922 removed. Requirement 1: a tree-wide
 #: search finds them only in the shared module.

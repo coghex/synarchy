@@ -117,8 +117,23 @@ Exit 0 on pass/improvement, 1 on failure or a missing baseline, 2 on bad
 invocation.
 
 ### `test_audit.py`
-Unit tests for the audit script. Constructs synthetic tile grids to verify
-each check correctly identifies the issue it's meant to catch.
+The shared self-test for `world_audit.py`, `world_check.py` and
+`world_baseline.py`. Synthetic tile grids and dumps verify that each audit
+check identifies the issue it's meant to catch, that the regression
+summary, determinism status, content-hash gate and missing-baseline exit
+policy decide as documented, and that strict baseline capture refuses what
+it must. Sub-second, engine-free, and it never writes under
+`tools/baselines/`.
+
+Since #2070 the file is a façade: it composes and runs the ordered group
+inventories of six owner modules — `test_audit_categories.py` (the
+emitted-category inventory derived from `world_audit.py`'s source),
+`test_audit_world_audit.py`, `test_audit_world_check.py`,
+`test_audit_content_hash.py`, `test_audit_strict_capture.py` and
+`test_audit_missing_baseline.py` — over the shared fixtures and assertion
+facility in `test_audit_support.py`. The owners expose no command line, and
+the aggregate refuses to run if any owner declares fewer groups than it has
+always carried. The command is unchanged:
 
 ```bash
 python3 tools/test_audit.py
@@ -269,7 +284,7 @@ python3 tools/location_placement_sweep.py --single --seed 7 --size 128
 
 Before committing a change:
 ```bash
-python3 tools/test_audit.py               # unit tests pass
+python3 tools/test_audit.py               # world_audit/check/baseline self-test passes
 python3 tools/lua_module_budget.py        # Lua module line budgets pass
 python3 tools/world_check.py              # regression suite passes
 ```
@@ -3318,7 +3333,14 @@ tools/
 ├── world_determinism.py    (detect race conditions)
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
-├── test_audit.py           (unit tests)
+├── test_audit.py           (world_audit/world_check/world_baseline self-test — the façade)
+├── test_audit_support.py           (its shared fixtures and assertion facility)
+├── test_audit_categories.py        (its emitted-category inventory owner)
+├── test_audit_world_audit.py       (its world_audit check-behavior owner)
+├── test_audit_world_check.py       (its world_check summary/determinism owner)
+├── test_audit_content_hash.py      (its baseline content-hash gate owner)
+├── test_audit_strict_capture.py    (its strict baseline-capture owner)
+├── test_audit_missing_baseline.py  (its missing-baseline exit-policy owner)
 ├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
