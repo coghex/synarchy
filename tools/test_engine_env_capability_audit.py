@@ -51,7 +51,7 @@ from engine_env_capability_audit import (  # type: ignore
     SAVE_LOAD_FIELD_MAP, SAVE_LOAD_PROJECTION,
     _import_chunks, _strip_haskell_comments,
 )
-from persistence_inventory_audit import extract_record_fields  # type: ignore
+from persistence_inventory_audit_haskell import extract_record_fields  # type: ignore
 # The writer-scanner half of this gate (#1892), owned by its own module
 # since #2036 and run from here so CI keeps exactly one self-test
 # command; see that module's docstring for the delegation contract.
