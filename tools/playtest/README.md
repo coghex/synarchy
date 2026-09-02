@@ -541,6 +541,34 @@ Cross-session aggregation (same spot tripping N personas) is a
 deliberate follow-up, not built here — the single-session path stays
 clean and additive.
 
+Those commands and everything they print are unchanged; since #2069
+the implementation behind `critic.py` lives in one module per
+ownership boundary, and `critic.py` itself is the documented command —
+its usage text, argument parsing and dispatch — with no pipeline or
+self-test body of its own:
+
+| Module | Owns |
+|---|---|
+| `critic_contract.py` | the contract, a leaf: the category/severity/verdict/confidence enums, the structured findings schema, the system prompt, and the default model, effort, token and frame settings |
+| `critic_click.py` | click correlation, a leaf: `widget_at` (`interactiveBounds` first, content `bounds` only for records without it), the routing-fact detection, left-click classification, the legacy `(paintKey, paintOrder)` join and the route-aware modal-scope / pointer-blocking / target / affordance selection |
+| `critic_signals.py` | deterministic pre-analysis: frame hashing and visual change, the per-turn signals, the friction candidates with every canonical join and the crash and stuck-loop handling, the digest, and pre/post-frame batch planning |
+| `critic_model.py` | model transport: the one Anthropic adjudication call with structured output, attached frames, and the model/effort/token settings |
+| `critic_evidence.py` | evidence validation and rendering: recorded-data anchors, `ValidationCtx`, per-finding coverage, enum validation, uncovered-candidate detection, conflicting-verdict reconciliation, stable finding ids, and the Markdown report |
+| `critic_pipeline.py` | orchestration (`run_critic`): load the trace once, analyse once, adjudicate in batches, one bounded repair pass, validate and reconcile, write matching `findings.json` and `report.md` |
+| `critic_selftest.py` | the offline self-test behind `--selftest`, including the deterministic fake critics — test support, imported only on that branch |
+| `critic_eval.py` | the opt-in real-model evaluation behind `--eval` |
+
+Dependencies run one way: the contract and click owners import
+nothing from the harness; signals consumes click; model transport and
+evidence consume the contract; the pipeline composes signals, evidence
+and the trace loader (never the model owner — the critic it drives is
+duck-typed, which is how the self-test's fakes share the production
+path); self-test and eval consume the production owners; nothing
+imports `critic.py`. A plain `critic.py <trace_dir>` run never imports
+the self-test, the fake critics or the canned fixture.
+`preanalysis.py` and the runner's self-test components import the
+analysis functions from `critic_signals.py` directly.
+
 ## Testing
 
 - `python3 tools/playtest/run.py --selftest` — offline, CI-safe check
