@@ -3016,7 +3016,9 @@ def test_pointer_reached_managers_parse_from_their_real_sources():
     reachable and parseable, which this pins directly."""
     from persistence_inventory_audit import _load_repo_state  # type: ignore
     record_sources, _, _, _, _ = _load_repo_state()
-    expected_counts = {"UnitManager": 4, "BuildingManager": 4,
+    # BuildingManager: bmDefs, bmInstances, bmNextId, bmSelected, plus
+    # #2091's session-transient bmDestructions.
+    expected_counts = {"UnitManager": 4, "BuildingManager": 5,
                        "UnitThreadState": 1}
     for label, relpath, pattern in POINTER_REACHED_MANAGERS:
         expect(relpath in record_sources,

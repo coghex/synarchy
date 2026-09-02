@@ -389,6 +389,7 @@ counting.
 | `bmInstances` | Persist exactly | via `BuildingSnapshot`/`wpsBuildings`, needs `bmDefs` resolved first | missing building def fails load (contract §4) | `tools/multiworld_save_probe.py` |
 | `bmNextId` | Persist exactly | — | must exceed every restored `BuildingId` so post-load spawns can't collide | `tools/persistence_contract_probe.py` (see §12) |
 | `bmSelected` | Exclude | — | selections are cleared on load (contract §1) | none yet |
+| `bmDestructions` | Exclude (session-transient) | — | the transient, render-only destruction presentations of demolished buildings (#2091): captured by `BuildingDestroy` in the same transition that deletes the instance, pruned by the building command drain against the game clock, and owning no gameplay authority. Never in `BuildingSnapshot`; every constructed manager (boot, load replacement, `BuildingClearAll`) starts with none, so a save taken mid-playback restores neither the building nor its effect | hspec `--match "Building destruction presentation lifecycle"` |
 
 ### UnitThreadState
 

@@ -145,6 +145,7 @@ import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.Plan as ConstructPlan
 import qualified Test.Headless.Render.StructureGhost as StructureGhost
+import qualified Test.Headless.Render.FrameAssembly as FrameAssembly
 import qualified Test.Headless.Construct.PlanInvalidation as ConstructPlanInvalidation
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
@@ -272,6 +273,7 @@ import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
 import qualified Test.Headless.Building.CameraFacing as BuildingCameraFacing
+import qualified Test.Headless.Building.DestructionPresentation as BuildingDestruction
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
@@ -379,6 +381,10 @@ main = hspec $ do
         -- own active scene rather than leaking one into this shared
         -- environment.
         describe "Lua.SceneText" LuaSceneText.spec
+        -- Same technique (#2192): the sprite half of the scene route —
+        -- a spawn through processLuaMessages, the manager's own
+        -- rebuild, then the pure frame assembly — against the live env.
+        FrameAssembly.envSpec
         -- Same technique as Lua.DebugQueue above: the live EngineEnv's
         -- queues/refs are only there to build a real Lua backend, whose
         -- console boundary is what #1955's key contract lives on.
@@ -606,6 +612,7 @@ main = hspec $ do
     describe "building asset schema and lifecycle roles"
         BuildingAssetSchema.spec
     BuildingCameraFacing.spec
+    BuildingDestruction.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
@@ -736,6 +743,7 @@ main = hspec $ do
     describe "Construct.Footprint" ConstructFootprint.spec
     ConstructPlan.spec
     StructureGhost.spec
+    FrameAssembly.spec
     ConstructPlanInvalidation.spec
     ConstructAttemptIdentity.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec

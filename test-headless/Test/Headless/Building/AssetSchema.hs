@@ -252,9 +252,10 @@ rejectionSpec = do
             ]) `shouldFailWith` ["probe_hall", "walkabout", "no `frames`"]
 
     it "decodes all four lifecycle roles, independently" $ do
-        -- Including `destruction`, which nothing plays yet (BDA-3 owns
-        -- playback): it has to DECODE now or the art slices have
-        -- nowhere to declare it. Four distinct animation names, so a
+        -- Including `destruction`, which 'Building.Destruction' plays
+        -- as a transient presentation after demolition (BDA-3, #2091):
+        -- it has to DECODE here or the art slices have nowhere to
+        -- declare it. Four distinct animation names, so a
         -- decoder collapsing two roles onto one would lose a value
         -- rather than merely reorder the map.
         def ← decodeOne (buildingYaml

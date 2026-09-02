@@ -429,6 +429,7 @@ library
                      Engine.Scene.Graph
                      Engine.Scene.Manager
                      Engine.Scene.Render
+                     Engine.Scene.Assembly
                      Engine.Loop
                      Engine.Loop.Mode
                      Engine.Loop.Timing
@@ -516,6 +517,7 @@ library
                      Building.Knowledge
                      Building.Knowledge.Live
                      Building.Command.Types
+                     Building.Destruction
                      Building.Thread.Command
                      Building.Render
                      Building.Visual
@@ -1308,6 +1310,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Plan
                    Test.Headless.Render.StructureGhost
                    Test.Headless.Render.StructureGhostFixture
+                   Test.Headless.Render.FrameAssembly
                    Test.Headless.Construct.PlanInvalidation
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
@@ -1432,6 +1435,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
+                   Test.Headless.Building.DestructionPresentation
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

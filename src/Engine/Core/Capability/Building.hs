@@ -73,7 +73,10 @@ data BuildingCapability = BuildingCapability
     --   'Building.Types.BuildingInstance' map (build progress,
     --   delivered materials, storage contents, spawn-roster
     --   countdown), the @bdDefs@ catalogue loaded from
-    --   @data/structure_packs/*.yaml@, and @bmSelected@. Written by
+    --   @data/structure_packs/*.yaml@, @bmSelected@, and — since
+    --   #2091 — @bmDestructions@, the transient render-only
+    --   presentations of demolished buildings (captured and pruned by
+    --   the drain on @UnitThread@, read by the render pass). Written by
     --   @UnitThread@ (via "Building.Thread.Command", drained on that
     --   thread), @WorldThread@ (load publish) and @LuaThread@
     --   (@building.select@\/@building.deselect@, and every

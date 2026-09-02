@@ -638,6 +638,9 @@ fromBuildingSnapshot page defs snap =
                 , bmInstances = HM.fromList resolved
                 , bmNextId    = bsnNextId snap
                 , bmSelected  = Nothing
+                  -- Destruction presentations are session-transient
+                  -- (#2091): never in the snapshot, never restored.
+                , bmDestructions = HM.empty
                 }
     in (bm, orphans)
 

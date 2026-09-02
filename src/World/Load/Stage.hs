@@ -238,9 +238,14 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                   -- so any page's value is representative.
                   nextBid = maybe 0 (bmNextId . psrBuildings) (listToMaybe results)
                   nextUid = maybe 0 (umNextId . psrUnits) (listToMaybe results)
+                  -- No destruction effects survive a load (#2091): a
+                  -- save taken during playback holds neither the
+                  -- demolished building nor its presentation, and the
+                  -- replacement session starts with none.
                   finalBuildings = BuildingManager
                       { bmDefs = buildingDefs, bmInstances = mergedBuildings
-                      , bmNextId = nextBid, bmSelected = Nothing }
+                      , bmNextId = nextBid, bmSelected = Nothing
+                      , bmDestructions = HM.empty }
                   finalUnits = UnitManager
                       { umDefs = unitDefs, umInstances = mergedUnits
                       , umSelected = mempty, umNextId = nextUid }
