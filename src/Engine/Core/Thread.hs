@@ -25,12 +25,62 @@
 --   passes whatever it needs through its own closures, which is what
 --   lets @Test.Headless.Core.WorkerLifecycle@ drive this module with
 --   a bare logger and no engine at all.
+--
+--   == Shutdown: graceful wait, forced kill, second join (#2165)
+--
+--   'shutdownThread' is a JOIN, on every path. It writes the stop
+--   request, then waits on 'tsDone' up to the graceful timeout
+--   ('stGracefulMicros', 10 s in production). A worker that has not
+--   exited by then is force-killed and waited for AGAIN, bounded by
+--   'stForcedMicros' (5 s in production); only if that second wait also
+--   expires does it give up — and giving up is loud: an error line
+--   naming the worker on the engine log, then an 'EngineException'.
+--   It never returns while the worker's loop, its stop or crash
+--   callback, or its fork finalizer may still be running, so a caller
+--   may tear down the logger, the Lua state's neighbours, or Vulkan the
+--   moment it returns.
+--
+--   The kill is sent from a helper thread. 'killThread' blocks until
+--   the target ACCEPTS the exception, and a worker inside a @safe@
+--   foreign call (a long Lua script) or an uninterruptible mask cannot
+--   accept it until that call returns — delivered inline, one stuck
+--   worker would hang the shutdown caller indefinitely, and the bounded
+--   second wait could never reach its report. Making such a worker
+--   interruptible is out of scope; the fatal report is the observable
+--   outcome there.
+--
+--   What the kill does on the worker's side: the running-tick guard
+--   classifies every exception it catches. One that downcasts to
+--   'SomeAsyncException' — 'ThreadKilled' from the kill above, but by
+--   the same test any other asynchronous exception, including the
+--   GHC-classified 'StackOverflow' and 'HeapOverflow' — is a FORCED
+--   TERMINATION, not a crash: the guard logs it as such, naming the
+--   worker and the exception, runs 'wsOnStop' (the same cleanup a
+--   cooperative stop runs, so the Lua worker still drains its debug
+--   queue and closes its state exactly once), and ends the loop.
+--   'wsOnCrash' is reserved for everything else — a synchronous tick
+--   failure keeps its fail-stop report and its lifecycle write. An
+--   asynchronous exception that lands OUTSIDE a tick (in the paused
+--   poll, the control read, or 'wsOnStop' itself) unwinds without a
+--   second cleanup, which is exactly how the once-only guarantee holds
+--   when the stop callback was already running.
+--
+--   'tsDone' is read, never taken: completion stays observable after a
+--   successful join, so a repeated 'shutdownThread' distinguishes a
+--   CONFIRMED termination (returns at once) from a merely WRITTEN stop
+--   request (waits, and kills, like the first call would). The stop
+--   request alone is never trusted as evidence that the loop exited.
+--
+--   The two timeouts are a parameter of 'shutdownThreadWith'; the
+--   production entry point 'shutdownThread' fixes them at
+--   'productionShutdownTimeouts', and the focused specs shorten both.
 module Engine.Core.Thread where
 
 import UPrelude
 import Control.Concurrent (ThreadId, forkIO, killThread, threadDelay)
-import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (SomeException, catch, finally, throwIO)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, readMVar)
+import Control.Exception
+    (SomeAsyncException, SomeException, catch, finally, fromException, throwIO)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Void (Void, absurd)
 import System.Timeout (timeout)
@@ -41,14 +91,20 @@ import Engine.Core.Log
     (LogCategory, LoggerState, logError, logInfo, logWarn)
 
 data ThreadState = ThreadState
-    { tsRunning  ∷ IORef ThreadControl
-    , tsThreadId ∷ ThreadId
-    , tsDone     ∷ MVar ()
+    { tsRunning   ∷ IORef ThreadControl
+    , tsThreadId  ∷ ThreadId
+    , tsDone      ∷ MVar ()
       -- ^ Filled exactly once when the thread's loop actually exits —
       --   via 'finally' at the fork site, so it covers a clean stop, a
       --   self-crash, and an async 'killThread' alike. Distinct from
       --   'tsRunning' (the stop *request*) so 'shutdownThread' genuinely
-      --   waits instead of reading back the flag it just set.
+      --   waits instead of reading back the flag it just set. Readers
+      --   use 'readMVar', never 'takeMVar': a filled done-'MVar' is the
+      --   persistent record that the loop has exited.
+    , tsName      ∷ T.Text
+      -- ^ 'wsName', so shutdown's own lines can name the worker.
+    , tsLoggerRef ∷ IORef LoggerState
+    , tsCategory  ∷ LogCategory
     }
 
 data ThreadControl = ThreadRunning | ThreadPaused | ThreadStopped
@@ -58,6 +114,26 @@ data ThreadControl = ThreadRunning | ThreadPaused | ThreadStopped
 --   control ref. Shared so every worker polls at the same 100 ms.
 pausedPollMicros ∷ Int
 pausedPollMicros = 100000
+
+-- | The two bounds 'shutdownThreadWith' waits under, in microseconds.
+data ShutdownTimeouts = ShutdownTimeouts
+    { stGracefulMicros ∷ Int
+      -- ^ How long a worker gets to honour the stop request before it
+      --   is force-killed.
+    , stForcedMicros   ∷ Int
+      -- ^ How long a force-killed worker gets to unwind before it is
+      --   reported as failing to terminate.
+    }
+    deriving (Show, Eq)
+
+-- | What every production caller waits under: the 10 s graceful
+--   timeout the workers have always had, and a finite 5 s bound on the
+--   post-kill unwind.
+productionShutdownTimeouts ∷ ShutdownTimeouts
+productionShutdownTimeouts = ShutdownTimeouts
+    { stGracefulMicros = 10 * 1000000
+    , stForcedMicros   =  5 * 1000000
+    }
 
 -- | The level a worker's startup-failure line is logged at. Five use
 --   'logError'; the Lua thread has always used 'logWarn'. Parameterised
@@ -76,7 +152,11 @@ data WorkerFailLevel = WorkerFailError | WorkerFailWarn
 --   worker carrying a counter across iterations (Combat's wound-tick
 --   modulo) needs nothing of its own.
 data WorkerSpec ε σ = WorkerSpec
-    { wsLoggerRef   ∷ IORef LoggerState
+    { wsName        ∷ T.Text
+      -- ^ The worker's short name (@"Unit"@, @"Lua"@, …), used only by
+      --   the lines the shared lifecycle itself logs about it: the
+      --   forced-termination and failed-to-terminate reports.
+    , wsLoggerRef   ∷ IORef LoggerState
       -- ^ Read once, before the guarded startup, so the failure line can
       --   be logged whatever the startup action did.
     , wsCategory    ∷ LogCategory
@@ -99,13 +179,16 @@ data WorkerSpec ε σ = WorkerSpec
       -- ^ One running tick. 'Just' continues the loop with that state;
       --   'Nothing' ends it.
     , wsOnStop      ∷ σ → IO ()
-      -- ^ Runs on the 'ThreadStopped' branch: per-worker stop logging
+      -- ^ Runs on the 'ThreadStopped' branch — per-worker stop logging
       --   and cleanup (the Lua thread drains its debug queue and closes
-      --   its Lua state here).
+      --   its Lua state here) — and ALSO when a running tick is ended
+      --   by an asynchronous exception (#2165), so a force-killed
+      --   worker gets the same cleanup, once.
     , wsOnCrash     ∷ σ → SomeException → IO ()
-      -- ^ Runs when a tick throws. Every worker is fail-stop, so the
-      --   loop always ends afterwards; the callback owns only the
-      --   reporting and cleanup, not the decision.
+      -- ^ Runs when a tick throws a SYNCHRONOUS exception — anything
+      --   that does not downcast to 'SomeAsyncException'. Every worker
+      --   is fail-stop, so the loop always ends afterwards; the callback
+      --   owns only the reporting and cleanup, not the decision.
     }
 
 -- | Startup for the five workers that cannot refuse.
@@ -158,7 +241,14 @@ startWorkerThreadEither spec = do
                 (wsFailFatal spec)
                 mkErrorContext
         )
-    pure $ (\tid → ThreadState stateRef tid doneVar) ⊚ result
+    pure $ (\tid → ThreadState
+                { tsRunning   = stateRef
+                , tsThreadId  = tid
+                , tsDone      = doneVar
+                , tsName      = wsName spec
+                , tsLoggerRef = wsLoggerRef spec
+                , tsCategory  = wsCategory spec
+                }) ⊚ result
 
 logStartFailure ∷ WorkerSpec ε σ → LoggerState → T.Text → IO ()
 logStartFailure spec logger msg = case wsFailLevel spec of
@@ -185,24 +275,79 @@ workerLoop spec stateRef = go
                 -- now stated; a seventh worker inherits it.
                 next ← catch (wsTick spec seed)
                     (\(e ∷ SomeException) → do
-                        wsOnCrash spec seed e
+                        -- Provenance (throw vs throwTo) is not
+                        -- recoverable here; the classification is the
+                        -- exception's TYPE, the same downcast
+                        -- 'Engine.Loop.Shutdown' and the Lua API's
+                        -- function wrapper use.
+                        case fromException e ∷ Maybe SomeAsyncException of
+                            Just _  → forcedTermination seed e
+                            Nothing → wsOnCrash spec seed e
                         pure Nothing
                     )
                 case next of
                     Just seed' → go seed'
                     Nothing    → pure ()
+    -- A forced termination is not a crash: no crash report, no
+    -- lifecycle write — the same cleanup a cooperative stop runs, and
+    -- a line that says what happened. Runs inside the catch handler,
+    -- so a second kill cannot interrupt the cleanup mid-way.
+    forcedTermination seed e = do
+        logger ← readIORef (wsLoggerRef spec)
+        logWarn logger (wsCategory spec) $
+            wsName spec <> " thread forcibly terminated: " <> tshow e
+        wsOnStop spec seed
 
--- | Signal stop and block until the thread's loop actually exits, up to
---   a 10 s timeout, then force-kill. Idempotent: a second call once the
---   thread is already stopped returns immediately (no re-wait).
+-- | Signal stop and block until the thread's loop actually exits, under
+--   'productionShutdownTimeouts': 10 s to stop on its own, then a
+--   forced kill and a further 5 s to unwind, then a fatal report.
+--   Idempotent: a second call after a confirmed join returns at once,
+--   because 'tsDone' stays filled. The full contract is the module
+--   haddock's shutdown section.
 shutdownThread ∷ ThreadState → IO ()
-shutdownThread ts = do
-    tstate ← readIORef (tsRunning ts)
-    case tstate of
-        ThreadStopped → pure ()
-        _ → do
-            writeIORef (tsRunning ts) ThreadStopped
-            result ← timeout (10 * 1000000) (takeMVar (tsDone ts))
-            case result of
-                Just () → pure ()
-                Nothing → killThread (tsThreadId ts)
+shutdownThread = shutdownThreadWith productionShutdownTimeouts
+
+-- | 'shutdownThread' with both bounds supplied, so a focused spec can
+--   exercise the timeout branch and the post-kill report in
+--   milliseconds. Production has one caller and it passes
+--   'productionShutdownTimeouts'.
+--
+--   Throws an 'EngineException' (@ExSystem (TimeoutError …)@) — after
+--   logging the same report at error level — when the worker has still
+--   not exited 'stForcedMicros' after the kill. 'tsDone' is left empty
+--   in that case: nothing was joined, and a later call will say so
+--   again rather than pretend otherwise.
+shutdownThreadWith ∷ ShutdownTimeouts → ThreadState → IO ()
+shutdownThreadWith timeouts ts = do
+    -- Written unconditionally: an already-written request is not
+    -- evidence that the loop exited, so it never short-circuits the
+    -- join below. The write is idempotent.
+    writeIORef (tsRunning ts) ThreadStopped
+    graceful ← await (stGracefulMicros timeouts)
+    unless graceful $ do
+        logger ← readIORef (tsLoggerRef ts)
+        logWarn logger (tsCategory ts) $
+            tsName ts <> " thread did not stop within "
+            <> showMillis (stGracefulMicros timeouts)
+            <> "; forcing termination"
+        -- From a helper: 'killThread' returns only once the target has
+        -- accepted the exception, and a worker in a safe foreign call
+        -- or an uninterruptible mask cannot accept it yet. The helper
+        -- keeps the kill pending for whenever it can; this thread keeps
+        -- its wait bounded.
+        _ ← forkIO $ killThread (tsThreadId ts)
+        forced ← await (stForcedMicros timeouts)
+        unless forced $ do
+            let detail = tsName ts <> " thread failed to terminate within "
+                         <> showMillis (stForcedMicros timeouts)
+                         <> " after a forced kill"
+            logError logger (tsCategory ts) detail
+            throwIO $ EngineException
+                (ExSystem (TimeoutError detail))
+                (tsName ts <> " thread failed to terminate.")
+                mkErrorContext
+  where
+    -- 'readMVar', not 'takeMVar': the join must leave the completion
+    -- record in place for the next reader.
+    await micros = isJust ⊚ timeout micros (readMVar (tsDone ts))
+    showMillis micros = tshow (micros `div` 1000) <> " ms"
