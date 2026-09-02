@@ -13,6 +13,8 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, buildingManagerRef, loggerRef)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Capability.WorldSim
+  (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logWarn, LogCategory(..))
 import Engine.Asset.Handle (toInt)
 import Engine.Scene.Types (SortableQuad(..))
@@ -26,15 +28,21 @@ import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
                             , constructDesignationFootprint
                             , constructDesignationFootprintSize)
-import World.Chop.Types (ChopDesignation(..), chopDesignationTile)
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Construct.Extent (structureDragExtent)
-import World.Render.ViewBounds (computeViewBounds)
+import World.Render.Camera (placementCamera, quadCacheMargins)
+import World.Render.ViewBounds
+    (computeViewBounds, expandViewBounds, viewBoundsAt)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
 import World.Render.TileQuads
     (worldCursorToQuad, worldFlatCursorToQuad, worldCursorBgToQuad)
+import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
+import World.Render.FloraMarker (floraMarkerQuad)
+import World.Render.FloraProjection
+    (FloraGeom(..), floraGeom, floraTexSize, floraVisibleInSlice)
+import World.Render.SpriteDepth (frameFrontWallLift, liftSpriteSortKey)
 
 -- * World Cursor Quads (generated every frame, not cached)
 
@@ -171,26 +179,85 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                                           vb camX camY chunkCoord]
                     ]
 
-    -- Chop-designation markers (#97): world annotations like the mine
-    -- markers, visible in every tool mode. Rendered from the surface z
-    -- stored at designation time.
+    -- Chop-designation markers (#97, re-anchored by #1856): world
+    -- annotations like the mine markers, visible in every tool mode.
+    --
+    -- ONE alpha icon per designated TREE, anchored to that tree's own
+    -- rendered ground contact — not a full-tile ground overlay. The
+    -- anchor and the painter depth come from the shared projection
+    -- boundary the Chop selection oracle reads, so the icon lands on
+    -- exactly the sprite the player selected even where two wood-tagged
+    -- co-tenants share a tile.
+    --
+    -- The marker is driven by the LIVE instance, found in the resident
+    -- chunk: a felled tree has no instance to draw against, so its
+    -- marker disappears with it rather than lingering as an orphaned
+    -- annotation (requirement 8 — the durable entry is separately swept
+    -- by 'World.Flora.Designation.forgetFloraInstances'). An EVICTED
+    -- chunk draws nothing either, exactly as its trees draw nothing.
     chopDesigns ← readIORef (wsChopDesignationsRef worldState)
-    let chopDesignQuads = case chopDesignTexture cs' of
+    cachedQuads ← readIORef (wsQuadCacheRef worldState)
+    floraCat    ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
+    harvests    ← readIORef (wsFloraHarvestsRef worldState)
+    worldDate   ← readIORef (wsDateRef worldState)
+    texSizes    ← readIORef (rvTextureSizeRef rv)
+    let calendar = maybe defaultCalendarConfig wgpCalender paramsM
+        daysPerYear = calendarDaysPerYear calendar
+        absDay = worldAbsoluteDay calendar worldDate
+        -- This pass is per-frame while the flora it annotates is
+        -- CACHED, so the marker must place itself with the camera those
+        -- cached quads were built with (#1856). Reading the live camera
+        -- instead sends the icon a whole world away from its tree for
+        -- as long as a reused cache straddles the wrap-alias midpoint.
+        --
+        -- EVERY input the cached run was built with comes from that
+        -- snapshot — the z-band cull and the front-wall lift included.
+        -- 'cameraChanged' tolerates a zoom delta of camEpsilon (0.075)
+        -- while the band steps every 0.0125, so a marker culled at the
+        -- live depth could outlive the tree it annotates, or vanish off
+        -- one still on screen.
+        placed = placementCamera cachedQuads WorldCameraSnapshot
+            { wcsPosition = camPosition camera
+            , wcsZoom     = zoom
+            , wcsZSlice   = camZSlice camera
+            , wcsFbSize   = (fbW, fbH)
+            , wcsFacing   = camFacing camera
+            }
+        (placeX, placeY) = wcsPosition placed
+        markerDepth = min viewDepth
+            (max 8 (round (wcsZoom placed * 80.0 + 8.0 ∷ Float)))
+        -- The same front-wall sprite lift the render pass and the
+        -- selection oracle build (#418/#1856): a tree lifted to clear a
+        -- wall carries its marker up with it, instead of leaving the
+        -- annotation sunk behind the trunk it belongs to.
+        spriteLift = frameFrontWallLift (wcsFacing placed) worldSize
+                         (wcsZSlice placed) markerDepth (wtdChunks tileData)
+        markerBounds = expandViewBounds (quadCacheMargins placed)
+            (viewBoundsAt (wcsPosition placed) (wcsZoom placed)
+                 fbW fbH markerDepth)
+        chopDesignQuads = case chopDesignTexture cs' of
             Nothing → V.empty
             Just tex
                 | HM.null chopDesigns → V.empty
                 | otherwise → V.fromList
-                    -- #1854: keyed by the designated PLANT now, so the
-                    -- tile to draw the marker on comes off the record
-                    -- itself rather than out of the key.
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
-                          facing dgx dgy (chZ cd) zSlice effectiveDepth
-                          tileAlpha wrapOff tex
-                    | cd ← HM.elems chopDesigns
-                    , let (dgx, dgy) = chopDesignationTile cd
-                          (chunkCoord, _) = globalToChunk dgx dgy
-                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
-                                          vb camX camY chunkCoord]
+                    [ floraMarkerQuad lookupSlot geom
+                          (floraTexSize texSizes tex) tileAlpha
+                          (fdGX fd) (fdGY fd) tex
+                    | (coord, lc) ← HM.toList (wtdChunks tileData)
+                    , Just wrapOff ← [isChunkVisibleWrapped
+                                          (wcsFacing placed) worldSize
+                                          markerBounds placeX placeY coord]
+                    , fd ← chunkFloraDraws floraCat daysPerYear absDay
+                               harvests (lcCoord lc) lc
+                    , let inst = fdInstance fd
+                    , HM.member (fiInstanceId inst) chopDesigns
+                    , floraVisibleInSlice (wcsZSlice placed) markerDepth inst
+                    , let base = floraGeom (wcsFacing placed) (fdGX fd)
+                                     (fdGY fd) inst (fdTexture fd) texSizes
+                                     (wcsZSlice placed) wrapOff
+                          geom = base { fgSortKey =
+                              liftSpriteSortKey spriteLift (lcCoord lc)
+                                  (fdGX fd) (fdGY fd) (fgSortKey base) }
                     ]
 
     -- Till-designation markers (#333): world annotations like the chop
@@ -444,34 +511,6 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
             _ → (0, V.empty)
         constructPreviewQuads = snd constructPreview
 
-    -- Chop tool: anchor→hover rectangle preview. Unlike the mine /
-    -- construct previews there is NO per-z-level filter — the commit
-    -- takes wood-tagged flora at any surface z (forests span slopes) —
-    -- so every loaded tile in the rectangle previews at its own z.
-    let chopPreview = case (chopAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex) →
-                let (hx, hy) = localizeHover ax ay hxRaw hyRaw
-                    hx' = clampSide ax hx
-                    hy' = clampSide ay hy
-                    xLo = min ax hx'
-                    xHi = max ax hx'
-                    yLo = min ay hy'
-                    yHi = max ay hy'
-                in ( (xHi - xLo + 1) * (yHi - yLo + 1)
-                   , V.fromList
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
-                          facing gx gy z zSlice effectiveDepth
-                          tileAlpha wrapOff tex
-                    | gx ← [xLo .. xHi]
-                    , gy ← [yLo .. yHi]
-                    , Just z ← [surfaceZAt gx gy]
-                    , let (chunkCoord, _) = globalToChunk gx gy
-                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
-                                          vb camX camY chunkCoord]
-                    ] )
-            _ → (0, V.empty)
-        chopPreviewQuads = snd chopPreview
-
     -- Till tool: anchor→hover rectangle preview. Per-z-level like mine/
     -- construct — a farmed field is flat ground, unlike chop's
     -- slope-spanning forest sweep.
@@ -547,8 +586,11 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
         -- standalone construct tool used to.
         BuildTool → ( markerScanned + hoverScanned + fst constructPreview
                     , markerQuads <> hoverQuads <> constructPreviewQuads )
-        ChopTool  → ( markerScanned + hoverScanned + fst chopPreview
-                    , markerQuads <> hoverQuads <> chopPreviewQuads )
+        -- #1856: Chop's gesture is a screen-space press-drag whose box
+        -- is a UI overlay ('scripts/unit_drag_select.lua'), not a
+        -- world-space tile rectangle, so this pass has no chop preview
+        -- to build — only the hover cursor and the committed markers.
+        ChopTool  → (markerScanned + hoverScanned, markerQuads <> hoverQuads)
         TillTool  → ( markerScanned + hoverScanned + fst tillPreview
                     , markerQuads <> hoverQuads <> tillPreviewQuads )
         PlantTool → ( markerScanned + hoverScanned

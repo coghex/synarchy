@@ -281,9 +281,10 @@ data WorldState = WorldState
       --   (surface z + the plant's canonical tile; see
       --   World.Chop.Types). #1854 re-keyed this off the tile too, so
       --   designating one of two trees on a tile marks exactly one.
-      --   Written by the world thread (WorldDesignateChop / cancel
-      --   commands) THROUGH "World.Flora.Designation", which is the one
-      --   operation that keeps this map and the loaded
+      --   Written by the world thread (#1856's exact-instance
+      --   WorldDesignateChopInstances / WorldEraseChopInstances, and
+      --   the AI's WorldCancelChop) THROUGH "World.Flora.Designation",
+      --   which is the one operation that keeps this map and the loaded
       --   'fiChopDesignated' mirror in step; read by the render pass
       --   (marker) and the chop AI. Persisted in saves
       --   (wpsChopDesignations).

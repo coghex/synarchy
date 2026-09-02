@@ -125,7 +125,9 @@ function M.onKeyDown(key)
     if mineTool.handleKeyDown(key) then
         return
     end
-    -- Chop tool's Esc cancels a pending designation anchor.
+    -- Chop tool's Esc disarms an in-flight press-drag box (#1856 —
+    -- there is no pending anchor to cancel; it deliberately does NOT
+    -- claim the key, so Escape's other handlers still run).
     local chopTool = require("scripts.chop_tool")
     if chopTool.handleKeyDown(key) then
         return
