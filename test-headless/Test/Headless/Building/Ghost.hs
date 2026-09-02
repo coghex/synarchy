@@ -730,13 +730,14 @@ stakePrelude = lns
     , "    for i = 1, #world do ids[i] = i end"
     , "    return ids end,"
     , "  getInfo = function(bid) return world[bid] end }"
-    , "local site = require('scripts.unit_ai_construct_site')"
+    , "site = require('scripts.unit_ai_construct_site')"
     , "local params = { construct_stake_visible_timeout = 5.0 }"
     , "local function job()"
     , "  return { category = 'building', building = 'hall',"
     , "           x = 4, y = 7, attempt = 11 }"
     , "end"
     , "local function at(gx, gy) return { gridX = gx, gridY = gy } end"
+    , "local site = site"
     , "local function stake(j, info, now)"
     , "  return site.stakeBuilding('p1', j, 1, info, now, params)"
     , "end"
@@ -846,6 +847,28 @@ stakeHandoffSpec =
         , "assert(stake(j, at(4, 7), 500) == 'done')"
         , "local c = only('status')"
         , "assert(c[4] == 'complete', 'the finished job is completed')"
+        ]
+
+    it "takes the job's page from the ACTING UNIT, never from the active\
+       \ selection" $ runsOk $ lns
+        [ stakePrelude
+        -- #1673 and the caller half of it: the construct lifecycle spans
+        -- many ticks (scan, claim, walk, stake), and reading
+        -- world.getActiveWorldId at each of them independently lets a job
+        -- scanned on one page be staked and completed on another — the
+        -- building lands on the wrong world and the original designation
+        -- is never finished. The acting unit's own projection does not
+        -- move underneath the job.
+        , "unit.getInfo = function(_uid) return { page = 'p1' } end"
+        , "world = nil"
+        , "_G.world = { getActiveWorldId = function() return 'p2' end }"
+        , "assert(site.jobPage(1) == 'p1',"
+        , "  'the job page is the unit\\'s, got ' .. tostring(site.jobPage(1)))"
+        -- …and it fails CLOSED rather than falling back to the active
+        -- page, which is the whole point of not reading that one.
+        , "unit.getInfo = function(_uid) return nil end"
+        , "assert(site.jobPage(1) == nil,"
+        , "  'an actor with no establishable page selects no page at all')"
         ]
 
     it "spawns, completes and cancels on the JOB's page, never the\

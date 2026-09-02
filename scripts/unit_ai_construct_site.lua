@@ -194,6 +194,25 @@ function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     end
 end
 
+-- The page a construction job belongs to: the ACTING UNIT's own, never
+-- the active one (#1673).
+--
+-- `world.getActiveWorldId` is a snapshot of a selection the world thread
+-- can move at any tick boundary, and the construct lifecycle spans
+-- several: a candidate is scanned on one tick, claimed on another,
+-- walked to over many, and staked on a later one. Reading the active
+-- page at each of those independently lets a job scanned on A be staked
+-- and completed on B — the building lands on the wrong world and A's
+-- designation is never finished. `unit.getInfo().page` is the acting
+-- unit's own projection and does not move underneath the job.
+--
+-- Fails CLOSED, exactly as `unit_ai_page` does: an actor whose page
+-- cannot be established selects nothing at all rather than falling back
+-- to whatever page happens to be active.
+function M.jobPage(uid)
+    return require("scripts.unit_ai_page").ofUnit(uid)
+end
+
 -- Cancel one building job's designation on the JOB's own page.
 --
 -- `construction.cancelDesignation` resolves the ACTIVE page, which is

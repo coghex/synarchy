@@ -151,7 +151,8 @@ end
 -- Buildings are always viable (staking needs no materials); structure
 -- jobs need a costed pack, a floor under a post, and sourceable materials.
 local function findConstructJob(uid, fromX, fromY, params)
-    local wid = world.getActiveWorldId()
+    -- #1673: the ACTOR's page, not the active one — see site.jobPage.
+    local wid = site.jobPage(uid)
     if not wid then return nil end
     local ccx = math.floor(fromX / 16)   -- chunkSize
     local ccy = math.floor(fromY / 16)
@@ -199,7 +200,7 @@ local function findConstructJob(uid, fromX, fromY, params)
 end
 
 local function constructUtility(uid, s, params)
-    local wid = world.getActiveWorldId()
+    local wid = site.jobPage(uid)
     if not wid then return -math.huge end
 
     -- Active job: finite lock-in (dire needs still preempt; the claim
@@ -231,7 +232,7 @@ local function constructUtility(uid, s, params)
 end
 
 local function constructExecute(uid, s, params)
-    local wid = world.getActiveWorldId()
+    local wid = site.jobPage(uid)
     if not wid then return end
     local info = unit.getInfo(uid)
     if not info then return end
