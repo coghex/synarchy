@@ -429,4 +429,4 @@ runDueScripts ls now = do
         when (isValidRef (scriptModuleRef script)) $
           void $ callModuleFunction ls (scriptModuleRef script) "update"
                      [ScriptNumber (scriptTickRate script)]
-        atomically $ modifyTVar' (lbsScripts ls) $ Map.adjust advanceTick sid
+        atomically $ modifyTVar' (lbsScripts ls) $ Map.adjust (advanceTick now) sid

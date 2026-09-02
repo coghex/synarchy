@@ -1,14 +1,15 @@
 {-# LANGUAGE Strict #-}
 module World.Thread
     ( startWorldThread
+    , worldTickWith
     , partitionAuthorized
     ) where
 
 import UPrelude
 import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.List (partition)
+import Engine.Core.Clock (monotonicSeconds, sampleElapsed)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
     , startWorkerThread)
@@ -46,8 +47,8 @@ startWorldThread env = startWorkerThread WorkerSpec
     , wsFailMsg     = "Failed starting world thread: "
     , wsFailLevel   = WorkerFailError
     , wsFailFatal   = "World thread start failure."
-    , wsStartup     = \_ → noRefusal (getPOSIXTime ⌦ newIORef . realToFrac)
-    , wsTick        = worldTick env
+    , wsStartup     = \_ → noRefusal (monotonicSeconds ⌦ newIORef)
+    , wsTick        = worldTickWith monotonicSeconds env
     , wsOnStop      = \_ → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logDebug logger CatWorld "World thread stopping..."
@@ -59,13 +60,17 @@ startWorldThread env = startWorkerThread WorkerSpec
 
 -- * World Tick
 
-worldTick ∷ EngineEnv → IORef Double → IO (Maybe (IORef Double))
-worldTick env lastTimeRef = do
+-- | One world tick against an injectable clock (#2204). Production
+--   passes 'monotonicSeconds' (see 'startWorldThread'); the headless
+--   gate scripts a jump. The elapsed value handed to 'tickWorldTime' is
+--   the SANITISED one from "Engine.Core.Clock" — never negative, never
+--   above the shared cap — and @lastTimeRef@ is replaced with the raw
+--   sample every tick, so an over-cap difference is dropped rather than
+--   carried into the next tick.
+worldTickWith ∷ IO Double → EngineEnv → IORef Double → IO (Maybe (IORef Double))
+worldTickWith clock env lastTimeRef = do
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
-    now ← realToFrac ⊚ getPOSIXTime
-    lastTime ← readIORef lastTimeRef
-    let dt = now - lastTime ∷ Double
-    writeIORef lastTimeRef now
+    dt ← sampleElapsed clock lastTimeRef
 
     locked ← captureLocked (slSaveBarrierRef (toSaveLoadCapability env))
     if locked
