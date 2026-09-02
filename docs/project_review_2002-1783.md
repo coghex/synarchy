@@ -30,11 +30,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. One ambiguous wall-art path can still select a family through the companion path
+- [x] PRR-1. One ambiguous wall-art path can still select a family through the companion path — [#2160]
 
 ## 1. Wall-family ambiguity containment
 
-### PRR-1. One ambiguous wall-art path can still select a family through the companion path
+### [#2160] PRR-1. One ambiguous wall-art path can still select a family through the companion path
 
 > **Captured note:** Make `rotatedWallArt` leave a wall exactly as placed when
 > either member of its placed texture/facemap pair has contradictory ownership.

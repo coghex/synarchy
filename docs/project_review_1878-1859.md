@@ -6,11 +6,13 @@ Status legend: `[ ]` unprocessed · `[#N]` filed as issue N · `[no-issue]` revi
 
 ## Status
 
-- [ ] PRR-1. Farm yield trail can miss grain consumed before its first observation
+- [x] PRR-1. Farm yield trail can miss grain consumed before its first observation — [no-issue]
 
 ## 1. Farm-probe harvest evidence
 
-### PRR-1. Farm yield trail can miss grain consumed before its first observation
+### [no-issue] PRR-1. Farm yield trail can miss grain consumed before its first observation
+
+> **Disposition:** No issue — the premise that the AI accelerates under the probe's time scale is false: `world.setTimeScale` scales only the world calendar, while `engine.gameTime()` is unscaled wall time advanced by the unit thread (`src/Unit/Thread.hs`), so decision ticks stay at 1.0 s ± 0.5 s real time and the harvest→collect→eat chain spans at least three of them after ripening, which itself begins only after arming; the first one-second gap cannot contain it. The residual is a 1-grain yield whose two consecutive ticks both land near the 0.5 s jitter floor inside one ~1 s sample gap, on the order of 1 in 10⁴ runs of a manual-only probe that prints the whole trail on failure, and no item rot exists to remove the identity any other way.
 
 > **Captured note:** Close PR #1862's remaining first-poll gap: arming the yield trail records only the pre-existing ground and inventory baseline. If the accelerated AI harvests the plot, collects the grain, and consumes it before the first later observation, every transient identity has disappeared and the probe reports `not-produced` even though the complete auto-harvest behavior succeeded.
 

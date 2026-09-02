@@ -596,6 +596,25 @@ function unitLog.hide()
     end
 end
 
+-- Load-replacement reset (#2156). The subject unit belongs to the
+-- replaced session -- and its uid may be REUSED by the replacement, so
+-- keeping it would silently point the panel at a different unit. The
+-- panel is hidden through its own hide() (no close/tab/scroll callback
+-- re-fired), the subject, tab and scroll state are written back to
+-- their fresh values, and the transient tab strip is destroyed; the
+-- chrome stays, as after a player's own close, and the next show(uid)
+-- rebuilds both. Swept from scripts/ui/view_teardown.lua's "saveLoaded"
+-- transition.
+function unitLog.clearSession()
+    unitLog.hide()
+    destroyTransient()
+    unitLog.uid           = nil
+    unitLog.activeTabKey  = "all"
+    unitLog.contentScroll = 0
+    unitLog.lastMaxOffset = 0
+    unitLog.justifyBottom = true
+end
+
 function unitLog.toggle(uid)
     if unitLog.visible and (uid == nil or uid == unitLog.uid) then
         unitLog.hide()

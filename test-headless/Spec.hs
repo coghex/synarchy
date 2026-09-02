@@ -207,6 +207,7 @@ import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
 import qualified Test.Headless.UI.ContainerWindowStack as UIContainerWindowStack
+import qualified Test.Headless.Load.ReplacementTeardown as LoadReplacementTeardown
 import qualified Test.Headless.UI.TransferGestures as UITransferGestures
 import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
@@ -782,6 +783,7 @@ main = hspec $ do
     UISettingsDefaultsKeybinds.spec
     UISettingsRevert.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
+    LoadReplacementTeardown.spec
     UITransferGestures.spec
     UIConsumableGesture.spec
     UITransferSession.spec

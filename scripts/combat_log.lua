@@ -939,6 +939,33 @@ function combatLog.hide()
     end
 end
 
+-- Load-replacement reset (#2156). A published load replaces the whole
+-- session, so every session-bound thing here goes: the All ring and the
+-- grouped battles (both emptied IN PLACE -- they are module-published
+-- tables), the battle-id allocator (back to its fresh-session value, or
+-- a reused unit id could be glued onto a battle of the replaced
+-- session), the active tab and both scroll positions, and the panel
+-- itself if it was open. The hide is the module's own hide(), never the
+-- close button's click route, and no tab/scroll callback is re-fired:
+-- state is written directly. The transient tab strip is destroyed too,
+-- since every tab it names is gone; the chrome stays, exactly as after
+-- a player's own close, and the next show() rebuilds both. Swept from
+-- scripts/ui/view_teardown.lua's "saveLoaded" transition.
+function combatLog.clearSession()
+    combatLog.hide()
+    destroyTransient()
+    local all, battles = combatLog.allEvents, combatLog.battles
+    for i = #all, 1, -1 do all[i] = nil end
+    for i = #battles, 1, -1 do battles[i] = nil end
+    combatLog.nextBattleId  = 1
+    combatLog.activeTabId   = "all"
+    combatLog.scrollOffset  = 0
+    combatLog.tabMaxScroll  = 0
+    combatLog.contentScroll = 0
+    combatLog.justifyBottom = true
+    combatLog.dirty         = false
+end
+
 function combatLog.toggle()
     if combatLog.visible then
         combatLog.hide()

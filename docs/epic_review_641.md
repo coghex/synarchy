@@ -23,12 +23,12 @@ concrete precondition
 
 ## Status
 
-- [ ] ER-1. Epic #641 leaves all nine completed children unchecked
-- [ ] ER-2. A separate critic output directory breaks every report screenshot link
+- [x] ER-1. Epic #641 leaves all nine completed children unchecked — [#641]
+- [x] ER-2. A separate critic output directory breaks every report screenshot link — [#2220]
 
 ## 1. Epic completion steering
 
-### ER-1. Epic #641 leaves all nine completed children unchecked
+### [#641] ER-1. Epic #641 leaves all nine completed children unchecked
 
 > **Captured note:** Epic #641 is closed and its closure comment confirms that
 > all nine scoped children #642 through #650 landed, but every child remains
@@ -76,7 +76,7 @@ roadmap is stale steering state, not evidence of missing implementation.
 
 ## 2. Critic report artifact integrity
 
-### ER-2. A separate critic output directory breaks every report screenshot link
+### [#2220] ER-2. A separate critic output directory breaks every report screenshot link
 
 > **Captured note:** H2's `--out DIR` option writes `report.md` outside the
 > session trace while rendering the trace-relative `frames/...` screenshot

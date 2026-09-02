@@ -27,14 +27,34 @@ uploadBloodTextures has run on a graphical session.
 
 PASS  = all checks hold.
 FAIL  = any check violated (bug in the model/debug surface).
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 import argparse
 import sys
+import probe_protocol
 from probelib import quit_engine, boot, init_arena, send, send_json
 
 PORT = 9011
 LOG = "/tmp/blood_decal_probe_engine.log"
+LOG_NAME = "blood_decal_probe_engine.log"
+PROBE_KEY = "blood_decal"
+CHECKS = [
+    ("near_requests_reuse", "same and near-same requests reuse one texture"),
+    ("distinct_requests_mint", "different style and severity requests mint distinct textures"),
+    ("fifo_order_reported", "texture lookup reports the correct FIFO order"),
+    ("oldest_texture_evicted", "exceeding the cap evicts the oldest texture"),
+    ("eviction_removes_decals", "texture eviction removes exactly its associated decals"),
+    ("pixel_data_bounded", "live textures expose generated bounded pixel data"),
+    ("render_quads_live_only", "render quads contain every live decal and no evicted decal"),
+    ("dry_tint_ages", "an already-dry decal is darker and fainter than a fresh decal"),
+    ("clear_empties_registry", "clear empties the texture and decal registries"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 
 
 def lua_props(props: dict | None) -> str:
@@ -51,9 +71,8 @@ def spawn(gx: float, gy: float, wound: str, severity: str, props: dict | None = 
            f"{lua_props(props)}); return {{decalId=d, textureId=t, isNew=n}}")
     result = send_json(PORT, lua)
     if not isinstance(result, dict) or "decalId" not in result:
-        print(f"FAIL (setup): blood.spawn({gx},{gy},{wound!r},{severity!r},"
-              f"{props}) -> {result!r}")
-        sys.exit(2)
+        raise RuntimeError(
+            f"blood.spawn({gx},{gy},{wound!r},{severity!r},{props}) -> {result!r}")
     return result
 
 
@@ -80,56 +99,76 @@ def get_render_quads() -> list:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9011)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
-    global PORT
-    PORT = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(PORT, log=LOG)
+
+def _run(port: int, rep: probe_protocol.Reporter) -> int:
+    global PORT
+    PORT = port
+
+    proc = boot(PORT, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     try:
         init_arena(PORT)
 
         cap = get_texture_cap()
         if cap <= 0:
-            print(f"FAIL (setup): blood.getTextureCap() = {cap}")
+            rep.abort(f"blood.getTextureCap() = {cap}", {"cap": cap})
             return 2
-        print(f"texture cap = {cap}")
+        rep.note(f"texture cap = {cap}")
 
         # --- 1. same/near-same requests reuse a texture descriptor -----
         s1 = spawn(10, 10, "stab", "moderate", {"footprint": "medium"})
         s2 = spawn(11, 11, "stab", "moderate", {"footprint": "medium"})
         if s2["textureId"] != s1["textureId"] or s2["isNew"]:
-            print(f"FAIL: identical request minted a new texture "
-                  f"({s1['textureId']} vs {s2['textureId']})")
+            rep.check("near_requests_reuse", False,
+                      "identical request minted a new texture",
+                      {"first": s1["textureId"], "second": s2["textureId"]})
             return 1
         s3 = spawn(12, 12, "stab", "moderate", {"footprint": "large"})
         if s3["textureId"] != s1["textureId"] or s3["isNew"]:
-            print("FAIL: a one-bucket-step-away request did not reuse "
-                  f"the near-matching texture ({s1['textureId']} vs "
-                  f"{s3['textureId']})")
+            rep.check("near_requests_reuse", False,
+                      "a one-bucket-step-away request did not reuse the near-matching texture",
+                      {"first": s1["textureId"], "near": s3["textureId"]})
             return 1
-        print(f"PASS: same/near-same requests reused texture {s1['textureId']} "
-              f"(decals {s1['decalId']}, {s2['decalId']}, {s3['decalId']})")
+        rep.check("near_requests_reuse", True,
+                  f"same/near-same requests reused texture {s1['textureId']}",
+                  {"texture": s1["textureId"],
+                   "decals": [s1["decalId"], s2["decalId"], s3["decalId"]]})
 
         # --- 2. different styles/severities create distinct descriptors --
         s4 = spawn(13, 13, "stab", "moderate",
                     {"style": "streak", "footprint": "medium"})
         if s4["textureId"] == s1["textureId"] or not s4["isNew"]:
-            print("FAIL: a different style reused the same texture "
-                  f"({s4['textureId']})")
+            rep.check("distinct_requests_mint", False,
+                      "a different style reused the same texture",
+                      {"texture": s4["textureId"]})
             return 1
         s5 = spawn(14, 14, "stab", "severe", {"footprint": "medium"})
         if s5["textureId"] in (s1["textureId"], s4["textureId"]) or not s5["isNew"]:
-            print("FAIL: a different severity bucket reused an existing "
-                  f"texture ({s5['textureId']})")
+            rep.check("distinct_requests_mint", False,
+                      "a different severity bucket reused an existing texture",
+                      {"texture": s5["textureId"]})
             return 1
-        print(f"PASS: different style ({s4['textureId']}) and severity "
-              f"({s5['textureId']}) each minted a distinct texture")
+        rep.check("distinct_requests_mint", True,
+                  "different style and severity each minted a distinct texture",
+                  {"style_texture": s4["textureId"],
+                   "severity_texture": s5["textureId"]})
 
         listed = list_textures()
         textures_so_far = len(listed)
         if textures_so_far != 3:
-            print(f"FAIL (setup): expected 3 distinct textures so far, "
-                  f"got {textures_so_far}")
+            rep.abort("expected three distinct textures before the FIFO check",
+                      {"textures": textures_so_far})
             return 2
 
         # blood.getTexture's reported FIFO order must match its actual
@@ -138,10 +177,14 @@ def main() -> int:
         for tid in (s1["textureId"], s4["textureId"], s5["textureId"]):
             got = get_texture(tid)
             if not got or got.get("order") != expected_order[tid]:
-                print(f"FAIL: blood.getTexture({tid}) order={got and got.get('order')!r}, "
-                      f"expected {expected_order[tid]}")
+                rep.check("fifo_order_reported", False,
+                          "blood.getTexture reported the wrong FIFO order",
+                          {"texture": tid,
+                           "actual": got and got.get("order"),
+                           "expected": expected_order[tid]})
                 return 1
-        print("PASS: blood.getTexture reports the correct FIFO order")
+        rep.check("fifo_order_reported", True,
+                  "blood.getTexture reports the correct FIFO order")
 
         # --- 3/4. exceeding the cap evicts the oldest descriptor, and --
         #          cascades to every decal that referenced it ----------
@@ -159,57 +202,63 @@ def main() -> int:
             f = spawn(20 + i, 20 + i, f"fillerkind{i}", "minor",
                        {"style": "drops"})
             if not f["isNew"]:
-                print(f"FAIL (setup): filler {i} unexpectedly reused a "
-                      f"texture ({f['textureId']})")
+                rep.abort("a capacity filler unexpectedly reused a texture",
+                          {"filler": i, "texture": f["textureId"]})
                 return 2
             filler_decal_ids.append(f["decalId"])
 
         at_cap = list_textures()
         if len(at_cap) != cap:
-            print(f"FAIL (setup): expected exactly {cap} textures at "
-                  f"capacity, got {len(at_cap)}")
+            rep.abort("texture pool did not reach its reported capacity",
+                      {"expected": cap, "actual": len(at_cap)})
             return 2
 
         overflow = spawn(99, 99, "overflowkind", "catastrophic",
                           {"style": "smear"})
         if not overflow["isNew"]:
-            print("FAIL (setup): overflow request unexpectedly reused a "
-                  "texture")
+            rep.abort("overflow request unexpectedly reused a texture")
             return 2
 
         after_evict = list_textures()
         after_ids = {t["id"] for t in after_evict}
         if len(after_evict) != cap:
-            print(f"FAIL: pool size after overflow is {len(after_evict)}, "
-                  f"expected it to stay capped at {cap}")
+            rep.check("oldest_texture_evicted", False,
+                      "pool size changed after overflow",
+                      {"expected": cap, "actual": len(after_evict)})
             return 1
         if s1["textureId"] in after_ids:
-            print(f"FAIL: the oldest texture ({s1['textureId']}) was not "
-                  "evicted despite exceeding the cap")
+            rep.check("oldest_texture_evicted", False,
+                      "the oldest texture was not evicted",
+                      {"texture": s1["textureId"], "cap": cap})
             return 1
         if get_texture(s1["textureId"]) is not None:
-            print(f"FAIL: blood.getTexture({s1['textureId']}) still "
-                  "resolves after eviction")
+            rep.check("oldest_texture_evicted", False,
+                      "the evicted texture still resolves by id",
+                      {"texture": s1["textureId"]})
             return 1
-        print(f"PASS: exceeding the cap ({cap}) evicted the oldest "
-              f"texture ({s1['textureId']}); pool holds {len(after_evict)}")
+        rep.check("oldest_texture_evicted", True,
+                  f"exceeding the cap ({cap}) evicted the oldest texture",
+                  {"texture": s1["textureId"], "pool_size": len(after_evict)})
 
         decal_ids_after = {d["id"] for d in list_decals()}
         evicted_decal_ids = {s1["decalId"], s2["decalId"], s3["decalId"]}
         still_present = evicted_decal_ids & decal_ids_after
         if still_present:
-            print(f"FAIL: decal(s) {still_present} referencing the evicted "
-                  "texture are still listed")
+            rep.check("eviction_removes_decals", False,
+                      "decals referencing the evicted texture are still listed",
+                      {"decals": sorted(still_present)})
             return 1
         survivors = {s4["decalId"], s5["decalId"], overflow["decalId"],
                      *filler_decal_ids}
         missing_survivors = survivors - decal_ids_after
         if missing_survivors:
-            print(f"FAIL: decal(s) {missing_survivors} on a non-evicted "
-                  "texture were wrongly removed")
+            rep.check("eviction_removes_decals", False,
+                      "decals on a live texture were wrongly removed",
+                      {"decals": sorted(missing_survivors)})
             return 1
-        print("PASS: evicting the oldest texture cascade-removed exactly "
-              f"the {len(evicted_decal_ids)} decal(s) that referenced it")
+        rep.check("eviction_removes_decals", True,
+                  "evicting the oldest texture removed exactly its decals",
+                  {"removed": len(evicted_decal_ids)})
 
         # --- 5. every listed texture reports generated pixel data ------
         for t in after_evict:
@@ -217,37 +266,44 @@ def main() -> int:
             if not (isinstance(w, (int, float)) and w > 0
                     and isinstance(h, (int, float)) and h > 0
                     and ph is not None):
-                print(f"FAIL: texture {t.get('id')} missing generated "
-                      f"pixel data (width={w!r}, height={h!r}, "
-                      f"pixelHash={ph!r})")
+                rep.check("pixel_data_bounded", False,
+                          "a live texture is missing generated pixel data",
+                          {"texture": t.get("id"), "width": w,
+                           "height": h, "pixel_hash": ph})
                 return 1
             if w > 32 or h > 32:
-                print(f"FAIL: texture {t.get('id')} exceeds the bounded "
-                      f"max size (got {w}x{h})")
+                rep.check("pixel_data_bounded", False,
+                          "a live texture exceeds the bounded maximum size",
+                          {"texture": t.get("id"), "width": w, "height": h})
                 return 1
-        print(f"PASS: all {len(after_evict)} listed textures report "
-              "generated, bounded pixel data")
+        rep.check("pixel_data_bounded", True,
+                  "all live textures report generated bounded pixel data",
+                  {"textures": len(after_evict)})
 
         # --- 6/7. renderable records exist for live decals, never for --
         #          evicted ones ------------------------------------------
         quads = get_render_quads()
         quad_decal_ids = {q["decal"] for q in quads}
         if not survivors.issubset(quad_decal_ids):
-            print(f"FAIL: blood.getRenderQuads() is missing survivor "
-                  f"decal(s) {survivors - quad_decal_ids}")
+            rep.check("render_quads_live_only", False,
+                      "render quads are missing live decals",
+                      {"decals": sorted(survivors - quad_decal_ids)})
             return 1
         if evicted_decal_ids & quad_decal_ids:
-            print(f"FAIL: blood.getRenderQuads() still reports evicted "
-                  f"decal(s) {evicted_decal_ids & quad_decal_ids}")
+            rep.check("render_quads_live_only", False,
+                      "render quads still contain evicted decals",
+                      {"decals": sorted(evicted_decal_ids & quad_decal_ids)})
             return 1
         for q in quads:
             for key in ("texture", "x", "y", "tintR", "tintG", "tintB", "alpha"):
                 if key not in q:
-                    print(f"FAIL: render record for decal {q.get('decal')} "
-                          f"is missing '{key}'")
+                    rep.check("render_quads_live_only", False,
+                              "a render record is missing required data",
+                              {"decal": q.get("decal"), "field": key})
                     return 1
-        print(f"PASS: getRenderQuads() reports exactly the live decals "
-              f"({len(quad_decal_ids)}) with full render data, none evicted")
+        rep.check("render_quads_live_only", True,
+                  "getRenderQuads reports all live decals and none evicted",
+                  {"decals": len(quad_decal_ids)})
 
         # --- 8. an already-dry decal reads darker/fainter than a fresh --
         #        one spawned at (about) the same time ---------------------
@@ -256,39 +312,47 @@ def main() -> int:
         old = spawn(51, 51, "agingcheck", "moderate",
                     {"style": "pool", "wetness": 0.02})
         if old["textureId"] != fresh["textureId"]:
-            print("FAIL (setup): fresh/old aging-check decals unexpectedly "
-                  f"minted different textures ({fresh['textureId']} vs "
-                  f"{old['textureId']})")
+            rep.abort("fresh and old aging fixtures minted different textures",
+                      {"fresh": fresh["textureId"], "old": old["textureId"]})
             return 2
         by_decal = {q["decal"]: q for q in get_render_quads()}
         freshQ, oldQ = by_decal.get(fresh["decalId"]), by_decal.get(old["decalId"])
         if freshQ is None or oldQ is None:
-            print(f"FAIL: aging-check decals missing from getRenderQuads "
-                  f"(fresh={freshQ!r}, old={oldQ!r})")
+            rep.check("dry_tint_ages", False,
+                      "aging fixtures are missing from render quads",
+                      {"fresh": freshQ, "old": oldQ})
             return 1
         if not (oldQ["alpha"] < freshQ["alpha"] and oldQ["tintR"] < freshQ["tintR"]):
-            print(f"FAIL: an already-dry decal did not read darker/fainter "
-                  f"than a fresh one (fresh={freshQ!r}, old={oldQ!r})")
+            rep.check("dry_tint_ages", False,
+                      "an already-dry decal is not darker and fainter than fresh",
+                      {"fresh": freshQ, "old": oldQ})
             return 1
-        print(f"PASS: aged decal tint (alpha={oldQ['alpha']:.3f}, "
-              f"tintR={oldQ['tintR']:.3f}) is darker/fainter than fresh "
-              f"(alpha={freshQ['alpha']:.3f}, tintR={freshQ['tintR']:.3f})")
+        rep.check("dry_tint_ages", True,
+                  "aged decal tint is darker and fainter than fresh",
+                  {"old_alpha": oldQ["alpha"], "old_tint": oldQ["tintR"],
+                   "fresh_alpha": freshQ["alpha"], "fresh_tint": freshQ["tintR"]})
 
         # --- 9. clear leaves both lists empty ---------------------------
         cleared = send(PORT, "return blood.clear()")
         if cleared.lower() != "true":
-            print(f"FAIL: blood.clear() returned {cleared!r}")
+            rep.check("clear_empties_registry", False,
+                      "blood.clear returned false", {"result": cleared})
             return 1
         remaining_textures = list_textures()
         remaining_decals = list_decals()
         if remaining_textures or remaining_decals:
-            print(f"FAIL: after clear, textures={remaining_textures!r} "
-                  f"decals={remaining_decals!r}")
+            rep.check("clear_empties_registry", False,
+                      "clear left textures or decals behind",
+                      {"textures": remaining_textures, "decals": remaining_decals})
             return 1
-        print("PASS: clear left both the texture and decal lists empty")
+        rep.check("clear_empties_registry", True,
+                  "clear left both the texture and decal lists empty")
 
-        print("\nPASS: all blood decal model + debug surface checks held")
+        rep.note("\nPASS: all blood decal model + debug surface checks held")
         return 0
+    except RuntimeError as error:
+        rep.abort(str(error))
+        return 2
     finally:
         quit_engine(PORT, proc)
 

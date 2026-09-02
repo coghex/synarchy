@@ -9,7 +9,7 @@ The current derived-role selection, river/graben bed-depth work, smelting conten
 ## Status
 
 - [x] PRR-1. Recipe counts accept zero and negative values with success semantics — [#1940]
-- [ ] PRR-2. Tagged harvests turn lifecycle-ineligible trees into full-yield trees — [deferred]: #1854 exact-instance harvesting
+- [x] PRR-2. Tagged harvests turn lifecycle-ineligible trees into full-yield trees — [#2212]
 - [x] PRR-3. The coastline-variety issue closed after PR 1 without its fjord slice — [#1947]
 
 ## 1. Recipe count validity
@@ -39,9 +39,7 @@ The current derived-role selection, river/graben bed-depth work, smelting conten
 
 ## 2. Tagged flora lifecycle semantics
 
-### [deferred] PRR-2. Tagged harvests turn lifecycle-ineligible trees into full-yield trees
-
-> **Deferred:** The yield half cannot be specified — no one has defined what a sprout or standing-dead tree should drop — and tagged harvest still selects the first matching instance on a tile (`Forage/Harvest.hs:127-131`) rather than the designated one, so a growth-aware yield would be attributed to the wrong plant. Clears when approved open #1854 lands exact per-instance harvesting on a stable `FloraInstanceId`, after which tag-scoped eligibility and growth-aware yield specify together against an exact instance.
+### [#2212] PRR-2. Tagged harvests turn lifecycle-ineligible trees into full-yield trees
 
 > **Captured note:** Separate "this designated plant may be removed" from "this growth state earns the species' normal harvest yield." Sprout and standing-dead trees are intentionally allowed to remain choppable, but the generic tagged-harvest bypass also gives either state the same static 2–6-log roll as a mature tree and would bypass season/age gates for any future harvest tag.
 

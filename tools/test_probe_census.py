@@ -10,8 +10,9 @@ interpreter (for the independent-process contention case).
 
 The real `tools/probe_census.py` is imported and driven — with
 `probe_runner_registry.PROBES`, `probe_engine.REPO_ROOT`, `ci_probes.CI_ELIGIBLE` and
-`probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry — so this
-exercises the shipped code paths rather than a copy.
+`probe_flake.PROTOCOL_PROBES` pointed at a synthetic registry by
+`probe_census_selftest_support.registry` — so this exercises the shipped
+code paths rather than a copy.
 
 #1492 added the declared schema, so shape, required-field, closure,
 enum, length, range and finite-number validation ARE covered, by
@@ -24,6 +25,35 @@ that one rule out of the production rule set. The safety promise every
 case shares is a CONTROLLED refusal — no traceback, authoritative bytes
 unchanged — rather than the discovery of every possible corruption in a
 hand-edited document.
+
+Composition (#2034)
+-------------------
+This stays the COMPLETE census gate, and the only one CI and
+`tools/ci-local.sh` invoke. Two neighbours now share the work:
+
+  `probe_census_selftest_support`   the ONE synthetic world both case
+                                    owners drive -- the registries and
+                                    the fixture that installs them, the
+                                    scratch tree and scratch
+                                    repository, the CLI driver, the
+                                    realistic result document, the
+                                    fixed evaluation moment, and
+                                    `expect_refusal`;
+  `test_probe_census_promotion`     #1441's CI-promotion report, whose
+                                    five cases this module runs from
+                                    that owner's own `CASES` inventory.
+
+Running those promotion cases HERE is the point rather than an
+implementation detail: they append to the same `selftestlib.FAILURES`,
+so a promotion regression still fails `python3
+tools/test_probe_census.py`, and a case added to that owner joins this
+gate without anyone remembering to list it. The promotion owner is
+separately runnable for iteration and is a CI step in NEITHER file --
+the `tools/test_probe_census_page.py` precedent.
+
+Everything only this gate needs -- the stored-schema documents, the
+sample and attempt records, the malformed mutators, the schema-file and
+missing-dependency harnesses -- deliberately stays here.
 
 Usage:
   python3 tools/test_probe_census.py
@@ -44,19 +74,23 @@ from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
-import probe_protocol  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
-import probe_runner_registry  # type: ignore  # noqa: E402
 
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
 
-
-COMMIT_A = "a" * 40
-COMMIT_B = "b" * 40
+# The synthetic world both census case owners drive (#2034). It is ONE
+# module rather than a copy each, so `expect_refusal`'s definition of a
+# controlled refusal and the registries the fixtures install cannot
+# drift between them -- and, load-bearing, so both owners append to the
+# same `selftestlib.FAILURES`.
+from probe_census_selftest_support import (  # noqa: E402
+    COMMIT_A, COMMIT_B, DAY, NOW, SYNTHETIC, at, cli, cli_repo,
+    expect_refusal, registry, result_document, scratch, seeded, unchanged,
+)
+import test_probe_census_promotion as promotion_cases  # type: ignore  # noqa: E402
 
 
 def expect_refusal_kind(kind, call, msg: str) -> None:
@@ -72,66 +106,9 @@ def expect_refusal_kind(kind, call, msg: str) -> None:
     expect(False, f"{msg} (nothing was raised)")
 
 
-def expect_refusal(call, msg: str, *fragments: str) -> None:
-    """`call` refuses with a `CensusError` naming each fragment."""
-    try:
-        call()
-    except probe_census.CensusError as error:
-        text = str(error)
-        missing = [f for f in fragments if f not in text]
-        if missing:
-            expect(False, f"{msg} (message {text!r} is missing {missing})")
-        else:
-            expect(True, msg)
-        return
-    except Exception as error:  # noqa: BLE001 - an uncontrolled failure IS the bug
-        expect(False, f"{msg} (raised {type(error).__name__}: {error})")
-        return
-    expect(False, f"{msg} (nothing was raised)")
-
-
 # ==========================================================================
 # Fixtures
 # ==========================================================================
-SYNTHETIC = [
-    ("alpha", "alpha_probe.py", "the first synthetic probe"),
-    ("beta", "beta_probe.py", "the second synthetic probe"),
-    ("gamma", "gamma_probe.py", "the third synthetic probe"),
-]
-
-
-@contextmanager
-def registry(probes=None, ci_eligible=(), protocol=None, reasons=None):
-    """The live registries, pointed at a synthetic set for one case.
-
-    `reasons` is `ci_probes.MANUAL_ONLY_REASONS` for the duration.
-    #1441's report reads it LIVE, the same way it reads `CI_ELIGIBLE`,
-    so a case that needs a synthetic probe to be `needs-gpu` states it
-    here rather than reaching into the real registry.
-    """
-    saved = (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
-             probe_flake.PROTOCOL_PROBES, ci_probes.MANUAL_ONLY_REASONS)
-    probe_runner_registry.PROBES = list(SYNTHETIC if probes is None else probes)
-    ci_probes.CI_ELIGIBLE = set(ci_eligible)
-    probe_flake.PROTOCOL_PROBES = dict(protocol or {})
-    ci_probes.MANUAL_ONLY_REASONS = dict(reasons or {})
-    try:
-        yield
-    finally:
-        (probe_runner_registry.PROBES, ci_probes.CI_ELIGIBLE,
-         probe_flake.PROTOCOL_PROBES,
-         ci_probes.MANUAL_ONLY_REASONS) = saved
-
-
-@contextmanager
-def scratch(prefix="probe-census-test-"):
-    root = Path(tempfile.mkdtemp(prefix=prefix))
-    try:
-        yield root
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
-
-
 def v1_document() -> dict:
     """A `probe-census/v1` seed exactly as #1425 writes one."""
     return {
@@ -170,77 +147,6 @@ def stored_v2_document() -> dict:
     }
 
 
-def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
-    """A realistic `probe-flake-result/v1` document.
-
-    It carries every producer-only field `Measurement.to_document` adds,
-    so the exclusion case has something real to prove.
-
-    A non-`ok` status returns what a real harness error looks like, not
-    an accepted measurement with its status field flipped: the run that
-    broke the stream is reported as `error_run` and is NOT one of the
-    completed runs, so one requested run is left uncompleted and the
-    tally covers only the run that finished. Since #1493 those are
-    cross-field invariants, so a flipped-status fixture would be state
-    the producer cannot write.
-    """
-    document = {
-        "schema": probe_census.RESULT_SCHEMA,
-        "probe": probe,
-        "status": status,
-        "error": None if status == "ok" else "run 2 emitted a duplicate event",
-        "requested_runs": 2,
-        "completed_runs": 2,
-        "runs": [
-            {"index": 1, "port": 9100, "outcome": "PASS",
-             "elapsed_seconds": 12.5,
-             "checks": {"first": "PASS", "second": "PASS"},
-             "artifact_dir": None},
-            {"index": 2, "port": 9101, "outcome": "FAIL",
-             "elapsed_seconds": 13.25,
-             "checks": {"first": "PASS", "second": "FAIL"},
-             "artifact_dir": "/tmp/artifacts/run-002"},
-        ],
-        "error_run": None,
-        "checks": [{"id": "first", "label": "the first check"},
-                   {"id": "second", "label": "the second check"}],
-        "check_counts": {"first": {"PASS": 2, "FAIL": 0, "MISSING": 0},
-                         "second": {"PASS": 1, "FAIL": 1, "MISSING": 0}},
-        "failure_count": 1,
-        "failure_rate": 0.5,
-        "timeout_count": 0,
-        "worst_elapsed_seconds": 13.25,
-        "total_elapsed_seconds": 25.75,
-        "timestamp_utc": "2026-08-21T05:00:00Z",
-        "commit_sha": commit,
-        "rts_capabilities": 4,
-        "peak_concurrency": 1,
-        "artifact_root": "/tmp/artifacts",
-        "invocation_dir": "/home/dev/synarchy",
-        "retained_artifacts": ["/tmp/artifacts/run-002"],
-    }
-    if status != "ok":
-        document.update({
-            "completed_runs": 1,
-            "runs": [{"index": 1, "port": 9100, "outcome": "PASS",
-                      "elapsed_seconds": 12.5,
-                      "checks": {"first": "PASS", "second": "MISSING"},
-                      "artifact_dir": None}],
-            "error_run": {"index": 2, "port": 9101, "outcome": "HARNESS_ERROR",
-                          "elapsed_seconds": 0.5, "checks": {},
-                          "artifact_dir": "/tmp/artifacts/run-002"},
-            "check_counts": {"first": {"PASS": 1, "FAIL": 0, "MISSING": 0},
-                             "second": {"PASS": 0, "FAIL": 0, "MISSING": 1}},
-            "failure_count": 0,
-            "failure_rate": None,
-            "timeout_count": 0,
-            "worst_elapsed_seconds": 12.5,
-            "total_elapsed_seconds": 12.5,
-        })
-    document.update(overrides)
-    return document
-
-
 def sample_record(mark: str, commit: str = COMMIT_A) -> dict:
     """A schema-valid durable sample, tagged by its retained artifact.
 
@@ -261,14 +167,6 @@ def attempt_record(mark: str, commit: str = COMMIT_A) -> dict:
     record["error"] = mark
     return record
 
-
-def seeded(path: Path) -> dict:
-    """A fresh v2 census on disk, from the synthetic registry."""
-    return probe_census.ensure_document(path)
-
-
-def unchanged(path: Path, before: bytes, msg: str) -> None:
-    expect(path.read_bytes() == before, msg)
 
 
 def staging_residue(directory: Path) -> list[str]:
@@ -2661,48 +2559,6 @@ def test_unusable_docs_worktree() -> None:
 
 
 # ==========================================================================
-@contextmanager
-def cli_repo():
-    """A scratch git repository with a real `docs-wip` worktree."""
-    with scratch("probe-census-cli-") as root:
-        main_wt = root / "main"
-        docs_wt = root / "docs-worktree"
-        env = {**os.environ, "GIT_CONFIG_GLOBAL": str(root / "gitconfig"),
-               "GIT_CONFIG_SYSTEM": "/dev/null"}
-        run = lambda *a, **k: subprocess.run(  # noqa: E731
-            a, cwd=str(k.pop("cwd", main_wt)), env=env, check=True,
-            capture_output=True, text=True)
-        subprocess.run(["git", "init", "-q", "-b", "master", str(main_wt)],
-                       env=env, check=True, capture_output=True)
-        run("git", "config", "user.email", "test@example.invalid")
-        run("git", "config", "user.name", "Census Test")
-        run("git", "commit", "-q", "--allow-empty", "-m", "root")
-        run("git", "worktree", "add", "-q", str(docs_wt), "-b", "docs-wip")
-        saved = probe_engine.REPO_ROOT
-        probe_engine.REPO_ROOT = str(main_wt)
-        try:
-            yield main_wt, docs_wt / probe_census.MANIFEST_RELPATH
-        finally:
-            probe_engine.REPO_ROOT = saved
-
-
-def cli(*argv):
-    """`main(argv)` with its streams captured. Returns (code, out, err).
-
-    argparse's own usage errors raise `SystemExit`; they are a non-zero
-    exit like any other, so they are reported as one here.
-    """
-    import io
-    from contextlib import redirect_stdout, redirect_stderr
-    out, err = io.StringIO(), io.StringIO()
-    try:
-        with redirect_stdout(out), redirect_stderr(err):
-            code = probe_census.main(list(argv))
-    except SystemExit as exit_code:
-        code = exit_code.code if isinstance(exit_code.code, int) else 1
-    return code, out.getvalue(), err.getvalue()
-
-
 def test_cli_justification() -> None:
     """#1479: the CLI never clears the stored justification by omission.
 
@@ -3350,18 +3206,6 @@ def test_cross_field_invariants() -> None:
 # ==========================================================================
 COMMIT_C = "c" * 40
 
-# One fixed evaluation moment. Nothing in this section reads a clock:
-# staleness is a function of an injected `now`, so a boundary case is a
-# boundary case on every machine and at every hour.
-NOW = datetime.datetime(2026, 8, 21, 12, 0, 0, tzinfo=datetime.timezone.utc)
-DAY = probe_census.SECONDS_PER_DAY
-
-
-def at(offset_days: float) -> str:
-    """A census timestamp `offset_days` BEFORE the evaluation moment."""
-    moment = NOW - datetime.timedelta(days=offset_days)
-    return moment.strftime(probe_census.TIMESTAMP_FORMAT)
-
 
 def measurement(commit=COMMIT_A, *, runs=2, failures=1, age_days=0.0,
                 probe="alpha", **overrides):
@@ -3890,441 +3734,6 @@ def test_summary_cli() -> None:
 
 
 # ==========================================================================
-# CI-promotion candidates (#1441)
-# ==========================================================================
-# The report is REPORTING, so every case here asserts two things at once:
-# what the report says, and that it changed nothing. A tool whose ready
-# list is read as "nothing measurable stands in the way of promoting
-# this" has to be wrong in the safe direction, so most of these cases
-# are a qualified probe made unqualified one field at a time.
-GPU = ci_probes.Reason(ci_probes.NEEDS_GPU, "no GPU on the runner")
-FLAKY = ci_probes.Reason(ci_probes.FLAKY, "AI timing flakes run-to-run")
-SLOW = ci_probes.Reason(ci_probes.SLOW_WORLDGEN, "generates a w128 world")
-VAGUE = ci_probes.Reason(ci_probes.UNCLASSIFIED, "nobody has said why")
-
-# Every synthetic probe speaks the structured protocol unless a case
-# says otherwise; a legacy probe emits no result to have measured.
-MIGRATED = {key: probe_protocol.PROTOCOL_VERSION
-            for key, _script, _purpose in SYNTHETIC}
-
-# One clean pair of runs, so a fixture that reports zero failures does
-# not carry a failing run in the same document.
-CLEAN_RUNS = [
-    {"index": 1, "port": 9100, "outcome": "PASS", "elapsed_seconds": 11.0,
-     "checks": {"first": "PASS", "second": "PASS"}, "artifact_dir": None},
-    {"index": 2, "port": 9101, "outcome": "PASS", "elapsed_seconds": 12.5,
-     "checks": {"first": "PASS", "second": "PASS"}, "artifact_dir": None},
-]
-CLEAN_COUNTS = {"first": {"PASS": 2, "FAIL": 0, "MISSING": 0},
-                "second": {"PASS": 2, "FAIL": 0, "MISSING": 0}}
-
-
-def clean_result(commit=COMMIT_A, *, probe="alpha",
-                 runs=probe_census.POLICY_RUN_COUNT, completed=None,
-                 failures=0, timeouts=0, worst=12.5, age_days=1.0):
-    """One accepted measurement with nothing wrong with it by default."""
-    return result_document(
-        probe=probe, commit=commit, timestamp_utc=at(age_days),
-        requested_runs=runs,
-        completed_runs=runs if completed is None else completed,
-        runs=copy.deepcopy(CLEAN_RUNS),
-        check_counts=copy.deepcopy(CLEAN_COUNTS),
-        failure_count=failures,
-        failure_rate=None if runs == 0 else failures / runs,
-        timeout_count=timeouts,
-        worst_elapsed_seconds=worst,
-        total_elapsed_seconds=worst + 11.0,
-        retained_artifacts=[])
-
-
-def promotion_of(path: Path, *, now=NOW, stale_after_seconds=14 * DAY,
-                 mutate=None) -> dict:
-    """The report for the census on disk, optionally hand-edited first."""
-    document = json.loads(path.read_text(encoding="utf-8"))
-    if mutate is not None:
-        mutate(document)
-    return probe_census.promotion_report(
-        document, now=now, stale_after_seconds=stale_after_seconds)
-
-
-def buckets(report: dict) -> tuple[list, list]:
-    return ([row["key"] for row in report["candidates"]],
-            [row["key"] for row in report["blocked"]])
-
-
-def qualified_census(path: Path, *, probe="alpha", **kwargs) -> None:
-    """Record one complete, clean ten-run cohort for `probe`."""
-    probe_census.record_result(path, clean_result(probe=probe, **kwargs))
-
-
-def test_promotion_candidate() -> None:
-    print("\n-- a reliability-qualified promotion candidate --")
-    with registry(protocol=MIGRATED, reasons={"alpha": (FLAKY,)}), \
-            scratch() as root:
-        path = root / "probe_census.json"
-        seeded(path)
-        # Two samples on ONE commit, of unequal size: the cohort's
-        # statistic is pooled, not the newest sample and not an average
-        # of the two rates.
-        qualified_census(path, runs=6, worst=9.5, age_days=3)
-        qualified_census(path, runs=4, worst=21.25, age_days=2)
-        before = path.read_bytes()
-
-        report = promotion_of(path)
-        ready, blocked = buckets(report)
-        expect(ready == ["alpha"] and blocked == [],
-               "a clean, fresh, complete, X=0 flaky probe is a candidate")
-        unchanged(path, before, "and the report writes no census bytes")
-
-        row = report["candidates"][0]
-        expect(row["requested_runs"] == 10 and row["completed_runs"] == 10
-               and row["sample_count"] == 2,
-               "the cohort's runs are POOLED across every sample in it")
-        expect(row["failure_count"] == 0 and row["timeout_count"] == 0
-               and row["failure_rate"] == 0.0,
-               "with pooled failures and timeouts, and a pooled rate")
-        expect(row["commit_sha"] == COMMIT_A and row["measured_at"] == at(2)
-               and row["opened_at"] == at(3)
-               and row["age_seconds"] == 2 * DAY,
-               "and reports the exact commit, both ends of the cohort's "
-               "measurement window, and the age it was judged fresh on")
-        expect(report["stale_after_seconds"] == 14 * DAY,
-               "the horizon it was judged against is reported, since a "
-               "candidacy is only meaningful against one")
-        expect(row["acceptable_failures"] == 0
-               and row["protocol"] == probe_protocol.PROTOCOL_VERSION
-               and row["classification"] == probe_census.MANUAL_ONLY,
-               "X, the protocol status and the live classification are "
-               "reported beside the numbers")
-
-        # Duration is TWO fields answering two questions, and the
-        # missing one is never filled in from the other.
-        expect(row["observed_worst_elapsed_seconds"] == 21.25,
-               "the observed duration is the MAXIMUM worst_elapsed_seconds "
-               "across the cohort, not the newest sample's")
-        expect(row["estimated_worst_case_seconds"] is None,
-               "an unset estimate stays unset rather than borrowing the "
-               "observed duration")
-        probe_census.record_policy(path, "alpha", estimate=480)
-        stored = promotion_of(path)["candidates"][0]
-        expect(stored["estimated_worst_case_seconds"] == 480
-               and stored["observed_worst_elapsed_seconds"] == 21.25,
-               "a stored estimate is reported SEPARATELY from the observed "
-               "duration, never merged with it")
-
-        # Every reason is reported, in declared order.
-        expect(row["reasons"] == [{"category": "flaky",
-                                   "explanation": FLAKY.explanation}],
-               "the candidate carries its declared reason record verbatim")
-        expect(row["blocking_categories"] == [],
-               "and nothing about it blocks a promotion")
-
-        # Cardinality is DERIVED. Nothing here, and nothing in the
-        # report, knows how many probes the registry holds.
-        expect(report["registered_probes"] == len(SYNTHETIC)
-               and report["manual_only"] == len(SYNTHETIC)
-               and report["ci_eligible"] == 0,
-               "every count is derived from the live registry, never a "
-               "frozen probe total")
-        expect(report["reliability_qualified"] == 1,
-               "the other synthetic probes are unmeasured, so they qualify "
-               "for neither list")
-
-
-def test_promotion_disqualifications() -> None:
-    print("\n-- what disqualifies a probe from being reported at all --")
-
-    def qualifies(mutate=None, *, stale_after_seconds=14 * DAY,
-                  reasons=None, protocol=None, extra=None):
-        with registry(protocol=MIGRATED if protocol is None else protocol,
-                      reasons={"alpha": (FLAKY,)} if reasons is None
-                      else reasons), scratch() as root:
-            path = root / "probe_census.json"
-            seeded(path)
-            qualified_census(path, age_days=1)
-            if extra is not None:
-                extra(path)
-            report = promotion_of(path, mutate=mutate,
-                                  stale_after_seconds=stale_after_seconds)
-            ready, blocked = buckets(report)
-            return "alpha" in ready or "alpha" in blocked
-
-    expect(qualifies() is True,
-           "the shared fixture qualifies before anything is changed")
-
-    def set_x(value):
-        def mutate(document):
-            document["probes"][0]["census"]["acceptable_failures"] = value
-        return mutate
-
-    expect(qualifies(set_x(1)) is False,
-           "X above zero is never a promotion candidate")
-    expect(qualifies(set_x(9)) is False,
-           "however large")
-    expect(qualifies(set_x(None)) is False,
-           "and an UNSET X is ineligible exactly as X>0 is: the rule needs "
-           "X to equal zero, not merely to be non-positive")
-
-    def shorten(document):
-        cohort = document["probes"][0]["census"]["current"]
-        cohort["samples"][0]["requested_runs"] = 9
-        cohort["samples"][0]["completed_runs"] = 9
-
-    expect(qualifies(shorten) is False,
-           "a cohort short of the policy's ten runs is incomplete")
-
-    def leave_one_unrun(document):
-        document["probes"][0]["census"]["current"]["samples"][0][
-            "completed_runs"] = 9
-
-    expect(qualifies(leave_one_unrun) is False,
-           "a scheduled run that never completed makes the cohort "
-           "incomplete, however clean the runs that did")
-
-    # The COMPENSATED case: completion is checked per SAMPLE, so one
-    # sample's shortfall is not cancelled by another's overrun. Pooled
-    # totals read as a flawless 20 of 20 here.
-    def compensate(document):
-        cohort = document["probes"][0]["census"]["current"]
-        cohort["samples"][0]["completed_runs"] = 9
-        cohort["samples"][1]["completed_runs"] = 11
-
-    def two_samples(path):
-        qualified_census(path, age_days=0.5)
-
-    expect(qualifies(compensate, extra=two_samples) is False,
-           "a 9-of-10 beside an 11-of-10 does NOT qualify: pooling them "
-           "to 20 of 20 would hide a measurement that lost a run")
-    expect(qualifies(extra=two_samples) is True,
-           "while the same two-sample cohort with both complete does")
-
-    def overrun(document):
-        document["probes"][0]["census"]["current"]["samples"][0][
-            "completed_runs"] = 11
-
-    expect(qualifies(overrun) is False,
-           "and an overrun alone disqualifies too: more completions than "
-           "were requested is a count nothing could have produced")
-
-    expect(qualifies(extra=lambda path: probe_census.record_result(
-        path, result_document(status="harness-error", commit=COMMIT_A,
-                              timestamp_utc=at(0.5)))) is False,
-           "a harness error at the cohort's own commit makes it incomplete: "
-           "a scheduled measurement reported nothing, and the cohort's "
-           "counts cannot show that")
-    expect(qualifies(extra=lambda path: probe_census.record_result(
-        path, result_document(status="harness-error", commit=COMMIT_A,
-                              timestamp_utc=at(0.5),
-                              commit_sha=probe_census.PLACEHOLDER_COMMIT))
-    ) is False,
-           "and so does one whose provenance git could not report: "
-           "attribution fails CLOSED, because `we cannot tell which cohort "
-           "lost a run` is not evidence that this one did not")
-    expect(qualifies(extra=lambda path: probe_census.record_result(
-        path, result_document(status="harness-error", commit=COMMIT_B,
-                              timestamp_utc=at(0.5)))) is True,
-           "a harness error at ANOTHER commit is not charged to this "
-           "cohort")
-
-    def fail_one(document):
-        document["probes"][0]["census"]["current"]["samples"][0][
-            "failure_count"] = 1
-
-    def time_one_out(document):
-        document["probes"][0]["census"]["current"]["samples"][0][
-            "timeout_count"] = 1
-
-    expect(qualifies(fail_one) is False, "a single failure disqualifies")
-    expect(qualifies(time_one_out) is False,
-           "and so does a single TIMEOUT, which the producer counts "
-           "separately from failures")
-
-    expect(qualifies(stale_after_seconds=1 * DAY) is False,
-           "a stale current cohort is not evidence about the code as it "
-           "stands")
-    expect(qualifies(protocol={}) is False,
-           "a legacy probe emits no structured result, so there is nothing "
-           "to have measured")
-
-    def archive(document):
-        census = document["probes"][0]["census"]
-        census["history"] = census["history"] + [census["current"]]
-        census["current"] = None
-
-    expect(qualifies(archive) is False,
-           "an archived cohort is a promoted probe's retained statistic, "
-           "not a current measurement")
-
-    with registry(protocol=MIGRATED, reasons={"alpha": (FLAKY,)}), \
-            scratch() as root:
-        path = root / "probe_census.json"
-        seeded(path)
-        report = promotion_of(path)
-        expect(buckets(report) == ([], [])
-               and report["reliability_qualified"] == 0,
-               "an unmeasured probe appears in NEITHER list")
-
-
-def test_promotion_reason_buckets() -> None:
-    print("\n-- which bucket a reliability-qualified probe lands in --")
-
-    def report_for(reasons):
-        with registry(protocol=MIGRATED, reasons=reasons), scratch() as root:
-            path = root / "probe_census.json"
-            seeded(path)
-            qualified_census(path, age_days=1)
-            return promotion_of(path)
-
-    ready, blocked = buckets(report_for({"alpha": (FLAKY,)}))
-    expect(ready == ["alpha"] and blocked == [],
-           "`flaky` is a ground a clean cohort directly answers")
-    ready, blocked = buckets(report_for({"alpha": (VAGUE,)}))
-    expect(ready == ["alpha"] and blocked == [],
-           "and so is `unclassified`: no stated ground survives the "
-           "measurement either")
-
-    for reason in (GPU, SLOW,
-                   ci_probes.Reason(ci_probes.SCENARIO_HEAVY, "long scenario"),
-                   ci_probes.Reason(ci_probes.TARGETED, "one narrow question"),
-                   ci_probes.Reason(ci_probes.BASE_FAILING, "red on master")):
-        ready, blocked = buckets(report_for({"alpha": (reason,)}))
-        expect(ready == [] and blocked == ["alpha"],
-               f"a clean probe held out on `{reason.category}` is reported "
-               f"as mechanically blocked, not as ready")
-
-    report = report_for({"alpha": (FLAKY, GPU, SLOW)})
-    ready, blocked = buckets(report)
-    row = report["blocked"][0]
-    expect(ready == [] and blocked == ["alpha"],
-           "ONE blocking category controls the bucket even when another "
-           "declared category is `flaky`")
-    expect([entry["category"] for entry in row["reasons"]]
-           == ["flaky", "needs-gpu", "slow/worldgen-heavy"],
-           "and EVERY declared category is retained, in declared order — "
-           "first-reason-only handling would lose the rest")
-    expect(row["blocking_categories"] == ["needs-gpu", "slow/worldgen-heavy"],
-           "the blocking categories are named as a sorted set beside them")
-    expect(all(entry["explanation"] for entry in row["reasons"]),
-           "each carries its own explanation, so the report says WHY")
-
-    # Fail closed. A category this file has never heard of is not in the
-    # answerable allowlist, so it blocks rather than reading as ready.
-    future = ci_probes.Reason.__new__(ci_probes.Reason)
-    object.__setattr__(future, "category", "needs-network")
-    object.__setattr__(future, "explanation", "a category from the future")
-    ready, blocked = buckets(report_for({"alpha": (future,)}))
-    expect(ready == [] and blocked == ["alpha"],
-           "an unknown reason category fails CLOSED into the blocked list "
-           "rather than appearing ready")
-    ready, blocked = buckets(report_for({"alpha": (FLAKY, future)}))
-    expect(ready == [] and blocked == ["alpha"],
-           "and it still blocks beside an answerable one")
-
-    ready, blocked = buckets(report_for({}))
-    expect(ready == [] and blocked == ["alpha"],
-           "a probe with no declared reason at all is blocked, not ready: "
-           "`every category is answerable` is vacuously true of none")
-
-
-def test_promotion_preserves_the_manifest() -> None:
-    print("\n-- promoting a candidate keeps its row and its history --")
-    reasons = {"alpha": (FLAKY,)}
-    with registry(protocol=MIGRATED, reasons=reasons), scratch() as root:
-        path = root / "probe_census.json"
-        seeded(path)
-        qualified_census(path, age_days=1)
-        expect(buckets(promotion_of(path))[0] == ["alpha"],
-               "alpha is a candidate while it is manual-only")
-
-        # The promotion itself: a person edits tools/ci_probes.py. The
-        # report never does, so the case performs the edit by hand.
-        ci_probes.CI_ELIGIBLE = {"alpha"}
-        ci_probes.MANUAL_ONLY_REASONS = {}
-        probe_census.ensure_document(path)
-        document = json.loads(path.read_text(encoding="utf-8"))
-        row = next(entry for entry in document["probes"]
-                   if entry["key"] == "alpha")
-        census = row["census"]
-
-        expect(len(document["probes"]) == len(SYNTHETIC)
-               and row["classification"] == probe_census.CI_ELIGIBLE,
-               "the promoted probe keeps its row in the global manifest, "
-               "reclassified")
-        expect(census["current"] is None
-               and [cohort["commit_sha"] for cohort in census["history"]]
-               == [COMMIT_A]
-               and len(census["history"][0]["samples"]) == 1,
-               "its current cohort is ARCHIVED, not deleted: the retained "
-               "history keeps every sample")
-        expect(len(census["attempts"]) == 1,
-               "and the attempt log is retained whole")
-
-        ready, blocked = buckets(promotion_of(path))
-        expect(ready == [] and blocked == [],
-               "and it leaves the manual-only report, in both directions")
-        report = promotion_of(path)
-        expect(report["ci_eligible"] == 1
-               and report["manual_only"] == len(SYNTHETIC) - 1,
-               "the derived counts follow the promotion")
-
-        # A promoted probe receives no further samples, and refusing is
-        # not a partial write.
-        before = path.read_bytes()
-        expect_refusal(
-            lambda: probe_census.record_result(path, clean_result()),
-            "a promoted probe's census refuses a later measurement",
-            "alpha", "CI-eligible", "no further samples")
-        unchanged(path, before,
-                  "and the refusal mutates not one byte of the record")
-
-
-def test_promotion_cli() -> None:
-    print("\n-- the --promotion-candidates CLI --")
-    with registry(protocol=MIGRATED,
-                  reasons={"alpha": (FLAKY,), "beta": (GPU,)}), \
-            cli_repo() as (_main_wt, census_path):
-        cli("--seed")
-        probe_census.record_result(census_path, clean_result(age_days=1))
-        probe_census.record_result(
-            census_path, clean_result(probe="beta", age_days=1, worst=300.0))
-        before = census_path.read_bytes()
-
-        code, out, err = cli("--promotion-candidates", "--as-of", at(0),
-                             "--json")
-        expect(code == 0 and err == "",
-               f"--promotion-candidates --json exits 0 ({err!r})")
-        report = json.loads(out)
-        expect(report["schema"] == probe_census.PROMOTION_SCHEMA,
-               "the JSON form declares its own schema")
-        expect(buckets(report) == (["alpha"], ["beta"]),
-               "and separates the two lists")
-        unchanged(census_path, before, "reporting writes no census bytes")
-
-        code, out, _ = cli("--promotion-candidates", "--as-of", at(0))
-        expect(code == 0 and "alpha" in out and "beta" in out,
-               "the default rendering is a human report")
-        expect(COMMIT_A in out,
-               "which reports the EXACT commit, not an abbreviation")
-        expect("needs-gpu" in out and "flaky" in out,
-               "and names every reason category it read")
-        expect("tools/ci_probes.py" in out,
-               "and says where an actual promotion is made")
-
-        # The horizon is an input here exactly as it is for --summary.
-        code, out, _ = cli("--promotion-candidates", "--as-of", at(0),
-                           "--stale-after-days", "0.5", "--json")
-        expect(code == 0 and buckets(json.loads(out)) == ([], []),
-               "a horizon that makes the cohort stale empties both lists")
-
-        code, _, err = cli("--promotion-candidates", "--probe", "alpha")
-        expect(code == 1 and "--probe" in err,
-               "--probe is refused: which probes qualify is the question "
-               "this mode answers")
-        code, _, err = cli("--promotion-candidates", "--summary")
-        expect(code != 0,
-               "and the reading modes are mutually exclusive")
-
-# ==========================================================================
 # ==========================================================================
 def outcome_record(mark: str, *, probe: str = "alpha",
                    outcome: str = "cannot-reproduce") -> dict:
@@ -4691,12 +4100,18 @@ def main() -> int:
                  test_staleness_boundary, test_unmeasured_and_zero_rate,
                  test_history_only_statistic,
                  test_cohort_semantic_refusals,
-                 test_summary_preserves_everything, test_summary_cli,
-                 test_promotion_candidate, test_promotion_disqualifications,
-                 test_promotion_reason_buckets,
-                 test_promotion_preserves_the_manifest,
-                 test_promotion_cli):
+                 test_summary_preserves_everything, test_summary_cli):
         test()
+    # #1441's promotion report has its own owner since #2034, but this
+    # stays the gate that must fail when it regresses. Its cases run
+    # HERE, from that owner's own `CASES` inventory, appending to the
+    # same `selftestlib.FAILURES` -- so a case added there joins this
+    # gate by construction, and an emptied inventory is reported rather
+    # than silently dropping promotion coverage from CI.
+    if not promotion_cases.CASES:
+        expect(False, "the promotion owner declares an EMPTY case "
+                      "inventory -- refusing to report a vacuous pass")
+    promotion_cases.run_cases()
     print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILED:")

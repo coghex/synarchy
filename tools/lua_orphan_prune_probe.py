@@ -54,6 +54,11 @@ the owning unit's page.
 aiState entry or nil). Exit 0 = fix verified.
 
 Usage:  python3 tools/lua_orphan_prune_probe.py [--port 9008] [--seed 42]
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 
@@ -66,9 +71,20 @@ import subprocess
 import sys
 import time
 import uuid
+import probe_protocol
 from probelib import quit_engine, boot, send, wait_load_published
 
 LOG = "/tmp/orphan_prune_engine.log"
+LOG_NAME = "orphan_prune_engine.log"
+PROBE_KEY = "lua_orphan_prune"
+CHECKS = [
+    ("snapshot_filters_orphan", "the save snapshot excludes the destroyed unit and keeps the survivor"),
+    ("load_pauses_immediately", "loadSave pauses the engine before the load transaction runs"),
+    ("load_reconcile_prunes_orphan", "post-load reconcile prunes the orphan and keeps survivor state"),
+    ("nested_references_scrubbed", "stale nested references and their collection phases are scrubbed"),
+    ("per_entity_apply", "per-entity apply drops an absent owner and exactly replaces the survivor row"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 # Unique per run, deleted on exit. A fixed name could clobber a real save
 # and a stale dir from an interrupted run could make a later run falsely
 # pass by loading old data; main() also refuses to run if the dir exists.
@@ -188,13 +204,26 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9008)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
 
+
+def _run(args, rep: probe_protocol.Reporter) -> int:
     save_dir = os.path.join("saves", SAVE_NAME)
     if os.path.exists(save_dir):
-        sys.exit(f"refusing to run: {save_dir} already exists")
+        rep.abort(f"refusing to run: {save_dir} already exists")
+        return 2
 
-    proc = boot(args.port, log=LOG)
+    proc = boot(args.port, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     ok = True
     try:
         bootstrap_defs(args.port)
@@ -206,23 +235,23 @@ def main() -> int:
 
         spot = find_flat(args.port)
         if not spot:
-            print("FAIL: no flat dry ground found to spawn on")
-            return 1
+            rep.abort("no flat dry ground found to spawn on")
+            return 2
         gx, gy = spot
-        print(f"Spawning on flat ground at ({gx},{gy})")
+        rep.note(f"Spawning on flat ground at ({gx},{gy})")
 
         a = int(float(send(args.port, f"return unit.spawn('acolyte', {gx}, {gy})")))
         b = int(float(send(args.port, f"return unit.spawn('acolyte', {gx+1}, {gy})")))
-        print(f"Spawned A={a} (to be orphaned), B={b} (control)")
+        rep.note(f"Spawned A={a} (to be orphaned), B={b} (control)")
 
         # Let the AI tick so aiState[A]/[B] are created.
         time.sleep(3.0)
         sa, sb = getstate(args.port, a), getstate(args.port, b)
-        print(f"After tick: aiState[A]={sa}, aiState[B]={sb}")
+        rep.note(f"After tick: aiState[A]={sa}, aiState[B]={sb}")
         if sa != "present" or sb != "present":
-            print("FAIL: AI state was not created for spawned units "
-                  "(can't exercise the leak)")
-            return 1
+            rep.abort("AI state was not created for both spawned units",
+                      {"orphan": sa, "survivor": sb})
+            return 2
 
         # Destroy A. It's queued — wait until the unit thread drops it.
         send(args.port, f"unit.destroy({a}); return 'ok'", expect_result=False)
@@ -231,11 +260,11 @@ def main() -> int:
                 break
             time.sleep(0.3)
         if exists(args.port, a):
-            print("FAIL: unit A never got destroyed")
-            return 1
+            rep.abort("unit A never got destroyed")
+            return 2
         leaked = getstate(args.port, a)
-        print(f"After destroy: unit.exists(A)=no, aiState[A]={leaked} "
-              f"(lingering in memory = the leak)")
+        rep.note(f"After destroy: unit.exists(A)=no, aiState[A]={leaked} "
+                 f"(lingering in memory = the leak)")
 
         # Snapshot filter: even though aiState[A] lingers in memory, the
         # SAVE payload must exclude it. Otherwise, on a cross-session load, A's
@@ -256,12 +285,14 @@ def main() -> int:
             f"for k in pairs(r) do local n=tonumber(k); "
             f"if n=={a} then ha=true elseif n=={b} then hb=true end end; "
             "return (ha and 'present' or 'absent')..','..(hb and 'present' or 'absent')")
-        print(f"Snapshotted unit_ai component: A={blobcheck.split(',')[0]}, "
-              f"B={blobcheck.split(',')[-1]}")
-        if blobcheck != "absent,present":
-            print("FAIL: destroyed unit A leaked into the save payload (or B "
-                  "missing) — snapshot filter not working")
-            ok = False
+        rep.note(f"Snapshotted unit_ai component: A={blobcheck.split(',')[0]}, "
+                 f"B={blobcheck.split(',')[-1]}")
+        snapshot_ok = blobcheck == "absent,present"
+        ok &= rep.check("snapshot_filters_orphan", snapshot_ok,
+                        ("destroyed unit excluded and survivor retained"
+                         if snapshot_ok else
+                         "destroyed unit leaked into the snapshot or survivor was missing"),
+                        {"snapshot": blobcheck})
 
         # #1589: plant one stale reference from EVERY declared family on
         # the SURVIVOR, before the save, so the post-load assertions read
@@ -300,45 +331,46 @@ def main() -> int:
                  f"s.harvestPhase='collecting'; return 'ok'",
                  expect_result=False)
             planted = present_families(args.port, b)
-            print(f"Planted stale families on B: {planted}")
+            rep.note(f"Planted stale families on B: {planted}")
             if planted != PLANTED_FAMILIES:
-                print(f"FAIL: could not plant every stale family (got "
-                      f"{planted!r}, want {PLANTED_FAMILIES!r}) — the "
-                      f"post-load assertions would pass vacuously")
-                return 1
+                rep.abort("could not plant every stale reference family",
+                          {"actual": planted, "expected": PLANTED_FAMILIES})
+                return 2
 
         # Save + load. The engine fires onSaveLoaded after the load
         # settles; the reconcile should prune A while keeping B.
         save_cmd = f'return engine.saveWorld("arena","{SAVE_NAME}")'
-        print(f"saveWorld -> {send(args.port, save_cmd)}")
+        rep.note(f"saveWorld -> {send(args.port, save_cmd)}")
         # saveWorld returns on enqueue — wait for the file to actually land
         # before loading, or loadSave races the write / reads a stale dir.
         if not wait_save_written(SAVE_NAME):
-            print(f"FAIL: save file for '{SAVE_NAME}' never appeared on disk")
-            return 1
+            rep.abort(f"save file for '{SAVE_NAME}' never appeared on disk")
+            return 2
         # Unpause first so the load-time freeze is observable: loadSave must
         # pause the engine synchronously (before queueing WorldLoadSave) so
         # the Lua loop can't tick script update()s against the half-restored
         # singletons during the load window.
         send(args.port, "engine.setPaused(false); return 'ok'", expect_result=False)
         load_cmd = f'return engine.loadSave("{SAVE_NAME}")'
-        print(f"loadSave -> {send(args.port, load_cmd)}")
+        rep.note(f"loadSave -> {send(args.port, load_cmd)}")
         # Right after loadSave returns (world thread hasn't finished the load),
         # the engine must already be paused — frozen for the load window.
         load_paused = send(args.port, "return engine.isPaused()")
-        print(f"engine.isPaused() immediately after loadSave -> {load_paused}")
-        if load_paused.strip().lower() not in ("true", "1", "1.0"):
-            print("FAIL: loadSave did not pause the engine; script update()s "
-                  "can race the load reconcile")
-            ok = False
+        rep.note(f"engine.isPaused() immediately after loadSave -> {load_paused}")
+        paused_ok = load_paused.strip().lower() in ("true", "1", "1.0")
+        ok &= rep.check("load_pauses_immediately", paused_ok,
+                        ("loadSave paused the engine immediately"
+                         if paused_ok else
+                         "loadSave did not pause before the load transaction"),
+                        {"paused": load_paused})
         # Issue #763: loadSave only ACCEPTS synchronously -- the saved page
         # ("arena", its own id verbatim -- no more main_world remap)
         # doesn't exist live until the transaction publishes.
         published, status = wait_load_published(args.port, 180)
-        print(f"load transaction published -> {published} ({status})")
+        rep.note(f"load transaction published -> {published} ({status})")
         if not published:
-            print(f"FAIL: load transaction did not publish: {status}")
-            return 1
+            rep.abort("load transaction did not publish", {"status": status})
+            return 2
         # Block on init, then let the load settle past LoadDone (the world
         # thread restores units, then enqueues the LuaSaveLoaded broadcast).
         send(args.port, "return world.waitForInit(180)", timeout=190)
@@ -354,18 +386,14 @@ def main() -> int:
             time.sleep(0.5)
         final_a = getstate(args.port, a)
         final_b = getstate(args.port, b)
-        print(f"After load: aiState[A]={final_a}, aiState[B]={final_b}")
-
-        if not pruned or final_a != "nil":
-            print("FAIL: stale aiState[A] for the dropped unit was NOT "
-                  "pruned after load (#195 not fixed)")
-            ok = False
-        elif final_b != "present":
-            print("FAIL: aiState[B] for a LIVE unit was wrongly pruned "
-                  "(reconcile too aggressive)")
-            ok = False
-        else:
-            print("PASS: dropped-unit AI state pruned, live-unit state kept")
+        rep.note(f"After load: aiState[A]={final_a}, aiState[B]={final_b}")
+        reconcile_ok = pruned and final_a == "nil" and final_b == "present"
+        ok &= rep.check("load_reconcile_prunes_orphan", reconcile_ok,
+                        ("dropped-unit AI state pruned and survivor state kept"
+                         if reconcile_ok else
+                         "post-load reconcile did not preserve exactly the survivor state"),
+                        {"orphan": final_a, "survivor": final_b,
+                         "pruned": pruned})
 
         # (i) Nested-reference scrub on a loaded-page survivor (#195,
         # extended to every declared family by #1589). A survivor can
@@ -379,15 +407,9 @@ def main() -> int:
         # reconciliation context part of what is under test.
         if ok:
             remaining = present_families(args.port, b)
-            print(f"Nested scrub: stale families still present -> {remaining}")
-            if remaining == "NOSTATE":
-                print("FAIL: B's own state was wrongly dropped (B is a survivor)")
-                ok = False
-            elif remaining != "":
-                print(f"FAIL: stale reference(s) survived the load reconcile: "
-                      f"{remaining}")
-                ok = False
-            else:
+            rep.note(f"Nested scrub: stale families still present -> {remaining}")
+            phases = None
+            if remaining == "":
                 # The collection families clear their owning phase on the
                 # same rule their own exhaustion path uses; a phase left
                 # behind with no list is the malformed leftover #1589
@@ -396,14 +418,13 @@ def main() -> int:
                     f"local s=require('scripts.unit_ai').getState({b}); "
                     "return tostring(s.foragePhase) .. ',' "
                     ".. tostring(s.harvestPhase)").strip().strip('"')
-                print(f"Collection phases after scrub -> {phases}")
-                if phases != "nil,nil":
-                    print("FAIL: an emptied loot list left its collecting "
-                          "phase behind")
-                    ok = False
-                else:
-                    print("PASS: stale nested references scrubbed across every "
-                          "declared family, survivor kept")
+                rep.note(f"Collection phases after scrub -> {phases}")
+            nested_ok = remaining == "" and phases == "nil,nil"
+            ok &= rep.check("nested_references_scrubbed", nested_ok,
+                            ("stale nested references and collection phases were scrubbed"
+                             if nested_ok else
+                             "stale nested references or collection phases survived"),
+                            {"remaining": remaining, "phases": phases})
 
         # (ii) Per-entity apply (issue #900). The registered component's
         # apply() now resolves EACH ROW against the restored session's own
@@ -446,27 +467,16 @@ def main() -> int:
             mk = send(args.port, f"local s={ai}.getState({b}); "
                  f"return s and tostring(s.probeMarker) or 'NOSTATE'")
             be = exists(args.port, b)
-            print(f"Per-entity apply: dead-id state -> {dead}, "
-                  f"B.currentAction -> {act}, B.probeMarker -> {mk}, "
-                  f"B alive -> {'yes' if be else 'no'}")
-            if dead != "nil":
-                print("FAIL: a row whose unit is absent from the restored "
-                      "session was applied instead of dropped")
-                ok = False
-            elif act != "idle":
-                print("FAIL: the present unit's own row was not applied")
-                ok = False
-            elif mk != "nil":
-                print("FAIL: a pre-load field survived the apply -- per-entity "
-                      "application must still leave EXACTLY the payload's rows, "
-                      "or a reused id inherits the previous session's state")
-                ok = False
-            elif not be:
-                print("FAIL: apply unexpectedly destroyed the unit")
-                ok = False
-            else:
-                print("PASS: absent-owner row dropped, present unit's row "
-                      "applied exactly")
+            rep.note(f"Per-entity apply: dead-id state -> {dead}, "
+                     f"B.currentAction -> {act}, B.probeMarker -> {mk}, "
+                     f"B alive -> {'yes' if be else 'no'}")
+            apply_ok = dead == "nil" and act == "idle" and mk == "nil" and be
+            ok &= rep.check("per_entity_apply", apply_ok,
+                            ("absent-owner row dropped and survivor row applied exactly"
+                             if apply_ok else
+                             "per-entity apply did not exactly replace the survivor row"),
+                            {"dead_owner": dead, "survivor_action": act,
+                             "survivor_marker": mk, "survivor_alive": be})
     finally:
         quit_engine(args.port, proc)
         try:

@@ -34,15 +34,15 @@ tracker state was changed.
 
 ## Status
 
-- [ ] TH-1. Lua strict-message probe no longer reaches its advertised exception path
-- [ ] TH-2. Offscreen portal coverage depends on an unseeded bounded search
-- [ ] TH-3. Construction probe treats an unsupported 30-second sample as failure
+- [x] TH-1. Lua strict-message probe no longer reaches its advertised exception path — [#2161]
+- [x] TH-2. Offscreen portal coverage depends on an unseeded bounded search — [#2166]
+- [x] TH-3. Construction probe treats an unsupported 30-second sample as failure — [#2172]
 
 ---
 
 ## False-green regression coverage
 
-### TH-1. Lua strict-message probe no longer reaches its advertised exception path
+### [#2161] TH-1. Lua strict-message probe no longer reaches its advertised exception path
 
 `tools/lua_strict_msg_probe.py` still describes itself as regression coverage
 for a deferred exception caused by strict UTF-8 decoding of malformed Lua
@@ -90,7 +90,7 @@ original deferred exception without adding test-only production behavior.
 
 ## Nondeterministic manual-probe fixtures
 
-### TH-2. Offscreen portal coverage depends on an unseeded bounded search
+### [#2166] TH-2. Offscreen portal coverage depends on an unseeded bounded search
 
 The offscreen probe creates an unseeded generated world and searches ten fixed
 candidate coordinates for a buildable remote portal location. When none is
@@ -137,7 +137,7 @@ fixture-owned terrain, or a reproducible coordinate derivation—still requires
 design. The retained evidence demonstrates variability but does not establish
 its frequency.
 
-### TH-3. Construction probe treats an unsupported 30-second sample as failure
+### [#2172] TH-3. Construction probe treats an unsupported 30-second sample as failure
 
 After a construction job is claimed, the probe requires observable progress
 within 30 seconds. It then independently allows another 30 seconds for the
