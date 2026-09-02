@@ -79,8 +79,18 @@ data ConstructStatus = CsPending | CsClaimed | CsComplete | CsPlacing
 --   Generic Serialize — append, don't reorder).
 data ConstructDesignation = ConstructDesignation
     { cdZ        ∷ !Int
-      -- ^ Surface z captured at designation time (the ghost renders from
-      --   it, no per-frame column reads — same trick as MineDesignation).
+      -- ^ Surface z captured at designation time.
+      --
+      --   A BUILDING marker still renders straight from it, no per-frame
+      --   column reads — the same trick as MineDesignation.
+      --
+      --   A STRUCTURE ghost does not (#1846). This is a SURFACE level and
+      --   the piece sits above it (floor, wall and wire at + 1, a ceiling
+      --   at + 2, a post at its supporting floor's z), so the ghost draws
+      --   at the final grid z 'World.Construct.Plan' resolves against
+      --   live terrain. What 'cdZ' contributes there is the REQUIRED
+      --   surface level: a site whose terrain has since drifted is
+      --   invalid, never silently retargeted (#1844 requirement 4).
     , cdTarget   ∷ !ConstructTarget
     , cdStatus   ∷ !ConstructStatus
     , cdProgress ∷ !Float

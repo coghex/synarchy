@@ -3,7 +3,10 @@
 --   @construction.*@ namespace. Mirrors the mine-designation API on
 --   @world.*@: the tool drives setAnchor / clearAnchor / designate, the
 --   build AI (#96) drives getPendingJobs / nearestDesignation /
---   setJobStatus, and the HUD sets the ghost textures.
+--   setJobStatus, the HUD sets the one remaining ghost texture (the
+--   BUILDING category blueprint — a structure draws its own art since
+--   #1846), and the build tool states the structure piece it has armed
+--   so the pre-anchor hover has something to preview.
 module Engine.Scripting.Lua.API.Construct
     ( constructSetAnchorFn
     , constructClearAnchorFn

@@ -305,8 +305,21 @@ data WorldPageSave = WorldPageSave
     , wpsConstructNextAttempt ∷ !ConstructAttemptId
       -- ^ #1844: this page's construction ATTEMPT allocator.
         -- ^ Construction designations (#95): build target + status +
-        --   progress per tile. Like mine designations, ghosts re-render
-        --   from the stored z, so restoration needs no chunk loading.
+        --   progress per tile.
+        --
+        --   A BUILDING marker re-renders from the stored z like a mine
+        --   designation, so its restoration needs no chunk loading.
+        --
+        --   A STRUCTURE ghost does need resident terrain (#1846): it
+        --   draws the piece's own art at the final grid z
+        --   'World.Construct.Plan' resolves, and that resolution reads
+        --   live terrain. This is NOT a restoration requirement — the
+        --   record restores exactly as it always did, and no load waits
+        --   on a chunk — but such a ghost is simply ABSENT until its
+        --   chunk publishes, which is the resolver's
+        --   @unresolved-terrain@ outcome and is deliberately
+        --   indistinguishable from any other frame in which the terrain
+        --   is not yet there.
     , wpsGroundItems  ∷ !GroundItems
         -- ^ Items lying in the world. Full ItemInstances + float
         --   positions; resting height derives from terrain at render,

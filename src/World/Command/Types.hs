@@ -198,10 +198,17 @@ data WorldCommand
         --   sender never claimed.
         -- ^ Build AI (#96): add build progress to the designation at
         --   (gx, gy). Deltas are pre-normalised to the job's total
-        --   work (1.0 = done) and the sum is clamped to [0, 1]; the
-        --   ghost marker's alpha ramps with it. Completion (placing
-        --   the piece + removing the designation) stays Lua-side —
-        --   the AI resolves art/materials, so it owns final placement.
+        --   work (1.0 = done) and the sum is clamped to [0, 1].
+        --
+        --   A BUILDING blueprint's alpha ramps with it. A STRUCTURE
+        --   site's does not (#1846): it is already invisible by the
+        --   time any progress is poured, because D-15/D-16 make it
+        --   vanish when its materials are PAID for and show nothing
+        --   until the finished piece appears.
+        --
+        --   Completion (placing the piece + removing the designation)
+        --   stays Lua-side — the AI resolves art/materials, so it owns
+        --   final placement.
     | WorldRevalidateConstructAll
         -- ^ #1844: the CATALOGUE-reconciliation sweep. A terminal
         --   structure-art failure makes a whole pack resolve nothing
