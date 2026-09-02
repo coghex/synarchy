@@ -1,10 +1,24 @@
 {-# LANGUAGE Strict #-}
+-- | Building quads for the scene: placed instances (solid, or the
+--   translucent pre-delivery ghost) and the build tool's placement
+--   preview.
+--
+--   WHICH asset is drawn, and WHERE, both come from 'Building.Visual'
+--   (#2088): the facing's own declared view — south, west, north, east,
+--   never a stored orientation — at the lifecycle frame the progress /
+--   clock selects, sized from that texture and anchored on the
+--   footprint. 'Building.HitTest' reads the same functions, so the
+--   click target is the visible quad by construction rather than a
+--   second copy of the arithmetic. Camera rotation changes only the
+--   selected canvas and the projection; footprint, grid position, z,
+--   sort ownership and lifecycle progress are untouched by it.
 module Building.Render
-    ( pickBuildingFrame
-    , renderBuildingQuads
+    ( renderBuildingQuads
     , renderBuildingQuadsScanned
+    , buildingToQuad
     , renderGhostQuad
     , renderGhostQuadScanned
+    , ghostToQuad
     , ghostTint
     ) where
 
@@ -13,7 +27,6 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv, buildingGhostRef, buildingManagerRef
@@ -28,79 +41,11 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , rectCorners, fullQuadUV
                                           , renderFlagSelected, tileWorldUV
                                           , noFaceMapVertexId)
-import World.Grid (tileWidth, tileHeight, tileSideHeight
-                  , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacingF, baseTileW, baseTileH)
-import Building.Schema
+import World.Grid (tileHalfDiamondHeight, worldLayer)
 import World.State.Types (wmVisible)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
-
--- | Pick a frame for a building at the given POSIX time. Mirrors
---   Unit.Render.pickFrame but simpler — no reverse-playback flag and,
---   in this slice, no camera selection: BDA-1 keeps reading the SOUTH
---   view of the four a definition now declares, and BDA-2 owns picking
---   a view from the active camera.
-pickBuildingFrame ∷ Double → BuildingInstance → BuildingDef → TextureHandle
-pickBuildingFrame now inst def =
-    let activity  = currentActivity now inst def
-        stateRole = case activity of
-                      Constructing → RoleConstruction
-                      Appearing    → RoleAppearance
-                      Built        → RoleBuilt
-        -- The role a Built building pins its last frame from when it
-        -- declares no `built` animation: whichever role its own
-        -- build_work put it through on the way up (#2080). Reading
-        -- the definition's own discriminator, rather than one fixed
-        -- role, is what keeps Cargo Hold / Furnace / Workbench /
-        -- Machine Shop pinning their final construction frame instead
-        -- of snapping back to the static sprite.
-        pinRole = legacyRoleFor (bdBuildWork def)
-        -- Find the animation for the current role. If we're Built and
-        -- no "built" animation is defined, fall back to the LAST frame
-        -- of `pinRole` so the visible sprite doesn't snap back to the
-        -- static south sprite (which may differ from the final
-        -- construction frame). pinLastFrame flags that mode.
-        (mAnim, pinLastFrame) =
-            case Map.lookup stateRole (bdRoleAnims def) of
-                Just animName
-                    | Just a ← HM.lookup animName (bdAnimations def)
-                    → (Just a, False)
-                _ → case activity of
-                    Built → case Map.lookup pinRole (bdRoleAnims def) of
-                        Just animName →
-                            (HM.lookup animName (bdAnimations def), True)
-                        Nothing → (Nothing, False)
-                    _ → (Nothing, False)
-    in case mAnim of
-        Nothing → bdSouthTexture def
-        -- Buildings are never compiled to atlases (D-8): they carry
-        -- their own per-frame `BuildingAnimation`, which #1261 split
-        -- off the unit record when unit animations retired theirs.
-        Just a  →
-            let fs = facingAsset FaceSouth (banFrames a)
-            in if V.null fs then bdSouthTexture def else
-                    let n = V.length fs
-                        -- Worker-driven construction: while
-                        -- Constructing the visible frame tracks
-                        -- progress directly. No workers → frac stays
-                        -- put → animation freezes mid-build.
-                        progressIdx =
-                            let frac = realToFrac (biBuildProgress inst)
-                                     / realToFrac (bdBuildWork def) ∷ Double
-                                raw  = floor (frac * fromIntegral n) ∷ Int
-                            in max 0 (min (n - 1) raw)
-                        timeIdx =
-                            let elapsed = max 0 (now - biSpawnedAt inst)
-                                raw     = floor (elapsed * realToFrac (banFps a)) ∷ Int
-                            in if banLoop a
-                               then raw `mod` n
-                               else min raw (n - 1)
-                        idx
-                          | pinLastFrame          = n - 1
-                          | activity ≡ Constructing = progressIdx
-                          | otherwise               = timeIdx
-                    in fs V.! idx
+import Building.Visual
 
 -- | Like 'Unit.Render.renderUnitQuads', one sweep over every visible
 --   page's buildings, so each instance's quad takes ITS OWN page's
@@ -163,6 +108,10 @@ renderBuildingQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha = do
                               ) [] instances
                     return (scanned, quads)
 
+-- | One placed instance's quad, or 'Nothing' when the camera band
+--   culls it. Pure — exported so the render/hit-test agreement is
+--   assertable without a texture system (#2088), the way
+--   'Unit.Render.unitToQuad' is for units.
 buildingToQuad
     ∷ (TextureHandle → Word32)
     → Float
@@ -184,55 +133,19 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
     in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
        then Nothing
        else
-        let -- Pre-delivery ghost: building was placed but its materials
-            -- gate hasn't been satisfied yet. Render the final form
-            -- with 0.6 alpha (matches the placement-time ghost) so
-            -- the player sees a translucent silhouette of what'll
-            -- land here once delivery completes.
-            isGhost = case mDef of
-                Just d  → bdBuildWork d > 0
-                       ∧ not (HM.null (bdMaterials d))
-                       ∧ not (materialsSatisfied inst d)
-                Nothing → False
-            texHandle = case mDef of
-                Just def
-                    | isGhost   → bdSouthTexture def
-                    | otherwise → pickBuildingFrame now inst def
-                Nothing → biTexture inst
-
-            (texW, texH) = case HM.lookup texHandle texSizes of
-                Just (w, h) → (fromIntegral w, fromIntegral h)
-                Nothing     → (baseTileW, baseTileH)
-
-            scaleX = texW / baseTileW
-            scaleY = texH / baseTileH
-            quadW = tileWidth  * scaleX
-            quadH = tileHeight * scaleY
-
-            -- Anchor at the bottom-left tile of the footprint. We
-            -- offset to the center of that tile for the iso math, the
-            -- same way units use their float (gx, gy) center.
-            gxF = fromIntegral (biAnchorX inst) + 0.5
-            gyF = fromIntegral (biAnchorY inst) + 0.5
-            (faF, fbF) = applyFacingF facing gxF gyF
-
-            rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
-            rawY = (faF + fbF) * tileHalfDiamondHeight
-
-            heightOffset = fromIntegral relativeZ * tileSideHeight
-
-            -- bdSpriteAnchor = "tile_bottom" lets the texture include
-            -- the cube's side face (16 px on the standard 96×64 tile).
-            -- We then push the quad DOWN by tileSideHeight so the
-            -- texture's bottom edge lines up with the world tile's
-            -- side-face bottom instead of dangling past it.
-            anchorOffset = case mDef of
-                Just d  | bdSpriteAnchor d ≡ "tile_bottom" → tileSideHeight
-                _                                          → 0
-
-            drawX = rawX + (tileWidth - quadW) * 0.5
-            drawY = rawY - heightOffset
-                  + tileHalfDiamondHeight - quadH + anchorOffset
+        let -- The ONE visual decision, shared with the hit test: which
+            -- handle this facing shows (the lifecycle frame, or the
+            -- static view at ghost opacity while materials are
+            -- outstanding, or the stamped handle when the def is
+            -- gone), sized from that handle and anchored on the
+            -- footprint.
+            (visual, rect) = placedBuildingQuad facing now zSlice texSizes
+                                                inst mDef
+            texHandle = bvTexture visual
+            isGhost   = bvGhost visual
+            BuildingQuadRect
+                { bqX = drawX, bqY = drawY, bqW = quadW, bqH = quadH
+                , bqIsoDepth = isoDepth } = rect
 
             -- Sort by the iso depth of the GROUND TILE, not the sprite
             -- top. Adding spriteRowSpan (the sprite's vertical extent)
@@ -243,12 +156,17 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             -- bottom plus the +0.0005 tiebreaker means a unit at the
             -- same row sorts in front (their key has +0.0006), and
             -- units north of the building still get obscured because
-            -- their key is lower (north = smaller faF + fbF).
-            sortKey = (faF + fbF)
+            -- their key is lower (north = smaller faF + fbF). Texture-
+            -- independent, so a facing whose canvas differs cannot
+            -- move a placed building in the sort.
+            sortKey = isoDepth
                     + fromIntegral relativeZ * 0.001
                     + 0.0005
 
             actualSlot = lookupSlot texHandle
+            -- Pre-delivery ghost: 0.6 alpha, matching the placement-
+            -- time ghost, so the player sees a translucent silhouette
+            -- of what'll land here once delivery completes.
             ghostFactor = if isGhost then 0.6 else 1.0
             tint = Vec4 1.0 1.0 1.0 (tileAlpha * ghostFactor)
             flags = if isSel then renderFlagSelected else 0
@@ -324,65 +242,65 @@ renderGhostQuadScanned env solarSlot facing zSlice = do
                             -- Stable handle id resolved in the shader (#286);
                             -- buildings carry no directional face map (#1696).
                             let lookupSlot h = fromIntegral (toInt h) ∷ Word32
-                                defFmSlot = noFaceMapVertexId
-                                texHandle = bdSouthTexture def
-                                (texW, texH) = case HM.lookup texHandle texSizes of
-                                    Just (w, h) → (fromIntegral w, fromIntegral h)
-                                    Nothing     → (baseTileW, baseTileH)
-                                scaleX = texW / baseTileW
-                                scaleY = texH / baseTileH
-                                quadW = tileWidth  * scaleX
-                                quadH = tileHeight * scaleY
-                                gxF = fromIntegral (bgGridX ghost) + 0.5
-                                gyF = fromIntegral (bgGridY ghost) + 0.5
-                                (faF, fbF) = applyFacingF facing gxF gyF
-                                rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
-                                rawY = (faF + fbF) * tileHalfDiamondHeight
-                                -- Lift the ghost to the terrain Z that
-                                -- the placed building will land at,
-                                -- mirroring `buildingToQuad`. Without
-                                -- this the ghost stays glued to the
-                                -- camera slice while the cursor + the
-                                -- about-to-be-placed building both sit
-                                -- at terrainZ, producing a visible
-                                -- offset on non-flat terrain.
-                                relativeZ = bgGridZ ghost - zSlice
-                                heightOffset =
-                                    fromIntegral relativeZ * tileSideHeight
-                                -- Same anchor logic as the placed-building
-                                -- path: tile_bottom textures get pushed
-                                -- down by tileSideHeight so their drawn
-                                -- side face matches the world tile's.
-                                anchorOffset =
-                                    if bdSpriteAnchor def ≡ "tile_bottom"
-                                    then tileSideHeight else 0
-                                drawX = rawX + (tileWidth - quadW) * 0.5
-                                drawY = rawY - heightOffset
-                                      + tileHalfDiamondHeight - quadH
-                                      + anchorOffset
-                                tint = ghostTint (bgValid ghost)
-                                actualSlot = lookupSlot texHandle
-                                sortKey = (faF + fbF) + quadH / tileHalfDiamondHeight * 0.5 + 0.01
-                                wuv = tileWorldUV (bgGridX ghost) (bgGridY ghost)
-                                (v0, v1, v2, v3) =
-                                    quadVertices
-                                        (rectCorners (Vec2 drawX drawY)
-                                                     (Vec2 quadW quadH))
-                                        fullQuadUV
-                                        QuadPayload
-                                            { qpTint      = tint
-                                            , qpAtlasSlot = fromIntegral actualSlot
-                                            , qpFaceMap   = defFmSlot
-                                            , qpFlags     = 0
-                                            , qpWorldUV   = wuv
-                                            }
                             in return $ (,) 1 $ V.singleton
-                                $ setQuadSolarPage solarSlot SortableQuad
-                                { sqSortKey = sortKey
-                                , sqV0      = v0
-                                , sqV1      = v1
-                                , sqV2      = v2
-                                , sqV3      = v3
-                                , sqTexture = texHandle
-                                , sqLayer   = worldLayer
-                                }
+                                $ setQuadSolarPage solarSlot
+                                $ ghostToQuad lookupSlot noFaceMapVertexId
+                                              facing zSlice texSizes ghost def
+
+-- | The placement preview's quad: the facing's STATIC view of the
+--   definition (#2088), placed exactly as 'buildingToQuad' would place
+--   the building once committed. Pure — exported so the facing
+--   selection and placement are assertable without a texture system.
+ghostToQuad
+    ∷ (TextureHandle → Word32)
+    → Float
+    → CameraFacing
+    → Int
+    → HM.HashMap TextureHandle (Int, Int)
+    → BuildingGhost
+    → BuildingDef
+    → SortableQuad
+ghostToQuad lookupSlot defFmSlot facing zSlice texSizes ghost def =
+    let texHandle = previewBuildingTexture facing def
+        -- Lifted to the terrain Z the placed building will land at,
+        -- with the same sprite-anchor drop, by the same function the
+        -- placed path uses. Without the lift the ghost stays glued to
+        -- the camera slice while the cursor + the about-to-be-placed
+        -- building both sit at terrainZ, producing a visible offset
+        -- on non-flat terrain.
+        BuildingQuadRect
+            { bqX = drawX, bqY = drawY, bqW = quadW, bqH = quadH
+            , bqIsoDepth = isoDepth } =
+            buildingQuadRect facing zSlice texSizes
+                             (spriteAnchorOffset (Just def))
+                             (bgGridX ghost) (bgGridY ghost) (bgGridZ ghost)
+                             texHandle
+        tint = ghostTint (bgValid ghost)
+        actualSlot = lookupSlot texHandle
+        -- Unlike the placed key, this one carries the canvas height, so
+        -- a facing whose authored canvas is taller legitimately sorts
+        -- differently. Retained as it was (#2088 keeps the ghost sort
+        -- formula out of scope).
+        sortKey = isoDepth + quadH / tileHalfDiamondHeight * 0.5 + 0.01
+        wuv = tileWorldUV (bgGridX ghost) (bgGridY ghost)
+        (v0, v1, v2, v3) =
+            quadVertices
+                (rectCorners (Vec2 drawX drawY)
+                             (Vec2 quadW quadH))
+                fullQuadUV
+                QuadPayload
+                    { qpTint      = tint
+                    , qpAtlasSlot = fromIntegral actualSlot
+                    , qpFaceMap   = defFmSlot
+                    , qpFlags     = 0
+                    , qpWorldUV   = wuv
+                    }
+    in SortableQuad
+        { sqSortKey = sortKey
+        , sqV0      = v0
+        , sqV1      = v1
+        , sqV2      = v2
+        , sqV3      = v3
+        , sqTexture = texHandle
+        , sqLayer   = worldLayer
+        }

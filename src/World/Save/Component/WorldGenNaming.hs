@@ -44,8 +44,12 @@ module World.Save.Component.WorldGenNaming
     , AbsBoundsDTO(..)
     , LocationEncounterOccupantDTO(..)
     , LocationEncounterDTO(..)
+    , LocationEncounterDTOv1(..)
+    , LocationSignificantItemDTO(..)
     , LocationInstanceDTO(..)
     , LocationInstancesDTO(..)
+    , LocationInstanceDTOv5(..)
+    , LocationInstancesDTOv5(..)
     , LocationInstanceDTOv4(..)
     , LocationInstancesDTOv4(..)
     , LocationInstanceDTOv1(..)
@@ -72,6 +76,8 @@ module World.Save.Component.WorldGenNaming
     , fromLocationInstancesDTO
     , fromLocationInstanceDTOv4
     , toLocationInstancesDTOv4
+    , toLocationInstancesDTOv5
+    , fromLocationInstancesDTOv5
     , fromLocationInstancesDTOv4
     , fromLocationInstanceDTOv1
     , toLocationInstancesDTOv1
@@ -107,7 +113,7 @@ import World.River.Naming (RiverName(..), RiverNames(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstances(..), LocationInstanceId
-    , LocationLifecycle )
+    , LocationSignificantItem(..), LocationLifecycle )
 import World.Chunk.Types (ChunkCoord)
 import Unit.Types.Manager (UnitId)
 import World.Save.Reference (SamePageRef(..))
@@ -210,6 +216,13 @@ data LocationEncounterOccupantDTO = LocationEncounterOccupantDTO
     , leodReturning           ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize)
 
+-- | Frozen mirror of one persisted encounter. This is the CURRENT
+--   (@world-pages@ v10) shape: #916's completion and episode state
+--   WITHOUT the per-encounter clearance-notice flag, which #917 moved
+--   onto the instance ('LocationInstanceDTO.lidClearEventEmitted') so a
+--   location authoring significant items and no encounter has one too.
+--   'LocationEncounterDTOv1' below is the frozen pre-#917 shape that
+--   still carries it.
 data LocationEncounterDTO = LocationEncounterDTO
     { ledRolledCount        ∷ !Int
     , ledOccupants          ∷ ![LocationEncounterOccupantDTO]
@@ -220,13 +233,107 @@ data LocationEncounterDTO = LocationEncounterDTO
     , ledAggressionAnnounced ∷ !Bool
     , ledDisengageAnnounced  ∷ !Bool
     , ledCleared            ∷ !Bool
-    , ledClearEventEmitted  ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN pre-#917 encounter shape (@world-pages@ v8 and v9),
+--   preserved verbatim: every current field plus the
+--   @clear_event_emitted@ flag #917 generalized onto the instance.
+--   Decode-only; 'fromLocationInstanceDTOv5' lifts the flag to where it
+--   now lives, so a historical save neither replays nor loses its
+--   deferred clearance notice. Never edited.
+data LocationEncounterDTOv1 = LocationEncounterDTOv1
+    { led1RolledCount        ∷ !Int
+    , led1Occupants          ∷ ![LocationEncounterOccupantDTO]
+    , led1RosterComplete     ∷ !Bool
+    , led1DeathOnlyClearance ∷ !Bool
+    , led1Activated          ∷ !Bool
+    , led1EpisodeActive      ∷ !Bool
+    , led1AggressionAnnounced ∷ !Bool
+    , led1DisengageAnnounced  ∷ !Bool
+    , led1Cleared            ∷ !Bool
+    , led1ClearEventEmitted  ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationEncounterDTOv1 ∷ Bool → LocationEncounter → LocationEncounterDTOv1
+toLocationEncounterDTOv1 clearEventEmitted e = LocationEncounterDTOv1
+    { led1RolledCount        = leRolledCount e
+    , led1Occupants          = map toOccupantDTO (leOccupants e)
+    , led1RosterComplete     = leRosterComplete e
+    , led1DeathOnlyClearance = leDeathOnlyClearance e
+    , led1Activated          = leActivated e
+    , led1EpisodeActive      = leEpisodeActive e
+    , led1AggressionAnnounced = leAggressionAnnounced e
+    , led1DisengageAnnounced  = leDisengageAnnounced e
+    , led1Cleared            = leCleared e
+    , led1ClearEventEmitted  = clearEventEmitted
+    }
+
+fromLocationEncounterDTOv1 ∷ LocationEncounterDTOv1 → LocationEncounter
+fromLocationEncounterDTOv1 d = LocationEncounter
+    { leRolledCount        = led1RolledCount d
+    , leOccupants          = map fromOccupantDTO (led1Occupants d)
+    , leRosterComplete     = led1RosterComplete d
+    , leDeathOnlyClearance = led1DeathOnlyClearance d
+    , leActivated          = led1Activated d
+    , leEpisodeActive      = led1EpisodeActive d
+    , leAggressionAnnounced = led1AggressionAnnounced d
+    , leDisengageAnnounced  = led1DisengageAnnounced d
+    , leCleared            = led1Cleared d
+    }
+
+-- | The ONE occupant conversion every encounter DTO version shares —
+--   'LocationEncounterOccupantDTO' is unchanged by #917, so the current
+--   and frozen shapes must not grow two copies that could drift.
+toOccupantDTO ∷ LocationEncounterOccupant → LocationEncounterOccupantDTO
+toOccupantDTO o = LocationEncounterOccupantDTO
+    { leodUnitId              = SamePageRef (leoUnitId o)
+    , leodHomeX               = fst (leoHome o)
+    , leodHomeY               = snd (leoHome o)
+    , leodEngaged             = leoEngaged o
+    , leodReturning           = leoReturning o
+    }
+
+fromOccupantDTO ∷ LocationEncounterOccupantDTO → LocationEncounterOccupant
+fromOccupantDTO o = LocationEncounterOccupant
+    { leoUnitId              = unSamePageRef (leodUnitId o)
+    , leoHome                = (leodHomeX o, leodHomeY o)
+    , leoEngaged             = leodEngaged o
+    , leoReturning           = leodReturning o
+    }
+
+-- | Frozen mirror of one 'Location.Instance.LocationSignificantItem'
+--   (#917). @lsidInstanceId@ is a typed same-page reference to the
+--   PHYSICAL item ('Item.Types.iiInstanceId'), absent until the content
+--   spawn binds one.
+data LocationSignificantItemDTO = LocationSignificantItemDTO
+    { lsidSlot        ∷ !Int
+    , lsidItemDefName ∷ !Text
+    , lsidInstanceId  ∷ !(Maybe (SamePageRef Word64))
+    , lsidTaken       ∷ !Bool
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationSignificantItemDTO
+    ∷ LocationSignificantItem → LocationSignificantItemDTO
+toLocationSignificantItemDTO e = LocationSignificantItemDTO
+    { lsidSlot        = lsiSlot e
+    , lsidItemDefName = lsiItemDefName e
+    , lsidInstanceId  = SamePageRef <$> lsiInstanceId e
+    , lsidTaken       = lsiTaken e
+    }
+
+fromLocationSignificantItemDTO
+    ∷ LocationSignificantItemDTO → LocationSignificantItem
+fromLocationSignificantItemDTO d = LocationSignificantItem
+    { lsiSlot        = lsidSlot d
+    , lsiItemDefName = lsidItemDefName d
+    , lsiInstanceId  = unSamePageRef <$> lsidInstanceId d
+    , lsiTaken       = lsidTaken d
+    }
 
 toLocationEncounterDTO ∷ LocationEncounter → LocationEncounterDTO
 toLocationEncounterDTO e = LocationEncounterDTO
     { ledRolledCount        = leRolledCount e
-    , ledOccupants          = map toOccupant (leOccupants e)
+    , ledOccupants          = map toOccupantDTO (leOccupants e)
     , ledRosterComplete     = leRosterComplete e
     , ledDeathOnlyClearance = leDeathOnlyClearance e
     , ledActivated          = leActivated e
@@ -234,21 +341,12 @@ toLocationEncounterDTO e = LocationEncounterDTO
     , ledAggressionAnnounced = leAggressionAnnounced e
     , ledDisengageAnnounced  = leDisengageAnnounced e
     , ledCleared            = leCleared e
-    , ledClearEventEmitted  = leClearEventEmitted e
     }
-  where
-    toOccupant o = LocationEncounterOccupantDTO
-        { leodUnitId              = SamePageRef (leoUnitId o)
-        , leodHomeX               = fst (leoHome o)
-        , leodHomeY               = snd (leoHome o)
-        , leodEngaged             = leoEngaged o
-        , leodReturning           = leoReturning o
-        }
 
 fromLocationEncounterDTO ∷ LocationEncounterDTO → LocationEncounter
 fromLocationEncounterDTO d = LocationEncounter
     { leRolledCount        = ledRolledCount d
-    , leOccupants          = map fromOccupant (ledOccupants d)
+    , leOccupants          = map fromOccupantDTO (ledOccupants d)
     , leRosterComplete     = ledRosterComplete d
     , leDeathOnlyClearance = ledDeathOnlyClearance d
     , leActivated          = ledActivated d
@@ -256,15 +354,7 @@ fromLocationEncounterDTO d = LocationEncounter
     , leAggressionAnnounced = ledAggressionAnnounced d
     , leDisengageAnnounced  = ledDisengageAnnounced d
     , leCleared            = ledCleared d
-    , leClearEventEmitted  = ledClearEventEmitted d
     }
-  where
-    fromOccupant o = LocationEncounterOccupant
-        { leoUnitId              = unSamePageRef (leodUnitId o)
-        , leoHome                = (leodHomeX o, leodHomeY o)
-        , leoEngaged             = leodEngaged o
-        , leoReturning           = leodReturning o
-        }
 
 -- | Frozen mirror of 'Location.Instance.LocationInstance' — a LIVE
 --   gameplay record by construction (its lifecycle and content-spawn
@@ -275,11 +365,14 @@ fromLocationEncounterDTO d = LocationEncounter
 --   id and 'LocationLifecycle' a payload-free append-only enum, both
 --   reused as-is exactly like 'ChunkCoord' / 'ZoomMapMode'.
 --
---   This is the CURRENT shape, carried by @world-pages@ v8: #1101's
+--   This is the CURRENT shape, carried by @world-pages@ v10: #1101's
 --   English gloss beside the display name and #1104's optional
---   etymology source, no discovery margin since #1230, and #916's optional
---   persistent encounter. 'LocationInstanceDTOv4' below is the frozen
---   pre-#916 shape (v7), 'LocationInstanceDTOv3' the pre-#1230 shape (v6),
+--   etymology source, no discovery margin since #1230, #916's optional
+--   persistent encounter, and #917's guaranteed significant-item
+--   obligations plus the generalized clearance-notice latch.
+--   'LocationInstanceDTOv5' below is the frozen pre-#917 shape (v8 and
+--   v9), 'LocationInstanceDTOv4' the pre-#916 one (v7),
+--   'LocationInstanceDTOv3' the pre-#1230 shape (v6),
 --   'LocationInstanceDTOv2' the pre-#1104 one and
 --   'LocationInstanceDTOv1' the pre-#1101 one.
 data LocationInstanceDTO = LocationInstanceDTO
@@ -295,6 +388,8 @@ data LocationInstanceDTO = LocationInstanceDTO
     , lidLifecycle       ∷ !LocationLifecycle
     , lidContentsSpawned ∷ !Bool
     , lidEncounter       ∷ !(Maybe LocationEncounterDTO)
+    , lidSignificant     ∷ ![LocationSignificantItemDTO]
+    , lidClearEventEmitted ∷ !Bool
     } deriving (Show, Eq, Generic, Serialize)
 
 toLocationInstanceDTO ∷ LocationInstance → LocationInstanceDTO
@@ -311,6 +406,8 @@ toLocationInstanceDTO i = LocationInstanceDTO
     , lidLifecycle       = liLifecycle i
     , lidContentsSpawned = liContentsSpawned i
     , lidEncounter       = toLocationEncounterDTO <$> liEncounter i
+    , lidSignificant     = map toLocationSignificantItemDTO (liSignificant i)
+    , lidClearEventEmitted = liClearEventEmitted i
     }
 
 fromLocationInstanceDTO ∷ LocationInstanceDTO → LocationInstance
@@ -326,6 +423,8 @@ fromLocationInstanceDTO d = LocationInstance
     , liLifecycle       = lidLifecycle d
     , liContentsSpawned = lidContentsSpawned d
     , liEncounter       = fromLocationEncounterDTO <$> lidEncounter d
+    , liSignificant     = map fromLocationSignificantItemDTO (lidSignificant d)
+    , liClearEventEmitted = lidClearEventEmitted d
     }
 
 -- | Frozen mirror of the per-page instance table: its allocator plus
@@ -348,6 +447,87 @@ fromLocationInstancesDTO ∷ LocationInstancesDTO → LocationInstances
 fromLocationInstancesDTO d = LocationInstances
     { lisNextId        = lisdNextId d
     , lisById          = HM.map fromLocationInstanceDTO (lisdById d)
+    , lisPendingLegacy = Nothing
+    }
+
+-- | The FROZEN pre-#917 location shape (@world-pages@ v8 and v9),
+--   preserved verbatim: every current field except #917's significant
+--   obligations and instance-level clearance-notice latch, with the
+--   notice still nested inside its encounter
+--   ('LocationEncounterDTOv1').
+--
+--   Historical instances migrate with @liSignificant = []@ — inventing
+--   an obligation from today's YAML would leave a materialized world
+--   owing an item it never spawned, which nothing could ever take —
+--   and their notice is lifted OUT of the encounter to where it now
+--   lives, so a save carrying a defeated-but-unannounced ruin still
+--   announces it exactly once, and one that already announced does not
+--   announce again. An instance with no encounter authored no clearance
+--   condition and never cleared, so it decodes unspent.
+data LocationInstanceDTOv5 = LocationInstanceDTOv5
+    { lid5Id              ∷ !LocationInstanceId
+    , lid5DefId           ∷ !Text
+    , lid5Chunk           ∷ !ChunkCoord
+    , lid5AnchorX         ∷ !Int
+    , lid5AnchorY         ∷ !Int
+    , lid5Bounds          ∷ !AbsBoundsDTO
+    , lid5DisplayName     ∷ !Text
+    , lid5Gloss           ∷ !(Maybe Text)
+    , lid5Etymology       ∷ !(Maybe EtymologySourceDTO)
+    , lid5Lifecycle       ∷ !LocationLifecycle
+    , lid5ContentsSpawned ∷ !Bool
+    , lid5Encounter       ∷ !(Maybe LocationEncounterDTOv1)
+    } deriving (Show, Eq, Generic, Serialize)
+
+fromLocationInstanceDTOv5 ∷ LocationInstanceDTOv5 → LocationInstance
+fromLocationInstanceDTOv5 d = LocationInstance
+    { liId              = lid5Id d
+    , liDefId           = lid5DefId d
+    , liChunk           = lid5Chunk d
+    , liAnchor          = (lid5AnchorX d, lid5AnchorY d)
+    , liBounds          = fromAbsBoundsDTO (lid5Bounds d)
+    , liDisplayName     = lid5DisplayName d
+    , liGloss           = lid5Gloss d
+    , liEtymology       = fromEtymologySourceDTO <$> lid5Etymology d
+    , liLifecycle       = lid5Lifecycle d
+    , liContentsSpawned = lid5ContentsSpawned d
+    , liEncounter       = fromLocationEncounterDTOv1 <$> lid5Encounter d
+    , liSignificant     = []
+    , liClearEventEmitted =
+        maybe False led1ClearEventEmitted (lid5Encounter d)
+    }
+
+data LocationInstancesDTOv5 = LocationInstancesDTOv5
+    { lisd5NextId ∷ !Int
+    , lisd5ById   ∷ !(HM.HashMap LocationInstanceId LocationInstanceDTOv5)
+    } deriving (Show, Eq, Generic, Serialize)
+
+toLocationInstancesDTOv5 ∷ LocationInstances → LocationInstancesDTOv5
+toLocationInstancesDTOv5 l = LocationInstancesDTOv5
+    { lisd5NextId = lisNextId l
+    , lisd5ById   = HM.map toV5 (lisById l)
+    }
+  where
+    toV5 i = LocationInstanceDTOv5
+        { lid5Id              = liId i
+        , lid5DefId           = liDefId i
+        , lid5Chunk           = liChunk i
+        , lid5AnchorX         = fst (liAnchor i)
+        , lid5AnchorY         = snd (liAnchor i)
+        , lid5Bounds          = toAbsBoundsDTO (liBounds i)
+        , lid5DisplayName     = liDisplayName i
+        , lid5Gloss           = liGloss i
+        , lid5Etymology       = toEtymologySourceDTO <$> liEtymology i
+        , lid5Lifecycle       = liLifecycle i
+        , lid5ContentsSpawned = liContentsSpawned i
+        , lid5Encounter       =
+            toLocationEncounterDTOv1 (liClearEventEmitted i) <$> liEncounter i
+        }
+
+fromLocationInstancesDTOv5 ∷ LocationInstancesDTOv5 → LocationInstances
+fromLocationInstancesDTOv5 d = LocationInstances
+    { lisNextId        = lisd5NextId d
+    , lisById          = HM.map fromLocationInstanceDTOv5 (lisd5ById d)
     , lisPendingLegacy = Nothing
     }
 
@@ -382,6 +562,8 @@ fromLocationInstanceDTOv4 d = LocationInstance
     , liLifecycle       = lid4Lifecycle d
     , liContentsSpawned = lid4ContentsSpawned d
     , liEncounter       = Nothing
+    , liSignificant     = []
+    , liClearEventEmitted = False
     }
 
 data LocationInstancesDTOv4 = LocationInstancesDTOv4
@@ -458,6 +640,8 @@ fromLocationInstanceDTOv1 d = LocationInstance
     , liLifecycle       = lid1Lifecycle d
     , liContentsSpawned = lid1ContentsSpawned d
     , liEncounter       = Nothing
+    , liSignificant     = []
+    , liClearEventEmitted = False
     }
 
 -- | The FROZEN pre-#1101 instance table. Structurally identical to
@@ -537,6 +721,8 @@ fromLocationInstanceDTOv2 d = LocationInstance
     , liLifecycle       = lid2Lifecycle d
     , liContentsSpawned = lid2ContentsSpawned d
     , liEncounter       = Nothing
+    , liSignificant     = []
+    , liClearEventEmitted = False
     }
 
 -- | The FROZEN pre-#1104 instance table. Structurally identical to
@@ -618,6 +804,8 @@ fromLocationInstanceDTOv3 d = LocationInstance
     , liLifecycle       = lid3Lifecycle d
     , liContentsSpawned = lid3ContentsSpawned d
     , liEncounter       = Nothing
+    , liSignificant     = []
+    , liClearEventEmitted = False
     }
 
 -- | The FROZEN pre-#1230 instance table. Structurally identical to

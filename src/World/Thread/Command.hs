@@ -47,9 +47,8 @@ import World.Thread.Command.Cursor (handleWorldSetZoomCursorHoverCommand
                                    , handleWorldAddConstructProgressCommand
                                    , handleWorldSetConstructDesignateTextureCommand
                                    , handleWorldSetConstructLineModeCommand
-                                   , handleWorldSetChopAnchorCommand
-                                   , handleWorldClearChopAnchorCommand
-                                   , handleWorldDesignateChopCommand
+                                   , handleWorldDesignateChopInstancesCommand
+                                   , handleWorldEraseChopInstancesCommand
                                    , handleWorldCancelChopCommand
                                    , handleWorldSetChopDesignateTextureCommand
                                    , handleWorldSetTillAnchorCommand
@@ -175,12 +174,10 @@ handleWorldCommand env logger (WorldSetConstructDesignateTexture pageId cat texH
   = handleWorldSetConstructDesignateTextureCommand env logger pageId cat texHandle
 handleWorldCommand env logger (WorldSetConstructLineMode pageId enabled)
   = handleWorldSetConstructLineModeCommand env logger pageId enabled
-handleWorldCommand env logger (WorldSetChopAnchor pageId gx gy)
-  = handleWorldSetChopAnchorCommand env logger pageId gx gy
-handleWorldCommand env logger (WorldClearChopAnchor pageId)
-  = handleWorldClearChopAnchorCommand env logger pageId
-handleWorldCommand env logger (WorldDesignateChop pageId gx1 gy1 gx2 gy2 tag)
-  = handleWorldDesignateChopCommand env logger pageId gx1 gy1 gx2 gy2 tag
+handleWorldCommand env logger (WorldDesignateChopInstances pageId iids tag)
+  = handleWorldDesignateChopInstancesCommand env logger pageId iids tag
+handleWorldCommand env logger (WorldEraseChopInstances pageId iids)
+  = handleWorldEraseChopInstancesCommand env logger pageId iids
 handleWorldCommand env logger (WorldCancelChop pageId gx gy mIid)
   = handleWorldCancelChopCommand env logger pageId gx gy mIid
 handleWorldCommand env logger (WorldSetChopDesignateTexture pageId texHandle)

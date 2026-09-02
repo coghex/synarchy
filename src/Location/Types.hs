@@ -57,6 +57,18 @@ data LocationContent = LocationContent
                                       --   policy. #916 supports explicit
                                       --   @death_only@; it is not a global
                                       --   default for future encounters.
+    , lconSignificant ∷ !Bool         -- ^ #917: is this a GUARANTEED
+                                      --   SIGNIFICANT item — one the
+                                      --   location's clearance predicate
+                                      --   waits on — rather than incidental
+                                      --   salvage? Legal only on
+                                      --   @kind: item@ (the YAML boundary
+                                      --   rejects it anywhere else), so a
+                                      --   @loot_table@ draw can never
+                                      --   participate in clearance no matter
+                                      --   what it rolls. Defaults to 'False':
+                                      --   an entry is incidental unless it
+                                      --   says otherwise.
     } deriving (Show, Eq, Generic)
 
 -- | The authored naming scheme a definition's placed instances draw

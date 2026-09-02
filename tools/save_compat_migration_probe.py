@@ -205,11 +205,12 @@ BOOTSTRAP_LOADERS: list[tuple[str, str, bool]] = [
 
 #: Every engine verb whose registry the load path's content-reference
 #: validation can reject a load on. Engine.Scripting.Lua.API.Save folds
-#: NINE checks into `allMessages` -- unit/building def, item, recipe,
-#: bill-output item, construct def, material, flora, location,
-#: infection -- over these EIGHT registries: the def check spans units
-#: and buildings, the bill-output check re-reads the item registry, and
-#: the construct check re-reads the building one.
+#: TEN checks into `allMessages` -- unit/building def, item,
+#: significant-obligation item (#917), recipe, bill-output item,
+#: construct def, material, flora, location, infection -- over these
+#: EIGHT registries: the def check spans units and buildings, and the
+#: bill-output, significant-obligation and construct checks re-read the
+#: item, item and building registries respectively.
 #:
 #: Requirement 2 of #1485: the bootstrap must cover all of them, so a
 #: fixture that LATER carries a flora or infection reference is already

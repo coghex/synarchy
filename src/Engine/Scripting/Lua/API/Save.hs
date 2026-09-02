@@ -48,6 +48,8 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , AutosaveRequest(..)
                         , missingDefReferences, renderMissingDefRef
                         , missingItemDefReferences, renderMissingItemDefRef
+                        , missingSignificantItemReferences
+                        , renderMissingSignificantItemRef
                         , missingRecipeReferences, renderMissingRecipeRef
                         , missingBillOutputItemReferences
                         , renderMissingBillOutputItemRef
@@ -779,6 +781,16 @@ continueLoad env logger requestId saveName descriptors = do
                     | w ← sdWorlds saveData ]
                 missingItems =
                     missingItemDefReferences (HM.keysSet (imDefs im)) pages
+                -- #917: an UNSPAWNED significant obligation names the
+                -- item the next chunk load will try to spawn. If that
+                -- def is gone the spawn fails on every attempt and the
+                -- location can never clear, so the save is refused here
+                -- rather than published into that state — the load-path
+                -- counterpart of the authoring-time rejection in
+                -- 'Engine.Asset.YamlLocations.significantItemErrors'.
+                missingSignificant =
+                    missingSignificantItemReferences
+                        (HM.keysSet (imDefs im)) pages
                 missingRecipes =
                     missingRecipeReferences (HM.keysSet (rmDefs rm)) pages
                 missingBillOutputItems =
@@ -795,6 +807,7 @@ continueLoad env logger requestId saveName descriptors = do
                 missingInfections =
                     missingInfectionReferences infMgr pages
                 allMissing = length missing + length missingItems
+                    + length missingSignificant
                     + length missingRecipes
                     + length missingBillOutputItems
                     + length missingConstruct
@@ -805,6 +818,7 @@ continueLoad env logger requestId saveName descriptors = do
                 allMessages =
                     map renderMissingDefRef missing
                     ⧺ map renderMissingItemDefRef missingItems
+                    ⧺ map renderMissingSignificantItemRef missingSignificant
                     ⧺ map renderMissingRecipeRef missingRecipes
                     ⧺ map renderMissingBillOutputItemRef
                           missingBillOutputItems
