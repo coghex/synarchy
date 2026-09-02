@@ -21,14 +21,23 @@
 --
 --   The scratch root mirrors the checkout entry-for-entry:
 --
---     * every top-level entry EXCEPT @config@ is a SYMLINK to the real
---       one, so @scripts/@, @assets/@ and @data/@ resolve exactly as they
---       do from the checkout and nothing is copied;
+--     * every top-level entry EXCEPT @config@ and @saves@ is a SYMLINK
+--       to the real one, so @scripts/@, @assets/@ and @data/@ resolve
+--       exactly as they do from the checkout and nothing is copied;
 --     * @config/@ is a real, fixture-OWNED directory holding a copy of
 --       the checkout's, because that is the one family production code
 --       writes into. Symlinking it would defeat the whole point:
 --       @saveKeybindsFn@ writes through the link straight back into the
 --       checkout.
+--     * @saves/@ is a real, fixture-OWNED directory that starts EMPTY
+--       (#2162). It is the other cwd-relative family production code
+--       writes into ('World.Save.Serialize.savesDirectory'), and the
+--       developer's own is gitignored and may or may not exist — so a
+--       spec that plants a save fixture, or drives a production path
+--       that publishes one, always lands in a directory this fixture
+--       made and never through a link into the developer's saves. It
+--       is never copied: a real saves directory can be large, and no
+--       spec may depend on what a developer happens to have saved.
 --
 --   Isolation is established BEFORE the engine boots, not after: engine
 --   initialization is itself a writer ('Engine.Core.Init.migrateLegacyConfig'
@@ -86,10 +95,17 @@ import System.IO.Error (isAlreadyExistsError)
 import System.IO.Unsafe (unsafePerformIO)
 import qualified System.Random as Random
 
--- | The one resource family production code WRITES into, and therefore
---   the one the scratch root owns outright instead of symlinking.
+-- | The resource family production code WRITES into and READS back, and
+--   therefore the one the scratch root owns as a COPY instead of
+--   symlinking.
 configDirName ∷ FilePath
 configDirName = "config"
+
+-- | The other family production code writes into (#2162), owned by the
+--   scratch root as a fresh EMPTY directory — see the module header for
+--   why it is created rather than copied or linked.
+savesDirName ∷ FilePath
+savesDirName = "saves"
 
 -- | The scratch root currently in effect, or 'Nothing' outside the
 --   fixture. This module is its only writer, which is exactly why it is
@@ -188,11 +204,14 @@ createExclusiveTempDirectory prefix = do
                 | otherwise              → ioError e
 
 -- | Mirror @srcRoot@ into @root@: symlinks for everything but
---   'configDirName', which is copied so it is writable fixture state.
+--   'configDirName', which is copied so it is writable fixture state,
+--   and 'savesDirName', which is created empty so it is writable fixture
+--   state that owes nothing to the checkout.
 populateRoot ∷ FilePath → FilePath → IO ()
 populateRoot srcRoot root = do
     entries ← listDirectory srcRoot
-    forM_ entries $ \name → unless (name ≡ configDirName) $ do
+    forM_ entries $ \name →
+      unless (name ≡ configDirName ∨ name ≡ savesDirName) $ do
         let src = srcRoot </> name
         isDir ← doesDirectoryExist src
         if isDir
@@ -201,6 +220,10 @@ populateRoot srcRoot root = do
     hasConfig ← doesDirectoryExist (srcRoot </> configDirName)
     when hasConfig $
         copyTree (srcRoot </> configDirName) (root </> configDirName)
+    -- 'createDirectory', like the root itself: @root@ was created fresh
+    -- and exclusively a moment ago, so anything already at this path
+    -- is a bug worth failing on, not something to adopt.
+    createDirectory (root </> savesDirName)
 
 -- | Recursive plain-file copy. @config/@ holds only files today; the
 --   recursion is here so a future subdirectory is carried across rather
