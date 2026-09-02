@@ -38,6 +38,7 @@ import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlEquipment
 import Equipment.Types
@@ -62,14 +63,13 @@ loadEquipmentYamlFn ∷ CoreCapability → ContentRegistriesCapability
 loadEquipmentYamlFn core regs env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
-                classes ← loadEquipmentYaml logger filePath
+                mClasses ← loadEquipmentYamlOutcome logger filePath
+                let classes = fromMaybe [] mClasses
                 let (lteq, _) = lbsMsgQueues backendState
 
                 total ← foldM (\acc c → do
@@ -117,10 +117,9 @@ loadEquipmentYamlFn core regs env backendState = do
                 logDebug logger CatAsset $
                     "loadEquipmentYaml: loaded " <> tshow total
                     <> " equipment classes from " <> T.pack filePath
-                return total
+                return (isJust mClasses, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
 
 -- | equipment.getClass(name) → table or nil. The returned table is the
 --   render-side view of an EquipmentClass:

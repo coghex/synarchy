@@ -28,6 +28,7 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Asset.YamlLootTables
 import LootTable.Types
 import LootTable.Roll (LootRollContext(..), rollLootTable, rollLootTableFor)
@@ -42,12 +43,10 @@ loadLootTableYamlFn ∷ CoreCapability → ContentRegistriesCapability
 loadLootTableYamlFn core regs = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
                 mDef ← loadLootTableYaml logger filePath
                 case mDef of
@@ -60,7 +59,7 @@ loadLootTableYamlFn core regs = do
                         logDebug logger CatAsset $
                             "loadLootTableYaml: loaded 0 loot tables from "
                             <> T.pack filePath
-                        return (0 ∷ Int)
+                        return (False, 0 ∷ Int)
                     Just d → do
                         let def = LootTableDef
                                 { ltdId      = ltydId d
@@ -76,9 +75,8 @@ loadLootTableYamlFn core regs = do
                         logDebug logger CatAsset $
                             "loadLootTableYaml: loaded 1 loot table '"
                             <> ltdId def <> "' from " <> T.pack filePath
-                        return 1
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+                        return (True, 1)
+            pushYamlResult parsed count
   where
     toEntry e = LootTableEntry
         { lteId     = ltyeId e

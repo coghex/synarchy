@@ -377,6 +377,7 @@ library
                      Engine.Scripting.Lua.API.Forage.Harvest
                      Engine.Scripting.Lua.API.Forage.Crop
                      Engine.Scripting.Lua.API.Flora
+                     Engine.Scripting.Lua.API.YamlResult
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
                      Engine.Core.Init
@@ -1219,6 +1220,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
                    Test.Headless.Startup.AssetLogging
+                   Test.Headless.Startup.Readiness
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building

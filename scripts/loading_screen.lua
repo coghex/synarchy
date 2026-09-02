@@ -38,7 +38,12 @@ loadingScreen.uiCreated  = false
 loadingScreen.showMenuCallback = nil
 
 -- Tracking
-loadingScreen.phase           = "idle"  -- "idle", "loading", "done"
+-- "failed" (#2203) is the startup loader's TERMINAL disposition: a
+-- queued YAML family discovered no files, or one of its files did not
+-- parse. It is deliberately not "done" -- ui_manager's boot transition
+-- keys on "done", so a failed startup never reaches finishStartupBoot
+-- and never pops the main menu.
+loadingScreen.phase           = "idle"  -- "idle","loading","done","failed"
 loadingScreen.mode            = "worldgen"  -- "worldgen" | "startup" | "load"
 loadingScreen.statusText      = "Loading..."
 -- The identity of the world being loaded/generated, when the caller
@@ -402,6 +407,47 @@ end
 -- Update (called every frame from ui_manager)
 -----------------------------------------------------------
 
+-- Render one startup-loader sample onto the bar and labels. Shared so
+-- the ticked normal path and arena's synchronous one (below) show a
+-- drained queue and a failed one identically -- the loader's own
+-- currentLabel is the status text in both cases.
+function loadingScreen.paintStartup(startupLoader)
+    local progress, statusText = startupLoader.getProgress()
+
+    if loadingScreen.barId then
+        bar.setProgress(loadingScreen.barId, progress)
+        bar.setText(loadingScreen.barId, "")
+    end
+    if loadingScreen.percentLabelId then
+        label.setText(loadingScreen.percentLabelId,
+            tostring(math.floor(progress * 100)) .. "%")
+    end
+    if loadingScreen.statusLabelId then
+        label.setText(loadingScreen.statusLabelId, statusText)
+    end
+end
+
+-- Arena boot's counterpart of the normal profile's ticked drain: the
+-- whole queue runs synchronously before anything is on screen, so
+-- there is no frame in which update() could paint a failure (#2203).
+--
+-- Returns true when the queue drained clean. On a family failure it
+-- SHOWS this screen carrying the retained message and returns false,
+-- so the caller skips finishArenaBoot and the failure is visible
+-- rather than only in the log. Framebuffer size comes from
+-- loadingScreen.init, which every caller runs first.
+function loadingScreen.runArenaStartup()
+    local startupLoader = require("scripts.startup_loader")
+    startupLoader.build("arena")
+    startupLoader.runAll()
+    if not startupLoader.isFailed() then return true end
+
+    loadingScreen.show({mode = "startup"})
+    loadingScreen.paintStartup(startupLoader)
+    loadingScreen.phase = "failed"
+    return false
+end
+
 function loadingScreen.update(dt)
     if loadingScreen.phase ~= "loading" then return end
 
@@ -413,20 +459,15 @@ function loadingScreen.update(dt)
     if loadingScreen.mode == "startup" then
         local startupLoader = require("scripts.startup_loader")
         startupLoader.tick(dt)
+        loadingScreen.paintStartup(startupLoader)
 
-        local progress, statusText = startupLoader.getProgress()
-
-        if loadingScreen.barId then
-            bar.setProgress(loadingScreen.barId, progress)
-            bar.setText(loadingScreen.barId, "")
-        end
-        local pctInt = math.floor(progress * 100)
-        if loadingScreen.percentLabelId then
-            label.setText(loadingScreen.percentLabelId,
-                tostring(pctInt) .. "%")
-        end
-        if loadingScreen.statusLabelId then
-            label.setText(loadingScreen.statusLabelId, statusText)
+        -- #2203: terminal. getProgress() froze at the failing family
+        -- and its status label is now the retained failure message, so
+        -- the last paint above is exactly what stays on screen; phase
+        -- never reaches "done", so finishStartupBoot never runs.
+        if startupLoader.isFailed() then
+            loadingScreen.phase = "failed"
+            return
         end
 
         if startupLoader.isDone() then
