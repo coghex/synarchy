@@ -100,8 +100,8 @@ import Control.Concurrent.STM
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (IOException, bracket_, try)
 import System.Directory
-    (createDirectoryIfMissing, doesDirectoryExist, makeAbsolute)
-import System.FilePath ((</>))
+    (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist)
+import System.FilePath ((</>), dropTrailingPathSeparator, normalise)
 import System.IO.Unsafe (unsafePerformIO)
 import World.Page.GeneratedId (GeneratedWorldId)
 import World.Save.Storage.Durable (rejectSymlinkedManagedPath)
@@ -128,20 +128,33 @@ data Library = Library
 -- | Open (creating if absent) the library at 'lcRoot'. Refuses a root,
 --   or a parent, that is a symlink, and a root whose parent does not
 --   exist — the resource root always does.
+--
+--   The configured root is NORMALISED before anything else looks at it
+--   — @.@ segments and doubled separators collapsed, then the trailing
+--   separator dropped (in that order: collapsing @a\/b\/.\/@ leaves
+--   @a\/b\/@) — and the handle carries the normalised spelling. Two
+--   things depend on that. The parent containment check takes the
+--   root's 'takeDirectory', and @takeDirectory "a\/b\/"@ is @"a\/b"@:
+--   with a trailing separator the "parent" check would re-check the
+--   root itself and a symlinked parent would pass. And two handles on
+--   one directory must share one pin store, which is keyed by the
+--   directory's canonical path (see 'sharedPinsForRoot'), never by the
+--   spelling a caller happened to use.
 openLibrary ∷ LibraryConfig → IO (Either LibraryFailure Library)
-openLibrary cfg = do
-    let root = lcRoot cfg
+openLibrary cfg0 = do
+    let cfg  = cfg0 { lcRoot = dropTrailingPathSeparator (normalise (lcRoot cfg0)) }
+        root = lcRoot cfg
     safety ← rejectSymlinkedManagedPath root
     case safety of
         Left reason → pure (Left (LibraryFailure LibUnsafePath Nothing (Just root) reason))
         Right () → do
-            created ← try (createDirectoryIfMissing False root)
+            created ← try $ do
+                createDirectoryIfMissing False root
+                sharedPinsForRoot root
             case created of
                 Left (e ∷ IOException) →
                     pure (Left (LibraryFailure LibRootCreate Nothing (Just root) (tshow e)))
-                Right () → do
-                    pins ← sharedPinsForRoot root
-                    pure (Right (Library cfg pins))
+                Right pins → pure (Right (Library cfg pins))
 
 -- Publication ------------------------------------------------------------------
 
@@ -269,9 +282,16 @@ sharedPinStores ∷ MVar (Map.Map FilePath (TVar PinCounts))
 sharedPinStores = unsafePerformIO (newMVar Map.empty)
 {-# NOINLINE sharedPinStores #-}
 
+-- | The pin store for the DIRECTORY @root@ names, whatever spelling names
+--   it. Keyed by 'canonicalizePath' — absolute, separator-normalised,
+--   every symlink in the ancestry resolved — so @generated-worlds@,
+--   @generated-worlds\/@, @.\/generated-worlds@ and a spelling through a
+--   symlinked temp directory all reach one 'TVar'. The root itself must
+--   already exist (the caller has just created it); a root that cannot be
+--   canonicalised is a root that cannot be opened.
 sharedPinsForRoot ∷ FilePath → IO (TVar PinCounts)
 sharedPinsForRoot root = do
-    key ← makeAbsolute root
+    key ← canonicalizePath root
     modifyMVar sharedPinStores $ \stores → case Map.lookup key stores of
         Just pins → pure (stores, pins)
         Nothing → do

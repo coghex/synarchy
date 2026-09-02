@@ -983,6 +983,36 @@ coordinationSpec = describe "coordination" $ do
             crRetainedPinned report `shouldBe` [gidA]
             crRemoved report `shouldBe` []
 
+    it "shares pins across handles whose root spellings differ, and normalises the spelling it keeps" $
+        withScratch $ \root → do
+            let spellings =
+                    [ libraryRoot root
+                    , libraryRoot root <> "/"
+                    , root </> "." </> libraryDirectory
+                    , root <> "//" <> libraryDirectory <> "/./"
+                    ]
+            handles ← forM spellings $ \spelling →
+                openLibrary ((configFor root) { lcRoot = spelling }) ≫= orFail "openLibrary"
+            -- Every handle carries the one normalised root, so paths in
+            -- its reports and failures agree whatever the caller typed.
+            forM_ handles $ \h → lcRoot (libraryConfig h) `shouldBe` libraryRoot root
+            (pinningLib, others) ← case handles of
+                (h : hs) → pure (h, hs)
+                []       → do
+                    expectationFailure "no handles"
+                    error "unreachable"
+            _ ← publishOK pinningLib gidA payload1
+            withPinnedReferences pinningLib [gidA] $
+                forM_ others $ \other → do
+                    pinnedReferences other `shouldReturn` Set.singleton gidA
+                    report ← cleanupOK other
+                    crRetainedPinned report `shouldBe` [gidA]
+                    crRemoved report `shouldBe` []
+            doesDirectoryExist (finalDir root gidA) `shouldReturn` True
+            -- Released through the first handle, gone through the last.
+            report ← cleanupOK (last handles)
+            crRemoved report `shouldBe` [gidA]
+
     it "does not let a pinned action start after cleanup has taken the process mutex" $
         withScratch $ \root → do
             lib ← openOK root
