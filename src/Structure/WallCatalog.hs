@@ -40,9 +40,12 @@
 --       resolves its own inherited art through its own table.
 --     * Two families OWNING one path is contradictory pack data — nothing
 --       in a placement can say which was meant — so the path is marked
---       AMBIGUOUS and stops rotating rather than picking a winner. That
---       makes the catalogue independent of registration ORDER, which
---       nothing guarantees.
+--       AMBIGUOUS and any pair placed with it stops rotating rather than
+--       picking a winner. BOTH halves stop: a piece whose sprite is
+--       contested does not get rotated on the strength of its facemap's
+--       uncontested claim, or the other way round. That makes the
+--       catalogue independent of registration ORDER, which nothing
+--       guarantees.
 --     * 'rotatedWallArt' identifies ONE family for the placed pair and
 --       takes BOTH rotated assets from it, so a wall can never be drawn
 --       with a sprite from one variant and a mask from another. The
@@ -222,9 +225,20 @@ rotatedWallArt cat facing edge (texPath, texHandle) (facePath, faceHandle) =
         , caps ← [ c | ((e, c), path) ← M.toList (wfFacemaps fam)
                      , e ≡ edge, path ≡ facePath ] ]
     -- ...narrowed to the ones that DECLARE one of the two paths rather
-    -- than inheriting both. An owner recorded as ambiguous (two families
-    -- claiming one path) contributes nothing, so the pair stops rotating
-    -- instead of a contested claim deciding.
-    owners = catMaybes [ HM.lookup texPath  (swcTexOwner cat)
-                       , HM.lookup facePath (swcFaceOwner cat) ]
-    matches = [ (fam, caps) | (i, fam, caps) ← carriers, Just i `elem` owners ]
+    -- than inheriting both. Each lookup has THREE outcomes, and ABSENT is
+    -- not AMBIGUOUS: @Nothing@ means no family claims that path (the
+    -- normal case for a path a variant merely inherits), so it makes no
+    -- claim and leaves its companion to decide; @Just (Just i)@ claims
+    -- family @i@; @Just Nothing@ is the marker 'registerWallFamily'
+    -- installs when two families claim one path. That last one is
+    -- contradictory pack data about a path this piece was actually placed
+    -- with, so the whole PAIR stops rotating -- an unambiguous companion
+    -- must not be allowed to pick the winner the contested half refuses
+    -- to name.
+    texOwner  = HM.lookup texPath  (swcTexOwner cat)
+    faceOwner = HM.lookup facePath (swcFaceOwner cat)
+    contested = any isNothing (catMaybes [texOwner, faceOwner])
+    owners    = catMaybes [texOwner, faceOwner]
+    matches
+      | contested = []
+      | otherwise = [ (fam, caps) | (i, fam, caps) ← carriers, Just i `elem` owners ]
