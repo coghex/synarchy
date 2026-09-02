@@ -583,7 +583,12 @@ richGlobals = SessionGlobals
         { tpPathToId = HM.singleton "structures/test_wall.png" 1
         , tpIdToPath = HM.singleton 1 "structures/test_wall.png"
         , tpNextId   = 2 }
-    , sgNextItemId     = 1000
+    -- Above every item id this session carries, the #917
+    -- significant obligations (8801/8802) included: a bound
+    -- obligation id at or above the cursor is one the monotonic
+    -- allocator could never have minted, and
+    -- 'significantProvenanceErrors' hard-fails it.
+    , sgNextItemId     = 9000
     , sgNextBuildingId = 3
     , sgNextUnitId     = 2
     , sgActivePage     = page1

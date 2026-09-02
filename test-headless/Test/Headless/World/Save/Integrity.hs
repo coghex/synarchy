@@ -143,7 +143,11 @@ minimalGlobals ∷ WorldPageId → SessionGlobals
 minimalGlobals active = SessionGlobals
     { sgGameTime       = 0
     , sgTexPalette     = emptyTexPalette
-    , sgNextItemId     = 1000
+    -- Above every item id these fixtures use (the #917 obligations
+    -- run in the 7000s): a bound significant id at or above this
+    -- cursor is one the monotonic allocator could never have
+    -- minted, which 'significantProvenanceErrors' hard-fails.
+    , sgNextItemId     = 8000
     , sgNextBuildingId = 100
     , sgNextUnitId     = 100
     , sgActivePage     = active
@@ -683,6 +687,48 @@ spec = do
             let p1 = withNamedGroundItem "rations" 7009
                         (pageOwing page1 (owedItem 1 7009 True))
             sessionIntegrityErrors (buildSnap page1 [p1]) `shouldBe` []
+
+        -- The one rule that must NOT skip a taken obligation. Every
+        -- other check excuses a taken item from resolving anywhere, so
+        -- an id the allocator never reached looks exactly like a
+        -- consumed one — and 'significantRecovered' would then count it,
+        -- clearing the location with nothing ever spawned or picked up.
+        it "hard-fails a TAKEN obligation whose item id is at the \
+           \session's own item cursor — an identity the monotonic \
+           \allocator could not have minted names no item that ever \
+           \existed, and 'taken' must not excuse it" $ do
+            let p1 = pageOwing page1 (owedItem 1 8000 True)
+            case sessionIntegrityErrors (buildSnap page1 [p1]) of
+                [e] → do
+                    ieCode e `shouldBe` "unmintable-identity"
+                    ieComponent e `shouldBe` worldPagesComponentId
+                    ieVersion e `shouldBe` ccVersion worldPagesCodec
+                    ieRefKind e `shouldBe` RefItemInstance
+                    ieRefValue e `shouldBe` "8000"
+                    ieMessage e `shouldSatisfy` T.isInfixOf
+                        "the allocator never minted it"
+                other → expectationFailure
+                    ("expected one unmintable-identity finding, got "
+                        <> show other)
+
+        it "hard-fails an UNTAKEN unmintable id too — absent-everywhere \
+           \is otherwise a tolerated warning, so the same forgery \
+           \would pass by simply not claiming to be taken" $
+            case sessionIntegrityErrors
+                     (buildSnap page1 [pageOwing page1
+                         (owedItem 1 9999 False)]) of
+                [e] → ieCode e `shouldBe` "unmintable-identity"
+                other → expectationFailure
+                    ("expected one unmintable-identity finding, got "
+                        <> show other)
+
+        it "accepts a TAKEN obligation whose id is BELOW the cursor and \
+           \resolves nowhere — a legitimately consumed or destroyed \
+           \item is exactly what requirement 3 allows" $ do
+            let snap = buildSnap page1
+                           [pageOwing page1 (owedItem 1 7999 True)]
+            sessionIntegrityErrors snap `shouldBe` []
+            sessionIntegrityWarnings snap `shouldBe` []
 
         it "hard-fails an untaken obligation whose item exists only NESTED \
            \inside a container on the ground — only a ground entry's \

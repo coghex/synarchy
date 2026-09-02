@@ -542,8 +542,17 @@ significantRefs snap =
 --     ('Location.Instance.locationSignificantItemErrors' catches the
 --     page-local case at component decode; this is the session-wide
 --     one, which no single component can see.)
+--   * a bound item identity is BELOW the session's item-id cursor —
+--     the only ids the monotonic allocator can have minted. Unlike
+--     every rule above, this one applies to a TAKEN obligation too:
+--     "taken" excuses an item from resolving anywhere, so an id the
+--     allocator never reached is indistinguishable from a consumed one
+--     to a resolution check, and would satisfy clearance with nothing
+--     ever spawned or picked up. The cursor lives in @core-session@,
+--     so this is again session-wide by necessity.
 significantProvenanceErrors ∷ SessionSnapshot → [IntegrityError]
-significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
+significantProvenanceErrors snap =
+    resolutionErrors ⧺ ownershipErrors ⧺ allocatorErrors
   where
     entitiesByPage = snapshotPageEntities snap
     refs = significantRefs snap
@@ -628,6 +637,52 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
             , Just itemId ← [lsiInstanceId entry] ]))
         , length owners > 1
         , let ownersText = T.intercalate ", " owners
+        ]
+
+    -- An id the monotonic allocator could not yet have minted names no
+    -- item that ever existed. 'itemAllocatorErrors' already refuses a
+    -- live 'ItemInstance' at or above the cursor, but an obligation is
+    -- not an item: its id is a bare reference, so a payload can carry
+    -- one the allocator never reached and nothing else in the session
+    -- has to agree with it.
+    --
+    -- This is the one provenance rule that must NOT skip a taken
+    -- obligation. Every other rule can, because a taken item is
+    -- legitimately allowed to be anywhere or gone — but "gone" is
+    -- exactly what an id above the cursor looks like to a
+    -- resolution-based check, so a forged @lsiTaken = True@ paired with
+    -- @snapNextItemId@ or higher would resolve nowhere, draw at most a
+    -- tolerated dangling warning, and then satisfy
+    -- 'Location.Instance.significantRecovered' — clearing a location
+    -- with no spawn and no pickup ever having happened. The lower bound
+    -- (0, the never-minted sentinel) is component decode's
+    -- ('Location.Instance.significantEntryErrors'); this is the upper
+    -- one, which no single component can check because the cursor lives
+    -- in @core-session@.
+    allocatorErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = path
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "an item identity the global allocator "
+                <> "has actually minted (below the saved cursor "
+                <> tshow cursor <> ")"
+            , ieActual        = "at or above that cursor, so no such "
+                <> "item was ever created"
+            , ieCode          = "unmintable-identity"
+            , ieMessage       = "significant item " <> tshow itemId
+                <> " owed by location #"
+                <> tshow (unLocationInstanceId (liId inst))
+                <> " on page '" <> unWorldPageId pid
+                <> "' is at or above the session's item-id cursor ("
+                <> tshow cursor <> "), so the allocator never minted it"
+            }
+        | let cursor = snapNextItemId snap
+        , (pid, inst, entry, path) ← refs
+        , Just itemId ← [lsiInstanceId entry]
+        , itemId ≥ cursor
         ]
 
 -- | The TOLERATED half of #917's provenance rules: an untaken

@@ -1667,7 +1667,25 @@ storage (it cannot be held without having been picked up), or only
 NESTED inside a ground container; one whose ground item is the wrong
 DEFINITION; and one physical id owed by two obligations. Meanwhile
 `significantDanglingWarnings` reports an absent item and tolerates it,
-leaving the obligation untaken. Once taken there is no rule at all.
+leaving the obligation untaken. Once taken there is no rule at all —
+with ONE exception.
+
+That exception is the item-id CURSOR. A bound `lsiInstanceId` at or
+above the session's `snapNextItemId` names an identity the monotonic
+allocator could never have minted, and that is a hard error for a
+TAKEN obligation as much as an untaken one. Every other rule can skip
+a taken entry because a taken item is legitimately allowed to be
+anywhere or gone — but "gone" is precisely what an unmintable id looks
+like to a resolution check, so a forged `taken: true` paired with an
+id past the cursor would resolve nowhere, draw at most a tolerated
+dangling warning, and then satisfy `significantRecovered`, clearing a
+location with no spawn and no pickup having ever happened.
+`itemAllocatorErrors` already refuses a live `ItemInstance` above the
+cursor, but an obligation is not an item: its id is a bare reference
+nothing else in the session has to agree with. The lower bound (0, the
+never-minted sentinel) is component decode's, in
+`significantEntryErrors`; this upper one has to be session-wide,
+because the cursor lives in `core-session`.
 
 The ground set it resolves against is each ground entry's OUTER item
 only, never recursed through `iiContents`, and that is load-bearing:
