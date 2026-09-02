@@ -107,16 +107,25 @@ local function snapshotUnitState(s)
     --
     -- constructJob.staking (#1845) is stripped on the same shallow copy
     -- and for a different reason: it is the CLOCK a building stake's
-    -- visibility wait is bounded by, and a wait that outlives the
-    -- session it was started in is meaningless -- the load discards the
-    -- building queue the stake was riding, so on the other side either
-    -- the building is standing there or it never will be. Deliberately
-    -- NOT the spawned building's id: that would be a raw BuildingId this
-    -- payload carried with no declared reference kind for
-    -- unit_ai_save_refs.lua to wrap and the integrity graph to check,
-    -- exactly the hazard the chopJob.iid note below records. The resumed
-    -- job re-derives the answer from the world instead -- see
-    -- unit_ai_construct_site.stakedBuildingAt.
+    -- visibility wait is bounded by, and a wait cannot outlive the
+    -- session whose building queue it was waiting on -- the load
+    -- discards that queue, so on the other side either the building is
+    -- standing there or it never will be.
+    --
+    -- The spawned building's id BESIDE it is deliberately NOT stripped.
+    -- It is the only thing that tells a resumed job whether its OWN
+    -- stake landed, rather than whether something that merely looks like
+    -- it is standing at the tile -- and designation admission does not
+    -- check occupancy, so a stranger really can be. It is safe to carry
+    -- because unit_ai_ref_schema.lua DECLARES it
+    -- (constructJob.stakedBid, kind "building", absentOk): wrapped on
+    -- the wire, checked by the integrity graph, and reconciled on load,
+    -- where a stake that never landed dangles and the whole job is
+    -- dropped so its designation goes back to the pool. A bare id with
+    -- no declared kind is the hazard the chopJob.iid note below records;
+    -- a declared one is the answer to it, and any future change here
+    -- must keep it declared rather than reach for the world again.
+    -- See unit_ai_construct_site.stakedBuildingAt.
     if copy.constructJob
        and (copy.constructJob.build ~= nil
             or copy.constructJob.staking ~= nil) then
