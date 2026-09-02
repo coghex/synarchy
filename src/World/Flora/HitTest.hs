@@ -166,7 +166,6 @@ floraHitView env worldState = do
     worldSize    ← pageWrapWorldSize worldState
     let calendar = maybe defaultCalendarConfig wgpCalender paramsM
         zoom = camZoom camera
-        effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
         live = WorldCameraSnapshot
             { wcsPosition = camPosition camera
             , wcsZoom     = zoom
@@ -176,6 +175,15 @@ floraHitView env worldState = do
             }
         placed = placementCamera cachedQuads live
         (placeX, placeY) = wcsPosition placed
+        -- From the PLACEMENT zoom, not the live one. The z-band this
+        -- derives is a CULL the cached run was built with, and
+        -- 'cameraChanged' tolerates a zoom delta of camEpsilon (0.075)
+        -- while the band steps every 0.0125 — so a small zoom across a
+        -- step would have the picker consider a tree the cached run
+        -- omitted, or skip one it drew.
+        effDepth = min viewDepth
+            (max 8 (round (wcsZoom placed * 80.0 + 8.0 ∷ Float)))
+        (placedFbW, placedFbH) = wcsFbSize placed
     pure FloraHitView
         { fhvFacing      = wcsFacing placed
         , fhvZSlice      = wcsZSlice placed
@@ -195,7 +203,8 @@ floraHitView env worldState = do
         -- chunk the cache built is still a candidate here.
         , fhvViewBounds  = expandViewBounds (quadCacheMargins placed)
                                (viewBoundsAt (wcsPosition placed)
-                                   (wcsZoom placed) fbW fbH effDepth)
+                                   (wcsZoom placed) placedFbW placedFbH
+                                   effDepth)
         , fhvTiles       = tileData
         , fhvCatalog     = catalog
         , fhvHarvests    = harvests
@@ -203,8 +212,8 @@ floraHitView env worldState = do
         , fhvTexSizes    = texSizes
         , fhvDaysPerYear = calendarDaysPerYear calendar
         , fhvAbsDay      = worldAbsoluteDay calendar worldDate
-        , fhvFrontWall   = frameFrontWallLift (camFacing camera) worldSize
-                               (camZSlice camera) effDepth
+        , fhvFrontWall   = frameFrontWallLift (wcsFacing placed) worldSize
+                               (wcsZSlice placed) effDepth
                                (wtdChunks tileData)
         }
 

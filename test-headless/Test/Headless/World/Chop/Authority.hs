@@ -29,6 +29,8 @@ import Engine.Core.Capability.RenderView
 import Engine.Core.State (EngineEnv(..), loggerRef, worldManagerRef)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import World.Flora.HitTest (FloraHitView(..), floraHitView)
+import World.Generate (viewDepth)
+import World.Render.Camera (cameraChanged)
 import World.Render.Camera.Types
     (WorldCameraSnapshot(..), WorldQuadCache(..))
 import Structure.Types (emptyChunkStructures)
@@ -246,6 +248,33 @@ spec = describe "Chop authority" $ beforeAll setup $ do
             -- …while the VIEW transform stays live: cached world
             -- coordinates are looked at through the live camera.
             (fhvCamX view, fhvCamY view) `shouldBe` liveCam
+
+        it "takes the z-band CULL from the cache's zoom, not the live one" $ \env → do
+            -- effDepth = min viewDepth (max 8 (round (zoom*80 + 8))), so
+            -- it steps every 0.0125 of zoom — while 'cameraChanged'
+            -- reuses a cache across a zoom delta of camEpsilon (0.075),
+            -- six steps. A cull taken live would let the picker consider
+            -- a tree the cached run omitted, or skip one it drew.
+            ws ← resetPage env
+            let rv = toRenderViewCapability env
+                cachedZoom = 1.0 ∷ Float
+                -- Inside camEpsilon of it, but several depth steps away.
+                liveZoom = cachedZoom + 0.05
+            modifyIORef' (rvCameraRef rv) $ \c → c { camZoom = liveZoom }
+            writeIORef (wsQuadCacheRef ws) $ Just (cacheAt (0, 0))
+                { wqcCamera = (wqcCamera (cacheAt (0, 0)))
+                    { wcsZoom = cachedZoom } }
+            view ← floraHitView env ws
+            let depthOf z = min viewDepth
+                    (max 8 (round (z * 80.0 + 8.0 ∷ Float)))
+            -- The fixture must really straddle a step, or this proves
+            -- nothing…
+            depthOf cachedZoom `shouldNotBe` depthOf liveZoom
+            -- …and the pan must really REUSE the cache.
+            cameraChanged (wqcCamera (cacheAt (0, 0))) { wcsZoom = cachedZoom }
+                          ((wqcCamera (cacheAt (0, 0))) { wcsZoom = liveZoom })
+                `shouldBe` False
+            fhvEffDepth view `shouldBe` depthOf cachedZoom
 
         it "falls back to the live camera when no cache exists yet" $ \env → do
             ws ← resetPage env

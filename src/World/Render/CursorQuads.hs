@@ -204,17 +204,18 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
     let calendar = maybe defaultCalendarConfig wgpCalender paramsM
         daysPerYear = calendarDaysPerYear calendar
         absDay = worldAbsoluteDay calendar worldDate
-        -- The same front-wall sprite lift the render pass and the
-        -- selection oracle build (#418/#1856): a tree lifted to clear a
-        -- wall carries its marker up with it, instead of leaving the
-        -- annotation sunk behind the trunk it belongs to.
-        spriteLift = frameFrontWallLift facing worldSize zSlice
-                         effectiveDepth (wtdChunks tileData)
         -- This pass is per-frame while the flora it annotates is
         -- CACHED, so the marker must place itself with the camera those
         -- cached quads were built with (#1856). Reading the live camera
         -- instead sends the icon a whole world away from its tree for
         -- as long as a reused cache straddles the wrap-alias midpoint.
+        --
+        -- EVERY input the cached run was built with comes from that
+        -- snapshot — the z-band cull and the front-wall lift included.
+        -- 'cameraChanged' tolerates a zoom delta of camEpsilon (0.075)
+        -- while the band steps every 0.0125, so a marker culled at the
+        -- live depth could outlive the tree it annotates, or vanish off
+        -- one still on screen.
         placed = placementCamera cachedQuads WorldCameraSnapshot
             { wcsPosition = camPosition camera
             , wcsZoom     = zoom
@@ -223,9 +224,17 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
             , wcsFacing   = camFacing camera
             }
         (placeX, placeY) = wcsPosition placed
+        markerDepth = min viewDepth
+            (max 8 (round (wcsZoom placed * 80.0 + 8.0 ∷ Float)))
+        -- The same front-wall sprite lift the render pass and the
+        -- selection oracle build (#418/#1856): a tree lifted to clear a
+        -- wall carries its marker up with it, instead of leaving the
+        -- annotation sunk behind the trunk it belongs to.
+        spriteLift = frameFrontWallLift (wcsFacing placed) worldSize
+                         (wcsZSlice placed) markerDepth (wtdChunks tileData)
         markerBounds = expandViewBounds (quadCacheMargins placed)
             (viewBoundsAt (wcsPosition placed) (wcsZoom placed)
-                 fbW fbH effectiveDepth)
+                 fbW fbH markerDepth)
         chopDesignQuads = case chopDesignTexture cs' of
             Nothing → V.empty
             Just tex
@@ -242,7 +251,7 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                                harvests (lcCoord lc) lc
                     , let inst = fdInstance fd
                     , HM.member (fiInstanceId inst) chopDesigns
-                    , floraVisibleInSlice zSlice effectiveDepth inst
+                    , floraVisibleInSlice (wcsZSlice placed) markerDepth inst
                     , let base = floraGeom (wcsFacing placed) (fdGX fd)
                                      (fdGY fd) inst (fdTexture fd) texSizes
                                      (wcsZSlice placed) wrapOff
