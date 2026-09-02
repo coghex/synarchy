@@ -877,8 +877,19 @@ library
                      World.Save.Payload
                      World.Save.Reference
                      World.Save.Integrity
+                     World.Save.Storage.Durable
                      World.Save.Storage
                      World.Save.Serialize
+                     World.GeneratedLibrary.Types
+                     World.GeneratedLibrary.Layout
+                     World.GeneratedLibrary.Entry
+                     World.GeneratedLibrary.Lock
+                     World.GeneratedLibrary.Registry
+                     World.GeneratedLibrary.References
+                     World.GeneratedLibrary.Publish
+                     World.GeneratedLibrary.Pins
+                     World.GeneratedLibrary.Cleanup
+                     World.GeneratedLibrary
                      World.Scale
                      World.Slope
                      World.Slope.Compute
@@ -1221,6 +1232,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
+                   Test.Headless.World.GeneratedLibrary
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.MenuListingOrder
@@ -1499,4 +1511,9 @@ test-suite synarchy-test-headless
                 -- frame) that `directory` cannot create; the library
                 -- already depends on `unix`.
                 , unix
+                -- The generated-world library's cross-process lock proof
+                -- (#2024) holds the library lock from a real second
+                -- process, which nothing in-process can imitate: POSIX
+                -- record locks never conflict within one process.
+                , process
     ghc-options: "-with-rtsopts=-N -A128M"
