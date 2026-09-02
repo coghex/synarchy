@@ -288,7 +288,7 @@ minimalSaveMetadataV1 = SaveMetadataV1
 --   component payload took. Used to prove the ENVELOPE-level dispatch
 --   recognizes and migrates a hand-built B1 envelope; the historical
 --   byte-for-byte fixture (recovered from git history) lives in
---   "Test.Headless.World.Save.Compat".
+--   "Test.Headless.World.Save.Compat.B1Fixture".
 minimalSaveDataV90 ∷ SaveDataV90
 minimalSaveDataV90 = SaveDataV90
     { sd90Metadata     = minimalFrozenSaveMetadataV90

@@ -953,6 +953,7 @@ library
                      World.ZoomMap.Cache.Classify
                      World.ZoomMap.Cache.Noise
                      World.ZoomMap.Cache.Pixels
+                     World.ZoomMap.Artifact
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
                      World.ZoomMap.Types
@@ -1148,6 +1149,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.SoilRedistribution
                    Test.Headless.WorldGen.Exposure
                    Test.Headless.WorldGen.ZoomParity
+                   Test.Headless.WorldGen.ZoomArtifact
                    Test.Headless.WorldGen.BorderProbe
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
@@ -1212,6 +1214,10 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.Save.Compat
+                   Test.Headless.World.Save.Compat.B1Fixture
+                   Test.Headless.World.Save.Compat.Baselines
+                   Test.Headless.World.Save.Compat.Historical
+                   Test.Headless.World.Save.Compat.Legacy
                    Test.Headless.World.Save.Integrity
                    Test.Headless.World.Save.Storage
                    Test.Headless.World.Save.Contract
