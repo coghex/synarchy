@@ -151,9 +151,13 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- planned structure reads differently from a planned building.
     hud.texConstructStructure  = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_structure.png")
     hud.texConstructBuilding   = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_building.png")
-    -- Chop-designation marker (#97): green so a tree marked for felling
-    -- reads differently from a dig / build designation.
-    hud.texChopDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/chop_designate.png")
+    -- Chop-designation marker (#97, re-anchored by #1856): a 44x44
+    -- felling-axe icon drawn once per designated TREE, centred on that
+    -- tree's rendered ground contact — not the 96x64 full-tile ground
+    -- overlay it replaced, which could not tell two wood-tagged
+    -- co-tenants on one tile apart. Its alpha (150) is a designed
+    -- value, baked into the file like every other designation marker's.
+    hud.texChopDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/chop_designate_tree.png")
     -- Till-designation marker (#333): brown so a field marked for
     -- tilling reads differently from every other designation layer.
     hud.texTillDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/till_designate.png")
@@ -569,7 +573,8 @@ function hud.createUI()
             -- Route to the mine tool so a pending anchor cancels.
             local mineTool = require("scripts.mine_tool")
             mineTool.onToolMode(itemName)
-            -- Route to the chop tool so a pending anchor cancels.
+            -- Route to the chop tool so an armed press-drag box
+            -- disarms (#1856 — there is no anchor left to cancel).
             local chopTool = require("scripts.chop_tool")
             chopTool.onToolMode(itemName)
             -- Route to the till tool so a pending anchor cancels.
@@ -1185,9 +1190,12 @@ function hud.update(dt)
     -- non-gameplay menu. The pushed position is not inert: the render pass
     -- re-hit-tests it into the shared cursor state every frame
     -- (src/World/Render/CursorQuads.hs), which also drives the
-    -- anchor→hover preview rectangle of an armed mine/construction/chop/
-    -- till designation — so without this gate, sweeping the pointer across
+    -- anchor→hover preview rectangle of an armed mine/construction/till
+    -- designation — so without this gate, sweeping the pointer across
     -- the modal drags the world's highlight and preview underneath it.
+    -- (Chop is NOT in that list since #1856: its gesture is a
+    -- screen-space press-drag whose box is a UI overlay, so it has no
+    -- anchor and no world-space preview to drag.)
     -- isGameplayInputActive() is false for those overlays, and it is the
     -- same predicate the click path above and game.onKeyDown/onMouseDown
     -- use. Nothing is cleared here: the last accepted hover simply stops

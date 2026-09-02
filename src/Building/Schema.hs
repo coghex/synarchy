@@ -10,10 +10,11 @@
 --   'FacingSet' has a value for every facing by construction, so no
 --   consumer can ask for a view the definition failed to declare.
 --
---   BDA-1 introduces the shape and keeps rendering on the south view;
---   BDA-2 owns selecting a view from the active camera, BDA-3 owns
---   destruction playback, and BDA-13 owns the final audit that rejects
---   'AssetLegacy' declarations from shipped definitions.
+--   BDA-1 introduced the shape; BDA-2 (#2088, 'Building.Visual')
+--   selects the view from the active camera for rendering and
+--   hit-testing alike; BDA-3 owns destruction playback, and BDA-13
+--   owns the final audit that rejects 'AssetLegacy' declarations from
+--   shipped definitions.
 --
 --   The as-built reference — canonical YAML, every rejection, the two
 --   independent migration axes, and the loader's registry naming — is

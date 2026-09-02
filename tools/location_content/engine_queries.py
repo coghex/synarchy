@@ -16,10 +16,22 @@ import time
 from probelib import send
 
 #: Ground items one ruin_small spawns: its `ruin_common` loot_table
-#: entry's 2 rolls, and nothing else. #921 removed the two fixed-position
-#: items that used to make this 4 — the count is now purely the roll
-#: count in data/locations/ruin_small.yaml.
-GROUND_PER_RUIN = 2
+#: entry's 2 rolls (#921 removed the two fixed-position items that used
+#: to make this 4), plus #917's ONE guaranteed significant item. Both
+#: halves come from data/locations/ruin_small.yaml, and they are counted
+#: separately because they behave completely differently: the loot rolls
+#: are incidental and touch nothing, while the significant item carries
+#: durable provenance and gates the ruin's cleared state.
+LOOT_ROLLS_PER_RUIN = 2
+SIGNIFICANT_PER_RUIN = 1
+GROUND_PER_RUIN = LOOT_ROLLS_PER_RUIN + SIGNIFICANT_PER_RUIN
+
+#: The item data/locations/ruin_small.yaml authors as its guaranteed
+#: significant content (#917). Deliberately NOT `radio` (D-6 in
+#: docs/expedition_gameplay_loop.md reserves that for unit
+#: communication) and deliberately absent from the `ruin_common` table,
+#: so a ground `processing_unit` can only ever be the significant one.
+SIGNIFICANT_ITEM = "processing_unit"
 
 
 def load_yaml_dir(port: int, directory: str, loader: str) -> None:
@@ -220,3 +232,44 @@ def unregistered_item_ids(names: set[str], registered: set[str]) -> set[str]:
     a synthetic id, independent of whatever a real spawn happens to
     produce (#800)."""
     return set(names) - registered
+
+
+def significant_state(port: int, page: str) -> dict[int, list[dict]]:
+    """#917's guaranteed significant obligations per placed instance, in
+    slot order — the durable state the clearance predicate reads.
+
+    Each entry is the query's own row: `slot`, `item` (the authored def
+    name), `taken`, and `item_instance_id` once the content spawn has
+    bound one. Reported straight from world.listPlacedLocations rather
+    than re-derived from ground items, because the whole point of the
+    provenance is that it survives the item LEAVING the ground."""
+    return {int(e["instance_id"]): sorted(e.get("significant") or [],
+                                          key=lambda r: r.get("slot", 0))
+            for e in placed(port, page) if "instance_id" in e}
+
+
+def clearance_state(port: int, page: str) -> dict[int, tuple]:
+    """(lifecycle, authors_clearance, clearance_satisfied,
+    clear_event_emitted) per placed instance — the four values #917's
+    compound predicate is decided from, read through the engine's own
+    reported fields rather than recomputed here, so the probe cannot
+    quietly disagree with the engine about what it is asserting."""
+    return {int(e["instance_id"]): (e.get("lifecycle"),
+                                    bool(e.get("authors_clearance")),
+                                    bool(e.get("clearance_satisfied")),
+                                    bool(e.get("clear_event_emitted")))
+            for e in placed(port, page) if "instance_id" in e}
+
+
+def ground_id_of_instance(port: int, item_instance_id: int) -> int | None:
+    """The page-local ground id currently holding physical item
+    @item_instance_id@, or None when it is not on the ground.
+
+    Resolved fresh every call ON PURPOSE: a ground id is not durable —
+    a drop or a rolled-back pickup re-spawns the same physical item
+    under a NEW one — which is exactly why #917 keys provenance on the
+    instance id instead."""
+    for g in ground_items(port):
+        if int(g.get("instanceId", -1)) == item_instance_id:
+            return int(g["id"])
+    return None

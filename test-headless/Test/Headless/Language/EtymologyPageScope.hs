@@ -223,6 +223,8 @@ instanceFor cat prov expr = LocationInstance
     , liLifecycle       = LifecycleDiscovered
     , liContentsSpawned = False
     , liEncounter       = Nothing
+    , liSignificant     = []
+    , liClearEventEmitted = False
     }
 
 riverNameFor ∷ Catalogue → LanguageProvenance → NameExpr → RiverName

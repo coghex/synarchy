@@ -70,14 +70,22 @@ registerDesignationAPI env = do
   registerLuaFunction "setLineMode"        (constructSetLineModeFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "construction")
 
-  -- Chop designation tool (#97). Mirrors the construction-designation
-  -- API: the tool drives setAnchor/clearAnchor/designate, the chop AI
-  -- drives nearestDesignation/getDesignationAt/cancelDesignation
-  -- (claims are Lua-side, like dig jobs — no engine job status).
+  -- Chop designation tool (#97, re-shaped by #1856). The tool drives
+  -- the four screen-space gesture verbs — designateAt/designateInRect
+  -- add, eraseAt/eraseInRect erase — over the shared selection oracle;
+  -- designateInstances/eraseInstances are the exact-identity authority
+  -- beneath them, for callers that already hold ids. The chop AI drives
+  -- nearestDesignation/getDesignationAt/cancelDesignation (claims are
+  -- Lua-side, like dig jobs — no engine job status).
   Lua.newtable
-  registerLuaFunction "setAnchor"           (chopSetAnchorFn (toWorldSimCapability env))
-  registerLuaFunction "clearAnchor"         (chopClearAnchorFn (toWorldSimCapability env))
-  registerLuaFunction "designate"           (chopDesignateFn (toWorldSimCapability env))
+  registerLuaFunction "designateAt"         (chopDesignateAtFn env)
+  registerLuaFunction "designateInRect"     (chopDesignateInRectFn env)
+  registerLuaFunction "eraseAt"             (chopEraseAtFn env)
+  registerLuaFunction "eraseInRect"         (chopEraseInRectFn env)
+  registerLuaFunction "designateInstances"
+      (chopDesignateInstancesFn (toWorldSimCapability env))
+  registerLuaFunction "eraseInstances"
+      (chopEraseInstancesFn (toWorldSimCapability env))
   registerLuaFunction "cancelDesignation"   (chopCancelDesignationFn (toWorldSimCapability env))
   registerLuaFunction "getDesignationAt"    (chopGetDesignationAtFn (toWorldSimCapability env))
   registerLuaFunction "getDesignationsAt"

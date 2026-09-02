@@ -15,6 +15,8 @@ module Engine.Scene.Types.Batch
   , batchFromSortedQuads
   , sortQuadsByLayer
   , mergeSortedQuads
+  , quadPainterOrder
+  , justAbove
   , LayeredQuads(..)
   , emptyLayeredQuads
   , setQuadSolarPage
@@ -32,8 +34,9 @@ import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Data.Ord (comparing)
 import Engine.Scene.Base (ObjectId, LayerId)
-import Engine.Asset.Handle (TextureHandle(..), FontHandle)
-import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..))
+import Engine.Asset.Handle (TextureHandle(..), FontHandle, toInt)
+import GHC.Float (castWord32ToFloat, castFloatToWord32)
+import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Graphics.Solar (SolarPageTable, emptySolarPageTable)
 import Engine.Graphics.Font.Data (GlyphInstance)
 import qualified Vulkan.Core10 as Vk
@@ -122,10 +125,69 @@ setQuadSolarPage slot q = q
 stampSolarPage ∷ Word32 → V.Vector SortableQuad → V.Vector SortableQuad
 stampSolarPage slot = V.map (setQuadSolarPage slot)
 
+-- | The scene's painter order (#1856).
+--
+--   'sqSortKey' alone is not a total order: two sprites can legitimately
+--   share a depth — two wood-tagged trees on one tile at one z with
+--   equal sub-tile V offsets do — and the sort below is an UNSTABLE
+--   introsort, so equal keys were drawn in an order nothing could
+--   predict or agree with. Any consumer that has to reproduce \"which
+--   sprite is on top\" — Chop's screen-space selection oracle
+--   ('World.Flora.HitTest'), and the designation marker anchored to
+--   whatever it picked — then had no order to share.
+--
+--   Extending the comparison to the quad's own rect AND its texture
+--   makes it total on everything that can change a rendered frame, and
+--   costs no new field on a record built in fifty places.
+--
+--   __Two quads still equal here render identically.__ Same depth, same
+--   rect, same texture — and every remaining field follows from those:
+--   the atlas slot is the texture handle, the UVs are the fixed unit
+--   square each quad builder emits, and a tint depends on the depth and
+--   the frame's alpha, which are shared. So whichever of them the
+--   unstable sort happens to place last, the output bytes are the same,
+--   and no consumer — a picker included — can observe the difference.
+--   That is what makes it safe for 'World.Flora.HitTest' to fall back
+--   to the stable instance id there: it is choosing between two
+--   candidates the frame cannot tell apart.
+--
+--   This only REFINES ties: every ordering that was already determined
+--   by 'sqSortKey' is unchanged.
+quadPainterOrder ∷ SortableQuad → (Float, Float, Float, Float, Float, Int)
+quadPainterOrder q =
+    let Vec2 x0 y0 = pos (sqV0 q)
+        Vec2 x2 y2 = pos (sqV2 q)
+    in (sqSortKey q, x0, y0, x2, y2, toInt (sqTexture q))
+
+-- | The next representable depth strictly above @key@ (#1856).
+--
+--   The way to sort one quad immediately over another, at ANY map
+--   coordinate. Adding a small constant is not: 'sqSortKey' is a
+--   'Float' and the depth term is @fa + fb@, which reaches the world's
+--   tile extent — around 2048 for a 128-chunk world, where one ULP is
+--   2.4e-4. A nudge of 1e-5 there rounds clean away and the two quads
+--   TIE, leaving 'quadPainterOrder' to separate them on rect and
+--   texture, which says nothing about which should be in front. That is
+--   how a designation marker ends up behind the tree it annotates on
+--   the far side of the map and nowhere near the origin.
+--
+--   One ULP is both sufficient and minimal: the sorter compares exactly,
+--   so strictly-greater is strictly-greater, and nothing can be
+--   scheduled between two adjacent floats.
+justAbove ∷ Float → Float
+justAbove x
+    | isNaN x                 = x
+    | isInfinite x ∧ x > 0    = x
+    -- Both zeros step to the smallest positive subnormal.
+    | x ≡ 0                   = castWord32ToFloat 1
+    -- Away from zero the magnitude bits grow downward for negatives.
+    | x > 0                   = castWord32ToFloat (castFloatToWord32 x + 1)
+    | otherwise               = castWord32ToFloat (castFloatToWord32 x - 1)
+
 -- | Group quads by layer and depth-sort each layer's run.
 sortQuadsByLayer ∷ V.Vector SortableQuad → Map.Map LayerId (V.Vector SortableQuad)
 sortQuadsByLayer quads =
-    Map.map (V.modify (VA.sortBy (comparing sqSortKey)) ∘ V.fromList) $
+    Map.map (V.modify (VA.sortBy (comparing quadPainterOrder)) ∘ V.fromList) $
         V.foldl' (\acc q → Map.insertWith (⧺) (sqLayer q) [q] acc)
                  Map.empty quads
 
@@ -147,7 +209,7 @@ mergeSortedQuads xs ys
               | otherwise = do
                   let qx = xs V.! i
                       qy = ys V.! j
-                  if sqSortKey qx ≤ sqSortKey qy
+                  if quadPainterOrder qx ≤ quadPainterOrder qy
                     then do VM.write mv (i + j) qx
                             go (i + 1) j
                     else do VM.write mv (i + j) qy
@@ -158,7 +220,8 @@ mergeSortedQuads xs ys
 -- | Sort quads by painter's algorithm and merge into a single RenderBatch.
 mergeQuadsToBatch ∷ LayerId → V.Vector SortableQuad → RenderBatch
 mergeQuadsToBatch layer quads =
-    batchFromSortedQuads layer (V.modify (VA.sortBy (comparing sqSortKey)) quads)
+    batchFromSortedQuads layer
+        (V.modify (VA.sortBy (comparing quadPainterOrder)) quads)
 
 -- | Expand ALREADY depth-sorted quads into a RenderBatch. The frame
 --   loop calls this with 'mergeSortedQuads' output so the per-frame

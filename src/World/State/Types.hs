@@ -281,9 +281,10 @@ data WorldState = WorldState
       --   (surface z + the plant's canonical tile; see
       --   World.Chop.Types). #1854 re-keyed this off the tile too, so
       --   designating one of two trees on a tile marks exactly one.
-      --   Written by the world thread (WorldDesignateChop / cancel
-      --   commands) THROUGH "World.Flora.Designation", which is the one
-      --   operation that keeps this map and the loaded
+      --   Written by the world thread (#1856's exact-instance
+      --   WorldDesignateChopInstances / WorldEraseChopInstances, and
+      --   the AI's WorldCancelChop) THROUGH "World.Flora.Designation",
+      --   which is the one operation that keeps this map and the loaded
       --   'fiChopDesignated' mirror in step; read by the render pass
       --   (marker) and the chop AI. Persisted in saves
       --   (wpsChopDesignations).
@@ -436,13 +437,13 @@ data WorldState = WorldState
       --   creation path — 'WorldInit', arena init, or load staging — can
       --   forget to assign one, and no consumer has an absent case to
       --   handle. Staging OVERWRITES it with the saved id when the save
-      --   carries one (@world-pages@ v9); a page restored from a
-      --   pre-v9 save simply keeps the fresh id minted here, which is
+      --   carries one (@world-pages@ v9 and later); a page restored
+      --   from a pre-v9 save simply keeps the fresh id minted here, which is
       --   requirement 7's "assigned a fresh id during transactional load
       --   staging, not derived from anything in the legacy save".
       --
-      --   Persisted per page in @world-pages@ v9 (authoritative) and
-      --   copied into the @"metadata"@ component at v3 so a
+      --   Persisted per page in @world-pages@ (authoritative, since
+      --   v9) and copied into the @"metadata"@ component at v3 so a
       --   @listSaves@-depth read can obtain it without decoding any
       --   gameplay component.
     }
