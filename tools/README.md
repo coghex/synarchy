@@ -1227,10 +1227,14 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`blood_impact`, `circadian`, `concussion_revive`, `disarm`, `lua_strict_msg`,
-`meal_waste`, `position_hold`, `remote_warning_page_guard`, `role`,
-`state_of_mind`, `text_encoding` and `thermo_altitude` are the migrated probes
-today; later changes normally migrate one at a time.
+`blood_decal`, `blood_impact`, `circadian`, `circadian_species`,
+`collapse_crawl`, `concussion_revive`, `config_state`, `disarm`, `injury_log`,
+`lua_orphan_prune`, `lua_strict_msg`, `machine_shop`, `meal_waste`,
+`mental_efficiency`, `position_hold`, `remote_warning_page_guard`, `role`,
+`state_of_mind`, `text_encoding`, `thermo_altitude`, `thought`, and `wire` are
+the migrated probes today. Later changes normally migrate one at a time; this
+ten-probe batch was an explicit operator request so the related mechanical
+work could land in one pull request.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes

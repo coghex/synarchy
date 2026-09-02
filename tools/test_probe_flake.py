@@ -1925,11 +1925,14 @@ def test_manifest_real_registry() -> None:
            f"{ci} entries are CI-eligible, matching tools/ci_probes.py")
     migrated = [e["key"] for e in manifest["probes"]
                 if e["protocol"] != "legacy"]
-    expect(migrated == ["blood_impact", "circadian", "concussion_revive", "disarm",
-                        "lua_strict_msg", "meal_waste", "position_hold",
-                        "remote_warning_page_guard", "role",
-                        "state_of_mind", "text_encoding", "thermo_altitude"],
-           f"the twelve migrated probes are probe-result/v1 probes in "
+    expect(migrated == ["blood_decal", "blood_impact", "circadian",
+                        "circadian_species", "collapse_crawl", "concussion_revive",
+                        "config_state", "disarm", "injury_log", "lua_orphan_prune",
+                        "lua_strict_msg", "machine_shop", "meal_waste",
+                        "mental_efficiency", "position_hold",
+                        "remote_warning_page_guard", "role", "state_of_mind",
+                        "text_encoding", "thermo_altitude", "thought", "wire"],
+           f"the twenty-two migrated probes are probe-result/v1 probes in "
            f"probe_runner_registry.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
@@ -1967,6 +1970,345 @@ def _migration_descriptor(script: str, probe: str, expected_ids: tuple[str, ...]
            f"{probe} declares its stable checks in execution order "
            f"(got {descriptor.ids})")
     return descriptor
+
+
+def test_ten_probe_batch_migrations() -> None:
+    """The explicit ten-probe batch shares one compatibility contract.
+
+    Each descriptor is pure, standalone reporting remains bracketed, failure
+    attribution names a stable check, and the probe's real `_run` entry point
+    passes isolated log/RTS wiring to its first engine boot.
+    """
+    import io
+
+    cases = {
+        "blood_decal": ("blood_decal_probe.py", 9011,
+            ("near_requests_reuse", "distinct_requests_mint", "fifo_order_reported",
+             "oldest_texture_evicted", "eviction_removes_decals",
+             "pixel_data_bounded", "render_quads_live_only", "dry_tint_ages",
+             "clear_empties_registry")),
+        "circadian_species": ("circadian_species_probe.py", 9016,
+            ("species_urge_phases", "utility_crossover", "wake_boundaries",
+             "bear_selects_sleep", "bear_reaches_sleeping",
+             "public_wake_standing", "sleeps_through_dawn",
+             "wakes_at_own_boundary")),
+        "collapse_crawl": ("collapse_crawl_probe.py", 9304,
+            ("hold_exercised", "no_premature_crawl", "rise_gate_releases")),
+        "config_state": ("config_state_probe.py", 9165,
+            tuple(check_id for check_id, _ in __import__(
+                "config_state_probe").PROBE_CHECKS)),
+        "injury_log": ("injury_log_probe.py", 9140,
+            ("emit_roundtrip", "drain_destructive", "injure_event",
+             "event_log_uid", "fall_lane_damaging", "fall_event")),
+        "lua_orphan_prune": ("lua_orphan_prune_probe.py", 9008,
+            ("snapshot_filters_orphan", "load_pauses_immediately",
+             "load_reconcile_prunes_orphan", "nested_references_scrubbed",
+             "per_entity_apply")),
+        "machine_shop": ("machine_shop_probe.py", 9391,
+            tuple(check_id for check_id, _ in __import__(
+                "machine_shop_probe").PROBE_CHECKS)),
+        "mental_efficiency": ("mental_efficiency_probe.py", 9353,
+            tuple(check_id for check_id, _ in __import__(
+                "mental_efficiency_probe").PROBE_CHECKS)),
+        "thought": ("thought_probe.py", 9351,
+            ("emit_roundtrip", "drain_destructive", "catalogue_loaded",
+             "state_thought_fired", "state_thought_moves_mood",
+             "cold_thought_fired", "world_patches_restored",
+             "mood_biases_valence", "thought_log_surfaces_text")),
+        "wire": ("wire_probe.py", 9359,
+            tuple(check_id for check_id, _ in __import__(
+                "wire_probe").PROBE_CHECKS)),
+    }
+
+    class StopBeforeEngine(BaseException):
+        pass
+
+    for key, (script, port, ids) in cases.items():
+        descriptor = _migration_descriptor(script, key, ids)
+        if descriptor is None:
+            continue
+        module = __import__(script.removesuffix(".py"))
+
+        stream = io.StringIO()
+        standalone = probe_protocol.Reporter(descriptor, stream=stream)
+        standalone.check(ids[0], False, descriptor.label(ids[0]))
+        standalone.close()
+        expect("[FAIL]" in stream.getvalue(),
+               f"{key} standalone failures remain human-readable")
+
+        with tempfile.TemporaryDirectory(prefix=f"{key}-migration-") as tmp:
+            events = Path(tmp) / "events.jsonl"
+            protocol = probe_protocol.Reporter(
+                descriptor, events_path=str(events), stream=io.StringIO())
+            protocol.check(ids[0], False, descriptor.label(ids[0]),
+                           {"synthetic": True})
+            protocol.close()
+            _, outcomes = probe_protocol.parse_event_stream(
+                events.read_text(encoding="utf-8"), descriptor)
+            expect(outcomes[ids[0]] == probe_protocol.FAIL,
+                   f"{key} attributes a failed assertion to its stable first id")
+
+            launches = []
+            saved_boot = module.boot
+            saved_config = None
+
+            def fake_boot(got_port, *pos, **kwargs):
+                launches.append({
+                    "port": got_port,
+                    "log": kwargs.get("log", pos[0] if pos else None),
+                    "args": list(kwargs.get("args") or []),
+                })
+                raise StopBeforeEngine()
+
+            module.boot = fake_boot
+            if key == "config_state":
+                saved_config = (module.git_status, module.backup_local_files,
+                                module.restore_local_files)
+                module.git_status = lambda _paths: ""
+                module.backup_local_files = lambda: {}
+                module.restore_local_files = lambda _backups: None
+
+            def invoke(rep):
+                if key in ("config_state", "injury_log"):
+                    return module._run(argparse.Namespace(
+                        port=port, no_fall=False), rep)
+                if key == "lua_orphan_prune":
+                    return module._run(argparse.Namespace(
+                        port=port, seed=42, size=64), rep)
+                if key == "wire":
+                    return module._run(argparse.Namespace(
+                        port=port, phase="all"), rep)
+                return module._run(port, rep)
+
+            try:
+                for rep in (
+                    probe_protocol.Reporter(descriptor, stream=io.StringIO()),
+                    probe_protocol.Reporter(
+                        descriptor, engine_log_dir=tmp, rts_caps=3,
+                        stream=io.StringIO()),
+                ):
+                    try:
+                        invoke(rep)
+                    except StopBeforeEngine:
+                        pass
+                    finally:
+                        rep.close()
+            finally:
+                module.boot = saved_boot
+                if saved_config is not None:
+                    (module.git_status, module.backup_local_files,
+                     module.restore_local_files) = saved_config
+
+            expect(len(launches) == 2,
+                   f"{key} reaches the same engine launch in standalone and protocol modes")
+            if len(launches) == 2:
+                expect(launches[0]["args"] == [],
+                       f"{key} standalone run preserves the default RTS settings")
+                expect(launches[0]["log"] == module.LOG,
+                       f"{key} standalone run preserves its historical engine log")
+                expect(launches[1]["args"] == ["+RTS", "-N3", "-RTS"],
+                       f"{key} protocol run applies the harness RTS capability count")
+                expect(launches[1]["log"] == os.path.join(tmp, module.LOG_NAME),
+                       f"{key} protocol run isolates its engine log")
+
+
+def _drive_circadian_species(rep, *, observation_failure=None,
+                             setup_failure=False):
+    import circadian_species_probe as circadian_species  # type: ignore
+
+    launches = {}
+    calls = {"urge": 0, "utility": 0, "wake": 0, "pressure": 0}
+    spawned = 0
+
+    class FakeProc:
+        pass
+
+    def fake_boot(port, log=None, args=None, **_kwargs):
+        launches["engine"] = {
+            "port": port,
+            "log": log,
+            "args": list(args or []),
+        }
+        return FakeProc()
+
+    def fake_bootstrap(_port):
+        if setup_failure:
+            raise circadian_species.ProbeSetupError("unit definitions unavailable")
+
+    def fake_spawn(*_args, **_kwargs):
+        nonlocal spawned
+        spawned += 1
+        return spawned
+
+    def fake_send(_port, command, **_kwargs):
+        if "getCircadianUrge" in command:
+            index = calls["urge"]
+            calls["urge"] += 1
+            if observation_failure == "urge" and index == 0:
+                return "not-a-number"
+            return (1.0, 0.0, 0.0, 1.0)[index]
+        if "sleepGoal.sleepUtility" in command:
+            index = calls["utility"]
+            calls["utility"] += 1
+            if observation_failure == "utility" and index == 0:
+                return "not-a-number"
+            return (2.0, 0.0, 0.0, 2.0)[index]
+        if "unit_stats').get" in command:
+            return 100.0
+        if "wakeAngleFor" in command:
+            index = calls["wake"]
+            calls["wake"] += 1
+            if observation_failure == "wake" and index == 0:
+                return "not-a-number"
+            if "bear_brown" in command:
+                return 0.75
+            return 0.25
+        if "unit.getStat" in command:
+            index = calls["pressure"]
+            calls["pressure"] += 1
+            if ((observation_failure == "pressure_dawn" and index == 0)
+                    or (observation_failure == "pressure_dusk" and index == 1)):
+                return "not-a-number"
+            return 40.0
+        return "ok"
+
+    def fake_ai_field(_uid, field):
+        return {
+            "currentAction": "go_to_sleep",
+            "sleepPhase": "sleeping",
+            "sleepLastSunAngle": 0.2,
+            "sleepWakeRequested": "nil",
+        }.get(field)
+
+    saved = (
+        circadian_species.boot, circadian_species.quit_engine,
+        circadian_species.bootstrap_defs, circadian_species.init_arena,
+        circadian_species.spawn_acolyte, circadian_species.send,
+        circadian_species.poll_until, circadian_species.get_ai_field,
+        circadian_species.get_pose, circadian_species.wait_for_pose,
+        circadian_species.time.sleep, circadian_species.PORT,
+    )
+    circadian_species.boot = fake_boot
+    circadian_species.quit_engine = lambda *_args, **_kwargs: None
+    circadian_species.bootstrap_defs = fake_bootstrap
+    circadian_species.init_arena = lambda *_args, **_kwargs: None
+    circadian_species.spawn_acolyte = fake_spawn
+    circadian_species.send = fake_send
+    circadian_species.poll_until = lambda _timeout, _fn: True
+    circadian_species.get_ai_field = fake_ai_field
+    circadian_species.get_pose = lambda _uid: "sleeping"
+    circadian_species.wait_for_pose = lambda *_args, **_kwargs: True
+    circadian_species.time.sleep = lambda _seconds: None
+    try:
+        rc = circadian_species._run(9016, rep)
+    finally:
+        (
+            circadian_species.boot, circadian_species.quit_engine,
+            circadian_species.bootstrap_defs, circadian_species.init_arena,
+            circadian_species.spawn_acolyte, circadian_species.send,
+            circadian_species.poll_until, circadian_species.get_ai_field,
+            circadian_species.get_pose, circadian_species.wait_for_pose,
+            circadian_species.time.sleep, circadian_species.PORT,
+        ) = saved
+    return rc, launches
+
+
+def test_circadian_species_protocol_contract() -> None:
+    """Exercise a migrated probe's real structured-result path."""
+    import io
+    import circadian_species_probe as circadian_species  # type: ignore
+
+    ids = circadian_species.DESCRIPTOR.ids
+
+    standalone = io.StringIO()
+    rep = probe_protocol.Reporter(circadian_species.DESCRIPTOR,
+                                  stream=standalone)
+    rc, launches = _drive_circadian_species(rep)
+    rep.close()
+    expect(rc == 0, f"circadian_species standalone exits 0 (got {rc})")
+    expect(standalone.getvalue().count("[PASS]") == len(ids),
+           "circadian_species standalone reports every declared check")
+    expect(launches["engine"] == {
+        "port": 9016, "log": circadian_species.LOG, "args": []},
+        "circadian_species preserves standalone engine launch behavior")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            circadian_species.DESCRIPTOR, events_path=str(events),
+            engine_log_dir=tmp, rts_caps=4, stream=stream)
+        rc, launches = _drive_circadian_species(rep)
+        rep.close()
+        event_text = events.read_text(encoding="utf-8")
+        _seen, outcomes = probe_protocol.parse_event_stream(
+            event_text, circadian_species.DESCRIPTOR)
+        expect(rc == 0 and all(value == probe_protocol.PASS
+                               for value in outcomes.values()),
+               f"circadian_species reports all checks in order on success "
+               f"(got rc={rc}, {outcomes})")
+        expect(stream.getvalue() == "",
+               "circadian_species protocol success prints nothing to stdout")
+        expect(probe_protocol.forbidden_marker_lines(stream.getvalue()) == [],
+               "circadian_species protocol stdout has no bracketed markers")
+        expect(launches["engine"] == {
+            "port": 9016,
+            "log": os.path.join(tmp, circadian_species.LOG_NAME),
+            "args": ["+RTS", "-N4", "-RTS"],
+        }, "circadian_species uses harness RTS and isolated engine log")
+
+    observation_cases = (
+        ("urge", "species_urge_phases"),
+        ("utility", "utility_crossover"),
+        ("wake", "wake_boundaries"),
+        ("pressure_dawn", "sleeps_through_dawn"),
+        ("pressure_dusk", "wakes_at_own_boundary"),
+    )
+    for failure, failed_id in observation_cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            events = Path(tmp) / "events.jsonl"
+            stream = io.StringIO()
+            rep = probe_protocol.Reporter(
+                circadian_species.DESCRIPTOR, events_path=str(events),
+                stream=stream)
+            rc, _launches = _drive_circadian_species(
+                rep, observation_failure=failure)
+            rep.close()
+            _seen, outcomes = probe_protocol.parse_event_stream(
+                events.read_text(encoding="utf-8"),
+                circadian_species.DESCRIPTOR)
+            failed_index = ids.index(failed_id)
+            expect(rc == 1
+                   and all(outcomes[cid] == probe_protocol.PASS
+                           for cid in ids[:failed_index])
+                   and outcomes[failed_id] == probe_protocol.FAIL
+                   and all(outcomes[cid] == probe_protocol.MISSING
+                           for cid in ids[failed_index + 1:]),
+                   f"circadian_species attributes {failure} observation "
+                   f"failure to {failed_id} (got rc={rc}, {outcomes})")
+            expect(stream.getvalue() == "",
+                   f"circadian_species {failure} protocol failure prints "
+                   "nothing to stdout")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        events = Path(tmp) / "events.jsonl"
+        stream = io.StringIO()
+        rep = probe_protocol.Reporter(
+            circadian_species.DESCRIPTOR, events_path=str(events),
+            stream=stream)
+        rc, _launches = _drive_circadian_species(rep, setup_failure=True)
+        rep.close()
+        seen, outcomes = probe_protocol.parse_event_stream(
+            events.read_text(encoding="utf-8"), circadian_species.DESCRIPTOR)
+        expect(rc == 2
+               and all(value == probe_protocol.MISSING
+                       for value in outcomes.values()),
+               "circadian_species setup abort exits 2 with every check missing")
+        expect(any(isinstance(event, probe_protocol.DiagnosticEvent)
+                   and event.level == "WARN" for event in seen),
+               "circadian_species setup abort records a WARN diagnostic")
+        expect(stream.getvalue() == "",
+               "circadian_species protocol setup abort prints nothing to stdout")
 
 
 def _drive_blood_impact(rep, *, high_opacity=0.9, setup_failure=False):
@@ -3630,7 +3972,9 @@ def main() -> int:
                  test_concurrency_accounting, test_artifacts,
                  test_no_tmpdir_default, test_result_document,
                  test_exit_codes, test_render, test_manifest_fixture,
-                 test_manifest_real_registry, test_blood_impact_standalone,
+                 test_manifest_real_registry, test_ten_probe_batch_migrations,
+                 test_circadian_species_protocol_contract,
+                 test_blood_impact_standalone,
                  test_meal_waste_standalone,
                  test_role_standalone,
                  test_circadian_standalone,

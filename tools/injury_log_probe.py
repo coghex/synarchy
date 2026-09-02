@@ -28,6 +28,11 @@ Usage:
   python3 tools/injury_log_probe.py [--port 9140] [--no-fall]
 
 Exit 0 = all checks passed.
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 
@@ -38,9 +43,23 @@ import socket
 import subprocess
 import sys
 import time
+import probe_protocol
 from probelib import quit_engine, boot, send, send_json
 
 LOG = "/tmp/injury_log_probe_engine.log"
+LOG_NAME = "injury_log_probe_engine.log"
+PROBE_KEY = "injury_log"
+PROBE_CHECKS = [
+    ("emit_roundtrip", "emit then drain returns the event"),
+    ("drain_destructive", "second drain is empty"),
+    ("injure_event", "unit.injure -> 'injure' event for the injured unit"),
+    ("event_log_uid", "getEventLog().uid carries the unit id"),
+    ("fall_lane_damaging", "the lane drops at least 2 z (guaranteed damaging)"),
+    ("fall_event", "fall landing -> 'fall' event for the falling unit"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, PROBE_CHECKS)
+CHECK_ID_BY_LABEL = {label: check_id for check_id, label in PROBE_CHECKS}
+_REPORTER: probe_protocol.Reporter | None = None
 
 # Phase 4's polling window: the fall_edge walk is ~7 tiles at the acolyte's
 # comfort speed, so 20 s of drains leaves room for a stalled approach to be
@@ -195,9 +214,10 @@ def terrain_z(port: int, gx: int, gy: int) -> int | None:
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
-          + (f"  ({detail})" if detail else ""))
-    return ok
+    if _REPORTER is None:
+        raise RuntimeError("injury-log reporter is not initialised")
+    payload = {"detail": str(detail)} if detail else None
+    return _REPORTER.check(CHECK_ID_BY_LABEL[name], bool(ok), name, payload)
 
 
 def main() -> int:
@@ -205,14 +225,28 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9140)
     ap.add_argument("--no-fall", action="store_true",
                     help="skip the movement-driven fall test")
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
 
-    proc = boot(args.port, log=LOG)
+
+def _run(args, rep: probe_protocol.Reporter) -> int:
+    global _REPORTER
+    _REPORTER = rep
+    proc = boot(args.port, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     passed = True
     try:
         bootstrap(args.port, with_movement=not args.no_fall)
 
-        print("1. injury.emit / drainEvents roundtrip")
+        rep.note("1. injury.emit / drainEvents roundtrip")
         r = send(args.port,
             "injury.emit(7,'fall','blood loss','l_shin','fracture',0.7); "
             "local e=injury.drainEvents(); if #e<1 then return 'NONE' end; "
@@ -222,7 +256,7 @@ def main() -> int:
         r2 = send(args.port, "return #injury.drainEvents()")
         passed &= check("second drain is empty", r2 == "0", r2)
 
-        print("2. unit.injure on a live unit emits an injury event")
+        rep.note("2. unit.injure on a live unit emits an injury event")
         send(args.port, "return require('scripts.movement_arena').buildCourse('flat')")
         time.sleep(0.8)
         tu = parse_uid(send(args.port,
@@ -271,7 +305,7 @@ def main() -> int:
                 f"injured={ev.get('injured')} "
                 f"({ev.get('n')} event(s) drained)")
 
-        print("3. emitEventForUnit tags a uid that getEventLog surfaces")
+        rep.note("3. emitEventForUnit tags a uid that getEventLog surfaces")
         r = send(args.port,
             "engine.emitEventForUnit('survival_critical','probe',4242); "
             "local l=engine.getEventLog(); if #l<1 then return 'NONE' end; "
@@ -291,11 +325,12 @@ def main() -> int:
             # off, the injuries — and therefore the event — are determined.
             # `bootstrap` has already silenced injury_log_panel's tick, so
             # this drain is the stream's only consumer.
-            print("4. a real fall emits a 'fall' injury event")
+            rep.note("4. a real fall emits a 'fall' injury event")
             course = send_json(args.port,
                 "return require('scripts.movement_arena').buildCourse('fall_edge')")
             if not isinstance(course, dict) or "sx" not in course:
-                passed &= check("fall_edge course built", False, str(course))
+                rep.abort("fall_edge course did not build", {"result": course})
+                return 2
             else:
                 sx = course["sx"] + 0.5
                 gx = course["gx"] + 0.5
@@ -322,9 +357,9 @@ def main() -> int:
                 # Compare the event's target numerically, never as text.
                 fu = parse_uid(fu_raw)
                 if fu is None or fu < 0:
-                    passed &= check("spawned the falling unit", False,
-                                    f"unit.spawn returned {fu_raw!r}")
-                    fu = None
+                    rep.abort("could not spawn the falling unit",
+                              {"result": fu_raw})
+                    return 2
                 time.sleep(1.5)  # settle onto the plateau before commanding
                 # Phase 3's survival_critical emit paused the session (see
                 # FALL_POLL_LUA); an ordered move on a paused world never
@@ -389,10 +424,10 @@ def main() -> int:
                         f"severity={hit.get('severity')} "
                         f"({others} unrelated event(s) drained)")
         else:
-            print("4. fall test skipped (--no-fall)")
+            rep.note("4. fall test skipped (--no-fall)")
 
-        print(f"\n  {'PASS' if passed else 'FAIL'}: injury-log backend"
-              + ("" if passed else " — see failures above"))
+        rep.note(f"\n  {'PASS' if passed else 'FAIL'}: injury-log backend"
+                 + ("" if passed else " — see failures above"))
         return 0 if passed else 1
     finally:
         quit_engine(args.port, proc)

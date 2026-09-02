@@ -42,16 +42,54 @@ live homeostasis tick between checks — the same "AI off" idiom
 tools/craft_bill_probe.py uses for unit_ai.update.
 
 Usage: python3 tools/mental_efficiency_probe.py [--port 9353]
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 import argparse
 import glob
 import sys
 import time
 
+import probe_protocol
 from probelib import boot, quit_engine, send, send_json, spawn_acolyte, poll_until
 
 SPROOT = "/tmp"
 TEST_YAML = f"{SPROOT}/mental_efficiency_probe_recipes.yaml"
+LOG = f"{SPROOT}/mental_efficiency_probe_engine.log"
+LOG_NAME = "mental_efficiency_probe_engine.log"
+PROBE_KEY = "mental_efficiency"
+PROBE_CHECKS = [
+    ("neutral_effectiveness", "neutral concentration -> 1.00"),
+    ("half_concentration_effectiveness", "concentration 0.5 -> 0.875"),
+    ("zero_concentration_effectiveness", "zero concentration -> 0.75"),
+    ("euphoric_effectiveness", "full concentration + euphoria -> 1.10"),
+    ("distracted_euphoric_effectiveness", "zero concentration + euphoria -> 0.75 x 1.10"),
+    ("probe_recipe_loaded", "probe recipe loaded"),
+    ("distracted_bill_added", "distracted probe bill added"),
+    ("distracted_bill_worked", "the real AI claimed + worked the distracted probe bill"),
+    ("focused_bill_added", "focused probe bill added"),
+    ("focused_bill_worked", "the real AI claimed + worked the focused probe bill"),
+    ("pinned_effectiveness", "distinct pinned effectiveness values read back correctly"),
+    ("progress_accrued", "the real progress-pour tick accrued progress for both crafters"),
+    ("progress_ratio", "real AI-driven progress-pour rate scales by the effectiveness ratio (0.75)"),
+    ("distracted_craft_executes", "distracted (eff 0.75) craft executes"),
+    ("distracted_quality", "distracted output quality = base 50 - 10 (clamped) = 40"),
+    ("euphoric_craft_executes", "euphoric (eff 1.10) craft executes"),
+    ("euphoric_quality", "euphoric output quality = base 50 + 10 (clamped) = 60"),
+    ("combat_samples", "enough landed hits sampled at both effectiveness levels"),
+    ("damage_energy_unchanged", "mean landed-hit raw damage energy is not shifted by effectiveness"),
+    ("cooldown_unchanged", "attack cooldown (recovery) is unaffected by effectiveness"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, PROBE_CHECKS)
+CHECK_ID_BY_LABEL = {label: check_id for check_id, label in PROBE_CHECKS}
+_REPORTER: probe_protocol.Reporter | None = None
+
+
+class ProbeSetupError(RuntimeError):
+    pass
 
 # Tiny work + a skill tag so the base quality (#343) is deterministic
 # (craftQuality(skill, Nothing) = skill, unclamped at 50). The output is
@@ -74,9 +112,11 @@ recipes:
 
 
 def check(passed, ok, label, detail=""):
-    print(f"  [{'PASS' if ok else 'FAIL'}] {label}"
-          + (f": {detail}" if detail else ""))
-    return passed and ok
+    if _REPORTER is None:
+        raise RuntimeError("mental-efficiency reporter is not initialised")
+    payload = {"detail": str(detail)} if detail != "" else None
+    _REPORTER.check(CHECK_ID_BY_LABEL[label], bool(ok), label, payload)
+    return passed and bool(ok)
 
 
 def near(a, b, tol=0.01):
@@ -105,7 +145,7 @@ def bootstrap(port):
             break
         time.sleep(0.5)
     else:
-        sys.exit("arena page never became the active world")
+        raise ProbeSetupError("arena page never became the active world")
     send(port, "return world.loadChunksInRegion(-2, -2, 2, 2)")
     send(port, "return world.waitForChunks(60)", timeout=65.0)
 
@@ -184,14 +224,15 @@ def spawn_station(port, uid, def_name, gx, gy, materials, progress=500):
     try:
         bid = int(float(raw))
     except ValueError:
-        sys.exit(f"building.spawn('{def_name}') failed: {raw}")
+        raise ProbeSetupError(
+            f"building.spawn('{def_name}') failed: {raw}") from None
     for _ in range(50):
         if send(port, f"return building.getInfo({bid}) and 'yes' or 'no'"
                 ).strip('"') == "yes":
             break
         time.sleep(0.1)
     else:
-        sys.exit(f"{def_name} instance never appeared")
+        raise ProbeSetupError(f"{def_name} instance never appeared")
     for item, count in materials.items():
         send(port,
              f"for i=1,{count} do unit.addItem({uid},'{item}'); "
@@ -199,11 +240,11 @@ def spawn_station(port, uid, def_name, gx, gy, materials, progress=500):
              f"return 'ok'")
     if send(port, f"return building.areMaterialsSatisfied({bid}) "
                   f"and 'yes' or 'no'").strip('"') != "yes":
-        sys.exit(f"{def_name} materials not satisfied after delivery")
+        raise ProbeSetupError(f"{def_name} materials not satisfied after delivery")
     send(port, f"building.addBuildProgress({bid}, {progress}); return 'ok'")
     act = send(port, f"return building.getActivity({bid})").strip('"')
     if act != "built":
-        sys.exit(f"{def_name} never reached built (activity={act})")
+        raise ProbeSetupError(f"{def_name} never reached built (activity={act})")
     return bid
 
 
@@ -372,11 +413,25 @@ def combat_damage_sample(port, conc, euphoric, want, retries):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9353)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
-    port = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
+
+
+def _run(port: int, rep: probe_protocol.Reporter) -> int:
+    global _REPORTER
+    _REPORTER = rep
     passed = True
 
-    proc = boot(port, f"{SPROOT}/mental_efficiency_probe_engine.log")
+    proc = boot(port, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     try:
         bootstrap(port)
         mental_off(port)
@@ -477,21 +532,19 @@ def main():
         pin(port, crafter, 0.0, False)   # effectiveness 0.75 -> delta clamps at -10
         ok, res = craft_execute(port, crafter, "mental_probe_forge", bid)
         passed = check(passed, ok, "distracted (eff 0.75) craft executes", res)
-        if ok:
-            q_lo = item_quality(port, crafter, res[0])
-            passed = check(passed, near(q_lo, 40.0, tol=1.0),
-                           "distracted output quality = base 50 - 10 (clamped) = 40",
-                           f"quality={q_lo}")
+        q_lo = item_quality(port, crafter, res[0]) if ok else None
+        passed = check(passed, q_lo is not None and near(q_lo, 40.0, tol=1.0),
+                       "distracted output quality = base 50 - 10 (clamped) = 40",
+                       f"quality={q_lo}")
 
         send(port, f"unit.addItem({crafter}, 'steel_bar'); return 'ok'")
         pin(port, crafter, 1.0, True)    # effectiveness 1.10 -> delta clamps at +10
         ok, res = craft_execute(port, crafter, "mental_probe_forge", bid)
         passed = check(passed, ok, "euphoric (eff 1.10) craft executes", res)
-        if ok:
-            q_hi = item_quality(port, crafter, res[0])
-            passed = check(passed, near(q_hi, 60.0, tol=1.0),
-                           "euphoric output quality = base 50 + 10 (clamped) = 60",
-                           f"quality={q_hi}")
+        q_hi = item_quality(port, crafter, res[0]) if ok else None
+        passed = check(passed, q_hi is not None and near(q_hi, 60.0, tol=1.0),
+                       "euphoric output quality = base 50 + 10 (clamped) = 60",
+                       f"quality={q_hi}")
 
         # --- 4. Combat damage energy unchanged across effectiveness ---
         lo_vals = combat_damage_sample(port, 0.0, False, want=6, retries=20)
@@ -499,24 +552,20 @@ def main():
         passed = check(passed, len(lo_vals) >= 4 and len(hi_vals) >= 4,
                        "enough landed hits sampled at both effectiveness levels",
                        f"lo={len(lo_vals)} hi={len(hi_vals)}")
-        if lo_vals and hi_vals:
-            mean_lo = sum(lo_vals) / len(lo_vals)
-            mean_hi = sum(hi_vals) / len(hi_vals)
-            # "raw" (pre-target-resistance driver energy/momentum) is a
-            # function of the ATTACKER's own pinned stats alone, never of
-            # which body part the RNG-driven picker landed on — so unlike
-            # "eff" it should be reproducible near-exactly across
-            # independently-random swings. A tight tolerance here is
-            # therefore meaningful, not just generous slack; the
-            # deterministic proof that damage energy can't be reached by
-            # effectiveness at all remains the hspec suite's
-            # computeAttackerSkill/computeDefenderEvasion invariance
-            # check — this is an end-to-end plumbing sanity check on top
-            # of it.
-            ratio = mean_hi / mean_lo if mean_lo else float("inf")
-            passed = check(passed, 0.95 < ratio < 1.0526,
-                           "mean landed-hit raw damage energy is not shifted by effectiveness",
-                           f"mean(eff=0.75)={mean_lo:.3f} mean(eff=1.10)={mean_hi:.3f} ratio={ratio:.3f}")
+        mean_lo = sum(lo_vals) / len(lo_vals) if lo_vals else None
+        mean_hi = sum(hi_vals) / len(hi_vals) if hi_vals else None
+        ratio = (mean_hi / mean_lo
+                 if mean_lo not in (None, 0) and mean_hi is not None
+                 else float("inf"))
+        # "raw" (pre-target-resistance driver energy/momentum) is a function
+        # of the attacker's pinned stats, so unlike "eff" it should reproduce
+        # closely across independently-random swings. The hspec suite keeps
+        # the deterministic invariance proof; this is the end-to-end check.
+        passed = check(passed, 0.95 < ratio < 1.0526,
+                       "mean landed-hit raw damage energy is not shifted by effectiveness",
+                       (f"mean(eff=0.75)={mean_lo:.3f} mean(eff=1.10)={mean_hi:.3f} ratio={ratio:.3f}"
+                        if mean_lo is not None and mean_hi is not None else
+                        f"mean(eff=0.75)={mean_lo} mean(eff=1.10)={mean_hi}"))
 
         # --- 5. Attack recovery/cooldown (Lua, scripts/unit_ai_combat.lua)
         #        unchanged across effectiveness. computeAttackCooldown
@@ -544,9 +593,12 @@ def main():
                        "attack cooldown (recovery) is unaffected by effectiveness",
                        f"cooldown(eff=0.75)={cd_lo} cooldown(eff=1.10)={cd_hi}")
 
-        print("\n" + ("ALL MENTAL EFFECTIVENESS CHECKS PASSED" if passed
-                      else "SOME FAILED"))
+        rep.note("\n" + ("ALL MENTAL EFFECTIVENESS CHECKS PASSED" if passed
+                          else "SOME FAILED"))
         return 0 if passed else 1
+    except ProbeSetupError as error:
+        rep.abort(str(error))
+        return 2
     finally:
         quit_engine(port, proc)
 
