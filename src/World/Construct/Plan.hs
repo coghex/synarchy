@@ -43,22 +43,26 @@ module World.Construct.Plan
     , PlanOp(..)
     , structurePieceSlot
     , structureFinalGridZ
+    , structurePieceArtContext
+    , resolvePlanPieceArt
     , resolveStructurePlan
     , planSurfaceZAt
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import Structure.ArtCatalog
-    (StructureArtCatalog, PieceArtContext(..), resolveUnplacedArt
+    (StructureArtCatalog, PieceArt, PieceArtContext(..), resolveUnplacedArt
     , packKindBuild, defaultPieceArtContext)
 import Structure.Facing (WallEdge(..))
 import Structure.Types (StructureSlot(..), StructureStage, slotFromText)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import Structure.Wire (wireShapeFor)
 import World.Construct.Art
-    (structureGridZAt, structurePresentAt, wallCapsAt, wireNeighborsAt)
+    ( structureGridZAt, structurePresentAt, wallCapsAt
+    , wireNeighborsWithProposed )
 import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructDesignations, StructurePiece(..) )
@@ -110,10 +114,15 @@ data PlanResult = PlanResult
       -- ^ The tile's CURRENT surface z, once terrain resolves. This is
       --   the quantity a designation captures as 'cdZ'.
     , prFinalZ   ∷ !(Maybe Int)
-      -- ^ The grid z the placed piece would sit at, once terrain (and,
-      --   for a post, its supporting floor) resolves. Resolver-internal
-      --   and never persisted: 'cdZ' is a SURFACE level, and the
-      --   progress-slope stamping and ghost both read it as one.
+      -- ^ The grid z the piece would sit at, once terrain (and, for a
+      --   post, its supporting floor) resolves. Never persisted: 'cdZ'
+      --   is a SURFACE level, and the progress-slope stamping reads it
+      --   as one.
+      --
+      --   Present on INVALID results too wherever terrain resolved, so
+      --   #1846's ghost can draw a refused candidate red at the place it
+      --   would have occupied (D-25). Present is not permission: only a
+      --   'PlanValid' result may be placed from.
     } deriving (Show, Eq)
 
 -- | The coherent snapshot one resolution runs against. Taken once by
@@ -126,6 +135,19 @@ data PlanWorld = PlanWorld
     , pwStage        ∷ !StructureStage
     , pwDesignations ∷ !ConstructDesignations
     , pwCatalog      ∷ !StructureArtCatalog
+    , pwProposedWire ∷ !(HS.HashSet (Int, Int))
+      -- ^ CANONICAL tiles an uncommitted gesture is proposing to wire and
+      --   that this same resolver has already answered 'PlanValid' for
+      --   (#1846). Empty for every non-render caller, which is what makes
+      --   'wireNeighborsWithProposed' collapse to 'wireNeighborsAt' there.
+      --
+      --   It reaches ART ONLY, never an outcome: a wire's connection
+      --   shape picks which variant of the pack's wire art is drawn, and
+      --   registration is all-or-nothing per kind, so no shape can turn
+      --   resolvable art into missing art or the reverse. That is what
+      --   lets the render pass resolve outcomes once with an empty set
+      --   and then re-resolve only the ART against the valid candidates
+      --   it found, without the two passes disagreeing.
     }
 
 -- | Which operation is asking, which decides only how outstanding
@@ -219,16 +241,29 @@ resolveStructurePlan pw op requiredZ piece tile@(gx, gy) =
                     ("no registered art for '" <> spPack piece <> "/"
                        <> spKind piece <> "'") (Just slot)
             | isNothing mBuild →
-                bare PlanVisibleInvalid
+                -- Decided by the CATALOGUE and not by terrain, which is
+                -- the module's ordering rule and stays. The position
+                -- fields are still filled in when terrain happens to be
+                -- resident, because this is the one refusal whose ART
+                -- resolves: #1846's ghost draws such a candidate red,
+                -- and it needs the resolver to say where.
+                positioned slot PlanVisibleInvalid
                     ("no complete build metadata for '" <> spPack piece
-                       <> "/" <> spKind piece <> "'") (Just slot)
+                       <> "/" <> spKind piece <> "'")
             | otherwise → case planSurfaceZAt worldSize tiles tile of
                 Nothing →
                     bare PlanUnresolvedTerrain "terrain not resident"
                          (Just slot)
                 Just surfaceZ
                     | surfaceZ ≢ requiredZ →
-                        at slot surfaceZ Nothing PlanVisibleInvalid
+                        -- 'prFinalZ' names where a piece WOULD sit given
+                        -- today's surface, for the sole benefit of a
+                        -- ghost that has to draw this refusal (D-25:
+                        -- every loaded candidate the oracle filters out
+                        -- still draws, in red). It is not a retarget:
+                        -- the outcome is invalid, and only 'PlanValid'
+                        -- results are ever placed from.
+                        at slot surfaceZ (finalZ surfaceZ) PlanVisibleInvalid
                             ("surface z " <> tshow surfaceZ
                                <> " differs from the plan's z "
                                <> tshow requiredZ)
@@ -255,6 +290,13 @@ resolveStructurePlan pw op requiredZ piece tile@(gx, gy) =
     at slot surfaceZ mFinal outcome reason = PlanResult
         { prOutcome = outcome, prReason = reason, prSlot = Just slot
         , prSurfaceZ = Just surfaceZ, prFinalZ = mFinal }
+    -- A result whose OUTCOME was decided without consulting terrain, but
+    -- which still reports where the piece would sit if terrain happens
+    -- to be resident. Never changes an outcome — the caller has already
+    -- chosen it.
+    positioned slot outcome reason = case planSurfaceZAt worldSize tiles tile of
+        Nothing       → bare outcome reason (Just slot)
+        Just surfaceZ → at slot surfaceZ (finalZ surfaceZ) outcome reason
 
     present slot = structurePresentAt worldSize tiles stage slot gx gy
 
@@ -265,32 +307,12 @@ resolveStructurePlan pw op requiredZ piece tile@(gx, gy) =
 
     finalZ surfaceZ = structureFinalGridZ piece surfaceZ floorZ
 
-    -- Both variant-carrying kinds' art context, derived from the world
-    -- the same way the render pass derives it. A pack that registers a
-    -- kind registers EVERY variant of it (registration is all or
-    -- nothing), so the context can never turn resolvable art into
-    -- missing art — which is what lets the catalogue check run before
-    -- terrain is known.
-    ctx = case spKind piece of
-        "wall" → defaultPieceArtContext
-            { pacWallCaps = wallCapsAt worldSize tiles stage
-                                (wallEdgeOf (spEdge piece)) gx gy }
-        "wire" → defaultPieceArtContext
-            { pacWireShape = wireShapeOf }
-        _ → defaultPieceArtContext
-
-    wallEdgeOf mEdge = case mEdge of
-        Just "nw" → WallNW
-        Just "se" → WallSE
-        Just "sw" → WallSW
-        _         → WallNE
-
-    wireShapeOf = wireShapeFor
-        (wireNeighborsAt worldSize tiles stage
-             (Just (pwDesignations pw)) gx gy)
-
-    mArt   = resolveUnplacedArt (pwCatalog pw) (spPack piece) (spKind piece)
-                                (spEdge piece) ctx
+    -- The art the piece would be BUILT with, through the one shared
+    -- derivation the render pass also calls (#1846). Not a check the
+    -- render pass repeats differently: it is the same function, so a
+    -- ghost cannot resolve a cap, a wire variant or a sprite the
+    -- placer would not.
+    mArt   = resolvePlanPieceArt pw piece tile
     -- The registered COST, not the pack's own `buildable` declaration:
     -- what makes a job doable is a cost the engine can actually charge,
     -- and that is the same value 'construction.payMaterials' spends and
@@ -312,3 +334,51 @@ resolveStructurePlan pw op requiredZ piece tile@(gx, gy) =
                 PlanForPlacement   → True
                 PlanForAttempt aid → cdAttempt cd ≢ aid
                 PlanForCommit aid  → cdAttempt cd ≢ aid
+
+-- | The world CONTEXT one candidate's art resolves through: the cap state
+--   a wall's own two end corners give it, and the connection shape a
+--   wire's neighbours give it.
+--
+--   Exported because the render pass needs the SAME derivation the
+--   resolver runs (#1846 requirement 4, and the review's correction that
+--   the ghost must consume this rather than add a render-only rule). Two
+--   copies of "which cap facemap would this wall be built with" is
+--   exactly the drift the shared resolver exists to prevent.
+--
+--   Kinds with no variants ignore both fields, and get
+--   'defaultPieceArtContext' — a statement that there is no context to
+--   look up, never a stand-in for one that was not.
+structurePieceArtContext
+    ∷ PlanWorld → StructurePiece → (Int, Int) → PieceArtContext
+structurePieceArtContext pw piece (gx, gy) = case spKind piece of
+    "wall" → defaultPieceArtContext
+        { pacWallCaps = wallCapsAt (pwWorldSize pw) (pwTiles pw) (pwStage pw)
+                            (wallEdgeOf (spEdge piece)) gx gy }
+    "wire" → defaultPieceArtContext { pacWireShape = wireShapeOf }
+    _      → defaultPieceArtContext
+  where
+    wallEdgeOf mEdge = case mEdge of
+        Just "nw" → WallNW
+        Just "se" → WallSE
+        Just "sw" → WallSW
+        _         → WallNE
+
+    wireShapeOf = wireShapeFor
+        (wireNeighborsWithProposed (pwWorldSize pw) (pwTiles pw) (pwStage pw)
+             (Just (pwDesignations pw)) (pwProposedWire pw) gx gy)
+
+-- | The exact texture and facemap this candidate would be built with, or
+--   'Nothing' when the pack, the kind or the art itself does not resolve
+--   ('Structure.ArtCatalog.resolveUnplacedArt' — an unregistered pack, an
+--   undeclared kind, an unparseable kind or edge, or a pack whose
+--   textures terminally failed).
+--
+--   'Nothing' here IS 'PlanMissingArt': the resolver's own catalogue
+--   check calls this, so a ghost that draws exactly what this returns
+--   draws nothing precisely when the plan says @missing-art@, with no
+--   second rule to keep in step (requirement 7).
+resolvePlanPieceArt
+    ∷ PlanWorld → StructurePiece → (Int, Int) → Maybe PieceArt
+resolvePlanPieceArt pw piece tile =
+    resolveUnplacedArt (pwCatalog pw) (spPack piece) (spKind piece)
+                       (spEdge piece) (structurePieceArtContext pw piece tile)

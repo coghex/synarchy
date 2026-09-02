@@ -43,6 +43,7 @@ module World.Thread.Command.Cursor
     , handleWorldAddConstructProgressCommand
     , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
+    , handleWorldSetConstructStructureTargetCommand
     , handleWorldDesignateChopInstancesCommand
     , handleWorldEraseChopInstancesCommand
     , handleWorldCancelChopCommand
@@ -88,6 +89,7 @@ import World.Thread.Command.Cursor.Construct
     , handleWorldAddConstructProgressCommand
     , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
+    , handleWorldSetConstructStructureTargetCommand
     )
 import World.Thread.Command.Cursor.Chop
     ( handleWorldDesignateChopInstancesCommand

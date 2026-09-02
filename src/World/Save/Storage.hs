@@ -159,16 +159,16 @@ import qualified Data.ByteString as BS
 import qualified Data.HashSet as HS
 import qualified Data.List as L
 import qualified Data.Text as T
-import Data.Char (isDigit)
 import Control.Exception (IOException, SomeException, try, finally)
 import System.Directory
     ( createDirectoryIfMissing, doesFileExist, removeFile, listDirectory
-    , renameFile, pathIsSymbolicLink )
-import System.FilePath ((</>), takeDirectory)
-import System.IO (Handle, openBinaryTempFile, hFlush, hClose)
-import System.Posix.IO
-    (OpenMode(..), closeFd, defaultFileFlags, handleToFd, openFd)
-import System.Posix.Unistd (fileSynchronise)
+    , renameFile )
+import System.FilePath ((</>))
+import System.IO (Handle, openBinaryTempFile)
+import World.Save.Storage.Durable
+    ( rejectSymlinkedPath, rejectSymlinkedManagedPath, durableFlush
+    , syncDirectory, claimUniquePath, isTransientName, closeQuietly
+    , removeIfExists )
 import World.Save.Types (SaveData, SaveMetadata(..), checkWorldCount)
 import World.Save.Envelope
     ( decodeSessionEnvelope, decodeSessionEnvelopeClassified
@@ -221,19 +221,13 @@ staleGenYamlFileName ∷ FilePath
 staleGenYamlFileName = "world_gen.yaml"
 
 -- | True iff @name@ is exactly one of this module's own generated
---   transient names: @template@ immediately followed by at least one
---   digit — 'openBinaryTempFile''s own naming convention for a dot-free
---   template (a numeric suffix, optionally @-N@ on retry, always
---   digit-first). Digit-anchored so cleanup can never sweep an unrelated
---   file that merely shares the prefix (e.g. a player's own note file
---   dropped in the slot directory) — requirement 12's "recognized stale
---   transaction artifacts... never unrelated files" and requirement 13's
---   "cleanup must not affect unrelated user files".
-isTransientName ∷ String → String → Bool
-isTransientName template name = case L.stripPrefix template name of
-    Just (c : _) → isDigit c
-    _            → False
-
+--   transient names — 'World.Save.Storage.Durable.isTransientName''s
+--   digit-anchored recognition of an 'openBinaryTempFile' product, so
+--   cleanup can never sweep an unrelated file that merely shares the
+--   prefix (e.g. a player's own note file dropped in the slot directory)
+--   — requirement 12's "recognized stale transaction artifacts... never
+--   unrelated files" and requirement 13's "cleanup must not affect
+--   unrelated user files".
 isOwnedArtifactName ∷ String → Bool
 isOwnedArtifactName name =
     isTransientName candidateTemplate name ∨ isTransientName staleTemplate name
@@ -266,32 +260,13 @@ isOwnedArtifactName name =
 --   error other than "does not exist" while checking is treated the
 --   same as "not a symlink" and left for the caller's own next
 --   operation to report properly.
+--
+--   Since #2024 this is the save stack's name for
+--   'World.Save.Storage.Durable.rejectSymlinkedManagedPath', the same
+--   guard the generated-world library applies to its own root and
+--   entries; the two stores cannot drift on what "contained" means.
 rejectSymlinkedSlotDir ∷ FilePath → IO (Either Text ())
-rejectSymlinkedSlotDir dir = do
-    slotSafe ← rejectSymlinkedPath dir
-    case slotSafe of
-        Left err → pure (Left err)
-        Right () → rejectSymlinkedPath (takeDirectory dir)
-
--- | Refuse a single path that is itself a symlink. The one primitive
---   check every containment guard in this module (and
---   'World.Save.Serialize'\'s listing, which has its own read path
---   separate from 'selectLoadGeneration'/'decodeGenerationFile' and must
---   apply the identical check before trusting a generation file's bytes)
---   is built from, so a symlink is recognised the SAME way everywhere —
---   'rejectSymlinkedSlotDir' calls this for a slot directory and its
---   parent; 'decodeGenerationFile' below calls it for one generation
---   file. A nonexistent path is not a symlink (nothing to reject); a
---   filesystem error other than "does not exist" while checking is
---   treated the same as "not a symlink" and left for the caller's own
---   next operation to report properly.
-rejectSymlinkedPath ∷ FilePath → IO (Either Text ())
-rejectSymlinkedPath path = do
-    result ← try (pathIsSymbolicLink path)
-    pure $ case (result ∷ Either IOException Bool) of
-        Right True → Left ("path is a symlink, refusing to operate \
-                            \through it: " <> T.pack path)
-        _          → Right ()
+rejectSymlinkedSlotDir = rejectSymlinkedManagedPath
 
 -- Publication ------------------------------------------------------------
 
@@ -492,23 +467,6 @@ writeValidateAndPublish dir slotName expectedMeta encoded
                                         luaKnownNames luaRequiredNames tempPath
   where
     fail' = publishFailureFor slotName
-
--- | Flush the RTS-level write buffer, then durably sync the underlying
---   file descriptor (POSIX @fsync@ — see the module haddock's durability
---   boundary section) before this candidate is trusted for anything.
---   'handleToFd' takes ownership of (and closes) the Haskell-level
---   'Handle'; the caller must not use @h@ again after this returns,
---   success or failure.
-durableFlush ∷ Handle → IO ()
-durableFlush h = do
-    hFlush h
-    fd ← handleToFd h
-    fileSynchronise fd `finally` closeFd fd
-
-closeQuietly ∷ Handle → IO ()
-closeQuietly h = do
-    r ← try (hClose h)
-    case (r ∷ Either SomeException ()) of _ → pure ()
 
 -- | Fully decode the re-read candidate bytes and confirm they describe
 --   exactly the intended save request (requirement 3): the SAME
@@ -712,30 +670,6 @@ stageOldPrevious dir prevPath = do
             renameFile prevPath staledPath
             pure (Just staledPath)
 
--- | Atomically claim a filesystem-unique path under @dir@ named
---   @template@ + a generated numeric suffix, without leaving a file
---   behind at it — 'openBinaryTempFile' is the only portable way this
---   codebase has to generate a collision-free name (requirement 2's
---   same guarantee, reused here for the staged-previous name); the
---   briefly-created placeholder is closed and removed immediately so the
---   caller can rename an EXISTING file onto the now-free name. This
---   leaves a narrow (microsecond) window where another process could
---   claim the identical name first, same as any "reserve a name" dance
---   without a dedicated atomic rename-to-fresh-name primitive; a
---   collision here surfaces as an ordinary 'PhaseStalePrevious' rename
---   failure, not silent corruption.
-claimUniquePath ∷ FilePath → String → IO FilePath
-claimUniquePath dir template = do
-    (path, h) ← openBinaryTempFile dir template
-    hClose h
-    removeFile path
-    pure path
-
-syncDirectory ∷ FilePath → IO ()
-syncDirectory dir = do
-    fd ← openFd dir ReadOnly defaultFileFlags
-    fileSynchronise fd `finally` closeFd fd
-
 -- | Runs only AFTER the durability boundary (the caller's directory
 --   sync): remove the staged-away previous generation this publish
 --   itself displaced (if any), then sweep every other recognized stale
@@ -767,17 +701,6 @@ listOwnedArtifacts dir = do
         Left _        → pure []
         Right entries → pure
             [ dir </> e | e ← entries, isOwnedArtifactName e ]
-
-removeIfExists ∷ FilePath → IO [Text]
-removeIfExists path = do
-    exists ← doesFileExist path
-    if not exists then pure [] else do
-        r ← try (removeFile path)
-        case r of
-            Right () → pure []
-            Left (e ∷ IOException) →
-                pure [ "failed to remove stale artifact " <> T.pack path
-                     <> ": " <> showT e ]
 
 -- | Best-effort: remove the ORIGINAL temp file if the transaction ended
 --   (success or failure) without renaming it away. A successful publish
