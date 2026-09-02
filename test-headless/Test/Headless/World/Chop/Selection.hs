@@ -41,7 +41,7 @@ import World.Generate (chunkToGlobal)
 import World.Grid (gridToWorld, tileHeight, tileWidth, worldWrapPeriod)
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.Render.FloraMarker (floraMarkerQuad)
-import World.Render.FloraProjection (FloraGeom(..))
+import World.Render.FloraProjection (FloraGeom(..), floraGeom)
 import World.Render.SpriteDepth
     (frameFrontWallLift, liftSpriteSortKey, noFrontWallLift
     , structureFrontWallClear)
@@ -79,6 +79,11 @@ zoom = 20.0
 
 -- | Handles: one tree texture and one shorter shrub texture, so the
 --   quad-size half of the projection is actually exercised.
+-- | The designation marker's own handle — distinct from every flora
+--   texture, so a sorted run can be read back by texture.
+markerTexture ∷ TextureHandle
+markerTexture = TextureHandle 21
+
 treeTex, treeTallTex, shrubTex ∷ TextureHandle
 treeTex     = TextureHandle 11
 shrubTex    = TextureHandle 12
@@ -829,7 +834,7 @@ spec = describe "Chop selection" $ do
 
     describe "the committed marker" $ do
 
-        let markerTex = TextureHandle 21
+        let markerTex = markerTexture
             iconSize  = (32, 32) ∷ (Float, Float)
             oak       = plantAt 1 woodId (8, 8)
             view      = viewOf FaceNorth (camOn FaceNorth (8, 8))
@@ -915,6 +920,55 @@ spec = describe "Chop selection" $ do
                 "assets/textures/ui/hud/utility/chop_designate_tree.png"
             imageSize icon `shouldBe` (44, 44)
             visibleAlphas icon `shouldBe` [150]
+
+        it "sorts over its tree at FAR-MAP depths, not just near the origin" $ do
+            -- sqSortKey is a Float and its depth term is fa + fb, which
+            -- reaches the world's tile extent. Out there one ULP is
+            -- ~2.4e-4, so the small added constant this used to carry
+            -- rounded clean away and the marker TIED its tree — after
+            -- which the painter order separated them on rect and
+            -- texture, which says nothing about which belongs in front.
+            forM_ [ (8, 8), (1024, 1024), (-1024, -1024) ] $ \(fx, fy) → do
+                let far = plantAt 1 woodId (8, 8)
+                    g = floraGeom FaceNorth fx fy (far { fiZ = zSlice })
+                            treeTex texSizes zSlice (0, 0)
+                    q = floraMarkerQuad (fromIntegral . toInt) g
+                            (32, 32) 1.0 fx fy markerTexture
+                sqSortKey q `shouldSatisfy` (> fgSortKey g)
+
+        it "would NOT have cleared its tree with an added constant out there" $ do
+            -- Pins the reason the step has to be range-safe rather than
+            -- merely small: at the far-map depth above, adding 1e-5 is
+            -- the identity.
+            let far = plantAt 1 woodId (8, 8)
+                g = floraGeom FaceNorth 1024 1024 (far { fiZ = zSlice })
+                        treeTex texSizes zSlice (0, 0)
+                k = fgSortKey g
+            abs k `shouldSatisfy` (> 1000)
+            (k + 0.00001) `shouldBe` k
+
+        it "draws over an overlapping equal-depth sprite out there too" $ do
+            -- The failure mode end to end: a marker tied with its tree
+            -- is ordered against every other quad at that depth by rect
+            -- and texture. Push both through the REAL sorter at a
+            -- far-map depth and require the marker to come out last.
+            let far = plantAt 1 woodId (8, 8)
+                (fx, fy) = (1024, 1024) ∷ (Int, Int)
+                inst = far { fiZ = zSlice }
+                g = floraGeom FaceNorth fx fy inst treeTex texSizes
+                        zSlice (0, 0)
+                treeQuad = floraToQuad (fromIntegral . toInt)
+                    defaultWorldTextures FaceNorth fx fy inst treeTex
+                    zSlice effDepth 1.0 (0, 0) texSizes
+                marker = floraMarkerQuad (fromIntegral . toInt) g
+                    (32, 32) 1.0 fx fy markerTexture
+            case treeQuad of
+                Nothing → expectationFailure "the tree was not drawable"
+                Just tq → do
+                    let sorted = Map.foldr (\v acc → V.toList v ⧺ acc) []
+                            (sortQuadsByLayer (V.fromList [marker, tq]))
+                    map sqTexture sorted
+                        `shouldBe` [sqTexture tq, markerTexture]
 
         it "vanishes with the tree: a felled plant leaves nothing to draw" $ do
             -- The marker pass is driven by the LIVE instance, so a

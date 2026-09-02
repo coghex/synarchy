@@ -16,6 +16,7 @@ module Engine.Scene.Types.Batch
   , sortQuadsByLayer
   , mergeSortedQuads
   , quadPainterOrder
+  , justAbove
   , LayeredQuads(..)
   , emptyLayeredQuads
   , setQuadSolarPage
@@ -34,6 +35,7 @@ import qualified Data.Set as Set
 import Data.Ord (comparing)
 import Engine.Scene.Base (ObjectId, LayerId)
 import Engine.Asset.Handle (TextureHandle(..), FontHandle, toInt)
+import GHC.Float (castWord32ToFloat, castFloatToWord32)
 import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Graphics.Solar (SolarPageTable, emptySolarPageTable)
 import Engine.Graphics.Font.Data (GlyphInstance)
@@ -156,6 +158,31 @@ quadPainterOrder q =
     let Vec2 x0 y0 = pos (sqV0 q)
         Vec2 x2 y2 = pos (sqV2 q)
     in (sqSortKey q, x0, y0, x2, y2, toInt (sqTexture q))
+
+-- | The next representable depth strictly above @key@ (#1856).
+--
+--   The way to sort one quad immediately over another, at ANY map
+--   coordinate. Adding a small constant is not: 'sqSortKey' is a
+--   'Float' and the depth term is @fa + fb@, which reaches the world's
+--   tile extent — around 2048 for a 128-chunk world, where one ULP is
+--   2.4e-4. A nudge of 1e-5 there rounds clean away and the two quads
+--   TIE, leaving 'quadPainterOrder' to separate them on rect and
+--   texture, which says nothing about which should be in front. That is
+--   how a designation marker ends up behind the tree it annotates on
+--   the far side of the map and nowhere near the origin.
+--
+--   One ULP is both sufficient and minimal: the sorter compares exactly,
+--   so strictly-greater is strictly-greater, and nothing can be
+--   scheduled between two adjacent floats.
+justAbove ∷ Float → Float
+justAbove x
+    | isNaN x                 = x
+    | isInfinite x ∧ x > 0    = x
+    -- Both zeros step to the smallest positive subnormal.
+    | x ≡ 0                   = castWord32ToFloat 1
+    -- Away from zero the magnitude bits grow downward for negatives.
+    | x > 0                   = castWord32ToFloat (castFloatToWord32 x + 1)
+    | otherwise               = castWord32ToFloat (castFloatToWord32 x - 1)
 
 -- | Group quads by layer and depth-sort each layer's run.
 sortQuadsByLayer ∷ V.Vector SortableQuad → Map.Map LayerId (V.Vector SortableQuad)

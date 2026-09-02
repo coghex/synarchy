@@ -25,6 +25,7 @@ module World.Render.FloraMarker
 import UPrelude
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Scene.Types (SortableQuad(..))
+import Engine.Scene.Types.Batch (justAbove)
 import Engine.Graphics.Vulkan.Types.Vertex
     (Vec2(..), Vec4(..), mkVertexWorld, tileWorldUV, noFaceMapVertexId)
 import World.Grid (tileWidth, tileHeight, worldLayer, baseTileW, baseTileH)
@@ -55,10 +56,15 @@ floraMarkerQuad lookupSlot geom (iconW, iconH) tileAlpha gx gy tex =
         slot  = fromIntegral (lookupSlot tex)
         tint  = Vec4 1.0 1.0 1.0 tileAlpha
         wuv   = tileWorldUV gx gy
-        -- The tree's own depth plus one tie-break step: the marker is
-        -- part of that sprite's annotation, so it must sort with it
-        -- rather than at its tile's generic depth.
-        sortKey = fgSortKey geom + 0.00001
+        -- The next representable depth ABOVE the tree's own: the marker
+        -- is part of that sprite's annotation, so it sorts with the
+        -- tree rather than at its tile's generic depth, and it must do
+        -- so at every map coordinate. A small added constant would not
+        -- — see 'justAbove'; at far-map depths it rounds away and the
+        -- marker ties its tree, after which the painter order separates
+        -- them on rect and texture, which says nothing about which
+        -- belongs in front.
+        sortKey = justAbove (fgSortKey geom)
         v uvx uvy px py = mkVertexWorld wuv (Vec2 px py) (Vec2 uvx uvy)
                               tint slot noFaceMapVertexId
     in SortableQuad
