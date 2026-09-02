@@ -176,6 +176,8 @@ data LibraryPhase
         -- ^ The cross-process library lock could not be created or
         --   was still held by another process when the wait bound
         --   expired.
+    | LibPin
+        -- ^ A liveness pin file could not be created or locked.
     | LibPayloadIdentity
         -- ^ The payload itself is unacceptable: no files, a name that
         --   is not a safe single path component, a reserved name, or a
@@ -331,15 +333,17 @@ data CleanupReport = CleanupReport
         --   for the next run's sweep.
     , crRetainedReferenced ∷ ![GeneratedWorldId]
     , crRetainedPinned     ∷ ![GeneratedWorldId]
-        -- ^ Retained because a process-owned operation pinned them.
+        -- ^ Retained because a pin is live on them — held by this
+        --   process, or by any other process whose pin file's record
+        --   lock is still held (or could not be judged).
     , crRetainedUnreadable ∷ ![FilePath]
     , crDeletionSuppressed ∷ !Bool
         -- ^ 'True' iff 'rsIndeterminate' was non-empty: no final entry
         --   was removed this run, whatever the scan otherwise said.
     , crTransientsRemoved  ∷ ![FilePath]
-        -- ^ ABANDONED staging, displaced and tombstone directories
-        --   plus registry candidate files swept — leftovers of earlier
-        --   operations, never this run's own tombstones, which
-        --   'crRemoved' accounts for.
+        -- ^ ABANDONED staging, displaced and tombstone directories,
+        --   registry candidate files and pin files swept — leftovers
+        --   of earlier operations, never this run's own tombstones,
+        --   which 'crRemoved' accounts for.
     , crWarnings           ∷ ![Text]
     } deriving (Show, Eq)

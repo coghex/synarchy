@@ -33,21 +33,22 @@
 --   world generation, saving or loading yet. Base-chunk records extend
 --   this same library later (D-18) rather than creating a second store.
 --
---   === Liveness the filesystem cannot see
+--   === Liveness the saves cannot show
 --
 --   Reference discovery reads SAVES. A session holding a generated
 --   world it has not saved yet references that world in memory only,
---   and a cleanup that consulted the filesystem alone would remove its
---   entry. 'withPinnedReferences' is the in-process answer: a
---   process-owned operation pins the ids it is about to depend on, and
---   cleanup retains a pinned id exactly as it retains a referenced one.
---   Pins are shared by every handle opened on one root in this process,
---   and pin transitions use the same process mutex cleanup acquires before
---   taking its filesystem lock. That makes "pin then start the operation"
---   atomic with respect to cleanup: whichever begins first wins the mutex,
---   and cleanup can never act from a pin snapshot that was already stale
---   when its protected work began. The integration slices are responsible
---   for pinning every live page's id around any cleanup they schedule.
+--   and a cleanup that consulted saves alone would remove its entry.
+--   'withPinnedReferences' is the answer, and it is visible to EVERY
+--   process on the root, not just this one: a pin is a file in the
+--   library root held under a POSIX record lock for as long as the pin
+--   is live ("World.GeneratedLibrary.Pins"), created under the library
+--   lock so it cannot come into being while a cleanup anywhere is
+--   deciding, and probed by cleanup the same way transients are proven
+--   abandoned. In-process, pins are shared by every handle opened on one
+--   directory and counted under the same process mutex cleanup holds, so
+--   this process's own pins are never probed and never observed
+--   mid-change. The integration slices are responsible for pinning every
+--   live page's id for as long as the page lives.
 module World.GeneratedLibrary
     ( -- * Opening
       Library
@@ -95,10 +96,8 @@ import UPrelude
 import qualified Data.HashSet as HS
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import Control.Concurrent.STM
-    (TVar, newTVarIO, readTVarIO, atomically, modifyTVar')
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
-import Control.Exception (IOException, bracket_, try)
+import Control.Exception (IOException, finally, try)
 import System.Directory
     (canonicalizePath, createDirectoryIfMissing, doesDirectoryExist)
 import System.FilePath ((</>), dropTrailingPathSeparator, normalise)
@@ -113,16 +112,15 @@ import World.GeneratedLibrary.Publish
 import World.GeneratedLibrary.Registry
 import World.GeneratedLibrary.References
 import World.GeneratedLibrary.Cleanup
+import World.GeneratedLibrary.Pins
 
-type PinCounts = Map.Map GeneratedWorldId Int
-
--- | An opened library: its configuration plus the process-owned pin set
---   SHARED by every handle opened on the same absolute root. Mutations are
---   serialised by the library lock; pin transitions are serialised by that
---   lock's process mutex.
+-- | An opened library: its configuration plus the process-owned pin
+--   store SHARED by every handle opened on the same directory. Mutations
+--   are serialised by the library lock; pin transitions by that lock's
+--   process mutex.
 data Library = Library
     { libraryConfig ∷ !LibraryConfig
-    , libraryPins   ∷ !(TVar PinCounts)
+    , libraryPins   ∷ !PinStore
     }
 
 -- | Open (creating if absent) the library at 'lcRoot'. Refuses a root,
@@ -245,40 +243,47 @@ scanReferences lib = scanSaveReferences (lcSavesDirectory (libraryConfig lib))
 cleanupLibrary ∷ Library → HS.HashSet Text → IO (Either LibraryFailure CleanupReport)
 cleanupLibrary lib luaKnownNames =
     withLibraryLock (libraryConfig lib) $ do
-        -- Read INSIDE the process mutex held by 'withLibraryLock'. Pin
-        -- transitions take the same mutex, so this snapshot cannot already
-        -- be stale when cleanup starts acting on it.
+        -- Read INSIDE the lock. Pin acquisition takes the same lock and
+        -- release the same process mutex, so this snapshot cannot be
+        -- stale while cleanup acts on it; other processes' pins are
+        -- probed on disk by the cleanup itself.
         pins ← pinnedReferences lib
         cleanupUnlocked (libraryConfig lib) luaKnownNames pins
 
 -- Liveness ----------------------------------------------------------------------------
 
 -- | Hold @gids@ live for the duration of @action@: a cleanup through ANY
---   handle on the same root retains them whether or not any save references
---   them yet. Acquisition and release take the library's process mutex, so
---   an action cannot start behind a cleanup that already owns the mutex, and
---   a cleanup that starts behind this pin must observe it. Nested and
---   overlapping pins compose (a count per id), and the pin is released on
---   every exit path.
-withPinnedReferences ∷ Library → [GeneratedWorldId] → IO a → IO a
-withPinnedReferences lib gids =
-    bracket_ (transition 1) (transition (-1))
+--   handle on the same root, in THIS process or any other, retains them
+--   whether or not any save references them yet. Acquisition takes the
+--   library lock (so it serialises with every cleanup everywhere and can
+--   fail with a structured 'LibLock' or 'LibPin' failure — in which case
+--   @action@ never runs); release takes the process mutex. Nested and
+--   overlapping pins compose (a count per id), and the pin is released
+--   on every exit path. @action@ is free to publish, reconcile or clean
+--   up (the lock is not held across it); what may NOT happen is calling
+--   this from inside another lock holder's action, such as a publish
+--   hook, because the process mutex is not reentrant.
+withPinnedReferences
+    ∷ Library → [GeneratedWorldId] → IO a → IO (Either LibraryFailure a)
+withPinnedReferences lib gids action = do
+    acquired ← withLibraryLock cfg (acquirePinsUnlocked cfg (libraryPins lib) gids)
+    case acquired of
+        Left failure → pure (Left failure)
+        Right () → (Right ⊚ action)
+            `finally` withLibraryProcessMutex (releasePinsUnlocked (libraryPins lib) gids)
   where
-    transition delta = withLibraryProcessMutex (adjust delta)
-    adjust delta = atomically $ modifyTVar' (libraryPins lib) $ \pins →
-        foldr (Map.alter (bump delta)) pins gids
-    bump delta current =
-        let n = fromMaybe 0 current + delta
-        in if n ≤ 0 then Nothing else Just n
+    cfg = libraryConfig lib
 
+-- | The ids THIS process currently holds pins on. Pins held by other
+--   processes are visible only on disk, to cleanup's probe.
 pinnedReferences ∷ Library → IO (Set.Set GeneratedWorldId)
-pinnedReferences lib = Map.keysSet ⊚ readTVarIO (libraryPins lib)
+pinnedReferences lib = inProcessPins (libraryPins lib)
 
 -- | Process-wide per-root pin stores. Opening the same root twice must not
 --   create two liveness views: cleanup through either handle protects an
 --   operation using the other. The table is intentionally process-lifetime;
 --   a root has no close operation, and retaining an empty TVar is harmless.
-sharedPinStores ∷ MVar (Map.Map FilePath (TVar PinCounts))
+sharedPinStores ∷ MVar (Map.Map FilePath PinStore)
 sharedPinStores = unsafePerformIO (newMVar Map.empty)
 {-# NOINLINE sharedPinStores #-}
 
@@ -289,11 +294,11 @@ sharedPinStores = unsafePerformIO (newMVar Map.empty)
 --   symlinked temp directory all reach one 'TVar'. The root itself must
 --   already exist (the caller has just created it); a root that cannot be
 --   canonicalised is a root that cannot be opened.
-sharedPinsForRoot ∷ FilePath → IO (TVar PinCounts)
+sharedPinsForRoot ∷ FilePath → IO PinStore
 sharedPinsForRoot root = do
     key ← canonicalizePath root
     modifyMVar sharedPinStores $ \stores → case Map.lookup key stores of
         Just pins → pure (stores, pins)
         Nothing → do
-            pins ← newTVarIO Map.empty
+            pins ← newPinStore
             pure (Map.insert key pins stores, pins)

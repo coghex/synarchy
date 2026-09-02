@@ -69,6 +69,7 @@ module World.GeneratedLibrary.Publish
     , publishUnlocked
     , claimTransientName
     , removeTransientDirectory
+    , nextTransientSuffix
     ) where
 
 import UPrelude
@@ -329,9 +330,18 @@ claimTransientName root kind gid = do
 
 nextTransientPath ∷ FilePath → TransientKind → GeneratedWorldId → IO FilePath
 nextTransientPath root kind gid = do
+    (pid, n) ← nextTransientSuffix
+    pure (root </> transientDirectoryName kind gid pid n)
+
+-- | The two numbers every owned transient name ends in: this process's
+--   id and a fresh value of a process-local counter. Shared with the pin
+--   files ("World.GeneratedLibrary.Pins") so one counter numbers every
+--   name this process generates.
+nextTransientSuffix ∷ IO (Word64, Word64)
+nextTransientSuffix = do
     pid ← getProcessID
     n ← IORef.atomicModifyIORef' transientCounter (\c → (c + 1, c))
-    pure (root </> transientDirectoryName kind gid (fromIntegral pid) n)
+    pure (fromIntegral pid, n)
 
 -- | Remove a transient directory the library owns, reporting (never
 --   throwing) a failure. Refuses a symlink: the directory would not be

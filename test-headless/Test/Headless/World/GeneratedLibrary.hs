@@ -34,7 +34,8 @@ import System.Directory
 import System.FilePath ((</>))
 import System.IO (hClose, hGetLine)
 import System.Process
-    (createProcess, proc, StdStream(..), CreateProcess(..), waitForProcess)
+    ( createProcess, proc, StdStream(..), CreateProcess(..), waitForProcess
+    , readProcess )
 
 import World.GeneratedLibrary
 import World.GeneratedLibrary.Layout
@@ -116,6 +117,11 @@ cleanupOK lib = cleanupLibrary lib HS.empty ≫= orFail "cleanupLibrary"
 
 reconcileOK ∷ Library → IO ([LibraryEntry], ReconcileReport)
 reconcileOK lib = reconcileLibrary lib ≫= orFail "reconcileLibrary"
+
+-- | Run @action@ with @gids@ pinned, failing the test if the pin itself
+--   could not be taken.
+pinned ∷ Library → [GeneratedWorldId] → IO a → IO a
+pinned lib gids action = withPinnedReferences lib gids action ≫= orFail "withPinnedReferences"
 
 failedIn ∷ LibraryPhase → Either LibraryFailure a → Bool
 failedIn phase = either ((≡ phase) . glfPhase) (const False)
@@ -343,6 +349,9 @@ layoutSpec = describe "layout" $ do
         classifyLibraryName registryFileName `shouldBe` RegistryName
         classifyLibraryName (registryTempTemplate <> "12345")
             `shouldBe` RegistryTempName
+        classifyLibraryName (registryTempTemplate <> "12345-7")
+            `shouldBe` RegistryTempName
+        classifyLibraryName (pinFileName gidA 4 2) `shouldBe` PinName (tokenOf gidA)
         classifyLibraryName lockFileName `shouldBe` LockName
 
     it "classifies every malformed, non-canonical, traversal-shaped or separator-bearing name as unfamiliar" $ do
@@ -350,7 +359,11 @@ layoutSpec = describe "layout" $ do
             bad = [ "", ".", "..", "../" <> tok, tok <> "/x", "x/" <> tok
                   , map toUpper' tok, take 31 tok, tok <> "0"
                   , tok <> ".staging-", tok <> ".staging-x1", tok <> ".staging"
-                  , tok <> ".unknown-1", tok <> "..staging-1", "notes", "README" ]
+                  , tok <> ".staging-1-", tok <> ".staging-1-2-3", tok <> ".pin-"
+                  , tok <> ".unknown-1", tok <> "..staging-1", "notes", "README"
+                  , registryTempTemplate, registryTempTemplate <> "1-notes"
+                  , registryTempTemplate <> "x1", registryTempTemplate <> "1-"
+                  , registryTempTemplate <> "1-2-3" ]
             toUpper' c = if c ≥ 'a' ∧ c ≤ 'f' then toEnum (fromEnum c - 32) else c
         forM_ bad $ \name →
             (name, classifyLibraryName name) `shouldBe` (name, UnfamiliarName)
@@ -514,7 +527,7 @@ publishSpec = describe "publication" $ do
             leDigest e `shouldBe` Just (digestOf payload1)
             -- Reconciliation restored; cleanup sweeps the abandoned
             -- staging copy of the interrupted republish.
-            report ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            report ← pinned lib [gidA] (cleanupOK lib)
             length (crTransientsRemoved report) `shouldBe` 1
             after ← rootNames root
             after `shouldBe` L.sort [entryDirectoryName gidA, registryFileName, lockFileName]
@@ -670,8 +683,8 @@ referenceSpec = describe "references and cleanup" $ do
             lib ← openOK root
             _ ← publishOK lib gidA payload1
             _ ← publishOK lib gidB payload2
-            withPinnedReferences lib [gidA] $ do
-                withPinnedReferences lib [gidA, gidB] $ do
+            pinned lib [gidA] $ do
+                pinned lib [gidA, gidB] $ do
                     pinnedReferences lib `shouldReturn` Set.fromList [gidA, gidB]
                     r ← cleanupOK lib
                     crRemoved r `shouldBe` []
@@ -717,13 +730,18 @@ referenceSpec = describe "references and cleanup" $ do
             let tok = entryDirectoryName gidA
                 strangers = [ "notes", map upper tok, tok <> ".staging-", "2024" ]
                 upper c = if c ≥ 'a' ∧ c ≤ 'f' then toEnum (fromEnum c - 32) else c
+                -- A file that merely STARTS like a registry candidate.
+                lookalike = registryTempTemplate <> "1-notes"
             forM_ strangers $ \n → createDirectory (libraryRoot root </> n)
             BS.writeFile (libraryRoot root </> "README") "keep me"
+            BS.writeFile (libraryRoot root </> lookalike) "mine"
             report ← cleanupOK lib
             L.sort (rcUnfamiliar (crReconcile report))
-                `shouldBe` L.sort (map (libraryRoot root </>) ("README" : strangers))
+                `shouldBe` L.sort (map (libraryRoot root </>) ("README" : lookalike : strangers))
+            crTransientsRemoved report `shouldBe` []
             forM_ strangers $ \n → doesDirectoryExist (libraryRoot root </> n) `shouldReturn` True
             BS.readFile (libraryRoot root </> "README") `shouldReturn` "keep me"
+            BS.readFile (libraryRoot root </> lookalike) `shouldReturn` "mine"
 
 -- Registry ---------------------------------------------------------------------------
 
@@ -818,7 +836,7 @@ registrySpec = describe "registry" $ do
             let displaced = libraryRoot root </> transientDirectoryName DisplacedDir gidA 3 3
             createDirectory displaced
             BS.writeFile (displaced </> "stale") "x"
-            r1 ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            r1 ← pinned lib [gidA] (cleanupOK lib)
             crTransientsRemoved r1 `shouldBe` [displaced]
             -- Now make the final unreadable and plant a displaced copy.
             createDirectory displaced
@@ -844,7 +862,7 @@ registrySpec = describe "registry" $ do
             -- rename fail after its temporary was written and validated.
             removeFile (registryPath root)
             createDirectory (registryPath root)
-            failedRepair ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            failedRepair ← pinned lib [gidA] (cleanupOK lib)
             crTransientsRemoved failedRepair `shouldBe` []
             doesDirectoryExist displaced `shouldReturn` True
             rcWarnings (crReconcile failedRepair)
@@ -856,7 +874,7 @@ registrySpec = describe "registry" $ do
             removeDirectoryRecursive (registryPath root)
             (_, repaired) ← reconcileOK lib
             rcWarnings repaired `shouldBe` []
-            swept ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            swept ← pinned lib [gidA] (cleanupOK lib)
             crTransientsRemoved swept `shouldBe` [displaced]
             doesDirectoryExist displaced `shouldReturn` False
 
@@ -883,7 +901,7 @@ registrySpec = describe "registry" $ do
             length displaced `shouldBe` 1
             -- Cleanup cannot make the registry durable either, so the old
             -- complete copy stays, run after run.
-            stuck ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            stuck ← pinned lib [gidA] (cleanupOK lib)
             crTransientsRemoved stuck `shouldBe` []
             forM_ displaced $ \d → doesDirectoryExist d `shouldReturn` True
             inventory ← listEntries lib ≫= orFail "listEntries"
@@ -891,7 +909,7 @@ registrySpec = describe "registry" $ do
             -- Once the registry can be written, the next cleanup proves it
             -- durable and only then sweeps the displaced copy.
             removeDirectoryRecursive (registryPath root)
-            swept ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            swept ← pinned lib [gidA] (cleanupOK lib)
             crTransientsRemoved swept `shouldBe` displaced
             forM_ displaced $ \d → doesDirectoryExist d `shouldReturn` False
             repaired ← listEntries lib ≫= orFail "listEntries"
@@ -930,7 +948,7 @@ containmentSpec = describe "containment" $ do
             fmap leStatus found `shouldSatisfy` \s → case s of
                 Just (EntryUnreadable why) → "symlink" `T.isInfixOf` why
                 _                          → False
-            report ← withPinnedReferences lib [gidB] (cleanupOK lib)
+            report ← pinned lib [gidB] (cleanupOK lib)
             crRetainedUnreadable report `shouldBe` [finalDir root gidA]
             crRemoved report `shouldBe` []
             e ← committed lib gidB
@@ -962,7 +980,7 @@ coordinationSpec = describe "coordination" $ do
                     -- returned.
                     poll a `shouldReturn'` Nothing
                     doesDirectoryExist staging `shouldReturn` True }
-            report ← withPinnedReferences lib [gidA] $ do
+            report ← pinned lib [gidA] $ do
                 _ ← publishEntryWith hooks lib gidA payload1 ≫= orFail "publishEntryWith"
                 Just a ← IORef.readIORef pending
                 wait a ≫= orFail "cleanupLibrary"
@@ -977,7 +995,7 @@ coordinationSpec = describe "coordination" $ do
             publishingLib ← openOK root
             cleanupLib ← openOK root
             _ ← publishOK publishingLib gidA payload1
-            report ← withPinnedReferences publishingLib [gidA] $ do
+            report ← pinned publishingLib [gidA] $ do
                 pinnedReferences cleanupLib `shouldReturn` Set.singleton gidA
                 cleanupOK cleanupLib
             crRetainedPinned report `shouldBe` [gidA]
@@ -1002,7 +1020,7 @@ coordinationSpec = describe "coordination" $ do
                     expectationFailure "no handles"
                     error "unreachable"
             _ ← publishOK pinningLib gidA payload1
-            withPinnedReferences pinningLib [gidA] $
+            pinned pinningLib [gidA] $
                 forM_ others $ \other → do
                     pinnedReferences other `shouldReturn` Set.singleton gidA
                     report ← cleanupOK other
@@ -1033,18 +1051,82 @@ coordinationSpec = describe "coordination" $ do
             cleanup ← async (cleanupLibrary quickLib HS.empty)
             threadDelay 100_000
             poll cleanup `shouldSatisfyM` isNothing
-            pinned ← async (withPinnedReferences lib [gidA] (pure ()))
+            pinnedAction ← async (withPinnedReferences lib [gidA] (pure ()))
             threadDelay 100_000
             -- Cleanup owns the process mutex while waiting for the POSIX
             -- lock, so the pin transition and its action cannot slip behind
             -- cleanup's snapshot and run concurrently with deletion.
-            poll pinned `shouldSatisfyM` isNothing
+            poll pinnedAction `shouldSatisfyM` isNothing
             hClose hin
             _ ← waitForProcess ph
             report ← wait cleanup ≫= orFail "cleanupLibrary"
             crRemoved report `shouldBe` [gidA]
-            _ ← wait pinned
+            wait pinnedAction ≫= orFail "withPinnedReferences"
             pure ()
+
+    it "a pin held by another process retains the entry; once that process is gone the pin is abandoned and swept" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            -- Another process pins gidA the way this library would: a pin
+            -- file under the root, held under a record lock.
+            let pinPath = libraryRoot root </> pinFileName gidA 424242 1
+                script = unlines
+                    [ "import fcntl, sys"
+                    , "f = open(sys.argv[1], 'w')"
+                    , "fcntl.lockf(f, fcntl.LOCK_EX)"
+                    , "print('pinned', flush=True)"
+                    , "sys.stdin.readline()" ]
+            (Just hin, Just hout, _, ph) ← createProcess
+                (proc "python3" ["-c", script, pinPath])
+                    { std_in = CreatePipe, std_out = CreatePipe }
+            hGetLine hout `shouldReturn` "pinned"
+            pinnedReferences lib `shouldReturn` Set.empty
+            held ← cleanupOK lib
+            crRetainedPinned held `shouldBe` [gidA]
+            crRemoved held `shouldBe` []
+            crTransientsRemoved held `shouldBe` []
+            doesFileExist pinPath `shouldReturn` True
+            doesDirectoryExist (finalDir root gidA) `shouldReturn` True
+            -- The pinning process exits without cleaning up: the lock is
+            -- gone, the file is not. That is an abandoned pin.
+            hClose hin
+            _ ← waitForProcess ph
+            gone ← cleanupOK lib
+            crTransientsRemoved gone `shouldBe` [pinPath]
+            crRemoved gone `shouldBe` [gidA]
+            doesFileExist pinPath `shouldReturn` False
+
+    it "a pin taken here is a held pin file another process can see, and is gone after release" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            let probe = unlines
+                    [ "import fcntl, sys"
+                    , "f = open(sys.argv[1], 'r+')"
+                    , "try:"
+                    , "    fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)"
+                    , "    print('free')"
+                    , "except OSError:"
+                    , "    print('held')" ]
+                pinFilesNow = do
+                    names ← rootNames root
+                    pure [ libraryRoot root </> n | n ← names
+                         , classifyLibraryName n ≡ PinName (tokenOf gidA) ]
+            pinFile ← pinned lib [gidA] $ do
+                files ← pinFilesNow
+                pinFile ← case files of
+                    [one] → pure one
+                    other → do
+                        expectationFailure ("expected one pin file, found " <> show other)
+                        error "unreachable"
+                readProcess "python3" ["-c", probe, pinFile] "" `shouldReturn` "held\n"
+                -- Nested holds keep the one file; only the last release drops it.
+                pinned lib [gidA] (pinFilesNow `shouldReturn` [pinFile])
+                pinFilesNow `shouldReturn` [pinFile]
+                pure pinFile
+            doesFileExist pinFile `shouldReturn` False
+            pinFilesNow `shouldReturn` []
 
     it "two same-id publishers leave one complete final entry and a registry matching the winner" $
         withScratch $ \root → do

@@ -17,17 +17,22 @@
 --   >                                and the registry are durable
 --   > <token>.tombstone-<suffix>     a proven-unreferenced entry detached
 --   >                                by cleanup, awaiting deletion
+--   > <token>.pin-<suffix>           a liveness pin FILE held under a
+--   >                                record lock by the pinning process
 --   > registry.synlib                the registry (an index, never the
 --   >                                authority)
---   > registry-synlib-tmp<suffix>    an exclusively created registry
+--   > registry-synlib-tmp<digits>[-<digits>]
+--   >                                an exclusively created registry
 --   >                                candidate; a crash leftover is swept
 --   > library.lock                   the cross-process lock file
 --
 --   where @\<token\>@ is exactly the 32 lowercase hexadecimal characters
 --   'World.Page.GeneratedId.renderGeneratedWorldId' produces and
---   @\<suffix\>@ is digits and hyphens, digit-first. Anything else is
---   'UnfamiliarName' and is never touched: not read, not indexed, not
---   removed (spec: "only reserved names carrying library ownership
+--   @\<suffix\>@ is @\<digits\>-\<digits\>@ (a process id and a counter).
+--   Every grammar is matched COMPLETELY: a name that merely starts like
+--   an owned one — @registry-synlib-tmp1-notes@, @\<token\>.staging-@ —
+--   is 'UnfamiliarName' and is never touched: not read, not indexed,
+--   not removed (spec: "only reserved names carrying library ownership
 --   evidence may be swept; unfamiliar directories must be retained").
 --
 --   === Identity to path is one-way and canonical
@@ -56,6 +61,7 @@ module World.GeneratedLibrary.Layout
     , isEntryToken
     , entryDirectoryName
     , transientDirectoryName
+    , pinFileName
       -- * Payload policy
     , validatePayloadName
     , validatePayload
@@ -77,7 +83,6 @@ import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Data.Char (isControl, isDigit, isHexDigit, isLower)
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
-import World.Save.Storage.Durable (isTransientName)
 import World.GeneratedLibrary.Types
 
 -- Reserved file names -----------------------------------------------------
@@ -92,10 +97,20 @@ registryFileName ∷ FilePath
 registryFileName = "registry.synlib"
 
 -- | Prefix passed to 'System.IO.openBinaryTempFile' for an exclusively
---   created registry candidate. Its numeric-suffixed products are reserved
---   library-owned crash leftovers and cleanup may sweep them under the lock.
+--   created registry candidate. That function appends @\<pid\>-\<n\>@
+--   (digits, a hyphen, digits); only a name carrying EXACTLY that
+--   suffix is one of the library's crash leftovers, which cleanup may
+--   sweep under the lock. See 'isRegistryTempName'.
 registryTempTemplate ∷ String
 registryTempTemplate = "registry-synlib-tmp"
+
+-- | The complete generated grammar: the template, then digits, then
+--   optionally one hyphen and more digits — never anything else. A
+--   prefix match alone would sweep a player's @registry-synlib-tmp1-notes@.
+isRegistryTempName ∷ FilePath → Bool
+isRegistryTempName name = case L.stripPrefix registryTempTemplate name of
+    Just suffix → validSuffix suffix
+    Nothing     → False
 
 lockFileName ∷ FilePath
 lockFileName = "library.lock"
@@ -116,11 +131,12 @@ renderTransientKind TombstoneDir = "tombstone"
 
 -- | What one name in the library root means. The token carried by the
 --   entry constructors is the directory's OWN name (or the id portion of
---   a transient's), already proven to have the canonical shape — it is
---   still only text, and is never turned into an id.
+--   a transient's or a pin's), already proven to have the canonical
+--   shape — it is still only text, and is never turned into an id.
 data LibraryName
     = FinalEntryName !Text
     | TransientName !TransientKind !Text
+    | PinName !Text
     | RegistryName
     | RegistryTempName
     | LockName
@@ -139,23 +155,35 @@ isEntryToken s = length s ≡ 32 ∧ all hexLower s
 classifyLibraryName ∷ FilePath → LibraryName
 classifyLibraryName name
     | name ≡ registryFileName = RegistryName
-    | isTransientName registryTempTemplate name = RegistryTempName
+    | isRegistryTempName name = RegistryTempName
     | name ≡ lockFileName     = LockName
     | isEntryToken name       = FinalEntryName (T.pack name)
     | otherwise = case L.break (≡ '.') name of
         (tok, '.' : rest) | isEntryToken tok →
             case transientKindOf rest of
                 Just kind → TransientName kind (T.pack tok)
-                Nothing   → UnfamiliarName
+                Nothing | ownedSuffix pinKindName rest → PinName (T.pack tok)
+                        | otherwise → UnfamiliarName
         _ → UnfamiliarName
   where
     transientKindOf rest =
         listToMaybe [ kind | kind ← [minBound .. maxBound]
-                           , Just suffix ← [L.stripPrefix (renderTransientKind kind <> "-") rest]
-                           , validSuffix suffix ]
-    validSuffix s = case s of
-        (c : _) → isDigit c ∧ all (\x → isDigit x ∨ x ≡ '-') s
-        []      → False
+                           , ownedSuffix (renderTransientKind kind) rest ]
+    ownedSuffix kindName rest = case L.stripPrefix (kindName <> "-") rest of
+        Just suffix → validSuffix suffix
+        Nothing     → False
+
+-- | The generated suffix grammar shared by every owned name: digits,
+--   optionally one hyphen and more digits. Matched completely.
+validSuffix ∷ String → Bool
+validSuffix s = case L.break (≡ '-') s of
+    (d, [])      → digits d
+    (d, '-' : r) → digits d ∧ digits r
+    _            → False
+  where digits x = not (null x) ∧ all isDigit x
+
+pinKindName ∷ String
+pinKindName = "pin"
 
 -- | The one and only id-to-directory-name mapping.
 entryDirectoryName ∷ GeneratedWorldId → FilePath
@@ -168,6 +196,13 @@ transientDirectoryName ∷ TransientKind → GeneratedWorldId → Word64 → Wor
 transientDirectoryName kind gid a b =
     entryDirectoryName gid <> "." <> renderTransientKind kind <> "-"
         <> show a <> "-" <> show b
+
+-- | The name of a liveness pin FILE for @gid@ ("World.GeneratedLibrary.Pins"),
+--   distinguished the same way. Round-trips through 'classifyLibraryName'
+--   as 'PinName'.
+pinFileName ∷ GeneratedWorldId → Word64 → Word64 → FilePath
+pinFileName gid a b =
+    entryDirectoryName gid <> "." <> pinKindName <> "-" <> show a <> "-" <> show b
 
 -- Payload policy -----------------------------------------------------------
 

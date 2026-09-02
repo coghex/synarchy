@@ -881,6 +881,7 @@ library
                      World.GeneratedLibrary.Registry
                      World.GeneratedLibrary.References
                      World.GeneratedLibrary.Publish
+                     World.GeneratedLibrary.Pins
                      World.GeneratedLibrary.Cleanup
                      World.GeneratedLibrary
                      World.Scale

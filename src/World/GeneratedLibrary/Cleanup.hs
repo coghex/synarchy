@@ -22,8 +22,13 @@
 --      slot was indeterminate, stop here: no final entry is removed
 --      this run ('crDeletionSuppressed'), and the report says which
 --      slot prevented it.
---   4. Otherwise, for every complete final whose id is in neither the
---      referenced set nor the process-owned PIN set: atomically DETACH
+--   4. Probe every pin file ("World.GeneratedLibrary.Pins") of an id
+--      this process does not itself hold: one whose record lock is
+--      still held marks its id live; one nobody holds is abandoned and
+--      removed. An id this process holds is live without a probe — its
+--      own pin file must never be probed.
+--   5. Otherwise, for every complete final whose id is neither
+--      referenced nor pinned (here or elsewhere): atomically DETACH
 --      it by renaming it to a tombstone, sync the root, rewrite the
 --      registry without it, and only then delete the tombstone
 --      recursively. An interruption during deletion leaves an
@@ -51,11 +56,12 @@ import World.GeneratedLibrary.Registry
 import World.GeneratedLibrary.References
 import World.GeneratedLibrary.Publish
     (claimTransientName, removeTransientDirectory)
+import World.GeneratedLibrary.Pins (PinProbe(..), sweepPinFile)
 
 -- | One cleanup run. Caller holds the library lock. @pinned@ is the set
---   of ids a process-owned operation has declared live (a session that
---   generated a world it has not saved yet, a save in flight) — they
---   are retained exactly as referenced ones are.
+--   of ids THIS process holds pins on; ids other processes hold pins on
+--   are discovered by probing their pin files. Both are retained exactly
+--   as referenced ones are.
 cleanupUnlocked
     ∷ LibraryConfig → HS.HashSet Text → Set.Set GeneratedWorldId
     → IO (Either LibraryFailure CleanupReport)
@@ -82,17 +88,20 @@ cleanupUnlocked cfg luaKnownNames pinned = do
                     let sweptTransients = sweptDirectories ⧺ sweptRegistryTemps
                         sweepWarnings = directoryWarnings ⧺ registryTempWarnings
                     refs ← scanSaveReferences (lcSavesDirectory cfg) luaKnownNames
+                    (foreignHeld, sweptPins, pinWarnings) ← probeForeignPins (rtPins scan)
                     let referenced = rsReferenced refs
+                        live gid   = gid `Set.member` pinned
+                                       ∨ T.pack (entryDirectoryName gid) `Set.member` foreignHeld
                         committed = [ (erId rec, root </> T.unpack (leName e))
                                     | e ← entries, leStatus e ≡ EntryCommitted
                                     , Just rec ← [leRecord e] ]
                         retainedRef = [ gid | (gid, _) ← committed, gid `Set.member` referenced ]
                         retainedPin = [ gid | (gid, _) ← committed
                                             , not (gid `Set.member` referenced)
-                                            , gid `Set.member` pinned ]
+                                            , live gid ]
                         candidates  = [ c | c@(gid, _) ← committed
                                           , not (gid `Set.member` referenced)
-                                          , not (gid `Set.member` pinned) ]
+                                          , not (live gid) ]
                         unreadable  = [ root </> T.unpack (leName e)
                                       | e ← entries, EntryUnreadable _ ← [leStatus e] ]
                         suppressed  = not (null (rsIndeterminate refs))
@@ -104,8 +113,8 @@ cleanupUnlocked cfg luaKnownNames pinned = do
                             , crRetainedPinned     = retainedPin
                             , crRetainedUnreadable = unreadable
                             , crDeletionSuppressed = suppressed
-                            , crTransientsRemoved  = sweptTransients
-                            , crWarnings           = sweepWarnings
+                            , crTransientsRemoved  = sweptTransients ⧺ sweptPins
+                            , crWarnings           = sweepWarnings ⧺ pinWarnings
                             }
                     if suppressed ∨ null candidates
                         then pure (Right base)
@@ -133,6 +142,24 @@ cleanupUnlocked cfg luaKnownNames pinned = do
                                 })
   where
     root = lcRoot cfg
+
+    -- Probe every pin file of an id this process does not hold. Returns
+    -- the tokens whose pins are live (held elsewhere, or unjudgeable —
+    -- retained either way), the abandoned pin files removed, and the
+    -- reasons for any that could not be judged.
+    probeForeignPins pins = do
+        results ← forM [ pin | pin@(tok, _) ← pins, not (heldHere tok) ] $ \(tok, path) → do
+            probe ← sweepPinFile path
+            pure $ case probe of
+                PinHeld           → (Set.singleton tok, [], [])
+                PinAbandoned      → (Set.empty, [path], [])
+                PinUnreadable why → ( Set.singleton tok, []
+                                    , [ "retaining pin " <> T.pack path
+                                        <> " that could not be judged: " <> why ] )
+        pure ( Set.unions [ h | (h, _, _) ← results ]
+             , concat [ p | (_, p, _) ← results ]
+             , concat [ w | (_, _, w) ← results ] )
+    heldHere tok = tok `Set.member` Set.map (T.pack . entryDirectoryName) pinned
 
     syncRoot = do
         r ← try (syncDirectory root)

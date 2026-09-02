@@ -131,6 +131,7 @@ data RootScan = RootScan
     , rtDisplaced  ∷ ![(Text, FilePath)]
     , rtTombstones ∷ ![FilePath]
     , rtRegistryTemps ∷ ![FilePath]
+    , rtPins       ∷ ![(Text, FilePath)]
     , rtUnfamiliar ∷ ![FilePath]
     } deriving (Show, Eq)
 
@@ -139,13 +140,14 @@ scanRoot root = do
     listed ← try (listDirectory root)
     pure $ case listed of
         Left (e ∷ IOException) → Left ("cannot list library root: " <> tshow e)
-        Right names → Right (L.foldl' place (RootScan [] [] [] [] [] []) (L.sort names))
+        Right names → Right (L.foldl' place (RootScan [] [] [] [] [] [] []) (L.sort names))
   where
     place scan name = case classifyLibraryName name of
         FinalEntryName tok             → scan { rtFinals = rtFinals scan ⧺ [(tok, root </> name)] }
         TransientName StagingDir _     → scan { rtStaging = rtStaging scan ⧺ [root </> name] }
         TransientName DisplacedDir tok → scan { rtDisplaced = rtDisplaced scan ⧺ [(tok, root </> name)] }
         TransientName TombstoneDir _   → scan { rtTombstones = rtTombstones scan ⧺ [root </> name] }
+        PinName tok                    → scan { rtPins = rtPins scan ⧺ [(tok, root </> name)] }
         RegistryName                   → scan
         RegistryTempName               → scan { rtRegistryTemps = rtRegistryTemps scan ⧺ [root </> name] }
         LockName                       → scan
