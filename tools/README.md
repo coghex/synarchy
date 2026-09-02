@@ -2079,7 +2079,10 @@ records the result.
 ```bash
 python3 tools/deflake.py            # one probe, one measurement
 python3 tools/deflake.py --json     # the machine-readable outcome document
-python3 tools/test_deflake.py       # the deterministic self-test
+python3 tools/test_deflake.py       # the deterministic self-test (the gate)
+python3 tools/test_deflake.py --only orchestration   # one owner's cases (#1436)
+python3 tools/test_deflake.py --only handoff         # the handoff's (#1659)
+python3 tools/test_deflake.py --only preparation     # engine preparation's (#1913)
 ```
 
 No arguments select a probe, and there is deliberately no run-count or RTS
@@ -2209,6 +2212,24 @@ The gate is `tools/test_deflake.py`, which boots no engine: every collaborator
 is an injected adapter, while `probe_census` and `probe_flake.Measurement`
 themselves are driven for real against throwaway censuses, because the census
 claims it checks are properties of the shipped recorder.
+
+Since #2093 that file is composition and selection only. Its 50 cases live
+with three independently delivered contract owners, each declaring its own
+`CASES` inventory: `deflake_selftest_orchestration` (#1436's
+select/claim/measure/record orchestration, 31 cases),
+`deflake_selftest_handoff` (#1659's retained diagnosis handoff, 15) and
+`deflake_selftest_preparation` (#1913's preparation-before-hold ordering, 4);
+`deflake_selftest_support` is the single source of what they share — the
+assertion helper and the ONE failure accumulator behind it, the temporary
+census/claim/artifact tree, the real `Measurement` builder, the fake claim,
+and the recording, resource and engine-preparation adapters behind `run`.
+The bare command runs every case once in the order it always has
+(orchestration, handoff, preparation) and is what CI and `make ci` invoke;
+`--only <owner>` runs one owner's cases in a fresh process for iteration.
+Every invocation reports the number of cases it ran, an owner whose
+inventory is absent or empty fails the run rather than reporting a vacuous
+pass, and an unrecognized argument or selector is a usage error rather than
+a fall-through to the aggregate.
 
 ### `deflake_diagnosis.py` — is the probe wrong, and did the fix work? (#1437)
 
