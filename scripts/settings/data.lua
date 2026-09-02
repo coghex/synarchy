@@ -284,6 +284,11 @@ function data.loadDefaults()
         uiScale = uiScale * 1.5
         engine.logInfo("Detected 1080p+ display, scaling UI to: " .. tostring(uiScale))
     end
+    -- The product must stay inside the engine's UI-scale domain (#2198):
+    -- engine.setUIScale REJECTS an out-of-domain value and leaves the
+    -- previous scale in place, so a default above uiScaleMax / 2.5 would
+    -- otherwise silently apply nothing on a 4K display.
+    uiScale = math.max(data.uiScaleMin, math.min(data.uiScaleMax, uiScale))
 
 
     -- Update current state

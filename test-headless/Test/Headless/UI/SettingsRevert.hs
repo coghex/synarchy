@@ -122,8 +122,8 @@ spec ∷ Spec
 spec = describe "settings revert restores saved values (#108, #1607)" $ do
 
     -- Requirement 1: the exact #108 contract. Saved and edited values
-    -- are distinct and well inside the engine setters' [0, 1000] clamp
-    -- (Engine.Scripting.Lua.API.Config), and the edited values are
+    -- are distinct and well inside the engine setters' 0–1000 domain
+    -- (Engine.Graphics.Config.Domain, #2198), and the edited values are
     -- OBSERVED live before the revert — without that, a revert that did
     -- nothing at all would pass.
     it "restores the last SAVED tooltip dwell and hint delay after a \

@@ -41,7 +41,9 @@ end
 -- else one of "below_minimum" / "height_out_of_range" / "scale_out_of_band".
 -- Purely informational: never mutates or clamps anything. Outside-
 -- envelope combos remain allowed best-effort (#748: "never silently
--- alter stored scale").
+-- alter stored scale") within the engine's stored-scale domain — a
+-- scale below 0.5 or above 4.0 is refused by engine.setUIScale itself
+-- (#2198), so it is never reachable here.
 function responsive.classify(fbW, fbH, uiscale)
     if fbW < responsive.MIN_WIDTH or fbH < responsive.MIN_HEIGHT then
         return { supported = false, reason = "below_minimum", band = nil }

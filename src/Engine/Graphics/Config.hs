@@ -7,6 +7,9 @@ module Engine.Graphics.Config
   , defaultVideoConfig
   , loadVideoConfig
   , saveVideoConfig
+  , validateVideoConfig
+  , VideoConfigRaw(..)
+  , resolveVideoConfigRaw
   , windowModeToText
   , windowModeFromText
   , msaaToSampleCount
@@ -23,6 +26,7 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), (.=), (.:?), FromJSON(..), ToJSON(..)
                    , Value(..), withText)
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
+import Engine.Graphics.Config.Domain
 import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..), Filter(..))
 
 -- | Convert user-facing MSAA int (1,2,4,8) to Vulkan sample count
@@ -171,16 +175,38 @@ instance FromJSON Resolution where
         <*> v .: "height"
     parseJSON _ = fail "Expected an object for Resolution"
 
-instance FromJSON VideoConfigFile where
+-- | One video-config document decoded STRUCTURALLY (#2198): every leaf
+--   in its on-disk type, the two tokens still unresolved text, and the
+--   legacy @fullscreen@ Boolean kept beside a possibly-absent
+--   @window_mode@. A wrong type, a missing @resolution@ or a syntax
+--   error fails THIS decode, and that is the whole-file failure
+--   'loadVideoConfig' answers with 'defaultVideoConfig'. Two consumers:
+--   'loadVideoConfig' applies the domain to it leaf by leaf, and the
+--   'VideoConfigFile' decoder demands every token resolve — the
+--   strictness 'Engine.Core.Init.migrateLegacyConfig' relies on.
+data VideoConfigRaw = VideoConfigRaw
+    { vrWidth             ∷ Int
+    , vrHeight            ∷ Int
+    , vrWindowMode        ∷ Maybe Text
+    , vrFullscreen        ∷ Bool
+    , vrUIScale           ∷ Double
+      -- ^ The source number as written (a finite Lua/YAML number that
+      --   overflows during narrowing is rejected by 'checkUIScale' on
+      --   the narrowed 'Float', and reported with THIS value).
+    , vrVSync             ∷ Bool
+    , vrFrameLimit        ∷ Maybe Int
+    , vrMSAA              ∷ Int
+    , vrBrightness        ∷ Int
+    , vrPixelSnap         ∷ Bool
+    , vrTextureFilter     ∷ Text
+    , vrTooltipDwellMs    ∷ Int
+    , vrTooltipHintDelayMs ∷ Int
+    } deriving (Show, Eq)
+
+instance FromJSON VideoConfigRaw where
     parseJSON (Object v) = do
       videoObj ← v .: "video"
-      -- Try new "window_mode" field first, fall back to legacy "fullscreen" bool
-      mWindowMode ← videoObj .:? "window_mode"
-      windowMode ← case mWindowMode of
-          Just wm → pure wm
-          Nothing → do
-              fs ← videoObj .:? "fullscreen" .!= False
-              pure $ if fs then Fullscreen else Windowed
+      res ← videoObj .: "resolution"
       -- '.:? key .!= def' is the correct idiom for *optional* fields
       -- with a fallback: '.:' would fail the entire parse when a key
       -- is missing (and the .!= would never get a chance to run),
@@ -188,19 +214,59 @@ instance FromJSON VideoConfigFile where
       -- silently resetting resolution / ui_scale on the very first
       -- launch after any new field is added. Use '.:?' uniformly so
       -- adding fields later doesn't invalidate older saved files.
-      VideoConfigFile
-        ⊚ videoObj .:  "resolution"
-        <*> pure windowMode
+      VideoConfigRaw (resWidth res) (resHeight res)
+        ⊚ videoObj .:? "window_mode"
+        <*> videoObj .:? "fullscreen" .!= False
         <*> videoObj .:? "ui_scale" .!= 1.0
         <*> videoObj .:? "vsync" .!= True
         <*> videoObj .:? "frame_limit" .!= Nothing
         <*> videoObj .:? "msaa" .!= 1
         <*> videoObj .:? "brightness" .!= 100
         <*> videoObj .:? "pixel_snap" .!= False
-        <*> videoObj .:? "texture_filter" .!= FilterNearest
+        <*> videoObj .:? "texture_filter" .!= "nearest"
         <*> videoObj .:? "tooltip_dwell_ms" .!= 400
         <*> videoObj .:? "tooltip_hint_delay_ms" .!= 400
     parseJSON _ = fail "Expected an object for VideoConfigFile"
+
+-- | The window mode a document resolves to when @window_mode@ is
+--   ABSENT: the legacy @fullscreen@ Boolean, itself optional (#433).
+--   A PRESENT @window_mode@ always outranks the legacy key, even when
+--   it fails to resolve — that case never consults @fullscreen@.
+legacyWindowMode ∷ VideoConfigRaw → WindowMode
+legacyWindowMode raw = if vrFullscreen raw then Fullscreen else Windowed
+
+-- | The typed document. Structurally the same decode as 'VideoConfigRaw';
+--   on top of it every token must resolve, exactly as before #2198, so a
+--   document carrying an unknown @window_mode@ or @texture_filter@ still
+--   fails this parse. 'Engine.Core.Init.migrateLegacyConfig' decodes
+--   this type as its schema-completeness gate, so that strictness is
+--   what keeps such a legacy file non-migratable; the per-leaf leniency
+--   lives in 'loadVideoConfig' alone.
+instance FromJSON VideoConfigFile where
+    parseJSON v = do
+      raw ← parseJSON v
+      windowMode ← case vrWindowMode raw of
+          Nothing → pure (legacyWindowMode raw)
+          Just t  → case windowModeFromText t of
+              Just wm → pure wm
+              Nothing → fail $ "Unknown window mode: " <> T.unpack t
+      textureFilter ← case textureFilterFromText (vrTextureFilter raw) of
+          Just tf → pure tf
+          Nothing → fail $ "Unknown texture filter: "
+                             <> T.unpack (vrTextureFilter raw)
+      pure VideoConfigFile
+        { vfResolution    = Resolution (vrWidth raw) (vrHeight raw)
+        , vfWindowMode    = windowMode
+        , vfUIScale       = narrowUIScale (vrUIScale raw)
+        , vfVSync         = vrVSync raw
+        , vfFrameLimit    = vrFrameLimit raw
+        , vfMSAA          = vrMSAA raw
+        , vfBrightness    = vrBrightness raw
+        , vfPixelSnap     = vrPixelSnap raw
+        , vfTextureFilter = textureFilter
+        , vfTooltipDwellMs = vrTooltipDwellMs raw
+        , vfTooltipHintDelayMs = vrTooltipHintDelayMs raw
+        }
 
 instance ToJSON Resolution where
     toJSON (Resolution w h) = Yaml.object
@@ -228,7 +294,89 @@ instance ToJSON VideoConfigFile where
 brightnessToMultiplier ∷ Int → Float
 brightnessToMultiplier pct = fromIntegral (max 50 (min 300 pct)) / 100.0
 
--- | Load video configuration from a YAML file
+-- | Apply the domain to a structurally valid document, leaf by leaf
+--   (#2198): every out-of-domain leaf takes its value from
+--   'defaultVideoConfig' and is reported, every other leaf survives
+--   unchanged. Width and height are independent leaves. A present but
+--   unknown @window_mode@ takes the DEFAULT mode, never the legacy
+--   @fullscreen@ key, which only an absent @window_mode@ consults.
+--   Each rejection is paired with the rendering of the default that
+--   replaced it, for the loader's log line. Pure, so a spec can pin it
+--   without a logger.
+resolveVideoConfigRaw ∷ VideoConfigRaw → (VideoConfig, [(VideoFieldRejection, Text)])
+resolveVideoConfigRaw raw = (config, catMaybes rejections)
+  where
+    d = defaultVideoConfig
+    config = VideoConfig
+        { vcWidth         = width
+        , vcHeight        = height
+        , vcWindowMode    = windowMode
+        , vcUIScale       = uiScale
+        , vcVSync         = vrVSync raw
+        , vcFrameLimit    = frameLimit
+        , vcMSAA          = msaa
+        , vcBrightness    = brightness
+        , vcPixelSnap     = vrPixelSnap raw
+        , vcTextureFilter = textureFilter
+        , vcTooltipDwellMs = dwell
+        , vcTooltipHintDelayMs = hintDelay
+        }
+    rejections = [rW, rH, rWM, rS, rFL, rM, rB, rTF, rD, rHD]
+    (width, rW)  = leaf (checkDimension fieldWidth (vrWidth raw))
+                        (vrWidth raw) (vcWidth d) (tshow (vcWidth d))
+    (height, rH) = leaf (checkDimension fieldHeight (vrHeight raw))
+                        (vrHeight raw) (vcHeight d) (tshow (vcHeight d))
+    (windowMode, rWM) = case vrWindowMode raw of
+        Nothing → (legacyWindowMode raw, Nothing)
+        Just t  → case windowModeFromText t of
+            Just wm → (wm, Nothing)
+            Nothing → ( vcWindowMode d
+                      , Just ( VideoFieldRejection fieldWindowMode t
+                                                   windowModeDomain
+                             , windowModeToText (vcWindowMode d) ) )
+    narrowed = narrowUIScale (vrUIScale raw)
+    (uiScale, rS) = leaf (asSource ⊚ checkUIScale narrowed)
+                         narrowed (vcUIScale d) (tshow (vcUIScale d))
+    -- Report the number as the file wrote it, not the infinity it
+    -- narrowed to.
+    asSource r = r { vfrValue = tshow (vrUIScale raw) }
+    (frameLimit, rFL) = leaf (checkFrameLimit "null" (vrFrameLimit raw))
+                             (vrFrameLimit raw) (vcFrameLimit d)
+                             (maybe "null" tshow (vcFrameLimit d))
+    (msaa, rM) = leaf (checkMSAA (vrMSAA raw))
+                      (vrMSAA raw) (vcMSAA d) (tshow (vcMSAA d))
+    (brightness, rB) = leaf (checkBrightness (vrBrightness raw))
+                            (vrBrightness raw) (vcBrightness d)
+                            (tshow (vcBrightness d))
+    (textureFilter, rTF) = case textureFilterFromText (vrTextureFilter raw) of
+        Just tf → (tf, Nothing)
+        Nothing → ( vcTextureFilter d
+                  , Just ( VideoFieldRejection fieldTextureFilter
+                                               (vrTextureFilter raw)
+                                               textureFilterDomain
+                         , textureFilterToText (vcTextureFilter d) ) )
+    (dwell, rD) = leaf (checkTooltipMs fieldTooltipDwellMs (vrTooltipDwellMs raw))
+                       (vrTooltipDwellMs raw) (vcTooltipDwellMs d)
+                       (tshow (vcTooltipDwellMs d))
+    (hintDelay, rHD) = leaf (checkTooltipMs fieldTooltipHintDelayMs
+                                            (vrTooltipHintDelayMs raw))
+                            (vrTooltipHintDelayMs raw) (vcTooltipHintDelayMs d)
+                            (tshow (vcTooltipHintDelayMs d))
+    -- A leaf keeps its value when the check passes and takes the
+    -- default (reported alongside its rendering) when it does not.
+    leaf ∷ Maybe VideoFieldRejection → α → α → Text
+         → (α, Maybe (VideoFieldRejection, Text))
+    leaf Nothing  value _    _         = (value, Nothing)
+    leaf (Just r) _     dflt dfltText  = (dflt, Just (r, dfltText))
+
+-- | Load video configuration from a YAML file.
+--
+--   Two failure shapes, deliberately distinct (#2198): a document that
+--   does not decode structurally (syntax error, wrong type, missing
+--   @resolution@) falls back to 'defaultVideoConfig' whole, as it
+--   always did; a document that decodes but carries an out-of-domain
+--   leaf keeps every other leaf and defaults only that one, with a
+--   warning naming the file, the full field and the rejected value.
 loadVideoConfig ∷ LoggerState → FilePath → IO VideoConfig
 loadVideoConfig logger path = do
     result ← Yaml.decodeFileEither path
@@ -237,25 +385,54 @@ loadVideoConfig logger path = do
             logWarn logger CatInit $ "Error loading video config: "
                                    <> tshow err
             return defaultVideoConfig
-        Right vf → return $ VideoConfig
-            { vcWidth      = resWidth (vfResolution vf)
-            , vcHeight     = resHeight (vfResolution vf)
-            , vcWindowMode = vfWindowMode vf
-            , vcUIScale    = vfUIScale vf
-            , vcVSync      = vfVSync vf
-            , vcFrameLimit = vfFrameLimit vf
-            , vcMSAA       = vfMSAA vf
-            , vcBrightness  = vfBrightness vf
-            , vcPixelSnap   = vfPixelSnap vf
-            , vcTextureFilter = vfTextureFilter vf
-            , vcTooltipDwellMs = vfTooltipDwellMs vf
-            , vcTooltipHintDelayMs = vfTooltipHintDelayMs vf
-            }
+        Right raw → do
+            let (config, rejections) = resolveVideoConfigRaw raw
+            forM_ rejections $ \(r, dflt) →
+                logWarn logger CatInit $
+                    "Video config " <> T.pack path <> ": "
+                      <> describeRejection r
+                      <> "; using the default " <> dflt
+            return config
 
--- | Save video configuration to a YAML file
-saveVideoConfig ∷ LoggerState → FilePath → VideoConfig → IO ()
-saveVideoConfig logger path config = do
-    let videoFile = VideoConfigFile
+-- | Every field of an in-memory config that is outside the domain.
+--   Empty for a valid config. The enumerated leaves (window mode,
+--   texture filter) and the Booleans cannot be out of domain.
+validateVideoConfig ∷ VideoConfig → [VideoFieldRejection]
+validateVideoConfig c = catMaybes
+    [ checkDimension fieldWidth (vcWidth c)
+    , checkDimension fieldHeight (vcHeight c)
+    , checkUIScale (vcUIScale c)
+    , checkFrameLimit "unlimited" (vcFrameLimit c)
+    , checkMSAA (vcMSAA c)
+    , checkBrightness (vcBrightness c)
+    , checkTooltipMs fieldTooltipDwellMs (vcTooltipDwellMs c)
+    , checkTooltipMs fieldTooltipHintDelayMs (vcTooltipHintDelayMs c)
+    ]
+
+-- | Save video configuration to a YAML file. 'True' when the file was
+--   written.
+--
+--   The whole config is validated first (#2198): if any field is out of
+--   the domain the write is refused entirely — an existing destination
+--   is left byte-for-byte as it was, an absent one stays absent — and
+--   every rejected field is logged. Nothing is silently replaced by a
+--   default. This holds independently of what the setters admit,
+--   because 'VideoConfig(..)' and this function are both exported.
+saveVideoConfig ∷ LoggerState → FilePath → VideoConfig → IO Bool
+saveVideoConfig logger path config =
+    case validateVideoConfig config of
+        [] → do
+            Yaml.encodeFile path videoFile
+            logInfo logger CatInit $ "Video config saved to " <> T.pack path
+            return True
+        rejections → do
+            forM_ rejections $ \r →
+                logWarn logger CatInit $
+                    "Video config not saved to " <> T.pack path <> ": "
+                      <> describeRejection r
+            return False
+  where
+    videoFile = VideoConfigFile
           { vfResolution = Resolution
               { resWidth = vcWidth config
               , resHeight = vcHeight config
@@ -271,5 +448,3 @@ saveVideoConfig logger path config = do
           , vfTooltipDwellMs = vcTooltipDwellMs config
           , vfTooltipHintDelayMs = vcTooltipHintDelayMs config
           }
-    Yaml.encodeFile path videoFile
-    logInfo logger CatInit $ "Video config saved to " <> T.pack path
