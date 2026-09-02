@@ -86,6 +86,11 @@ ARENA = "arena"
 class ProbeSetupError(RuntimeError):
     pass
 
+
+class ProbeObservationError(RuntimeError):
+    """A malformed value belonging to the currently active check."""
+
+
 # Mirrors scripts/unit_ai_sleep.lua's own WAKE_PRESSURE_FRAC. Layers E/F
 # must keep the sleeper strictly below it, or a pressure wake would be
 # mistaken for a time-of-day wake (and would mask its absence).
@@ -136,7 +141,8 @@ def urge(uid: int) -> float:
     try:
         return float(raw)
     except (TypeError, ValueError):
-        raise ProbeSetupError(f"getCircadianUrge({uid}) -> {raw!r}")
+        raise ProbeObservationError(
+            f"getCircadianUrge({uid}) -> {raw!r}") from None
 
 
 def sleep_utility(uid: int, cfg_key: str) -> float:
@@ -148,7 +154,8 @@ def sleep_utility(uid: int, cfg_key: str) -> float:
     try:
         return float(raw)
     except (TypeError, ValueError):
-        raise ProbeSetupError(f"sleepUtility({uid}, {cfg_key}) -> {raw!r}")
+        raise ProbeObservationError(
+            f"sleepUtility({uid}, {cfg_key}) -> {raw!r}") from None
 
 
 def max_stat(uid: int, name: str) -> float:
@@ -203,7 +210,8 @@ def wake_angle_for(def_name: str) -> float:
     try:
         return float(raw)
     except (TypeError, ValueError):
-        raise ProbeSetupError(f"wakeAngleFor({def_name!r}) -> {raw!r}")
+        raise ProbeObservationError(
+            f"wakeAngleFor({def_name!r}) -> {raw!r}") from None
 
 
 def hold_pressure(uid: int, max_sp: float, frac: float = 0.4) -> None:
@@ -224,7 +232,8 @@ def pressure_frac(uid: int, max_sp: float) -> float:
     try:
         return float(raw) / max_sp
     except (TypeError, ValueError):
-        raise ProbeSetupError(f"sleep_pressure({uid}) -> {raw!r}")
+        raise ProbeObservationError(
+            f"sleep_pressure({uid}) -> {raw!r}") from None
 
 
 def wait_asleep(uid: int, timeout: float = 60.0) -> bool:
@@ -290,10 +299,15 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
         DUSK, DAWN = 0.75, 0.25
 
         # ---- A. Raw urge: opposite phases ------------------------------
-        set_time_and_wait(18, 0, DUSK)
-        a_urge_dusk, b_urge_dusk = urge(aid), urge(bid)
-        set_time_and_wait(6, 0, DAWN)
-        a_urge_dawn, b_urge_dawn = urge(aid), urge(bid)
+        try:
+            set_time_and_wait(18, 0, DUSK)
+            a_urge_dusk, b_urge_dusk = urge(aid), urge(bid)
+            set_time_and_wait(6, 0, DAWN)
+            a_urge_dawn, b_urge_dawn = urge(aid), urge(bid)
+        except ProbeObservationError as error:
+            rep.check("species_urge_phases", False, str(error),
+                      {"error": str(error)})
+            return 1
 
         urge_ok = (a_urge_dusk >= 0.95 and b_urge_dusk <= 0.05
                    and a_urge_dawn <= 0.05 and b_urge_dawn >= 0.95)
@@ -315,12 +329,17 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
             send(PORT, f"unit.setStat({uid}, 'exhaustion', {max_exh})",
                  expect_result=False)  # fully rested -> exhaustionDeficit term = 0
 
-        set_time_and_wait(18, 0, DUSK)
-        a_util_dusk = sleep_utility(aid, "acolyte")
-        b_util_dusk = sleep_utility(bid, "bear_brown")
-        set_time_and_wait(6, 0, DAWN)
-        a_util_dawn = sleep_utility(aid, "acolyte")
-        b_util_dawn = sleep_utility(bid, "bear_brown")
+        try:
+            set_time_and_wait(18, 0, DUSK)
+            a_util_dusk = sleep_utility(aid, "acolyte")
+            b_util_dusk = sleep_utility(bid, "bear_brown")
+            set_time_and_wait(6, 0, DAWN)
+            a_util_dawn = sleep_utility(aid, "acolyte")
+            b_util_dawn = sleep_utility(bid, "bear_brown")
+        except ProbeObservationError as error:
+            rep.check("utility_crossover", False, str(error),
+                      {"error": str(error)})
+            return 1
 
         utility_ok = (a_util_dusk > a_util_dawn + 1.0
                       and b_util_dawn > b_util_dusk + 1.0
@@ -339,9 +358,14 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
         # here through the module's own lookup so the three cases —
         # unchanged acolyte, moved bear, unconfigured def — are checked
         # against the same code the sleeping unit runs. ------------------
-        a_wake = wake_angle_for("acolyte")
-        b_wake = wake_angle_for("bear_brown")
-        d_wake = wake_angle_for(UNCONFIGURED_DEF)
+        try:
+            a_wake = wake_angle_for("acolyte")
+            b_wake = wake_angle_for("bear_brown")
+            d_wake = wake_angle_for(UNCONFIGURED_DEF)
+        except ProbeObservationError as error:
+            rep.check("wake_boundaries", False, str(error),
+                      {"error": str(error)})
+            return 1
         wake_ok = (abs(a_wake - DAWN) <= 1e-9
                    and abs(b_wake - DUSK) <= 1e-9
                    and abs(d_wake - DAWN) <= 1e-9)
@@ -428,7 +452,12 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
         # Give the reverse pose chain a couple of ticks to show itself, so
         # a wake that HAS started cannot be missed by reading too early.
         time.sleep(3.0)
-        frac = pressure_frac(bid2, max_sp2)
+        try:
+            frac = pressure_frac(bid2, max_sp2)
+        except ProbeObservationError as error:
+            rep.check("sleeps_through_dawn", False, str(error),
+                      {"error": str(error)})
+            return 1
         phase, pose = get_ai_field(bid2, "sleepPhase"), get_pose(bid2)
         if frac >= WAKE_PRESSURE_FRAC:
             rep.abort("sleep pressure reached the wake threshold during the dawn check",
@@ -464,7 +493,12 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
                        "pose": get_pose(bid2),
                        "sun_angle": get_ai_field(bid2, "sleepLastSunAngle")})
             return 1
-        frac = pressure_frac(bid2, max_sp2)
+        try:
+            frac = pressure_frac(bid2, max_sp2)
+        except ProbeObservationError as error:
+            rep.check("wakes_at_own_boundary", False, str(error),
+                      {"error": str(error)})
+            return 1
         if frac >= WAKE_PRESSURE_FRAC:
             rep.check("wakes_at_own_boundary", False,
                       "sleep pressure could have caused the dusk wake",
