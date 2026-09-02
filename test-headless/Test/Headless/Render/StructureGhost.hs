@@ -348,20 +348,14 @@ wireSpec = describe "a wire ghost runs the autotile rule speculatively" $ do
         let sp = StructurePiece wirePack "wire" Nothing
             run = [ (fst homeTile + i, snd homeTile) | i ← [0 .. 3] ]
             ge = ghostEnvAt packs FaceSouth HM.empty
-            (_, quads) = structurePreviewGhosts ge sp surfaceZ run
-            handles = map sqTexture (V.toList quads)
-            expect s = aaHandle ∘ paTexture <$>
-                resolveUnplacedArt (packCatalog packs) wirePack "wire"
-                    Nothing (defaultPieceArtContext { pacWireShape = s })
-        length handles `shouldBe` 4
         -- Ends at both extremes, straights between: exactly what the
         -- placer's own shapeFor answers for a 4-long east-west run.
-        map Just handles `shouldBe`
-            -- 'wireShapeFor' names an END by the side it CONNECTS on
-            -- (unlike a tee, which names its gap): the west end of an
-            -- east-west run reaches east, so it is WireEndE.
-            [expect WireEndE, expect WireStraightEW
-            , expect WireStraightEW, expect WireEndW]
+        -- 'wireShapeFor' names an END by the side it CONNECTS on (unlike
+        -- a tee, which names its gap), so the west end reaches east and
+        -- is WireEndE.
+        wireShapesOf packs ge sp run `shouldBe`
+            [ Just WireEndE, Just WireStraightEW
+            , Just WireStraightEW, Just WireEndW ]
 
     it "a committed wire designation connects a neighbour's ghost" $
       \packs → do
@@ -370,39 +364,73 @@ wireSpec = describe "a wire ghost runs the autotile rule speculatively" $ do
             isolated = ghostEnvAt packs FaceSouth HM.empty
             withNeighbour = ghostEnvAt packs FaceSouth
                                 (designationsFor' east sp)
-            shapeOf ge = map sqTexture ∘ V.toList ∘ snd $
-                structurePreviewGhosts ge sp surfaceZ [homeTile]
-            expect s' = aaHandle ∘ paTexture <$>
-                resolveUnplacedArt (packCatalog packs) wirePack "wire"
-                    Nothing (defaultPieceArtContext { pacWireShape = s' })
-        map Just (shapeOf isolated) `shouldBe` [expect WireIsolated]
-        map Just (shapeOf withNeighbour) `shouldBe` [expect WireEndE]
+        wireShapesOf packs isolated sp [homeTile] `shouldBe` [Just WireIsolated]
+        wireShapesOf packs withNeighbour sp [homeTile] `shouldBe` [Just WireEndE]
 
-    it "an invalid candidate contributes no connectivity (D-22)" $ \packs → do
-        -- The middle tile of a three-long run already carries wire, so
-        -- the resolver refuses it. Its neighbours must NOT read it as a
-        -- proposed connection — the placed piece under it is what they
-        -- connect to, and this example proves the proposed set is
-        -- filtered by outcome rather than taken wholesale.
-        let sp  = StructurePiece wirePack "wire" Nothing
-            mid = (fst homeTile + 1, snd homeTile)
-            run = [ (fst homeTile + i, snd homeTile) | i ← [0 .. 2] ]
-            geClean = ghostEnvAt packs FaceSouth HM.empty
-            (_, cleanQuads) = structurePreviewGhosts geClean sp surfaceZ run
-        -- With nothing placed, all three are proposed-valid and the
-        -- middle is a straight.
-        V.length cleanQuads `shouldBe` 3
-        let taken = ghostEnvWith packs FaceSouth HM.empty
-                        (HM.union (structuresAt mid [SWire])
-                                  (structuresAt homeTile [SFloor]))
+    it "a PLACED wire neighbour connects a ghost" $ \packs → do
+        let sp = StructurePiece wirePack "wire" Nothing
+            east = (fst homeTile + 1, snd homeTile)
+            alone = ghostEnvWith packs FaceSouth HM.empty HM.empty
                         emptyStructureStage
-            (_, takenQuads) = structurePreviewGhosts taken sp surfaceZ run
-        -- All three still DRAW (the middle in red), and the outer two
-        -- still see the middle — through the PLACED wire, not through a
-        -- refused proposal.
-        V.length takenQuads `shouldBe` 3
-        L.sort (map show (quadTints takenQuads))
-            `shouldSatisfy` elem (show invalidTint)
+            beside = ghostEnvWith packs FaceSouth HM.empty
+                         (structuresAt east [SWire]) emptyStructureStage
+        wireShapesOf packs alone sp [homeTile] `shouldBe` [Just WireIsolated]
+        wireShapesOf packs beside sp [homeTile] `shouldBe` [Just WireEndE]
+
+    it "an INVALID proposed candidate contributes no connectivity (D-22)" $
+      \packs → do
+        -- The discriminating case. The middle tile of a three-long run
+        -- is refused because it carries an outstanding NON-wire
+        -- designation — and carries no wire of its own, placed or
+        -- designated. So the ONLY thing that could connect its two
+        -- neighbours is the proposal itself, and D-22 says a proposal
+        -- that will not be built must not.
+        --
+        -- Written this way deliberately: an earlier version made the
+        -- middle invalid by placing wire there, which proves nothing —
+        -- the neighbours would read that real wire whether or not the
+        -- proposed set were filtered, so the example passed for an
+        -- implementation that fed EVERY candidate into 'pwProposedWire'.
+        let sp   = StructurePiece wirePack "wire" Nothing
+            mid  = (fst homeTile + 1, snd homeTile)
+            far  = (fst homeTile + 2, snd homeTile)
+            run  = [homeTile, mid, far]
+            -- A floor designation: an outstanding designation at the
+            -- tile, which 'PlanForPlacement' refuses, and NOT wire, so
+            -- 'wireDesignatedAt' does not see it either.
+            blocked = HM.singleton (canon mid)
+                (newConstructDesignation surfaceZ
+                    (CtStructure (StructurePiece dungeonPack "floor" Nothing))
+                    (ConstructAttemptId 7))
+            ge = ghostEnvWith packs FaceSouth blocked HM.empty
+                     emptyStructureStage
+        -- ONE call over the WHOLE run, because that is the only shape
+        -- of this example that can fail: asking for each tile
+        -- separately would leave the middle out of its neighbours'
+        -- candidate set for reasons unrelated to its outcome, and the
+        -- assertion would hold for any implementation at all.
+        --
+        -- The control: nothing blocking, all three proposed-valid, and
+        -- the run reads as one line.
+        wireShapesOf packs (ghostEnvAt packs FaceSouth HM.empty) sp run
+            `shouldBe` [Just WireEndE, Just WireStraightEW, Just WireEndW]
+        -- Blocked: the two survivors go ISOLATED, because the only
+        -- thing that ever connected them was a proposal that will not
+        -- be built. An implementation feeding every candidate into
+        -- 'pwProposedWire' regardless of outcome answers
+        -- [EndE, StraightEW, EndW] here — the control's own answer —
+        -- which is exactly the bug, and exactly what this catches.
+        --
+        -- The middle still draws (in red, below) and still resolves a
+        -- straight from its two VALID neighbours: being refused stops
+        -- it contributing connectivity, not receiving it.
+        wireShapesOf packs ge sp run
+            `shouldBe` [Just WireIsolated, Just WireStraightEW, Just WireIsolated]
+        -- The refused candidate draws, and only it is red (D-25).
+        let (_, quads) = structurePreviewGhosts ge sp surfaceZ run
+        V.length quads `shouldBe` 3
+        map (color ∘ sqV0) (V.toList quads) `shouldBe`
+            [validPreviewTint, invalidTint, validPreviewTint]
 
 -- | A post whose supporting FLOOR is absent has no final grid z at all
 --   — a post takes its floor's z, so "no floor" and "nowhere to draw"
@@ -722,6 +750,27 @@ placedQuadsAt packs tile facing slot art gridZ =
     handles = HM.fromList
         [ (texId,  aaHandle (paTexture art))
         , (faceId, aaHandle (paFacemap art)) ]
+
+-- | Which wire CONNECTION VARIANT each candidate's ghost drew, named by
+--   the shape rather than by a bare handle — the catalogue answers one
+--   texture per variant, so the handle identifies the shape uniquely and
+--   the reverse lookup is what makes a failure readable.
+wireShapesOf ∷ [PackFixture] → GhostEnv → StructurePiece → [(Int, Int)]
+             → [Maybe WireShape]
+wireShapesOf packs ge sp tiles =
+    [ lookup h byHandle
+    | h ← map sqTexture (V.toList
+              (snd (structurePreviewGhosts ge sp surfaceZ tiles))) ]
+  where
+    byHandle =
+        [ (aaHandle (paTexture a), shape)
+        | shape ← [minBound .. maxBound]
+        , Just a ← [ resolveUnplacedArt (packCatalog packs) wirePack "wire"
+                         Nothing
+                         (defaultPieceArtContext { pacWireShape = shape }) ] ]
+
+validPreviewTint ∷ Vec4
+validPreviewTint = Vec4 1 1 1 (tileAlpha * previewGhostAlpha)
 
 invalidTint ∷ Vec4
 invalidTint =
