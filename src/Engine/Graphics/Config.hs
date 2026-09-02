@@ -9,6 +9,7 @@ module Engine.Graphics.Config
   , saveVideoConfig
   , validateVideoConfig
   , VideoConfigRaw(..)
+  , UIScaleSource(..)
   , resolveVideoConfigRaw
   , windowModeToText
   , windowModeFromText
@@ -25,6 +26,7 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), (.=), (.:?), FromJSON(..), ToJSON(..)
                    , Value(..), withText)
+import Data.Aeson.Types (typeMismatch)
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
 import Engine.Graphics.Config.Domain
 import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..), Filter(..))
@@ -189,10 +191,7 @@ data VideoConfigRaw = VideoConfigRaw
     , vrHeight            ∷ Int
     , vrWindowMode        ∷ Maybe Text
     , vrFullscreen        ∷ Bool
-    , vrUIScale           ∷ Double
-      -- ^ The source number as written (a finite Lua/YAML number that
-      --   overflows during narrowing is rejected by 'checkUIScale' on
-      --   the narrowed 'Float', and reported with THIS value).
+    , vrUIScale           ∷ UIScaleSource
     , vrVSync             ∷ Bool
     , vrFrameLimit        ∷ Maybe Int
     , vrMSAA              ∷ Int
@@ -202,6 +201,46 @@ data VideoConfigRaw = VideoConfigRaw
     , vrTooltipDwellMs    ∷ Int
     , vrTooltipHintDelayMs ∷ Int
     } deriving (Show, Eq)
+
+-- | The @ui_scale@ leaf as written: the number it names, and its
+--   spelling for the log line. A finite number that overflows while
+--   narrowing to the stored 'Float' is rejected by 'checkUIScale' on
+--   the narrowed value and reported with THIS spelling.
+--
+--   YAML's own non-finite spellings (@.inf@, @-.inf@, @.nan@, in any
+--   case) reach this decoder as STRINGS — the yaml library only ever
+--   builds a 'Number' from a finite literal — and so do the @+inf@ /
+--   @-inf@ forms aeson's own 'Double' instance accepts. Every one of
+--   them is a NUMBER the domain has to reject field-locally, not a wrong
+--   type, so it decodes here to the non-finite 'Double' it names; any
+--   other string is a wrong type and fails the structural decode, which
+--   keeps the whole-file fallback for it.
+data UIScaleSource = UIScaleSource
+    { usValue ∷ Double
+    , usText  ∷ Text
+    } deriving (Show, Eq)
+
+instance FromJSON UIScaleSource where
+    parseJSON v@(Number _) = do
+        d ← parseJSON v
+        pure (UIScaleSource d (tshow d))
+    parseJSON (String t) = case nonFiniteSpelling t of
+        Just d  → pure (UIScaleSource d t)
+        Nothing → fail ("ui_scale: expected a number, got the string "
+                          <> show t)
+    parseJSON v = typeMismatch "ui_scale number" v
+
+-- | The non-finite number a scalar spells, if it spells one: YAML 1.1/1.2
+--   core-schema (@.inf@, @+.inf@, @-.inf@, @.nan@), aeson's (@+inf@,
+--   @-inf@) and Haskell's own 'show' forms, case-insensitively.
+nonFiniteSpelling ∷ Text → Maybe Double
+nonFiniteSpelling t
+    | s `elem` [".inf", "+.inf", "inf", "+inf", "infinity", "+infinity"] = Just (1 / 0)
+    | s `elem` ["-.inf", "-inf", "-infinity"]                            = Just (-1 / 0)
+    | s `elem` [".nan", "nan"]                                           = Just (0 / 0)
+    | otherwise                                                          = Nothing
+  where
+    s = T.toLower (T.strip t)
 
 instance FromJSON VideoConfigRaw where
     parseJSON (Object v) = do
@@ -217,7 +256,7 @@ instance FromJSON VideoConfigRaw where
       VideoConfigRaw (resWidth res) (resHeight res)
         ⊚ videoObj .:? "window_mode"
         <*> videoObj .:? "fullscreen" .!= False
-        <*> videoObj .:? "ui_scale" .!= 1.0
+        <*> videoObj .:? "ui_scale" .!= UIScaleSource 1.0 "1.0"
         <*> videoObj .:? "vsync" .!= True
         <*> videoObj .:? "frame_limit" .!= Nothing
         <*> videoObj .:? "msaa" .!= 1
@@ -257,7 +296,7 @@ instance FromJSON VideoConfigFile where
       pure VideoConfigFile
         { vfResolution    = Resolution (vrWidth raw) (vrHeight raw)
         , vfWindowMode    = windowMode
-        , vfUIScale       = narrowUIScale (vrUIScale raw)
+        , vfUIScale       = narrowUIScale (usValue (vrUIScale raw))
         , vfVSync         = vrVSync raw
         , vfFrameLimit    = vrFrameLimit raw
         , vfMSAA          = vrMSAA raw
@@ -334,12 +373,12 @@ resolveVideoConfigRaw raw = (config, catMaybes rejections)
                       , Just ( VideoFieldRejection fieldWindowMode t
                                                    windowModeDomain
                              , windowModeToText (vcWindowMode d) ) )
-    narrowed = narrowUIScale (vrUIScale raw)
+    narrowed = narrowUIScale (usValue (vrUIScale raw))
     (uiScale, rS) = leaf (asSource ⊚ checkUIScale narrowed)
                          narrowed (vcUIScale d) (tshow (vcUIScale d))
-    -- Report the number as the file wrote it, not the infinity it
+    -- Report the number as the file spelled it, not the infinity it
     -- narrowed to.
-    asSource r = r { vfrValue = tshow (vrUIScale raw) }
+    asSource r = r { vfrValue = usText (vrUIScale raw) }
     (frameLimit, rFL) = leaf (checkFrameLimit "null" (vrFrameLimit raw))
                              (vrFrameLimit raw) (vcFrameLimit d)
                              (maybe "null" tshow (vcFrameLimit d))

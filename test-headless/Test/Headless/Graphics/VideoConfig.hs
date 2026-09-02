@@ -511,8 +511,14 @@ yamlSpec = describe "YAML loading" $ do
         , ("window_mode sideways", [("window_mode", "sideways")], baseConfig { vcWindowMode = Windowed }, fieldWindowMode, "sideways")
         , ("ui_scale 0.25",      [("ui_scale", "0.25")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, "0.25")
         , ("ui_scale 4.5",       [("ui_scale", "4.5")],       baseConfig { vcUIScale = 1.0 }, fieldUIScale, "4.5")
-        , ("ui_scale +inf",      [("ui_scale", "+inf")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, "Infinity")
-        , ("ui_scale -inf",      [("ui_scale", "-inf")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, "-Infinity")
+          -- YAML's own non-finite spellings arrive as strings from the
+          -- yaml library; each is a number the domain rejects, reported
+          -- as written, never a wrong type.
+        , ("ui_scale .inf",      [("ui_scale", ".inf")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, ".inf")
+        , ("ui_scale -.inf",     [("ui_scale", "-.inf")],     baseConfig { vcUIScale = 1.0 }, fieldUIScale, "-.inf")
+        , ("ui_scale .NaN",      [("ui_scale", ".NaN")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, ".NaN")
+        , ("ui_scale +inf",      [("ui_scale", "+inf")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, "+inf")
+        , ("ui_scale -inf",      [("ui_scale", "-inf")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, "-inf")
         , ("ui_scale 1e39 (finite as written, infinite once narrowed to Float)",
                                  [("ui_scale", "1e39")],      baseConfig { vcUIScale = 1.0 }, fieldUIScale, "1.0e39")
         , ("frame_limit 0",      [("frame_limit", "0")],      baseConfig { vcFrameLimit = Nothing }, fieldFrameLimit, "0")
@@ -530,6 +536,8 @@ yamlSpec = describe "YAML loading" $ do
     structuralCases ∷ [(String, ByteString)]
     structuralCases =
         [ ("wrong type (width: abc)", docWith [("width", "abc")])
+        , ("wrong type (ui_scale: abc)", docWith [("ui_scale", "abc")])
+        , ("wrong type (ui_scale: true)", docWith [("ui_scale", "true")])
         , ("wrong type (msaa: 4.5)", docWith [("msaa", "4.5")])
         , ("wrong type (window_mode: 5)", docWith [("window_mode", "5")])
         , ("schema-incomplete (no resolution)", docWithout resolutionKeys)
