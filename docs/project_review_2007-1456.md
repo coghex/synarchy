@@ -29,11 +29,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. A later recipe-loader change bypassed the shared `tshow` conversion
+- [x] PRR-1. A later recipe-loader change bypassed the shared `tshow` conversion — [#2177]
 
 ## 1. Shared show-to-Text conversion
 
-### PRR-1. A later recipe-loader change bypassed the shared `tshow` conversion
+### [#2177] PRR-1. A later recipe-loader change bypassed the shared `tshow` conversion
 
 > **Captured note:** Replace the recipe loader's new hand-written
 > `T.pack (show ...)` wrapper with the shared `UPrelude.tshow`, and decide

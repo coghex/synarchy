@@ -41,11 +41,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. The lunge probe can grade a fresh replacement-target launch as stale bookkeeping
+- [x] PRR-1. The lunge probe can grade a fresh replacement-target launch as stale bookkeeping — [#2168]
 
 ## 1. Lunge acceptance stability
 
-### PRR-1. The lunge probe can grade a fresh replacement-target launch as stale bookkeeping
+### [#2168] PRR-1. The lunge probe can grade a fresh replacement-target launch as stale bookkeeping
 
 > **Captured note:** Stabilize PR #1728's replaced-target lunge scenario so it
 > proves that the original launch cleared all seven bookkeeping fields without

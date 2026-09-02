@@ -8,7 +8,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 - [x] PRR-1. Shutdown comments still claim every worker stops after Vulkan teardown — [#1408]
 - [x] PRR-2. `logEntryWith` documents a logging skip list that no longer exists — [#1410]
-- [ ] PRR-3. Shared YAML loading collapses every asset loader's source attribution
+- [x] PRR-3. Shared YAML loading collapses every asset loader's source attribution — [#2167]
 
 ## 1. Shutdown lifecycle documentation
 
@@ -61,7 +61,7 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` closed without 
 
 ## 3. Asset-loader logging
 
-### PRR-3. Shared YAML loading collapses every asset loader's source attribution
+### [#2167] PRR-3. Shared YAML loading collapses every asset loader's source attribution
 
 > **Captured note:** Preserve each owning asset loader as the reported source location when sharing the eleven YAML list-loader bodies. The extracted helper has no `HasCallStack` constraint, so every warning and debug entry now starts its call stack inside `Engine.Asset.YamlList`.
 

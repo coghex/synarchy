@@ -8,11 +8,13 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Reconcile the text-encoding probe's census protocol status
+- [x] PRR-1. Reconcile the text-encoding probe's census protocol status — [no-issue]
 
 ## 1. Probe-census registry agreement
 
-### PRR-1. Reconcile the text-encoding probe's census protocol status
+### [no-issue] PRR-1. Reconcile the text-encoding probe's census protocol status
+
+> **Disposition:** No issue — already fixed. Commit `b1a97d46f` (2026-08-31, after this report's capture) landed the `text_encoding` census row at `probe-result/v1`; on 2026-09-02 `python3 tools/probe_census.py --validate` exits 0 against the branch-resolved docs-wip manifest (95 probes) and `tools/test_probe_census.py` passes (973 assertions). Master's own committed copy still lags the docs-wip working copy on seven unrelated rows, which is the ordinary accumulate-then-land state, not this drift.
 
 > **Captured note:** Complete the post-merge census reconciliation promised by PR #1979: the authoritative docs-worktree row for `text_encoding` still says `legacy`, while the live de-flake registry declares `probe-result/v1`, so the census validator refuses the manifest.
 

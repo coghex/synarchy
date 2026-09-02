@@ -8,11 +8,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. Loot-weight Hspec fixtures collide across concurrent suite processes
+- [x] PRR-1. Loot-weight Hspec fixtures collide across concurrent suite processes — [#2163]
 
 ## 1. Loot-table test isolation
 
-### PRR-1. Loot-weight Hspec fixtures collide across concurrent suite processes
+### [#2163] PRR-1. Loot-weight Hspec fixtures collide across concurrent suite processes
 
 > **Captured note:** Give every loot-weight Hspec fixture an invocation-owned temporary path and cleanup boundary. PR #1993's fixed directory and filename let independent test processes overwrite one another's YAML and recursively delete one another's fixtures.
 

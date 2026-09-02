@@ -14,9 +14,9 @@ concrete precondition
 ## Processing status
 
 - [x] EPIC. Route every texture surface to its correct sampler — [#2072]
-- [ ] TSR-1. Pin UI surfaces to nearest independently of the player filter
-- [ ] TSR-2. Add cell extrusion padding to the unit atlas compiler and runtime
-- [ ] TSR-3. Route gameplay unit atlases through the player-selected sampler
+- [x] TSR-1. Pin UI surfaces to nearest independently of the player filter — [#2075]
+- [x] TSR-2. Add cell extrusion padding to the unit atlas compiler and runtime — [#2076]
+- [x] TSR-3. Route gameplay unit atlases through the player-selected sampler — [#2085]
 
 ## Epic contract
 

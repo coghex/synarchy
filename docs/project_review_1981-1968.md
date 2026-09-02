@@ -8,11 +8,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. The persistence inventory omits one encounter reset registry
+- [x] PRR-1. The persistence inventory omits one encounter reset registry — [#2171]
 
 ## 1. Transient unit-AI state inventory
 
-### PRR-1. The persistence inventory omits one encounter reset registry
+### [#2171] PRR-1. The persistence inventory omits one encounter reset registry
 
 > **Captured note:** Update the authoritative persistence inventory and its nearby owner comment to enumerate all eleven transient unit-AI registries and all four ruin-encounter overlays introduced by PR #1900. Both still describe ten registries and three overlays because they omit `localEpisodeAggression`, even though the live reset registry and focused gate include it.
 
