@@ -62,7 +62,8 @@ import Control.Concurrent.STM.TVar (newTVarIO)
 --   stops those and exits non-zero.
 startLuaThread ∷ EngineEnv → IO (Either DebugListenerFailure ThreadState)
 startLuaThread env = startWorkerThreadEither WorkerSpec
-    { wsLoggerRef   = loggerRef env
+    { wsName        = "Lua"
+    , wsLoggerRef   = loggerRef env
     , wsCategory    = CatLua
     , wsStartingMsg = "Starting Lua scripting thread..."
       -- This worker has never logged a post-fork line.

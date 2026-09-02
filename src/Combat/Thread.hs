@@ -46,7 +46,8 @@ combatTickRate = 1.0 / 60.0
 
 startCombatThread ∷ EngineEnv → IO ThreadState
 startCombatThread env = startWorkerThread WorkerSpec
-    { wsLoggerRef   = loggerRef env
+    { wsName        = "Combat"
+    , wsLoggerRef   = loggerRef env
     , wsCategory    = CatThread
     , wsStartingMsg = "Starting combat thread..."
     , wsStartedMsg  = Just "Combat thread started"
