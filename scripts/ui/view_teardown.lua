@@ -44,6 +44,21 @@
 --     chop_tool has no anchor at all since #1856 — its press-drag box
 --     resolves entirely at its own release — so its zoomBand hook just
 --     disarms the effect.
+--   * "saveLoaded" — uiManager.onSaveLoaded() (#2156): a published
+--     load has REPLACED the whole session, and that broadcast is the one
+--     hook every load reaches whatever triggered it (the menu's loading
+--     screen, a debug-console engine.loadSave mid-gameplay). Hooked
+--     here: the modules whose transient, session-bound UI state neither
+--     saveModules' reset hooks nor the #1610 Exit-to-Menu registry
+--     covers — the thought/combat/injury histories keyed by raw unit
+--     ids (a uid the replacement session REUSES would inherit the old
+--     entries), the four log panels' pages and view state, and the
+--     notification cards + their pending queue. Deliberately its OWN
+--     key rather than an alias of "hudHide": that sweep also clears
+--     transfers, tools, selections and the container stack, all of
+--     which the load transaction reconciles through its own paths and
+--     must not be cleared a second time here. ctx = { worldId = the
+--     published active page id (may be nil) }.
 --
 -- Rules for entries:
 --   * Hooks MUST be idempotent — they run on every transition of their
@@ -256,6 +271,37 @@ local registry = {
     -- owns its own modal page / visible flag, so hiding the HUD pages
     -- does not cover them — hide on hudHide so they don't leak into the
     -- next screen.
+    -- On saveLoaded (#2156) each panel's own clearSession runs instead
+    -- of a bare hide: the panel's HISTORY and view state are session-
+    -- bound too (see each module's clearSession), and popups discard
+    -- their pending queue along with the active cards -- dismissAll's
+    -- established semantics, which is what keeps a queued card of the
+    -- replaced session from surfacing after the load.
+    { name = "event_log",
+      hudHide    = function() require("scripts.event_log").hide() end,
+      saveLoaded = function() require("scripts.event_log").clearSession() end },
+    { name = "combat_log",
+      hudHide    = function() require("scripts.combat_log").hide() end,
+      saveLoaded = function() require("scripts.combat_log").clearSession() end },
+    { name = "injury_log_panel",
+      hudHide    = function() require("scripts.injury_log_panel").hide() end,
+      saveLoaded = function() require("scripts.injury_log_panel").clearSession() end },
+    { name = "notification_popups",
+      hudHide    = function() require("scripts.popup").dismissAll() end,
+      saveLoaded = function() require("scripts.popup").dismissAll() end },
+
+    -- Per-unit log overlay (#104): same own-page story as the log
+    -- panels above.
+    { name = "unit_log",
+      hudHide    = function() require("scripts.unit_log").hide() end,
+      saveLoaded = function() require("scripts.unit_log").clearSession() end },
+
+    -- Thought history (#351/#2156): no page of its own -- its entries
+    -- surface through unit_log's Thought tab -- but a per-unit ring
+    -- keyed by raw uid is session-bound state all the same, and the
+    -- load-replacement sweep is the one transition it needs.
+    { name = "thought_log",
+      saveLoaded = function() require("scripts.thought_log").clearSession() end },
     { name = "event_log",
       hudHide = function() require("scripts.event_log").hide() end },
     { name = "combat_log",

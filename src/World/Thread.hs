@@ -38,7 +38,8 @@ import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
 
 startWorldThread ∷ EngineEnv → IO ThreadState
 startWorldThread env = startWorkerThread WorkerSpec
-    { wsLoggerRef   = ccLoggerRef (toCoreCapability env)
+    { wsName        = "World"
+    , wsLoggerRef   = ccLoggerRef (toCoreCapability env)
     , wsCategory    = CatWorld
     , wsStartingMsg = "Starting world thread..."
     , wsStartedMsg  = Just "World thread started"
