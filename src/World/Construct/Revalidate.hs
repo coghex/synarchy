@@ -190,6 +190,10 @@ constructPlanWorldWith cat ws = do
         , pwStage        = stage
         , pwDesignations = designations
         , pwCatalog      = cat
+          -- Empty for every non-render caller: a proposed wire tile is an
+          -- UNCOMMITTED gesture's candidate, and nothing outside the
+          -- anchor→hover preview has one (#1846).
+        , pwProposedWire = HS.empty
         }
 
 -- | Split a designation map against the current world: the records that

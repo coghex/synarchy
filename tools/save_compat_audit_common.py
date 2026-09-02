@@ -68,7 +68,7 @@ HASKELL_COMPONENT_SOURCE_PATHS = sorted(
     (REPO_ROOT / "src" / "World" / "Save" / "Component").glob("*.hs"))
 
 # Fixed placeholder ISO-8601 timestamp (round-11 review), matching the
-# same constant test-headless/Test/Headless/World/Save/Compat.hs's own
+# same constant test-headless/Test/Headless/World/Save/Compat/B1Fixture.hs's own
 # hand-built SaveMetadata values already use -- NOT a real save time,
 # deliberately, so two --generate-session runs over identical inputs
 # produce byte-identical fixtures/checksums.

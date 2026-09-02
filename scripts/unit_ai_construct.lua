@@ -5,11 +5,11 @@
 --     places the Constructing ghost, the designation completes, and the
 --     existing deliver_to_build_site + build_nearby machinery takes
 --     over (materials gate + worker-rate progress, unchanged).
---   * "structure": the full job — source the piece's materials
---     (inventory → ground → mule, same ladder as delivery), walk beside
---     the tile, pour work into the designation (construction.
---     addJobProgress; the ghost solidifies as progress accrues), and at
---     1.0 place the piece via scripts/structures.lua, job complete.
+--   * "structure": the full job — source materials (inventory → ground
+--     → mule, same ladder as delivery), walk beside the tile, pour work
+--     in (construction.addJobProgress), and at 1.0 place the piece via
+--     scripts/structures.lua. No ghost ramp: since #1846 a structure
+--     site is invisible from payment until the piece lands (D-15/D-16).
 --
 -- Claims: one worker per PAGE + tile via a module-local registry
 -- (constructClaims, same shape and same #1329 page key as digClaims).
@@ -419,9 +419,9 @@ local function constructExecute(uid, s, params)
         return
     end
 
-    -- Phase 3: pour work in. progress rides the designation (persisted,
-    -- drives the ghost's alpha ramp); the local copy just avoids a
-    -- read-back race with the async command queue.
+    -- Phase 3: pour work in. progress rides the designation (persisted;
+    -- it ramps a BUILDING blueprint — a structure site is already
+    -- invisible, #1846); the local copy avoids a read-back race.
     if job.phase == "building" then
         -- Requirement 10: an unresolved-terrain site cannot be
         -- PROGRESSED either — its chunk evicting mid-build must stop the

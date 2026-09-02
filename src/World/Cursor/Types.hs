@@ -6,6 +6,7 @@ module World.Cursor.Types
 import UPrelude
 import qualified Data.HashSet as HS
 import Engine.Asset.Handle (TextureHandle)
+import World.Construct.Types (StructurePiece)
 
 data CursorState = CursorState
     { zoomCursorPos  ∷ Maybe (Int, Int)
@@ -42,12 +43,36 @@ data CursorState = CursorState
     -- | Construction-designation tool (#95): first-click anchor tile.
     --   Mirrors 'mineAnchor' — the render pass previews the
     --   anchor→hover rectangle until the second click commits it.
+    --
+    --   Unlike 'mineAnchor' this is only HALF of what a structure
+    --   preview needs (#1846). With no anchor and a piece armed in
+    --   'constructStructureTarget', the render pass previews the single
+    --   hovered tile; with both, the whole extent. With no armed piece
+    --   it previews nothing, anchor or not.
     , constructAnchor ∷ Maybe (Int, Int)
-    -- | Ghost textures for committed construction designations, one per
-    --   target category (structure pieces vs buildings) so the blueprint
-    --   reads differently for each. Set from Lua like the cursor textures.
-    , constructStructTexture ∷ Maybe TextureHandle
+    -- | Ghost texture for committed BUILDING construction designations.
+    --   Set from Lua like the cursor textures.
+    --
+    --   Structures no longer have one: #1846 replaced the category
+    --   placeholder with the piece's own art, resolved through #1842's
+    --   catalogue and drawn by the same geometry the placer builds with.
+    --   DTV-10 (#1845) retires this last one and the mechanism with it.
     , constructBuildingTexture ∷ Maybe TextureHandle
+    -- | The structure piece the build tool currently has ARMED, or
+    --   'Nothing' when it is off or holding a building target (#1846).
+    --
+    --   The engine cannot ask Lua what the picker chose, and the ghost
+    --   has to draw the piece's OWN art from the first hover — before any
+    --   anchor exists and therefore before any designation carries the
+    --   descriptor. So the tool states it on entering placement and
+    --   clears it on leaving (@construction.setStructureTarget@ /
+    --   @clearStructureTarget@), exactly as it already does for
+    --   'constructLineMode'.
+    --
+    --   It is a PREVIEW input only. A committed designation carries its
+    --   own target and never reads this, so a stale value can at worst
+    --   preview the wrong piece under the cursor, never designate one.
+    , constructStructureTarget ∷ Maybe StructurePiece
     -- | Wire path tool (#359): while true, the anchor→hover preview (and
     --   the build tool's commit, which snaps the same way in Lua) is
     --   constrained to a straight 1-wide LINE along whichever axis has
@@ -105,8 +130,8 @@ emptyCursorState =
         , mineAnchor = Nothing
         , mineDesignTexture = Nothing
         , constructAnchor = Nothing
-        , constructStructTexture = Nothing
         , constructBuildingTexture = Nothing
+        , constructStructureTarget = Nothing
         , constructLineMode = False
         , chopDesignTexture = Nothing
         , tillAnchor = Nothing
