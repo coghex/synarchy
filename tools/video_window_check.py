@@ -414,11 +414,13 @@ def main() -> int:
     # included, which `setResolution` clobbered just above — without
     # moving the window off the size it was restored to.
     #
-    # Skipped entirely on an unrecognized mode: `setVideoConfigFn` maps
-    # an unparseable window-mode string to `Windowed`, so passing one
-    # through here would SET the user's mode rather than restore it. That
-    # case is already a recorded failure above; leaving vcWidth/vcHeight
-    # alone is the lesser harm.
+    # Skipped entirely on an unrecognized mode: `setVideoConfigFn`
+    # validates every argument against the video-config domain and
+    # REFUSES the whole ten-field call (returns false, writes nothing)
+    # when the window-mode token is unknown (#2198), so passing one
+    # through here would restore nothing while reading as a restore.
+    # That case is already a recorded failure above; leaving
+    # vcWidth/vcHeight alone is the honest outcome.
     if orig_mode in known_modes:
         lua(f'engine.setVideoConfig({cfg_w}, {cfg_h}, "{orig_mode}", '
             f'{orig_scale}, {str(orig_vsync).lower()}, {orig_flimit}, '
