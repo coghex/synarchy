@@ -88,7 +88,8 @@ import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
-    , transferOrdersComponentId, worldPagesComponentId )
+    , transferOrdersComponentId, worldPagesComponentId, ccVersion )
+import World.Save.Component.Page (worldPagesCodec)
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
@@ -98,9 +99,10 @@ import World.Save.Types
     ( BuildingSnapshot(..), UnitSnapshot(..), ItemWalkOrder(..)
     , pageItemContainers, flattenItemInstances )
 import Item.Types (ItemInstance(..))
-import Item.Ground (GroundItems(..))
+import Item.Ground (GroundItems(..), GroundItem(..))
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
+    , LocationSignificantItem(..)
     , LocationInstance(..), LocationInstanceId(..), instancesToList )
 import World.Generate.Types (WorldGenParams(..))
 
@@ -230,6 +232,7 @@ sessionIntegrityErrors snap = concat
     [ duplicateGlobalIdErrors snap
     , billStationErrors, billClaimantErrors, nodeBuildingErrors
     , locationOccupantErrors
+    , significantProvenanceErrors snap
     , orderRefErrors snap
     ]
   where
@@ -295,7 +298,8 @@ sessionIntegrityErrors snap = concat
               path = "world-pages[page=" <> unWorldPageId pid
                   <> "].locations[" <> tshow (unLocationInstanceId (liId inst))
                   <> "].encounter.occupants[" <> tshow index <> "].unit"
-        , Just err ← [ refEdgeError worldPagesComponentId 8 path RefUnit
+        , Just err ← [ refEdgeError worldPagesComponentId
+                         worldPagesVersion path RefUnit
                          ScopeSamePage pid (unitPages uid)
                          (tshow (unUnitId uid)) ]
         ]
@@ -368,6 +372,31 @@ data PageEntities = PageEntities
     { peUnits     ∷ !(HS.HashSet UnitId)
     , peBuildings ∷ !(HS.HashSet BuildingId)
     , peItems     ∷ !(HS.HashSet Word64)
+    , peGroundItems ∷ !(HM.HashMap Word64 Text)
+      -- ^ The page's ground items, each mapped to its own
+      --   'Item.Types.iiDefName' (#917). Kept beside 'peItems' rather
+      --   than derived from it because a significant item's provenance
+      --   asks two questions the whole-page set cannot answer: an
+      --   untaken obligation must still be LYING on the ground —
+      --   finding its item in a unit's inventory or a building's
+      --   storage is a contradiction, since it cannot be there without
+      --   having been picked up, which is the one thing that latches
+      --   @taken@ — and the item lying there must BE the thing the
+      --   obligation says is owed, which needs the def name.
+      --
+      --   TOP-LEVEL ONLY: each ground entry's own @giInst@, never
+      --   recursed through 'Item.Types.iiContents'. That is the whole
+      --   point rather than an omission.
+      --   'Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'
+      --   removes a GROUND-MAP entry and latches @iiInstanceId
+      --   (giInst gi)@ — the outer item — so an id that exists only
+      --   inside a container on the ground is not pickable as its own
+      --   ground item and can never latch its obligation. Admitting it
+      --   here would pass a save whose obligation is permanently
+      --   undischargeable, which is exactly the state this check
+      --   exists to refuse. 'peItems' still flattens, because the
+      --   question IT answers — does this id exist anywhere on the
+      --   page — is a different one.
     } deriving (Show, Eq)
 
 -- | Build a page's resolvable identities from its three item-bearing
@@ -396,6 +425,9 @@ pageEntitiesFrom groundOf unitsOf buildingsOf page = PageEntities
                            groundOf unitsOf buildingsOf page
         , inst ← insts
         , i    ← flattenItemInstances inst ]
+    , peGroundItems = HM.fromList
+        [ (iiInstanceId inst, iiDefName inst)
+        | inst ← map giInst (HM.elems (gisItems (groundOf page))) ]
     }
 
 resolvesOn ∷ PageEntities → OrderRefTarget → Bool
@@ -468,6 +500,224 @@ danglingOrderRefErrors pid entities orders =
     , not (resolvesOn entities (orfTarget r))
     ]
 
+-- Guaranteed significant contents (#917) -----------------------------
+
+-- | One placed location's guaranteed significant-item obligation,
+--   flattened with the page it belongs to and the data path a
+--   diagnostic needs. THE single enumeration: the hard rules below and
+--   the tolerated warning both walk it, so a change to what an
+--   obligation carries is checked everywhere from one edit — the same
+--   discipline 'transferOrderRefs' holds for orders.
+significantRefs
+    ∷ SessionSnapshot → [(WorldPageId, LocationInstance, LocationSignificantItem, Text)]
+significantRefs snap =
+    [ (pid, inst, entry, path)
+    | (pid, page) ← L.sortOn fst (HM.toList (snapPages snap))
+    , inst ← instancesToList (wgpLocationInstances (pgsGenParams page))
+    , entry ← liSignificant inst
+    , let path = "world-pages[page=" <> unWorldPageId pid
+              <> "].locations[" <> tshow (unLocationInstanceId (liId inst))
+              <> "].significant[" <> tshow (lsiSlot entry) <> "].item"
+    ]
+
+-- | The BLOCKING provenance rules for guaranteed significant items
+--   (#917). Two, and both are contradictions rather than mere absences
+--   — which is why they abort the boundary while a missing item only
+--   warns:
+--
+--   * an UNTAKEN obligation's item must, if it resolves at all, be
+--     lying on the GROUND of the obligation's OWN page. Resolving on
+--     another page means the durable @(page, instance)@ provenance is
+--     wrong; resolving in a unit's inventory or a building's storage
+--     means the item was picked up while its latch says it was not,
+--     which would let a location stay unclearable forever with its
+--     reward already in someone's pack. Once TAKEN, no rule at all: the
+--     item may sit anywhere or have been consumed or destroyed, which
+--     #917 requirement 3 explicitly allows.
+--   * one physical item identity is owned by at most ONE obligation
+--     across the whole session. Item instance ids come from a GLOBAL
+--     allocator, so two obligations naming one id can never be two real
+--     items — and a single pickup would latch a location whose own item
+--     was never taken.
+--     ('Location.Instance.locationSignificantItemErrors' catches the
+--     page-local case at component decode; this is the session-wide
+--     one, which no single component can see.)
+--   * a bound item identity is BELOW the session's item-id cursor —
+--     the only ids the monotonic allocator can have minted. Unlike
+--     every rule above, this one applies to a TAKEN obligation too:
+--     "taken" excuses an item from resolving anywhere, so an id the
+--     allocator never reached is indistinguishable from a consumed one
+--     to a resolution check, and would satisfy clearance with nothing
+--     ever spawned or picked up. The cursor lives in @core-session@,
+--     so this is again session-wide by necessity.
+significantProvenanceErrors ∷ SessionSnapshot → [IntegrityError]
+significantProvenanceErrors snap =
+    resolutionErrors ⧺ ownershipErrors ⧺ allocatorErrors
+  where
+    entitiesByPage = snapshotPageEntities snap
+    refs = significantRefs snap
+
+    resolutionErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = path
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "a ground '" <> lsiItemDefName entry
+                <> "' on the owning page ('" <> unWorldPageId pid
+                <> "') while untaken"
+            , ieActual        = actual
+            , ieCode          = "wrong-scope-reference"
+            , ieMessage       = "untaken significant item " <> tshow itemId
+                <> " owed by location #"
+                <> tshow (unLocationInstanceId (liId inst))
+                <> " on page '" <> unWorldPageId pid <> "' " <> actual
+            }
+        | (pid, inst, entry, path) ← refs
+        , not (lsiTaken entry)
+        , Just itemId ← [lsiInstanceId entry]
+        , Just actual ← [misresolution pid (lsiItemDefName entry) itemId]
+        ]
+
+    -- 'Nothing' when the item is where an untaken obligation requires
+    -- AND is the thing it says is owed, or absent from the session
+    -- entirely (which 'significantDanglingWarnings' reports and
+    -- tolerates). 'Just' names the contradiction.
+    misresolution pid owedDef itemId = case onOwnGround of
+        -- Lying on the owning page's ground, as required — but is it
+        -- the RIGHT item? A binding that named the wrong definition
+        -- would otherwise let picking that item up latch the slot and
+        -- clear the location with the guaranteed one still on the
+        -- floor. The registration boundary refuses such a binding
+        -- ('Location.Instance.registerLocationSignificantSpawn'); this
+        -- is the save-side half, for a payload that never went through
+        -- it.
+        Just actualDef
+            | actualDef ≡ owedDef → Nothing
+            | otherwise → Just ("is a '" <> actualDef
+                <> "' lying on that page's ground, not the '" <> owedDef
+                <> "' the obligation names")
+        Nothing → case pagesHolding of
+            [] → Nothing
+            ps | pid `elem` ps →
+                   Just "is held in an inventory, in storage, or nested \
+                        \inside a container on that page"
+               | otherwise →
+                   Just ("resolves on page(s) "
+                       <> T.intercalate ", " (map unWorldPageId ps))
+      where
+        onOwnGround = HM.lookup itemId ∘ peGroundItems
+                          =≪ HM.lookup pid entitiesByPage
+        pagesHolding = L.sort
+            [ p | (p, pe) ← HM.toList entitiesByPage
+                , HS.member itemId (peItems pe) ]
+
+    ownershipErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = "item-instance#" <> tshow itemId
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "owned by at most one significant \
+                                \obligation (item ids are one global \
+                                \allocator)"
+            , ieActual        = "claimed by " <> ownersText
+            , ieCode          = "duplicate-identity"
+            , ieMessage       = "significant item " <> tshow itemId
+                <> " is owed by more than one location: " <> ownersText
+            }
+        | (itemId, owners) ← L.sortOn fst (HM.toList (HM.fromListWith (flip (⧺))
+            [ ( itemId
+              , [ unWorldPageId pid <> "#"
+                    <> tshow (unLocationInstanceId (liId inst))
+                    <> " slot " <> tshow (lsiSlot entry) ] )
+            | (pid, inst, entry, _) ← refs
+            , Just itemId ← [lsiInstanceId entry] ]))
+        , length owners > 1
+        , let ownersText = T.intercalate ", " owners
+        ]
+
+    -- An id the monotonic allocator could not yet have minted names no
+    -- item that ever existed. 'itemAllocatorErrors' already refuses a
+    -- live 'ItemInstance' at or above the cursor, but an obligation is
+    -- not an item: its id is a bare reference, so a payload can carry
+    -- one the allocator never reached and nothing else in the session
+    -- has to agree with it.
+    --
+    -- This is the one provenance rule that must NOT skip a taken
+    -- obligation. Every other rule can, because a taken item is
+    -- legitimately allowed to be anywhere or gone — but "gone" is
+    -- exactly what an id above the cursor looks like to a
+    -- resolution-based check, so a forged @lsiTaken = True@ paired with
+    -- @snapNextItemId@ or higher would resolve nowhere, draw at most a
+    -- tolerated dangling warning, and then satisfy
+    -- 'Location.Instance.significantRecovered' — clearing a location
+    -- with no spawn and no pickup ever having happened. The lower bound
+    -- (0, the never-minted sentinel) is component decode's
+    -- ('Location.Instance.significantEntryErrors'); this is the upper
+    -- one, which no single component can check because the cursor lives
+    -- in @core-session@.
+    allocatorErrors =
+        [ IntegrityError
+            { ieComponent     = worldPagesComponentId
+            , ieVersion       = worldPagesVersion
+            , iePath          = path
+            , ieRefKind       = RefItemInstance
+            , ieRefValue      = tshow itemId
+            , ieExpectedScope = "an item identity the global allocator "
+                <> "has actually minted (below the saved cursor "
+                <> tshow cursor <> ")"
+            , ieActual        = "at or above that cursor, so no such "
+                <> "item was ever created"
+            , ieCode          = "unmintable-identity"
+            , ieMessage       = "significant item " <> tshow itemId
+                <> " owed by location #"
+                <> tshow (unLocationInstanceId (liId inst))
+                <> " on page '" <> unWorldPageId pid
+                <> "' is at or above the session's item-id cursor ("
+                <> tshow cursor <> "), so the allocator never minted it"
+            }
+        | let cursor = snapNextItemId snap
+        , (pid, inst, entry, path) ← refs
+        , Just itemId ← [lsiInstanceId entry]
+        , itemId ≥ cursor
+        ]
+
+-- | The TOLERATED half of #917's provenance rules: an untaken
+--   obligation whose item is absent from the whole session. Reported,
+--   never fatal — the obligation stays untaken and the location stays
+--   unclearable, which is the honest outcome and exactly what
+--   requirement 9 asks for ("a missing referenced runtime entity must
+--   not be mistaken for a taken item or a satisfied condition").
+--   Deliberately a warning rather than an error for the same reason a
+--   dangling transfer-order target is: the state is recoverable and
+--   refusing the whole save would lose far more than it protects.
+significantDanglingWarnings ∷ SessionSnapshot → [IntegrityError]
+significantDanglingWarnings snap =
+    [ IntegrityError
+        { ieComponent     = worldPagesComponentId
+        , ieVersion       = worldPagesVersion
+        , iePath          = path
+        , ieRefKind       = RefItemInstance
+        , ieRefValue      = tshow itemId
+        , ieExpectedScope = "same page ('" <> unWorldPageId pid <> "')"
+        , ieActual        = "not found in the loaded session"
+        , ieCode          = "dangling-reference"
+        , ieMessage       = "significant item " <> tshow itemId
+            <> " owed by location #"
+            <> tshow (unLocationInstanceId (liId inst)) <> " on page '"
+            <> unWorldPageId pid <> "' does not resolve (tolerated: the \
+               \obligation stays untaken)"
+        }
+    | (pid, inst, entry, path) ← significantRefs snap
+    , not (lsiTaken entry)
+    , Just itemId ← [lsiInstanceId entry]
+    , not (any (HS.member itemId ∘ peItems)
+               (HM.elems (snapshotPageEntities snap)))
+    ]
+
 -- | The NON-BLOCKING half of the session integrity graph (#1246): every
 --   finding that must be surfaced as a diagnostic and must never fail a
 --   boundary. Deliberately a sibling of 'sessionIntegrityErrors' rather
@@ -482,7 +732,8 @@ danglingOrderRefErrors pid entities orders =
 --   silently tolerated today (issues #758/#763) and reporting them here
 --   would change what an existing, unrelated save logs.
 sessionIntegrityWarnings ∷ SessionSnapshot → [IntegrityError]
-sessionIntegrityWarnings snap = orderWarnings ⧺ locationWarnings
+sessionIntegrityWarnings snap =
+    orderWarnings ⧺ locationWarnings ⧺ significantDanglingWarnings snap
   where entitiesByPage = snapshotPageEntities snap
         orderWarnings =
             [ e
@@ -493,7 +744,7 @@ sessionIntegrityWarnings snap = orderWarnings ⧺ locationWarnings
         locationWarnings =
             [ IntegrityError
                 { ieComponent = worldPagesComponentId
-                , ieVersion = 8
+                , ieVersion = worldPagesVersion
                 , iePath = path
                 , ieRefKind = RefUnit
                 , ieRefValue = tshow (unUnitId uid)
@@ -786,3 +1037,11 @@ luaReferenceErrors componentVersions ke edges =
         Just page → "world page '" <> page <> "' (per-page allocator)"
         Nothing   → "the reference's own declared world page \
                      \(per-page allocator; none declared)"
+
+-- | The @world-pages@ schema version every diagnostic above attributes
+--   itself to, read off the codec that actually writes the component
+--   rather than restated as a literal. Two consecutive bumps (#2021's
+--   v9, #917's v10) each had to hand-edit five literals here that
+--   nothing tied to the codec, and the second one missed them.
+worldPagesVersion ∷ Word32
+worldPagesVersion = ccVersion worldPagesCodec
