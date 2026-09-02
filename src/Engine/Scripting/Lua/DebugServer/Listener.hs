@@ -209,7 +209,11 @@ acceptLoop cfg listener cmdQueue failures = do
         Left (e ∷ SomeException) → do
             stopping ← readTVarIO (dlStopping listener)
             -- An intentional stop closed the socket out from under this
-            -- accept. That is not a loss and gets no diagnostic.
+            -- accept — or, if the close did not wake it, killed this
+            -- thread outright. Both land here, and both are recognised
+            -- by the flag the stop set BEFORE either: neither is a loss
+            -- and neither gets a diagnostic. Returning ends the loop,
+            -- so an async kill still stops the thread.
             unless stopping $ handleAcceptFailure cfg listener cmdQueue
                                                   failures e
 
