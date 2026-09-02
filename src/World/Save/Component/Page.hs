@@ -293,7 +293,7 @@ orderedPages = L.sortOn pgsPageId . HM.elems . snapPages
 
 -- Frozen leaf DTOs (requirement 4) -----------------------------------
 
--- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v9)
+-- | Frozen mirror of 'WorldIdentity' — the CURRENT (world-pages v10)
 --   shape: the optional language provenance #1092 added, plus the
 --   optional etymology source #1104 added. #1230 took the component to
 --   v7 and #916 took it to v8 without touching the identity, so both

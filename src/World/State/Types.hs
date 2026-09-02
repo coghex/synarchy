@@ -436,13 +436,13 @@ data WorldState = WorldState
       --   creation path — 'WorldInit', arena init, or load staging — can
       --   forget to assign one, and no consumer has an absent case to
       --   handle. Staging OVERWRITES it with the saved id when the save
-      --   carries one (@world-pages@ v9); a page restored from a
-      --   pre-v9 save simply keeps the fresh id minted here, which is
+      --   carries one (@world-pages@ v9 and later); a page restored
+      --   from a pre-v9 save simply keeps the fresh id minted here, which is
       --   requirement 7's "assigned a fresh id during transactional load
       --   staging, not derived from anything in the legacy save".
       --
-      --   Persisted per page in @world-pages@ v9 (authoritative) and
-      --   copied into the @"metadata"@ component at v3 so a
+      --   Persisted per page in @world-pages@ (authoritative, since
+      --   v9) and copied into the @"metadata"@ component at v3 so a
       --   @listSaves@-depth read can obtain it without decoding any
       --   gameplay component.
     }

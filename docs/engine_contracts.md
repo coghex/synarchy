@@ -1386,8 +1386,8 @@ name.
 
 ### Persistence
 
-`world-pages` v9 (v8 frozen by #917 as
-`PageCoreDTOv8`/`WorldGenParamsDTOv7`/`LocationInstancesDTOv5`/
+`world-pages` v10 (v9 frozen by #917 as
+`PageCoreDTOv9`/`WorldGenParamsDTOv7`/`LocationInstancesDTOv5`/
 `LocationInstanceDTOv5`/`LocationEncounterDTOv1`; v7 frozen by #916 as
 `PageCoreDTOv7`/`WorldGenParamsDTOv6`/`LocationInstancesDTOv4`/
 `LocationInstanceDTOv4`; v6 frozen by #1230 as
@@ -1395,7 +1395,7 @@ name.
 `PageCoreDTOv5`/`WorldGenParamsDTOv4`/`WorldIdentityDTOv2`/
 `LocationInstanceDTOv2`/`RiverNameDTOv1` frozen — every historical shape
 decodes with the source ABSENT, never inferred. #917 changed nothing
-about etymology itself: v8 is a frozen migration boundary that carries
+about etymology itself: v9 is a frozen migration boundary that carries
 each stored source across untouched.
 
 ---
@@ -1448,11 +1448,11 @@ the encounter-wide, once-per-episode notification state through
 `hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
 compatibility wrappers resolving to the chunk's first instance.
 
-Persistence: `world-pages` v9, with v8's pre-significant-contents
+Persistence: `world-pages` v10, with v9's pre-significant-contents
 location record frozen as `LocationInstanceDTOv5` (its encounter, still
 carrying the clearance-notice flag, as `LocationEncounterDTOv1`) and
 v7's pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
-NOTHING the payload did not carry — `migrateWorldPagesV8` gains no
+NOTHING the payload did not carry — `migrateWorldPagesV9` gains no
 significant obligations and `migrateWorldPagesV7` no encounter — rather
 than letting current content reinterpret a materialized world; #917's
 own §Guaranteed significant contents has the detail, including where
@@ -1633,7 +1633,7 @@ location's exactly-once content lifecycle on a location that could then
 never be cleared. A hand-stamped location has no `LocationInstanceId`,
 so it owes nothing and its incidental contents are unaffected.
 
-**Persistence.** `world-pages` v9. `migrateWorldPagesV8` preserves every
+**Persistence.** `world-pages` v10. `migrateWorldPagesV9` preserves every
 stored value, lifts the encounter's clearance-notice flag onto the
 instance, and adds NO obligations — reading them off today's YAML would
 owe a materialized world an item it never spawned, permanently blocking

@@ -35,7 +35,8 @@ import World.Save.Integrity
 import World.Save.Snapshot
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId, transferOrdersComponentId
-    , worldPagesComponentId )
+    , worldPagesComponentId, ccVersion )
+import World.Save.Component.Page (worldPagesCodec)
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Entities
     ( CraftBillDTO(..), CraftBillDTOv1(..), migrateCraftBillDTOv1
@@ -567,7 +568,8 @@ spec = do
             sessionIntegrityWarnings snap `shouldBe` []
 
         it "hard-fails a roster UID that resolves only on another page, \
-           \naming the world-pages v9 occupant path" $ do
+           \naming the world-pages occupant path at the component's own \
+           \CURRENT version" $ do
             let uid = UnitId 5
                 p1 = pageWithEncounter page1 uid
                 p2 = (minimalPage page2)
@@ -578,7 +580,7 @@ spec = do
                 [e] → do
                     ieCode e `shouldBe` "wrong-page"
                     ieComponent e `shouldBe` worldPagesComponentId
-                    ieVersion e `shouldBe` 9
+                    ieVersion e `shouldBe` ccVersion worldPagesCodec
                     ieRefKind e `shouldBe` RefUnit
                     iePath e `shouldSatisfy` T.isInfixOf
                         "locations[1].encounter.occupants[0].unit"
@@ -618,7 +620,8 @@ spec = do
             sessionIntegrityWarnings snap `shouldBe` []
 
         it "hard-fails an untaken obligation whose item resolves only on \
-           \ANOTHER page, naming the world-pages v9 significant path" $ do
+           \ANOTHER page, naming the world-pages significant path at the \
+           \component's own CURRENT version" $ do
             let p1 = pageOwing page1 (owedItem 1 7002 False)
                 p2 = withGroundItem 7002 (minimalPage page2)
                 snap = buildSnap page1 [p1, p2]
@@ -626,7 +629,7 @@ spec = do
                 [e] → do
                     ieCode e `shouldBe` "wrong-scope-reference"
                     ieComponent e `shouldBe` worldPagesComponentId
-                    ieVersion e `shouldBe` 9
+                    ieVersion e `shouldBe` ccVersion worldPagesCodec
                     ieRefKind e `shouldBe` RefItemInstance
                     ieRefValue e `shouldBe` "7002"
                     iePath e `shouldSatisfy` T.isInfixOf

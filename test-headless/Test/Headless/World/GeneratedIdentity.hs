@@ -92,7 +92,9 @@ idOne, idTwo ∷ GeneratedWorldId
 idOne = fixtureGeneratedWorldIdForPage pageOne
 idTwo = fixtureGeneratedWorldIdForPage pageTwo
 
--- | A page core at the CURRENT (v9) wire shape.
+-- | A page core at the CURRENT wire shape (v9 when #2021 wrote this;
+--   v10 since #917, which appended significant-item obligations to the
+--   location table without touching this field).
 coreV9 ∷ WorldPageId → Maybe GeneratedWorldId → PageCoreDTO
 coreV9 pid gid = PageCoreDTO
     { pcPageId = pid, pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
@@ -171,7 +173,7 @@ pureSpec = describe "generated world identity (#2021)" $ do
             T.length (renderGeneratedWorldId gid) `shouldBe` 32
             renderGeneratedWorldId gid `shouldBe` renderGeneratedWorldId gid
 
-    describe "world-pages v9" $ do
+    describe "world-pages v9 (the version that added the field)" $ do
         it "round-trips a page's id byte-exactly through the real codec" $
             case decodeWorldPages 9 (S.encode (WorldPagesDTO [coreV9 pageOne (Just idOne)])) of
                 Left e   → expectationFailure (T.unpack (renderComponentError e))

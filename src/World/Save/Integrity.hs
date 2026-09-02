@@ -88,7 +88,8 @@ import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Component.Types
     ( craftBillsComponentId, powerNodesComponentId
     , buildingsComponentId, unitsComponentId
-    , transferOrdersComponentId, worldPagesComponentId )
+    , transferOrdersComponentId, worldPagesComponentId, ccVersion )
+import World.Save.Component.Page (worldPagesCodec)
 import World.Save.Payload
     (LuaRefEdge(..), LoadReconcileContext(..))
 import World.Save.Reference (RefKind(..), RefScope(..), refKindText)
@@ -297,7 +298,8 @@ sessionIntegrityErrors snap = concat
               path = "world-pages[page=" <> unWorldPageId pid
                   <> "].locations[" <> tshow (unLocationInstanceId (liId inst))
                   <> "].encounter.occupants[" <> tshow index <> "].unit"
-        , Just err ← [ refEdgeError worldPagesComponentId 9 path RefUnit
+        , Just err ← [ refEdgeError worldPagesComponentId
+                         worldPagesVersion path RefUnit
                          ScopeSamePage pid (unitPages uid)
                          (tshow (unUnitId uid)) ]
         ]
@@ -549,7 +551,7 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
     resolutionErrors =
         [ IntegrityError
             { ieComponent     = worldPagesComponentId
-            , ieVersion       = 9
+            , ieVersion       = worldPagesVersion
             , iePath          = path
             , ieRefKind       = RefItemInstance
             , ieRefValue      = tshow itemId
@@ -605,7 +607,7 @@ significantProvenanceErrors snap = resolutionErrors ⧺ ownershipErrors
     ownershipErrors =
         [ IntegrityError
             { ieComponent     = worldPagesComponentId
-            , ieVersion       = 9
+            , ieVersion       = worldPagesVersion
             , iePath          = "item-instance#" <> tshow itemId
             , ieRefKind       = RefItemInstance
             , ieRefValue      = tshow itemId
@@ -641,7 +643,7 @@ significantDanglingWarnings ∷ SessionSnapshot → [IntegrityError]
 significantDanglingWarnings snap =
     [ IntegrityError
         { ieComponent     = worldPagesComponentId
-        , ieVersion       = 9
+        , ieVersion       = worldPagesVersion
         , iePath          = path
         , ieRefKind       = RefItemInstance
         , ieRefValue      = tshow itemId
@@ -687,7 +689,7 @@ sessionIntegrityWarnings snap =
         locationWarnings =
             [ IntegrityError
                 { ieComponent = worldPagesComponentId
-                , ieVersion = 9
+                , ieVersion = worldPagesVersion
                 , iePath = path
                 , ieRefKind = RefUnit
                 , ieRefValue = tshow (unUnitId uid)
@@ -980,3 +982,11 @@ luaReferenceErrors componentVersions ke edges =
         Just page → "world page '" <> page <> "' (per-page allocator)"
         Nothing   → "the reference's own declared world page \
                      \(per-page allocator; none declared)"
+
+-- | The @world-pages@ schema version every diagnostic above attributes
+--   itself to, read off the codec that actually writes the component
+--   rather than restated as a literal. Two consecutive bumps (#2021's
+--   v9, #917's v10) each had to hand-edit five literals here that
+--   nothing tied to the codec, and the second one missed them.
+worldPagesVersion ∷ Word32
+worldPagesVersion = ccVersion worldPagesCodec
