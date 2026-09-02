@@ -8,11 +8,11 @@ concrete precondition
 
 ## Status
 
-- [ ] PRR-1. A HUD visibility transition can retire sticky tutorial rows before any frame renders them
+- [x] PRR-1. A HUD visibility transition can retire sticky tutorial rows before any frame renders them — [#2056]
 
 ## 1. Tutorial presentation acknowledgement
 
-### PRR-1. A HUD visibility transition can retire sticky tutorial rows before any frame renders them
+### [#2056] PRR-1. A HUD visibility transition can retire sticky tutorial rows before any frame renders them
 
 > **Captured note:** Do not treat the update that changes the tutorial page from hidden to visible as proof that its sticky rows were presented. That same synchronous call can acknowledge the rows and delete them again before the renderer ever snapshots the visible page.
 

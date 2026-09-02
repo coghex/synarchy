@@ -45,18 +45,18 @@ drafting this report.
 
 ## Status
 
-- [ ] CTA2-1. Screenshot players cannot perform a pointer-only hover
-- [ ] CTA2-2. `input_check.py` crashes after an early click miss
-- [ ] CTA2-3. Migrated sparse v1 unit-AI rows cannot execute a live tick
-- [ ] CTA2-4. Later captures show fixed HUD bitmap glyphs collapsing at east/west facings
-- [ ] CTA2-5. The chop probe relies on generated wood flora absent from its fixed fixture
-- [ ] CTA2-6. The broad persistence sweep drops failed-check identity from retained output
+- [x] CTA2-1. Screenshot players cannot perform a pointer-only hover — [#2050]
+- [x] CTA2-2. `input_check.py` crashes after an early click miss — [#2052]
+- [x] CTA2-3. Migrated sparse v1 unit-AI rows cannot execute a live tick — [#2055]
+- [x] CTA2-4. Later captures show fixed HUD bitmap glyphs collapsing at east/west facings — [no-issue]
+- [x] CTA2-5. The chop probe relies on generated wood flora absent from its fixed fixture — [#2058]
+- [x] CTA2-6. The broad persistence sweep drops failed-check identity from retained output — [#2060]
 
 ---
 
 ## Interactive test apparatus
 
-### CTA2-1. Screenshot players cannot perform a pointer-only hover
+### [#2050] CTA2-1. Screenshot players cannot perform a pointer-only hover
 
 The screenshot-only playtest harness cannot deliberately move the pointer
 without also clicking, dragging, or scrolling. Consequently, a player cannot
@@ -95,7 +95,7 @@ incorrect click and abandoned flow.
 - **Remaining uncertainty:** This evidence establishes a harness limitation,
   not a product discoverability defect for human pointer users.
 
-### CTA2-2. `input_check.py` crashes after an early click miss
+### [#2052] CTA2-2. `input_check.py` crashes after an early click miss
 
 The manual input checker records a failed click assertion and then
 unconditionally reads callback state that does not exist when the click missed.
@@ -131,7 +131,7 @@ and obscures the primary setup or routing failure.
 
 ## Product correctness
 
-### CTA2-3. Migrated sparse v1 unit-AI rows cannot execute a live tick
+### [#2055] CTA2-3. Migrated sparse v1 unit-AI rows cannot execute a live tick
 
 A valid sparse unit-AI row migrated from save schema v1 survives decoding,
 canonical comparison, resaving, restart, and reload, but lacks the transient
@@ -169,7 +169,21 @@ matrix runs reproduced the same post-restart warning.
   `nextActionAt` field; other transient unit-AI fields may require the same
   reconciliation audit.
 
-### CTA2-4. Later captures show fixed HUD bitmap glyphs collapsing at east/west facings
+### [no-issue] CTA2-4. Later captures show fixed HUD bitmap glyphs collapsing at east/west facings
+
+> **Disposition:** No issue — the later captures show the same invariance the
+> rejected earlier set did. Per-pixel inspection of `b0cfcb`'s four
+> `wall_face*.png` frames finds identical glyph-ink counts and zero differing
+> interior pixels (>6 px from the box edge) for the hamburger and all six
+> toolbar glyphs between any two facings; all differences fall in the
+> rounded-corner margins where the rotated world shows through, and the
+> `Objectives` label interior is likewise stable. The four frames differ by
+> 260k–450k pixels overall, so the rotation occurred. This run's
+> `toolbar_face*.png` crops frame the wall, not the toolbar, leaving only
+> full-frame eyeballing — which misread the per-facing corner-margin changes
+> as glyph collapse, exactly as in the earlier rejected observation. `src/UI/`
+> still contains no camera-facing reference and both UI vertex paths apply
+> only `ubo.uiProj`.
 
 A later real-Vulkan offscreen session shows the hamburger and six fixed
 left-toolbar glyphs at full size when the camera faces south or north, but as
@@ -215,7 +229,7 @@ visible change to bitmap glyph content rather than the entire HUD layout.
 
 ## Probe fixtures and retained evidence
 
-### CTA2-5. The chop probe relies on generated wood flora absent from its fixed fixture
+### [#2058] CTA2-5. The chop probe relies on generated wood flora absent from its fixed fixture
 
 The chop probe defaults to one generated world fixture and searches its loaded
 region for naturally placed wood-harvestable flora. Seed 42 currently supplies
@@ -248,7 +262,7 @@ recurred in the parallel sweep and its solo retry.
   the evidence does not establish that natural world generation is a durable
   fixture contract for this probe.
 
-### CTA2-6. The broad persistence sweep drops failed-check identity from retained output
+### [#2060] CTA2-6. The broad persistence sweep drops failed-check identity from retained output
 
 The broad persistence sweep prints each check as it runs but ends with only a
 failure count. The aggregate probe runner retains a default 25-line tail plus

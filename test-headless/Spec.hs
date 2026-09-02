@@ -207,6 +207,7 @@ import qualified Test.Headless.UI.ClickCorrelation as UIClickCorrelation
 import qualified Test.Headless.UI.TransferContextMenu as UITransferContextMenu
 import qualified Test.Headless.UI.ItemList as UIItemList
 import qualified Test.Headless.UI.ContainerWindowStack as UIContainerWindowStack
+import qualified Test.Headless.Load.ReplacementTeardown as LoadReplacementTeardown
 import qualified Test.Headless.UI.TransferGestures as UITransferGestures
 import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
@@ -280,6 +281,7 @@ import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Load.Status as LoadStatus
+import qualified Test.Headless.Load.Terminalize as LoadTerminalize
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
@@ -666,6 +668,7 @@ main = hspec $ do
     MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Load.Status" LoadStatus.spec
+    describe "Load.Terminalize" LoadTerminalize.spec
     describe "Save.Snapshot" SaveSnapshot.spec
     describe "Lua persistence components" LuaSaveModules.spec
     describe "Lua shared helpers" LuaSharedHelpers.spec
@@ -781,6 +784,7 @@ main = hspec $ do
     UISettingsDefaultsKeybinds.spec
     UISettingsRevert.spec
     describe "UI.ContainerWindowStack" UIContainerWindowStack.spec
+    LoadReplacementTeardown.spec
     UITransferGestures.spec
     UIConsumableGesture.spec
     UITransferSession.spec

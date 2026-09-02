@@ -38,9 +38,158 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "650578ad6de470a8d97e5808987e75441d07e834",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-09-01T20:07:28Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "650578ad6de470a8d97e5808987e75441d07e834",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:45155",
+            "pid": 45155,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-09-01T20:07:18Z",
+            "token": "d8e299a539be46b8a9a23724ab74e666"
+          }
+        ],
+        "current": {
+          "commit_sha": "650578ad6de470a8d97e5808987e75441d07e834",
+          "samples": [
+            {
+              "check_counts": {
+                "arterial_severed_volume_floor": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "catastrophic_blunt_family_blood": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "clear_removes_decals": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "internal_dry": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "ordinary_blunt_dry": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "ordinary_fracture_concussion_dry": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "slash_style": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "stab_severity_scaling": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "stab_style": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "650578ad6de470a8d97e5808987e75441d07e834",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.201,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.438,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.501,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 52.13,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.985,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.645,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 52.239,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.592,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.447,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 51.426,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-09-01T20:07:28Z",
+              "total_elapsed_seconds": 516.604,
+              "worst_elapsed_seconds": 52.239
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -48,7 +197,7 @@
       },
       "classification": "manual-only",
       "key": "blood_impact",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "blood_impact_probe.py"
     },
     {
@@ -126,7 +275,10 @@
         "attempts": [],
         "claims": [],
         "current": null,
-        "deferred": null,
+        "deferred": {
+          "reason": "Biome-specific tree assets are still being implemented, so missing-tree results cannot exercise the chop contract and are not actionable game regressions.",
+          "resume_when": "All tree assets required by the chop probe's supported biome set have been merged and registered in the live flora data."
+        },
         "estimated_worst_case_seconds": null,
         "history": [],
         "outcomes": []
@@ -140,9 +292,148 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "5396cbe7be03ae610d17c607943997d9be315053",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-08-31T23:22:18Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "5396cbe7be03ae610d17c607943997d9be315053",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:71043",
+            "pid": 71043,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-08-31T23:22:09Z",
+            "token": "f986f93120624a36acd3e06fa164bb37"
+          }
+        ],
+        "current": {
+          "commit_sha": "5396cbe7be03ae610d17c607943997d9be315053",
+          "samples": [
+            {
+              "check_counts": {
+                "sleep_pressure_drain_rate": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "sleep_pressure_monotonic": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "sleep_pressure_seeded": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "urge_dusk_peak": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "urge_evening_rising": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "urge_midnight_flat": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "urge_noon_flat": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "5396cbe7be03ae610d17c607943997d9be315053",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.112,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.284,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.432,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.303,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.195,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.191,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.1,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.215,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.186,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 35.29,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-08-31T23:22:18Z",
+              "total_elapsed_seconds": 352.308,
+              "worst_elapsed_seconds": 35.432
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -150,7 +441,7 @@
       },
       "classification": "manual-only",
       "key": "circadian",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "circadian_probe.py"
     },
     {
@@ -208,9 +499,123 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "240fe9712905f42cca5673333bac246c9f64f962",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-09-01T01:13:07Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "240fe9712905f42cca5673333bac246c9f64f962",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:21041",
+            "pid": 21041,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-09-01T01:12:54Z",
+            "token": "98a01854c7774212913ee1618a29d6a2"
+          }
+        ],
+        "current": {
+          "commit_sha": "240fe9712905f42cca5673333bac246c9f64f962",
+          "samples": [
+            {
+              "check_counts": {
+                "below_band_rises": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "in_band_stays_collapsed": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "240fe9712905f42cca5673333bac246c9f64f962",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 59.29,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.695,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.575,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.746,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 57.019,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.472,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.475,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.405,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.763,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 56.894,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-09-01T01:13:07Z",
+              "total_elapsed_seconds": 569.335,
+              "worst_elapsed_seconds": 59.29
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -218,7 +623,7 @@
       },
       "classification": "manual-only",
       "key": "concussion_revive",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "concussion_revive_probe.py"
     },
     {
@@ -412,9 +817,123 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "9ada343081e09ddd4994d9106894bcb0ccdb1ebb",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-09-01T01:24:42Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "9ada343081e09ddd4994d9106894bcb0ccdb1ebb",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:10075",
+            "pid": 10075,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-09-01T01:24:34Z",
+            "token": "405bba7151554f3e980dc66698ceef0a"
+          }
+        ],
+        "current": {
+          "commit_sha": "9ada343081e09ddd4994d9106894bcb0ccdb1ebb",
+          "samples": [
+            {
+              "check_counts": {
+                "initial_drop": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "repeat_drop": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "9ada343081e09ddd4994d9106894bcb0ccdb1ebb",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.67,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.536,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.524,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.956,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.925,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.431,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.495,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.368,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.423,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 28.232,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-09-01T01:24:42Z",
+              "total_elapsed_seconds": 285.561,
+              "worst_elapsed_seconds": 28.956
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -422,7 +941,7 @@
       },
       "classification": "manual-only",
       "key": "disarm",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "disarm_probe.py"
     },
     {
@@ -832,9 +1351,143 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "bbda7d1220b78be3fe28df7ca90c1fa0a0bf7c64",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-09-02T02:10:51Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "bbda7d1220b78be3fe28df7ca90c1fa0a0bf7c64",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:90672",
+            "pid": 90672,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-09-02T02:10:41Z",
+            "token": "26467f10acef4e1e895633a8a3109d13"
+          }
+        ],
+        "current": {
+          "commit_sha": "bbda7d1220b78be3fe28df7ca90c1fa0a0bf7c64",
+          "samples": [
+            {
+              "check_counts": {
+                "bulk_finishes_meal": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "entry_gates_unchanged": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "feed_bound_preserved": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "first_item_exempt": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "starving_eats_rations": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "withholds_marginal_ration": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "bbda7d1220b78be3fe28df7ca90c1fa0a0bf7c64",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 32.77,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.342,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.589,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.365,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.41,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.368,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.39,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.59,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.593,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 30.464,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-09-02T02:10:51Z",
+              "total_elapsed_seconds": 306.882,
+              "worst_elapsed_seconds": 32.77
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -842,7 +1495,7 @@
       },
       "classification": "manual-only",
       "key": "meal_waste",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "meal_waste_probe.py"
     },
     {
@@ -1138,9 +1791,203 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-09-01T01:55:54Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:29360",
+            "pid": 29360,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-09-01T01:55:46Z",
+            "token": "7d21f617996f49b08735abc5586c14f1"
+          }
+        ],
+        "current": {
+          "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+          "samples": [
+            {
+              "check_counts": {
+                "active_world_change_reason": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "cancel_modal_closed": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "cancel_outcome": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "commit_outcome_absent": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "confirmation_outcome": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "cross_page_spawn_absent": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "modal_closed_after_switch": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "modal_open_on_page_a": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "page_a_active": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "page_b_active": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "page_c_active": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "presented_outcome": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "remote_position_valid": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "revalidation_rejected_once": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "same_page_commit_accepted": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "same_page_modal_closed": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "single_portal_after_accept": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "single_portal_after_cancel": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.722,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.724,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.728,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.726,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.754,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.666,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.633,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.737,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.703,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 16.699,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-09-01T01:55:54Z",
+              "total_elapsed_seconds": 167.092,
+              "worst_elapsed_seconds": 16.754
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -1148,7 +1995,7 @@
       },
       "classification": "manual-only",
       "key": "remote_warning_page_guard",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "remote_warning_page_guard_probe.py"
     },
     {
@@ -1555,9 +2402,168 @@
       "census": {
         "acceptable_failures": 0,
         "acceptable_failures_justification": null,
-        "attempts": [],
-        "claims": [],
-        "current": null,
+        "attempts": [
+          {
+            "accepted": true,
+            "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+            "completed_runs": 10,
+            "error": null,
+            "requested_runs": 10,
+            "retained_artifacts": [],
+            "status": "ok",
+            "timestamp_utc": "2026-09-01T01:59:34Z"
+          }
+        ],
+        "claims": [
+          {
+            "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+            "host": "Vincents-MacBook-Pro.local",
+            "lease_seconds": 3600.0,
+            "owner": "vincentcoghlan@Vincents-MacBook-Pro.local:54706",
+            "pid": 54706,
+            "requested_runs": 10,
+            "timestamp_utc": "2026-09-01T01:59:26Z",
+            "token": "f14a2a5edf6f4875bf666cd6b2f0122d"
+          }
+        ],
+        "current": {
+          "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+          "samples": [
+            {
+              "check_counts": {
+                "awareness_mood_response": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "awareness_perception_response": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "confused_band_gate_isolation": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "delirious_band_gate_isolation": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "fresh_mental_baseline": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "hungerless_species_fallback": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "pain_concentration_response": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "pain_emotional_response": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "pain_gate_isolation": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "pain_mood_response": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                },
+                "unconscious_band_gate_isolation": {
+                  "FAIL": 0,
+                  "MISSING": 0,
+                  "PASS": 10
+                }
+              },
+              "commit_sha": "faf652ac3a846ffa7f8efb5fd9a5b49e5133f30f",
+              "completed_runs": 10,
+              "failure_count": 0,
+              "failure_rate": 0.0,
+              "peak_concurrency": 1,
+              "requested_runs": 10,
+              "retained_artifacts": [],
+              "rts_capabilities": 4,
+              "runs": [
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.092,
+                  "index": 1,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.027,
+                  "index": 2,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.356,
+                  "index": 3,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.003,
+                  "index": 4,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.009,
+                  "index": 5,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.211,
+                  "index": 6,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.205,
+                  "index": 7,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.147,
+                  "index": 8,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.068,
+                  "index": 9,
+                  "outcome": "PASS"
+                },
+                {
+                  "artifact_dir": null,
+                  "elapsed_seconds": 44.312,
+                  "index": 10,
+                  "outcome": "PASS"
+                }
+              ],
+              "timeout_count": 0,
+              "timestamp_utc": "2026-09-01T01:59:34Z",
+              "total_elapsed_seconds": 441.43,
+              "worst_elapsed_seconds": 44.356
+            }
+          ]
+        },
         "deferred": null,
         "estimated_worst_case_seconds": null,
         "history": [],
@@ -1565,7 +2571,7 @@
       },
       "classification": "manual-only",
       "key": "state_of_mind",
-      "protocol": "legacy",
+      "protocol": "probe-result/v1",
       "script": "state_of_mind_probe.py"
     },
     {
@@ -2310,6 +3316,40 @@
       "key": "structure_rotation",
       "protocol": "legacy",
       "script": "structure_rotation_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "scene_stats",
+      "protocol": "legacy",
+      "script": "scene_stats_probe.py"
+    },
+    {
+      "census": {
+        "acceptable_failures": 0,
+        "acceptable_failures_justification": null,
+        "attempts": [],
+        "claims": [],
+        "current": null,
+        "deferred": null,
+        "estimated_worst_case_seconds": null,
+        "history": [],
+        "outcomes": []
+      },
+      "classification": "manual-only",
+      "key": "startup_asset_logging",
+      "protocol": "legacy",
+      "script": "startup_asset_logging_probe.py"
     }
   ],
   "schema": "probe-census/v5"
