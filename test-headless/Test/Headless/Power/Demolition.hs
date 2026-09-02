@@ -37,6 +37,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Data.List (sort)
+import Building.Schema
 import Building.Thread.Command (processAllBuildingCommands)
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingManager(..)
@@ -166,13 +167,14 @@ bareDef ∷ Text → BuildingDef
 bareDef name = BuildingDef
     { bdName = name, bdDisplayName = name
     , bdCategory = "Power", bdDescription = ""
-    , bdTexture = TextureHandle 0, bdIconTexture = TextureHandle 0
+    , bdTextures = legacyAssets (TextureHandle 0), bdIconTexture = TextureHandle 0
     , bdTileW = 1, bdTileH = 1, bdPlacement = "flat_ground"
     , bdIsStarting = False, bdRace = "acolyte"
     , bdSpriteAnchor = "diamond_bottom", bdBuildWork = 0
     , bdMaterials = HM.empty, bdStorageCapacity = 0
     , bdOperations = [], bdAnimations = HM.empty
-    , bdStateAnims = HM.empty, bdPowerDrain = 0, bdPowerNode = Nothing
+    , bdRoleAnims = Map.empty
+    , bdVisualClass     = FreestandingInstallation, bdPowerDrain = 0, bdPowerNode = Nothing
     }
 
 -- | The two power hosts plus one ORDINARY building — the control that

@@ -26,7 +26,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (readIORef, writeIORef)
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Structure.Types (emptyChunkStructures)
@@ -141,5 +142,5 @@ spec = beforeAll initEnv $
       camZSlice cam `shouldBe` 0
   where
     initEnv = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         pure env

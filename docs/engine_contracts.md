@@ -653,7 +653,7 @@ per policy**, because one slot cannot carry two samplers:
 | art | scene handle | UI handle |
 |---|---|---|
 | item `sprite:` | `idTexture` (ground-item quads) | `idIconTexture` (inventory / equipment / container rows) |
-| building `sprite:` | `bdTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
+| building `sprites:`/legacy `sprite:` | `bdTextures`' south view, `bdSouthTexture` (`Building.Render`) | `bdIconTexture` (`building.listDefs`'s `iconTex`) |
 | broken-equipment badge | texture name `broken_equipment` | texture name `broken_equipment_ui` |
 
 **Known live-frame exception:** when a unit has no authored `portrait:`,

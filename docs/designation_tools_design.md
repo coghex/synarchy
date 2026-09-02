@@ -140,19 +140,20 @@ concrete precondition
   that solution are stale and should point to the new epic/replacement child
   once those tracker artifacts exist.
 - A planned `CtBuilding` already names a building definition whose
-  `bdTexture`, pixel dimensions, footprint anchor, and `bdSpriteAnchor` drive
+  `bdSouthTexture`, pixel dimensions, footprint anchor, and `bdSpriteAnchor` drive
   the placement ghost and final renderer. The current committed designation
   instead expands one generic 96×64 marker across every footprint tile. The
   building ghost must be one target-shaped sprite, not a repeated tile marker.
 - **The building half is largely existing machinery** (verified 2026-08-28 at
   `dc470999`). `Building.Render.buildingToQuad` already draws the real
-  `bdTexture` at 0.6 alpha with correct scale, `bdSpriteAnchor` offset,
+  `bdSouthTexture` at 0.6 alpha with correct scale, `bdSpriteAnchor` offset,
   footprint anchor and sort key — its `isGhost` predicate is positive
   `bdBuildWork` plus unsatisfied materials. `renderGhostQuad` does the same
   for the cursor-following placement ghost, and `ghostTint` returns
   `Vec4 1.0 0.4 0.4 0.6` when placement is invalid. `pickBuildingFrame`
   already indexes construction frames by `biBuildProgress / bdBuildWork`
-  whenever the activity is `Appearing` and `bdBuildWork > 0`.
+  whenever the activity is `Constructing` (#2080 split that out of the
+  overloaded `Appearing`, which now means timed appearance alone).
 - **`cdProgress` is dead for buildings.** `World.Construct.Apply` states that
   building designations never accrue progress — they are staked into a real
   building, which owns its own construction visuals — so `cdProgress` is only
@@ -176,7 +177,7 @@ concrete precondition
   post placement and the #415 front-wall depth strips — so once the art
   resolves, the structure ghost is a call into the existing renderer.
 - **The two tool families already diverge at the PREVIEW stage.** A building
-  previews with its real `bdTexture` at 0.6 alpha following the cursor, while
+  previews with its real `bdSouthTexture` at 0.6 alpha following the cursor, while
   a structure previews through `CursorQuads.hs`'s `constructPreviewQuads`
   using the generic `world_select.png` cursor tile at full alpha, one flat
   quad per rectangle tile (honouring `constructLineMode` for the #359 wire
@@ -579,7 +580,7 @@ and no texture, and the pack/kind → texture+facemap translation lives only in
 engine up front — the same shape as the existing
 `structure.registerWallFamily` verb — so the render pass can resolve an
 unplaced piece without calling into Lua. Buildings need none of this: their
-art is already reachable through `bdTexture`.
+art is already reachable through `bdSouthTexture`.
 
 ### D-12. Chop uses ground-contact-centered icons and symmetric add/erase gestures
 
@@ -635,8 +636,9 @@ There is no shared or finished-texture fallback: a constructed building missing
 that art is an invalid asset/data definition and must be caught before play.
 Buildings with zero `build_work` follow an appearance or instant-placement
 lifecycle instead. The portal's time-driven appearance animation is therefore
-not construction progress and must remain semantically distinct even though
-the current runtime calls both animation roles `appearing`.
+not construction progress and must remain semantically distinct. #2080 made
+that distinction explicit: the two animation roles are now `construction`
+and `appearance`, and the derived activities `Constructing` and `Appearing`.
 
 ### D-17. Missing building progress sequences land as dedicated art slices
 
@@ -709,7 +711,7 @@ The delivery plan is plumbing-first: DTV-9 adds the engine-side pack/kind →
 art/buildability resolution and settles wire's treatment (Q-13); DTV-13 then
 establishes the authoritative candidate-plan and invalidation boundary; and
 the structure ghost slice builds on both. DTV-10 (buildings) does not
-technically need either structure slice — `bdTexture` is already reachable —
+technically need either structure slice — `bdSouthTexture` is already reachable —
 but the ledger keeps it after them so the arc lands in one coherent order
 rather than shipping half the visual language first.
 
@@ -1115,7 +1117,7 @@ lifecycle.
 
 Resolved by D-16.
 
-Buildings with an `appearing` animation already have target-specific progress
+Buildings with a `construction` animation already have target-specific progress
 frames, but structure packs currently define only finished floor, wall,
 ceiling, post, and wire art. Structures intentionally show nothing between the
 fixed ghost and finished piece. Every positive-`build_work` building must have
@@ -1300,7 +1302,7 @@ or generate missing frames.
   player is placing it and 60% once designated, with no category marker and no
   per-footprint-tile repetition.
 - **Scope:** Route both the pre-commit preview and the committed designation
-  through the building's own `bdTexture`, dimensions, `bdSpriteAnchor` and
+  through the building's own `bdSouthTexture`, dimensions, `bdSpriteAnchor` and
   footprint anchor; apply D-19's two alphas and D-20's preview-only invalid
   tint; keep the `CtBuilding` designation ghost and the staked
   `BuildingInstance` pre-delivery ghost at the same 60% state; remove the
@@ -1312,7 +1314,7 @@ or generate missing frames.
   and add focused render plus visual verification.
 - **Phase:** 1 — construction presentation
 - **Depends on:** `none` — a building's art is already reachable through
-  `bdTexture`; sequenced after DTV-9 by D-21 rather than by necessity
+  `bdSouthTexture`; sequenced after DTV-9 by D-21 rather than by necessity
 - **Ordering:** `not on the critical path`
 - **Relevant decisions:** D-11, D-15, D-16, D-19, D-20
 - **Acceptance signals:** A building designation emits ONE ghost with the same

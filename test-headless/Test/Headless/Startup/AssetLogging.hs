@@ -41,7 +41,8 @@ import System.Directory
     ( createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory
     , removeDirectoryRecursive )
 import System.FilePath ((</>))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..) )
@@ -273,7 +274,7 @@ data Bindings = Bindings
 
 newBindings ∷ IO Bindings
 newBindings = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     ref ← newIORef []
     logger ← initLogger defaultLogConfig
         { lcBackend         = LogToCallback (\e → modifyIORef' ref (e :))

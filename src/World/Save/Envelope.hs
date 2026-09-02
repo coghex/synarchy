@@ -64,6 +64,7 @@ module World.Save.Envelope
     , metadataComponentId
     , metadataComponentVersion
     , legacyMetadataComponentVersion
+    , predecessorMetadataComponentVersion
     , LuaComponentSpec(..)
     , encodeSessionSnapshot
     , decodeSessionEnvelope
@@ -89,6 +90,8 @@ import World.Save.Payload (LuaComponentSpec(..))
 import World.Save.Types (SaveMetadata)
 import World.Save.Compat.MetadataV1
     (decodeSaveMetadataV1, migrateSaveMetadataV1)
+import World.Save.Compat.MetadataV2
+    (decodeSaveMetadataV2, migrateSaveMetadataV2)
 import World.Save.Snapshot (SessionSnapshot)
 import World.Save.Component
     (componentKnownIds, componentRequiredIds
@@ -112,11 +115,16 @@ currentEnvelopeVersion = 1
 --   independent counter (requirement 3). Bump this, not
 --   'currentEnvelopeVersion', if 'SaveMetadata''s shape ever changes.
 --
---   v2 (#913) appended 'World.Save.Types.smAutosave'. v1 payloads are
---   still decoded, through the frozen "World.Save.Compat.MetadataV1"
---   mirror — see @metadataComponentInputVersions@.
+--   v2 (#913) appended 'World.Save.Types.smAutosave'. v3 (#2021)
+--   appended 'World.Save.Types.smGeneratedWorldIds' — every page's
+--   opaque generated-world id, so a listing-depth read can obtain the
+--   save's complete set of generated foundations without decoding a
+--   single gameplay component. v1 and v2 payloads are still decoded,
+--   through the frozen "World.Save.Compat.MetadataV1" and
+--   "World.Save.Compat.MetadataV2" mirrors — see
+--   @metadataComponentInputVersions@.
 metadataComponentVersion ∷ Word32
-metadataComponentVersion = 2
+metadataComponentVersion = 3
 
 -- | Every @"metadata"@ schema version this build can DECODE, newest
 --   last. 'decodeMetadataComponent' accepts exactly these and rejects
@@ -129,7 +137,18 @@ metadataComponentVersion = 2
 --   historical version was removed" drift that audit exists to catch.
 metadataComponentInputVersions ∷ [Word32]
 metadataComponentInputVersions =
-    [legacyMetadataComponentVersion, metadataComponentVersion]
+    [ legacyMetadataComponentVersion
+    , predecessorMetadataComponentVersion
+    , metadataComponentVersion ]
+
+-- | The @"metadata"@ schema version immediately preceding the current
+--   one — the version "World.Save.Compat.MetadataV2" freezes. Its own
+--   binding for the same reason 'legacyMetadataComponentVersion' has
+--   one: 'decodeMetadataComponent' dispatches on it by name rather than
+--   by a bare literal, so adding a fourth version means adding another
+--   frozen mirror here, not editing a magic number in a guard.
+predecessorMetadataComponentVersion ∷ Word32
+predecessorMetadataComponentVersion = 2
 
 -- | The @"metadata"@ schema version the FROZEN legacy envelope shapes
 --   (B1's @{metadata, session}@ and B2's pre-#761 set) always carry.
@@ -967,9 +986,13 @@ decodeSessionEnvelopeClassified luaKnownNames luaRequiredNames bytes =
 --   cases are unreachable — metadata is always in the reader's required
 --   set.
 --
---   Two versions are accepted (@metadataComponentInputVersions@): the
+--   Three versions are accepted (@metadataComponentInputVersions@): the
 --   current one, decoded straight into 'SaveMetadata', and the frozen v1
---   shape, decoded through "World.Save.Compat.MetadataV1" and migrated.
+--   and v2 shapes, decoded through "World.Save.Compat.MetadataV1" /
+--   "World.Save.Compat.MetadataV2" and migrated. Each historical
+--   version needs its OWN frozen mirror rather than reusing an older
+--   one — cereal encodes these records positionally, so v2's bytes can
+--   only be read against v2's exact field list.
 --   The version is matched EXACTLY against that list rather than by an
 --   ordering comparison, so a FUTURE version this build has never seen
 --   is still refused outright instead of being fed to a decoder that
@@ -990,8 +1013,10 @@ decodeMetadataComponent decoded = do
                     (HM.lookup metadataComponentId (dePayloads decoded))
     if version ≡ legacyMetadataComponentVersion
       then migrateSaveMetadataV1 ⊚ decodeSaveMetadataV1 payload
-      else either (Left . (("Failed to decode metadata component: ") <>) . T.pack)
-                  Right (S.decode payload)
+      else if version ≡ predecessorMetadataComponentVersion
+        then migrateSaveMetadataV2 ⊚ decodeSaveMetadataV2 payload
+        else either (Left . (("Failed to decode metadata component: ") <>) . T.pack)
+                    Right (S.decode payload)
 
 findDescriptor ∷ ComponentId → EnvelopeManifest → Maybe ComponentDescriptor
 findDescriptor cid manifest =

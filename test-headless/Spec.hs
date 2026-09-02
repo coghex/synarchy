@@ -84,6 +84,7 @@ import qualified Test.Headless.World.Save.Integrity as SaveIntegrity
 import qualified Test.Headless.World.Save.Storage as SaveStorage
 import qualified Test.Headless.World.Save.Contract as SaveContract
 import qualified Test.Headless.World.Identity as WorldIdentity
+import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -242,6 +243,7 @@ import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
+import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
 import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
@@ -263,6 +265,7 @@ import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
+import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
@@ -421,6 +424,12 @@ main = hspec $ do
     -- of re-restoring the shared worlds.
     aroundAll withHeadlessEngine $
         describe "World identity (#707)" WorldIdentity.spec
+    -- #2021 (WML-3). The pure half needs no engine. The boundary half
+    -- gets its OWN engine for the same reason "World identity" does: it
+    -- creates private w8 pages and saves EVERY live page, which the
+    -- shared-worlds engine above must not gain.
+    GeneratedIdentity.pureSpec
+    aroundAll withHeadlessEngine GeneratedIdentity.spec
     -- #2020 (WML-2). The pure half needs no engine at all. The
     -- boundary half gets its OWN engine: it creates a private w8 page
     -- and saves it, which the shared-worlds engine above must not gain,
@@ -584,6 +593,8 @@ main = hspec $ do
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
     describe "Preview.Zoom" PreviewZoom.spec
+    describe "building asset schema and lifecycle roles"
+        BuildingAssetSchema.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
@@ -839,6 +850,7 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    FixtureLogging.spec
     LogCategoryEnv.spec
     LogMonad.spec
     LogParity.spec

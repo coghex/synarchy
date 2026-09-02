@@ -37,7 +37,8 @@ import qualified Data.Map as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.WorldSim
@@ -72,6 +73,7 @@ import World.Thread.Time (tickWorldTime)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
 import World.Time.Types (WorldTime(..), worldTimeToSunAngle)
 import World.ZoomMap.Types (ZoomChunkEntry(..))
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
 -- * The two pages
 
@@ -288,7 +290,7 @@ spec = describe "per-page solar attribution (#1869)" $ aroundAll setup $ do
     -- Isolation wraps the boot (#1357): engine init is itself a config
     -- writer.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         act env
 
 -- | The pure assignment, on its own.
@@ -576,6 +578,8 @@ restoreSpec = describe "a restored multi-page session" $
                     , pcDateDay    = 1
                     , pcMapMode    = ZMDefault
                     , pcIdentity   = Nothing
+                    , pcGeneratedId =
+                        Just (fixtureGeneratedWorldIdForPage pageId)
                     }
                 paramsFor n = defaultWorldGenParams { wgpWorldSize = n }
                 written = WorldPagesDTO

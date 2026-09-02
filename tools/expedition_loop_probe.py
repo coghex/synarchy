@@ -984,7 +984,7 @@ def await_roster(chk: Checks, port: int, bid: int):
 def build_storage(chk: Checks, port: int, hx: int, hy: int) -> int:
     """The colony's storage: a real cargo_hold_S beside the portal.
 
-    Finished immediately on purpose. A cargo_hold_S spawns Appearing
+    Finished immediately on purpose. A cargo_hold_S spawns Constructing
     (build_work 240) and an unfinished building is a CONSTRUCTION SITE:
     build_nearby and deliver_to_build_site (utility 6.0, with a lock-in)
     would pull the whole colony — travellers included — off to finish it.

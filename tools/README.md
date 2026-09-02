@@ -117,8 +117,23 @@ Exit 0 on pass/improvement, 1 on failure or a missing baseline, 2 on bad
 invocation.
 
 ### `test_audit.py`
-Unit tests for the audit script. Constructs synthetic tile grids to verify
-each check correctly identifies the issue it's meant to catch.
+The shared self-test for `world_audit.py`, `world_check.py` and
+`world_baseline.py`. Synthetic tile grids and dumps verify that each audit
+check identifies the issue it's meant to catch, that the regression
+summary, determinism status, content-hash gate and missing-baseline exit
+policy decide as documented, and that strict baseline capture refuses what
+it must. Sub-second, engine-free, and it never writes under
+`tools/baselines/`.
+
+Since #2070 the file is a façade: it composes and runs the ordered group
+inventories of six owner modules — `test_audit_categories.py` (the
+emitted-category inventory derived from `world_audit.py`'s source),
+`test_audit_world_audit.py`, `test_audit_world_check.py`,
+`test_audit_content_hash.py`, `test_audit_strict_capture.py` and
+`test_audit_missing_baseline.py` — over the shared fixtures and assertion
+facility in `test_audit_support.py`. The owners expose no command line, and
+the aggregate refuses to run if any owner declares fewer groups than it has
+always carried. The command is unchanged:
 
 ```bash
 python3 tools/test_audit.py
@@ -269,7 +284,7 @@ python3 tools/location_placement_sweep.py --single --seed 7 --size 128
 
 Before committing a change:
 ```bash
-python3 tools/test_audit.py               # unit tests pass
+python3 tools/test_audit.py               # world_audit/check/baseline self-test passes
 python3 tools/lua_module_budget.py        # Lua module line budgets pass
 python3 tools/world_check.py              # regression suite passes
 ```
@@ -450,7 +465,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `injury_log_probe.py` | logging arc (general) | arena | Injury-log stream roundtrip: `injury.emit`/`drainEvents`, `unit.injure`, `emitEventForUnit` tagging. |
 | `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
-| `location_content_probe.py` | #90, #91, #915, #1101, #1230 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. |
+| `location_content_probe.py` | #90, #91, #915, #1101, #1230 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. The file itself is the façade (CLI, artifact guard, the eight-process sequence, the helpers other probes import); the scenario owners — content/persistence, discovery/knowledge, content dispatch/rejection, naming — live under `tools/location_content/` beside the shared invocation infrastructure (#2095). |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
 | `location_stamp_idempotent_probe.py` | #424, #1575 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load; and the 5x5 footprint under the tested room really materialized level, with no levelling edit the engine refused. |
 | `lua_orphan_prune_probe.py` | #195, #1589 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load, and a stale reference from EVERY declared `unit_ai` family — planted before the save — is cleared by the automatic post-load reconcile. |
@@ -1074,19 +1089,36 @@ that was never created says so rather than being called empty); a default
 failing run says its log went with the tree and points at the flag; and a
 cleanup that cannot finish makes an otherwise passing run non-zero,
 through #1620's own `remove_isolated_root` reporting. It also pins what
-the probe still proves after the move: all seven boots go through the one
-funnel that hands each this invocation's log and registers its process as
-it is launched; both log-reading ASSERTIONS read that same log; the five
-fixture bodies are pinned by `sha256`; their registration order and
-loaders are unchanged (placement and loot draws are order- and
-content-sensitive); `load_fixture_yaml` still guards every one of them
-(#1342); and `make_isolated_root`, `remove_isolated_root` and
-`save_and_wait` are still the shapes `portal_ghost_probe.py` imports.
+the probe still proves after the move: all seven boot CALL SITES go
+through the one funnel that hands each this invocation's log and
+registers its process as it is launched; both log-reading ASSERTIONS
+read that same log; the five fixture bodies are pinned by `sha256`;
+their registration order and loaders are unchanged (placement and loot
+draws are order- and content-sensitive); `load_fixture_yaml` still
+guards every one of them (#1342); and `make_isolated_root`,
+`remove_isolated_root` and `save_and_wait` are still the shapes
+`portal_ghost_probe.py` imports.
 
-The probe is manual-only and boots seven engines across several generated
-worlds, so without this companion the contract is only ever observed by a
-run nothing in CI can make. Engine-free, GPU-free, network-free, about a
-second; blocking CI step alongside `test_flora_growth_probe.py`.
+Since #2095 every structural check scans the COMPLETE reorganized
+surface — the façade plus every scenario owner under
+`tools/location_content/` — and asserts its own non-vacuity first,
+because an exclusion-style property ("no bare `boot`", "no raw fixture
+`send`", "every log read is this invocation's") is True over an empty
+node set and would otherwise report OK while inspecting nothing once the
+assertion bodies left `run`. It also pins the scenario split itself:
+only the façade boots; the regeneration call site is still a loop over
+the same and reversed visit orders, so the run still LAUNCHES eight
+processes from seven call sites; each fixture constant has exactly one
+definition, resolved wherever its owner keeps it; the façade offers one
+`run(args, art, token)`; every PASS diagnostic and recorded failure
+belongs to an owner rather than the façade; and no owner keeps
+cross-scenario state in a mutable module global.
+
+The probe is manual-only. It boots from seven call sites and launches
+eight engine processes across several generated worlds, so without this
+companion the contract is only ever observed by a run nothing in CI can
+make. Engine-free, GPU-free, network-free, about a second; blocking CI
+step alongside `test_flora_growth_probe.py`.
 
 ```bash
 python3 tools/test_location_content_probe.py
@@ -1196,9 +1228,9 @@ is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
 `blood_impact`, `circadian`, `concussion_revive`, `disarm`, `lua_strict_msg`,
-`position_hold`, `remote_warning_page_guard`, `role`, `state_of_mind`,
-`text_encoding` and `thermo_altitude` are the migrated probes today; later
-changes normally migrate one at a time.
+`meal_waste`, `position_hold`, `remote_warning_page_guard`, `role`,
+`state_of_mind`, `text_encoding` and `thermo_altitude` are the migrated probes
+today; later changes normally migrate one at a time.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
@@ -1884,6 +1916,31 @@ interpreters against a shared barrier file and its crash case SIGKILLs one of
 them, because a claim that must hold between OS processes cannot be proved by
 threads.
 
+That bare invocation is the whole gate and the only one CI or `make ci` runs.
+Its 29 cases live with three independently changing contract owners, and
+`--only` runs one owner's cases for iteration (#2100):
+
+```bash
+python3 tools/test_probe_claim.py --only claim          # 12 cases, ~7 s
+python3 tools/test_probe_claim.py --only census         #  4 cases
+python3 tools/test_probe_claim.py --only orchestration  # 13 cases
+```
+
+| Owner module | `--only` | Owns |
+|---|---|---|
+| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
+| `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, and `probe_flake` staying usable with no `docs-wip` worktree |
+| `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI |
+
+`probe_claim_selftest_support.py` is the single source of everything the three
+share — the assertion helpers and the ONE failure accumulator behind them, the
+synthetic registries, the scratch trees and scratch repository, the real
+`probe_flake.Measurement` builder, and the subprocess programs the concurrency
+cases race. None of the four is a gate of its own; `test_probe_claim.py` holds
+no case body and is composition and selection only, spelling out the
+interleaved run sequence the aggregate has always used and refusing to run at
+all if it and the three inventories have drifted apart.
+
 ### `probe_select.py` — which probe does `/deflake` measure next? (#1435)
 
 The census (#1428/#1429), the acceptable-failure policy (#1430), the in-flight
@@ -2487,9 +2544,9 @@ attestations, and the repair commit and verification evidence when the route
 has them. A route with no batches states those halves as `null` rather than
 dropping the keys, so a consumer reads one shape. `deflake_outcome.py` and
 `deflake_issue.py` below are its two consumers, and they read the same
-envelope through the same entry gate: `deflake_outcome.RouteOwnership` is the
-only part that differs, so every rule the two share is checked once rather
-than forked.
+envelope through the same entry gate — `deflake_handoff.py`, which owns that
+gate for both of them: `deflake_handoff.RouteOwnership` is the only part that
+differs, so every rule the two share is checked once rather than forked.
 
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
@@ -2520,13 +2577,44 @@ engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.
 
+### `deflake_handoff.py` — the handoff contract both consumers read (#2097)
+
+The `deflake-outcome-handoff/v1` envelope, and every rule the two consumers
+below share. No CLI: it records nothing, publishes nothing, and imports
+neither consumer, so the two workflows cannot come to disagree about what the
+envelope means and neither is the other's prerequisite.
+
+It owns the schema and the measurement-role vocabulary (`handoff`,
+`baseline`, `verification`), `RouteOwnership` and what each of #1437's endings
+IS, the `HandoffError` / `NonSuccess` classifications, the `Measurement` and
+`Handoff` representations, every producer-record, identity, manifest,
+invocation, path, worktree, descriptor, artifact and producer-binding rule,
+`require_reproduced` — #1437's two-part reproduction qualification, which
+every route past the `cannot-reproduce` fork rests on — and the `utc_now` /
+`reuse_stored_timestamp` pair a durable record is stamped and replayed with.
+
+`require_diagnosis_outcome` and `require_handoff` take `owned` EXPLICITLY: a
+shared contract that defaulted to one consumer's routes would answer for that
+consumer whenever a caller forgot to say which routes it owns. Each consumer
+keeps its own `OWNED` instance and supplies it. `deflake_outcome.py` also
+re-exports the contract's names — the same class objects, so an `except`
+written against either module's `HandoffError` matches a refusal raised
+through the other — for callers that have not moved to the contract yet.
+
+Its gate is `python3 tools/test_deflake_diagnosis.py`, the same deterministic
+run both consumers are covered by.
+
 ### `deflake_outcome.py` — the non-success outcomes of a de-flake attempt (#1439)
 
 Consumes one `deflake-outcome-handoff/v1` for one exact registered probe and
 one de-flake attempt, decides whether the evidence supports a STABLE
 non-success outcome, and appends that outcome durably to the probe's census
 row. It reuses `probe_census.update`'s locked read-modify-write and adds no
-second state store, no second write path and no second lock.
+second state store, no second write path and no second lock. Reading the
+envelope is `deflake_handoff.py`'s above; what is here is #1439's own — which
+route becomes which stable outcome and on what evidence, the records and
+recommendations they produce, the census append, the no-pull-request boundary,
+and this CLI.
 
 ```bash
 python3 tools/deflake_outcome.py --handoff <document.json>
@@ -2856,7 +2944,8 @@ to the probe-adjustment or fix-PR path. The issue may exist remotely; the next
 invocation reconciles the key, finds it, and records it once.
 
 The census record is deliberately the same shape `deflake_outcome.py` writes
-plus an `issue` block (number, URL, publication key, origin) — one `outcomes`
+— that record is #1439's own, not the shared contract's — plus an `issue`
+block (number, URL, publication key, origin) — one `outcomes`
 collection holds every ending of a de-flake attempt, and the schema pairs the
 two halves: `production-defect` REQUIRES `issue` and the three stable outcomes
 forbid it.
@@ -3244,7 +3333,14 @@ tools/
 ├── world_determinism.py    (detect race conditions)
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
-├── test_audit.py           (unit tests)
+├── test_audit.py           (world_audit/world_check/world_baseline self-test — the façade)
+├── test_audit_support.py           (its shared fixtures and assertion facility)
+├── test_audit_categories.py        (its emitted-category inventory owner)
+├── test_audit_world_audit.py       (its world_audit check-behavior owner)
+├── test_audit_world_check.py       (its world_check summary/determinism owner)
+├── test_audit_content_hash.py      (its baseline content-hash gate owner)
+├── test_audit_strict_capture.py    (its strict baseline-capture owner)
+├── test_audit_missing_baseline.py  (its missing-baseline exit-policy owner)
 ├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)

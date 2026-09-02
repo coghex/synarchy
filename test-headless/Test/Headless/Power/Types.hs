@@ -94,10 +94,15 @@ spec = do
             -- The whole file fails to decode, so a content mistake can
             -- never leave a def that ordinary building placement would
             -- happily spawn for free.
+            -- Everything else about this def is valid (#2080 made
+            -- `visual_class` mandatory, so it has to be here or the
+            -- rejection would be about the wrong field), leaving the
+            -- orphaned power_role as the only thing to reject.
             decodeBuildings (BS.unlines
                 [ "buildings:"
                 , "  - name: \"broken\""
                 , "    sprite: \"x.png\""
+                , "    visual_class: \"freestanding_installation\""
                 , "    power_role: \"source\""
                 ]) `shouldSatisfy` isLeft
 

@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
-"""Artifact ownership for the location-content probe (issue #1884).
+"""Artifact and scenario ownership for the location-content probe
+(issues #1884, #2095).
 
-`tools/location_content_probe.py` is manual-only, boots seven engines
-and generates several worlds, so its own acceptance can only be observed
-by a run nothing in CI can make. The contract this file pins is the half
-that is pure Python and would otherwise regress silently: every file one
-invocation creates lives under ONE directory that invocation owns, and
-the whole tree goes away again on every handled exit — unless
-`--keep-artifacts` says otherwise.
+`tools/location_content_probe.py` is manual-only. It boots engines from
+seven `boot_isolated` CALL SITES, one of which runs twice -- once
+visiting the ruins in the same order, once in the exact reverse -- so an
+observable run LAUNCHES eight engine processes across several generated
+worlds, and its own acceptance can only be seen by a run nothing in CI
+can make. The contract this file pins is the half that is pure Python
+and would otherwise regress silently: every file one invocation creates
+lives under ONE directory that invocation owns, and the whole tree goes
+away again on every handled exit — unless `--keep-artifacts` says
+otherwise.
+
+Since #2095 the scenario assertions live in owners under
+`tools/location_content/` and the probe file is the façade over them, so
+every structural check below scans the COMPLETE reorganized surface --
+the façade plus every module it imports from that package -- and asserts
+its own non-vacuity first. Rooted at the façade alone, the
+exclusion-style properties ("no bare `boot`", "no raw fixture `send`",
+"every log read is this invocation's") would all evaluate True over an
+empty node set: they would report OK while inspecting nothing.
 
 Before #1884 the probe's five fixture YAMLs and its engine log were the
 fixed, process-global names `/tmp/loc_content_probe_bogus.yaml`,
@@ -48,6 +61,22 @@ leak, collide, or stop proving what it claims:
   * Every boot goes through the one funnel that hands it this
     invocation's log and registers the process as it is launched, and
     both log-reading ASSERTIONS read that same log.
+  * Only the façade boots at all, from exactly seven call sites, and the
+    regeneration site is still a loop over the two visit orders -- so the
+    run still LAUNCHES eight processes. A call-site count alone would
+    accept that loop being unrolled, flattened to one case, or grown to
+    three, each of which changes the process count.
+  * The façade still offers exactly one `run(args, art, token)` for
+    `main` to call, with that parameter order: substituting it is the
+    sole mechanism behind eight of the lifecycle tests below.
+  * The reorganized surface is complete -- the façade imports every
+    extracted module, and every scan runs over all of them.
+  * Every PASS diagnostic and every recorded failure belongs to a
+    scenario owner rather than the façade or the shared infrastructure,
+    and the counts are the pre-split file's exactly.
+  * No scenario owner keeps cross-scenario state in a mutable module
+    global; the values `run` used to accumulate across phases are
+    fields of the one handoff record the façade threads.
   * Retention is opt-in, keeps the run's own result, names where the
     artifacts are, and describes what the run ACTUALLY produced rather
     than what a finished run usually would.
@@ -62,9 +91,11 @@ leak, collide, or stop proving what it claims:
     `load_fixture_yaml`, so a fixture that registers nothing still stops
     the probe at setup (#1342).
   * The public helpers other probes import — `make_isolated_root`,
-    `remove_isolated_root`, `save_and_wait` — still exist with the
-    shapes `tools/portal_ghost_probe.py` and
-    `tools/test_location_probe_config_isolation.py` depend on.
+    `remove_isolated_root`, `save_and_wait` — are still the SAME
+    function objects, with the shapes `tools/portal_ghost_probe.py` and
+    `tools/test_location_probe_config_isolation.py` depend on. Identity,
+    not merely a name that resolves: a delegating wrapper would satisfy
+    `hasattr` and break both.
 
 No engine, no world, no worldgen, no GPU: every test here runs against
 temporary directories in about a second.
@@ -78,6 +109,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import importlib
 import inspect
 import io
 import os
@@ -91,6 +123,10 @@ sys.path.insert(0, str(TOOLS))
 import probelib  # type: ignore  # noqa: E402
 import location_content_probe as probe  # type: ignore  # noqa: E402
 import portal_ghost_probe as portal  # type: ignore  # noqa: E402
+from location_content import invocation  # type: ignore  # noqa: E402
+
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 #: The six process-global names the probe used before #1884. Nothing it
 #: writes may resolve to one of them again, and a real run must leave
@@ -119,6 +155,141 @@ FIXTURE_LOADERS = (
     "engine.loadLocationYaml",
 )
 
+#: The package the scenario owners live in (#2095).
+PACKAGE = TOOLS / "location_content"
+
+#: Every module the reorganization created, from the FILESYSTEM. Ground
+#: truth: a scan built from this can never resolve to fewer files than
+#: exist, which is the way a post-split structural check would otherwise
+#: go quietly vacuous.
+EXTRACTED = tuple(sorted(path for path in PACKAGE.glob("*.py")
+                         if path.name != "__init__.py"))
+
+#: The complete reorganized surface every structural scan below runs
+#: over: the façade plus the package, `__init__` included.
+SURFACE = (Path(probe.__file__).resolve(),
+           PACKAGE / "__init__.py", *EXTRACTED)
+
+#: The scenario owners, as distinct from the shared infrastructure the
+#: façade also imports. Named because the checks that say WHERE a
+#: contract lives need both halves of the distinction.
+SCENARIO_OWNERS = ("content", "dispatch", "knowledge", "naming")
+INFRASTRUCTURE = ("engine_queries", "invocation")
+
+#: #2095 requirement 11 and the acceptance's process count. Seven
+#: `boot_isolated` call sites, one of them inside a two-element loop over
+#: the visit orders, so a run launches eight engine processes.
+BOOT_CALL_SITES = 7
+PROCESS_LAUNCHES = 8
+
+#: The pre-split file's own diagnostic totals, recounted from the whole
+#: surface. Moving an assertion between owners is a visible edit here;
+#: losing one, or duplicating one, is a failure.
+TOTAL_PASS_DIAGNOSTICS = 45
+TOTAL_FAILURE_RECORDS = 67
+
+#: The values `run` used to accumulate in local variables across its
+#: phases (#2095's cross-scenario handoff). Each is now a field of the
+#: one record the façade threads between owners; `failures` stays the
+#: list the façade owns and passes to every one of them.
+HANDOFF_FIELDS = (
+    "placed_all", "ruins", "counts1", "geoms1", "loot1", "r0mem_key",
+    "mem_uids", "dangling_uid", "sibling_keys", "saved_content",
+    "saved_naming", "named",
+)
+
+
+def module_source(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+#: Parsed ONCE. Two scans that want to talk about the same node -- "is
+#: this `boot(...)` the funnel's own?", "is this call site inside the
+#: regeneration loop?" -- can only compare node identity if they read
+#: the same trees, and a fresh `ast.parse` per call silently answers no
+#: to every such question.
+_SURFACE_TREES = [(path, ast.parse(module_source(path)))
+                  for path in SURFACE]
+
+
+def surface_trees() -> list[tuple[Path, ast.Module]]:
+    """(path, parsed module) for every file on the reorganized surface.
+
+    Every scan below goes through this rather than through one module's
+    `run`, and then asserts its own non-vacuity: an exclusion-style
+    property ("no bare boot", "no raw send") is True over an empty node
+    set, so a scan that stopped seeing the code would report OK.
+    """
+    return _SURFACE_TREES
+
+
+def facade_tree() -> ast.Module:
+    """The façade's own parsed module, from the shared cache — so a node
+    found here is the SAME object `surface_calls` returns."""
+    facade = Path(probe.__file__).resolve()
+    return next(tree for path, tree in surface_trees() if path == facade)
+
+
+def facade_package_imports() -> tuple[str, ...]:
+    """The package modules the FAÇADE itself imports, derived from its
+    own source rather than a list maintained here."""
+    names: set[str] = set()
+    for node in ast.walk(facade_tree()):
+        if isinstance(node, ast.ImportFrom) and node.module:
+            parts = node.module.split(".")
+            if parts[0] != PACKAGE.name:
+                continue
+            if len(parts) > 1:
+                names.add(parts[1])
+            else:
+                names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                if parts[0] == PACKAGE.name and len(parts) > 1:
+                    names.add(parts[1])
+    return tuple(sorted(names))
+
+
+def surface_calls(name: str, *, attribute: bool = False):
+    """Every `name(...)` (or `.name(...)`) call across the surface, in a
+    deterministic (file, line, column) order."""
+    found = []
+    for path, tree in surface_trees():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if attribute:
+                match = isinstance(func, ast.Attribute) and func.attr == name
+            else:
+                match = isinstance(func, ast.Name) and func.id == name
+            if match:
+                found.append((path, node))
+    found.sort(key=lambda pair: (str(pair[0]), pair[1].lineno,
+                                 pair[1].col_offset))
+    return found
+
+
+def pass_diagnostic_text(node: ast.Call) -> str:
+    """The literal head of a `print(...)` argument, whichever of the
+    three spellings the probe uses (plain, f-string, or an f-string
+    joined to a computed tail)."""
+    if not (isinstance(node.func, ast.Name) and node.func.id == "print"
+            and node.args):
+        return ""
+    first = node.args[0]
+    if isinstance(first, ast.BinOp):
+        first = first.left
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    if isinstance(first, ast.JoinedStr):
+        return "".join(part.value for part in first.values
+                       if isinstance(part, ast.Constant)
+                       and isinstance(part.value, str))
+    return ""
+
+
 #: The fixture bodies are load-bearing content, not scaffolding: which
 #: content ids they name is what phase 3's unknown-id checks read back,
 #: the single-entry loot tables are what make a specific item spawn
@@ -140,15 +311,44 @@ FIXTURE_DIGESTS = {
         "3e0fc0dbd0b9abf46ba05f85c00b0446b39799393aec0179c520d811226104d0",
 }
 
-FAILURES: list[str] = []
+
+def fixture_definitions(name: str) -> list[Path]:
+    """Every module on the surface that DEFINES `name` at module level.
+
+    Requirement 7 is single-sourcing, not availability: a re-export
+    satisfies `getattr` while a second copy quietly drifts, so the digest
+    audit proves there is exactly one definition before it hashes it.
+    """
+    found = []
+    for path, tree in surface_trees():
+        for node in tree.body:
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            if any(isinstance(target, ast.Name) and target.id == name
+                   for target in targets):
+                found.append(path)
+    return found
 
 
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-        print(f"  FAIL: {msg}")
-    else:
-        print(f"  OK:   {msg}")
+def fixture_body(name: str) -> str:
+    """The fixture constant `name`, resolved at whichever module owns it.
+
+    FAILS rather than skipping or defaulting when no module on the
+    surface defines it: a constant that moved to a module this test does
+    not read is the case the digest audit exists to catch, and answering
+    "unchanged" for a body it never found would be the worst possible
+    reading.
+    """
+    owners = fixture_definitions(name)
+    if len(owners) != 1:
+        raise AssertionError(
+            f"{name} must be defined exactly once across the reorganized "
+            f"surface, found {[path.name for path in owners]}")
+    module = importlib.import_module(f"{PACKAGE.name}.{owners[0].stem}")
+    return getattr(module, name)
 
 
 @contextlib.contextmanager
@@ -206,13 +406,6 @@ def run_main(argv: list[str], body) -> tuple[int | None, BaseException | None,
     return code, raised, out.getvalue(), seen.get("base")  # type: ignore[return-value]
 
 
-def run_body(fn):
-    """Source of `probe.run` as an AST function node, for the properties
-    that are about the code the interpreter actually runs rather than
-    about a value it produces."""
-    return ast.parse(inspect.getsource(fn)).body[0]
-
-
 # ---------------------------------------------------------------------
 # Invocation-unique paths
 # ---------------------------------------------------------------------
@@ -253,15 +446,20 @@ def test_every_fixture_path_is_absolute_and_owned() -> None:
                "and all three live under the one directory the invocation "
                "owns, so removing it removes them")
 
-    # …and the five names really are the five the probe asks for: a
-    # sixth fixture that skipped `RunArtifacts` would not be covered by
-    # any of the above.
-    fixtures = [node.args[0].value
-                for node in ast.walk(run_body(probe.run))
-                if isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "fixture"
-                and node.args and isinstance(node.args[0], ast.Constant)]
+    # …and the five names really are the five the probe asks for, over
+    # the WHOLE surface: a sixth fixture that skipped `RunArtifacts`, or
+    # one asked for from a module this scan does not read, would not be
+    # covered by any of the above.
+    calls = surface_calls("fixture", attribute=True)
+    expect(calls, "the surface really contains `art.fixture(...)` calls — "
+                  "an empty scan would make the order check below vacuous")
+    owners = {path for path, _ in calls}
+    expect(len(owners) == 1,
+           f"all five fixtures are asked for by ONE owner, so their source "
+           f"order is their registration order (got "
+           f"{sorted(path.name for path in owners)})")
+    fixtures = [node.args[0].value for _path, node in calls
+                if node.args and isinstance(node.args[0], ast.Constant)]
     expect(tuple(fixtures) == FIXTURE_NAMES,
            f"the probe asks for exactly these five fixtures, in this order "
            f"(got {fixtures})")
@@ -277,15 +475,21 @@ def test_no_artifact_keeps_a_legacy_fixed_tmp_name() -> None:
                    f"nothing this run writes resolves to {legacy}")
         expect(os.path.realpath(art.base) != os.path.realpath("/tmp"),
                "the run's own directory is not /tmp itself")
-    source = Path(probe.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    literals = [node.value for node in ast.walk(tree)
+    # Over the WHOLE surface (#2095): rooted at the façade alone this
+    # would pass while a `/tmp` literal sat in an extracted module.
+    scanned = surface_trees()
+    expect(len(scanned) > 1,
+           f"the scan covers the façade AND the extracted modules "
+           f"(got {len(scanned)} file(s))")
+    literals = [(path.name, node.value)
+                for path, tree in scanned
+                for node in ast.walk(tree)
                 if isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and node.value.startswith("/tmp/")]
     expect(not literals,
-           f"no /tmp path literal is left in the module at all (got "
-           f"{literals})")
+           f"no /tmp path literal is left anywhere on the reorganized "
+           f"surface (got {literals})")
 
 
 def test_a_real_run_leaves_every_legacy_path_as_it_found_it() -> None:
@@ -391,7 +595,7 @@ def test_an_early_return_still_releases() -> None:
         # What the probe does when a phase gives up: some fixtures
         # written, most phases never run.
         with open(art.fixture("bogus"), "w") as handle:
-            handle.write(probe.BOGUS_LOCATION_YAML)
+            handle.write(fixture_body("BOGUS_LOCATION_YAML"))
         return 1
 
     code, raised, _text, base = run_main([], early_return)
@@ -540,12 +744,15 @@ def test_every_boot_is_handed_this_runs_log_and_root() -> None:
         return launched
 
     with fresh_run() as art:
-        original = probe.boot
-        probe.boot = stub_boot
+        # The funnel lives in the invocation module since #2095, and
+        # `boot` is looked up in ITS globals — patching the façade's
+        # re-export would leave the real `probelib.boot` in the path.
+        original = invocation.boot
+        invocation.boot = stub_boot
         try:
-            probe.boot_isolated(9190, art)
+            invocation.boot_isolated(9190, art)
         finally:
-            probe.boot = original
+            invocation.boot = original
         expect(seen.get("log") == art.engine_log,
                f"the boot writes into this invocation's own log "
                f"(got {seen.get('log')!r})")
@@ -556,19 +763,35 @@ def test_every_boot_is_handed_this_runs_log_and_root() -> None:
                "and the process is registered as it is LAUNCHED, so the "
                "span boot spends waiting for READY is covered too")
 
-    # Every boot in `run` really does go through that one funnel: a bare
-    # `boot(...)` would pick its own log and register nothing.
-    body = run_body(probe.run)
-    bare = [node for node in ast.walk(body)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "boot"]
-    funnelled = [node for node in ast.walk(body)
-                 if isinstance(node, ast.Call)
-                 and isinstance(node.func, ast.Name)
-                 and node.func.id == "boot_isolated"]
-    expect(not bare, f"no phase boots outside boot_isolated (got {len(bare)})")
-    expect(len(funnelled) == 7,
-           f"all seven phase boots go through it (got {len(funnelled)})")
+    # Every boot on the whole surface really does go through that one
+    # funnel: a bare `boot(...)` would pick its own log and register
+    # nothing, and a scenario owner booting for itself would sit outside
+    # the shared lifecycle entirely (#2095 requirement 3).
+    funnel_nodes: set[int] = set()
+    for _path, tree in surface_trees():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "boot_isolated":
+                funnel_nodes.update(id(inner) for inner in ast.walk(node))
+    bare = [(path, node) for path, node in surface_calls("boot")
+            if id(node) not in funnel_nodes]
+    excluded = [pair for pair in surface_calls("boot")
+                if id(pair[1]) in funnel_nodes]
+    expect(len(excluded) == 1,
+           f"the funnel's own single `boot(...)` is what was excluded, so "
+           f"the check below is not hiding a renamed funnel (got "
+           f"{len(excluded)})")
+    funnelled = surface_calls("boot_isolated")
+    expect(not bare,
+           f"nothing on the surface boots outside boot_isolated (got "
+           f"{[(path.name, node.lineno) for path, node in bare]})")
+    expect(len(funnelled) == BOOT_CALL_SITES,
+           f"all {BOOT_CALL_SITES} boot call sites go through it "
+           f"(got {len(funnelled)})")
+    bootstrappers = {path for path, _ in funnelled}
+    expect(bootstrappers == {Path(probe.__file__).resolve()},
+           f"...and every one of them is the façade's, so no scenario "
+           f"owner boots an engine of its own (got "
+           f"{sorted(path.name for path in bootstrappers)})")
 
 
 def test_launched_engines_are_dead_before_anything_is_removed() -> None:
@@ -754,11 +977,20 @@ def test_retention_after_a_staging_failure_names_nothing_absent() -> None:
 # ---------------------------------------------------------------------
 def test_the_fixture_bodies_are_byte_for_byte_unchanged() -> None:
     print("\ntest_the_fixture_bodies_are_byte_for_byte_unchanged")
+    # Resolved at whichever module owns each constant now (#2095
+    # requirement 7 moved them to the scenario that consumes them), and
+    # `fixture_body` refuses a name it cannot find rather than skipping
+    # it — an unresolvable constant is a failure, never a quiet pass.
     for name, digest in FIXTURE_DIGESTS.items():
-        body = getattr(probe, name).encode("utf-8")
+        owners = fixture_definitions(name)
+        expect(len(owners) == 1,
+               f"{name} is defined exactly once across the surface, so a "
+               f"re-export cannot become a second copy that drifts (got "
+               f"{[path.name for path in owners]})")
+        body = fixture_body(name).encode("utf-8")
         expect(hashlib.sha256(body).hexdigest() == digest,
-               f"{name} is byte-for-byte what it was — moving where a "
-               f"fixture is written must not change what it says")
+               f"{name} is byte-for-byte what it was — moving which module "
+               f"a fixture lives in must not change what it says")
 
 
 def test_registration_order_and_loaders_are_unchanged() -> None:
@@ -766,14 +998,16 @@ def test_registration_order_and_loaders_are_unchanged() -> None:
     # Placement and loot draws are order-sensitive: phase 3 registers
     # bogus location, bogus loot, quinoa location, quinoa loot, and
     # phase 4 registers dense alone (#1884 requirement 6).
-    body = run_body(probe.run)
-    loads = [node for node in ast.walk(body)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-             and node.func.id == "load_fixture_yaml"]
-    loads.sort(key=lambda node: (node.lineno, node.col_offset))
-    loaders = [node.args[1].value for node in loads
+    loads = surface_calls("load_fixture_yaml")
+    expect(loads, "the surface really registers fixtures — an empty scan "
+                  "would make both order checks below vacuous")
+    owners = {path for path, _ in loads}
+    expect(len(owners) == 1,
+           f"one owner registers all five, so its source order IS the "
+           f"registration order (got {sorted(path.name for path in owners)})")
+    loaders = [node.args[1].value for _path, node in loads
                if isinstance(node.args[1], ast.Constant)]
-    targets = [node.args[2].id for node in loads
+    targets = [node.args[2].id for _path, node in loads
                if isinstance(node.args[2], ast.Name)]
     expect(targets == [f"{n}_yaml" for n in FIXTURE_NAMES],
            f"the five fixtures register in the unchanged order "
@@ -788,22 +1022,45 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
     # fixture registered nothing, so a file that is invalid for the
     # current schema stops the probe at SETUP instead of surfacing as
     # downstream behavioural failures.
-    body = run_body(probe.run)
-    loads = [node for node in ast.walk(body)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-             and node.func.id == "load_fixture_yaml"]
+    loads = surface_calls("load_fixture_yaml")
     expect(len(loads) == len(FIXTURE_NAMES),
            f"every one of the five fixtures is loaded through the checking "
            f"helper, and nothing else is (got {len(loads)})")
-    raw = [node for node in ast.walk(body)
-           if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-           and node.func.id == "send"
-           and any("loadLocationYaml" in c.value or "loadLootTableYaml" in c.value
-                   for c in ast.walk(node)
-                   if isinstance(c, ast.Constant) and isinstance(c.value, str))]
+    sends = surface_calls("send")
+    expect(sends, "the surface really calls send() — the exclusion below "
+                  "is True over an empty node set")
+    registering = [(path, node) for path, node in sends
+                   if any("loadLocationYaml" in c.value
+                          or "loadLootTableYaml" in c.value
+                          for c in ast.walk(node)
+                          if isinstance(c, ast.Constant)
+                          and isinstance(c.value, str))]
+    # A registration through a bare `send` is one naming a path THIS RUN
+    # produced: an `art.fixture(...)` result, or one of the `<name>_yaml`
+    # variables holding one. Those are the calls that would skip
+    # `load_fixture_yaml`'s zero-count rejection and let an invalid
+    # fixture surface as downstream behavioural failures instead.
+    raw = [(path, node) for path, node in registering
+           if any((isinstance(inner, ast.Name) and inner.id.endswith("_yaml"))
+                  or (isinstance(inner, ast.Call)
+                      and isinstance(inner.func, ast.Attribute)
+                      and inner.func.attr == "fixture")
+                  for inner in ast.walk(node))]
     expect(not raw,
            f"no fixture is registered through a bare send() that would skip "
-           f"the registration check (got {len(raw)})")
+           f"the registration check (got "
+           f"{[(path.name, node.lineno) for path, node in raw]})")
+    # The bare registrations that DO remain are the shipped catalogs the
+    # setup helpers load, never this run's own files — spelled out so the
+    # exclusion above is a justified boundary rather than a hole.
+    shipped = [(path, node) for path, node in registering
+               if any(isinstance(inner, ast.Constant)
+                      and isinstance(inner.value, str)
+                      and "data/" in inner.value
+                      for inner in ast.walk(node))]
+    expect(shipped and len(shipped) == len(registering),
+           f"...and every bare registration left names a shipped data/ "
+           f"catalog ({len(shipped)} of {len(registering)})")
     expect(probelib.FixtureNotRegistered is probe.FixtureNotRegistered,
            "and the probe still imports that helper's own failure type, so "
            "a rejected fixture ends the run rather than a traceback")
@@ -815,27 +1072,34 @@ def test_both_log_assertions_read_this_invocations_log() -> None:
     # the integrity diagnostic in phase 2 and the two unknown-content
     # warnings in phase 3 — so a read of anything but this invocation's
     # own log could report another run's evidence as this one's.
-    body = run_body(probe.run)
-    opens = [node for node in ast.walk(body)
-             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-             and node.func.id == "open"]
-    reads = [node for node in opens
+    opens = surface_calls("open")
+    expect(opens, "the surface really opens files — an empty scan would "
+                  "make every shape check below vacuous")
+    reads = [(path, node) for path, node in opens
              if not any(isinstance(a, ast.Constant) and a.value == "w"
                         for a in node.args[1:])]
-    writes = [node for node in opens if node not in reads]
+    writes = [pair for pair in opens if pair not in reads]
     expect(len(reads) == 2,
            f"the probe reads the log in exactly the two places that assert "
-           f"against it (got {len(reads)})")
+           f"against it (got {[(p.name, n.lineno) for p, n in reads]})")
+    # The two now sit with the owners that assert on them — the
+    # knowledge owner's integrity diagnostic and the dispatch owner's
+    # unknown-content warnings — and each still takes the invocation's
+    # `RunArtifacts` rather than reaching for a log of its own.
+    expect(len({path for path, _ in reads}) == 2,
+           f"...one in each of the two owners that read it (got "
+           f"{sorted(path.name for path, _ in reads)})")
     expect(all(isinstance(node.args[0], ast.Attribute)
                and node.args[0].attr == "engine_log"
                and isinstance(node.args[0].value, ast.Name)
                and node.args[0].value.id == "art"
-               for node in reads),
+               for _path, node in reads),
            "and both read this invocation's own log")
     expect(len(writes) == len(FIXTURE_NAMES)
            and all(isinstance(node.args[0], ast.Name)
-                   and node.args[0].id.endswith("_yaml") for node in writes),
-           f"and every truncating write in the run is one of the five "
+                   and node.args[0].id.endswith("_yaml")
+                   for _path, node in writes),
+           f"and every truncating write on the surface is one of the five "
            f"fixtures (got {len(writes)})")
 
 
@@ -848,6 +1112,24 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
            and portal.remove_isolated_root is probe.remove_isolated_root
            and portal.save_and_wait is probe.save_and_wait,
            "portal_ghost_probe still shares all three helpers")
+    # #2095: the façade RE-EXPORTS these rather than wrapping them. A
+    # delegating wrapper would satisfy every `hasattr` above while
+    # breaking this identity and the signature pin below, so assert the
+    # objects really are the invocation module's own.
+    expect(probe.make_isolated_root is invocation.make_isolated_root
+           and probe.remove_isolated_root is invocation.remove_isolated_root
+           and probe.save_and_wait is invocation.save_and_wait,
+           "the façade re-exports the invocation module's own function "
+           "objects, not wrappers around them")
+    # …and the nine names other probes import all resolve on the façade,
+    # which is the module they import from.
+    missing = [name for name in (
+        "load_defs", "gen_world", "placed_ready", "wait_floor",
+        "make_isolated_root", "remove_isolated_root", "save_and_wait",
+        "ruin_geometry", "spawn_counts") if not hasattr(probe, name)]
+    expect(not missing,
+           f"every helper another probe imports from this module is still "
+           f"there (missing {missing})")
     save = inspect.signature(probe.save_and_wait).parameters
     expect(list(save) == ["port", "page", "slot", "failures", "log"],
            f"save_and_wait keeps its parameter names and order "
@@ -861,7 +1143,205 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
                "what RunArtifacts.build hands the engine")
 
 
+# ---------------------------------------------------------------------
+# Scenario ownership behind the façade (#2095)
+# ---------------------------------------------------------------------
+def test_the_reorganized_surface_is_complete() -> None:
+    print("\ntest_the_reorganized_surface_is_complete")
+    # Every structural scan above runs over SURFACE. If that set could
+    # resolve to fewer files than the reorganization created, each of
+    # those scans would report OK while inspecting less than the code —
+    # so prove the set is real, and that the façade reaches all of it.
+    expect(EXTRACTED,
+           f"the scenario owners really are extracted into "
+           f"{PACKAGE.name}/ (found {[p.name for p in EXTRACTED]})")
+    expect(len(SURFACE) == len(EXTRACTED) + 2,
+           f"the surface is the façade + __init__ + every extracted "
+           f"module (got {len(SURFACE)} for {len(EXTRACTED)} extracted)")
+    expect(all(path.is_file() for path in SURFACE),
+           f"...and every file on it exists "
+           f"{[str(p) for p in SURFACE if not p.is_file()]}")
+    imported = facade_package_imports()
+    on_disk = tuple(path.stem for path in EXTRACTED)
+    expect(imported == on_disk,
+           f"the façade imports exactly the modules that exist, so a scan "
+           f"derived from either can never be the smaller one (imports "
+           f"{list(imported)}, on disk {list(on_disk)})")
+    expect(set(on_disk) == set(SCENARIO_OWNERS) | set(INFRASTRUCTURE),
+           f"...and each is either a scenario owner or shared "
+           f"infrastructure (got {list(on_disk)})")
+
+
+def test_the_facade_keeps_one_run_entry_point() -> None:
+    print("\ntest_the_facade_keeps_one_run_entry_point")
+    # Substituting `probe.run` is the sole mechanism behind eight of the
+    # lifecycle tests above (a passing run, a failing run, an early
+    # return, a mid-run exception, a probelib.boot SystemExit abort, a
+    # _PhaseAborted, a KeyboardInterrupt, and cleanup failure).
+    # Delegating from `main` to per-scenario entry points instead would
+    # remove that coverage silently.
+    tree = facade_tree()
+    runs = [node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "run"]
+    expect(len(runs) == 1,
+           f"the façade defines exactly one module-level run (got "
+           f"{len(runs)})")
+    params = [arg.arg for arg in runs[0].args.args]
+    expect(params == ["args", "art", "token"],
+           f"...with the parameter order run_main's wrapper supplies "
+           f"(got {params})")
+    expect(inspect.signature(probe.run).parameters and
+           list(inspect.signature(probe.run).parameters) == params,
+           "and the live object agrees with the source")
+    called = [node for node in ast.walk(tree)
+              if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Name) and node.func.id == "run"]
+    expect(len(called) == 1,
+           f"`main` reaches the scenarios through that one call and no "
+           f"other (got {len(called)})")
+
+
+def test_the_regeneration_boot_runs_once_per_visit_order() -> None:
+    print("\ntest_the_regeneration_boot_runs_once_per_visit_order")
+    # #2095 requirement 11. Seven static call sites, eight LAUNCHES,
+    # because one site is the body of a two-element loop. Asserting only
+    # the call-site count would accept that loop being unrolled,
+    # flattened to a single iteration, or grown to three — each of which
+    # changes the process count the acceptance pins.
+    loops = [node for node in ast.walk(facade_tree())
+             if isinstance(node, ast.For)
+             and any(isinstance(inner, ast.Call)
+                     and isinstance(inner.func, ast.Name)
+                     and inner.func.id == "boot_isolated"
+                     for inner in ast.walk(node))]
+    expect(len(loops) == 1,
+           f"exactly one boot site is inside a loop (got {len(loops)})")
+    if not loops:
+        return
+    iterable = loops[0].iter
+    expect(isinstance(iterable, ast.Tuple),
+           f"...over a literal tuple, so its length is readable here "
+           f"(got {type(iterable).__name__})")
+    cases = getattr(iterable, "elts", [])
+    expect(len(cases) == 2,
+           f"...naming exactly the two visit orders (got {len(cases)})")
+    literals = {node.value for node in ast.walk(iterable)
+                if isinstance(node, ast.Constant)}
+    expect({"same order", False, "reversed order", True} <= literals,
+           f"...the SAME order and the REVERSED one, which is what proves "
+           f"a stable instance keeps its own loot rather than consuming a "
+           f"shared stream (got {sorted(map(str, literals))})")
+    sites = surface_calls("boot_isolated")
+    in_loop = [pair for pair in sites
+               if any(inner is pair[1] for inner in ast.walk(loops[0]))]
+    expect(len(in_loop) == 1,
+           f"the loop holds one of them (got {len(in_loop)})")
+    launches = (len(sites) - len(in_loop)) + len(cases) * len(in_loop)
+    expect(len(sites) == BOOT_CALL_SITES and launches == PROCESS_LAUNCHES,
+           f"{BOOT_CALL_SITES} call sites launch {PROCESS_LAUNCHES} engine "
+           f"processes (got {len(sites)} sites, {launches} launches)")
+
+
+def test_every_scenario_assertion_lives_with_its_owner() -> None:
+    print("\ntest_every_scenario_assertion_lives_with_its_owner")
+    # "The façade contains CLI/orchestration and compatibility exports
+    # rather than the scenario assertion bodies." A probe's assertions
+    # ARE its PASS diagnostics and its recorded failures, so count both,
+    # per file, and compare against the pre-split file's own totals: a
+    # lost assertion and a duplicated one both fail here.
+    per_file: dict[str, tuple[int, int]] = {}
+    for path, tree in surface_trees():
+        passes = sum(1 for node in ast.walk(tree)
+                     if isinstance(node, ast.Call)
+                     and pass_diagnostic_text(node).startswith("PASS:"))
+        records = sum(1 for node in ast.walk(tree)
+                      if isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and node.func.attr == "append"
+                      and isinstance(node.func.value, ast.Name)
+                      and node.func.value.id == "failures")
+        per_file[path.stem] = (passes, records)
+    expect(sum(p for p, _ in per_file.values()) == TOTAL_PASS_DIAGNOSTICS,
+           f"the surface still prints exactly the pre-split file's "
+           f"{TOTAL_PASS_DIAGNOSTICS} PASS diagnostics (got {per_file})")
+    expect(sum(r for _, r in per_file.values()) == TOTAL_FAILURE_RECORDS,
+           f"...and records exactly its {TOTAL_FAILURE_RECORDS} failures "
+           f"(got {per_file})")
+    facade_passes, facade_records = per_file[Path(probe.__file__).stem]
+    expect(facade_passes == 0,
+           f"the façade asserts nothing itself (got {facade_passes} PASS "
+           f"diagnostic(s))")
+    expect(facade_records == 1,
+           f"...beyond the one orchestration failure it owns, the skipped "
+           f"phase (got {facade_records})")
+    for name in SCENARIO_OWNERS:
+        expect(per_file[name][0] > 0 and per_file[name][1] > 0,
+               f"{name} owns assertions of its own (got {per_file[name]})")
+    for name in INFRASTRUCTURE:
+        expect(per_file[name][0] == 0,
+               f"{name} is infrastructure and asserts no scenario "
+               f"contract (got {per_file[name][0]} PASS diagnostic(s))")
+
+
+def test_no_scenario_owner_keeps_cross_scenario_state_in_a_module_global()\
+        -> None:
+    print("\ntest_no_scenario_owner_keeps_cross_scenario_state_in_a_"
+          "module_global")
+    # Cross-scenario state travels through the façade's one handoff
+    # record. A module-level mutable container in an owner would be a
+    # second, invisible channel — and one an import order could change
+    # the meaning of. Immutable configuration (the fixture bodies, the
+    # ids and radii) is deliberately NOT what this forbids.
+    mutable = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp,
+               ast.SetComp)
+    offenders = []
+    for path, tree in surface_trees():
+        if path.stem not in SCENARIO_OWNERS:
+            continue
+        for node in tree.body:
+            targets = (node.targets if isinstance(node, ast.Assign)
+                       else [node.target] if isinstance(node, ast.AnnAssign)
+                       else [])
+            if not targets or node.value is None:
+                continue
+            builder = (isinstance(node.value, ast.Call)
+                       and isinstance(node.value.func, ast.Name)
+                       and node.value.func.id in {"list", "dict", "set"})
+            if isinstance(node.value, mutable) or builder:
+                offenders.extend(
+                    f"{path.name}:{target.id}" for target in targets
+                    if isinstance(target, ast.Name))
+    expect(not offenders,
+           f"no scenario owner holds mutable module-level state "
+           f"(got {offenders})")
+
+
+def test_the_handoff_record_carries_every_threaded_value() -> None:
+    print("\ntest_the_handoff_record_carries_every_threaded_value")
+    # The twelve values `run` used to accumulate in local variables
+    # across its phases. Each must be a field of the record the façade
+    # threads, and each must default to something a skipped phase can
+    # leave alone — which is what makes the dependent phases skip rather
+    # than assert against a value nothing produced.
+    state = probe.ScenarioState()
+    missing = [name for name in HANDOFF_FIELDS if not hasattr(state, name)]
+    expect(not missing,
+           f"the handoff record carries every threaded value "
+           f"(missing {missing})")
+    expect(not state.ruins and not state.loot1 and not state.named
+           and state.saved_content is False and state.saved_naming is False
+           and state.dangling_uid == -1,
+           f"...and a fresh one reads as 'no phase has run yet' "
+           f"(got {state})")
+    fresh = probe.ScenarioState()
+    fresh.ruins.append({"id": "probe"})
+    expect(probe.ScenarioState().ruins == [],
+           "each run gets its own containers — a shared class-level "
+           "default would leak one invocation's state into the next")
+
+
 def main() -> int:
+    selftestlib.parse_verbose()
     test_two_invocations_share_no_path()
     test_every_fixture_path_is_absolute_and_owned()
     test_no_artifact_keeps_a_legacy_fixed_tmp_name()
@@ -888,13 +1368,19 @@ def main() -> int:
     test_every_fixture_still_goes_through_load_fixture_yaml()
     test_both_log_assertions_read_this_invocations_log()
     test_the_public_helpers_other_probes_import_are_intact()
+    test_the_reorganized_surface_is_complete()
+    test_the_facade_keeps_one_run_entry_point()
+    test_the_regeneration_boot_runs_once_per_visit_order()
+    test_every_scenario_assertion_lives_with_its_owner()
+    test_no_scenario_owner_keeps_cross_scenario_state_in_a_module_global()
+    test_the_handoff_record_carries_every_threaded_value()
     if FAILURES:
         print(f"\n{len(FAILURES)} check(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
-        return 1
-    print("\nAll location_content_probe artifact-ownership tests passed")
-    return 0
+        return selftestlib.concluded(1)
+    return selftestlib.concluded(
+        0, "\nAll location_content_probe artifact-ownership tests passed")
 
 
 if __name__ == "__main__":
