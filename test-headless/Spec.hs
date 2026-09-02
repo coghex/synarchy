@@ -142,6 +142,7 @@ import qualified Test.Headless.Construct.AttemptIdentity as ConstructAttemptIden
 import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.Plan as ConstructPlan
+import qualified Test.Headless.Render.StructureGhost as StructureGhost
 import qualified Test.Headless.Construct.PlanInvalidation as ConstructPlanInvalidation
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
@@ -719,6 +720,7 @@ main = hspec $ do
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
     ConstructPlan.spec
+    StructureGhost.spec
     ConstructPlanInvalidation.spec
     ConstructAttemptIdentity.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec

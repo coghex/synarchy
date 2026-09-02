@@ -68,6 +68,8 @@ registerDesignationAPI env = do
   registerLuaFunction "resolvePlan"        (constructResolvePlanFn env)
   registerLuaFunction "setDesignateTexture" (constructSetDesignateTextureFn (toWorldSimCapability env))
   registerLuaFunction "setLineMode"        (constructSetLineModeFn (toWorldSimCapability env))
+  registerLuaFunction "setStructureTarget" (constructSetStructureTargetFn (toWorldSimCapability env))
+  registerLuaFunction "clearStructureTarget" (constructClearStructureTargetFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "construction")
 
   -- Chop designation tool (#97). Mirrors the construction-designation

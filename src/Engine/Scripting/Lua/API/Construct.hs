@@ -21,6 +21,8 @@ module Engine.Scripting.Lua.API.Construct
     , constructResolvePlanFn
     , constructSetDesignateTextureFn
     , constructSetLineModeFn
+    , constructSetStructureTargetFn
+    , constructClearStructureTargetFn
     , AttemptArg(..)
     , readAttemptArg
     , requiredAttempt
@@ -29,6 +31,7 @@ module Engine.Scripting.Lua.API.Construct
 import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
@@ -607,6 +610,7 @@ constructResolvePlanFn env = do
                                       , pwStage        = stage
                                       , pwDesignations = designations
                                       , pwCatalog      = cat
+                                      , pwProposedWire = HS.empty
                                       }
                               pure ∘ Just ∘ planOutcomeName ∘ prOutcome $
                                   resolveStructurePlan pw
@@ -652,8 +656,9 @@ constructBeginPlacementFn wsc = do
     return 1
 
 -- | construction.setDesignateTexture(pageId, category, texHandle) — ghost
---   texture for committed designations, keyed by category ("structure" |
---   "building").
+--   texture for committed BUILDING designations. Structures draw their
+--   own art since #1846, so \"building\" is the only category the world
+--   thread still accepts; anything else warns there.
 constructSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructSetDesignateTextureFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -685,6 +690,52 @@ constructSetLineModeFn wsc = do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             Q.writeQueue (wsWorldQueue wsc) $
                 WorldSetConstructLineMode pageId enabledArg
+        Nothing → pure ()
+    return 0
+
+-- | construction.setStructureTarget(pageId, pack, kind[, edge]) — the
+--   structure piece the build tool has ARMED (#1846).
+--
+--   The pre-anchor hover preview draws the piece's own art before any
+--   designation exists to carry the descriptor, and the render thread
+--   cannot call into Lua to ask the picker. So the tool states its target
+--   on entering placement, exactly as it already states its line mode.
+--   A call missing the page, pack or kind CLEARS the target rather than
+--   half-setting one: a preview drawing the previous piece would be worse
+--   than no preview at all.
+constructSetStructureTargetFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructSetStructureTargetFn wsc = do
+    pageIdArg ← Lua.tostring 1
+    packArg   ← Lua.tostring 2
+    kindArg   ← Lua.tostring 3
+    edgeArg   ← Lua.tostring 4
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $ do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                mPiece = do
+                    packBS ← packArg
+                    kindBS ← kindArg
+                    pure $ StructurePiece
+                        (TE.decodeUtf8Lenient packBS)
+                        (TE.decodeUtf8Lenient kindBS)
+                        (TE.decodeUtf8Lenient <$> edgeArg)
+            Q.writeQueue (wsWorldQueue wsc) $
+                WorldSetConstructStructureTarget pageId mPiece
+        Nothing → pure ()
+    return 0
+
+-- | construction.clearStructureTarget(pageId) — leaving placement.
+--   Spelled as the same verb with no descriptor, so there is one command
+--   and one field rather than two paths that could disagree about what
+--   \"armed\" means.
+constructClearStructureTargetFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+constructClearStructureTargetFn wsc = do
+    pageIdArg ← Lua.tostring 1
+    case pageIdArg of
+        Just pageIdBS → Lua.liftIO $
+            Q.writeQueue (wsWorldQueue wsc) $
+                WorldSetConstructStructureTarget
+                    (WorldPageId (TE.decodeUtf8Lenient pageIdBS)) Nothing
         Nothing → pure ()
     return 0
 

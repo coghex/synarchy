@@ -801,14 +801,31 @@ function buildTool.enterPlacement(target)
     buildTool.state.anchor        = nil
     buildTool.state.lastHoverTile = nil
     local wid = buildTool.hud and buildTool.hud.worldId
-    if wid then construction.setLineMode(wid, isWirePath(target)) end
+    if wid then
+        construction.setLineMode(wid, isWirePath(target))
+        -- #1846: the engine draws the armed piece's OWN art from the
+        -- first hover, before any anchor exists to carry the descriptor,
+        -- and the render thread cannot ask this picker what it chose. So
+        -- the target is stated here exactly as the line mode is. A
+        -- BUILDING target clears it: buildings preview through
+        -- building.setGhost, not the structure ghost.
+        if target.kind == "structure" then
+            construction.setStructureTarget(wid, target.pack, target.piece,
+                                            target.edge)
+        else
+            construction.clearStructureTarget(wid)
+        end
+    end
 end
 
 function buildTool.exitPlacement()
     building.clearGhost()
     local wid = buildTool.hud and buildTool.hud.worldId
     if buildTool.state.anchor and wid then construction.clearAnchor(wid) end
-    if wid then construction.setLineMode(wid, false) end
+    if wid then
+        construction.setLineMode(wid, false)
+        construction.clearStructureTarget(wid)
+    end
     buildTool.state.mode          = "off"
     buildTool.state.target        = nil
     buildTool.state.anchor        = nil

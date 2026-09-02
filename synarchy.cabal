@@ -707,6 +707,7 @@ library
                      World.Render.Solar
                      World.Render.WaterSlope
                      World.Render.CursorQuads
+                     World.Render.StructureGhost
                      World.Render.TileQuads
                      World.Render.FloraQuads
                      World.Render.GroundItemQuads
@@ -1273,6 +1274,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Fixture
                    Test.Headless.Construct.Footprint
                    Test.Headless.Construct.Plan
+                   Test.Headless.Render.StructureGhost
+                   Test.Headless.Render.StructureGhostFixture
                    Test.Headless.Construct.PlanInvalidation
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute

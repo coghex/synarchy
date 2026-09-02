@@ -23,7 +23,8 @@ import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
 import World.Construct.Attempt (ConstructAttemptId)
-import World.Construct.Types (ConstructTarget(..), ConstructStatus(..))
+import World.Construct.Types
+    (ConstructTarget(..), ConstructStatus(..), StructurePiece(..))
 import World.Save.Payload (LuaComponentSpec, LuaRefEdge)
 import World.Save.Types (SaveData(..), AutosaveRequest(..))
 import World.Texture.Types (WorldTextureType(..))
@@ -212,8 +213,14 @@ data WorldCommand
         --   this is requirement 9's bounded page-level sweep, and it is
         --   enqueued only when a failure actually CHANGED the catalogue.
     | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
-        -- ^ Ghost texture for committed construction designations, keyed
-        --   by target category ("structure" | "building").
+        -- ^ Ghost texture for committed BUILDING construction
+        --   designations. Structures draw their own art (#1846), so the
+        --   category argument survives only until DTV-10 (#1845) retires
+        --   the mechanism; anything but "building" is refused.
+    | WorldSetConstructStructureTarget WorldPageId (Maybe StructurePiece)
+        -- ^ The structure piece the build tool has ARMED (#1846), or
+        --   'Nothing' on leaving placement. Drives the pre-anchor hover
+        --   preview, which has no designation to read a descriptor from.
     | WorldSetConstructLineMode WorldPageId Bool
         -- ^ Wire path tool (#359): while true, the anchor→hover preview
         --   snaps to a straight 1-wide line (the build tool's commit

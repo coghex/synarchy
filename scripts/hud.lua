@@ -147,9 +147,11 @@ function hud.init(boxTexSet, menuFont, width, height)
     -- Mine-designation marker: dedicated art so standing designations
     -- read differently from the cursor/selection at a glance.
     hud.texMineDesignate       = engine.loadTexture("assets/textures/ui/hud/utility/mine_designate.png")
-    -- Construction-designation ghosts (#95): one per target category so a
-    -- planned structure reads differently from a planned building.
-    hud.texConstructStructure  = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_structure.png")
+    -- Construction-designation ghost for planned BUILDINGS (#95).
+    -- Planned STRUCTURES no longer have one: #1846 gave every structure
+    -- piece its own art in both ghost states, so the category
+    -- placeholder and its handle are gone. DTV-10 (#1845) does the same
+    -- for buildings and retires this last one with them.
     hud.texConstructBuilding   = engine.loadTexture("assets/textures/ui/hud/utility/construct_designate_building.png")
     -- Chop-designation marker (#97): green so a tree marked for felling
     -- reads differently from a dig / build designation.
@@ -407,10 +409,6 @@ function hud.createUI()
     end
     if hud.texMineDesignate then
         world.setMineDesignateTexture(hud.worldId, hud.texMineDesignate)
-    end
-    if hud.texConstructStructure then
-        construction.setDesignateTexture(hud.worldId, "structure",
-            hud.texConstructStructure)
     end
     if hud.texConstructBuilding then
         construction.setDesignateTexture(hud.worldId, "building",
@@ -881,10 +879,6 @@ function hud.show()
     end
     if hud.texMineDesignate then
         world.setMineDesignateTexture(hud.worldId, hud.texMineDesignate)
-    end
-    if hud.texConstructStructure then
-        construction.setDesignateTexture(hud.worldId, "structure",
-            hud.texConstructStructure)
     end
     if hud.texConstructBuilding then
         construction.setDesignateTexture(hud.worldId, "building",
