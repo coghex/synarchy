@@ -647,6 +647,20 @@ function eventLog.hide()
     end
 end
 
+-- Load-replacement reset (#2156). The event log's DATA is the engine's
+-- own store, which World.Load.Publish.resetTransientState already
+-- cleared; what this module owns is the page and its view state, and a
+-- panel left open across the load would keep showing the replaced
+-- session's rows. Hidden through the module's own hide() -- no close or
+-- tab callback is re-fired -- and the view state written directly, the
+-- same values show() would establish on a fresh open. Swept from
+-- scripts/ui/view_teardown.lua's "saveLoaded" transition.
+function eventLog.clearSession()
+    eventLog.hide()
+    eventLog.activeTabKey = "all"
+    eventLog.scrollOffset = 0
+end
+
 -- Click dispatch: ui_manager.onEventLogRowClick forwards here when
 -- a row's transparent overlay box receives a click. We resolve the
 -- elemHandle back to a filteredEvents index, then call the popup

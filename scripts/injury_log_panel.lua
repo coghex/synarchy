@@ -788,6 +788,29 @@ function injuryLog.hide()
     end
 end
 
+-- Load-replacement reset (#2156) -- the mirror of combat_log's
+-- clearSession: the All ring and the per-unit logs emptied IN PLACE,
+-- the log-id allocator back to its fresh-session value (a reused unit
+-- id must start a NEW log, never continue a replaced session's), the
+-- active tab and both scroll positions reset, the panel hidden through
+-- its own hide() with no tab/scroll callback re-fired, and the transient
+-- tab strip destroyed since every tab it names is gone. Swept from
+-- scripts/ui/view_teardown.lua's "saveLoaded" transition.
+function injuryLog.clearSession()
+    injuryLog.hide()
+    destroyTransient()
+    local all, logs = injuryLog.allEvents, injuryLog.unitLogs
+    for i = #all, 1, -1 do all[i] = nil end
+    for i = #logs, 1, -1 do logs[i] = nil end
+    injuryLog.nextLogId     = 1
+    injuryLog.activeTabId   = "all"
+    injuryLog.scrollOffset  = 0
+    injuryLog.tabMaxScroll  = 0
+    injuryLog.contentScroll = 0
+    injuryLog.justifyBottom = true
+    injuryLog.dirty         = false
+end
+
 function injuryLog.toggle()
     if injuryLog.visible then
         injuryLog.hide()
