@@ -11,6 +11,8 @@ import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, buildingManagerRef, loggerRef)
+import Engine.Core.Capability.RenderHandoff
+  (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.WorldSim
@@ -31,6 +33,9 @@ import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Construct.Extent (structureDragExtent)
+import World.Construct.Plan (PlanWorld(..))
+import World.Render.StructureGhost
+    ( GhostEnv(..), structureDesignationGhosts, structurePreviewGhosts )
 import World.Render.Camera (placementCamera, quadCacheMargins)
 import World.Render.ViewBounds
     (computeViewBounds, expandViewBounds, viewBoundsAt)
@@ -311,8 +316,9 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                     ]
 
     -- Construction-designation ghosts (#95): world annotations like the
-    -- mine markers, visible in every tool mode. Each renders with the
-    -- ghost texture for its target category (structure vs building).
+    -- mine markers, visible in every tool mode. A BUILDING renders with
+    -- its category blueprint texture; a STRUCTURE renders its own piece
+    -- art through 'World.Render.StructureGhost' (#1846).
     constructDesigns ← readIORef (wsConstructDesignationsRef worldState)
     bm ← readIORef (buildingManagerRef env)
 
@@ -344,8 +350,50 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                      HS.union newlyMissingDefs (constructMissingDefsWarned cs) }
             , () )
 
+    -- Structure-ghost inputs (#1846), read ONCE so every candidate in
+    -- this frame is judged against the same world — the discipline
+    -- 'PlanWorld' exists for. The wall catalogue and the texture sizes
+    -- are the very refs the PLACED structure pass reads, so a ghost and
+    -- the piece it previews cannot rotate or measure differently.
+    let handoff = toRenderHandoffCapability env
+    stage      ← readIORef (wsStructureStageRef worldState)
+    artCatalog ← readIORef (rhStructureArtCatalogRef handoff)
+    wallCat    ← readIORef (rhStructureWallCatalogRef handoff)
+    texSizes   ← readIORef (rvTextureSizeRef rv)
+    let ghostEnv = GhostEnv
+            { geCatalog    = wallCat
+              -- The structure passes bake the stable handle id as a
+              -- Word32 (#286); the cursor helpers take an Int. Same id,
+              -- two arities of the same projection.
+            , geLookupSlot = \h → fromIntegral (toInt h)
+            , geTexSizes   = texSizes
+            , geFacing     = facing
+            , geZSlice     = zSlice
+            , geEffDepth   = effectiveDepth
+            , geTileAlpha  = tileAlpha
+            , geViewBounds = vb
+            , geCamX       = camX
+            , geCamY       = camY
+            , gePlan       = PlanWorld
+                { pwWorldSize    = worldSize
+                , pwTiles        = tileData
+                , pwStage        = stage
+                , pwDesignations = constructDesigns
+                , pwCatalog      = artCatalog
+                , pwProposedWire = HS.empty
+                }
+            }
+        -- The DESIGNATED state (D-19): a world annotation like every
+        -- other marker, so it shows in every tool mode.
+        structureGhosts = structureDesignationGhosts ghostEnv
+        structureGhostQuads = snd structureGhosts
+
+    -- Only BUILDINGS still draw a category marker. Structures draw the
+    -- piece's own art through 'World.Render.StructureGhost' below
+    -- (#1846); DTV-10 (#1845) retires this remaining half and the
+    -- mechanism with it.
     let constructTexFor cd = case cdTarget cd of
-            CtStructure _ → constructStructTexture cs'
+            CtStructure _ → Nothing
             CtBuilding  _ → constructBuildingTexture cs'
         -- Build-progress display (#96): the blueprint ghost solidifies
         -- as the build AI pours progress in — a fresh designation sits
@@ -355,6 +403,10 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
         -- ramp is the marker-level equivalent. Applied uniformly across
         -- every footprint tile of a building designation, same as the
         -- texture — one job, one consistent tint/alpha (#807 req 3).
+        --
+        -- This ramp is a BUILDING behaviour now. A structure site never
+        -- solidifies: D-15/D-16 make it vanish outright once its
+        -- materials are paid for, and #1846 implements that.
         constructAlphaFor cd =
             tileAlpha * (0.45 + 0.55 * max 0.0 (min 1.0 (cdProgress cd)))
         constructDesignQuads
@@ -467,47 +519,40 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
             _ → (0, V.empty)
         minePreviewQuads = snd minePreview
 
-    -- Structure-piece designation preview (#403 — folded into the build
-    -- tool): anchor→hover rectangle, mirroring the mine preview
-    -- (per-z-level, unloaded chunks skipped). Drawn with the
-    -- select-cursor texture so it reads as "about to be designated".
+    -- Structure-piece PREVIEW (#403 → #1846): the armed piece's own art
+    -- over every candidate of the current gesture, at D-19's 25 % and
+    -- red where #1844's resolver would refuse it. The candidate set and
+    -- the per-tile verdict both come from that resolver; this block only
+    -- decides WHICH tiles are being gestured at.
     --
-    -- Wire path tool (#359): 'constructLineMode' constrains this to a
-    -- straight 1-wide LINE along whichever axis has the larger extent
-    -- from the anchor, instead of the filled rectangle — the build
-    -- tool's commit (scripts/build_tool.lua) snaps the SAME way before
-    -- calling construction.designate, so what previews is what commits.
-    let constructPreview = case (constructAnchor cs', hoverResult, worldCursorTexture cs') of
-            (Just (ax, ay), Just (hxRaw, hyRaw, _, _, _), Just tex)
-                | Just anchorZ ← surfaceZAt ax ay →
-                -- #1844: ONE bounded-drag helper, shared with the
-                -- commit. The endpoint arrives canonical, and the helper
-                -- localizes it into the anchor's frame itself — which is
-                -- also the frame each quad's screen position is computed
-                -- in, so nothing here re-localizes it first. It clamps
-                -- OUTWARD to 64 cells per axis INCLUDING the anchor, and
-                -- for a wire path it picks the dominant axis from the
-                -- RAW localized delta before clamping. Preview and
-                -- commit therefore cannot disagree about which tiles a
-                -- drag names.
-                let tiles = structureDragExtent worldSize
-                                (constructLineMode cs') (ax, ay) (hxRaw, hyRaw)
-                -- (#1921) 'tiles' IS the candidate set here — line mode
-                -- and rectangle mode enumerate different shapes — so
-                -- the count comes from the very list the quads are
-                -- built from.
-                in ( length tiles
-                   , V.fromList
-                    [ worldCursorToQuad lookupSlot lookupFmSlot textures
-                          facing gx gy z zSlice effectiveDepth
-                          tileAlpha wrapOff tex
-                    | (gx, gy) ← tiles
-                    , Just z ← [surfaceZAt gx gy]
-                    , z ≡ anchorZ
-                    , let (chunkCoord, _) = globalToChunk gx gy
-                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
-                                          vb camX camY chunkCoord]
-                    ] )
+    -- Before the first click there is one candidate — the hovered tile,
+    -- at its OWN surface z — which is requirement 6's single-piece hover
+    -- state. After the anchor lands the candidates are
+    -- 'structureDragExtent' at the ANCHOR's surface z, the same z the
+    -- commit requires.
+    --
+    -- #1844: ONE bounded-drag helper, shared with the commit. The
+    -- endpoint arrives canonical, and the helper localizes it into the
+    -- anchor's frame itself — which is also the frame each quad's screen
+    -- position is computed in, so nothing here re-localizes it first. It
+    -- clamps OUTWARD to 64 cells per axis INCLUDING the anchor, and for
+    -- a wire path ('constructLineMode', #359) it picks the dominant axis
+    -- from the RAW localized delta before clamping. Preview and commit
+    -- therefore cannot disagree about which tiles a drag names.
+    let constructPreview = case (constructStructureTarget cs', hoverResult) of
+            (Just piece, Just (hxRaw, hyRaw, _, _, _)) →
+                case constructAnchor cs' of
+                    Just (ax, ay)
+                        | Just anchorZ ← surfaceZAt ax ay →
+                            structurePreviewGhosts ghostEnv piece anchorZ $
+                                structureDragExtent worldSize
+                                    (constructLineMode cs') (ax, ay)
+                                    (hxRaw, hyRaw)
+                    Nothing
+                        | Just hoverZ ← surfaceZAt hxRaw hyRaw →
+                            structurePreviewGhosts ghostEnv piece hoverZ
+                                [(hxRaw, hyRaw)]
+                    _ → (0, V.empty)
             _ → (0, V.empty)
         constructPreviewQuads = snd constructPreview
 
@@ -543,7 +588,8 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
     -- Mine + construction + chop + till markers are world annotations:
     -- shown in every tool mode. The mode only adds its own hover/preview
     -- on top.
-    let markerQuads = designQuads <> constructDesignQuads <> chopDesignQuads
+    let markerQuads = designQuads <> constructDesignQuads
+                    <> structureGhostQuads <> chopDesignQuads
                     <> tillDesignQuads <> plantDesignQuads
 
     -- Scene-assembly telemetry (#1921). Each count is the number of
@@ -574,6 +620,11 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                 if isJust (constructTexFor cd)
                 then acc + constructDesignationFootprintSize (bmDefs bm) cd
                 else acc) 0 constructDesigns
+          -- Structure designations left that fold when they stopped
+          -- using a category marker (#1846); their candidates are the
+          -- unpaid structure sites the ghost builder enumerates, counted
+          -- by that builder itself so the two cannot drift.
+          + fst structureGhosts
         hoverScanned  = if isJust hoverResult then 1 else 0
         selectScanned = if isJust (worldSelectedTile cs') then 1 else 0
     return $ case toolMode of
