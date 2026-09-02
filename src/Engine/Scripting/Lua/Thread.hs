@@ -25,15 +25,19 @@ import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Scripting.Lua.TickPolicy
     (schedulerSleepMicros, scriptIsDue, advanceTick)
 import Engine.Scripting.Lua.DebugServer
-    ( DebugCommand(..), startDebugServer, pollDebugCommand
+    ( DebugCommand(..), DebugConsole(..), DebugServerConfig(..)
+    , defaultDebugServerConfig, startDebugServer, stopDebugConsole
+    , inertDebugConsole, pollDebugCommand
     , DebugListenerFailure(..), ListenerAction(..), listenerAction
-    , reportDebugListenerFailure, reportBootCleanup )
+    , reportDebugListenerFailure, handleDebugListenerLoss
+    , reportBootCleanup )
 import Engine.Scripting.Lua.Thread.Console (processDebugCommands, debugBuiltin)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
+import Engine.Core.State
+    (EngineEnv(..), EngineLifecycle(..), requestEngineCleanup)
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Save.Barrier (captureLocked)
 import Engine.Input.Types (InputState)
@@ -77,6 +81,12 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
     , wsOnStop      = \lls → do
         logger ← readIORef (loggerRef env)
         logDebug logger CatLua "Lua thread stopped"
+        -- #2170: stop the console FIRST, so no accept thread and no
+        -- client handler outlives this worker. Every admitted client is
+        -- closed, killed and joined here, before the Lua state below is
+        -- freed out from under a thread that might still be holding a
+        -- command against it.
+        stopDebugConsole (llsConsole lls)
         -- Answer any debug commands still queued at teardown so their
         -- client threads (and netcat connections) don't sit out the full
         -- 30 s response timeout while the engine shuts down. Mirrors the
@@ -86,6 +96,8 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
     , wsOnCrash     = \lls e → do
         logger ← readIORef (loggerRef env)
         logWarn logger CatLua $ "Lua thread crashed: " <> tshow e
+        -- Same ordering as the clean stop above (#2170).
+        stopDebugConsole (llsConsole lls)
         -- Drain pending debug commands so clients don't hang
         drainDebugQueue (llsDebugQueue lls) $
             "ERROR: Lua thread crashed: " <> tshow e
@@ -100,6 +112,11 @@ data LuaLoopState = LuaLoopState
     { llsBackend    ∷ LuaBackendState
     , llsControlRef ∷ IORef ThreadControl
     , llsDebugQueue ∷ TQueue DebugCommand
+    , llsConsole    ∷ DebugConsole
+      -- ^ The console this worker owns (#2170), so the teardown paths
+      --   above can stop its accept loop and its clients. Inert — no
+      --   listener, a queue nothing feeds — for the port-0 sentinel and
+      --   for a console-optional mode whose bind failed.
     }
 
 -- | Answer and discard every queued debug command with one reply.
@@ -176,34 +193,43 @@ luaStartup env stateRef = do
 
     let mode = ecBootMode (engineConfig env)
         port = ecDebugPort (engineConfig env)
+        -- Production defaults for every bound, with only the terminal
+        -- loss hook overridden: #2170 requires the loss to be reported
+        -- on stderr in every mode and to STOP the engine in a
+        -- console-required one, and the mode is knowledge this layer
+        -- has and 'startDebugServer' deliberately does not.
+        serverConfig = (defaultDebugServerConfig port (debugBuiltin env))
+            { dscOnLoss = handleDebugListenerLoss mode port $
+                void (requestEngineCleanup (lifecycleRef env))
+            }
         -- Shared by both branches that actually touch a socket.
-        attemptBind = startDebugServer port (debugBuiltin env)
-        listening q = do
+        attemptBind = startDebugServer serverConfig
+        listening c = do
             logInfo logger CatLua $
                 "Debug server listening on port " <> tshow port
-            return (Right q)
+            return (Right c)
     -- #1190: whether a dead listener is survivable is a per-MODE
     -- decision, made here (with the mode in hand) rather than
     -- inside 'startDebugServer', which sees only a number and so
     -- cannot tell --dump's deliberate port-0 sentinel from the
     -- same 0 reaching a mode whose only control surface it is.
-    eDebugQueue ← case listenerAction mode port of
+    eDebugConsole ← case listenerAction mode port of
         TolerateListener → attemptBind ⌦ \case
-            Right q  → listening q
+            Right c  → listening c
             Left err → do
                 -- Engine keeps running without a console; the
                 -- queue is inert (nothing ever feeds it).
                 logWarn logger CatLua $
                     "Debug server failed to start on port "
                     <> tshow port <> ": " <> err
-                Right ⊚ atomically newTQueue
+                Right ⊚ inertDebugConsole
         RequireListener → attemptBind ⌦ \case
-            Right q  → listening q
+            Right c  → listening c
             Left err → return (Left (ListenerBindFailed err))
         -- No socket is touched at all, so no READY marker is
         -- emitted on either handle.
         RejectPortZero → return (Left ListenerPortZero)
-    case eDebugQueue of
+    case eDebugConsole of
         Left failure → do
             reportDebugListenerFailure mode port failure
             -- The Lua state was allocated (and the API
@@ -216,7 +242,7 @@ luaStartup env stateRef = do
             reportBootCleanup
                 "closed the Lua state (no scripting thread was started)"
             return (Left failure)
-        Right debugQueue →
+        Right console →
             -- Issue #763: the real debug queue only
             -- exists once 'startDebugServer' above returns, but
             -- 'backendState' was constructed earlier (so registerLuaAPI/
@@ -229,9 +255,11 @@ luaStartup env stateRef = do
             -- and its dozen-plus test call sites, none of which
             -- exercise real debug-command handling.
             return $ Right LuaLoopState
-                { llsBackend    = backendState { lbsDebugQueue = debugQueue }
+                { llsBackend    = backendState
+                    { lbsDebugQueue = consoleQueue console }
                 , llsControlRef = stateRef
-                , llsDebugQueue = debugQueue
+                , llsDebugQueue = consoleQueue console
+                , llsConsole    = console
                 }
 
 createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
