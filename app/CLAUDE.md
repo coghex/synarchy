@@ -1,7 +1,7 @@
 # app/ — executable entry point and CLI
 
 Loaded when you work under `app/`. Root rules still apply: never launch
-a window (see the root `CLAUDE.md` §Headless mode).
+a window (see the root `CLAUDE.md` §Launch rules).
 
 ## Boot modes and flags
 

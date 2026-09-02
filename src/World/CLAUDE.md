@@ -1,7 +1,6 @@
 # src/World/ — generation, hydrology, fluids, rendering
 
-Loaded when you work under `src/World/`. Worldgen is free-hand
-territory inside this tree; notify before reaching into engine or Lua.
+Loaded when you work under `src/World/`.
 
 ## Namespaces
 
@@ -55,7 +54,7 @@ generation; every non-worldgen test is milliseconds).
   `python3 tools/world_check.py --quick` (6 seeds, <1 min) for output
   sanity. `--dump` is the
   self-contained way to inspect output (`docs/headless_console.md`).
-  worldSize 128 ≈ 30 s, 256 ≈ 2 min, 512 much longer.
+  worldSize 256 generates in about two minutes; 512 takes much longer.
 - **Worldgen-OUTPUT changes (full tier):**
   `SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless`, then
   re-capture baselines `python3 tools/world_baseline.py` (~7 min) and

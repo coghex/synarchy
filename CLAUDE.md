@@ -9,12 +9,16 @@ gate that proves it. Two layers sit below it:
   mechanics behind every contract named here, each enforced by the gate
   its entry names. Read the relevant section before changing code it
   covers.
-- Nested `CLAUDE.md` files, loaded on demand when you work under that
-  directory: `app/` (boot modes, CLI flags, resource root), `scripts/`
-  (Lua and UI contracts), `src/World/` (worldgen, the seam frame,
-  worldgen testing), `src/World/Save/` (save format, enum policy),
-  `src/Unit/Atlas/` (unit animation art). If a change reaches into one
-  of those areas from elsewhere, read its file first.
+- Nested per-directory `CLAUDE.md` files, each with an `AGENTS.md`
+  symlink beside it: `app/` (boot modes, CLI flags, resource root),
+  `scripts/` (Lua and UI contracts), `src/World/` (worldgen, the seam
+  frame, worldgen testing), `src/World/Save/` (save format, enum
+  policy), `src/Unit/Atlas/` (unit animation art). Claude Code loads
+  one automatically when you work with files under its directory; no
+  other agent does, so **every other agent must read the matching file
+  before any work in its scope**, and every agent reads it before a
+  change that reaches into that area from elsewhere. The rules in
+  those files are as binding as the ones here.
 
 Every earlier version of this file is archived verbatim under
 `docs/history/claude_md_<date>_pretrim.md`; consult those, git history,
@@ -171,7 +175,8 @@ to proceed past the risk warning), or the work accumulates uncommitted
 in the `docs-wip` worktree until they batch it. Never push `docs-wip`,
 never run `docs_land.sh` unasked, never hand-roll an equivalent.
 `docs-wip` is not a feature branch — it tracks `origin/master` and
-lands by direct push; the script's guarantees and the manual fallback:
+lands by direct push. The script's own header states what it
+guarantees; the manual fallback and the protected-ref push warning:
 `docs/engine_contracts.md` §Docs landing.
 
 Exempt, because they either create their own worktree or must operate

@@ -3,18 +3,21 @@
 `CLAUDE.md` is auto-loaded into every session, so it carries the rules
 that prevent damage: what you must not undo, and which gate proves it.
 This file carries the layer below that — the as-built mechanics behind
-those rules, extracted from CLAUDE.md in two passes (2026-08-18 and
-2026-08-20) to keep the always-loaded file navigable.
+those rules, extracted from CLAUDE.md in three passes (2026-08-18,
+2026-08-20 and 2026-09-02 — the last also introduced the nested
+per-directory `CLAUDE.md` files) to keep the always-loaded file
+navigable.
 
 **This is not a design document.** The design docs
 (`docs/texture_infrastructure.md`, `docs/unified_item_transfers.md`,
 `docs/expedition_gameplay_loop.md`, `docs/persistence_contract.md`, …)
 record what was *decided*; this records what was *built*, and it is the
 only prose record of most of it. Read the section here before changing
-code in the area it covers — CLAUDE.md points you at each one by name.
+code in the area it covers — the root `CLAUDE.md` and the nested
+per-directory `CLAUDE.md` files point you at each one by name.
 
-Every contract below is mechanically enforced by the gate its CLAUDE.md
-entry names, so a breach fails loudly rather than silently. That is
+Every contract below is mechanically enforced by the gate its
+`CLAUDE.md` entry names, so a breach fails loudly rather than silently. That is
 exactly why the detail could move out of the always-loaded file.
 
 ---
@@ -473,9 +476,9 @@ hidden behind a flag.
 
 Enforced by `python3 tools/test_pack_atlas.py` (fixture-based, isolated
 temp trees, never touching shipped assets) plus the strict
-`pack_atlas.py --validate-only --strict` run. CLAUDE.md keeps the
-one-atlas-per-animation shape and the index-aware validation rule; these
-are the exact invariants.
+`pack_atlas.py --validate-only --strict` run. `src/Unit/Atlas/CLAUDE.md`
+keeps the one-atlas-per-animation shape and the index-aware validation
+rule; these are the exact invariants.
 
 - **Rows** are the AUTHORED directions in `ATLAS_DIRECTION_ORDER` — the
   engine's own `Unit.Direction` order `S, SW, W, NW, N, NE, E, SE` —
@@ -1081,8 +1084,8 @@ FILE once, so a dual-use texture holding two slots still appears once.
 ## UI input routing (#742-#749)
 
 Enforced by hspec `Test.Headless.UI.*` (InputOwnership, Clipping,
-PopupPlacement, InteractiveBounds). CLAUDE.md keeps the on-sight digest;
-these are the six contracts in full.
+PopupPlacement, InteractiveBounds). `scripts/CLAUDE.md` keeps the
+on-sight digest; these are the six contracts in full.
 
 **Layers + modal boundary (#742).** Pages live on six `UILayer`s,
 painted bottom-to-top `LayerHUD < LayerOverlay < LayerMenu < LayerModal
@@ -1238,8 +1241,8 @@ change, a HUD hide, Escape, or another container replacing it all end it.
 ## Responsive UI lifecycle (#748/#750)
 
 Enforced by hspec `Test.Headless.UI.ResponsiveMenus` /
-`ResponsiveGameplay`. CLAUDE.md keeps the registry split and the
-one-line resize rules; these are the numbers and the full rules.
+`ResponsiveGameplay`. `scripts/CLAUDE.md` keeps the registry split and
+the one-line resize rules; these are the numbers and the full rules.
 
 `scripts/ui/responsive.lua` owns the supported envelope — bands
 (inclusive): framebuffer height 600-900 @ 0.5-1x UI scale, 901-1200 @
@@ -1291,9 +1294,9 @@ Rules that keep resizes correct — follow them for any new screen/panel:
 
 Enforced by hspec `--match "random stream ownership"`, which pairs
 behavioural isolation and per-instance-entropy cases with two source
-guards. CLAUDE.md keeps the two rules (no `math.randomseed` under
-`scripts/`; non-gameplay code keeps its own stream); this is the story
-behind them.
+guards. The root `CLAUDE.md` and `scripts/CLAUDE.md` keep the two rules
+(no `math.randomseed` under `scripts/`; non-gameplay code keeps its own
+stream); this is the story behind them.
 
 A Lua state has exactly one `math.random` stream, and eleven gameplay
 modules draw from it (AI cadence, thoughts, mental state, wildlife,
@@ -1483,9 +1486,7 @@ stamp time, never from hashmap order — so ids survive save/load and
 chunk eviction. Consumers read the STORED values, never re-derive from
 the live registry. Lifecycle transitions are one-way (`promoteLifecycle`
 refuses backward AND same-state — what makes discovery fire exactly one
-event); `hinted` is deliberately unreachable but must NOT be deleted
-(positionally serialized, append-only enum). Gates: hspec
-`--match "Location instance identity"`, `location_content_probe.py`.
+event).
 
 
 Enforced by hspec `--match "Location instance identity"` and
@@ -1877,9 +1878,9 @@ at reconcile. Radio sharing/range deliberately deferred.
 
 Enforced by hspec `--match "World.Render.PickSeam"` /
 `"World.DesignationSeam"` / `"a seam-frame unit"`. The contract is also
-stated in full on `World.Render.HitTest`. CLAUDE.md keeps the
-canonical-coords rule, the rectangle exception and the lookup-wrap rule;
-this is the full enumeration.
+stated in full on `World.Render.HitTest`. `src/World/CLAUDE.md` and the
+root's domain list keep the canonical-coords rule, the rectangle
+exception and the lookup-wrap rule; this is the full enumeration.
 
 Chunks are STORED u-wrapped, so one physical tile has two names near
 the seam. Picking (`pickWorldTile` and every Lua caller it backs —
@@ -1991,12 +1992,8 @@ right-clicking and opening the window reveal NOTHING; every unit-driven
 reveal is gated on `isPlayerCommandable`; knowledge is player-global,
 never per-unit.
 
-Gates for the whole arc: hspec `--match "Unit transfer"` /
-`"Transfer context menu"` / `"durable transfer orders survive"` /
-`"Container knowledge"`; `tools/transfer_order_probe.py` and
-`tools/item_list_widget_probe.py` (manual-only; the latter owns the
-real-AI proof that a MOVING target is preempted and then stays put for
-the whole approach), and — the arc's INTEGRATED gate —
+Beyond the gates listed below, the reveal rule is pinned by hspec
+`--match "Container knowledge"`, and the arc's INTEGRATED gate is
 `tools/unified_transfer_probe.py` (#1255, manual-only `needs-gpu`): one
 fixed-seed session proving an exact instance moves both ways between
 all three endpoint classes through BOTH modes, plus the partial batch,
@@ -2249,17 +2246,12 @@ default (`config/save_default.yaml` + key-level `save.local.yaml`
 overlay; Settings → General edits it). `scripts/autosave.lua` owns the
 WALL-CLOCK interval and fires only when `uiManager.isGameplayView()` —
 a deadline reached in a menu / with no world / mid save-or-load is
-SKIPPED silently, and menus never suspend or reset the cadence. Slots
-are the reserved `autosave-<n>` family, `autosave-1` newest; ownership
-is the durable `smAutosave` metadata flag (`"metadata"` v2; v1 migrates
-to manual), NEVER the name — a manual save squatting on one of those
-names fails the attempt with nothing rotated. PUBLISH FIRST, ROTATE
-SECOND, and an interruption leaves a partially shifted family, never a
-shorter one. A FAILED autosave stays paused and zero-scaled. Interval
-autosaves ride the SAME save transaction — they only add a request-time
-`AutosaveRequest` (pre-request pause, visible time scale, player-intent
-generation) plus the durable `smAutosave` classification
-`engine.listSaves()` exposes. Gate: `autosave_probe.py` (manual-only).
+SKIPPED silently, and menus never suspend or reset the cadence.
+Interval autosaves ride the SAME save transaction — they only add a
+request-time `AutosaveRequest` (pre-request pause, visible time scale,
+player-intent generation) plus the durable `smAutosave` classification
+`engine.listSaves()` exposes. Slot ownership, rotation order and the
+failure disposition follow.
 
 Enforced by `tools/autosave_probe.py` (manual-only). Slots are the
 reserved `autosave-<n>` family, `autosave-1` newest; ownership is the
@@ -2284,10 +2276,10 @@ one stays paused and zero-scaled. Gate: `autosave_probe.py`
 
 ## Save/load transaction: phases and failure semantics
 
-CLAUDE.md carries the four architectural bullets (the Lua save-module
-registry, `publishGeneration`'s write-fsync-revalidate-rotate transaction,
-the whole-session load transaction, and the typed-reference integrity
-graph). This is the phase and failure detail it defers.
+`src/World/Save/CLAUDE.md` carries the architectural bullets (the Lua
+save-module registry, `publishGeneration`'s write-fsync-revalidate-rotate
+transaction, the whole-session load transaction, and the typed-reference
+integrity graph). This is the phase and failure detail it defers.
 
 **`engine.getLoadStatus()` exposes a 12-phase lifecycle plus a 13th
 terminal phase, `LoadReconciliationFailed` (#1204):** publication
@@ -2314,9 +2306,9 @@ dirs/files are refused.
 ## Enum append-only audit: baseline and payload normalization
 
 Enforced by `tools/enum_append_only_audit.py` (CI + `make ci`, with its
-own `--self-test`). CLAUDE.md states the rule and the two hard facts about
-the baseline (it is GENERATED; a pure append ratchets it with
-`--update-baseline`). This is the rest.
+own `--self-test`). `src/World/Save/CLAUDE.md` states the rule and the
+two hard facts about the baseline (it is GENERATED; a pure append
+ratchets it with `--update-baseline`). This is the rest.
 
 **Coverage.** Of the 43 guarded types, 38 are on the save wire and 28 are
 named by a live component today; the rest are guarded pre-emptively, which
@@ -2411,7 +2403,7 @@ passed while the developer's bindings were being replaced.
 ## CLI value validation (#1191)
 
 Enforced by hspec `--match "App.Cli"` and `tools/preview_cli_probe.py`
-(no boot). CLAUDE.md states the rule, the flags it covers, and
+(no boot). `app/CLAUDE.md` states the rule, the flags it covers, and
 `--region`'s exclusion. This is the rest.
 
 **Empty selections and empty segments** are errors too, not just unknown
@@ -2432,9 +2424,10 @@ default is `docs/code_health_findings.md` CH-67, sequenced after #1081.
 ## Debug-console listener policy (#1190)
 
 Enforced by hspec `--match "debug-console listener policy"` and
-`tools/debug_console_boot_probe.py` (CI-eligible). CLAUDE.md keeps the
-rule — `--headless`/`--offscreen` ABORT when the listener can't start;
-this is the detail.
+`tools/debug_console_boot_probe.py` (CI-eligible). The root `CLAUDE.md`
+§Launch rules and `app/CLAUDE.md` keep the rule —
+`--headless`/`--offscreen` ABORT when the listener can't start; this is
+the detail.
 
 Those two modes have no window, so the console is their only
 interactive control surface. If the listener can't start — an occupied

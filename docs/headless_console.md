@@ -3,7 +3,7 @@
 Reference for driving the engine without a window: boot modes, the
 dump layers, the TCP console, and the world-generation query API. The
 rules that keep this safe for agents (never open a window, never
-`pkill`, which ports to use) are in `CLAUDE.md` §Headless mode; this
+`pkill`, which ports to use) are in `CLAUDE.md` §Launch rules; this
 file is the lookup table behind them.
 
 ## Boot modes
