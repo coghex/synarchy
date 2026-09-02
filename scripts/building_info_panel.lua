@@ -37,10 +37,10 @@ local function formatInfo(bid, info)
     local lines = {}
     table.insert(lines, info.displayName or info.defName or "(unnamed)")
     table.insert(lines, "Activity: " .. activity)
-    -- Worker-driven construction progress (only while Appearing and
-    -- the def has a non-zero work cost — instant-build defs like the
-    -- portal show no progress line).
-    if activity == "appearing" then
+    -- Worker-driven construction progress. Only "constructing" carries
+    -- one (#2080): a zero-work def materialising on a clock reports
+    -- "appearing" and has no work to report a percentage of.
+    if activity == "constructing" then
         local required = building.getBuildRequired(bid)
         local progress = building.getBuildProgress(bid)
         if required and required > 0 and progress then
@@ -112,8 +112,9 @@ function buildingInfoWatch.update(dt)
         end
     elseif cur then
         -- Same building still selected — refresh so activity/footprint
-        -- updates land in the panel (activity transitions Appearing →
-        -- Built as the appear anim finishes).
+        -- updates land in the panel (activity transitions
+        -- Constructing/Appearing → Built as the build completes or the
+        -- appearance anim finishes).
         if pushBuildingInfo(cur) then
             buildingInfoWatch.tilePushed = false
         else

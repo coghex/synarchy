@@ -37,7 +37,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
@@ -990,7 +991,7 @@ engineSpec = beforeAll setup $ do
 
   where
     setup = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         pure (env, ls)
 

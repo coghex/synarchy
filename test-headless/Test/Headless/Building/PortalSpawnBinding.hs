@@ -48,11 +48,13 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 
+import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
@@ -168,7 +170,7 @@ portalDef = BuildingDef
     , bdDisplayName     = portalDefName
     , bdCategory        = "Test"
     , bdDescription     = ""
-    , bdTexture         = TextureHandle 0, bdIconTexture         = TextureHandle 0
+    , bdTextures         = legacyAssets (TextureHandle 0), bdIconTexture         = TextureHandle 0
     , bdTileW           = 1
     , bdTileH           = 1
     , bdPlacement       = "flat_ground"
@@ -180,7 +182,8 @@ portalDef = BuildingDef
     , bdStorageCapacity = 0
     , bdOperations      = []
     , bdAnimations      = HM.empty
-    , bdStateAnims      = HM.empty
+    , bdRoleAnims      = Map.empty
+    , bdVisualClass     = FreestandingInstallation
     , bdPowerDrain      = 0
     , bdPowerNode       = Nothing
     }
@@ -460,7 +463,7 @@ spec = describe "Portal spawn page binding (#1686)" $ aroundAll setup $ do
     -- because the engine booted inside it — @scripts/@ is symlinked
     -- there, so the real building_spawn Lua still loads.
     setup act = withIsolatedResourceRoot $ do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         installPageSwitch env ls
         _ ← rememberRealVerbs ls

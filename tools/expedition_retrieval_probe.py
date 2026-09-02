@@ -500,7 +500,7 @@ def build_colony(chk: Checks, port: int, home) -> int:
     if not chk.ok(bool(cap), f"colony cargo_hold_S spawned at ({hx},{hy}) "
                              f"with storage capacity {cap}"):
         return -1
-    # Finish it. A cargo_hold_S spawns Appearing (build_work 240) and an
+    # Finish it. A cargo_hold_S spawns Constructing (build_work 240) and an
     # unfinished building is a CONSTRUCTION SITE: build_nearby and
     # deliver_to_build_site (utility 6.0, with a lock-in) will pull the
     # carrier off its expedition to go and finish the colony's store —

@@ -76,7 +76,7 @@ lns = T.intercalate "\n"
 --   A row is @{ bid, x, y, activity, required, capacity, used }@:
 --   @findStorageTarget@ wants @activity == 'built'@ with
 --   @used < capacity@, @findNearestUnbuilt@ wants
---   @activity == 'appearing'@ with @required > 0@. Emptying
+--   @activity == 'constructing'@ with @required > 0@. Emptying
 --   @BUILDINGS@, or leaving only rows of the other shape, is how a case
 --   makes resolution fail — the same way a destroyed site fails it in
 --   game.
@@ -152,7 +152,7 @@ prelude = lns
     , "    BUILDINGS = { { bid = bid, x = d, y = 0, activity = 'built',"
     , "                    required = 0, capacity = 100, used = 0 } }"
     , "  else"
-    , "    BUILDINGS = { { bid = bid, x = d, y = 0, activity = 'appearing',"
+    , "    BUILDINGS = { { bid = bid, x = d, y = 0, activity = 'constructing',"
     , "                    required = 240.0, capacity = 0, used = 0 } }"
     , "  end"
     , "end"
@@ -173,7 +173,7 @@ spec = describe "cached logistics target clears" $ do
                 [ prelude
                 , newState
                 , "s.buildTarget = STALE"
-                -- A built (not appearing) building is still no build
+                -- A built (not constructing) building is still no build
                 -- site: resolution runs and finds nothing, exactly as
                 -- it does once the real site is destroyed.
                 , "place('store', 9, 3)"
@@ -235,7 +235,7 @@ spec = describe "cached logistics target clears" $ do
                 [ prelude
                 , newState
                 , "s.storeTarget = STALE"
-                -- An appearing (not built) building is no cargo.
+                -- A constructing (not built) building is no cargo.
                 , "place('build', 9, 3)"
                 , "local u = logistics.storeMaterialsUtility(1, s, PARAMS)"
                 , "assert(u == -math.huge, 'no cargo must score -inf, got ' .. tostring(u))"
@@ -297,7 +297,7 @@ spec = describe "cached logistics target clears" $ do
             runsOk $ lns
                 [ prelude
                 , newState
-                -- One appearing site resolves for build; nothing
+                -- One constructing site resolves for build; nothing
                 -- resolves for store. Only storeTarget may be touched.
                 , "place('build', 77, 5)"
                 , "s.storeTarget = STALE"

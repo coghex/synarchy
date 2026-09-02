@@ -7,17 +7,30 @@
 --   from is the base its recorded seed produces, and if the load path
 --   reads that seed rather than a constant of its own.
 --
---   Two layers of coverage, because either one alone passes a broken
---   engine:
+--   That reconstruction claim belongs to 'engineSpec' and to the
+--   end-to-end probe below, and to nothing else here. 'pureSpec' covers
+--   a different axis: it says nothing about which seed either caller
+--   passes, and nothing about a seed rebuilding its own base.
 --
---   * 'pureSpec' pins the seeding CONTRACT on 'generateArenaChunks' —
---     one seed, one base; different seeds, different vegetation. It says
---     nothing about which seed either caller passes.
 --   * 'engineSpec' pins the fresh-creation WIRING against a live
 --     headless engine: the chunk map 'handleWorldInitArenaCommand'
 --     actually wrote must equal the one rebuilt from the @wgpSeed@ that
 --     same command recorded — exactly the reconstruction the load path
 --     performs, and the one an ambient 'newStdGen' fails.
+--   * 'pureSpec' pins what a seed is ALLOWED to vary: two different
+--     pinned seeds must disagree about surface vegetation, and about
+--     nothing else — coordinates, surface maps, column starts,
+--     materials and slopes are seed-blind, and vegetation reaches only
+--     the top tile.
+--
+--   'pureSpec' pins no vegetation VALUES, by policy. Grass-variant
+--   placement is not a cross-revision compatibility surface: a later
+--   build may map the same arena seed to different variants, so an
+--   arena autosave loaded by that build may render untouched tiles
+--   differently. Only within one build must a seed reconstruct its own
+--   base. That declines to freeze the generated vector and nothing
+--   more — save decoding, the persisted edit overlay, arena topology
+--   and material compatibility are all unaffected.
 --
 --   The end-to-end half (a real save, a fresh process, a real load)
 --   lives in @tools/multiworld_save_probe.py --arena@, which compares an
@@ -54,27 +67,9 @@ arenaSeed = 0
 otherSeed ∷ Word64
 otherSeed = 20260827
 
--- | The params a fresh arena page records, mirrored here so the pure
---   layer can prove the derivation only ever sees a 'Word64' field.
-arenaParams ∷ WorldGenParams
-arenaParams = defaultWorldGenParams
-    { wgpSeed = arenaSeed, wgpWorldSize = 100000 }
-
 pureSpec ∷ Spec
 pureSpec =
-    describe "generateArenaChunks is a pure function of its seed" $ do
-        it "the same seed rebuilds an identical arena base, chunk for \
-           \chunk" $
-            generateArenaChunks (arenaGenForSeed arenaSeed)
-                `shouldBe` generateArenaChunks (arenaGenForSeed arenaSeed)
-
-        it "the seed read back out of a page's own WorldGenParams yields \
-           \that same base" $
-            -- Both callers derive their generator from a wgpSeed field,
-            -- so the derivation must depend on nothing but that value.
-            generateArenaChunks (arenaGenForSeed (wgpSeed arenaParams))
-                `shouldBe` generateArenaChunks (arenaGenForSeed arenaSeed)
-
+    describe "arena seed sensitivity and seed-blind topology" $ do
         it "two different pinned seeds disagree about surface vegetation" $
             -- Not merely "the bases differ": the difference must be in
             -- the surface vegetation, which is the only thing the seed

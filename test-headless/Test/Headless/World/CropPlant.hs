@@ -50,7 +50,8 @@ import qualified HsLua as Lua
 import System.Directory (doesFileExist, removePathForcibly)
 
 import Engine.Asset.Handle (TextureHandle(..), toInt)
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
 import World.Construct.Types
@@ -751,7 +752,7 @@ engineSpec = beforeAll setup $ do
 
   where
     setup = do
-        EngineInitResult env ← initializeEngineHeadless
+        EngineInitResult env ← initializeEngineHeadlessQuiet
         pure env
 
 -- | Install a fresh synthetic page: one flat chunk with the given

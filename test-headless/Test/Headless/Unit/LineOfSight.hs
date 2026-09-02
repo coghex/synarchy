@@ -19,7 +19,8 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (writeIORef)
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
@@ -135,7 +136,7 @@ setupPages visibleOrder = do
 
 initEnv ∷ IO EngineEnv
 initEnv = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     pure env
 
 putUnits ∷ EngineEnv → [(UnitId, UnitInstance)] → IO ()

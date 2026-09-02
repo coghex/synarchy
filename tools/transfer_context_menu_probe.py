@@ -14,7 +14,7 @@ gates on `fontsReady`, a GPU font atlas), and `--headless` refuses
 Registers a throwaway 1x1 building fixture (`build_work: 0.0`, positive
 `storage_capacity`) rather than spawning the shipped `cargo_hold_S`:
 that def's real `build_work` (240s, worker-driven) means
-`building.spawn` alone would leave it stuck in the "appearing" activity
+`building.spawn` alone would leave it stuck in the "constructing" activity
 forever with no construct_job AI running to finish it — `build_work:
 0.0` takes the OTHER branch of `Building.Types.currentActivity` (no
 `state_animations` block here either, so its computed `appearDuration`
@@ -112,6 +112,7 @@ buildings:
     category: "Test"
     description: "Throwaway #1014 test fixture — not shipped content."
     sprite: "assets/textures/buildings/cargo_hold_S/default.png"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"

@@ -12,7 +12,7 @@
 --   drive the tick against real tile heights and a real time of day.
 --   No world/unit thread is started — mirrors
 --   'Test.Headless.Unit.LineOfSight's synthetic-page pattern (a bare
---   'initializeEngineHeadless', hand-built 'WorldManager' +
+--   'initializeEngineHeadlessQuiet', hand-built 'WorldManager' +
 --   'UnitManager') since discovery only reads/writes plain 'IORef's
 --   that any thread can touch, so calling the tick function directly
 --   is both sufficient and far faster than booting real worldgen.
@@ -27,7 +27,8 @@ import qualified Data.Vector.Unboxed as VU
 import Control.Exception (Exception, throw, try)
 import Data.IORef (writeIORef, readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
-import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Load.Status (beginLoad, failLoad)
 import Engine.PlayerEvent (PlayerEvent(..))
@@ -242,7 +243,7 @@ lifecyclesOf = fmap (map liLifecycle . instancesToList . wgpLocationInstances)
 
 initEnv ∷ IO EngineEnv
 initEnv = do
-    EngineInitResult env ← initializeEngineHeadless
+    EngineInitResult env ← initializeEngineHeadlessQuiet
     writeIORef (locationDefsRef env) registry1
     pure env
 
