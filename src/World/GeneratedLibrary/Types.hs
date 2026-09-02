@@ -324,8 +324,11 @@ data CleanupReport = CleanupReport
     { crReconcile          ∷ !ReconcileReport
     , crReferences         ∷ !ReferenceScan
     , crRemoved            ∷ ![GeneratedWorldId]
-        -- ^ Final entries positively proven unreferenced, detached and
-        --   deleted.
+        -- ^ Final entries positively proven unreferenced and DETACHED to
+        --   a tombstone — no longer an entry from this moment. The
+        --   tombstone is deleted in the same run once the detachment and
+        --   the registry are durable; otherwise it waits, identifiable,
+        --   for the next run's sweep.
     , crRetainedReferenced ∷ ![GeneratedWorldId]
     , crRetainedPinned     ∷ ![GeneratedWorldId]
         -- ^ Retained because a process-owned operation pinned them.

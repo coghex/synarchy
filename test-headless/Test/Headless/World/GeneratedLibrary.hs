@@ -860,6 +860,44 @@ registrySpec = describe "registry" $ do
             crTransientsRemoved swept `shouldBe` [displaced]
             doesDirectoryExist displaced `shouldReturn` False
 
+    it "a replacement whose own registry write fails keeps the displaced copy until a later durable repair" $
+        withScratch $ \root → do
+            lib ← openOK root
+            _ ← publishOK lib gidA payload1
+            -- A directory at the registry path makes every registry rename
+            -- fail. The replacement itself still commits — the entry is
+            -- durable — but its registry state is not, which is exactly the
+            -- window the displaced copy exists for.
+            removeFile (registryPath root)
+            createDirectory (registryPath root)
+            replaced ← publishOK lib gidA payload2
+            prOutcome replaced `shouldBe` PublishedReplaced
+            prWarnings replaced
+                `shouldSatisfy` any ("displaced copy retained" `T.isInfixOf`)
+            e ← committed lib gidA
+            leDigest e `shouldBe` Just (digestOf payload2)
+            names ← rootNames root
+            let displaced = [ libraryRoot root </> n | n ← names
+                            , classifyLibraryName n
+                                ≡ TransientName DisplacedDir (tokenOf gidA) ]
+            length displaced `shouldBe` 1
+            -- Cleanup cannot make the registry durable either, so the old
+            -- complete copy stays, run after run.
+            stuck ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            crTransientsRemoved stuck `shouldBe` []
+            forM_ displaced $ \d → doesDirectoryExist d `shouldReturn` True
+            inventory ← listEntries lib ≫= orFail "listEntries"
+            liSource inventory `shouldSatisfy` (≢ FromRegistryFile)
+            -- Once the registry can be written, the next cleanup proves it
+            -- durable and only then sweeps the displaced copy.
+            removeDirectoryRecursive (registryPath root)
+            swept ← withPinnedReferences lib [gidA] (cleanupOK lib)
+            crTransientsRemoved swept `shouldBe` displaced
+            forM_ displaced $ \d → doesDirectoryExist d `shouldReturn` False
+            repaired ← listEntries lib ≫= orFail "listEntries"
+            liSource repaired `shouldBe` FromRegistryFile
+            map rrInventoryDigest (liRows repaired) `shouldBe` [digestOf payload2]
+
 -- Containment ------------------------------------------------------------------------
 
 containmentSpec ∷ Spec
