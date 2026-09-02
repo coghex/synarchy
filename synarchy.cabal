@@ -269,6 +269,9 @@ library
                      Engine.Input.Thread.Scroll
                      Engine.Scripting.Lua.Debug
                      Engine.Scripting.Lua.DebugServer
+                     Engine.Scripting.Lua.DebugServer.Types
+                     Engine.Scripting.Lua.DebugServer.Client
+                     Engine.Scripting.Lua.DebugServer.Listener
                      Engine.Scripting.Lua.Types
                      Engine.Scripting.Lua.Material
                      Engine.Scripting.Lua.Message
@@ -426,6 +429,7 @@ library
                      Engine.Scene.Graph
                      Engine.Scene.Manager
                      Engine.Scene.Render
+                     Engine.Scene.Assembly
                      Engine.Loop
                      Engine.Loop.Mode
                      Engine.Loop.Timing
@@ -513,6 +517,7 @@ library
                      Building.Knowledge
                      Building.Knowledge.Live
                      Building.Command.Types
+                     Building.Destruction
                      Building.Thread.Command
                      Building.Render
                      Building.Visual
@@ -1239,6 +1244,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
+                   Test.Headless.Load.Terminalize
                    Test.Headless.Load.ReplacementTeardown
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
@@ -1304,6 +1310,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Plan
                    Test.Headless.Render.StructureGhost
                    Test.Headless.Render.StructureGhostFixture
+                   Test.Headless.Render.FrameAssembly
                    Test.Headless.Construct.PlanInvalidation
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
@@ -1394,6 +1401,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.ConfigState
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener
+                   Test.Headless.Core.DebugSocket
                    Test.Headless.App.Cli
                    Test.Headless.App.ChunkRegion
                    Test.Headless.App.PreviewConfig
@@ -1427,6 +1435,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
+                   Test.Headless.Building.DestructionPresentation
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents
@@ -1525,4 +1534,15 @@ test-suite synarchy-test-headless
                 -- process, which nothing in-process can imitate: POSIX
                 -- record locks never conflict within one process.
                 , process
+                -- Two suites need real sockets, for unrelated reasons.
+                -- Test.Headless.Load.Terminalize's root-proof unreadable
+                -- legacy save is a Unix-domain socket bound at
+                -- saves/<name>.synworld (#2162): open(2) fails on it for
+                -- every user, root included, where a permission-bit
+                -- fixture would pass vacuously in CI's root container.
+                -- Test.Headless.Core.DebugSocket drives the real debug
+                -- listener over real loopback sockets (#2170): the
+                -- supervision it proves is exactly what a mocked
+                -- transport would not exercise.
+                , network
     ghc-options: "-with-rtsopts=-N -A128M"

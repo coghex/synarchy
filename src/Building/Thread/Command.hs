@@ -24,6 +24,9 @@ import qualified Engine.Core.Queue as Q
 import World.State.Types (WorldManager(..))
 import World.Page.Types (WorldPageId)
 import Building.Types
+import Building.Destruction
+    ( captureDestructionEffect, destructionExpired
+    , pruneExpiredDestructions )
 import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
 import Building.Knowledge.Live
     ( containerObserver, forgetAllContainers, forgetContainerEverywhere
@@ -47,6 +50,7 @@ processAllBuildingCommands ∷ IORef LoggerState → WorldSimCapability
                            → BuildingCapability → IO ()
 processAllBuildingCommands logRef sim reg bld = do
     drain
+    pruneDestructions
     -- #1087: after the queue is empty, give every container THIS
     -- SESSION placed and is still watching a chance to have reached
     -- Built. Scoped to that session-local set, never to every
@@ -59,6 +63,23 @@ processAllBuildingCommands logRef sim reg bld = do
         case mCmd of
             Just cmd → handleBuildingCommand logRef sim reg bld cmd >> drain
             Nothing  → return ()
+    -- #2091: expire destruction presentations HERE, against the game
+    -- clock, not in the render pass. The unit tick runs this drain
+    -- every tick regardless of pause while advancing the game clock
+    -- only when unpaused, so a paused effect stays frozen at its phase
+    -- and a hidden, culled or never-drawn one still expires on time.
+    -- Read-then-write on purpose: the render thread reads this ref
+    -- every frame, so an idle tick (no effect, or none expired) must
+    -- not pay for a manager write it has no reason to make.
+    pruneDestructions = do
+        bm ← readIORef (bcBuildingManagerRef bld)
+        unless (HM.null (bmDestructions bm)) $ do
+            now ← readIORef (wsGameTimeRef sim)
+            when (any (destructionExpired now) (HM.elems (bmDestructions bm))) $
+                atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+                    ( bm' { bmDestructions =
+                                pruneExpiredDestructions now (bmDestructions bm') }
+                    , () )
 
 handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
                       → ContentRegistriesViewCapability → BuildingCapability
@@ -68,13 +89,41 @@ handleBuildingCommand logRef sim reg bld
     logger ← readIORef logRef
     applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId
 
-handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
-    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
+    -- #2091: the destruction presentation's frame zero. Same clock as
+    -- biSpawnedAt, read BEFORE the transaction so the capture below is
+    -- pure and the whole removal is one manager transition.
+    now ← readIORef (wsGameTimeRef sim)
+    invalidClip ← atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
         let cleared = if bmSelected bm ≡ Just bid
                       then Nothing
                       else bmSelected bm
-        in (bm { bmInstances = HM.delete bid (bmInstances bm)
-               , bmSelected  = cleared }, ())
+            -- Only a LIVE instance can leave an effect behind
+            -- (requirement 4): an unknown or already-demolished id
+            -- finds nothing here, so it can neither start nor restart
+            -- playback. The def missing from the manager (a save
+            -- naming a removed definition) has no role to resolve and
+            -- is removed silently, like a def with no destruction role.
+            captured = case HM.lookup bid (bmInstances bm) of
+                Nothing   → Right Nothing
+                Just inst → case HM.lookup (biDefName inst) (bmDefs bm) of
+                    Nothing  → Right Nothing
+                    Just def → captureDestructionEffect now bid inst def
+            effects = case captured of
+                Right (Just eff) → HM.insert bid eff (bmDestructions bm)
+                _                → bmDestructions bm
+        in ( bm { bmInstances    = HM.delete bid (bmInstances bm)
+                , bmSelected     = cleared
+                , bmDestructions = effects }
+           , either Just (const Nothing) captured )
+    -- An invalid destruction declaration degrades to "no visual" and
+    -- is reported with its building/animation context; it never
+    -- blocks, skips or crashes the removal above or the cleanup below.
+    forM_ invalidClip $ \err → do
+        logger ← readIORef logRef
+        logWarn logger CatThread $
+            "BuildingDestroy: no destruction presentation for building id "
+                <> tshow (unBuildingId bid) <> ": " <> err
     -- #1087: demolishing a container drops the player's memory of it,
     -- so nothing can later inherit that record — and so the container
     -- reads as never-inspected again rather than as a permanently
@@ -92,8 +141,12 @@ handleBuildingCommand _ sim _ bld (BuildingDestroy bid) = do
 
 handleBuildingCommand _ sim _ bld BuildingClearAll = do
     -- Queue-ordered wipe (runs after any pending BuildingSpawns), #58.
+    -- Bulk removal is immediate and SILENT (#2091): every outstanding
+    -- destruction effect goes with the instances, and none is spawned.
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
-        (bm { bmInstances = HM.empty, bmSelected = Nothing }, ())
+        ( bm { bmInstances = HM.empty, bmSelected = Nothing
+             , bmDestructions = HM.empty }
+        , () )
     forgetAllContainers (wsWorldManagerRef sim)
 
 -- | Insert one spawned building into the manager. Shared by the drain
