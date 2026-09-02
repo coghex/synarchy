@@ -48,12 +48,34 @@ Checks:
 
 Usage: python3 tools/thought_probe.py [--port 9351]
 Exit 0 = pass.
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 import argparse, glob, socket, subprocess, sys, time
+import probe_protocol
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/thought_probe_engine.log"
+LOG_NAME = "thought_probe_engine.log"
+PROBE_KEY = "thought"
+PROBE_CHECKS = [
+    ("emit_roundtrip", "emit then drain returns the event"),
+    ("drain_destructive", "second drain is empty"),
+    ("catalogue_loaded", "catalogue has entries"),
+    ("state_thought_fired", "fired a 'state' thought"),
+    ("state_thought_moves_mood", "mood measurably moved"),
+    ("cold_thought_fired", "fired the COLD environmental thought"),
+    ("world_patches_restored", "phase 4's world patches are restored"),
+    ("mood_biases_valence", "low mood draws negative valence far more than high mood"),
+    ("thought_log_surfaces_text", "thought_log surfaces the emitted text"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, PROBE_CHECKS)
+CHECK_ID_BY_LABEL = {label: check_id for check_id, label in PROBE_CHECKS}
+_REPORTER: probe_protocol.Reporter | None = None
 
 # The exact identity phase 4 asserts on. thought.emit publishes category
 # and text only (scripts/thoughts.lua's tick) — never the catalogue
@@ -105,22 +127,37 @@ def bootstrap(port):
 
 
 def check(name, ok, detail=""):
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f"  ({detail})" if detail else ""))
-    return ok
+    if _REPORTER is None:
+        raise RuntimeError("thought reporter is not initialised")
+    payload = {"detail": str(detail)} if detail else None
+    return _REPORTER.check(CHECK_ID_BY_LABEL[name], bool(ok), name, payload)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9351)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
-    P = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(P, log=LOG)
+
+def _run(P: int, rep: probe_protocol.Reporter) -> int:
+    global _REPORTER
+    _REPORTER = rep
+    proc = boot(P, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     passed = True
     try:
         bootstrap(P)
 
-        print("1. thought.emit / drainEvents roundtrip")
+        rep.note("1. thought.emit / drainEvents roundtrip")
         r = send(P,
             "thought.emit(7,'a stray thought','random'); "
             "local e=thought.drainEvents(); if #e<1 then return 'NONE' end; "
@@ -130,7 +167,7 @@ def main():
         r2 = send(P, "return #thought.drainEvents()")
         passed &= check("second drain is empty", r2 == "0", r2)
 
-        print("2. data/thoughts.yaml loads")
+        rep.note("2. data/thoughts.yaml loads")
         n = send(P, "return require('scripts.thoughts').loadCatalogue()")
         passed &= check("catalogue has entries", int(float(n)) >= 10, n)
 
@@ -179,11 +216,11 @@ def main():
             return None, samples
 
         def report_samples(samples):
-            print(f"  polled {len(samples)} roll(s), every outcome in order:")
+            rep.note(f"  polled {len(samples)} roll(s), every outcome in order:")
             for i, s in enumerate(samples, 1):
-                print(f"    {i:3d}. {s}")
+                rep.note(f"    {i:3d}. {s}")
 
-        print("3. STATE thought: high pain -> 'state' category + mood moves")
+        rep.note("3. STATE thought: high pain -> 'state' category + mood moves")
         uid = int(float(send(P, "local u=unit.spawn('acolyte',1,0); return u")))
         time.sleep(0.8)
         # Fraction, not raw severity: painFrac = getPain()/PAIN_CEILING(5.0),
@@ -196,7 +233,7 @@ def main():
         # phase asserts that mood MOVES.
         hit, samples = roll_until(uid, lambda r: r.startswith("state|"))
         moodAfter = float(send(P, f"return require('scripts.brain').mood({uid})"))
-        print(f"  fired: {hit or 'NONE'}  mood {moodBefore:.4f} -> {moodAfter:.4f}")
+        rep.note(f"  fired: {hit or 'NONE'}  mood {moodBefore:.4f} -> {moodAfter:.4f}")
         if hit is None:
             report_samples(samples)
         passed &= check("fired a 'state' thought", hit is not None,
@@ -204,7 +241,7 @@ def main():
         passed &= check("mood measurably moved", abs(moodAfter - moodBefore) > 0.005,
                          f"{moodBefore:.4f} -> {moodAfter:.4f}")
 
-        print("4. ENVIRONMENTAL thought: arctic ambient -> the COLD thought")
+        rep.note("4. ENVIRONMENTAL thought: arctic ambient -> the COLD thought")
         uid2 = int(float(send(P, "local u=unit.spawn('acolyte',3,0); return u")))
         time.sleep(0.8)
         # Establish the conditions that decide which environmental
@@ -241,8 +278,8 @@ def main():
             # Restore before phase 5, which reuses this same Lua process.
             send(P, "world.getAmbientAt = _ORIG_AMBIENT; "
                     "world.getSunAngleAt = _ORIG_SUNANGLE; return 'ok'")
-        print(f"  fired: {hit or 'NONE'}")
-        print(f"  preconditions: pinnedMood={PHASE4_MOOD} {ctx}")
+        rep.note(f"  fired: {hit or 'NONE'}")
+        rep.note(f"  preconditions: pinnedMood={PHASE4_MOOD} {ctx}")
         if hit is None:
             report_samples(samples)
         passed &= check("fired the COLD environmental thought", hit is not None,
@@ -251,7 +288,7 @@ def main():
                     "..'|'..tostring(world.getSunAngleAt == _ORIG_SUNANGLE)")
         passed &= check("phase 4's world patches are restored", r == "true|true", r)
 
-        print("5. state of mind biases selection (mood-weighted valence)")
+        rep.note("5. state of mind biases selection (mood-weighted valence)")
         send(P, "require('scripts.thoughts').catalogue = {"
                 "{id='neg',valence='negative',weight=1,mood_delta=0,text='NEG'},"
                 "{id='pos',valence='positive',weight=1,mood_delta=0,text='POS'},"
@@ -280,13 +317,13 @@ def main():
 
         frac_low  = neg_fraction(0.05)
         frac_high = neg_fraction(0.95)
-        print(f"  negative-pick fraction: mood=0.05 -> {frac_low:.2f}, "
-              f"mood=0.95 -> {frac_high:.2f}")
+        rep.note(f"  negative-pick fraction: mood=0.05 -> {frac_low:.2f}, "
+                 f"mood=0.95 -> {frac_high:.2f}")
         passed &= check("low mood draws negative valence far more than high mood",
                          frac_low - frac_high > 0.3,
                          f"low={frac_low:.2f} high={frac_high:.2f}")
 
-        print("6. thought_log.lua data path: emit -> update() -> unitEntries()")
+        rep.note("6. thought_log.lua data path: emit -> update() -> unitEntries()")
         send(P, "engine.loadScript('scripts/thought_log.lua', 0.1); return 'ok'")
         time.sleep(0.3)
         send(P, f"thought.emit({uid3},'PROBE_CHECK_TEXT','random'); return 'ok'")
@@ -297,7 +334,7 @@ def main():
         passed &= check("thought_log surfaces the emitted text",
                          "PROBE_CHECK_TEXT" in r, r)
 
-        print(f"\n{'PASS' if passed else 'FAIL'} — thought system (#351)")
+        rep.note(f"\n{'PASS' if passed else 'FAIL'} — thought system (#351)")
         return 0 if passed else 1
     finally:
         quit_engine(P, proc)
