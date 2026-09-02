@@ -977,6 +977,34 @@ before touching each area:
   queries, and the frozen v1 DTO path: `docs/engine_contracts.md`
   §Location instances. Gates: hspec
   `--match "Location instance identity"`, `location_content_probe.py`.
+- **Location clearance is a CONJUNCTION (#917)** — a location clears
+  only when EVERY condition it actually authors is satisfied: #916's
+  death-only encounter, AND every GUARANTEED SIGNIFICANT item it
+  spawned has been taken. A location authoring one of those clears on
+  that one; a location authoring NEITHER never clears — the empty
+  conjunction is deliberately false, not vacuously true. `leCleared` is
+  now encounter completion ALONE and may be true while the location is
+  uncleared; `resolveLocationClearance` is the SINGLE writer of the
+  cleared transition and of the one instance-level notice latch
+  (`liClearEventEmitted`, generalized out of the encounter so a
+  significant-only location has one too). `significant: true` is legal
+  only on a fixed `kind: item` content entry AND its id must resolve
+  against the item registry — the loader rejects the whole file
+  otherwise, because an obligation that can never spawn is a
+  permanently unclearable location, not a skippable warning. A
+  `loot_table` draw can never decide what a location owes; the LOAD
+  path refuses a save whose UNSPAWNED obligation names a def this build
+  no longer registers, for the same reason. Obligations are created at
+  PLACEMENT with the expected cardinality, and an unspawned one — or
+  one marked taken that names no item — keeps the condition
+  incomplete. Provenance is the item's physical
+  `iiInstanceId`, never a ground id, and `taken` latches once at
+  `pickupGroundOnPage` — the first SUCCESSFUL pickup by any unit of any
+  faction — and nothing anywhere clears it. Full contract:
+  `docs/engine_contracts.md` §Guaranteed significant contents. Gates:
+  hspec `--match "Location significant contents"` /
+  `"compound clearance with significant contents"`,
+  `location_content_probe.py`, `expedition_loop_probe.py`.
 - **Location + river naming, etymology (#1101/#1102/#1104)** — a placed
   instance's `name` is rendered in its PAGE's own generated language
   (from the identity's #1092 provenance); `gloss` is the same
@@ -1055,12 +1083,14 @@ before touching each area:
   travel → discover → extract → return → invest**, run as ONE session by
   `tools/expedition_loop_probe.py` (manual-only, fixed-seed, ~15 min,
   two engine boots); `docs/expedition_gameplay_loop.md` is the design
-  authority (step 9's combat encounter and progression reward are
-  deferred, #916/#917). The gate pins: the colony comes from a real
-  `acolyte_portal` and its OWN roster, never hand-spawned units; the
-  expected end lifecycle is `discovered` with contents spawned exactly
-  once (a gate calling `setLocationLifecycle` would be asserting its own
-  writes); and every durable identity is re-checked in a FRESH PROCESS.
+  authority (step 9's combat encounter is deferred, #916). The gate
+  pins: the colony comes from a real `acolyte_portal` and its OWN
+  roster, never hand-spawned units; the expected end lifecycle is
+  `cleared` — the selected ruin is zero-occupant, so since #917
+  recovering its guaranteed significant item is the only outstanding
+  condition and therefore the only thing that can clear it (a gate
+  calling `setLocationLifecycle` would be asserting its own writes);
+  and every durable identity is re-checked in a FRESH PROCESS.
   It also runs an **unprepared control** — a second traveller sharing
   ONE identical leg, differing only in FOOD — which must end measurably
   worse off, which is what makes the scenario prove preparation matters

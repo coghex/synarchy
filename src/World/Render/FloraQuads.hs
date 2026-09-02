@@ -10,9 +10,9 @@ import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..), mkVertexWorld
                                            , tileWorldUV, noFaceMapVertexId)
-import World.Grid (gridToScreen, tileWidth, tileHeight, tileSideHeight
-                  , tileHalfWidth, tileHalfDiamondHeight
-                  , worldLayer, applyFacing, baseTileW, baseTileH)
+import World.Grid (worldLayer)
+import World.Render.FloraProjection
+    (FloraGeom(..), floraGeom, floraVisibleInSlice)
 import World.Types
 
 -- | One flora instance's world quad.
@@ -38,58 +38,24 @@ floraToQuad
     → Maybe SortableQuad
 floraToQuad lookupSlot _textures facing
             gx gy inst texHandle zSlice effDepth tileAlpha wrapOff texSizes =
-    let floraZ = fiZ inst
-        relativeZ = floraZ - zSlice
-    in if floraZ > zSlice ∨ floraZ < (zSlice - effDepth)
+    if not (floraVisibleInSlice zSlice effDepth inst)
        then Nothing
        else
-        let -- Look up actual texture dimensions, default to tile size
-            (texW, texH) = case HM.lookup texHandle texSizes of
-                Just (w, h) → (fromIntegral w, fromIntegral h)
-                Nothing     → (baseTileW, baseTileH)
-
-            -- Scale relative to the actual tile pixel size
-            scaleX = texW / baseTileW
-            scaleY = texH / baseTileH
-
-            quadW = tileWidth  * scaleX
-            quadH = tileHeight * scaleY
-
-            -- Base screen position of the tile
-            (rawX, rawY) = gridToScreen facing gx gy
-            (wrapX, wrapY) = wrapOff
-            heightOffset = fromIntegral relativeZ * tileSideHeight
-
-            -- Sub-tile offset in isometric space
-            subX = (fiOffU inst - fiOffV inst) * tileHalfWidth
-            subY = (fiOffU inst + fiOffV inst) * tileHalfDiamondHeight
-
-            -- The trunk base in the texture is a circle of diameter
-            -- fiBaseWidth pixels. The ground contact center is
-            -- baseRadius pixels up from the bottom of the texture.
-            baseRadius = fiBaseWidth inst * 0.5 / baseTileH * tileHeight
-
-            -- Center horizontally on the tile
-            drawX = rawX + wrapX + subX + (tileWidth - quadW) * 0.5
-
-            -- Anchor: the point (baseRadius up from quad bottom)
-            -- sits at the tile diamond center Y.
-            --   tile center Y = rawY - heightOffset + tileHalfDiamondHeight
-            --   anchor Y      = drawY + quadH - baseRadius
-            -- Solve for drawY:
-            drawY = rawY + wrapY - heightOffset + subY
-                  + tileHalfDiamondHeight - quadH + baseRadius
-
-            (fa, fb) = applyFacing facing gx gy
-            sortKey = fromIntegral (fa + fb)
-                    + fromIntegral relativeZ * 0.001
-                    + 0.0003
-                    + fiOffV inst * 0.00005
+        -- #1856: placement, size, anchor and painter depth all come
+        -- from the ONE shared projection boundary, so the selection
+        -- oracle and the designation marker cannot drift from what is
+        -- painted here.
+        let geom = floraGeom facing gx gy inst texHandle texSizes zSlice wrapOff
+            drawX = fgDrawX geom
+            drawY = fgDrawY geom
+            quadW = fgQuadW geom
+            quadH = fgQuadH geom
+            sortKey = fgSortKey geom
 
             actualSlot = lookupSlot texHandle
             fmSlot = noFaceMapVertexId
 
-            depth = zSlice - floraZ
+            depth = zSlice - fiZ inst
             fadeRange = max 1 effDepth
             fadeT = clamp01 (fromIntegral depth / fromIntegral fadeRange)
             hazeT = fadeT * fadeT * 0.6

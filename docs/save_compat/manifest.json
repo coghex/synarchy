@@ -2089,6 +2089,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/u1-generated-world-identity.expected.json"
         }
       ]
+    },
+    {
+      "id": "v1-location-significant-contents",
+      "description": "The #917 shape (world-pages v10): every placed ruin owes one GUARANTEED SIGNIFICANT item, so each location instance carries an obligation list keyed by slot -- the authored item def name, the spawned item's physical iiInstanceId, and its own taken latch -- plus the instance-level clearance-notice latch #917 generalized out of #916's encounter. The seed-42 32-chunk world places TWO ruins and this fixture holds one obligation of each kind: one whose item was picked up through the real ground boundary (taken), one still lying where it spawned (untaken). That split is what makes the v9->v10 migration's 'gains no obligations' contract a real decode outcome rather than a comparison of empty lists. leCleared is now encounter completion ALONE; the cleared lifecycle is the conjunction of the conditions a location actually authors.",
+      "declaredAt": "2026-09-01",
+      "declaredByIssue": 917,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 8,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "v1-location-significant-contents",
+          "path": "test-headless/data/save-compat/v1-location-significant-contents.bin",
+          "kind": "complete-session",
+          "sha256": "ae1453afbe726bf94a0076467ad009a7bccf6d85afbcf265babc95ba5b87ad32",
+          "sizeBytes": 2537939,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 32, 3), unit.spawn('acolyte', 0,0, 0, 'player'), then local p = world.waitForInit(8); return p ~= nil; local p = world.waitForInit(8); return p ~= nil, settled 45.0s and held until `(function() local la = world.listPlacedLocations() or {} if #la == 0 then return false end for _, e in ipairs(la) do world.loadChunksInRegion(e.cx, e.cy, e.cx, e.cy) end local uid = nil for _, u in ipairs(unit.getAllIds() or {}) do local i = unit.getInfo(u) if i and i.defName == 'acolyte' then uid = u break end end local taken, untaken = 0, 0 for _, e in ipairs(world.listPlacedLocations() or {}) do for _, s in ipairs(e.significant or {}) do if s.taken then taken = taken + 1 elseif s.item_instance_id then untaken = untaken + 1 end end end if taken == 0 and uid then for _, e in ipairs(world.listPlacedLocations() or {}) do for _, s in ipairs(e.significant or {}) do if s.item_instance_id and not s.taken then for _, g in ipairs(item.listGround() or {}) do if g.instanceId == s.item_instance_id then item.pickupGround(uid, g.id) return false end end end end end end return taken > 0 and untaken > 0 end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/v1-location-significant-contents.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -189,6 +189,7 @@ import qualified Test.Headless.UI.SettingsRevert
 import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
+import qualified Test.Headless.Lua.ChopGesture as LuaChopGesture
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
@@ -220,6 +221,8 @@ import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.Chop.Selection as ChopSelection
+import qualified Test.Headless.World.Chop.Authority as ChopAuthority
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
 import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
@@ -263,6 +266,7 @@ import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpaw
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
+import qualified Test.Headless.Building.CameraFacing as BuildingCameraFacing
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
@@ -278,6 +282,7 @@ import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
 import qualified Test.Headless.Item.NestedContents as NestedContents
 import qualified Test.Headless.Location.Instance as LocationInstance
+import qualified Test.Headless.Location.SignificantContents as LocationSignificantContents
 import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
@@ -592,6 +597,7 @@ main = hspec $ do
     describe "Preview.Zoom" PreviewZoom.spec
     describe "building asset schema and lifecycle roles"
         BuildingAssetSchema.spec
+    BuildingCameraFacing.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
@@ -808,6 +814,9 @@ main = hspec $ do
     SolarAttribution.spec
     describe "World.Render.DesignationFaceMap" DesignationFaceMap.spec
     describe "World.DesignationSeam" DesignationSeam.spec
+    ChopSelection.spec
+    ChopAuthority.spec
+    LuaChopGesture.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
     FloraIdentity.spec
     FloraIdentity.engineSpec
@@ -866,6 +875,7 @@ main = hspec $ do
     UnitFaction.spec
     ContainerKnowledge.spec
     LocationInstance.spec
+    LocationSignificantContents.spec
     LocationNaming.spec
     RiverNaming.spec
     LocationLootDeterminism.spec

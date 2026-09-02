@@ -98,10 +98,18 @@ cancelChopForInstance ws iid = do
         Just cd → setChopDesignations ws
             [(iid, chopDesignationTile cd, Nothing)]
 
--- | Cancel every designation standing on one tile — the player's
---   tile-granularity cancel gesture, which predates instance identity
---   and must keep clearing what the player pointed at. Accepts any
---   u-alias of the tile (#1175).
+-- | Cancel every designation standing on one tile.
+--
+--   NOT a player path (#1856): the player's erase gesture is
+--   screen-space and exact-identity, and reaches
+--   'setChopDesignations' through
+--   'World.Thread.Command.Cursor.Chop.handleWorldEraseChopInstancesCommand'.
+--   This is the AI's tile-granularity fallback — a chop job restored
+--   from a save knows its TILE but not which of that tile's plants it
+--   had claimed — and the drain that clears a pending legacy
+--   tile-keyed entry before it can resurrect. Do not route a new
+--   player interaction back through it. Accepts any u-alias of the
+--   tile (#1175).
 cancelChopAtTile ∷ WorldState → Int → Int → IO ()
 cancelChopAtTile ws gx gy = do
     worldSize ← pageWrapWorldSize ws

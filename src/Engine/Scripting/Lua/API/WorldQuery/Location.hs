@@ -43,8 +43,10 @@ import Location.Discovery (AwarenessHit(..), UnitSight(..), findAwareness)
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstanceId(..), LocationInstances
+    , LocationSignificantItem(..)
     , instancesToList, instancesInChunk, lookupLocationInstance
-    , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances )
+    , isDiscoveredLifecycle, lifecycleName, emptyLocationInstances
+    , locationAuthorsClearance, locationClearanceSatisfied )
 import Location.Bounds (AbsBounds(..))
 import Unit.Faction (isPlayerOwned)
 import Unit.LineOfSight (visibleTilesOnPage)
@@ -93,7 +95,16 @@ instancesForPage env mPage =
 --                          --   English reading (#1101), from the same
 --                          --   name expression. Mirrors
 --                          --   world.getIdentity's optional gloss.
---       contents_spawned } -- one-time content-spawn flag (#90)
+--       contents_spawned,  -- one-time content-spawn flag (#90)
+--       significant,       -- #917: array of this instance's guaranteed
+--                          --   significant-item obligations, in slot
+--                          --   order: { slot, item, taken } plus
+--                          --   `item_instance_id` once one is spawned
+--                          --   (OMITTED before that). Always present,
+--                          --   empty when the location owes none.
+--       authors_clearance, -- does it author ANY clearance condition?
+--       clearance_satisfied, -- is the compound predicate satisfied?
+--       clear_event_emitted } -- has its one clearance notice been spent?
 --
 --   #911 EXTENDED this table; it did not repurpose anything. `id` still
 --   means the DEFINITION id (that is what @scripts/locations.lua@ joins
@@ -286,6 +297,39 @@ pushInstanceTable inst = do
             Lua.rawseti (-2) index
         Lua.setfield (-2) "occupants"
         Lua.setfield (-2) "encounter"
+    -- #917: the guaranteed significant items this instance owes, in
+    -- authored slot order. ALWAYS an array (empty for a location that
+    -- authors none), so a caller can iterate without a nil check and
+    -- can tell "owes nothing" from "owes one, not yet spawned" — which
+    -- an omitted field could not express.
+    Lua.newtable
+    forM_ (zip [1 ..] (sortOn lsiSlot (liSignificant inst)))
+        $ \(index, entry) → do
+            Lua.newtable
+            pushIntField "slot" (lsiSlot entry)
+            Lua.pushstring (TE.encodeUtf8 (lsiItemDefName entry))
+            Lua.setfield (-2) "item"
+            -- OMITTED until the content spawn binds one, mirroring
+            -- `gloss` above: absence means "not spawned yet", which is
+            -- exactly what keeps the loot condition incomplete.
+            forM_ (lsiInstanceId entry) $ \iid → do
+                Lua.pushinteger (fromIntegral iid)
+                Lua.setfield (-2) "item_instance_id"
+            Lua.pushboolean (lsiTaken entry)
+            Lua.setfield (-2) "taken"
+            Lua.rawseti (-2) index
+    Lua.setfield (-2) "significant"
+    -- The compound clearance predicate, reported rather than left for
+    -- every caller to re-derive from `encounter` and `significant` — a
+    -- second implementation is what would drift. `authors_clearance`
+    -- distinguishes a location with no clearance condition at all
+    -- (which never clears) from one whose conditions are outstanding.
+    Lua.pushboolean (locationAuthorsClearance inst)
+    Lua.setfield (-2) "authors_clearance"
+    Lua.pushboolean (locationClearanceSatisfied inst)
+    Lua.setfield (-2) "clearance_satisfied"
+    Lua.pushboolean (liClearEventEmitted inst)
+    Lua.setfield (-2) "clear_event_emitted"
     Lua.newtable
     pushIntField "min_x" (abMinX ab)
     pushIntField "min_y" (abMinY ab)
