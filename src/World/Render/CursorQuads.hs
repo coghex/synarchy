@@ -36,6 +36,7 @@ import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Construct.Extent (structureDragExtent)
 import World.Construct.Plan (PlanWorld(..))
+import Structure.Render (translateQuad)
 import World.Render.StructureGhost
     ( GhostEnv(..), structureDesignationGhosts, structurePreviewGhosts )
 import World.Render.Camera (placementCamera, quadCacheMargins)
@@ -428,12 +429,25 @@ renderWorldCursorQuadsScanned env pageId worldState tileAlpha = do
                 , not (buildingStakedAt pageId defName (ax, ay)
                                         (bmInstances bm))
                 , let (chunkCoord, _) = globalToChunk ax ay
-                , Just _ ← [isChunkVisibleWrapped facing worldSize
-                                vb camX camY chunkCoord]
-                , Just quad ← [buildingGhostQuad lookupSlot noFaceMapVertexId
-                                   facing zSlice effectiveDepth texSizes
-                                   tileAlpha designatedGhostAlpha True def
-                                   ax ay (designationZ ax ay cd)]
+                , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
+                                      vb camX camY chunkCoord]
+                , Just built ← [buildingGhostQuad lookupSlot noFaceMapVertexId
+                                    facing zSlice effectiveDepth texSizes
+                                    tileAlpha designatedGhostAlpha True def
+                                    ax ay (designationZ ax ay cd)]
+                  -- Chunks are stored u-wrapped, so the visibility test
+                  -- answers through the NEAREST alias and hands back that
+                  -- alias's screen offset. The quad is built at the
+                  -- tile's own coordinates and then translated by it —
+                  -- the same two-step every other world annotation takes
+                  -- (#1175/#1176), and the same one
+                  -- 'World.Render.StructureGhost' takes for a structure
+                  -- ghost. 'translateQuad' moves positions only: sort
+                  -- key and world UV are untouched, so a seam-side ghost
+                  -- keeps sorting and lighting as the tile it plans on.
+                  -- Away from the seam the offset is (0, 0) and this is
+                  -- the identity.
+                , let quad = translateQuad wrapOff built
                 ]
 
     -- Hover quads (bg + fg) — used by both info and mine tools.

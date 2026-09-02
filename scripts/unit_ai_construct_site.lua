@@ -194,6 +194,25 @@ function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     end
 end
 
+-- Cancel one building job's designation on the JOB's own page.
+--
+-- `construction.cancelDesignation` resolves the ACTIVE page, which is
+-- not necessarily this job's and can move between two Lua calls in the
+-- same tick; a cancellation that landed elsewhere would erase a
+-- stranger's designation and leave this one standing.
+-- `cancelDesignationForRefund` is the page-scoped, exact-attempt pop
+-- this module already uses for structures. A building designation
+-- carries no receipt (its materials are delivered to the staked
+-- instance, not paid at designation time), so the popped job is
+-- discarded rather than refunded.
+function M.cancelBuildingJob(wid, job)
+    if construction.cancelDesignationForRefund then
+        construction.cancelDesignationForRefund(wid, job.x, job.y, job.attempt)
+    else
+        construction.cancelDesignation(job.x, job.y, job.attempt)
+    end
+end
+
 -- Is the building this job plans already standing at its anchor?
 --
 -- Derived from the world every time, never remembered (#1845). The
@@ -267,7 +286,15 @@ function M.stakeBuilding(wid, job, uid, info, now, params)
             return "working"
         end
         unit.stop(uid)
-        if building.spawn(job.building, job.x, job.y) then
+        -- PAGE-QUALIFIED (#1673): an unbound `building.spawn` resolves
+        -- whatever page is ACTIVE, which is not necessarily the one this
+        -- job is on and can move between two Lua calls in the same tick.
+        -- Naming `wid` makes the spawn validate against, and land on,
+        -- the page the completion, the cancellation and
+        -- `stakedBuildingAt` all target. Not the BOUND form: that one
+        -- additionally refuses a page that is not the visible one, and a
+        -- construction job on a loaded-but-hidden page is legitimate.
+        if building.spawn(job.building, job.x, job.y, wid) then
             job.staking = now
             return "working"
         end
@@ -283,7 +310,7 @@ function M.stakeBuilding(wid, job, uid, info, now, params)
             return "done"
         end
         core.reportFailure(uid, "Can't build here — blueprint cancelled")
-        construction.cancelDesignation(job.x, job.y, job.attempt)
+        M.cancelBuildingJob(wid, job)
         return "gone"
     end
     if M.stakedBuildingAt(wid, job) then
@@ -294,7 +321,7 @@ function M.stakeBuilding(wid, job, uid, info, now, params)
         return "working"
     end
     core.reportFailure(uid, "Can't build here — blueprint cancelled")
-    construction.cancelDesignation(job.x, job.y, job.attempt)
+    M.cancelBuildingJob(wid, job)
     return "gone"
 end
 

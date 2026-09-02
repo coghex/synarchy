@@ -70,10 +70,10 @@ import Engine.Core.Capability.RenderView
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), defaultCamera)
 import Item.Types (ItemInstance(..))
 import Engine.Graphics.Vulkan.Types.Vertex
-    (Vec2(..), Vec4(..), Vertex(..), noFaceMapVertexId)
+    (Vec2(..), Vec4(..), Vertex(..), WorldUV, noFaceMapVertexId)
 import Engine.Scene.Types (SortableQuad(..))
 import World.Chunk.Types
-    (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
+    (ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
@@ -83,7 +83,13 @@ import World.Flora.Types (emptyFloraChunkData)
 import World.Fluid.Types (emptyIceMap)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
+import World.Generate (viewDepth)
+import World.Grid (gridToWorld)
+import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.CursorQuads (renderWorldCursorQuadsScanned)
+import World.Render.ViewBounds (computeViewBounds)
+import World.Chunk.Types (ChunkCoord(..))
+import Structure.Render (translateQuad)
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
 import Structure.Types (emptyChunkStructures)
@@ -270,6 +276,33 @@ quadBounds q =
 
 quadTint ∷ SortableQuad → Vec4
 quadTint q = let Vertex { color = c } = sqV0 q in c
+
+quadWorldUV ∷ SortableQuad → WorldUV
+quadWorldUV q = let Vertex { worldUV = w } = sqV0 q in w
+
+-- | A world small enough that a camera parked one world-width away
+--   reaches the fixture chunk only through a non-identity u-alias.
+seamWorldChunks ∷ Int
+seamWorldChunks = 8
+
+-- | That camera position, in world units: parked on the fixture
+--   anchor's u-ALIAS one whole world to the east, the same way
+--   'Test.Headless.World.DesignationSeam' frames its own seam view.
+--   Reaching the real chunk from here needs a non-identity alias.
+seamCamPos ∷ (Float, Float)
+seamCamPos = gridToWorld FaceSouth
+                 (fst anchorTile + seamWorldChunks * chunkSize)
+                 (snd anchorTile)
+
+-- | The untranslated ghost the seam example compares against, built
+--   with that example's own camera and depth.
+designationGhostAt' ∷ Camera2D → Int → BuildingDef → Int → SortableQuad
+designationGhostAt' cam effD def z =
+    fromMaybe (error "the seam fixture ghost was culled by the camera band") $
+        buildingGhostQuad (const 0) noFaceMapVertexId (camFacing cam)
+                          (camZSlice cam) effD texSizes tileAlpha
+                          designatedGhostAlpha True def
+                          (fst anchorTile) (snd anchorTile) z
 
 quadAlpha ∷ SortableQuad → Float
 quadAlpha q = let Vec4 _ _ _ a = quadTint q in a
@@ -546,6 +579,48 @@ renderSpec = describe "the committed designation render pass" $ do
         fmap quadBounds (stakedGhostAt workDef (-3))
             `shouldSatisfy` maybe False (boundsAgree (quadBounds (V.head after)))
 
+    it "draws through the nearest u-alias at the seam" $ \env → do
+        -- Chunks are stored u-wrapped, so the visibility test answers
+        -- through the nearest alias and hands back that alias's screen
+        -- offset. Building the quad at the tile's own coordinates and
+        -- then DROPPING that offset selects a designation as visible
+        -- through one alias and draws it at the other — typically
+        -- offscreen. 'translateQuad' moves positions only.
+        ws ← scene env
+        writeIORef (wsGenParamsRef ws)
+            (Just defaultWorldGenParams { wgpWorldSize = seamWorldChunks })
+        -- Park the camera a whole world-width away, so the fixture
+        -- chunk is only reachable through a non-identity alias.
+        cam ← readIORef (rvCameraRef (toRenderViewCapability env))
+        let seamCam = cam { camPosition = seamCamPos }
+        writeIORef (rvCameraRef (toRenderViewCapability env)) seamCam
+        plan ws workDef
+        -- PRECONDITION, pinned rather than assumed: this fixture really
+        -- is at the seam. Without it a world-size or camera change would
+        -- quietly make the whole example an identity comparison.
+        (fbW, fbH) ← readIORef (rvFramebufferSizeRef (toRenderViewCapability env))
+        let effD = min viewDepth
+                     (max 8 (round (camZoom seamCam * 80.0 + 8.0 ∷ Float)))
+            vb = computeViewBounds seamCam fbW fbH effD
+            (cx, cy) = camPosition seamCam
+            offset = isChunkVisibleWrapped (camFacing seamCam) seamWorldChunks
+                         vb cx cy (ChunkCoord 0 0)
+        offset `shouldSatisfy` maybe False (≢ (0, 0))
+        (_, quads) ← cursorPass env ws
+        V.length quads `shouldBe` 1
+        let drawn = V.head quads
+            raw = designationGhostAt' seamCam effD workDef 0
+        -- Translated by exactly that offset…
+        Just (quadBounds drawn)
+            `shouldBe` fmap (\o → quadBounds (translateQuad o raw)) offset
+        -- …and demonstrably not left at the canonical position.
+        quadBounds drawn `shouldNotBe` quadBounds raw
+        -- translateQuad moves positions ONLY: the seam-side ghost keeps
+        -- sorting and lighting as the tile it plans on.
+        sqSortKey drawn `shouldBe` sqSortKey raw
+        quadWorldUV drawn `shouldBe` quadWorldUV raw
+        sqTexture drawn `shouldBe` sqTexture raw
+
     it "leaves a structure designation to its own ghost pass" $ \env → do
         ws ← scene env
         writeIORef (wsConstructDesignationsRef ws) $ HM.singleton anchorTile
@@ -622,10 +697,15 @@ stakePrelude = lns
     , "unit = { moveTo = function() moved = moved + 1 end,"
     , "         stop = function() end }"
     , "construction = {"
-    , "  setJobStatus = function(_w, x, y, st, at)"
-    , "    calls[#calls+1] = { 'status', x, y, st, at } end,"
+    , "  setJobStatus = function(w, x, y, st, at)"
+    , "    calls[#calls+1] = { 'status', x, y, st, at, w } end,"
+    -- The page-scoped, exact-attempt pop. The page-BLIND
+    -- cancelDesignation is recorded separately so a regression to it is
+    -- visible rather than silently equivalent.
+    , "  cancelDesignationForRefund = function(w, x, y, at)"
+    , "    calls[#calls+1] = { 'cancel', x, y, at, w }; return nil end,"
     , "  cancelDesignation = function(x, y, at)"
-    , "    calls[#calls+1] = { 'cancel', x, y, at } end }"
+    , "    calls[#calls+1] = { 'cancel-pageblind', x, y, at } end }"
     , "engine = { loadYaml = function() return nil end }"
     , "structure = nil"
     -- `world` is the building manager this fixture answers
@@ -634,8 +714,17 @@ stakePrelude = lns
     , "world = {}"
     , "spawnResult = 1"
     , "spawned = 0"
+    , "spawnPage = nil"
+    -- A page-less spawn resolves whatever page is ACTIVE, which is not
+    -- necessarily this job's. The fixture refuses one outright so a
+    -- regression to the three-argument call cannot pass.
     , "building = {"
-    , "  spawn = function() spawned = spawned + 1; return spawnResult end,"
+    , "  spawn = function(_d, _x, _y, page)"
+    , "    spawned = spawned + 1"
+    , "    spawnPage = page"
+    , "    assert(page ~= nil,"
+    , "      'a staking spawn must name the job\\'s own page')"
+    , "    return spawnResult end,"
     , "  getActiveIds = function()"
     , "    local ids = {}"
     , "    for i = 1, #world do ids[i] = i end"
@@ -757,6 +846,36 @@ stakeHandoffSpec =
         , "assert(stake(j, at(4, 7), 500) == 'done')"
         , "local c = only('status')"
         , "assert(c[4] == 'complete', 'the finished job is completed')"
+        ]
+
+    it "spawns, completes and cancels on the JOB's page, never the\
+       \ active one" $ runsOk $ lns
+        [ stakePrelude
+        -- #1673: `building.spawn` without a page resolves whatever page
+        -- is active, and active-page selection can move between two Lua
+        -- calls in one tick. Every page-scoped step of the hand-off —
+        -- the spawn, the completion, the cancellation and the stake
+        -- recognition — names 'p1', so a selection change cannot land
+        -- the building on one page while the job finishes on another.
+        , "local j = job()"
+        , "stake(j, at(4, 7), 100)"
+        , "assert(spawnPage == 'p1', 'the spawn names the job page, got '"
+        , "  .. tostring(spawnPage))"
+        , "world[1] = { defName = 'hall', gridX = 4, gridY = 7, page = 'p1' }"
+        , "assert(stake(j, at(4, 7), 101) == 'done')"
+        , "assert(only('status')[6] == 'p1', 'the completion names it too')"
+        -- …and the cancel path takes the page-scoped verb.
+        , "calls = {}"
+        , "local k = job()"
+        , "world = {}"
+        , "spawnResult = nil"
+        , "assert(stake(k, at(4, 7), 200) == 'gone')"
+        , "local seen = {}"
+        , "for _, c in ipairs(calls) do seen[c[1]] = c end"
+        , "assert(seen['cancel'], 'the page-scoped cancel is used')"
+        , "assert(seen['cancel'][5] == 'p1', 'and names the job page')"
+        , "assert(not seen['cancel-pageblind'],"
+        , "  'the page-blind cancelDesignation must not be reached')"
         ]
 
     it "still cancels a refused stake when nothing was built" $ runsOk $ lns
