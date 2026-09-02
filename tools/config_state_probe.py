@@ -43,6 +43,11 @@ Usage:
   python3 tools/config_state_probe.py [--port 9165]
 
 Exit 0 = all checks passed.
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 
@@ -52,9 +57,12 @@ import shutil
 import subprocess
 import sys
 import yaml
+import probe_protocol
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/config_state_probe_engine.log"
+LOG_NAME = "config_state_probe_engine.log"
+PROBE_KEY = "config_state"
 
 LOCAL_FILES = [
     "config/video.local.yaml",
@@ -83,11 +91,68 @@ RECORD_FILES = [
     "config/keybinds.legacy-neutral.local.yaml",
 ]
 
+PROBE_CHECKS = [
+    ("clean_before", "clean before the probe runs"),
+    ("video_local_absent", "config/video.local.yaml absent pre-boot (simulated fresh clone)"),
+    ("keybinds_local_absent", "config/keybinds.local.yaml absent pre-boot (simulated fresh clone)"),
+    ("notifications_local_absent", "config/notifications.local.yaml absent pre-boot (simulated fresh clone)"),
+    ("save_local_absent", "config/save.local.yaml absent pre-boot (simulated fresh clone)"),
+    ("video_legacy_absent", "config/video.yaml absent pre-boot (simulated fresh clone)"),
+    ("keybinds_legacy_absent", "config/keybinds.yaml absent pre-boot (simulated fresh clone)"),
+    ("notifications_legacy_absent", "config/notifications.yaml absent pre-boot (simulated fresh clone)"),
+    ("video_record_absent", "config/video.legacy-neutral.local.yaml absent pre-boot (simulated fresh clone)"),
+    ("keybinds_record_absent", "config/keybinds.legacy-neutral.local.yaml absent pre-boot (simulated fresh clone)"),
+    ("video_defaults", "video config == config/video_default.yaml"),
+    ("keybind_defaults", "keybinds == config/keybinds_default.yaml"),
+    ("notifications_materialized", "config/notifications.local.yaml materialized on boot"),
+    ("notification_defaults", "notification defaults come from the registry"),
+    ("building_popup_default", "building.popup comes from the registry (not the old drifted file)"),
+    ("unit_warning_pause_default", "unit_warning.pause comes from the registry (not the old drifted file)"),
+    ("save_defaults", "save config == config/save_default.yaml"),
+    ("autosave_default_off", "shipped autosave default is OFF"),
+    ("save_sparse_overlay", "sparse local file overlays ONE key, keeping the rest"),
+    ("save_invalid_fallback", "out-of-range key falls back to the effective default"),
+    ("save_default_api", "getDefaultSaveConfig reports the tracked template"),
+    ("video_not_written_on_load", "config/video.local.yaml not written just by loading"),
+    ("keybinds_not_written_on_load", "config/keybinds.local.yaml not written just by loading"),
+    ("save_not_written_on_load", "config/save.local.yaml not written just by loading"),
+    ("save_legacy_never_created", "no legacy config/save.yaml is ever created (the save family has no pre-#786 path)"),
+    ("video_legacy_not_resurrected", "legacy config/video.yaml not resurrected by a fresh-clone boot"),
+    ("keybinds_legacy_not_resurrected", "legacy config/keybinds.yaml not resurrected by a fresh-clone boot"),
+    ("notifications_legacy_not_resurrected", "legacy config/notifications.yaml not resurrected by a fresh-clone boot"),
+    ("video_record_not_created", "config/video.legacy-neutral.local.yaml not created by a fresh-clone boot (no legacy file to judge)"),
+    ("keybinds_record_not_created", "config/keybinds.legacy-neutral.local.yaml not created by a fresh-clone boot (no legacy file to judge)"),
+    ("video_local_written", "config/video.local.yaml written"),
+    ("video_legacy_unchanged", "legacy config/video.yaml NOT modified by save"),
+    ("video_scale_saved", "saved video config has the new ui_scale"),
+    ("keybinds_local_written", "config/keybinds.local.yaml written"),
+    ("keybinds_legacy_unchanged", "legacy config/keybinds.yaml NOT modified by save"),
+    ("keybinds_saved", "saved keybinds have the new moveUp"),
+    ("notification_override_accepted", "setNotificationOverrides accepted"),
+    ("notifications_legacy_unchanged", "legacy config/notifications.yaml NOT modified by save"),
+    ("notification_override_saved", "saved notification override took effect"),
+    ("save_config_accepted", "setSaveConfig accepted"),
+    ("save_local_written", "config/save.local.yaml written"),
+    ("save_disk_roundtrip", "saved autosave settings round-trip on disk"),
+    ("save_api_roundtrip", "saved autosave settings round-trip through the API"),
+    ("save_patch", "setSaveConfig is a patch, not a full overwrite"),
+    ("save_write_clamps", "setSaveConfig clamps an out-of-range value on write"),
+    ("save_path_no_legacy", "no legacy config/save.yaml created by the save path"),
+    ("save_only_override", "enabling autosave records ONLY that key"),
+    ("save_unset_from_template", "the unset keys still resolve from the tracked template"),
+    ("save_matching_removes_local", "a config matching the template removes the local file"),
+    ("clean_after", "clean after save round-trip"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, PROBE_CHECKS)
+CHECK_ID_BY_LABEL = {label: check_id for check_id, label in PROBE_CHECKS}
+_REPORTER: probe_protocol.Reporter | None = None
+
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
-          + (f"  ({detail})" if detail else ""))
-    return ok
+    if _REPORTER is None:
+        raise RuntimeError("config-state reporter is not initialised")
+    payload = {"detail": str(detail)} if detail else None
+    return _REPORTER.check(CHECK_ID_BY_LABEL[name], bool(ok), name, payload)
 
 
 def git_status(paths: list[str]) -> str:
@@ -157,13 +222,26 @@ def load_yaml(path: str):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9165)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    finally:
+        rep.close()
 
-    print("0. pre-check: clean git status for config/ + .gitignore")
+
+def _run(args, rep: probe_protocol.Reporter) -> int:
+    global _REPORTER
+    _REPORTER = rep
+    rep.note("0. pre-check: clean git status for config/ + .gitignore")
     pre = git_status(["config", ".gitignore"])
     passed = check("clean before the probe runs", pre == "", pre.strip())
     if not passed:
-        print("  Aborting: fix the tracked config state before running this probe.")
+        rep.abort("fix the tracked config state before running this probe")
         return 1
 
     backups = backup_local_files()
@@ -173,9 +251,10 @@ def main() -> int:
             passed &= check(f"{p} absent pre-boot (simulated fresh clone)",
                              not os.path.exists(p))
 
-        proc = boot(args.port, log=LOG)
+        proc = boot(args.port, log=rep.engine_log_path(LOG_NAME, LOG),
+                    args=rep.engine_args())
 
-        print("1. fresh-clone boot falls back to versioned templates")
+        rep.note("1. fresh-clone boot falls back to versioned templates")
         r = send(args.port,
                   "local w,h,wm,uis,vs = engine.getVideoConfig(); "
                   "return w..'|'..h..'|'..wm..'|'..uis..'|'..tostring(vs)")
@@ -299,18 +378,18 @@ def main() -> int:
         restore_legacy_files(backups)
         legacy_before = {p: open(p).read() for p in LEGACY_FILES}
 
-        print("2. exercise the public save paths")
+        rep.note("2. exercise the public save paths")
         send(args.port, "engine.setUIScale(1.23); return 'ok'")
         send(args.port, "engine.saveVideoConfig(); return 'ok'")
         passed &= check("config/video.local.yaml written",
                          os.path.exists("config/video.local.yaml"))
         passed &= check("legacy config/video.yaml NOT modified by save",
                          open("config/video.yaml").read() == legacy_before["config/video.yaml"])
-        if os.path.exists("config/video.local.yaml"):
-            saved = load_yaml("config/video.local.yaml")["video"]
-            passed &= check("saved video config has the new ui_scale",
-                             abs(float(saved["ui_scale"]) - 1.23) < 1e-6,
-                             str(saved.get("ui_scale")))
+        saved = (load_yaml("config/video.local.yaml")["video"]
+                 if os.path.exists("config/video.local.yaml") else {})
+        passed &= check("saved video config has the new ui_scale",
+                         abs(float(saved.get("ui_scale", 0)) - 1.23) < 1e-6,
+                         str(saved.get("ui_scale")))
 
         send(args.port, "engine.setActionKeys('moveUp', {'I','K'}); return 'ok'")
         send(args.port, "engine.saveKeybinds(); return 'ok'")
@@ -318,22 +397,22 @@ def main() -> int:
                          os.path.exists("config/keybinds.local.yaml"))
         passed &= check("legacy config/keybinds.yaml NOT modified by save",
                          open("config/keybinds.yaml").read() == legacy_before["config/keybinds.yaml"])
-        if os.path.exists("config/keybinds.local.yaml"):
-            saved_kb = load_yaml("config/keybinds.local.yaml")["keybinds"]
-            passed &= check("saved keybinds have the new moveUp",
-                             saved_kb.get("moveUp") == ["I", "K"],
-                             str(saved_kb.get("moveUp")))
+        saved_kb = (load_yaml("config/keybinds.local.yaml")["keybinds"]
+                    if os.path.exists("config/keybinds.local.yaml") else {})
+        passed &= check("saved keybinds have the new moveUp",
+                         saved_kb.get("moveUp") == ["I", "K"],
+                         str(saved_kb.get("moveUp")))
 
         r = send(args.port, "return tostring(engine.setNotificationOverrides({debug={log=true}}))")
         passed &= check("setNotificationOverrides accepted", r == "true", r)
         passed &= check("legacy config/notifications.yaml NOT modified by save",
                          open("config/notifications.yaml").read()
                              == legacy_before["config/notifications.yaml"])
-        if os.path.exists("config/notifications.local.yaml"):
-            saved_notif = load_yaml("config/notifications.local.yaml")["categories"]
-            passed &= check("saved notification override took effect",
-                             saved_notif.get("debug", {}).get("log") is True,
-                             str(saved_notif.get("debug")))
+        saved_notif = (load_yaml("config/notifications.local.yaml")["categories"]
+                       if os.path.exists("config/notifications.local.yaml") else {})
+        passed &= check("saved notification override took effect",
+                         saved_notif.get("debug", {}).get("log") is True,
+                         str(saved_notif.get("debug")))
 
         r = send(args.port,
                   "return tostring(engine.setSaveConfig("
@@ -341,13 +420,13 @@ def main() -> int:
         passed &= check("setSaveConfig accepted", r == "true", r)
         passed &= check("config/save.local.yaml written",
                          os.path.exists("config/save.local.yaml"))
-        if os.path.exists("config/save.local.yaml"):
-            saved_save = load_yaml("config/save.local.yaml")["save"]
-            passed &= check("saved autosave settings round-trip on disk",
-                             saved_save.get("enabled") is True
-                             and saved_save.get("interval_minutes") == 7
-                             and saved_save.get("rotation_depth") == 4,
-                             str(saved_save))
+        saved_save = (load_yaml("config/save.local.yaml")["save"]
+                      if os.path.exists("config/save.local.yaml") else {})
+        passed &= check("saved autosave settings round-trip on disk",
+                         saved_save.get("enabled") is True
+                         and saved_save.get("interval_minutes") == 7
+                         and saved_save.get("rotation_depth") == 4,
+                         str(saved_save))
         r = send(args.port,
                   "local c = engine.getSaveConfig(); "
                   "return tostring(c.enabled)..'|'..c.intervalMinutes"
@@ -377,12 +456,12 @@ def main() -> int:
         # change to the tracked template could never reach them again.
         os.remove("config/save.local.yaml")
         send(args.port, "engine.setSaveConfig({enabled = true}); return 'ok'")
-        if os.path.exists("config/save.local.yaml"):
-            only_override = load_yaml("config/save.local.yaml")["save"]
-            passed &= check("enabling autosave records ONLY that key",
-                             set(only_override) == {"enabled"}
-                             and only_override["enabled"] is True,
-                             str(only_override))
+        only_override = (load_yaml("config/save.local.yaml")["save"]
+                         if os.path.exists("config/save.local.yaml") else {})
+        passed &= check("enabling autosave records ONLY that key",
+                         set(only_override) == {"enabled"}
+                         and only_override.get("enabled") is True,
+                         str(only_override))
         r = send(args.port,
                   "local c = engine.getSaveConfig(); "
                   "return tostring(c.enabled)..'|'..c.intervalMinutes"
@@ -401,12 +480,12 @@ def main() -> int:
         quit_engine(args.port, proc)
         proc = None
 
-        print("3. post-check: saving local config state did not dirty git")
+        rep.note("3. post-check: saving local config state did not dirty git")
         post = git_status(["config", ".gitignore"])
         passed &= check("clean after save round-trip", post == "", post.strip())
 
-        print(f"\n  {'PASS' if passed else 'FAIL'}: config-state boundary"
-              + ("" if passed else " — see failures above"))
+        rep.note(f"\n  {'PASS' if passed else 'FAIL'}: config-state boundary"
+                 + ("" if passed else " — see failures above"))
         return 0 if passed else 1
     finally:
         if proc is not None:

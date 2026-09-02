@@ -13,8 +13,8 @@ each exists exactly once and neither half needs to import the other:
 
   * the repository anchors -- `REPO_ROOT`, the inventory doc, the
     `EngineEnv` declaration file and pattern -- and the live-field
-    derivation itself (`extract_record_fields`, re-exported from
-    tools/persistence_inventory_audit.py so this audit and the
+    derivation itself (`extract_record_fields`, imported from its one
+    owner, tools/persistence_inventory_audit_haskell.py, so this audit and the
     persistence-inventory audit can never drift onto two notions of
     "the live EngineEnv field set");
   * `scan_production_sources`, the ONE production-tree walk both
@@ -51,7 +51,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from persistence_inventory_audit import extract_record_fields  # type: ignore
+from persistence_inventory_audit_haskell import extract_record_fields  # type: ignore
 
 INVENTORY_PATH = REPO_ROOT / "docs" / "engineenv_capability_inventory.md"
 ENGINE_ENV_FILE = "src/Engine/Core/State.hs"
