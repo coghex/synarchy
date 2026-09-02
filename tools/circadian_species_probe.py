@@ -51,17 +51,45 @@ Six layers, cheapest/most isolated first:
      WAKE_PRESSURE_FRAC — and climb back toward standing.
 
 PASS = every check holds. FAIL = a concrete mismatch.
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 import argparse
 import glob
 import sys
 import time
+import probe_protocol
 from probelib import boot, quit_engine, send, init_arena, spawn_acolyte, poll_until, load_ai_stack
 
 PORT = 9016
 LOG = "/tmp/circadian_species_probe_engine.log"
+LOG_NAME = "circadian_species_probe_engine.log"
+PROBE_KEY = "circadian_species"
+CHECKS = [
+    ("species_urge_phases", "raw circadian urge is phase-shifted per species"),
+    ("utility_crossover", "go_to_sleep utility crosses over between species"),
+    ("wake_boundaries", "the automatic wake boundary is derived per species"),
+    ("bear_selects_sleep", "bear AI selects go_to_sleep at its dawn circadian peak"),
+    ("bear_reaches_sleeping", "bear reaches the real Sleeping pose through the reused art chain"),
+    ("public_wake_standing", "the public wake API returns the bear to standing"),
+    ("sleeps_through_dawn", "the dawn-centered bear sleeps through the old dawn wake boundary"),
+    ("wakes_at_own_boundary", "the bear wakes automatically at its own dusk boundary"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, CHECKS)
 ARENA = "arena"
+
+
+class ProbeSetupError(RuntimeError):
+    pass
+
+
+class ProbeObservationError(RuntimeError):
+    """A malformed value belonging to the currently active check."""
+
 
 # Mirrors scripts/unit_ai_sleep.lua's own WAKE_PRESSURE_FRAC. Layers E/F
 # must keep the sleeper strictly below it, or a pressure wake would be
@@ -103,9 +131,9 @@ def set_time_and_wait(hour: int, minute: int, target: float, tol: float = 0.01) 
             return False
 
     if not poll_until(10.0, check):
-        print(f"FAIL (setup): sun angle never settled near {target} after "
-              f"world.setTime('{ARENA}', {hour}, {minute})")
-        sys.exit(2)
+        raise ProbeSetupError(
+            f"sun angle never settled near {target} after "
+            f"world.setTime('{ARENA}', {hour}, {minute})")
 
 
 def urge(uid: int) -> float:
@@ -113,8 +141,8 @@ def urge(uid: int) -> float:
     try:
         return float(raw)
     except (TypeError, ValueError):
-        print(f"FAIL: getCircadianUrge({uid}) -> {raw!r}")
-        sys.exit(1)
+        raise ProbeObservationError(
+            f"getCircadianUrge({uid}) -> {raw!r}") from None
 
 
 def sleep_utility(uid: int, cfg_key: str) -> float:
@@ -126,8 +154,8 @@ def sleep_utility(uid: int, cfg_key: str) -> float:
     try:
         return float(raw)
     except (TypeError, ValueError):
-        print(f"FAIL: sleepUtility({uid}, {cfg_key}) -> {raw!r}")
-        sys.exit(1)
+        raise ProbeObservationError(
+            f"sleepUtility({uid}, {cfg_key}) -> {raw!r}") from None
 
 
 def max_stat(uid: int, name: str) -> float:
@@ -135,11 +163,9 @@ def max_stat(uid: int, name: str) -> float:
     try:
         v = float(raw)
     except (TypeError, ValueError):
-        print(f"FAIL (setup): {name} -> {raw!r}")
-        sys.exit(2)
+        raise ProbeSetupError(f"{name} -> {raw!r}")
     if v <= 0:
-        print(f"FAIL (setup): {name} = {v}, expected > 0")
-        sys.exit(2)
+        raise ProbeSetupError(f"{name} = {v}, expected > 0")
     return v
 
 
@@ -184,8 +210,8 @@ def wake_angle_for(def_name: str) -> float:
     try:
         return float(raw)
     except (TypeError, ValueError):
-        print(f"FAIL: wakeAngleFor({def_name!r}) -> {raw!r}")
-        sys.exit(1)
+        raise ProbeObservationError(
+            f"wakeAngleFor({def_name!r}) -> {raw!r}") from None
 
 
 def hold_pressure(uid: int, max_sp: float, frac: float = 0.4) -> None:
@@ -206,8 +232,8 @@ def pressure_frac(uid: int, max_sp: float) -> float:
     try:
         return float(raw) / max_sp
     except (TypeError, ValueError):
-        print(f"FAIL: sleep_pressure({uid}) -> {raw!r}")
-        sys.exit(1)
+        raise ProbeObservationError(
+            f"sleep_pressure({uid}) -> {raw!r}") from None
 
 
 def wait_asleep(uid: int, timeout: float = 60.0) -> bool:
@@ -232,11 +258,24 @@ def wait_for_ai_state(uid: int, timeout: float = 10.0) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9016)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
-    global PORT
-    PORT = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
 
-    proc = boot(PORT, log=LOG)
+
+def _run(port: int, rep: probe_protocol.Reporter) -> int:
+    global PORT
+    PORT = port
+
+    proc = boot(PORT, log=rep.engine_log_path(LOG_NAME, LOG),
+                args=rep.engine_args())
     try:
         bootstrap_defs(PORT)
         init_arena(PORT, name=ARENA)
@@ -247,7 +286,7 @@ def main() -> int:
         aid = spawn_acolyte(PORT, 0, 0)
         bid = spawn_acolyte(PORT, 0, 0, unit="bear_brown", clear_water=False)
         if not wait_for_ai_state(bid):
-            print("FAIL (setup): bear_brown never got AI state")
+            rep.abort("bear_brown never got AI state")
             return 2
         # Save the real update closure (mirrors tools/sleep_probe.py) so
         # phase C below can restore genuine AI-driven decisions after
@@ -260,28 +299,23 @@ def main() -> int:
         DUSK, DAWN = 0.75, 0.25
 
         # ---- A. Raw urge: opposite phases ------------------------------
-        set_time_and_wait(18, 0, DUSK)
-        a_urge_dusk, b_urge_dusk = urge(aid), urge(bid)
-        set_time_and_wait(6, 0, DAWN)
-        a_urge_dawn, b_urge_dawn = urge(aid), urge(bid)
+        try:
+            set_time_and_wait(18, 0, DUSK)
+            a_urge_dusk, b_urge_dusk = urge(aid), urge(bid)
+            set_time_and_wait(6, 0, DAWN)
+            a_urge_dawn, b_urge_dawn = urge(aid), urge(bid)
+        except ProbeObservationError as error:
+            rep.check("species_urge_phases", False, str(error),
+                      {"error": str(error)})
+            return 1
 
-        if a_urge_dusk < 0.95:
-            print(f"FAIL: acolyte urge at dusk = {a_urge_dusk}, expected ~peak")
+        urge_ok = (a_urge_dusk >= 0.95 and b_urge_dusk <= 0.05
+                   and a_urge_dawn <= 0.05 and b_urge_dawn >= 0.95)
+        if not rep.check("species_urge_phases", urge_ok,
+                         "raw circadian urge is phase-shifted per species",
+                         {"acolyte_dusk": a_urge_dusk, "bear_dusk": b_urge_dusk,
+                          "acolyte_dawn": a_urge_dawn, "bear_dawn": b_urge_dawn}):
             return 1
-        if b_urge_dusk > 0.05:
-            print(f"FAIL: bear urge at dusk = {b_urge_dusk}, expected ~flat "
-                  f"(bear's circadian_center is dawn, not dusk)")
-            return 1
-        if a_urge_dawn > 0.05:
-            print(f"FAIL: acolyte urge at dawn = {a_urge_dawn}, expected ~flat")
-            return 1
-        if b_urge_dawn < 0.95:
-            print(f"FAIL: bear urge at dawn = {b_urge_dawn}, expected ~peak "
-                  f"(bear_brown.circadian_center = 0.25 in unit_resource_config.lua)")
-            return 1
-        print(f"PASS: raw circadian urge is phase-shifted per species — "
-              f"dusk: acolyte={a_urge_dusk:.3f} bear={b_urge_dusk:.3f}; "
-              f"dawn: acolyte={a_urge_dawn:.3f} bear={b_urge_dawn:.3f}")
 
         # ---- B. sleepUtility: hold deficit + exhaustion fixed and
         # identical for both units so only the urge term can move the
@@ -295,34 +329,27 @@ def main() -> int:
             send(PORT, f"unit.setStat({uid}, 'exhaustion', {max_exh})",
                  expect_result=False)  # fully rested -> exhaustionDeficit term = 0
 
-        set_time_and_wait(18, 0, DUSK)
-        a_util_dusk = sleep_utility(aid, "acolyte")
-        b_util_dusk = sleep_utility(bid, "bear_brown")
-        set_time_and_wait(6, 0, DAWN)
-        a_util_dawn = sleep_utility(aid, "acolyte")
-        b_util_dawn = sleep_utility(bid, "bear_brown")
+        try:
+            set_time_and_wait(18, 0, DUSK)
+            a_util_dusk = sleep_utility(aid, "acolyte")
+            b_util_dusk = sleep_utility(bid, "bear_brown")
+            set_time_and_wait(6, 0, DAWN)
+            a_util_dawn = sleep_utility(aid, "acolyte")
+            b_util_dawn = sleep_utility(bid, "bear_brown")
+        except ProbeObservationError as error:
+            rep.check("utility_crossover", False, str(error),
+                      {"error": str(error)})
+            return 1
 
-        if not (a_util_dusk > a_util_dawn + 1.0):
-            print(f"FAIL: acolyte sleepUtility should be higher at its own "
-                  f"dusk peak than at dawn (dusk={a_util_dusk:.3f}, "
-                  f"dawn={a_util_dawn:.3f})")
+        utility_ok = (a_util_dusk > a_util_dawn + 1.0
+                      and b_util_dawn > b_util_dusk + 1.0
+                      and a_util_dusk > b_util_dusk
+                      and b_util_dawn > a_util_dawn)
+        if not rep.check("utility_crossover", utility_ok,
+                         "go_to_sleep utility crosses over between species",
+                         {"acolyte_dusk": a_util_dusk, "bear_dusk": b_util_dusk,
+                          "acolyte_dawn": a_util_dawn, "bear_dawn": b_util_dawn}):
             return 1
-        if not (b_util_dawn > b_util_dusk + 1.0):
-            print(f"FAIL: bear sleepUtility should be higher at its own "
-                  f"dawn peak than at dusk (dawn={b_util_dawn:.3f}, "
-                  f"dusk={b_util_dusk:.3f})")
-            return 1
-        if not (a_util_dusk > b_util_dusk):
-            print(f"FAIL: at dusk, acolyte's own-peak utility ({a_util_dusk:.3f}) "
-                  f"should exceed bear's off-peak utility ({b_util_dusk:.3f})")
-            return 1
-        if not (b_util_dawn > a_util_dawn):
-            print(f"FAIL: at dawn, bear's own-peak utility ({b_util_dawn:.3f}) "
-                  f"should exceed acolyte's off-peak utility ({a_util_dawn:.3f})")
-            return 1
-        print(f"PASS: go_to_sleep utility crosses over between species — "
-              f"dusk: acolyte={a_util_dusk:.3f} bear={b_util_dusk:.3f}; "
-              f"dawn: acolyte={a_util_dawn:.3f} bear={b_util_dawn:.3f}")
 
         # ---- C. #1945: the automatic wake boundary is derived from the
         # def's own circadian phase, through scripts/circadian.lua's
@@ -331,27 +358,22 @@ def main() -> int:
         # here through the module's own lookup so the three cases —
         # unchanged acolyte, moved bear, unconfigured def — are checked
         # against the same code the sleeping unit runs. ------------------
-        a_wake = wake_angle_for("acolyte")
-        b_wake = wake_angle_for("bear_brown")
-        d_wake = wake_angle_for(UNCONFIGURED_DEF)
-        if abs(a_wake - DAWN) > 1e-9:
-            print(f"FAIL: acolyte wake boundary = {a_wake}, expected {DAWN} "
-                  f"unchanged (circadian_center 0.75 + half a day)")
+        try:
+            a_wake = wake_angle_for("acolyte")
+            b_wake = wake_angle_for("bear_brown")
+            d_wake = wake_angle_for(UNCONFIGURED_DEF)
+        except ProbeObservationError as error:
+            rep.check("wake_boundaries", False, str(error),
+                      {"error": str(error)})
             return 1
-        if abs(b_wake - DUSK) > 1e-9:
-            print(f"FAIL: bear_brown wake boundary = {b_wake}, expected {DUSK} "
-                  f"— half a day past its own dawn-centered peak, so the "
-                  f"0.25 crossing it beds down on no longer wakes it")
+        wake_ok = (abs(a_wake - DAWN) <= 1e-9
+                   and abs(b_wake - DUSK) <= 1e-9
+                   and abs(d_wake - DAWN) <= 1e-9)
+        if not rep.check("wake_boundaries", wake_ok,
+                         "the automatic wake boundary is per-species",
+                         {"acolyte": a_wake, "bear": b_wake,
+                          "unconfigured": d_wake}):
             return 1
-        if abs(d_wake - DAWN) > 1e-9:
-            print(f"FAIL: {UNCONFIGURED_DEF} (no circadian_center) wake "
-                  f"boundary = {d_wake}, expected {DAWN} — an unconfigured "
-                  f"def must keep today's behavior via circadian.lua's "
-                  f"DEFAULT_CENTER, not silently change")
-            return 1
-        print(f"PASS: the automatic wake boundary is per-species — "
-              f"acolyte={a_wake:.3f} bear={b_wake:.3f} "
-              f"{UNCONFIGURED_DEF}(default)={d_wake:.3f}")
 
         # ---- D. End to end: a fresh bear actually seeks + reaches real
         # sleep at its circadian peak, exercising the new bear_brown.yaml
@@ -365,33 +387,31 @@ def main() -> int:
              expect_result=False)  # deficit = 0.6, comfortably above the 0.35 floor
         set_time_and_wait(6, 0, DAWN)  # bear's circadian peak
 
-        if not poll_until(15.0, lambda: get_ai_field(bid2, "currentAction") == "go_to_sleep"):
-            print(f"FAIL: bear never picked go_to_sleep at its dawn peak "
-                  f"(currentAction={get_ai_field(bid2, 'currentAction')!r})")
+        selected = poll_until(15.0, lambda: get_ai_field(bid2, "currentAction") == "go_to_sleep")
+        if not rep.check("bear_selects_sleep", bool(selected),
+                         "bear_brown's AI selected go_to_sleep at its dawn peak",
+                         {"current_action": get_ai_field(bid2, "currentAction")}):
             return 1
-        print("PASS: bear_brown's AI selected go_to_sleep at its circadian peak (dawn)")
 
         if not poll_until(30.0, lambda: get_ai_field(bid2, "sleepPhase")
                           in ("lying_down", "sleeping")):
-            print(f"FAIL: bear's sleepPhase never reached lying_down "
-                  f"(sleepPhase={get_ai_field(bid2, 'sleepPhase')!r} "
-                  f"pose={get_pose(bid2)!r})")
+            rep.check("bear_reaches_sleeping", False,
+                      "bear sleep phase never reached lying_down",
+                      {"sleep_phase": get_ai_field(bid2, "sleepPhase"),
+                       "pose": get_pose(bid2)})
             return 1
-        if not wait_for_pose(bid2, "sleeping", timeout=10.0):
-            print(f"FAIL: bear never reached the real Sleeping pose "
-                  f"(pose={get_pose(bid2)!r}) — check bear_brown.yaml's "
-                  f"crouching/crawling/sleeping state_animations aliases")
+        sleeping = wait_for_pose(bid2, "sleeping", timeout=10.0)
+        if not rep.check("bear_reaches_sleeping", sleeping,
+                         "bear_brown reached the real Sleeping pose via the reused art",
+                         {"pose": get_pose(bid2)}):
             return 1
-        print("PASS: bear_brown reached the real Sleeping pose via the "
-              "reused sit/lie/sleep art (standing -> crouching -> "
-              "crawling -> sleeping)")
 
         send(PORT, f"require('scripts.unit_ai').wakeUnit({bid2})", expect_result=False)
-        if not wait_for_pose(bid2, "standing", timeout=15.0):
-            print(f"FAIL: bear never woke back to standing "
-                  f"(pose={get_pose(bid2)!r})")
+        standing = wait_for_pose(bid2, "standing", timeout=15.0)
+        if not rep.check("public_wake_standing", standing,
+                         "bear_brown woke via the public API back to standing",
+                         {"pose": get_pose(bid2)}):
             return 1
-        print("PASS: bear_brown woke via the public wake API back to standing")
 
         # ---- E. #1945 regression: carry the sleeping bear ACROSS 0.25
         # (the old universal dawn wake, and its own urge peak) and
@@ -406,52 +426,49 @@ def main() -> int:
         hold_pressure(bid2, max_sp2)
         set_time_and_wait(4, 48, 0.20)  # pre-0.25, inside the bear's urge window
         if not wait_asleep(bid2):
-            print(f"FAIL (setup): bear never returned to sleep before dawn "
-                  f"(sleepPhase={get_ai_field(bid2, 'sleepPhase')!r} "
-                  f"pose={get_pose(bid2)!r})")
+            rep.abort("bear never returned to sleep before dawn",
+                      {"sleep_phase": get_ai_field(bid2, "sleepPhase"),
+                       "pose": get_pose(bid2)})
             return 2
         hold_pressure(bid2, max_sp2)
         if not poll_until(15.0, lambda: (lambda a: a is not None
                                          and 0.10 <= a < DAWN)(
                               ai_field_number(bid2, "sleepLastSunAngle"))):
-            print(f"FAIL (setup): no sleeping-phase tick sampled a pre-0.25 "
-                  f"sun angle (sleepLastSunAngle="
-                  f"{get_ai_field(bid2, 'sleepLastSunAngle')!r})")
+            rep.abort("no sleeping-phase tick sampled a pre-dawn sun angle",
+                      {"sun_angle": get_ai_field(bid2, "sleepLastSunAngle")})
             return 2
         if not ai_field_is_unset(bid2, "sleepWakeRequested"):
-            print("FAIL (setup): a wake request is still pending, so an "
-                  "automatic-wake assertion would prove nothing")
+            rep.abort("a wake request was still pending before the dawn crossing")
             return 2
         baseline = ai_field_number(bid2, "sleepLastSunAngle")
 
         set_time_and_wait(7, 12, 0.30)  # past 0.25, still short of 0.75
         if not poll_until(15.0, lambda: (lambda a: a is not None and a >= DAWN)(
                               ai_field_number(bid2, "sleepLastSunAngle"))):
-            print(f"FAIL: no sleeping-phase tick sampled past 0.25, so the "
-                  f"crossing was never presented to the detector "
-                  f"(sleepLastSunAngle="
-                  f"{get_ai_field(bid2, 'sleepLastSunAngle')!r})")
+            rep.check("sleeps_through_dawn", False,
+                      "the dawn crossing was never presented to the detector",
+                      {"sun_angle": get_ai_field(bid2, "sleepLastSunAngle")})
             return 1
         # Give the reverse pose chain a couple of ticks to show itself, so
         # a wake that HAS started cannot be missed by reading too early.
         time.sleep(3.0)
-        frac = pressure_frac(bid2, max_sp2)
+        try:
+            frac = pressure_frac(bid2, max_sp2)
+        except ProbeObservationError as error:
+            rep.check("sleeps_through_dawn", False, str(error),
+                      {"error": str(error)})
+            return 1
         phase, pose = get_ai_field(bid2, "sleepPhase"), get_pose(bid2)
         if frac >= WAKE_PRESSURE_FRAC:
-            print(f"FAIL (setup): sleep_pressure reached {frac:.3f} of max, "
-                  f"at or past WAKE_PRESSURE_FRAC — a wake here would be the "
-                  f"pressure condition, not the boundary")
+            rep.abort("sleep pressure reached the wake threshold during the dawn check",
+                      {"fraction": frac, "threshold": WAKE_PRESSURE_FRAC})
             return 2
-        if phase != "sleeping" or pose != "sleeping":
-            print(f"FAIL: bear_brown woke on the 0.25 crossing "
-                  f"(sleepPhase={phase!r} pose={pose!r}) after sampling "
-                  f"{baseline:.3f} — 0.25 is its own circadian PEAK; its "
-                  f"wake boundary is {b_wake:.3f}")
+        stayed_asleep = phase == "sleeping" and pose == "sleeping"
+        if not rep.check("sleeps_through_dawn", stayed_asleep,
+                         "bear_brown slept through the dawn crossing",
+                         {"baseline": baseline, "fraction": frac,
+                          "sleep_phase": phase, "pose": pose}):
             return 1
-        print(f"PASS: bear_brown slept through the 0.25 crossing "
-              f"(sampled {baseline:.3f} -> "
-              f"{ai_field_number(bid2, 'sleepLastSunAngle'):.3f}, "
-              f"sleep_pressure {frac:.3f} of max)")
 
         # ---- F. …and wakes on its OWN boundary (0.75) with no wakeUnit
         # call and pressure still below WAKE_PRESSURE_FRAC. --------------
@@ -460,48 +477,53 @@ def main() -> int:
         if not poll_until(15.0, lambda: (lambda a: a is not None
                                          and 0.55 <= a < DUSK)(
                               ai_field_number(bid2, "sleepLastSunAngle"))):
-            print(f"FAIL (setup): no sleeping-phase tick sampled a pre-0.75 "
-                  f"sun angle (sleepLastSunAngle="
-                  f"{get_ai_field(bid2, 'sleepLastSunAngle')!r} "
-                  f"sleepPhase={get_ai_field(bid2, 'sleepPhase')!r})")
+            rep.abort("no sleeping-phase tick sampled a pre-dusk sun angle",
+                      {"sun_angle": get_ai_field(bid2, "sleepLastSunAngle"),
+                       "sleep_phase": get_ai_field(bid2, "sleepPhase")})
             return 2
         if not ai_field_is_unset(bid2, "sleepWakeRequested"):
-            print("FAIL (setup): a wake request is pending; this case must "
-                  "prove the AUTOMATIC wake, not the public API")
+            rep.abort("a wake request was pending before the automatic dusk wake")
             return 2
 
         set_time_and_wait(19, 12, 0.80)  # across 0.75
         if not poll_until(20.0, lambda: get_ai_field(bid2, "sleepPhase") == "waking"):
-            print(f"FAIL: bear_brown did not wake on its own 0.75 boundary "
-                  f"(sleepPhase={get_ai_field(bid2, 'sleepPhase')!r} "
-                  f"pose={get_pose(bid2)!r} sleepLastSunAngle="
-                  f"{get_ai_field(bid2, 'sleepLastSunAngle')!r})")
+            rep.check("wakes_at_own_boundary", False,
+                      "bear_brown did not begin waking at its own dusk boundary",
+                      {"sleep_phase": get_ai_field(bid2, "sleepPhase"),
+                       "pose": get_pose(bid2),
+                       "sun_angle": get_ai_field(bid2, "sleepLastSunAngle")})
             return 1
-        frac = pressure_frac(bid2, max_sp2)
+        try:
+            frac = pressure_frac(bid2, max_sp2)
+        except ProbeObservationError as error:
+            rep.check("wakes_at_own_boundary", False, str(error),
+                      {"error": str(error)})
+            return 1
         if frac >= WAKE_PRESSURE_FRAC:
-            print(f"FAIL: sleep_pressure was {frac:.3f} of max at the wake, "
-                  f"so the pressure condition could have fired instead of "
-                  f"the boundary")
+            rep.check("wakes_at_own_boundary", False,
+                      "sleep pressure could have caused the dusk wake",
+                      {"fraction": frac, "threshold": WAKE_PRESSURE_FRAC})
             return 1
         if not ai_field_is_unset(bid2, "sleepWakeRequested"):
-            print("FAIL: a wake request appeared, so this was not the "
-                  "automatic time-of-day wake")
+            rep.check("wakes_at_own_boundary", False,
+                      "a public wake request appeared during the automatic wake")
             return 1
         # Full pressure now, so the reverse pose chain can finish without
         # go_to_sleep immediately re-committing at the top of it.
         send(PORT, f"unit.setStat({bid2}, 'sleep_pressure', {max_sp2})",
              expect_result=False)
-        if not wait_for_pose(bid2, "standing", timeout=20.0):
-            print(f"FAIL: bear_brown began waking on its 0.75 boundary but "
-                  f"never climbed back to standing (pose={get_pose(bid2)!r})")
+        returned = wait_for_pose(bid2, "standing", timeout=20.0)
+        if not rep.check("wakes_at_own_boundary", returned,
+                         "bear_brown woke automatically at dusk and returned to standing",
+                         {"fraction": frac, "pose": get_pose(bid2)}):
             return 1
-        print(f"PASS: bear_brown woke automatically on its own 0.75 boundary "
-              f"— no wakeUnit, sleep_pressure {frac:.3f} of max — and "
-              f"returned to standing")
 
-        print("\nPASS: all #613 species-specific circadian curve and #1945 "
-              "per-species wake-boundary checks held")
+        rep.note("\nPASS: all #613 species-specific circadian curve and #1945 "
+                 "per-species wake-boundary checks held")
         return 0
+    except ProbeSetupError as error:
+        rep.abort(str(error))
+        return 2
     finally:
         quit_engine(PORT, proc)
 

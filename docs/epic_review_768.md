@@ -20,11 +20,11 @@ concrete precondition
 
 ## Status
 
-- [ ] ER-1. Epic #768 leaves its completed roadmap unchecked and pins compatibility to the wrong version
+- [x] ER-1. Epic #768 leaves its completed roadmap unchecked and pins compatibility to the wrong version — [#768]
 
 ## 1. Epic closure and compatibility steering
 
-### ER-1. Epic #768 leaves its completed roadmap unchecked and pins compatibility to the wrong version
+### [#768] ER-1. Epic #768 leaves its completed roadmap unchecked and pins compatibility to the wrong version
 
 > **Captured note:** Epic #768 is closed and its owner closure comment confirms
 > that all eleven children landed, but every child remains unchecked and the

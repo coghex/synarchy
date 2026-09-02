@@ -1227,10 +1227,14 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`blood_impact`, `circadian`, `concussion_revive`, `disarm`, `lua_strict_msg`,
-`meal_waste`, `position_hold`, `remote_warning_page_guard`, `role`,
-`state_of_mind`, `text_encoding` and `thermo_altitude` are the migrated probes
-today; later changes normally migrate one at a time.
+`blood_decal`, `blood_impact`, `circadian`, `circadian_species`,
+`collapse_crawl`, `concussion_revive`, `config_state`, `disarm`, `injury_log`,
+`lua_orphan_prune`, `lua_strict_msg`, `machine_shop`, `meal_waste`,
+`mental_efficiency`, `position_hold`, `remote_warning_page_guard`, `role`,
+`state_of_mind`, `text_encoding`, `thermo_altitude`, `thought`, and `wire` are
+the migrated probes today. Later changes normally migrate one at a time; this
+ten-probe batch was an explicit operator request so the related mechanical
+work could land in one pull request.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes
@@ -1417,6 +1421,17 @@ writes nothing. A harness error is deliberately NOT gated: it reads no cohort
 and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
+**Where the promotion report lives (#2034).** The assessment and the rendering
+are `tools/probe_census_promotion.py`'s, not `probe_census.py`'s: they are
+read-only over a census the CLI has already loaded and validated, so keeping
+them out of the file that owns the schema, the lock and the atomic write is
+what makes "reporting writes no census bytes" structural rather than
+disciplined. The command, its arguments and incompatibilities, its exit codes,
+the human table and the `--json` document are unchanged by the move. That
+module has no CLI of its own, and the dependency runs one way (promotion ->
+census), with `--promotion-candidates`' dispatch importing it at its point of
+use so no cycle exists.
+
 **CI-promotion candidates (#1441).** `--promotion-candidates` reports what a
 person needs in front of them before editing `tools/ci_probes.py`, and it edits
 nothing itself. Promotion has two halves and only one of them is measurable:
@@ -1555,6 +1570,19 @@ repair, never a write precondition.
 Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
+
+Since #2034 that gate is composed of two case owners: its own, and
+`tools/test_probe_census_promotion.py`, whose five promotion cases it runs
+from that module's `CASES` inventory into the same `selftestlib.FAILURES`
+list — so a promotion regression still fails it, and a case added there joins
+it without being listed twice. `tools/probe_census_selftest_support.py` is the
+ONE source of the synthetic world both owners drive: the registries and the
+fixture that installs them, the scratch tree and scratch repository, the
+in-process CLI driver, the realistic result document, the fixed evaluation
+moment and `expect_refusal`. Like `tools/test_probe_census_page.py`, the
+promotion owner is separately runnable for iteration (`python3
+tools/test_probe_census_promotion.py`) and is a step in NEITHER `make ci` nor
+GitHub CI — `test_probe_census.py` is the registered one.
 
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
 self-test, and since #1429 it runs unconditionally in CI's probe-runner
