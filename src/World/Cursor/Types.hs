@@ -43,6 +43,12 @@ data CursorState = CursorState
     -- | Construction-designation tool (#95): first-click anchor tile.
     --   Mirrors 'mineAnchor' — the render pass previews the
     --   anchor→hover rectangle until the second click commits it.
+    --
+    --   Unlike 'mineAnchor' this is only HALF of what a structure
+    --   preview needs (#1846). With no anchor and a piece armed in
+    --   'constructStructureTarget', the render pass previews the single
+    --   hovered tile; with both, the whole extent. With no armed piece
+    --   it previews nothing, anchor or not.
     , constructAnchor ∷ Maybe (Int, Int)
     -- | Ghost texture for committed BUILDING construction designations.
     --   Set from Lua like the cursor textures.

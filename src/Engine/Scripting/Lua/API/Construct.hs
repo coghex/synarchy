@@ -678,7 +678,8 @@ constructSetDesignateTextureFn wsc = do
     return 0
 
 -- | construction.setLineMode(pageId, enabled) — wire path tool (#359):
---   while enabled, the anchor→hover preview (World/Render/CursorQuads.hs)
+--   while enabled, the anchor→hover preview
+--   (World/Render/StructureGhost.hs)
 --   snaps to a straight 1-wide line along whichever axis has the larger extent
 --   from the anchor, instead of the default filled rectangle. The build
 --   tool's commit (scripts/build_tool.lua) snaps the SAME way before

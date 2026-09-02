@@ -134,7 +134,10 @@ data WorldCommand
         -- ^ Texture for committed designation markers.
     | WorldSetConstructAnchor WorldPageId Int Int
         -- ^ Construction tool (#95): first click anchors the designation
-        --   rectangle at (gx, gy). The render pass previews anchor→hover.
+        --   rectangle at (gx, gy). The render pass previews anchor→hover
+        --   — and, since #1846, already previewed the single hovered
+        --   tile BEFORE this arrived, given an armed
+        --   'WorldSetConstructStructureTarget'.
     | WorldClearConstructAnchor WorldPageId
         -- ^ Construction tool: cancel the pending rectangle (right-click /
         --   Escape / tool switch).

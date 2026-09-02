@@ -41,9 +41,15 @@
 --     player can place more without reopening the picker.
 --   * Structure piece                  → DF-style two-click rectangle
 --     (construction.setAnchor / construction.designate "structure"),
---     mirroring the old construct_tool. No building ghost — the engine
---     renders the anchor→hover rectangle preview keyed off the same
---     BuildTool ToolMode (World/Render/CursorQuads.hs). Stays armed.
+--     mirroring the old construct_tool. Stays armed.
+--     No building.setGhost here — a structure has an engine ghost of its
+--     OWN (#1846), drawn from the armed piece's real art through
+--     World/Render/StructureGhost.hs and keyed off the same BuildTool
+--     ToolMode. It starts at the first HOVER, before any anchor exists,
+--     which is why enterPlacement states the target with
+--     construction.setStructureTarget: the render thread cannot ask this
+--     picker what was chosen. After the anchor lands the same ghost
+--     covers the whole rectangle.
 -- Right-click cancels a pending structure rectangle, or (nothing
 -- pending) erases the designation under the cursor — except the
 -- starting-building path, where right-click just exits placement (no
@@ -225,11 +231,12 @@ end
 -- designates, wire is a PATH tool: the two-click commit snaps to a
 -- straight 1-wide line along whichever axis has the larger extent from
 -- the anchor (snapWirePath), and construction.setLineMode makes the
--- live anchor→hover ghost preview the SAME line (World/Render/CursorQuads.hs)
--- instead of a filled rectangle — see isWirePath/enterPlacement/
--- handleMouseDown below. The connection-aware render (scripts/wire.lua)
--- then picks each tile's autotile variant from its neighbours, so the
--- committed line reads as one connected run. The icon reuses the pack's
+-- live anchor→hover ghost preview the SAME line
+-- (World/Render/StructureGhost.hs) instead of a filled rectangle — see
+-- isWirePath/enterPlacement/handleMouseDown below. Since #1846 that
+-- preview runs the autotile rule speculatively over the run it is
+-- proposing, so the line reads as one connected run BEFORE it is
+-- committed, not only after scripts/wire.lua places it. The icon reuses the pack's
 -- "cross" connection art — the most recognizable single-glance "this is
 -- wire" shape.
 local function wireTex()
@@ -793,8 +800,9 @@ end
 -----------------------------------------------------------
 function buildTool.enterPlacement(target)
     destroyPicker()
-    -- Drop any ghost left over from a previous building target — a
-    -- structure target drives no ghost of its own (update() below).
+    -- Drop any building.setGhost left over from a previous building
+    -- target. A structure target drives no LUA ghost — it has an engine
+    -- one instead, armed just below (update() does nothing for it).
     building.clearGhost()
     buildTool.state.mode          = "placement"
     buildTool.state.target        = target
@@ -833,11 +841,16 @@ function buildTool.exitPlacement()
 end
 
 -----------------------------------------------------------
--- Per-tick: drive the ghost preview while in placement mode. Only the
--- building targets have a ghost — a structure rectangle previews via
--- the engine's anchor→hover render (constructAnchor, keyed off this
--- tool's ToolMode, see World/Render/CursorQuads.hs), driven entirely by the
--- setAnchor/designate calls in handleMouseDown below.
+-- Per-tick: drive the BUILDING ghost preview while in placement mode.
+-- Only a building target needs a per-tick ghost, because
+-- building.setGhost is a Lua-driven cursor-follower.
+--
+-- A structure target has an engine ghost too (#1846) and simply does not
+-- need this tick: the engine draws the armed piece's own art from
+-- constructStructureTarget + the live hover, and after the first click
+-- the whole constructAnchor→hover extent — see
+-- World/Render/StructureGhost.hs. enterPlacement/exitPlacement state the
+-- armed piece; handleMouseDown below owns the anchor and the commit.
 -----------------------------------------------------------
 function buildTool.update(dt)
     if buildTool.state.mode ~= "placement" then return end
