@@ -6,6 +6,8 @@ module Test.Headless.Building.MachineShopConstruction (spec) where
 
 import UPrelude
 import Test.Hspec
+import Building.Schema
+import Data.Foldable (toList)
 import qualified Codec.Picture as JP
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
@@ -50,19 +52,28 @@ spec = it "loads the approved four-frame sequence without a fallback" $ do
             pure emptyDef
 
     bydSpriteAnchor machineShop `shouldBe` "diamond_bottom"
-    Map.lookup "appearing" (bydStateAnims machineShop)
+    -- The canonical lifecycle role (#2080). A positive-`build_work`
+    -- definition declares `construction`; the legacy `appearing` key it
+    -- replaced could mean either construction or timed appearance.
+    Map.lookup RoleConstruction (bydRoleAnims machineShop)
         `shouldBe` Just "machine-shop-construct"
-    Map.lookup "built" (bydStateAnims machineShop) `shouldBe` Nothing
+    Map.lookup RoleAppearance (bydRoleAnims machineShop) `shouldBe` Nothing
+    Map.lookup RoleBuilt (bydRoleAnims machineShop) `shouldBe` Nothing
+    bydVisualClass machineShop `shouldBe` IndoorFixture
 
     animation ← case Map.lookup "machine-shop-construct" (bydAnimations machineShop) of
         Just found → pure found
         Nothing → do
             expectationFailure "machine-shop-construct animation is not declared"
-            pure (BuildingYamlAnim 0 True Map.empty)
+            pure (BuildingYamlAnim 0 True (legacyAssets []))
     byaFps animation `shouldBe` 4
     byaLoop animation `shouldBe` False
-    Map.toList (byaFrames animation)
-        `shouldBe` [("default", map T.pack framePaths)]
+    -- The frame paths are still the pre-#2080 singular `default` list —
+    -- four-facing art is the art slices' job — so the declaration reads
+    -- back as LEGACY, with that one list reaching all four views.
+    faSource (byaFrames animation) `shouldBe` AssetLegacy
+    map (map T.unpack) (toList (faViews (byaFrames animation)))
+        `shouldBe` replicate 4 framePaths
 
     mapM_ assertRegularPng framePaths
     defaultImage ← decodeNormalizedPng defaultSprite
@@ -136,7 +147,8 @@ emptyDef = BuildingYamlDef
     , bydDisplayName = ""
     , bydCategory = ""
     , bydDescription = ""
-    , bydSprite = ""
+    , bydSprites = legacyAssets ""
+    , bydVisualClass = IndoorFixture
     , bydTileSize = BuildingYamlTileSize 1 1
     , bydPlacement = ""
     , bydIsStarting = False
@@ -146,7 +158,7 @@ emptyDef = BuildingYamlDef
     , bydMaterials = Map.empty
     , bydStorageCapacity = 0
     , bydOperations = []
-    , bydStateAnims = Map.empty
+    , bydRoleAnims = Map.empty
     , bydAnimations = Map.empty
     , bydPowerDrain = 0
     , bydPowerNode = Nothing

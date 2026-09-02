@@ -508,6 +508,7 @@ library
                      Unit.Thread.Movement.Timers
                      Unit.Thread.Movement.Climb
                      Unit.Thread.Movement.PathAdvance
+                     Building.Schema
                      Building.Types
                      Building.Knowledge
                      Building.Knowledge.Live
@@ -1387,6 +1388,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.StampCommit
                    Test.Headless.Location.Stamping
                    Test.Headless.Tutorial.Definitions
+                   Test.Headless.Building.AssetSchema
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

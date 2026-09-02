@@ -7,6 +7,8 @@ buildings:
     tile_size: { x: 1, y: 1 }
     placement: "flat_ground"
     race: "acolyte_cult"
+    # Which art family owns this building's textures (#2080).
+    visual_class: "freestanding_installation"
     # Texture draws its own side-face below the diamond, so anchor the
     # sprite at the cube's bottom instead of the diamond's south point.
     sprite_anchor: "tile_bottom"
@@ -35,11 +37,11 @@ buildings:
     # While materials aren't satisfied the building renders as a
     # translucent ghost (uses default.png with 0.6 alpha). Once they
     # arrive, the construction anim plays through these 4 frames at
-    # whatever pace the workers drive. With no "built" anim defined,
-    # the engine pins frame 4 as the built sprite — same picture, no
-    # snap.
+    # whatever pace the workers drive. With no `built` anim defined,
+    # the engine pins frame 4 of the `construction` role as the built
+    # sprite — same picture, no snap.
     state_animations:
-      appearing: cargo-construct
+      construction: cargo-construct
 
     animations:
       cargo-construct:

@@ -2,7 +2,7 @@
 --
 -- Executes construction designations (#95). Two job categories:
 --   * "building": walk to the blueprint and STAKE it — building.spawn
---     places the Appearing ghost, the designation completes, and the
+--     places the Constructing ghost, the designation completes, and the
 --     existing deliver_to_build_site + build_nearby machinery takes
 --     over (materials gate + worker-rate progress, unchanged).
 --   * "structure": the full job — source the piece's materials

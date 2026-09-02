@@ -468,14 +468,19 @@ python3 tools/world_check.py --quick
 # retaining on a pass, a failure and a boot abort while naming only what
 # the run actually produced, a cleanup failure making an otherwise clean
 # run non-zero through #1620's own reporting, and an outside same-named
-# decoy left byte-identical. It also pins what the probe still proves:
-# all seven boots through the one funnel that hands each this
-# invocation's log and registers its process as it is launched, both
-# log-reading ASSERTIONS reading that same log, the five fixture bodies
-# by sha256, their registration order and loaders, load_fixture_yaml
-# still guarding every one of them, and the three helpers
-# portal_ghost_probe imports still intact. That probe is manual-only and
-# boots seven engines; the companion boots nothing.
+# decoy left byte-identical. It also pins what the probe still proves,
+# scanning the COMPLETE reorganized surface (#2095 -- the facade plus
+# every scenario owner under tools/location_content/, so an
+# exclusion-style check cannot go vacuous once the bodies leave run):
+# all seven boot CALL SITES through the one funnel that hands each this
+# invocation's log and registers its process as it is launched, the
+# regeneration site still a loop over the two visit orders so a run
+# LAUNCHES eight processes, both log-reading ASSERTIONS reading that
+# same log, the five fixture bodies by sha256 resolved at their single
+# source, their registration order and loaders, load_fixture_yaml still
+# guarding every one of them, and the three helpers portal_ghost_probe
+# imports still the same function objects. That probe is manual-only and
+# launches eight engine processes; the companion boots nothing.
 # test_movement_probe is #1586's: tools/movement_probe.py --list is a
 # metadata query answered from scripts/movement_arena.lua before any
 # boot(), for every --mode, and the derived view is held to the runtime

@@ -472,7 +472,7 @@ def phase_occupied(port: int) -> None:
 
 
 def phase_stake(port: int) -> None:
-    """A building designation gets staked into a real Appearing building."""
+    """A building designation gets staked into a real Constructing building."""
     print("\n[phase 3] building blueprint STAKED (acolyte_portal)")
     w = wid(port)
     send(port, f"construction.designate('{w}', 20, 8, 20, 8, "

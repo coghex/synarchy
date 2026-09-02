@@ -125,6 +125,7 @@ buildings:
     category: "Test"
     description: "Throwaway #807 test fixture — not shipped content."
     sprite: "{SPRITE}"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 2, y: 3 }}
     placement: "flat_ground"
     race: "acolyte_cult"
@@ -134,6 +135,7 @@ buildings:
     category: "Test"
     description: "Throwaway #807 test fixture — not shipped content."
     sprite: "{SPRITE}"
+    visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
     race: "acolyte_cult"
