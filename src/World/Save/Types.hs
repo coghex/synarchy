@@ -344,7 +344,12 @@ data WorldPageSave = WorldPageSave
         -- ^ Chop designations (#97): flora INSTANCE id → surface z plus
         --   the plant's canonical tile (#1854). Like the other
         --   designation layers, restored straight into
-        --   wsChopDesignationsRef; markers re-render from the stored z.
+        --   wsChopDesignationsRef. #1856: the MARKER no longer reads
+        --   that z — it anchors to the live flora instance's own
+        --   projected ground contact, because a stored z drifts the
+        --   annotation off the sprite as soon as the column changes.
+        --   The z survives as the value the @chop.*@ query verbs report
+        --   to the AI.
     , wpsPendingChopMigration ∷ !PendingChopDesignations
         -- ^ #1854: pre-identity tile-keyed chop designations that could
         --   not be resolved to an instance at load time because their

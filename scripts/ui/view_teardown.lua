@@ -39,8 +39,11 @@
 --     amendment a layout-only rebuild must never cancel a committed/
 --     armed two-click designation anchor the way it may a merely
 --     PENDING (unreleased) interaction. Same reasoning keeps
---     mine_tool/chop_tool/till_tool's own designation anchors off this
+--     mine_tool/till_tool's own designation anchors off this
 --     transition too (they aren't hud.world_page-mounted UI at all).
+--     chop_tool has no anchor at all since #1856 — its press-drag box
+--     resolves entirely at its own release — so its zoomBand hook just
+--     disarms the effect.
 --
 -- Rules for entries:
 --   * Hooks MUST be idempotent — they run on every transition of their
@@ -181,7 +184,8 @@ local registry = {
     { name = "mine_tool",
       zoomBand = function() require("scripts.mine_tool").cancel() end },
 
-    -- Chop designation anchor (#97): same idempotent teardown.
+    -- Chop's armed press-drag box (#97/#1856): same idempotent
+    -- teardown — an abandoned gesture designates nothing.
     { name = "chop_tool",
       zoomBand = function() require("scripts.chop_tool").cancel() end },
 

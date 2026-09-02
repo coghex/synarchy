@@ -29,9 +29,9 @@ Covered:
   * exit 2 takes precedence over a concurrent ordinary failure, and an
     ordinary failure (a missing till box, an unusable portal fixture)
     never becomes exit 2;
-  * discovery really uses the authoritative query, centres the real 5x5
-    `chop.designate` on the returned coordinate, and rejects a malformed
-    one;
+  * discovery really uses the authoritative query, builds the real
+    `chop.designateInstances` request from the returned coordinate's own
+    plant identity, and rejects a malformed one;
   * the query origins COVER the probe's loaded region, which is the
     property that makes "found nothing" a statement about the region
     rather than about a sample grid.
@@ -91,15 +91,20 @@ class FakeConsole:
 
     `wood_at` is the coordinate `world.findHarvestableFlora` reports (or
     None for "nothing in range anywhere"), `drain` the value the drain
-    following a `chop.designate` returns. Every call is recorded so a
-    test can assert WHICH query was used and what it was centred on."""
+    following the designation returns. `instance_id` is what the
+    follow-up `world.getFloraAt` on that coordinate reports as the
+    discovered tree's identity — #1856 designates by exact id, so the
+    stage reads one. Every call is recorded so a test can assert WHICH
+    query was used and what it was centred on."""
 
     def __init__(self, wood_at=None, species="oak", drain=None,
-                 wood_result=None):
+                 wood_result=None, instance_id=4242, flora_result=None):
         self.wood_at = wood_at
         self.species = species
         self.drain = drain if drain is not None else []
         self.wood_result = wood_result  # overrides a well-formed reply
+        self.instance_id = instance_id
+        self.flora_result = flora_result  # overrides the getFloraAt reply
         self.sent: list[str] = []
         self._designated = False
 
@@ -112,6 +117,12 @@ class FakeConsole:
 
     def send_json(self, port, lua, timeout=10.0, idle=None):
         self.sent.append(lua)
+        if "getFloraAt" in lua:
+            if self.flora_result is not None:
+                return self.flora_result
+            return {"id": self.species, "instanceId": self.instance_id,
+                    "chopDesignated": False, "harvestable": True,
+                    "regrowthRemaining": 0, "tags": ["wood"]}
         if "findHarvestableFlora" in lua:
             if self.wood_result is not None:
                 return self.wood_result
@@ -126,7 +137,7 @@ class FakeConsole:
         raise AssertionError(f"unexpected console call: {lua}")
 
     def designate_calls(self):
-        return [c for c in self.sent if "chop.designate" in c]
+        return [c for c in self.sent if "chop.designateInstances" in c]
 
     def find_calls(self):
         return [c for c in self.sent if "findHarvestableFlora" in c]
@@ -146,7 +157,7 @@ def drive(console, fn=None):
     return result, buffer.getvalue()
 
 
-def good_record(requested=25, applied=1, dropped=24, outcome="partial",
+def good_record(requested=2, applied=1, dropped=1, outcome="partial",
                 kind="chop.designate"):
     return [{"kind": kind, "outcome": outcome, "requested": requested,
              "applied": applied, "dropped": dropped,
@@ -233,7 +244,7 @@ def test_invalid_records_are_behavior_failures():
               probe.probe_exit_status(ok, setup_failed) == 1)
         check(f"an invalid chop record ({label}) reports the chop line, "
               f"not the setup diagnostic",
-              "(fixture setup)" not in out and "mixed chop sweep" in out,
+              "(fixture setup)" not in out and "mixed chop selection" in out,
               out.strip())
 
 
@@ -257,20 +268,51 @@ def test_discovery_uses_the_authoritative_wood_query():
     first = console.find_calls()[0]
     check("discovery calls world.findHarvestableFlora with the wood tag",
           "world.findHarvestableFlora" in first and "'wood'" in first, first)
-    check("discovery never falls back to the point query",
-          not any("getFloraAt" in c for c in console.sent))
+    # #1856: the point query is no longer a SEARCH fallback — it is
+    # asked exactly once, afterwards, and only about the coordinate
+    # discovery already returned. A search that fell back to it would
+    # ask about coordinates the authoritative query never named.
+    flora_calls = [c for c in console.sent if "getFloraAt" in c]
+    check("the point query is never used to SEARCH",
+          len(flora_calls) == 1 and "(12,-34)" in flora_calls[0],
+          str(flora_calls))
     check("discovery stops at the first hit",
           len(console.find_calls()) == 1, str(console.find_calls()))
 
 
-def test_designation_is_the_real_public_5x5_request():
-    console = FakeConsole(wood_at=(12, -34), drain=good_record())
+def test_designation_is_the_real_public_exact_id_request():
+    console = FakeConsole(wood_at=(12, -34), instance_id=4242,
+                          drain=good_record())
     drive(console)
     calls = console.designate_calls()
-    check("exactly one chop.designate is issued", len(calls) == 1, str(calls))
-    check("the 5x5 box is centred on the discovered coordinate",
-          "chop.designate('probe',10,-36,14,-32,'wood')" in calls[0],
-          calls[0])
+    check("exactly one chop.designateInstances is issued",
+          len(calls) == 1, str(calls))
+    # The submitted set is the DISCOVERED tree plus one well-formed id
+    # naming no resident plant, which is what makes the partial leg
+    # deterministic rather than a hope about nearby grass.
+    check("the request submits the discovered tree's own instance id",
+          "4242" in calls[0], calls[0])
+    check("the request submits one unresolvable id alongside it",
+          str(probe.UNRESOLVABLE_INSTANCE_ID) in calls[0], calls[0])
+    check("the unresolvable id is in the planted namespace and positive",
+          probe.UNRESOLVABLE_INSTANCE_ID >> 62 == 1
+          and probe.UNRESOLVABLE_INSTANCE_ID < (1 << 63),
+          str(probe.UNRESOLVABLE_INSTANCE_ID))
+    check("the request names the probe page and the wood tag",
+          "'probe'" in calls[0] and "'wood'" in calls[0], calls[0])
+
+
+def test_a_missing_instance_id_is_a_behavior_failure():
+    """A discovered coordinate whose point query reports no identity
+    cannot be designated at all. That is a BEHAVIOR failure, not a
+    fixture-setup one: discovery already proved wood is there."""
+    console = FakeConsole(wood_at=(12, -34), drain=good_record(),
+                          flora_result={"id": "oak"})
+    (ok, setup_failed), out = drive(console)
+    check("a discovered tile with no instance id fails as behavior",
+          ok is False and setup_failed is False, f"{ok=} {setup_failed=}")
+    check("and nothing is designated",
+          not console.designate_calls(), str(console.designate_calls()))
 
 
 def test_the_designation_drain_is_destructive_and_isolated():
@@ -419,7 +461,8 @@ def main():
     test_invalid_records_are_behavior_failures()
     test_a_well_formed_record_passes()
     test_discovery_uses_the_authoritative_wood_query()
-    test_designation_is_the_real_public_5x5_request()
+    test_designation_is_the_real_public_exact_id_request()
+    test_a_missing_instance_id_is_a_behavior_failure()
     test_the_designation_drain_is_destructive_and_isolated()
     test_search_origins_cover_the_loaded_region()
     test_the_loaded_region_matches_what_the_probe_loads()

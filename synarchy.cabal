@@ -709,6 +709,10 @@ library
                      World.Render.CursorQuads
                      World.Render.TileQuads
                      World.Render.FloraQuads
+                     World.Render.FloraProjection
+                     World.Render.FloraDraws
+                     World.Render.FloraMarker
+                     World.Render.SpriteDepth
                      World.Render.GroundItemQuads
                      World.Render.SideDecoQuads
                      World.Render.Textures
@@ -892,6 +896,7 @@ library
                      World.Flora.Identity
                      World.Flora.Types
                      World.Flora.Designation
+                     World.Flora.HitTest
                      World.Flora.Growth
                      World.Flora.Placement
                      World.Flora.Render
@@ -1228,6 +1233,9 @@ test-suite synarchy-test-headless
                    Test.Headless.World.ChunkIdentity
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
+                   Test.Headless.World.Chop.Selection
+                   Test.Headless.World.Chop.Authority
+                   Test.Headless.Lua.ChopGesture
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue

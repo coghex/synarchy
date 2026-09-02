@@ -273,7 +273,13 @@ def _run(args, port, rep):
             rep.abort("no flat diggable tile near the tree")
             return 1
         dx, dy = (int(v) for v in spot.split(","))
-        send(port, f"chop.designate('probe',{tx},{ty},{tx},{ty}); "
+        # #1856: chop designates EXACT plant identities now (the
+        # player's gesture is a screen-space press-drag, which needs a
+        # camera this probe has not got). The tree's own id comes from
+        # the point query.
+        send(port, f"local f = world.getFloraAt({tx},{ty}); "
+                   f"if f and f.instanceId then "
+                   f"chop.designateInstances('probe', {{f.instanceId}}) end; "
                    f"return 'ok'")
         send(port, f"world.designateMine('probe',{dx},{dy},{dx},{dy}); "
                    f"return 'ok'")

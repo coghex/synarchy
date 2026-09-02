@@ -84,6 +84,28 @@ dragSelect.rightStartY       = 0
 dragSelect.rightStartFbX     = 0
 dragSelect.rightStartFbY     = 0
 dragSelect.rightPendingClick = nil
+dragSelect.rightCurrX        = 0
+dragSelect.rightCurrY        = 0
+-- #1856: a designation TOOL's pluggable box effect, one slot per
+-- tracked button. A tool arms its own press (chopTool.handleMouseDown
+-- calls armToolBox) and the SAME machinery every other gesture uses —
+-- the four-pixel threshold, the fast-release classification, the
+-- visible rect, the view-transition teardown and the one-record-per-
+-- action outcome path — resolves it to exactly one click or one box.
+--
+-- This is deliberately NOT boxSelectArmed: that flag means "commit a
+-- UNIT selection at release" and is the #114/#730 fallback's alone. An
+-- armed tool box replaces the effect, not the gesture, which is why
+-- both buttons can carry one — Chop's left adds and its right erases
+-- (D-12), and neither has any unit-selection meaning.
+--
+-- An effect is a table of
+--   { handler = <F4 handler name>,
+--     onClick = function(x, y)               -> applied count,
+--     onBox   = function(x1, y1, x2, y2)     -> applied count }
+dragSelect.toolBox = {}
+-- Which button currently owns the shared rect overlay, or nil.
+dragSelect.visualButton = nil
 -- 4 thin sprites for the rect outline (top / bottom / left / right).
 -- Filled center stays transparent so units underneath remain visible.
 dragSelect.edgeIds  = nil
@@ -180,17 +202,19 @@ local function setEdgesVisible(visible)
     end
 end
 
--- Sync the 4 edge sprites to the current drag bounds. Called every
--- tick while dragging.
-local function updateRectVisual()
+-- Sync the 4 edge sprites to the given drag bounds (window pixels).
+-- Called every tick while dragging. #1856 made the bounds explicit so
+-- a right-button tool box draws the identical rect from its own start
+-- point — one visual, one geometry, both buttons.
+local function updateRectVisual(ax, ay, bx, by)
     local ww, wh = engine.getWindowSize()
     local fbW, fbH = engine.getFramebufferSize()
     local scaleX = (ww and ww > 0) and (fbW / ww) or 1
     local scaleY = (wh and wh > 0) and (fbH / wh) or 1
-    local x1 = math.min(dragSelect.startX, dragSelect.currX) * scaleX
-    local y1 = math.min(dragSelect.startY, dragSelect.currY) * scaleY
-    local x2 = math.max(dragSelect.startX, dragSelect.currX) * scaleX
-    local y2 = math.max(dragSelect.startY, dragSelect.currY) * scaleY
+    local x1 = math.min(ax, bx) * scaleX
+    local y1 = math.min(ay, by) * scaleY
+    local x2 = math.max(ax, bx) * scaleX
+    local y2 = math.max(ay, by) * scaleY
     local w = math.max(1, x2 - x1)
     local h = math.max(1, y2 - y1)
     local t = EDGE_THICKNESS
@@ -208,22 +232,49 @@ local function updateRectVisual()
     UI.setSize    (dragSelect.edgeIds.right,  t,  h)
 end
 
+-- Does THIS button's press draw and commit a box? Either the #114/#730
+-- unit-selection fallback (left only) or a #1856 tool box (either).
+local function boxArmed(button)
+    if button == 1 then
+        return dragSelect.boxSelectArmed or dragSelect.toolBox[1] ~= nil
+    end
+    return dragSelect.toolBox[button] ~= nil
+end
+
+-- Claim the shared rect overlay for one button and show it. Only one
+-- gesture can own the visual; the first to cross the threshold keeps
+-- it until it resolves, so two simultaneous holds cannot fight over it.
+local function claimVisual(button)
+    if dragSelect.visualButton == nil then
+        dragSelect.visualButton = button
+        setEdgesVisible(true)
+    end
+end
+
+local function releaseVisual(button)
+    if dragSelect.visualButton == button then
+        dragSelect.visualButton = nil
+        if dragSelect.edgeIds then
+            setEdgesVisible(false)
+        end
+    end
+end
+
 function dragSelect.update(dt)
-    -- Box-select visuals/effects only ever apply to a boxSelectArmed
-    -- press (#730 review round 6) — a non-armed press (debug/build/
-    -- mine/chop/till/plant tool claims, a menu-background deadclick)
-    -- never transitions to "dragging" here at all; its click-vs-drag
-    -- F4 classification is computed directly from coordinates in
-    -- onMouseUp regardless (round 5), so it needs nothing from this
-    -- periodic tick.
-    if dragSelect.state == "pressed" and dragSelect.boxSelectArmed then
+    -- Box visuals/effects only ever apply to an ARMED press (#730
+    -- review round 6) — a non-armed press (debug/build/mine/till/plant
+    -- tool claims, a menu-background deadclick) never transitions to
+    -- "dragging" here at all; its click-vs-drag F4 classification is
+    -- computed directly from coordinates in onMouseUp regardless
+    -- (round 5), so it needs nothing from this periodic tick.
+    if dragSelect.state == "pressed" and boxArmed(1) then
         local mx, my = engine.getMousePosition()
         if mx then
             dragSelect.currX = mx
             dragSelect.currY = my
             if pastThreshold(dragSelect.startX, dragSelect.startY, mx, my) then
                 dragSelect.state = "dragging"
-                setEdgesVisible(true)
+                claimVisual(1)
                 -- The press might have triggered a stray tile-cursor
                 -- select via hud.onMouseDown. Now that we know it was a
                 -- drag, undo that so we don't leave a tile selected
@@ -238,17 +289,37 @@ function dragSelect.update(dt)
         if mx then
             dragSelect.currX = mx
             dragSelect.currY = my
-            updateRectVisual()
+            if dragSelect.visualButton == 1 then
+                updateRectVisual(dragSelect.startX, dragSelect.startY, mx, my)
+            end
         end
     end
 
-    -- Right-button threshold tracking only (#730 review round 4) — no
-    -- visual, no box-select effect, purely for the deferred F4
-    -- click-vs-drag classification below.
+    -- Right-button tracking. Without an armed tool box this is
+    -- threshold tracking only (#730 review round 4) — no visual, no
+    -- effect, purely for the deferred F4 click-vs-drag classification.
+    -- WITH one (#1856: Chop's erase gesture) it draws and commits the
+    -- identical box the left button does.
     if dragSelect.rightState == "pressed" then
         local mx, my = engine.getMousePosition()
-        if mx and pastThreshold(dragSelect.rightStartX, dragSelect.rightStartY, mx, my) then
-            dragSelect.rightState = "dragging"
+        if mx then
+            dragSelect.rightCurrX = mx
+            dragSelect.rightCurrY = my
+            if pastThreshold(dragSelect.rightStartX, dragSelect.rightStartY,
+                             mx, my) then
+                dragSelect.rightState = "dragging"
+                if boxArmed(2) then claimVisual(2) end
+            end
+        end
+    elseif dragSelect.rightState == "dragging" then
+        local mx, my = engine.getMousePosition()
+        if mx then
+            dragSelect.rightCurrX = mx
+            dragSelect.rightCurrY = my
+            if dragSelect.visualButton == 2 then
+                updateRectVisual(dragSelect.rightStartX,
+                                 dragSelect.rightStartY, mx, my)
+            end
         end
     end
 end
@@ -299,6 +370,46 @@ end
 -- gameplay-inactive deadclick, which have no box-select meaning.
 function dragSelect.armBoxSelect()
     dragSelect.boxSelectArmed = true
+end
+
+-- #1856: arm a designation TOOL's box effect on this press. Called from
+-- the tool's own handleMouseDown, which init_mouse.lua has already run
+-- dragSelect.handleMouseDown ahead of, so the press's start point and
+-- framebuffer capture are in place.
+--
+-- The effect replaces what happens at RELEASE, never the gesture
+-- machinery: the four-pixel threshold, the fast-drag classification,
+-- the visible rect, the view-transition teardown and the
+-- exactly-one-record outcome path are all the shared ones. Passing nil
+-- disarms.
+function dragSelect.armToolBox(button, effect)
+    dragSelect.toolBox[button] = effect
+end
+
+-- Disarm a tool's box effect MID-GESTURE — Escape, a tool switch, a
+-- view transition, all of which can arrive while the button is still
+-- held. The gesture itself is still live, so this does not resolve it;
+-- what it must do is leave nothing behind that outlives the effect:
+--
+--   * the visible rect, which the EFFECT owned. Without this the
+--     release falls through to the generic unarmed-drag path, which has
+--     no visual to release, and the box stays painted on screen; and
+--   * the press's deferred click record, which still carries the
+--     press-time "accepted" default. A cancelled below-threshold
+--     gesture performs nothing, so recording an accepted chop click for
+--     it is a lie.
+--
+-- Idempotent, like every other teardown here.
+function dragSelect.disarmToolBox(button)
+    if dragSelect.toolBox[button] == nil then return end
+    dragSelect.toolBox[button] = nil
+    releaseVisual(button)
+    local pending = (button == 1) and dragSelect.pendingClick
+                                   or dragSelect.rightPendingClick
+    if pending then
+        pending.outcome = "noop"
+        pending.reason = "the tool gesture was cancelled before release"
+    end
 end
 
 -- F4 (#730) Layer A: a drag-select box's real outcome can only be
@@ -409,7 +520,69 @@ function dragSelect.deferClick(button, handler, outcome, x, y, reason)
     end
 end
 
+-- #1856: resolve an armed TOOL box at release. Returns true when the
+-- effect owned this release, so the caller skips its own commit path.
+--
+-- The three endings are the same three every other gesture has, and
+-- each produces exactly one Layer A record:
+--
+--   * a swallowed release (focus loss / minimize) commits NOTHING —
+--     the box is abandoned, not finished, so no designation lands at
+--     whatever stale coordinate the cursor was left at;
+--   * past the threshold, the box commits and records "input.drag";
+--   * below it, the click commits and the press's own deferred
+--     "input.click" record is what lands.
+local function resolveToolBox(effect, startX, startY, x, y,
+                              pending, downRoute)
+    if downRoute == "swallowed" then
+        recordDragOutcome("noop", x, y, 0, 0, dragReason(
+            "release swallowed (focus loss / minimize)", pending))
+        return
+    end
+    if pastThreshold(startX, startY, x, y) then
+        local applied = effect.onBox and effect.onBox(startX, startY, x, y) or 0
+        recordDragOutcome(applied > 0 and "accepted" or "noop",
+            x, y, applied, applied)
+    else
+        local applied = effect.onClick and effect.onClick(x, y) or 0
+        local pc = pending
+        if not pc then
+            local fx, fy = toFbCoords(x, y)
+            pc = { handler = effect.handler, fbX = fx, fbY = fy }
+        end
+        -- The press-time record could not know whether the click would
+        -- find a target; the release does.
+        pc.outcome = applied > 0 and "accepted" or "noop"
+        recordDeferredClick(pc)
+    end
+end
+
 function dragSelect.onMouseUp(button, x, y, downRoute)
+    -- An armed tool box owns its whole release, both buttons alike.
+    local effect = dragSelect.toolBox[button]
+    if effect then
+        local live = (button == 1 and dragSelect.state ~= "idle")
+                  or (button == 2 and dragSelect.rightState ~= "idle")
+        if live then
+            local sx = button == 1 and dragSelect.startX or dragSelect.rightStartX
+            local sy = button == 1 and dragSelect.startY or dragSelect.rightStartY
+            local pending = button == 1 and dragSelect.pendingClick
+                                         or dragSelect.rightPendingClick
+            resolveToolBox(effect, sx, sy, x, y, pending, downRoute)
+        end
+        releaseVisual(button)
+        dragSelect.toolBox[button] = nil
+        if button == 1 then
+            dragSelect.pendingClick = nil
+            dragSelect.boxSelectArmed = false
+            dragSelect.state = "idle"
+        else
+            dragSelect.rightPendingClick = nil
+            dragSelect.rightState = "idle"
+        end
+        return
+    end
+
     if button == 1 then
         if dragSelect.state ~= "idle" then
             -- #730 review round 5: classify against the ACTUAL
@@ -450,7 +623,7 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                     recordDragOutcome("noop", x, y, 0, 0,
                         "release swallowed (focus loss / minimize)")
                 end
-                setEdgesVisible(false)
+                releaseVisual(1)
             elseif wasDragging then
                 -- Crossed the threshold, but this press was never
                 -- box-select-armed (#730 review round 6) — a debug/
@@ -478,6 +651,7 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                     recordDeferredClick(dragSelect.pendingClick)
                 end
             end
+            releaseVisual(1)
             dragSelect.pendingClick   = nil
             dragSelect.boxSelectArmed = false
             dragSelect.state = "idle"
@@ -505,6 +679,7 @@ function dragSelect.onMouseUp(button, x, y, downRoute)
                     recordDeferredClick(dragSelect.rightPendingClick)
                 end
             end
+            releaseVisual(2)
             dragSelect.rightPendingClick = nil
             dragSelect.rightState = "idle"
         end
@@ -527,6 +702,15 @@ end
 -- if already "dragging") rather than silently dropping it, since
 -- dragSelect.onMouseUp will never get a chance to.
 function dragSelect.cancel()
+    -- #1856: disarm BOTH tool boxes FIRST. The branches below resolve
+    -- each button's pending click and then clear it, so disarming
+    -- afterwards would arrive to find nothing left to restamp and the
+    -- press-time "accepted" default already published — a cancelled
+    -- below-threshold Chop press recorded as an accepted click that
+    -- designated nothing. Disarming here restamps it as the noop it is
+    -- BEFORE the branch reads it, and takes the rect down with it.
+    dragSelect.disarmToolBox(1)
+    dragSelect.disarmToolBox(2)
     if dragSelect.state ~= "idle" then
         if dragSelect.state == "dragging" then
             recordDragOutcomeFb("noop", dragSelect.startFbX, dragSelect.startFbY,
@@ -535,9 +719,7 @@ function dragSelect.cancel()
         elseif dragSelect.pendingClick then
             recordDeferredClick(dragSelect.pendingClick)
         end
-        if dragSelect.edgeIds then
-            setEdgesVisible(false)
-        end
+        releaseVisual(1)
         dragSelect.pendingClick   = nil
         dragSelect.boxSelectArmed = false
         dragSelect.state = "idle"
@@ -553,6 +735,7 @@ function dragSelect.cancel()
         elseif dragSelect.rightPendingClick then
             recordDeferredClick(dragSelect.rightPendingClick)
         end
+        releaseVisual(2)
         dragSelect.rightPendingClick = nil
         dragSelect.rightState = "idle"
     end

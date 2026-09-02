@@ -258,7 +258,7 @@ def check_lava_rim_containment(grid: dict[tuple[int, int], dict[str, Any]],
     in the rim caps, the terrain patch or the shell would leave a real rim
     tile below the surface and fail here. The zero it measures across the
     baselines is evidence the seal holds, not evidence `grow` never
-    truncates. `tools/test_audit.py`'s
+    truncates. `tools/test_audit_world_audit.py`'s
     `test_lava_rim_on_real_generated_output` pins that reading — it drives a
     real seed-12321 dump, asserts the rim is present and flush, and then
     lowers one real rim tile to prove the predicate is a live guard rather
