@@ -509,13 +509,16 @@ def main() -> int:
         clear_all()
         with open("config/video.yaml", "w") as f:
             f.write(LEGACY_VIDEO)  # ui_scale 1.75
+        # Sentinel scales stay inside the loader's 0.5-4.0 ui_scale domain
+        # (#2198): an out-of-domain leaf is defaulted on load, which would
+        # read here as "local lost", not as the precedence this phase pins.
         with open("config/video.local.yaml", "w") as f:
-            f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 9.9"))
+            f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 3.9"))
 
         proc = boot(args.port, log=LOG)
         scale, _ = get_video_ui_scale(args.port)
-        passed &= check("resolved config uses the local value (9.9), not the legacy one (1.75)",
-                         abs(scale - 9.9) < 1e-6, str(scale))
+        passed &= check("resolved config uses the local value (3.9), not the legacy one (1.75)",
+                         abs(scale - 3.9) < 1e-6, str(scale))
         quit_engine(args.port, proc)
         proc = None
         untouched = load_yaml("config/video.yaml")["video"]
@@ -544,18 +547,18 @@ def main() -> int:
 
         print("4b. malformed legacy state does not destroy a valid newer local file")
         with open("config/video.local.yaml", "w") as f:
-            f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 4.2"))
+            f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 3.2"))
         # config/video.yaml is still the malformed fixture from 4a.
 
         proc = boot(args.port, log=LOG)
         scale, _ = get_video_ui_scale(args.port)
-        passed &= check("valid local value (4.2) survives next to a malformed legacy file",
-                         abs(scale - 4.2) < 1e-6, str(scale))
+        passed &= check("valid local value (3.2) survives next to a malformed legacy file",
+                         abs(scale - 3.2) < 1e-6, str(scale))
         quit_engine(args.port, proc)
         proc = None
         kept = load_yaml("config/video.local.yaml")["video"]
         passed &= check("video.local.yaml content itself is unchanged",
-                         abs(float(kept["ui_scale"]) - 4.2) < 1e-6)
+                         abs(float(kept["ui_scale"]) - 3.2) < 1e-6)
 
         print(f"\n  {'PASS' if passed else 'FAIL'}: config-migration upgrade path"
               + ("" if passed else " — see failures above"))

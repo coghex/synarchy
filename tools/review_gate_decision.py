@@ -59,9 +59,16 @@ verdict.
 The decision needs no GitHub query at all -- the old `gh pr diff` call
 existed only to read the post-push file list this module no longer uses --
 so there is no PR-query failure branch left to preserve. That is
-deliberate and is issue #1679's approved amendment to requirement 5; the
-label removal itself stays best effort in the workflow (`|| true`), as it
-always was, and is not part of this decision.
+deliberate and is issue #1679's approved amendment to requirement 5.
+
+This module still decides only; applying and VERIFYING the decision is
+`tools/review_gate_label_policy.py`'s job (#2184). That separation is
+unchanged, but the guarantee on the other side of it is not: the label
+removal is no longer best effort. The workflow reads the label state back
+from GitHub after the attempt, fails `dismiss-stale-approval` when a strip
+cannot be shown to have taken effect, and gates the required
+`review-approved` check on this decision rather than on the event
+payload. So a STRIP exit code is now enforced end to end, not advisory.
 
 Exit codes: 0 = KEEP the label, non-zero = STRIP it. A crash, a bad
 argument, or a missing interpreter is therefore a STRIP too, which is the

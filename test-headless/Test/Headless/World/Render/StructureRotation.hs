@@ -228,6 +228,53 @@ maskCatalog =
                else WallArtEntry e (Just c) (facePath e c) (faceHandle e c) False
            | e ← allEdges, c ← allCaps ]
 
+-- * The ONE-HALF collision (#2160)
+--
+--   A second family that shares exactly ONE half of the default family's
+--   NE art — either the sprite or the four cap facemaps — and authors the
+--   other half, plus every other edge, for itself. A default NE wall is
+--   then placed with one path the two families contest and one that names
+--   the default alone, which is the state the pair-level reduction used to
+--   resolve in the default's favour instead of refusing.
+--
+--   The shared entries carry the DEFAULT's handles, so the catalogue's
+--   first-registration-wins handle table comes out identical whichever
+--   order the two families are registered in.
+
+-- | @shareTex@ picks which half is shared; @sharedOwned@ picks whether
+--   this family DECLARES that shared path (contradictory pack data) or
+--   merely INHERITS it (the ordinary partial-variant shape, which claims
+--   nothing).
+halfClashEntries ∷ Bool → Bool → [WallArtEntry]
+halfClashEntries shareTex sharedOwned =
+    [ if shareTex ∧ e ≡ WallNE
+        then WallArtEntry e Nothing (texPath e) (texHandle e) sharedOwned
+        else WallArtEntry e Nothing (ownTexPath e) (ownTexHandle e) True
+    | e ← allEdges ]
+    <> [ if shareTex ∨ e ≢ WallNE
+           then WallArtEntry e (Just c) (ownFacePath e c) (ownFaceHandle e c) True
+           else WallArtEntry e (Just c) (facePath e c) (faceHandle e c) sharedOwned
+       | e ← allEdges, c ← allCaps ]
+  where
+    ownTexPath  e     = "pack/half/wall_" <> edgeName e <> ".png"
+    ownTexHandle e    = TextureHandle (500 + edgeIx e)
+    ownFacePath e c   = "pack/half/face_" <> edgeName e <> "_"
+                                          <> wallCapsCode c <> ".png"
+    ownFaceHandle e c = TextureHandle (600 + edgeIx e * 4 + capIx c)
+
+-- | The default family and one half-clashing family, registered in BOTH
+--   orders. Nothing guarantees pack load order, so every conclusion drawn
+--   from ownership has to hold in either.
+halfClashCatalogs ∷ Bool → Bool → [(String, StructureWallCatalog)]
+halfClashCatalogs shareTex sharedOwned =
+    [ ("default family first",  build [familyEntries, clashing])
+    , ("clashing family first", build [clashing, familyEntries]) ]
+  where
+    clashing = halfClashEntries shareTex sharedOwned
+    build    = foldl' (\cat es → fromMaybe (error "half-clash fixture is incomplete")
+                                           (registerWallFamily es cat))
+                      emptyStructureWallCatalog
+
 -- | Every fixture path interned, plus the non-wall art, so
 --   'structurePieceQuads' can resolve each piece's ids back to paths.
 paletteAndIds ∷ (TexPalette, HM.HashMap Text Int)
@@ -655,6 +702,64 @@ spec = do
                 (texPath WallNW, texHandle WallNW)
                 (facePath WallNW placedCaps, faceHandle WallNW placedCaps)
                 `shouldBe` Just (expectedArt FaceWest WallNW)
+
+    describe "one-half ambiguous ownership (#2160)" $
+        forM_ ([("sprite", True), ("cap facemap", False)] ∷ [(String, Bool)]) $
+          \(half, shareTex) → do
+            forM_ (halfClashCatalogs shareTex True) $ \(order, cat) → do
+                it ("marks exactly the placed " <> half <> " ambiguous, " <> order) $ do
+                    -- Without this the refusal below would prove nothing: a
+                    -- fixture contesting BOTH halves is the case #1794
+                    -- already refused, and one contesting NEITHER never
+                    -- reaches the reduction at all.
+                    let texOwner  = HM.lookup (texPath WallNE) (swcTexOwner cat)
+                        faceOwner = HM.lookup (facePath WallNE placedCaps)
+                                              (swcFaceOwner cat)
+                        contested = if shareTex then texOwner else faceOwner
+                        uncontested = if shareTex then faceOwner else texOwner
+                        -- An uncontested default path, so "the default
+                        -- family" is named without depending on its index.
+                        defaultOwner = HM.lookup (texPath WallNW) (swcTexOwner cat)
+                    defaultOwner `shouldSatisfy` \o → case o of
+                        Just (Just _) → True
+                        _             → False
+                    contested   `shouldBe` Just Nothing
+                    uncontested `shouldBe` defaultOwner
+
+                it ("refuses the pair whose " <> half <> " is ambiguously owned \
+                    \even though its companion names one family, " <> order) $
+                    forM_ allFacings $ \facing →
+                        rotatedWallArt cat facing WallNE
+                            (texPath WallNE, texHandle WallNE)
+                            (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
+                            `shouldBe` Nothing
+
+                it ("leaves a pair only one family carries rotating, " <> order) $
+                    forM_ allFacings $ \facing →
+                        forM_ [WallNW, WallSE, WallSW] $ \e →
+                            rotatedWallArt cat facing e
+                                (texPath e, texHandle e)
+                                (facePath e placedCaps, faceHandle e placedCaps)
+                                `shouldBe` Just (expectedArt facing e)
+
+            forM_ (halfClashCatalogs shareTex False) $ \(order, cat) →
+                it ("keeps rotating when the shared " <> half <> " is INHERITED \
+                    \rather than declared, " <> order) $ do
+                    -- An ABSENT claim is not an ambiguous one. These are the
+                    -- same two families differing only in whether the second
+                    -- DECLARES the shared path, and this is the ordinary
+                    -- partial-variant shape, so the declaring family's art
+                    -- still answers at every facing.
+                    let sharedOwner
+                          | shareTex  = HM.lookup (texPath WallNE) (swcTexOwner cat)
+                          | otherwise = HM.lookup (facePath WallNE placedCaps)
+                                                  (swcFaceOwner cat)
+                    sharedOwner `shouldBe` HM.lookup (texPath WallNW) (swcTexOwner cat)
+                    forM_ allFacings $ \facing →
+                        rotatedWallArt cat facing WallNE
+                            (texPath WallNE, texHandle WallNE)
+                            (facePath WallNE placedCaps, faceHandle WallNE placedCaps)
+                            `shouldBe` Just (expectedArt facing WallNE)
 
     describe "unresolved art" $
         it "emits nothing until both palette ids have a runtime handle" $
