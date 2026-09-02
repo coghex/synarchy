@@ -35,7 +35,8 @@ unitTickRate = 1.0 / 30.0
 
 startUnitThread ∷ EngineEnv → IO ThreadState
 startUnitThread env = startWorkerThread WorkerSpec
-    { wsLoggerRef   = loggerRef env
+    { wsName        = "Unit"
+    , wsLoggerRef   = loggerRef env
     , wsCategory    = CatThread
     , wsStartingMsg = "Starting unit thread..."
     , wsStartedMsg  = Just "Unit thread started"

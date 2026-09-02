@@ -42,7 +42,8 @@ maxFastSettleIterations = 500
 
 startSimThread ∷ EngineEnv → IO ThreadState
 startSimThread env = startWorkerThread WorkerSpec
-    { wsLoggerRef   = ccLoggerRef (toCoreCapability env)
+    { wsName        = "Sim"
+    , wsLoggerRef   = ccLoggerRef (toCoreCapability env)
     , wsCategory    = CatWorld
     , wsStartingMsg = "Starting simulation thread..."
     , wsStartedMsg  = Just "Simulation thread started"
