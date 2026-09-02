@@ -46,7 +46,8 @@ class ActionError(ValueError):
 
 # The action vocabulary the harness accepts from agents. Mirrors F2's
 # verbs; documented for the player in the agent prompt and in README.md.
-ACTION_KINDS = ("click", "drag", "scroll", "key", "hold", "type", "wait", "done")
+ACTION_KINDS = ("click", "hover", "drag", "scroll", "key", "hold", "type",
+                "wait", "done")
 
 # The wheel contract for the `scroll` action (#1980). `dy` is measured in
 # WHEEL NOTCHES, not pixels, and its sign is the CAMERA's rather than the
@@ -370,6 +371,52 @@ def bound_scroll_dy(dy):
     return effective, _clamped_dy_note(value, effective)
 
 
+def hover_coord(value, axis: str, upper: int) -> float:
+    """One `hover` coordinate, clamped into the frame (#2050).
+
+    `hover` is the harness's only action whose entire payload is a
+    coordinate pair, so the pair is TYPED here rather than left to
+    `_clamp`'s bare `float()`: a value that is not a JSON number has no
+    position on screen to clamp to, and `float()` would have silently
+    accepted the two things that actually reach this boundary unvalidated
+    — a numeric string from a lenient provider fallback, and a bool from
+    a scripted agent (bool is an int subclass, so it is excluded FIRST).
+
+    A FINITE coordinate outside the frame still clamps, matching the
+    module's documented policy and `click`'s behaviour: a wild guess is
+    wanted naive-player signal, an out-of-range pixel is not.
+
+    This is `hover`'s own contract and deliberately changes nothing about
+    `click`/`drag`/`scroll`, whose historical handling raises `ActionError`
+    only for a missing coordinate and lets `float()` decide the rest.
+    """
+    if value is None:
+        raise ActionError(
+            f"action 'hover' needs numeric x/y (no {axis}); "
+            "no pointer move was sent")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ActionError(
+            f"action 'hover' rejected: {axis} must be a number in "
+            f"[0, {upper}], got {value!r}; no pointer move was sent")
+    if isinstance(value, int):
+        # Python ints are arbitrary precision, so a schema-valid FINITE
+        # coordinate can sit entirely outside float range. Compare it
+        # exactly, before any conversion: `float(value)` would raise
+        # OverflowError and turn a clampable finite value into a
+        # rejection, which is the outcome reserved for values that are
+        # not finite numbers at all.
+        if value <= 0:
+            return 0.0
+        if value >= upper:
+            return float(upper)
+        return float(value)
+    if not math.isfinite(value):
+        raise ActionError(
+            f"action 'hover' rejected: {axis} must be a finite number in "
+            f"[0, {upper}], got {value!r}; no pointer move was sent")
+    return _clamp(value, 0, upper)
+
+
 def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
     """Agent action -> (main_calls, post_calls) of input.* Lua lines.
 
@@ -416,6 +463,20 @@ def translate_action(action: dict, fb_size: tuple[int, int], notes=None):
     if kind == "click":
         x, y = xy()
         return [f"return input.click({x:.1f}, {y:.1f}{btn_mods_args()})"], []
+    if kind == "hover":
+        # Pointer-only (#2050): ONE moveMouse and nothing else — no
+        # button, no wheel, no key, no post-step call. `input.moveMouse`
+        # updates hover, pick and tooltip state exactly as a real pointer
+        # move does (Engine.Scripting.Lua.API.InputInject), and tooltip
+        # dwell counts down on per-frame `dtMs` (UI.Tooltip.State), which
+        # keeps ticking while the world clock is paused — so the
+        # harness's ordinary settle-then-screenshot cycle captures
+        # whatever resting the pointer there reveals. Both coordinates
+        # are read before either call is built, so a bad y refuses the
+        # whole turn rather than moving the pointer first.
+        x = hover_coord(action.get("x"), "x", w - 1)
+        y = hover_coord(action.get("y"), "y", h - 1)
+        return [f"return input.moveMouse({x:.1f}, {y:.1f})"], []
     if kind == "drag":
         x1, y1 = xy("x1", "y1")
         x2, y2 = xy("x2", "y2")

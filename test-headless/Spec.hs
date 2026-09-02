@@ -195,6 +195,7 @@ import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
 import qualified Test.Headless.Lua.ChopGesture as LuaChopGesture
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
+import qualified Test.Headless.Lua.GroupedLogRetention as LuaGroupedLogRetention
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
@@ -801,6 +802,7 @@ main = hspec $ do
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     LuaDragSelectDeferred.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec
+    describe "Lua.GroupedLogRetention" LuaGroupedLogRetention.spec
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec

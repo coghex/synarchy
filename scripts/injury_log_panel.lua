@@ -58,6 +58,13 @@ local LOG_QUIESCENCE_SEC = 30
 -- new event, so a reused unit id can't get glued onto a dead unit's log
 -- (the engine reassigns ids on destroy/spawn — same guard as combat_log).
 local LOG_REJOIN_MAX_SEC = 120
+-- #2189: the GROUPED history is bounded too, not just the All ring. The
+-- unit-log list used to be append-only with an uncapped event list per log,
+-- so a long session grew without limit: every ingest scanned, and every
+-- render measured a tab for, every unit-log ever opened. These two caps are
+-- the same numbers in combat_log.lua.
+local MAX_GROUPS       = 64
+local MAX_GROUP_EVENTS = 200
 injuryLog.allEvents = injuryLog.allEvents or {}   -- {ev, ev, ...}
 -- Each unit-log: { id, uid, name, active, events={ev,...}, lastEventAt }.
 injuryLog.unitLogs   = injuryLog.unitLogs   or {}
@@ -377,7 +384,71 @@ local function findUnitLog(victim)
     return nil
 end
 
+-- #2189: drop one retained unit-log so a new one can be admitted. Same
+-- policy and the same numbers as combat_log.lua's evictOneBattle.
+--
+-- Preference order, straight from the contract: a log already outside the
+-- rejoin window first (it can never absorb another event, so losing it costs
+-- nothing a player could reach), then the least-recently-active one, then --
+-- on an exact lastEventAt tie -- the smallest id, which IS the oldest
+-- creation order because nextLogId only ever counts up and an evicted id is
+-- never reissued. (Only clearSession rewinds it, and that empties the list
+-- in the same breath, so no id is ever live twice.)
+--
+-- "Now" is engine.gameTime() -- the clock findUnitLog reads -- while
+-- lastEventAt is the event's own ts, so the two are independent sources.
+-- With a single `now` the staleness term can never disagree with
+-- earliest-lastEventAt (stale means lastEventAt < now - window, so the
+-- global minimum is in the stale set whenever that set is non-empty); it is
+-- written out because it is the rule the contract states, and it keeps the
+-- eviction honest if the window rule ever stops being a plain cutoff.
+local function evictOneUnitLog()
+    local now = engine.gameTime()
+    local pickIdx, pickStale, pickLast, pickId
+    for i, lg in ipairs(injuryLog.unitLogs) do
+        local last  = lg.lastEventAt or 0
+        local stale = (now - last) > LOG_REJOIN_MAX_SEC
+        local better
+        if pickIdx == nil          then better = true
+        elseif stale ~= pickStale  then better = stale
+        elseif last  ~= pickLast   then better = last < pickLast
+        else                            better = lg.id < pickId end
+        if better then
+            pickIdx, pickStale, pickLast, pickId = i, stale, last, lg.id
+        end
+    end
+    if pickIdx == nil then return end
+    local gone = table.remove(injuryLog.unitLogs, pickIdx)
+
+    -- The tab strip is now wrong, so ask for a rebuild. processEvent's own
+    -- tail only marks dirty when the ACTIVE tab is affected, which is false
+    -- whenever a non-active log is the one evicted -- and without the
+    -- rebuild the departed tab's label, button and tabClickBoxes entry stay
+    -- on screen and clickable, selecting a log activeTabEvents() can no
+    -- longer find. State is written directly here: no tab-click handler is
+    -- invoked and no render is forced, exactly as clearSession does it.
+    injuryLog.dirty = true
+    if injuryLog.activeTabId == gone.id then
+        injuryLog.activeTabId   = "all"
+        injuryLog.contentScroll = 0
+    end
+    -- tabMaxScroll is only recomputed inside renderContent, so it is stale
+    -- (too high) whenever the panel is hidden. Clamp both to what the
+    -- shorter list can support: an offset can never exceed (tabs - 1).
+    local maxOff = math.max(0, #injuryLog.unitLogs - 1)
+    injuryLog.tabMaxScroll = math.min(injuryLog.tabMaxScroll or 0, maxOff)
+    injuryLog.scrollOffset =
+        math.max(0, math.min(injuryLog.scrollOffset or 0, maxOff))
+end
+
 local function newUnitLog(victim, gameTime)
+    -- #2189: make room BEFORE allocating, so the log being created is never
+    -- a candidate for its own eviction. `>=` because one is about to be
+    -- appended; the loop always removes from a non-empty list, so it
+    -- terminates.
+    while #injuryLog.unitLogs >= MAX_GROUPS do
+        evictOneUnitLog()
+    end
     local id = injuryLog.nextLogId
     injuryLog.nextLogId = id + 1
     local baseName = formatGameTimeHM(gameTime) .. " " .. tabUnitName(victim)
@@ -420,6 +491,10 @@ local function processEvent(ev)
         lg = newUnitLog(victim, ev.ts or 0)
     end
     table.insert(lg.events, 1, ev)
+    -- #2189: newest-first, so trimming the tail drops the oldest event.
+    while #lg.events > MAX_GROUP_EVENTS do
+        table.remove(lg.events)
+    end
     lg.lastEventAt = ev.ts or 0
 
     if injuryLog.activeTabId == "all"
