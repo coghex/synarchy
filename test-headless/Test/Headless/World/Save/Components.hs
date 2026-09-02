@@ -783,10 +783,19 @@ goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
     [ ("core-session",        (85,   "74d3010096cbbe2b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
-      -- #2021 re-pinned: @world-pages@ v9 appends each page's optional
+      -- #2021 re-pinned: @world-pages@ v9 appended each page's optional
       -- generated-world id (17 bytes per page here — a present tag plus
-      -- 128 opaque bits). Only this component's rows move; no other
+      -- 128 opaque bits). Only this component's rows moved; no other
       -- component carries the id.
+      --
+      -- #917 took the component to v10 and did NOT move this row, which
+      -- is correct rather than an oversight: its two obligation fields
+      -- hang off a LOCATION INSTANCE, and these fixture pages carry
+      -- 'defaultWorldGenParams' — an EMPTY instance table — so there is
+      -- no record for them to append to. The v10 layout is pinned where
+      -- it can actually be observed, by
+      -- "a page owing significant contents encodes MORE than the same
+      -- page owing none" below.
     , ("world-pages",         (1340, "70b209601aaa96d0"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
@@ -813,7 +822,8 @@ goldenFullPayloads =
     [ ("core-session",        (85,  "0641eeed95100f9a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
       -- #2021 re-pinned, same reason as goldenRichPayloads (one page
-      -- here, so 17 bytes rather than 34).
+      -- here, so 17 bytes rather than 34). #917 left it unmoved for the
+      -- same reason too — this page's location table is empty.
     , ("world-pages",         (700, "e99c20c10976e8b9"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",         (78,  "d70f14ce21048a09"))
@@ -1186,8 +1196,8 @@ spec = do
     -- ('decodeComponentValue' 's own @ccDecode@ then @ccValidate@
     -- sequence) at EVERY carrier shape, so no historical version
     -- routes around the check: the current 'LocationInstanceDTO' rides
-    -- @world-pages@ v8, frozen 'LocationInstanceDTOv4' rides v7,
-    -- 'LocationInstanceDTOv3' rides v6,
+    -- @world-pages@ v10, frozen 'LocationInstanceDTOv5' rides v8/v9,
+    -- 'LocationInstanceDTOv4' rides v7, 'LocationInstanceDTOv3' rides v6,
     -- 'LocationInstanceDTOv2' rides v4/v5 and 'LocationInstanceDTOv1'
     -- rides v2/v3 (one version per identical carrier shape suffices).
     -- @world-pages@ v1 predates persisted instances and carries no
@@ -1370,6 +1380,34 @@ spec = do
            \BEFORE the construction changed)" $ do
             encodedPayloadDigests richSnapshot `shouldBe` goldenRichPayloads
             encodedPayloadDigests fullSnapshot `shouldBe` goldenFullPayloads
+
+        -- The golden rows above are pinned on pages with an EMPTY
+        -- location table, so they cannot witness #917's v10 layout at
+        -- all — which is exactly why an unmoved world-pages row reads
+        -- as a stale pin. This is the observation that settles it: the
+        -- obligation fields DO reach the wire, and the golden fixtures
+        -- simply have no location to carry them.
+        it "a page owing significant contents encodes MORE than the same \
+           \page owing none -- the v10 obligation fields reach the wire, \
+           \which the golden rows above cannot show because their \
+           \location tables are empty" $ do
+            let withInstance entries = (minimalPage page1)
+                    { pgsGenParams = canon (defaultWorldGenParams
+                        { wgpLocationInstances = LocationInstances
+                            { lisNextId        = 2
+                            , lisById          = HM.singleton
+                                (LocationInstanceId 1) (significantOwner entries)
+                            , lisPendingLegacy = Nothing } }) }
+                sizeOf page = case captureSessionSnapshot minimalGlobals [page] of
+                    Left errs → error ("fixture invalid: " <> show errs)
+                    Right s   → sum [ BS.length (rcEncode c s)
+                                    | c ← saveComponentRegistry
+                                    , rcId c ≡ worldPagesComponentId ]
+                owing = sizeOf (withInstance
+                            [LocationSignificantItem 1 "processing_unit"
+                                (Just 7) True])
+                empty' = sizeOf (withInstance [])
+            owing `shouldSatisfy` (> empty')
 
         it "probes EVERY registered component -- a new codec cannot escape \
            \the dispatch invariants below by simply not being listed" $
