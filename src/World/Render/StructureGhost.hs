@@ -61,10 +61,11 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
-import Building.Render (ghostTint)
+import Building.Visual
+    (designatedGhostAlpha, ghostPieceTint, previewGhostAlpha)
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
+import Engine.Graphics.Vulkan.Types.Vertex (Vec4)
 import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog (ArtAsset(..), PieceArt(..))
 import Structure.Render
@@ -101,30 +102,12 @@ data GhostEnv = GhostEnv
     , gePlan      ∷ !PlanWorld
     }
 
--- | D-19's two lifecycle opacity factors. Named rather than spelled at
---   the two call sites, because the whole point of the pair is that the
---   preview is LIGHTER than the commitment — a relationship two loose
---   literals would not state.
-previewGhostAlpha, designatedGhostAlpha ∷ Float
-previewGhostAlpha    = 0.25
-designatedGhostAlpha = 0.60
-
--- | The tint one ghost draws with: D-19's lifecycle factor over the
---   frame's own @tileAlpha@, and — for an INVALID preview only (D-20) —
---   the RGB 'Building.Render.ghostTint' already uses for an invalid
---   building placement.
---
---   The RGB is read off that function rather than restated, so the two
---   build-tool families warn in one colour by construction. Its alpha is
---   deliberately discarded: a building ghost has one opacity, a
---   structure ghost has two, and D-19 owns which.
-ghostPieceTint ∷ Float   -- ^ frame @tileAlpha@
-               → Float   -- ^ lifecycle factor
-               → Bool    -- ^ valid? (invalid ⇒ red)
-               → Vec4
-ghostPieceTint tileAlpha factor valid =
-    let Vec4 r g b _ = ghostTint valid
-    in Vec4 r g b (tileAlpha * factor)
+-- The three names re-exported above are 'Building.Visual's since
+-- #1845: a BUILDING designation is now the same two-state ghost a
+-- structure piece has been since #1846, so D-19's factors and its
+-- valid/invalid tint stopped being this module's private convention and
+-- moved beside the geometry both families measure with. Re-exported
+-- here because this is where a structure-side reader looks for them.
 
 -- | The quads for one candidate, or none.
 --

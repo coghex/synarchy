@@ -222,11 +222,6 @@ data WorldCommand
         --   because the catalogue is keyed by pack NAME and is global;
         --   this is requirement 9's bounded page-level sweep, and it is
         --   enqueued only when a failure actually CHANGED the catalogue.
-    | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
-        -- ^ Ghost texture for committed BUILDING construction
-        --   designations. Structures draw their own art (#1846), so the
-        --   category argument survives only until DTV-10 (#1845) retires
-        --   the mechanism; anything but "building" is refused.
     | WorldSetConstructStructureTarget WorldPageId (Maybe StructurePiece)
         -- ^ The structure piece the build tool has ARMED (#1846), or
         --   'Nothing' on leaving placement. Drives the pre-anchor hover

@@ -25,7 +25,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Building.HitTest (hitTestBuildingAt)
-import Building.Render (buildingToQuad, ghostToQuad, ghostTint)
+import Building.Render (buildingToQuad, ghostToQuad)
 import Building.Schema
 import Building.Types
 import Building.Visual
@@ -419,19 +419,22 @@ ghostSpec = describe "ghost paths" $ do
             let ghost = BuildingGhost { bgDefName = bdName workerDef
                                       , bgGridX = 3, bgGridY = 1, bgGridZ = 0
                                       , bgValid = True }
-                q = ghostToQuad (const 0) 0 f zSlice texSizes ghost workerDef
+                q = ghostToQuad (const 0) 0 f zSlice texSizes tileAlpha
+                                ghost workerDef
             sqTexture q `shouldBe` staticHandle f
-            quadTint q `shouldBe` ghostTint True
-            quadTint (ghostToQuad (const 0) 0 f zSlice texSizes
+            quadTint q `shouldBe`
+                ghostPieceTint tileAlpha previewGhostAlpha True
+            quadTint (ghostToQuad (const 0) 0 f zSlice texSizes tileAlpha
                                   ghost { bgValid = False } workerDef)
-                `shouldBe` ghostTint False
+                `shouldBe` ghostPieceTint tileAlpha previewGhostAlpha False
 
     it "the preview sits exactly where the placed building will" $
         forM_ canonicalFacings $ \f → do
             let ghost = BuildingGhost { bgDefName = bdName tileBottomDef
                                       , bgGridX = 3, bgGridY = 1, bgGridZ = 0
                                       , bgValid = True }
-                q = ghostToQuad (const 0) 0 f zSlice texSizes ghost tileBottomDef
+                q = ghostToQuad (const 0) 0 f zSlice texSizes tileAlpha
+                                ghost tileBottomDef
                 placed = instanceOf tileBottomDef 0 0 False
             quadBounds q `shouldSatisfy`
                 boundsAgree (rectBounds (hitRect f 0 placed (Just tileBottomDef)))
@@ -444,7 +447,7 @@ ghostSpec = describe "ghost paths" $ do
             q ← renderedOrFail f False 0 inst (Just workerDef)
             sqTexture q `shouldBe` staticHandle f
             let Vec4 _ _ _ a = quadTint q
-            a `shouldSatisfy` closeTo (tileAlpha * 0.6)
+            a `shouldSatisfy` closeTo (tileAlpha * designatedGhostAlpha)
 
     it "beginning work hands off to the construction frame for the same facing" $
         forM_ canonicalFacings $ \f → do

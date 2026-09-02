@@ -140,9 +140,11 @@ concrete precondition
   #1837 (D-23), and the stale narrative in `docs/asset_system_findings.md`
   (ASSET-5) now redirects here and to the two replacement children. #1846
   removed the STRUCTURE placeholder, its handle, its HUD wiring and the
-  structure branch of `construction.setDesignateTexture`; #1845 (DTV-10) owns
-  the building half, so `construct_designate_building.png` is the only
-  category marker still shipped.
+  structure branch of `construction.setDesignateTexture`; #1845 (DTV-10) did
+  the same for the building half, taking the last category marker, the
+  `constructBuildingTexture` cursor field and the now category-less
+  `construction.setDesignateTexture` command with it. Neither placeholder is
+  shipped any more.
 - A planned `CtBuilding` already names a building definition whose
   `bdSouthTexture`, pixel dimensions, footprint anchor, and `bdSpriteAnchor` drive
   the placement ghost and final renderer. The current committed designation

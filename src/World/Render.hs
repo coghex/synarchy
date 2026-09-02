@@ -141,7 +141,7 @@ updateWorldTiles env = do
         then return (0, V.empty)
         else perVisiblePage worldManager $ \pageId worldState →
                 stampPageQuads (solarSlotOf pageId) ⊚
-                    renderWorldCursorQuadsScanned env worldState tileAlpha
+                    renderWorldCursorQuadsScanned env pageId worldState tileAlpha
 
     -- Ground-item quads, also per-frame: resting height derives from
     -- the CURRENT terrain each frame, so items drop with dug tiles
@@ -220,7 +220,7 @@ updateWorldTiles env = do
                 -- it is lit by that page (#1869).
                 activeSolarSlot = maybe solarPageNone (solarSlotOf . fst)
                                         (resolveActiveWorld worldManager)
-            renderGhostQuadScanned env activeSolarSlot facing zSlice
+            renderGhostQuadScanned env activeSolarSlot facing zSlice tileAlpha
 
     (zoomStat, zoomQuads) ← measureCategory ScZoomMap forcedQuadCount $
         generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH

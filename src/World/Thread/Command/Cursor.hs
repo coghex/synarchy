@@ -41,7 +41,6 @@ module World.Thread.Command.Cursor
     , handleWorldCancelConstructCommand
     , handleWorldSetConstructStatusCommand
     , handleWorldAddConstructProgressCommand
-    , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
     , handleWorldSetConstructStructureTargetCommand
     , handleWorldDesignateChopInstancesCommand
@@ -87,7 +86,6 @@ import World.Thread.Command.Cursor.Construct
     , handleWorldCancelConstructCommand
     , handleWorldSetConstructStatusCommand
     , handleWorldAddConstructProgressCommand
-    , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
     , handleWorldSetConstructStructureTargetCommand
     )

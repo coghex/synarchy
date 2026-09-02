@@ -34,6 +34,12 @@ module Building.Visual
     , buildingQuadRect
     , spriteAnchorOffset
     , placedBuildingQuad
+      -- * How a ghost of it is presented
+    , ghostTint
+    , previewGhostAlpha
+    , designatedGhostAlpha
+    , ghostPieceTint
+    , buildingStakedAt
     ) where
 
 import UPrelude
@@ -42,6 +48,8 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Camera (CameraFacing)
+import Engine.Graphics.Vulkan.Types.Vertex (Vec4(..))
+import World.Page.Types (WorldPageId)
 import World.Grid (tileWidth, tileHeight, tileSideHeight
                   , tileHalfWidth, tileHalfDiamondHeight
                   , applyFacingF, baseTileW, baseTileH)
@@ -257,3 +265,78 @@ placedBuildingQuad facing now zSlice texSizes inst mDef =
                      (biAnchorX inst) (biAnchorY inst) (biGridZ inst)
                      (bvTexture visual)
     in (visual, rect)
+
+-- * Ghost presentation (#1845)
+--
+--   A building is drawn as a translucent ghost in three places — the
+--   build tool's placement PREVIEW, the committed construction
+--   DESIGNATION, and the staked instance still waiting on its
+--   materials. D-19 makes those the same picture at two opacities, so
+--   the factors and the tint live here, beside the geometry every one
+--   of them measures with, rather than at three call sites that could
+--   drift apart.
+
+-- | The ghost preview's validity → RGBA tint (#778): neutral white
+--   translucent when valid, red-dominant translucent when invalid —
+--   the one place RGB tinting is allowed by design (see the
+--   no-tinting rule). A standalone pure function so the decision is
+--   Hspec-testable without a texture system / GPU.
+--
+--   Its ALPHA is the historical 0.6 and is read by nobody now that
+--   'ghostPieceTint' composes the lifecycle factor over the frame's own
+--   @tileAlpha@; the RGB is what every caller wants from it.
+ghostTint ∷ Bool → Vec4
+ghostTint valid
+    | valid     = Vec4 1.0 1.0 1.0 0.6
+    | otherwise = Vec4 1.0 0.4 0.4 0.6
+
+-- | D-19's two lifecycle opacity factors. Named rather than spelled at
+--   the call sites, because the whole point of the pair is that the
+--   preview is LIGHTER than the commitment — a relationship two loose
+--   literals would not state.
+--
+--   Both are MULTIPLIERS over the frame's existing @tileAlpha@ zoom
+--   fade (and over the texture's own authored alpha), never
+--   replacements for it: a ghost fades out with the world it sits in.
+previewGhostAlpha, designatedGhostAlpha ∷ Float
+previewGhostAlpha    = 0.25
+designatedGhostAlpha = 0.60
+
+-- | The tint one ghost draws with: D-19's lifecycle factor over the
+--   frame's own @tileAlpha@, and — for an INVALID preview only (D-20) —
+--   the RGB 'ghostTint' uses for an invalid building placement.
+--
+--   A COMMITTED designation is never invalid-tinted (#1845 requirement
+--   5): the red is placement feedback, and a job the player already
+--   committed to has no placement left to refuse.
+ghostPieceTint ∷ Float   -- ^ frame @tileAlpha@
+               → Float   -- ^ lifecycle factor
+               → Bool    -- ^ valid? (invalid ⇒ red)
+               → Vec4
+ghostPieceTint tileAlpha factor valid =
+    let Vec4 r g b _ = ghostTint valid
+    in Vec4 r g b (tileAlpha * factor)
+
+-- | Has the building this designation planned already been staked?
+--
+--   The staking hand-off crosses two queues — @building.spawn@ lands
+--   the instance on the building queue (drained by the unit thread)
+--   while the completion removes the designation on the world queue —
+--   so a frame can legitimately see both. They are the same 60 % ghost
+--   of the same definition at the same anchor, so drawing both would
+--   double the opacity for as long as the hand-off takes; the
+--   designation yields, since the instance is the durable half.
+--
+--   Matched on PAGE, def name and anchor together: a building of some
+--   other definition at the anchor is not this designation's stake, and
+--   an instance on another page is not on screen for this pass at all
+--   (#1673's page-qualification discipline).
+buildingStakedAt ∷ WorldPageId → Text → (Int, Int)
+                 → HM.HashMap BuildingId BuildingInstance → Bool
+buildingStakedAt page defName (ax, ay) =
+    HM.foldl' (\found inst → found ∨ matches inst) False
+  where
+    matches inst = biPage inst ≡ page
+                 ∧ biDefName inst ≡ defName
+                 ∧ biAnchorX inst ≡ ax
+                 ∧ biAnchorY inst ≡ ay

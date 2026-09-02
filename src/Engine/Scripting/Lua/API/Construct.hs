@@ -22,7 +22,6 @@ module Engine.Scripting.Lua.API.Construct
     , constructBeginPlacementFn
     , constructAbortPlacementFn
     , constructResolvePlanFn
-    , constructSetDesignateTextureFn
     , constructSetLineModeFn
     , constructSetStructureTargetFn
     , constructClearStructureTargetFn
@@ -47,7 +46,6 @@ import Engine.Core.State
 import World.Construct.Plan
     ( PlanOp(..), PlanResult(..), PlanWorld(..), planOutcomeName
     , resolveStructurePlan )
-import Engine.Asset.Handle (TextureHandle(..))
 import World.Construct.Attempt (ConstructAttemptId(..))
 import Structure.Types (StructureCommitWindow(..), StructureStageToken(..))
 import World.Construct.Receipt (receiptEntries)
@@ -657,25 +655,6 @@ constructBeginPlacementFn wsc = do
         _ → pure False
     Lua.pushboolean ok
     return 1
-
--- | construction.setDesignateTexture(pageId, category, texHandle) — ghost
---   texture for committed BUILDING designations. Structures draw their
---   own art since #1846, so \"building\" is the only category the world
---   thread still accepts; anything else warns there.
-constructSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetDesignateTextureFn wsc = do
-    pageIdArg ← Lua.tostring 1
-    catArg ← Lua.tostring 2
-    handleArg ← Lua.tointeger 3
-    case (pageIdArg, catArg, handleArg) of
-        (Just pageIdBS, Just catBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (wsWorldQueue wsc) $
-                WorldSetConstructDesignateTexture pageId
-                    (TE.decodeUtf8Lenient catBS) texHandle
-        _ → pure ()
-    return 0
 
 -- | construction.setLineMode(pageId, enabled) — wire path tool (#359):
 --   while enabled, the anchor→hover preview

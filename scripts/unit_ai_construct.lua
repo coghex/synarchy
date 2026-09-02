@@ -296,25 +296,11 @@ local function constructExecute(uid, s, params)
     -- Keep the claim fresh, carrying the attempt it is a claim ON.
     constructClaims[key] = { uid = uid, at = now, attempt = job.attempt }
 
-    -- Building blueprint: walk up and stake it, then hand off to the
-    -- delivery + build_nearby machinery.
+    -- Building blueprint: walk up, stake it, and hold the designation
+    -- until the staked building is really there (site.stakeBuilding,
+    -- #1845). Then hand off to the delivery + build_nearby machinery.
     if job.category == "building" then
-        local d = distance(info.gridX, info.gridY, job.x + 0.5, job.y + 0.5)
-        if d > 2.2 then
-            unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
-            return
-        end
-        unit.stop(uid)
-        local bid = building.spawn(job.building, job.x, job.y)
-        if bid then
-            construction.setJobStatus(wid, job.x, job.y, "complete",
-                                      job.attempt)
-            releaseConstructJob(wid, s, uid)
-        else
-            -- Placement invalid (terrain changed, overlap) — retrying
-            -- can't succeed, so cancel the blueprint and say so.
-            reportFailure(uid, "Can't build here — blueprint cancelled")
-            construction.cancelDesignation(job.x, job.y, job.attempt)
+        if site.stakeBuilding(wid, job, uid, info, now, params) ~= "working" then
             releaseConstructJob(wid, s, uid)
         end
         return

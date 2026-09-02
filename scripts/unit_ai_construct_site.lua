@@ -194,6 +194,60 @@ function M.sweepClaims(constructClaims, constructKey, wid, jobs, now, timeout)
     end
 end
 
+-- Stake a BUILDING blueprint, and hold the designation until the
+-- building it stakes is really on screen (#1845).
+--
+-- `building.spawn` returns as soon as the insertion is QUEUED: it lands
+-- on the building queue, which the UNIT thread drains, while
+-- `setJobStatus("complete")` removes the designation on the WORLD
+-- queue. The two are applied independently, so reporting the completion
+-- straight after the spawn can delete the designation ghost a frame or
+-- more before the staked building exists to draw its own, and the site
+-- blinks empty. The designation ghost and the staked pre-delivery ghost
+-- are the same 60 % picture of the same definition at the same anchor
+-- (the renderer yields the designation once both exist), so simply
+-- holding the designation until the instance is observable makes the
+-- whole hand-off invisible.
+--
+-- The wait normally ends on the very next tick. The deadline is for the
+-- one case where the queued spawn is dropped outright — its page torn
+-- down, its definition unregistered — and there an empty site is the
+-- honest picture, because nothing was built.
+--
+-- Returns "working" while the unit still owes this job something
+-- (walking, or waiting on the stake), and "done" or "gone" when the
+-- caller should release it.
+function M.stakeBuilding(wid, job, uid, info, now, params)
+    local core = require("scripts.unit_ai_core")
+    local mv = require("scripts.movement_speed")
+    if not job.stakedBid then
+        if core.distance(info.gridX, info.gridY,
+                         job.x + 0.5, job.y + 0.5) > 2.2 then
+            unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
+            return "working"
+        end
+        unit.stop(uid)
+        job.stakedBid = building.spawn(job.building, job.x, job.y)
+        job.stakedAt = now
+        if not job.stakedBid then
+            -- Placement invalid (terrain changed, overlap) — retrying
+            -- can't succeed, so cancel the blueprint and say so.
+            core.reportFailure(uid, "Can't build here — blueprint cancelled")
+            construction.cancelDesignation(job.x, job.y, job.attempt)
+            return "gone"
+        end
+    end
+    -- `building.getInfo` reads the same manager the renderer draws from,
+    -- so "observable here" is exactly "drawable there".
+    local visible = building.getInfo and building.getInfo(job.stakedBid)
+    local timeout = params.construct_stake_visible_timeout or 5.0
+    if not visible and (now - (job.stakedAt or now)) <= timeout then
+        return "working"
+    end
+    construction.setJobStatus(wid, job.x, job.y, "complete", job.attempt)
+    return "done"
+end
+
 -- Finish one job: requirement 10's third re-check, requirement 18's
 -- exact-attempt placement hand-off, the placement itself, and the
 -- completion-or-refund that follows it (#1844).

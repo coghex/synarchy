@@ -274,6 +274,8 @@ local config = {
         construct_lock_utility  = 6.0,
         construct_rate          = 1.0,
         construct_claim_timeout = 30.0,  -- stale-claim expiry (seconds)
+        -- #1845 hand-off deadline (unit_ai_construct_site.stakeBuilding)
+        construct_stake_visible_timeout = 5.0,
         construct_xp_per_piece  = 1.0,   -- construction XP per placed
                                          -- piece (#265; diminishing via
                                          -- applySkillXP, like mining)

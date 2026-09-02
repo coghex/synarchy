@@ -556,8 +556,7 @@ scannedMeaningSpec = describe "the per-category scanned meanings" $ do
         withTexture ← runPass env
         scannedOf ScCursor withTexture `shouldBe` 3
 
-    it "expands a construction designation to its def's whole\
-       \ footprint" $ \env → do
+    it "counts one candidate per committed building designation" $ \env → do
         ws ← resetScene env gameplayCamera
         bm ← readIORef (buildingManagerRef env)
         writeIORef (buildingManagerRef env) bm
@@ -565,15 +564,15 @@ scannedMeaningSpec = describe "the per-category scanned meanings" $ do
         writeIORef (wsConstructDesignationsRef ws) $ HM.singleton (0, 0)
             (newConstructDesignation 0 (CtBuilding (bdName footprintDef))
                                  firstConstructAttemptId)
-        cs ← readIORef (wsCursorRef ws)
-        writeIORef (wsCursorRef ws)
-            cs { constructBuildingTexture = Just (TextureHandle 9) }
         stats ← runPass env
-        -- ONE anchor-only map entry (#807), six candidates: the
-        -- designation's candidates are the FOOTPRINT tiles, not the
-        -- map entries.
-        scannedOf ScCursor stats
-            `shouldBe` bdTileW footprintDef * bdTileH footprintDef
+        -- ONE anchor-only map entry, ONE candidate. #1845 replaced
+        -- #807's per-footprint-tile marker repetition with a single
+        -- sprite of the building's own art, so the def's 2x3 footprint
+        -- changes the SIZE of that one quad and not the count — and no
+        -- cursor texture arms the builder any more, because there is no
+        -- category placeholder left to arm it with.
+        bdTileW footprintDef * bdTileH footprintDef `shouldSatisfy` (> 1)
+        scannedOf ScCursor stats `shouldBe` 1
 
     it "counts every ground-item record on the page" $ \env → do
         ws ← resetScene env gameplayCamera

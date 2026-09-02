@@ -1434,6 +1434,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
+                   Test.Headless.Building.Ghost
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

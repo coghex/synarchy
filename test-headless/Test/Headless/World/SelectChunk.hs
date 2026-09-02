@@ -439,6 +439,6 @@ sharedSpec = describe "zoom cursor selection (#813) — tile-render commit" $
                         -- The next tile-cursor render pass must NOT resolve
                         -- the now-cleared arm and wipe the fresh chunk
                         -- selection out via the #135 opposing-clear.
-                        _ ← renderWorldCursorQuads env ws 1.0
+                        _ ← renderWorldCursorQuads env pid ws 1.0
                         afterRender ← readIORef (wsCursorRef ws)
                         zoomSelectedPos afterRender `shouldBe` Just (tgx, tgy)

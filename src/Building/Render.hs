@@ -19,6 +19,7 @@ module Building.Render
     , renderGhostQuad
     , renderGhostQuadScanned
     , ghostToQuad
+    , buildingGhostQuad
     , ghostTint
     ) where
 
@@ -41,7 +42,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vec2(..), Vec4(..)
                                           , rectCorners, fullQuadUV
                                           , renderFlagSelected, tileWorldUV
                                           , noFaceMapVertexId)
-import World.Grid (tileHalfDiamondHeight, worldLayer)
+import World.Grid (worldLayer)
 import World.State.Types (wmVisible)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
@@ -164,10 +165,14 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
                     + 0.0005
 
             actualSlot = lookupSlot texHandle
-            -- Pre-delivery ghost: 0.6 alpha, matching the placement-
-            -- time ghost, so the player sees a translucent silhouette
-            -- of what'll land here once delivery completes.
-            ghostFactor = if isGhost then 0.6 else 1.0
+            -- Pre-delivery ghost: D-19's committed 60 %, the SAME
+            -- factor the construction designation this instance was
+            -- staked from draws with (#1845 requirement 3), so staking
+            -- changes nothing the player can see until delivery
+            -- completes. Geometry cannot jump either: both go through
+            -- 'buildingQuadRect' with this def's own sprite anchor and
+            -- the facing's static view.
+            ghostFactor = if isGhost then designatedGhostAlpha else 1.0
             tint = Vec4 1.0 1.0 1.0 (tileAlpha * ghostFactor)
             flags = if isSel then renderFlagSelected else 0
             wuv = tileWorldUV (biAnchorX inst) (biAnchorY inst)
@@ -193,27 +198,16 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             , sqLayer   = worldLayer
             }
 
--- | The ghost preview's validity → RGBA tint (#778): neutral white
---   translucent when valid, red-dominant translucent when invalid —
---   the one place RGB tinting is allowed by design (see the
---   no-tinting rule). A standalone pure function (not inlined into
---   'renderGhostQuad') so the decision is Hspec-testable without a
---   texture system / GPU.
-ghostTint ∷ Bool → Vec4
-ghostTint valid
-    | valid     = Vec4 1.0 1.0 1.0 0.6
-    | otherwise = Vec4 1.0 0.4 0.4 0.6
-
 -- | Render the ghost preview if one is set. Returns at most one quad,
 --   in a vector for caller convenience. Tinted via 'ghostTint'.
 --
 --   The ghost has no page of its own — it previews a placement on
 --   whichever page is active — so it takes the ACTIVE page's solar slot
 --   (#1869), which is the page the placement will land on.
-renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int
+renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int → Float
                 → IO (V.Vector SortableQuad)
-renderGhostQuad env solarSlot facing zSlice =
-    snd ⊚ renderGhostQuadScanned env solarSlot facing zSlice
+renderGhostQuad env solarSlot facing zSlice tileAlpha =
+    snd ⊚ renderGhostQuadScanned env solarSlot facing zSlice tileAlpha
 
 -- | 'renderGhostQuad' with the scene-assembly telemetry (#1921) this
 --   pass contributes: the optional ghost CANDIDATE — zero or one —
@@ -223,9 +217,9 @@ renderGhostQuad env solarSlot facing zSlice =
 --   definition lookup and the texture-system check reject it, since
 --   those rejections are exactly what an emitted count of zero beside
 --   a scanned count of one records.
-renderGhostQuadScanned ∷ EngineEnv → Word32 → CameraFacing → Int
+renderGhostQuadScanned ∷ EngineEnv → Word32 → CameraFacing → Int → Float
                        → IO (Int, V.Vector SortableQuad)
-renderGhostQuadScanned env solarSlot facing zSlice = do
+renderGhostQuadScanned env solarSlot facing zSlice tileAlpha = do
     mGhost ← readIORef (buildingGhostRef env)
     case mGhost of
         Nothing → return (0, V.empty)
@@ -245,44 +239,61 @@ renderGhostQuadScanned env solarSlot facing zSlice = do
                             in return $ (,) 1 $ V.singleton
                                 $ setQuadSolarPage solarSlot
                                 $ ghostToQuad lookupSlot noFaceMapVertexId
-                                              facing zSlice texSizes ghost def
+                                              facing zSlice texSizes tileAlpha
+                                              ghost def
 
--- | The placement preview's quad: the facing's STATIC view of the
---   definition (#2088), placed exactly as 'buildingToQuad' would place
---   the building once committed. Pure — exported so the facing
---   selection and placement are assertable without a texture system.
-ghostToQuad
+-- | The ONE ghost quad body (#1845): the facing's STATIC view of a
+--   definition, placed exactly where 'buildingToQuad' would place the
+--   building once it stands there, at a D-19 lifecycle opacity over the
+--   frame's own @tileAlpha@.
+--
+--   The build tool's placement PREVIEW and the committed construction
+--   DESIGNATION both come through here, so "two states, one art" is a
+--   property of the code rather than of two call sites that happen to
+--   agree today. The staked pre-delivery instance reaches the same
+--   picture through 'buildingToQuad' — the same 'buildingQuadRect', the
+--   same sprite anchor, the same static view and the same
+--   'designatedGhostAlpha' — because it has an instance to draw from and
+--   this does not.
+--
+--   The sort key is the PLACED key, not a sprite-height one: preview,
+--   designation and staked instance must not reorder against their
+--   surroundings as a plan turns into a building (#2088 left the
+--   preview's own formula alone; this slice is where the three are
+--   unified). Pure, so both the choice and the placement are assertable
+--   without a texture system.
+buildingGhostQuad
     ∷ (TextureHandle → Word32)
-    → Float
+    → Float                                 -- ^ face-map slot
     → CameraFacing
-    → Int
-    → HM.HashMap TextureHandle (Int, Int)
-    → BuildingGhost
+    → Int                                   -- ^ camera z slice
+    → HM.HashMap TextureHandle (Int, Int)   -- ^ texture pixel sizes
+    → Float                                 -- ^ frame tileAlpha
+    → Float                                 -- ^ lifecycle factor
+    → Bool                                  -- ^ valid? (invalid ⇒ red)
     → BuildingDef
+    → Int → Int → Int                       -- ^ anchor gx, gy, grid z
     → SortableQuad
-ghostToQuad lookupSlot defFmSlot facing zSlice texSizes ghost def =
+buildingGhostQuad lookupSlot defFmSlot facing zSlice texSizes
+                  tileAlpha factor valid def gx gy gz =
     let texHandle = previewBuildingTexture facing def
-        -- Lifted to the terrain Z the placed building will land at,
-        -- with the same sprite-anchor drop, by the same function the
-        -- placed path uses. Without the lift the ghost stays glued to
-        -- the camera slice while the cursor + the about-to-be-placed
-        -- building both sit at terrainZ, producing a visible offset
-        -- on non-flat terrain.
+        -- Lifted to the terrain Z the building will land at, with the
+        -- same sprite-anchor drop, by the same function the placed path
+        -- uses. Without the lift the ghost stays glued to the camera
+        -- slice while the building sits at terrainZ, producing a
+        -- visible offset on non-flat terrain.
         BuildingQuadRect
             { bqX = drawX, bqY = drawY, bqW = quadW, bqH = quadH
             , bqIsoDepth = isoDepth } =
             buildingQuadRect facing zSlice texSizes
-                             (spriteAnchorOffset (Just def))
-                             (bgGridX ghost) (bgGridY ghost) (bgGridZ ghost)
-                             texHandle
-        tint = ghostTint (bgValid ghost)
+                             (spriteAnchorOffset (Just def)) gx gy gz texHandle
+        -- 'buildingToQuad's key, term for term.
+        sortKey = isoDepth
+                + fromIntegral (gz - zSlice) * 0.001
+                + 0.0005
+        tint = ghostPieceTint tileAlpha factor valid
         actualSlot = lookupSlot texHandle
-        -- Unlike the placed key, this one carries the canvas height, so
-        -- a facing whose authored canvas is taller legitimately sorts
-        -- differently. Retained as it was (#2088 keeps the ghost sort
-        -- formula out of scope).
-        sortKey = isoDepth + quadH / tileHalfDiamondHeight * 0.5 + 0.01
-        wuv = tileWorldUV (bgGridX ghost) (bgGridY ghost)
+        wuv = tileWorldUV gx gy
         (v0, v1, v2, v3) =
             quadVertices
                 (rectCorners (Vec2 drawX drawY)
@@ -304,3 +315,22 @@ ghostToQuad lookupSlot defFmSlot facing zSlice texSizes ghost def =
         , sqTexture = texHandle
         , sqLayer   = worldLayer
         }
+
+-- | The placement preview's quad (#1845 requirement 2): D-19's 25 %,
+--   red where the placement is refused (#778). A thin naming of
+--   'buildingGhostQuad' — the preview is the LIGHTER of the two ghost
+--   states and the only one that ever shows the invalid tint.
+ghostToQuad
+    ∷ (TextureHandle → Word32)
+    → Float
+    → CameraFacing
+    → Int
+    → HM.HashMap TextureHandle (Int, Int)
+    → Float                                 -- ^ frame tileAlpha
+    → BuildingGhost
+    → BuildingDef
+    → SortableQuad
+ghostToQuad lookupSlot defFmSlot facing zSlice texSizes tileAlpha ghost def =
+    buildingGhostQuad lookupSlot defFmSlot facing zSlice texSizes
+                      tileAlpha previewGhostAlpha (bgValid ghost) def
+                      (bgGridX ghost) (bgGridY ghost) (bgGridZ ghost)

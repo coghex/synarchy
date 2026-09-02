@@ -1156,7 +1156,7 @@ previewQuads env ws tool arm = do
         { worldCursorPos = Just (pixX, pixY)
         , worldCursorTexture = Just (TextureHandle 1)
         }
-    renderWorldCursorQuads env ws 1.0
+    renderWorldCursorQuads env fixturePage ws 1.0
 
 markerQuads ∷ EngineEnv → WorldState → CursorState
             → IO (V.Vector SortableQuad)
@@ -1164,7 +1164,7 @@ markerQuads env ws cursorState = do
     _ ← configureSeamView env
     writeIORef (wsToolModeRef ws) TillTool
     writeIORef (wsCursorRef ws) cursorState
-    renderWorldCursorQuads env ws 1.0
+    renderWorldCursorQuads env fixturePage ws 1.0
 
 configureSeamView ∷ EngineEnv → IO (Int, Int)
 configureSeamView env = do
