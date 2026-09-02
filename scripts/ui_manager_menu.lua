@@ -198,6 +198,22 @@ function uiManager.onSaveLoaded(survUnitIds, survBuildingIds)
     if containerWindow and containerWindow.closeIfOpen then
         containerWindow.closeIfOpen()
     end
+
+    -- #2156: the ONE explicit cross-owner teardown of transient,
+    -- session-bound UI state a whole-session replacement needs -- the
+    -- thought/combat/injury histories, the four log panels, the
+    -- notification cards and their queue -- run here because this
+    -- broadcast is the one hook every load reaches (see above). It is
+    -- its own "saveLoaded" transition, NOT the hudHide sweep (which
+    -- also clears transfers, tools and selections the load reconciles
+    -- through its own paths), and the #1610 Exit-to-Menu registry stays
+    -- out of the load transaction exactly as before. Every hook is
+    -- pcall-isolated, so one failing clear can suppress neither another
+    -- nor the rebinding above. The Haskell-owned half (input, focus,
+    -- the event streams, the locked tooltip) ran in
+    -- World.Load.Publish.resetTransientState before this broadcast.
+    require("scripts.ui.view_teardown").run("saveLoaded",
+        { worldId = activeId })
 end
 
 function uiManager.onCreateWorld()

@@ -1239,6 +1239,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
+                   Test.Headless.Load.ReplacementTeardown
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
                    Test.Headless.World.GeneratedIdentity
