@@ -14,6 +14,7 @@ import qualified Test.Headless.WorldGen.SoilShed as SoilShed
 import qualified Test.Headless.WorldGen.SoilRedistribution as SoilRedistribution
 import qualified Test.Headless.WorldGen.Exposure as Exposure
 import qualified Test.Headless.WorldGen.ZoomParity as ZoomParity
+import qualified Test.Headless.WorldGen.ZoomArtifact as ZoomArtifact
 import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
@@ -323,6 +324,7 @@ import qualified Test.Headless.Capability.WorldSim as CapabilityWorldSim
 
 main ∷ IO ()
 main = hspec $ do
+    describe "World.ZoomMap.Artifact" ZoomArtifact.spec
     -- ONE engine for all worldgen specs. Worlds are memoized by
     -- (seed, size, plateCount) via Test.Headless.Harness.sharedWorld
     -- — generation is the entire cost of this suite, so specs share
@@ -341,6 +343,7 @@ main = hspec $ do
         describe "Biome Flatness" Flatness.spec
         describe "Column Exposure" Exposure.spec
         describe "Zoom/Detail Parity" ZoomParity.spec
+        ZoomArtifact.worldSpec
         describe "Border Probe" BorderProbe.spec
         Climate.spec
         describe "Asset.TextureFallback" TextureFallback.spec
