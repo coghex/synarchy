@@ -29,7 +29,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Yaml as Yaml
-import Building.Render (pickBuildingFrame)
+import Building.Visual (pickBuildingFrame)
 import Building.Schema
 import Building.Types
 import Engine.Asset.Handle (TextureHandle(..))
@@ -457,12 +457,12 @@ lifecycleSpec = do
     it "keeps construction progress-driven and appearance time-driven" $ do
         -- Construction indexes on progress and ignores the clock, so a
         -- stalled build freezes rather than animating on.
-        pickBuildingFrame 0 (instanceAt 0 0) workerDef `shouldBe` handle 10
-        pickBuildingFrame 9999 (instanceAt 0 0) workerDef `shouldBe` handle 10
-        pickBuildingFrame 0 (instanceAt 0 60) workerDef `shouldBe` handle 12
+        pickBuildingFrame FaceSouth 0 (instanceAt 0 0) workerDef `shouldBe` handle 10
+        pickBuildingFrame FaceSouth 9999 (instanceAt 0 0) workerDef `shouldBe` handle 10
+        pickBuildingFrame FaceSouth 0 (instanceAt 0 60) workerDef `shouldBe` handle 12
         -- Appearance indexes on elapsed game time and ignores progress.
-        pickBuildingFrame 0 (instanceAt 0 0) timedDef `shouldBe` handle 20
-        pickBuildingFrame 1.0 (instanceAt 0 0) timedDef `shouldBe` handle 22
+        pickBuildingFrame FaceSouth 0 (instanceAt 0 0) timedDef `shouldBe` handle 20
+        pickBuildingFrame FaceSouth 1.0 (instanceAt 0 0) timedDef `shouldBe` handle 22
 
     it "pins the last frame of the role the definition's build_work picked" $ do
         -- Neither def declares a `built` animation, so a Built instance
@@ -470,12 +470,12 @@ lifecycleSpec = do
         -- back to the static sprite.
         legacyRoleFor 120 `shouldBe` RoleConstruction
         legacyRoleFor 0 `shouldBe` RoleAppearance
-        pickBuildingFrame 0 (instanceAt 0 120) workerDef `shouldBe` handle 13
-        pickBuildingFrame 99 (instanceAt 0 0) timedDef `shouldBe` handle 23
+        pickBuildingFrame FaceSouth 0 (instanceAt 0 120) workerDef `shouldBe` handle 13
+        pickBuildingFrame FaceSouth 99 (instanceAt 0 0) timedDef `shouldBe` handle 23
 
-    it "renders the static SOUTH view when no role animation applies" $ do
+    it "renders the static view when no role animation applies" $ do
         let bare = workerDef { bdRoleAnims = Map.empty }
-        pickBuildingFrame 0 (instanceAt 0 0) bare `shouldBe` handle 1
+        pickBuildingFrame FaceSouth 0 (instanceAt 0 0) bare `shouldBe` handle 1
         bdSouthTexture bare `shouldBe` handle 1
 
     it "reloads a snapshot with progress intact and textures re-resolved" $ do

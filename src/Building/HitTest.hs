@@ -2,12 +2,19 @@
 -- | Screen-pixel → BuildingId hit testing.
 --
 -- Mirrors 'Unit.HitTest.hitTestUnitAt' but tests against each
--- building's sprite quad. Buildings have multi-tile footprints; the
--- sprite-quad math here is the same as 'Building.Render.buildingToQuad'
--- so the click target matches the visible sprite exactly.
+-- building's sprite quad. The quad is not computed here: it is the
+-- SAME 'Building.Visual.placedBuildingQuad' the renderer draws from
+-- (#2088) — the facing's own declared view at the lifecycle frame the
+-- progress / clock selects (or the static view of a pre-delivery
+-- ghost), sized from that texture, with the sprite-anchor drop applied
+-- — so the click target IS the visible quad at every camera facing. A
+-- pixel that lies only inside some other view's bounds does not hit.
 --
--- Returns the building with the highest gridZ that contains the click;
--- on ties, the closer (smaller distance to quad center) wins.
+-- What stays this module's own is the POLICY around the quad: only the
+-- active world is clickable, the z-slice / view-depth band, the
+-- degenerate-window guard, highest grid z wins, and equal-z ties
+-- prefer the closer quad centre. Hit-testing is quad-based, not
+-- per-alpha-pixel.
 module Building.HitTest
     ( hitTestBuildingAt
     ) where
@@ -23,11 +30,9 @@ import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Graphics.Camera (Camera2D(..))
 import Engine.Graphics.Viewport (windowDegenerate)
-import World.Grid (tileWidth, tileHeight, tileSideHeight
-                  , tileHalfWidth, tileHalfDiamondHeight
-                  , applyFacingF, baseTileW, baseTileH)
 import World.Generate (viewDepth)
 import Building.Types
+import Building.Visual (BuildingQuadRect(..), placedBuildingQuad)
 
 -- | Hit test at framebuffer-pixel coordinates. Returns the topmost
 --   (highest-Z) building whose sprite quad contains the click.
@@ -39,6 +44,9 @@ hitTestBuildingAt env pixX pixY = do
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     texSizes ← readIORef (rvTextureSizeRef rv)
     mgr      ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    -- Same game clock the renderer reads, so the target is sized from
+    -- the frame that is actually on screen this tick.
+    now      ← readIORef (wsGameTimeRef (toWorldSimCapability env))
 
     -- Only the active world's buildings are clickable (#76) — matches the
     -- render scoping; a hidden world's building must not win the hit-test.
@@ -73,29 +81,15 @@ hitTestBuildingAt env pixX pixY = do
                 candidates =
                     [ (gridZ, dist, bid)
                     | (bid, inst) ← HM.toList instances
-                    , let gridZ     = biGridZ inst
-                          relativeZ = gridZ - zSlice
+                    , let gridZ = biGridZ inst
                     , gridZ ≤ zSlice
                     , gridZ ≥ zSlice - effDepth
-                    , let texHandle = biTexture inst
-                          (texW, texH) = case HM.lookup texHandle texSizes of
-                              Just (w, h) → (fromIntegral w, fromIntegral h)
-                              Nothing     → (baseTileW, baseTileH)
-                          scaleX = texW / baseTileW
-                          scaleY = texH / baseTileH
-                          quadW  = tileWidth  * scaleX
-                          quadH  = tileHeight * scaleY
-                          -- Mirror buildingToQuad: anchor centered on
-                          -- the bottom-left tile of the footprint.
-                          gxF = fromIntegral (biAnchorX inst) + 0.5
-                          gyF = fromIntegral (biAnchorY inst) + 0.5
-                          (faF, fbF) = applyFacingF facing gxF gyF
-                          rawX = (faF - fbF) * tileHalfWidth - tileHalfWidth
-                          rawY = (faF + fbF) * tileHalfDiamondHeight
-                          heightOffset = fromIntegral relativeZ * tileSideHeight
-                          drawX = rawX + (tileWidth - quadW) * 0.5
-                          drawY = rawY - heightOffset
-                                + tileHalfDiamondHeight - quadH
+                    , let mDef = HM.lookup (biDefName inst) (bmDefs bm)
+                          (_, BuildingQuadRect
+                                { bqX = drawX, bqY = drawY
+                                , bqW = quadW, bqH = quadH }) =
+                              placedBuildingQuad facing now zSlice texSizes
+                                                 inst mDef
                           cx    = drawX + quadW * 0.5
                           cy    = drawY + quadH * 0.5
                           dx    = worldX - cx

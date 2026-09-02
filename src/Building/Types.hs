@@ -105,9 +105,11 @@ data BuildingDef = BuildingDef
     , bdTextures    ∷ !(FacingAssets TextureHandle)
       -- ^ The four static views (#2080), one independently addressable
       --   handle per camera facing, plus whether they were declared
-      --   canonically or came from one legacy @sprite@ path. Only the
-      --   south view is drawn in this slice ('bdSouthTexture'); BDA-2
-      --   owns selecting a view from the active camera.
+      --   canonically or came from one legacy @sprite@ path. The view
+      --   on screen is the ACTIVE CAMERA's (#2088,
+      --   'Building.Visual.previewBuildingTexture'); 'bdSouthTexture'
+      --   is the camera-blind south view the build menu and the
+      --   instance's stamped fallback handle keep.
     , bdIconTexture ∷ !TextureHandle
       -- ^ The SAME south sprite uploaded under the UI policy (#2075),
       --   for the build menu's `iconTex`. The menu shows one view, and
@@ -135,7 +137,7 @@ data BuildingDef = BuildingDef
       --   completes, with no acolyte assignment needed). When > 0,
       --   Constructing→Built and the construction-anim frame are
       --   derived from biBuildProgress / bdBuildWork instead of
-      --   elapsed time.
+      --   elapsed time — at every camera facing alike.
     , bdMaterials   ∷ !(HM.HashMap Text Int)
       -- ^ Materials required to start construction. Item def name →
       --   integer count. Empty (default) = no materials gate: progress
@@ -220,7 +222,11 @@ data BuildingInstance = BuildingInstance
       --   serialized — a save holds one world; loaded buildings are
       --   stamped with the load target page). Scopes placement/render so
       --   a building in one world never blocks or draws in another (#76).
-    , biTexture    ∷ !TextureHandle      -- ^ copied from def
+    , biTexture    ∷ !TextureHandle
+      -- ^ The def's SOUTH view, copied at spawn and re-resolved at load.
+      --   Not what is drawn: rendering and hit-testing select the active
+      --   facing's asset from the def by 'biDefName' (#2088), and read
+      --   this only when that def is missing from the manager.
     , biAnchorX    ∷ !Int                -- ^ tile coords (footprint origin)
     , biAnchorY    ∷ !Int
     , biGridZ      ∷ !Int                -- ^ vertical layer (terrain Z at place time)
@@ -308,8 +314,11 @@ buildingsOnPages ∷ HS.HashSet WorldPageId
                  → HM.HashMap BuildingId BuildingInstance
 buildingsOnPages pages = HM.filter (\bi → HS.member (biPage bi) pages)
 
--- | The south view — the one static handle this slice renders and
---   copies onto a placed instance. BDA-2 owns making that a choice.
+-- | The south view: the camera-blind handle a placed instance is
+--   stamped with ('biTexture') and the view the build menu shows. Not
+--   a render lookup — 'Building.Visual' selects the ACTIVE facing's
+--   view (#2088); this stays the one stable view for camera-independent
+--   consumers.
 bdSouthTexture ∷ BuildingDef → TextureHandle
 bdSouthTexture = facingAsset FaceSouth ∘ bdTextures
 
