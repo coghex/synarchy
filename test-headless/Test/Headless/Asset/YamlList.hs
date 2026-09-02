@@ -26,6 +26,11 @@ import System.Directory
     (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import GHC.Generics (Generic)
+-- 'HasCallStack' is deliberately NOT listed here: it reaches this
+-- module through UPrelude's @module Prelude@ re-export (base-4.21
+-- exports it from Prelude), so naming it as well is a redundant
+-- import and @-Werror=unused-imports@ makes that a build failure.
+-- 'Test.Headless.Core.LogMonad' imports it the same way.
 import GHC.Stack (SrcLoc(..))
 import Data.Aeson (FromJSON(..), (.:), withObject)
 import Engine.Core.Log
