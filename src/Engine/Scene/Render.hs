@@ -1,4 +1,10 @@
 {-# LANGUAGE Strict #-}
+-- | The scene's per-frame update and its GPU buffer plumbing. Per-frame
+--   batch generation happens here ('updateSceneForRender' fills the
+--   'BatchManager''s sprite AND text batches); deciding where those
+--   batches land in the frame is "Engine.Scene.Assembly"'s pure merge
+--   (#2192), which 'Engine.Loop.Frame' feeds the manager into — nothing
+--   here extracts batches for the frame any more.
 module Engine.Scene.Render where
 
 import UPrelude
@@ -20,7 +26,6 @@ import Engine.Graphics.Vulkan.Types.Vertex
 import Engine.Graphics.Vulkan.BufferUtils (createVulkanBufferManual)
 import Engine.Graphics.Window.Types
 import qualified Engine.Graphics.Window.GLFW as GLFW
-import World.Grid (uiLayerThreshold)
 import Vulkan.Core10
 import Vulkan.Zero
 
@@ -82,14 +87,6 @@ updateSceneForRender = do
         Nothing → do
             logDebugM CatScene "No active scene"
             modify $ \s → s { sceneManager = updatedSceneMgr }
-
-getCurrentRenderBatches ∷ EngineM σ (V.Vector RenderBatch)
-getCurrentRenderBatches = do
-    sceneMgr ← gets sceneManager
-    let batches = getCurrentBatches sceneMgr
-    logDebugSM CatRender "Retrieved current batches"
-        [("count", tshow $ V.length batches)]
-    pure batches
 
 -- | Create or resize dynamic vertex buffer for scene rendering.
 --   Reuses the cached buffer from GraphicsState when it's big enough.
@@ -210,12 +207,3 @@ uploadBatchesToBuffer frameIdx batches dynamicBuffer = do
                 V.// [(frameIdx, Just result)] }
 
     pure result
-
--- | Get world-layer DrawableObjects as SortableQuads for interleaving
--- with world tiles. Filters to only world layers (< uiLayerThreshold).
-getWorldSceneQuads ∷ EngineM σ (V.Vector SortableQuad)
-getWorldSceneQuads = do
-    sceneMgr ← gets sceneManager
-    let bm = smBatchManager sceneMgr
-        worldObjs = V.filter (\obj → doLayer obj < uiLayerThreshold) (bmVisibleObjs bm)
-    pure $ V.map drawableToQuad worldObjs

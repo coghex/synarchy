@@ -145,6 +145,7 @@ import qualified Test.Headless.Construct.Corners as ConstructCorners
 import qualified Test.Headless.Construct.Footprint as ConstructFootprint
 import qualified Test.Headless.Construct.Plan as ConstructPlan
 import qualified Test.Headless.Render.StructureGhost as StructureGhost
+import qualified Test.Headless.Render.FrameAssembly as FrameAssembly
 import qualified Test.Headless.Construct.PlanInvalidation as ConstructPlanInvalidation
 import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefusal
 import qualified Test.Headless.Craft.Execute as CraftExecute
@@ -379,6 +380,10 @@ main = hspec $ do
         -- own active scene rather than leaking one into this shared
         -- environment.
         describe "Lua.SceneText" LuaSceneText.spec
+        -- Same technique (#2192): the sprite half of the scene route —
+        -- a spawn through processLuaMessages, the manager's own
+        -- rebuild, then the pure frame assembly — against the live env.
+        FrameAssembly.envSpec
         -- Same technique as Lua.DebugQueue above: the live EngineEnv's
         -- queues/refs are only there to build a real Lua backend, whose
         -- console boundary is what #1955's key contract lives on.
@@ -736,6 +741,7 @@ main = hspec $ do
     describe "Construct.Footprint" ConstructFootprint.spec
     ConstructPlan.spec
     StructureGhost.spec
+    FrameAssembly.spec
     ConstructPlanInvalidation.spec
     ConstructAttemptIdentity.spec
     describe "Construct.PendingRefusal" ConstructPendingRefusal.spec

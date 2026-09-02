@@ -10,7 +10,6 @@ import Control.Exception (displayException)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
-import qualified Data.Map as Map
 import Data.IORef (readIORef, writeIORef)
 import Linear (identity)
 import Engine.Core.Defaults
@@ -37,6 +36,7 @@ import Engine.Loop.Resource (validateDescriptorState, getFrameResources,
                               getCommandBuffer, getDevice, getSwapchain,
                               getQueues, extractWindow)
 import qualified Engine.Core.Queue as Q
+import Engine.Scene.Assembly (assembleLayeredBatches, spriteBatchesInDrawOrder)
 import Engine.Scene.Render
 import Engine.Scene.Types
 import Engine.Graphics.Solar (SolarBase(..), SolarPageTable, solarUniformEntries)
@@ -247,49 +247,35 @@ renderSceneFrame imageIndex frameIdx resources device = do
     -- that the main thread was updating every frame.
     liveCamera ← liftIO $ readIORef (cameraRef env)
 
-    -- 2. Update scene (populates BatchManager with DrawableObjects)
+    -- 2. Update scene: fills the BatchManager with this frame's
+    --    visible scene sprites AND its text batches.
     updateSceneForRender
-    _sceneMgr ← gets sceneManager
+    sceneMgr ← gets sceneManager
 
-    -- 3. Get scene sprites in world layers as SortableQuads
-    sceneQuads ← getWorldSceneQuads
-
-    -- 4. Sort the dynamic quads (units, cursor, ghost, scene
-    --    sprites — small) per layer, then linear-merge them into
-    --    the cached pre-sorted static runs. Static sits on the
-    --    left of the merge, so a dynamic sprite at exactly a
-    --    tile's depth deterministically draws over it.
-    let dynByLayer = sortQuadsByLayer
-            (lqDynamic worldQuads <> sceneQuads)
-        groupedByLayer = Map.unionWith mergeSortedQuads
-            (lqStatic worldQuads) dynByLayer
-        perLayerBatches = Map.mapWithKey batchFromSortedQuads groupedByLayer
-        worldLayeredBatches = Map.map
-            (\batch → V.singleton (SpriteItem batch))
-            perLayerBatches
-
-    -- 5. Tick tooltip subsystem (resolves hover, builds/destroys
+    -- 3. Tick tooltip subsystem (resolves hover, builds/destroys
     --    the transient tooltip page on LayerTooltip). Must run
     --    BEFORE renderUIPages so this frame's UI pass picks up
     --    the tooltip elements.
     updateTooltipState
 
-    -- 6. Render UI
+    -- 4. Render UI
     (_uiBatches, uiLayeredBatches) ← renderUIPages
 
-    -- 7. Final merge: world + UI
-    let layeredBatches = Map.unionsWith (<>)
-            [worldLayeredBatches, uiLayeredBatches]
-
-        -- Build sprite batches in layer-ascending order so the
-        -- vertex buffer layout matches the draw-call order in
-        -- recordSceneCommandBuffer.  Previously we used
-        -- worldBatches <> uiBatches which is per-page order;
-        -- when multiple visible pages shared layer IDs the
-        -- vertexOffsetRef tracking got out of sync.
-        batches = V.concatMap
-            (V.mapMaybe (\case SpriteItem b → Just b; _ → Nothing))
-            (V.fromList $ map snd $ Map.toAscList layeredBatches)
+    -- 5. Per-layer merge (#2192, Engine.Scene.Assembly): the dynamic
+    --    world quads and the world-layer scene sprites are depth-sorted
+    --    and linear-merged into the cached static runs (static on the
+    --    left, so a sprite at exactly a tile's depth draws over it);
+    --    UI-layer scene sprites and every scene text land as items at
+    --    their own LayerId; UI pages come last within a layer.
+    --
+    --    The sprite batches are then taken in the recorder's own draw
+    --    order (layer-ascending, item order within a layer) so the
+    --    vertex buffer layout matches the draw calls — when several
+    --    visible pages shared layer IDs, a per-page order here once put
+    --    the vertexOffsetRef tracking out of sync.
+    let layeredBatches = assembleLayeredBatches worldQuads
+                             (smBatchManager sceneMgr) uiLayeredBatches
+        batches = spriteBatchesInDrawOrder layeredBatches
 
     -- Use the LIVE camera for the view/projection matrices, and this
     -- publication's OWN per-page solar table (#1869) — the one the

@@ -429,6 +429,7 @@ library
                      Engine.Scene.Graph
                      Engine.Scene.Manager
                      Engine.Scene.Render
+                     Engine.Scene.Assembly
                      Engine.Loop
                      Engine.Loop.Mode
                      Engine.Loop.Timing
@@ -1308,6 +1309,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Construct.Plan
                    Test.Headless.Render.StructureGhost
                    Test.Headless.Render.StructureGhostFixture
+                   Test.Headless.Render.FrameAssembly
                    Test.Headless.Construct.PlanInvalidation
                    Test.Headless.Construct.PendingRefusal
                    Test.Headless.Craft.Execute
