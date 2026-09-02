@@ -291,6 +291,14 @@ defaultBuildingEntry meta entries = fromMaybe "" $
 --   ever a container, descended into like any other when its only
 --   @.png@ children are themselves directories, and whatever lies
 --   beneath is classified by these same rules.
+--
+--   That rule holds of EVERY entry this function returns, animated or
+--   static (#2199). Both producers — 'classifyDir' for an animation's
+--   frames, and the loose-texture branch of 'walk' for a static — ask
+--   the SAME 'isRegularFrameFile', so neither can drift back to the
+--   name test on its own: a FIFO named @x.png@ beside a building's
+--   real textures, or inside a non-animation subfolder such as
+--   @dungeon_1\/damaged\/@, yields no entry at all.
 discoverBuildingEntries ∷ Map.Map Text BuildingYamlAnim → FilePath
                         → IO [PreviewBuildingEntry]
 discoverBuildingEntries anims root = do
@@ -312,13 +320,16 @@ discoverBuildingEntries anims root = do
                         then classifyDir segs' full ⌦ \case
                             Just entry → pure [entry]
                             Nothing    → walk segs'
-                        else pure [ staticEntry segs' full
-                                  | isSupportedTextureFile name ]
+                        else if isSupportedTextureFile name
+                            then do
+                                regular ← isRegularFrameFile full
+                                pure [staticEntry segs' full | regular]
+                            else pure []
 
     -- 'Just' when this directory is a recognized animation.
     classifyDir segs dir = do
         names ← listDirectory dir
-        pngs  ← filterM (isRegularFileChild dir)
+        pngs  ← filterM (isRegularFrameFile ∘ (dir </>))
                         (filter isSupportedTextureFile names)
         if null pngs
             then pure Nothing
@@ -338,6 +349,10 @@ discoverBuildingEntries anims root = do
                           entry buildingDefaultFps buildingDefaultLoop
                       | otherwise → Nothing
 
+    -- THE regular-file rule, and the only one: every frame path this
+    -- function emits — an animation's frames from 'classifyDir', a
+    -- static's single frame from 'walk' — passes through here.
+    --
     -- A frame candidate must be a REGULAR FILE, not merely a name
     -- carrying a supported extension: a DIRECTORY named
     -- @frame_001.png@ otherwise entered 'pngs' and became a frame path
@@ -345,15 +360,20 @@ discoverBuildingEntries anims root = do
     -- 'doesDirectoryExist' misses a FIFO, socket or device node, and
     -- 'doesFileExist' means "exists and is NOT a directory", so it
     -- ACCEPTS every one of them. The type therefore comes from a real
-    -- @lstat@.
+    -- @lstat@. #2199 is what happens when only one of the two callers
+    -- asks: the static branch guarded a loose texture by its NAME
+    -- alone, so a FIFO called @x.png@ became an unloadable entry —
+    -- precisely the case this comment already disclaimed.
     --
     -- The symlink test stays, first and independent: 'lstat' not
     -- following links is what makes a symlink a non-regular file here,
     -- but "symlinks are skipped at every level" (the outer walk does
     -- the same) is this module's own stated rule and must not survive
-    -- only as a side effect of how the type is read.
-    isRegularFileChild dir f = do
-        let full = dir </> f
+    -- only as a side effect of how the type is read. 'walk' has
+    -- already rejected a symlink by the time it asks; the test is not
+    -- redundant for 'classifyDir', which reaches its candidates
+    -- directly.
+    isRegularFrameFile full = do
         isLink ← pathIsSymbolicLink full
         if isLink
             then pure False

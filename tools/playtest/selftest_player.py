@@ -26,13 +26,20 @@ if _HERE not in sys.path:
 
 from engine import ActionError, FakeEngine, translate_action  # noqa: E402
 from personas import load_persona  # noqa: E402
-from session import run_session  # noqa: E402
+from session import run_replay, run_session  # noqa: E402
 from trace import SessionTrace, load_replay, load_turns  # noqa: E402
 import agent as agent_mod  # noqa: E402
 import engine as engine_mod  # noqa: E402
 import launch as launch_mod  # noqa: E402
 
 NAME = "player"
+
+
+def _short(value) -> str:
+    """A check NAME has to stay readable, and one of the coordinates
+    under test is a 401-digit integer."""
+    text = repr(value)
+    return text if len(text) <= 24 else f"{text[:12]}...({len(text)} chars)"
 
 
 def run(check) -> None:
@@ -367,6 +374,130 @@ def run(check) -> None:
                   engine_mod.SCROLL_DY_MAX]
               and "600" not in cturn["injected"][0],
               str(cturn["injected"]))
+        # --- hover: the pointer-only move (#2050) --------------------
+        # The vocabulary is published in three surfaces a player or a
+        # lenient provider actually reaches, and every one of them has
+        # to name the action or it is unselectable in practice. The
+        # schema check asserts DERIVATION from ACTION_KINDS, not just
+        # membership: a second hand-maintained enum is the drift this
+        # requirement exists to prevent.
+        check("hover is in the harness action vocabulary",
+              "hover" in engine_mod.ACTION_KINDS,
+              str(engine_mod.ACTION_KINDS))
+        schema_do = agent_mod.TURN_SCHEMA["properties"]["action"][
+            "properties"]["do"]
+        check("the strict action schema enum is derived from ACTION_KINDS "
+              "and so offers hover",
+              schema_do.get("enum") == list(engine_mod.ACTION_KINDS)
+              and "hover" in schema_do.get("enum", []),
+              str(schema_do.get("enum")))
+        hover_prompt = agent_mod.build_system_prompt(p, "MANUAL", (1280, 720))
+        check("the rendered player prompt offers hover in the same "
+              "one-line JSON shape as the other verbs",
+              '- hover: {"do":"hover","x":N,"y":N}' in hover_prompt,
+              [line for line in hover_prompt.splitlines()
+               if "hover" in line][:1])
+        # normalize_turn gates on the same tuple, so a model that picks
+        # hover keeps it instead of being silently downgraded to wait.
+        hover_norm = agent_mod.normalize_turn(
+            {"observation": "a sprite", "expectation": "a label",
+             "note": "", "action": {"do": "hover", "x": 100, "y": 200,
+                                    "dy": None}})
+        check("a hover reply survives normalization instead of becoming "
+              "a wait", hover_norm["action"] == {"do": "hover", "x": 100,
+                                                 "y": 200}
+              and "unparseable" not in hover_norm["note"],
+              str(hover_norm))
+
+        def hover_calls(act):
+            return translate_action(act, (1280, 720))
+
+        hcalls, hpost = hover_calls({"do": "hover", "x": 640, "y": 360})
+        check("a hover translates to exactly one input.moveMouse and "
+              "nothing else",
+              hcalls == ["return input.moveMouse(640.0, 360.0)"]
+              and hpost == [], f"{hcalls} post={hpost}")
+        check("a hover injects no button, wheel or key call",
+              not any(bad in c for c in hcalls
+                      for bad in ("mouseDown", "mouseUp", "input.click",
+                                  "input.scroll", "input.key",
+                                  "input.type")), str(hcalls))
+        # Out of range CLAMPS rather than erroring, matching click and the
+        # module's documented policy: a wild guess is wanted signal.
+        for hx, hy, want in ((-50, 360, "return input.moveMouse(0.0, 360.0)"),
+                             (99999, 360,
+                              "return input.moveMouse(1279.0, 360.0)"),
+                             (640, -1, "return input.moveMouse(640.0, 0.0)"),
+                             (640, 99999,
+                              "return input.moveMouse(640.0, 719.0)"),
+                             (10 ** 400, -(10 ** 400),
+                              "return input.moveMouse(1279.0, 0.0)")):
+            ccalls, cpost = hover_calls({"do": "hover", "x": hx, "y": hy})
+            check("an out-of-range hover coordinate clamps into the frame "
+                  f"(x={_short(hx)}, y={_short(hy)})",
+                  ccalls == [want] and cpost == [],
+                  f"{ccalls} post={cpost}")
+        # A coordinate that names no position on screen has no nearest
+        # pixel to clamp to, so it is refused and the turn injects
+        # nothing. `float()` alone would have accepted the numeric string
+        # a lenient provider fallback produces and the bool a scripted
+        # agent produces, and would have turned NaN into a silent 1279.
+        for bad_action, label in (
+                ({"do": "hover", "y": 360}, "x missing"),
+                ({"do": "hover", "x": 640}, "y missing"),
+                ({"do": "hover"}, "both missing"),
+                ({"do": "hover", "x": None, "y": 360}, "x null"),
+                ({"do": "hover", "x": "640", "y": 360}, "x numeric string"),
+                ({"do": "hover", "x": 640, "y": "360"}, "y numeric string"),
+                ({"do": "hover", "x": True, "y": 360}, "x bool"),
+                ({"do": "hover", "x": 640, "y": []}, "y list"),
+                ({"do": "hover", "x": {}, "y": 360}, "x object"),
+                ({"do": "hover", "x": float("nan"), "y": 360}, "x NaN"),
+                ({"do": "hover", "x": 640, "y": float("inf")}, "y inf"),
+                ({"do": "hover", "x": float("-inf"), "y": 360}, "x -inf")):
+            refused = None
+            try:
+                hover_calls(bad_action)
+            except ActionError as e:
+                refused = str(e)
+            check(f"an invalid hover coordinate is rejected ({label})",
+                  refused is not None and "hover" in refused
+                  and "no pointer move was sent" in refused, str(refused))
+
+        # Integration: the action reaches the trace and replays through
+        # the real recording path, not just the translator. One turn, so
+        # the counts below are the hover's own.
+        hvdir = os.path.join(tmp, "hover-trace")
+        hvtrace = SessionTrace(hvdir, {"mode": "selftest-hover"})
+        hveng = FakeEngine()
+        run_session(hveng,
+                    agent_mod.ScriptedAgent([{"do": "hover", "x": 812,
+                                              "y": 96}]),
+                    hvtrace, turns=1, dt=0.0, max_seconds=None,
+                    memory_turns=4, stuck_k=99, settle=0.0)
+        hvtrace.finish("turn_budget_exhausted")
+        hvturn = load_turns(hvdir)[0]
+        hvreplay = load_replay(hvdir)[0]
+        check("the trace records the hover the player requested",
+              hvturn["player"]["action"] == {"do": "hover", "x": 812,
+                                             "y": 96},
+              str(hvturn["player"]["action"]))
+        check("the hover turn injects exactly one pre-step moveMouse and "
+              "no post-step call",
+              hvturn["injected"] == ["return input.moveMouse(812.0, 96.0)"]
+              and hvturn.get("post_injected") == 0
+              and hvreplay["pre"] == hvturn["injected"]
+              and hvreplay["post"] == [],
+              f"{hvturn['injected']} post={hvreplay['post']}")
+        rhveng = FakeEngine()
+        rhvtrace = SessionTrace(os.path.join(tmp, "hover-replay"), {})
+        rhvtrace.finish(run_replay(rhveng, hvdir, rhvtrace, dt=0.0,
+                                   settle=0.0))
+        check("replaying the hover re-injects the identical call",
+              rhveng.injected == hveng.injected
+              and rhveng.injected == ["return input.moveMouse(812.0, 96.0)"],
+              f"{rhveng.injected} vs {hveng.injected}")
+
         usage = agent_mod._parse_codex_usage(
             '{"type":"thread.started"}\n'
             '{"type":"turn.completed","usage":{"input_tokens":123,'

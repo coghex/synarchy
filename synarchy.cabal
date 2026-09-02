@@ -1486,6 +1486,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TickInterval
                    Test.Headless.Lua.DragSelectDeferred
                    Test.Headless.Lua.TextWrapping
+                   Test.Headless.Lua.GroupedLogRetention
                    Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput
