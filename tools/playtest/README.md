@@ -222,6 +222,7 @@ coordinates into the frame.
 | Agent action | Injected as |
 |---|---|
 | `{"do":"click","x","y"[,"button","mods"]}` | `input.click` |
+| `{"do":"hover","x","y"}` | one `input.moveMouse` — pointer only, no button |
 | `{"do":"drag","x1","y1","x2","y2"[,"button"]}` | `input.mouseDown` → `moveMouse` (midpoint, end) → `input.mouseUp` |
 | `{"do":"scroll","dy"[,"dx","x","y"]}` | optional `input.moveMouse` + one `input.scroll` |
 | `{"do":"key","name"[,"mods"]}` | `input.key` |
@@ -229,6 +230,32 @@ coordinates into the frame.
 | `{"do":"type","text"}` | `input.type` |
 | `{"do":"wait"}` | nothing — watch time pass |
 | `{"do":"done","reason"}` | nothing — player claims the goal; session ends |
+
+`{"do":"hover","x","y"}` is the pointer-only move (#2050). It is the one
+action that reaches information a click cannot: hover tooltips carry the
+names and descriptions the build picker's uncaptioned sprites do not
+print (`scripts/build_tool.lua`), and before this action existed a player
+who wanted to know what a sprite was had to click it and find out. It
+translates to exactly one `input.moveMouse` and nothing else — no button,
+wheel, key, or post-step call — and `input.moveMouse` updates hover, pick
+and tooltip state exactly as a real pointer move does. Tooltip dwell
+counts down on the per-frame `dtMs` (`src/UI/Tooltip/State.hs`), which
+keeps ticking while the world clock is paused, so the loop's ordinary
+settle-then-screenshot cycle captures the tooltip without the turn
+spending its sim step on it.
+
+Its coordinates are typed at the translation boundary rather than left to
+a bare `float()`, because a pointer move's whole payload is that pair:
+
+- a missing `x`/`y`, a non-finite one, and anything that is not a JSON
+  number at all (a numeric string, a bool) are **rejected** with
+  `ActionError` — none of them names a position on screen to clamp to, so
+  the turn injects nothing;
+- a finite coordinate outside the frame is **clamped** into it, exactly
+  as `click`'s is: a wild guess is wanted naive-player signal.
+
+That is `hover`'s own contract and changes nothing about `click`, `drag`
+or `scroll`, whose coordinate handling is unchanged.
 
 `dy` is the one action parameter with a published range, because it is
 the one whose sign the player cannot infer from the gesture (#1980). It
