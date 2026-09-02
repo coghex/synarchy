@@ -57,6 +57,7 @@ import World.Fluid.Types (emptyIceMap)
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (canonicalTile)
 import World.Grid (gridToWorld)
+import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.StructureGhost
 import World.Render.ViewBounds (ViewBounds, computeViewBounds)
 import World.Tile.Types (WorldTileData(..))
@@ -508,36 +509,77 @@ lineModeSpec =
 
 seamSpec ∷ SpecWith [PackFixture]
 seamSpec = describe "at the cylindrical U seam" $
-    forM_ [ ("a committed designation", \packs facing →
-                snd (structureDesignationGhosts
-                        (seamGhostEnv packs facing
-                            (designationsFor' seamTile seamPiece))))
-          , ("the pre-anchor hover", \packs facing →
-                snd (structurePreviewGhosts
-                        (seamGhostEnv packs facing HM.empty)
-                        seamPiece surfaceZ [seamTile]))
-          , ("an anchored drag", \packs facing →
-                snd (structurePreviewGhosts
-                        (seamGhostEnv packs facing HM.empty)
-                        seamPiece surfaceZ
-                        (structureDragExtent worldSize False seamTile
-                             seamTile)))
-          ] $ \(label, render) →
-        it (label ⧺ " renders through the nearest visible alias without \
-                    \changing sort keys or payloads") $ \packs →
-            forM_ allFacings $ \facing → do
-                let ghost = V.toList (render packs facing)
-                    ge = seamGhostEnv packs facing HM.empty
-                    reference = placedQuadsAt packs seamTile facing SFloor
-                                    (artFor ge seamPiece) (surfaceZ + 1)
-                -- Something is drawn at all…
-                ghost `shouldSatisfy` not ∘ null
-                length ghost `shouldBe` length reference
-                -- …and everything but the vertex POSITIONS is identical
-                -- to the unshifted piece: sort keys, texture, layer,
-                -- payloads.
-                map quadShapeNoPos ghost
-                    `shouldBe` map quadShapeNoPos reference
+    forM_ allFacings $ \facing → describe (show facing) $ do
+
+      it "precondition: the camera's alias really is across the seam" $ \_ → do
+        -- Everything below is worthless if the wrap offset is zero, and
+        -- an earlier version of this suite centred the camera on the
+        -- STORED tile, where it is: 'translateQuad' was the identity, so
+        -- a ghost that ignored the alias entirely passed. One component
+        -- is identically zero and the other world-sized; WHICH is the
+        -- point, so both are derived from the projection.
+        let (expX, expY) = wrapDisplacement facing
+        min (abs expX) (abs expY) `shouldBe` 0
+        max (abs expX) (abs expY) `shouldSatisfy` (> 1.0)
+
+      it "precondition: the shared decision resolves it through that alias" $
+        \_ → do
+          let (expX, expY) = wrapDisplacement facing
+              cam = seamCamera facing
+          case isChunkVisibleWrapped facing worldSize (boundsFor cam)
+                   (fst (camPosition cam)) (snd (camPosition cam))
+                   seamChunkCoord of
+            Nothing → expectationFailure "seam chunk culled at its own alias"
+            Just (offX, offY) → do
+              abs (offX - expX) `shouldSatisfy` (< 0.001)
+              abs (offY - expY) `shouldSatisfy` (< 0.001)
+
+      forM_ seamCases $ \(label, render) →
+        it (label ⧺ " draws through the nearest alias: positions shifted \
+                    \by exactly the wrap, everything else identical") $
+          \packs → do
+            let ghost = V.toList (render packs facing)
+                ge = seamGhostEnv packs facing HM.empty
+                -- The reference is the placed piece at the STORED
+                -- coords, untranslated — the same thing the ghost would
+                -- emit with no alias applied.
+                reference = placedQuadsAt packs seamTile facing SFloor
+                                (artFor ge seamPiece) (surfaceZ + 1)
+            ghost `shouldSatisfy` not ∘ null
+            length ghost `shouldBe` length reference
+            -- Sort keys, texture, layer and every non-position vertex
+            -- payload are untouched by the translation.
+            map quadShapeNoPos ghost `shouldBe` map quadShapeNoPos reference
+            -- …and every vertex moved by exactly the wrap displacement.
+            -- This is the half the old assertion dropped, which is why a
+            -- missing translateQuad survived it.
+            let (expX, expY) = wrapDisplacement facing
+                shifts = [ (px - rx, py - ry)
+                         | (g, r) ← zip ghost reference
+                         , (gv, rv) ← zip (quadVerts g) (quadVerts r)
+                         , let Vec2 px py = pos gv
+                         , let Vec2 rx ry = pos rv ]
+            shifts `shouldSatisfy` (not ∘ null)
+            forM_ shifts $ \(dx, dy) → do
+              abs (dx - expX) `shouldSatisfy` (< 0.001)
+              abs (dy - expY) `shouldSatisfy` (< 0.001)
+
+-- | The three ghost paths the review requires at the seam: the
+--   pre-anchor hover, an anchored drag, and a committed designation.
+seamCases ∷ [(String, [PackFixture] → CameraFacing → V.Vector SortableQuad)]
+seamCases =
+    [ ( "a committed designation", \packs facing →
+          snd (structureDesignationGhosts
+                  (seamGhostEnv packs facing
+                      (designationsFor' seamTile seamPiece))) )
+    , ( "the pre-anchor hover", \packs facing →
+          snd (structurePreviewGhosts (seamGhostEnv packs facing HM.empty)
+                  seamPiece surfaceZ [seamTile]) )
+    , ( "an anchored drag", \packs facing →
+          snd (structurePreviewGhosts (seamGhostEnv packs facing HM.empty)
+                  seamPiece surfaceZ
+                  (structureDragExtent worldSize False seamTile seamTile)) )
+    ]
 
 seamPiece ∷ StructurePiece
 seamPiece = StructurePiece dungeonPack "floor" Nothing
@@ -611,8 +653,12 @@ seamChunkCoord = ChunkCoord (-15) 17
 
 -- | A tile in the chunk stored one past the canonical u range — the
 --   same seam fixture "Test.Headless.World.Render.StructureSeam" uses.
-seamTile ∷ (Int, Int)
-seamTile = ((-15) * chunkSize, 17 * chunkSize)
+--   'seamTile' is the CANONICAL name the chunk is stored under;
+--   'seamAliasTile' is the same physical tile's other name, a whole
+--   world away, which is where the camera sits.
+seamTile, seamAliasTile ∷ (Int, Int)
+seamTile      = ((-15) * chunkSize, 17 * chunkSize)
+seamAliasTile = (17 * chunkSize, (-15) * chunkSize)
 
 chunkAt ∷ ChunkCoord → ChunkStructures → LoadedChunk
 chunkAt coord structures =
@@ -656,11 +702,29 @@ ghostEnvWith ∷ [PackFixture] → CameraFacing → ConstructDesignations
 ghostEnvWith packs facing designs structures stage =
     ghostEnv packs facing homeTile [homeChunk structures] designs stage
 
+-- | The seam fixture's view. The data is CANONICAL — the chunk is stored
+--   under 'seamChunkCoord' and every candidate names 'seamTile' — while
+--   the CAMERA sits on the opposite u-alias ('seamAliasTile'), which is
+--   the only arrangement in which the ghost has to be drawn through a
+--   wrapped image at all. Centring it on 'seamTile' instead makes the
+--   wrap offset zero and the whole suite vacuous.
+seamCamera ∷ CameraFacing → Camera2D
+seamCamera facing = cameraAt facing seamAliasTile
+
 seamGhostEnv ∷ [PackFixture] → CameraFacing → ConstructDesignations → GhostEnv
 seamGhostEnv packs facing designs =
-    ghostEnv packs facing seamTile
+    ghostEnv packs facing seamAliasTile
         [chunkAt seamChunkCoord (structuresAt seamTile [])] designs
         emptyStructureStage
+
+-- | The screen displacement of ONE u-wrap at this facing, taken from the
+--   projection rather than restated as a constant this fixture could get
+--   wrong.
+wrapDisplacement ∷ CameraFacing → (Float, Float)
+wrapDisplacement facing =
+    let (aliasWX, aliasWY) = uncurry (gridToWorld facing) seamAliasTile
+        (canonWX, canonWY) = uncurry (gridToWorld facing) seamTile
+    in (aliasWX - canonWX, aliasWY - canonWY)
 
 ghostEnv ∷ [PackFixture] → CameraFacing → (Int, Int) → [LoadedChunk]
          → ConstructDesignations → StructureStage → GhostEnv
