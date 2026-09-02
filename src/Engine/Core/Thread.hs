@@ -59,11 +59,22 @@
 --   cooperative stop runs, so the Lua worker still drains its debug
 --   queue and closes its state exactly once), and ends the loop.
 --   'wsOnCrash' is reserved for everything else — a synchronous tick
---   failure keeps its fail-stop report and its lifecycle write. An
---   asynchronous exception that lands OUTSIDE a tick (in the paused
---   poll, the control read, or 'wsOnStop' itself) unwinds without a
---   second cleanup, which is exactly how the once-only guarantee holds
---   when the stop callback was already running.
+--   failure keeps its fail-stop report and its lifecycle write.
+--
+--   A kill can land ONLY inside a tick. The loop runs with asynchronous
+--   exceptions uninterruptibly masked and unmasks for the tick alone
+--   ('forkIOWithUnmask' under 'uninterruptibleMask_' at the fork site),
+--   so the control read, the paused poll, the stop and crash callbacks
+--   and the fork finalizer cannot be interrupted: a kill that arrives
+--   after a tick has returned — the tick that outlived the graceful
+--   wait finishing just as the helper delivers — stays pending while
+--   the loop honours the stop request and runs 'wsOnStop' to
+--   completion, then finds the thread gone. That is what makes the
+--   cleanup once-only AND complete on the forced path, rather than
+--   skipped or half-run with 'tsDone' reporting a clean join. The
+--   trade-off is deliberate: a stop callback that blocks forever
+--   cannot be killed at all, and the second wait's fatal report is the
+--   outcome there.
 --
 --   'tsDone' is read, never taken: completion stays observable after a
 --   successful join, so a repeated 'shutdownThread' distinguishes a
@@ -77,10 +88,12 @@
 module Engine.Core.Thread where
 
 import UPrelude
-import Control.Concurrent (ThreadId, forkIO, killThread, threadDelay)
+import Control.Concurrent
+    (ThreadId, forkIO, forkIOWithUnmask, killThread, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, readMVar)
 import Control.Exception
-    (SomeAsyncException, SomeException, catch, finally, fromException, throwIO)
+    ( SomeAsyncException, SomeException, catch, finally, fromException
+    , throwIO, uninterruptibleMask_ )
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Void (Void, absurd)
 import System.Timeout (timeout)
@@ -228,8 +241,12 @@ startWorkerThreadEither spec = do
             case eSeed of
                 Left refusal → pure (Left refusal)
                 Right seed → do
-                    tid ← forkIO $ workerLoop spec stateRef seed
-                                     `finally` putMVar doneVar ()
+                    -- Forked uninterruptibly masked; the loop unmasks
+                    -- for each tick and nothing else (module haddock,
+                    -- shutdown section).
+                    tid ← uninterruptibleMask_ $ forkIOWithUnmask $ \unmask →
+                        workerLoop spec stateRef unmask seed
+                            `finally` putMVar doneVar ()
                     forM_ (wsStartedMsg spec) $ logInfo logger (wsCategory spec)
                     pure (Right tid)
         )
@@ -257,8 +274,14 @@ logStartFailure spec logger msg = case wsFailLevel spec of
 
 -- | The shared loop: control-state dispatch, paused polling, and the
 --   guarded running tick.
-workerLoop ∷ WorkerSpec ε σ → IORef ThreadControl → σ → IO ()
-workerLoop spec stateRef = go
+--
+--   Runs in whatever masking state it is entered in — the fork site
+--   makes that uninterruptible — and applies @unmask@ to the tick
+--   alone, so an asynchronous exception can be raised inside the tick
+--   guard and nowhere else in the loop.
+workerLoop ∷ WorkerSpec ε σ → IORef ThreadControl → (∀ α. IO α → IO α)
+           → σ → IO ()
+workerLoop spec stateRef unmask = go
   where
     go seed = do
         control ← readIORef stateRef
@@ -273,7 +296,7 @@ workerLoop spec stateRef = go
                 -- a catch frame that never pops (unbounded stack
                 -- growth). This is the single place that invariant is
                 -- now stated; a seventh worker inherits it.
-                next ← catch (wsTick spec seed)
+                next ← catch (unmask (wsTick spec seed))
                     (\(e ∷ SomeException) → do
                         -- Provenance (throw vs throwTo) is not
                         -- recoverable here; the classification is the
@@ -290,8 +313,8 @@ workerLoop spec stateRef = go
                     Nothing    → pure ()
     -- A forced termination is not a crash: no crash report, no
     -- lifecycle write — the same cleanup a cooperative stop runs, and
-    -- a line that says what happened. Runs inside the catch handler,
-    -- so a second kill cannot interrupt the cleanup mid-way.
+    -- a line that says what happened. Runs in the handler, back under
+    -- the loop's uninterruptible mask, so a second kill waits.
     forcedTermination seed e = do
         logger ← readIORef (wsLoggerRef spec)
         logWarn logger (wsCategory spec) $

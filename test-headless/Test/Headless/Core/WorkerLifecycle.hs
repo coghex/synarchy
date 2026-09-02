@@ -17,7 +17,11 @@
 --   the kill is reported fatally on both channels, and a stop request
 --   that was merely written is never mistaken for a confirmed exit.
 --   Those cases drive 'Engine.Core.Thread.shutdownThreadWith' with
---   millisecond bounds; the production entry point keeps its 10 s.
+--   millisecond bounds; the production entry point keeps its 10 s. The
+--   boundary case — a kill that arrives once the tick has returned and
+--   the stop callback is already running — is pinned deterministically:
+--   the callback blocks on a gate this module holds, the kill is sent
+--   while it is blocked, and the callback must still complete.
 --
 --   Nothing in this module boots an engine: the shared definition
 --   deliberately does not mention 'Engine.Core.State.EngineEnv', which
@@ -31,11 +35,11 @@ module Test.Headless.Core.WorkerLifecycle (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Concurrent.MVar
     (newEmptyMVar, putMVar, readMVar, takeMVar, tryReadMVar, tryTakeMVar)
 import Control.Exception
-    ( AsyncException(..), ErrorCall, SomeException, fromException
+    ( AsyncException(..), ErrorCall, SomeException, finally, fromException
     , throwIO, throwTo, try, uninterruptibleMask_ )
 import Data.Void (Void)
 import Data.IORef
@@ -454,6 +458,53 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
       putMVar release ()
       joined ← timeout (5 * 1000000) (readMVar (tsDone ts))
       joined `shouldBe` Just ()
+      readIORef stopsRef `shouldReturn` 1
+      readIORef crashesRef `shouldReturn` 0
+
+    it "lets a stop callback already in progress complete when the kill lands during it" $ do
+      (_, loggerRef) ← captureLogger
+      entered ← newEmptyMVar
+      gate ← newEmptyMVar
+      inStop ← newEmptyMVar
+      release ← newEmptyMVar
+      stopsRef ← newIORef (0 ∷ Int)
+      crashesRef ← newIORef (0 ∷ Int)
+      ts ← startWorkerThread $
+             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+                (\() → putMVar entered () ≫ takeMVar gate ≫ pure (Just ())))
+               { wsOnStop  = \() → do
+                   -- Announce, then block on a gate the case holds, then
+                   -- count: a kill delivered during the wait would end
+                   -- the callback with the count still 0.
+                   putMVar inStop ()
+                   takeMVar release
+                   atomicModifyIORef' stopsRef (\c → (c + 1, ()))
+               , wsOnCrash = \_ _ → atomicModifyIORef' crashesRef
+                                      (\c → (c + 1, ()))
+               }
+      takeMVar entered
+      -- The boundary the review named: the stop request is written
+      -- while the tick is in flight, the tick then returns normally,
+      -- and the loop honours the request — so the kill below arrives
+      -- with the tick over and the stop callback under way.
+      writeIORef (tsRunning ts) ThreadStopped
+      putMVar gate ()
+      takeMVar inStop
+      killed ← newEmptyMVar
+      _ ← forkIO $ killThread (tsThreadId ts) `finally` putMVar killed ()
+      -- Give the kill every chance to be delivered before the release.
+      -- A tolerance, not a timing assertion: with the loop masked
+      -- outside its tick the kill cannot land here however long this
+      -- waits, and without that mask it lands at once.
+      settleQuiet
+      putMVar release ()
+      -- The pending kill resolves once the worker has exited; joining
+      -- the killer too leaves no thread behind.
+      takeMVar killed
+      joined ← timeout (5 * 1000000) (readMVar (tsDone ts))
+      joined `shouldBe` Just ()
+      -- The callback ran to completion, exactly once, and the kill was
+      -- never reported as a crash.
       readIORef stopsRef `shouldReturn` 1
       readIORef crashesRef `shouldReturn` 0
 
