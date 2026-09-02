@@ -74,10 +74,17 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 --   one turns @return item.spawnGround(...)@ — which several probes
 --   parse as a bare number — into @"0\t14"@. A caller needing the
 --   spawned item's durable PHYSICAL identity resolves the ground id it
---   gets back (@item.listGround@ reports @instanceId@ per row), or, for
---   #917's location provenance, hands the ground id to
---   @world.registerLocationSignificantSpawn@, which resolves it
---   engine-side.
+--   gets back (@item.listGround@ reports @instanceId@ per row).
+--
+--   #917's location provenance does NOT come through here. There is no
+--   public verb that binds an already-spawned item to an obligation:
+--   any such verb is a substitution vector, because the id it is handed
+--   names whatever item is wearing that ground id by the time the call
+--   lands. A caller filling a guaranteed significant slot uses
+--   @world.spawnLocationSignificantItem@ instead, which spawns and
+--   binds in ONE engine-side step, takes the item definition from the
+--   obligation's own persisted @lsiItemDefName@ rather than from the
+--   caller, and removes the item again if the binding is refused.
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
 --   the terrain. An explicit pageId (slot 5) pins the spawn to that
