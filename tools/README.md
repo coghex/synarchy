@@ -2222,14 +2222,17 @@ select/claim/measure/record orchestration, 31 cases),
 `deflake_selftest_support` is the single source of what they share — the
 assertion helper and the ONE failure accumulator behind it, the temporary
 census/claim/artifact tree, the real `Measurement` builder, the fake claim,
-and the recording, resource and engine-preparation adapters behind `run`.
+the recording, resource and engine-preparation adapters behind `run`, and
+the one save/restore of the runner's executable seam.
 The bare command runs every case once in the order it always has
 (orchestration, handoff, preparation) and is what CI and `make ci` invoke;
 `--only <owner>` runs one owner's cases in a fresh process for iteration.
-Every invocation reports the number of cases it ran, an owner whose
-inventory is absent or empty fails the run rather than reporting a vacuous
-pass, and an unrecognized argument or selector is a usage error rather than
-a fall-through to the aggregate.
+Every invocation reports the number of cases it ran and asserts afterwards
+that every module global, environment variable and patched function a case
+reaches is back where it started; an owner whose inventory is absent or
+empty fails the run rather than reporting a vacuous pass; and an
+unrecognized argument or selector is a usage error rather than a
+fall-through to the aggregate.
 
 ### `deflake_diagnosis.py` — is the probe wrong, and did the fix work? (#1437)
 

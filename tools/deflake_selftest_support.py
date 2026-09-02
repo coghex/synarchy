@@ -24,12 +24,23 @@ Two of those are single-sourced for correctness rather than tidiness:
   either by forgetting to substitute. Every case goes through this one
   function, and only the cases that deliberately exercise the real
   adapters name them.
+* `saved_runner_executable` is the ONE save/restore of
+  `probe_runner_resources.ENGINE_EXECUTABLE`, the only writable
+  production module global this gate touches. `deflake` installs the
+  prepared executable there under every `run` and, being the tool that
+  is about to hand it to child probes, never uninstalls it -- so `run`
+  restores it on every exit, and the preparation cases, which assign it
+  themselves before calling `run`, use the same helper around their own
+  assignment.
+
+`seams_restored` is the check that all of that restoration actually
+happened: every entry point runs it around whatever cases it selected,
+so a focused owner cannot leak a module global, `PATH`, or a patched
+function into whatever runs next in the same interpreter.
 
 A helper with exactly ONE owner lives with that owner rather than here:
-`Raiser` and `written_handoff` are the handoff's, and
-`saved_runner_executable` -- which restores the one writable production
-module global this gate assigns -- is the preparation owner's, being
-consumed by nothing else.
+`Raiser` and `written_handoff` are the handoff's, and the `PATH`
+save/restore is the real-preparation case's alone.
 
 Nothing here runs a case and this module is not a gate of its own:
 `python3 tools/test_deflake.py` remains the only invocation, in CI and
@@ -37,6 +48,7 @@ in `make ci` alike.
 """
 from __future__ import annotations
 
+import argparse
 import datetime
 import json
 import os
@@ -53,6 +65,7 @@ import probe_claim  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
+import probe_runner_resources  # type: ignore  # noqa: E402
 
 from selftestlib import FAILURES, expect  # noqa: E402
 
@@ -60,7 +73,8 @@ __all__ = [
     "ARGV", "COMMIT", "CWD", "FAILURES", "FakeClaim", "NOW", "OTHER",
     "OTHER_COMMIT", "PREPARED_ENGINE", "PROBE", "Preparer", "Recorder",
     "Scratch", "TOOLS_DIR", "expect", "held_resources", "installed_census",
-    "measurement", "run", "selector_inputs",
+    "measurement", "run", "saved_runner_executable", "seams_restored",
+    "selector_inputs",
 ]
 
 TOOLS_DIR = str(Path(__file__).resolve().parent)
@@ -275,6 +289,67 @@ class Preparer:
         return self.executable
 
 
+class saved_runner_executable:
+    """Restore `probe_runner_resources.ENGINE_EXECUTABLE`, which `deflake` installs.
+
+    It is a module global the runner reads when it hands a child probe
+    its executable, so a case that leaves it set would decide what a
+    later case observes.
+    """
+
+    def __enter__(self):
+        self._saved = probe_runner_resources.ENGINE_EXECUTABLE
+        return self
+
+    def __exit__(self, *exc):
+        probe_runner_resources.ENGINE_EXECUTABLE = self._saved
+        return False
+
+
+class seams_restored:
+    """Assert, on exit, that every seam a case patches is back where it started.
+
+    The seams a case in this suite reaches and restores in its own
+    `finally`: `probe_runner_resources.ENGINE_EXECUTABLE` (installed by
+    `deflake` under every `run`, and assigned by the preparation cases),
+    `PATH` (prepended by the real-preparation case),
+    `probe_census.tempfile.mkstemp` and `probe_census.os.fsync` (the two
+    recorder-failure cases) and `argparse.ArgumentParser.parse_args` (the
+    CLI case). A case that restores its own seam is the rule; this is
+    the check that the rule held, run by every entry point around the
+    cases it selected -- a focused owner included -- and on every
+    outcome, an exception propagating through the cases included.
+    """
+
+    SEAMS = ("probe_runner_resources.ENGINE_EXECUTABLE", "PATH",
+             "probe_census.tempfile.mkstemp", "probe_census.os.fsync",
+             "argparse.ArgumentParser.parse_args")
+
+    @staticmethod
+    def snapshot() -> dict:
+        return {
+            "probe_runner_resources.ENGINE_EXECUTABLE":
+                probe_runner_resources.ENGINE_EXECUTABLE,
+            "PATH": os.environ.get("PATH"),
+            "probe_census.tempfile.mkstemp": probe_census.tempfile.mkstemp,
+            "probe_census.os.fsync": probe_census.os.fsync,
+            "argparse.ArgumentParser.parse_args":
+                argparse.ArgumentParser.parse_args,
+        }
+
+    def __enter__(self):
+        self.before = self.snapshot()
+        return self
+
+    def __exit__(self, *exc):
+        after = self.snapshot()
+        for seam in self.SEAMS:
+            expect(after[seam] == self.before[seam],
+                   f"{seam} is restored once the selected cases have run "
+                   f"(was {self.before[seam]!r}, now {after[seam]!r})")
+        return False
+
+
 def run(scratch: Scratch, **overrides):
     """`measure_next_probe` with every seam defaulted to a safe fake."""
     settings = {
@@ -299,4 +374,13 @@ def run(scratch: Scratch, **overrides):
         "read_configuration": lambda root: [],
     }
     settings.update(overrides)
-    return deflake.measure_next_probe(**settings)
+    # `measure_next_probe` installs the prepared executable as the
+    # runner's module global (#1913) and leaves it there: for the tool
+    # that is right, since the process is about to hand it to child
+    # probes. For a case it is a leak -- a focused owner would leave the
+    # synthetic path behind for whatever runs next in this interpreter
+    # -- so it goes back on every exit, exceptions included. The
+    # preparation cases observe the value INSIDE the call, which this
+    # does not touch.
+    with saved_runner_executable():
+        return deflake.measure_next_probe(**settings)

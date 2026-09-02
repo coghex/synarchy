@@ -8,11 +8,12 @@ claim and measuring nothing, and the REAL preparation against the REAL
 hold in one namespace -- with a fake `cabal` on `PATH` -- observing that
 a would-be child preparation is excluded rather than assuming it.
 
-`saved_runner_executable` lives here because these four cases are the
-only consumers of it: `probe_runner_resources.ENGINE_EXECUTABLE` is the
-one writable production module global this gate assigns, and nothing
-outside this owner assigns it. The `PATH` save/restore is likewise the
-real-preparation case's alone.
+These are the only cases that ASSIGN
+`probe_runner_resources.ENGINE_EXECUTABLE` themselves, and they do it
+under the shared `saved_runner_executable` -- the same helper `run`
+uses to give back what `deflake` installs -- so the one writable
+production module global this gate touches has one save/restore. The
+`PATH` save/restore is the real-preparation case's alone.
 
 Not a gate of its own. Run through the aggregate:
 
@@ -35,24 +36,7 @@ import probe_resource_lock  # type: ignore  # noqa: E402
 import probe_runner_resources  # type: ignore  # noqa: E402
 from deflake_selftest_support import (  # noqa: E402
     PREPARED_ENGINE, FakeClaim, Preparer, Recorder, Scratch, expect,
-    held_resources, measurement, run)
-
-
-class saved_runner_executable:
-    """Restore `probe_runner_resources.ENGINE_EXECUTABLE`, which `deflake` installs.
-
-    It is a module global the runner reads when it hands a child probe
-    its executable, so a case that leaves it set would decide what a
-    later case observes.
-    """
-
-    def __enter__(self):
-        self._saved = probe_runner_resources.ENGINE_EXECUTABLE
-        return self
-
-    def __exit__(self, *exc):
-        probe_runner_resources.ENGINE_EXECUTABLE = self._saved
-        return False
+    held_resources, measurement, run, saved_runner_executable)
 
 
 # --------------------------------------------------------------------------

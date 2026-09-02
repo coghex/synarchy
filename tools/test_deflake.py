@@ -75,7 +75,11 @@ declaring `CASES` and one that declares an empty inventory; `_resolve`
 refuses a case two owners both claim and one an owner lists twice; and
 the aggregate order is required to name every owner exactly once, so an
 owner cannot drop out of the aggregate while still answering to
-`--only`.
+`--only`. One check runs after: the selected cases run inside
+`deflake_selftest_support.seams_restored`, which asserts that every
+module global, environment variable and patched function a case reaches
+is back where it started, so a focused owner cannot leak a seam into
+whatever runs next in the same interpreter.
 
 Usage:
   python3 tools/test_deflake.py                       every case, in order
@@ -244,8 +248,9 @@ def main(argv: list[str] | None = None) -> int:
               f"vacuous pass")
         return 1
 
-    for case in cases:
-        case()
+    with support.seams_restored():
+        for case in cases:
+            case()
     print(f"\n{case_count_line(args.only, len(cases))}")
 
     if support.FAILURES:
