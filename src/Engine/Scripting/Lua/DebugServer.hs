@@ -1,7 +1,73 @@
 {-# LANGUAGE Strict #-}
+-- | The debug console: a TCP line protocol that evaluates Lua inside a
+--   running engine.
+--
+--   == Trust model
+--
+--   This is stated here because nothing in the tree said it, and every
+--   bound below reads as a security control if you do not know that it
+--   is not one.
+--
+--   * __The transport IS the boundary.__ The listener binds
+--     @127.0.0.1@ and only @127.0.0.1@, so reaching it already requires
+--     code execution on the host. Binding any other address is out of
+--     scope by decision (#2170), not by omission.
+--   * __The host user is the security principal.__ There is no
+--     authentication, no capability negotiation, and no per-client
+--     trust decision, because every client is by construction the
+--     person who is already running the process.
+--   * __Every connection holds full evaluator authority.__ A line that
+--     is not a built-in reaches the complete Lua state — the whole
+--     engine API, the filesystem through it, and @engine.quit()@. There
+--     is no reduced surface for a \"less trusted\" client, because
+--     there is no such client.
+--   * __The bounds are resource limits, not access control.__ The
+--     connection cap, the line cap and the idle timeout
+--     ("Engine.Scripting.Lua.DebugServer.Types") exist so a stuck or
+--     buggy client cannot exhaust the process, and raising one cannot
+--     make the console less trusted than it already is by design.
+--
+--   That shape is deliberate for a developer-and-agent console on a
+--   pre-release game. Changing it — authentication, a narrowed Lua
+--   surface, a non-loopback bind — is a product decision, not a
+--   hardening pass.
+--
+--   == Layout
+--
+--   * "Engine.Scripting.Lua.DebugServer.Types" — the command record,
+--     the finite bounds, the injection seams, the handles.
+--   * "Engine.Scripting.Lua.DebugServer.Client" — one connection, from
+--     banner to close.
+--   * "Engine.Scripting.Lua.DebugServer.Listener" — the supervised
+--     accept loop and its owner.
+--
+--   This module keeps the per-boot-mode policy (#1190, #2170) and
+--   re-exports the rest, so every existing importer is unchanged.
 module Engine.Scripting.Lua.DebugServer
-    ( DebugCommand(..)
+    ( -- * Re-exported console
+      DebugCommand(..)
+    , DebugConsole(..)
+    , DebugListener
+    , DebugServerConfig(..)
+    , DebugServerLimits(..)
+    , defaultDebugServerConfig
+    , defaultDebugServerLimits
+    , defaultMaxConnections
+    , defaultMaxLineBytes
+    , defaultIdleTimeoutMicros
+    , defaultAcceptRetryBudget
+    , defaultAcceptRetryDelayMicros
+    , commandResponseTimeoutMicros
+    , AcceptDisposition(..)
+    , classifyAcceptFailure
+    , connectionRefusedMessage
+    , lineTooLongMessage
+    , idleTimeoutMessage
+    , listenerRetryMessage
+    , listenerLostMessage
     , startDebugServer
+    , stopDebugConsole
+    , inertDebugConsole
     , pollDebugCommand
       -- * Per-boot-mode listener policy (#1190)
     , DebugConsolePolicy(..)
@@ -12,28 +78,18 @@ module Engine.Scripting.Lua.DebugServer
     , debugListenerFailureMessage
     , reportDebugListenerFailure
     , reportBootCleanup
+      -- * Per-boot-mode response to a listener LOST after boot (#2170)
+    , ListenerLossResponse(..)
+    , listenerLossResponse
+    , reportDebugListenerLoss
     ) where
 
 import UPrelude
 import Engine.Core.Types (BootMode(..), bootModeName)
+import Engine.Scripting.Lua.DebugServer.Types
+import Engine.Scripting.Lua.DebugServer.Listener
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BS8
-import Control.Concurrent (forkIO)
-import System.IO (hPutStrLn, hFlush, stdout, stderr)
-import System.Timeout (timeout)
-import Control.Concurrent.MVar
-import Control.Concurrent.STM (atomically)
-import Control.Concurrent.STM.TQueue
-import Control.Exception (SomeException, try, onException, finally)
-import Network.Socket
-import Network.Socket.ByteString (recv, sendAll)
-
-data DebugCommand = DebugCommand
-    { dcCommand  ∷ !Text      -- ^ Lua code to evaluate
-    , dcResponse ∷ !(MVar Text)  -- ^ Response channel
-    }
+import System.IO (hPutStrLn, hFlush, stderr)
 
 -- | Whether a boot mode can run without a debug console (#1190).
 --
@@ -123,9 +179,8 @@ debugListenerFailureMessage mode port failure =
 --   belongs on the same channel — stderr, so a mode whose stdout is
 --   reserved for data is unaffected.
 reportDebugListenerFailure ∷ BootMode → Int → DebugListenerFailure → IO ()
-reportDebugListenerFailure mode port failure = do
-    hPutStrLn stderr $ T.unpack (debugListenerFailureMessage mode port failure)
-    hFlush stderr
+reportDebugListenerFailure mode port failure =
+    putStderrLine (debugListenerFailureMessage mode port failure)
 
 -- | One line of the boot-failure cleanup trace, on the same stderr
 --   channel as 'reportDebugListenerFailure'.
@@ -137,127 +192,58 @@ reportDebugListenerFailure mode port failure = do
 --   partially started worker was actually stopped or that a Lua state
 --   was actually closed.
 reportBootCleanup ∷ Text → IO ()
-reportBootCleanup detail = do
-    hPutStrLn stderr $ T.unpack ("synarchy: boot cleanup: " <> detail)
-    hFlush stderr
+reportBootCleanup detail =
+    putStderrLine ("synarchy: boot cleanup: " <> detail)
 
--- | Start the debug TCP server on the given port.
---   Returns a TQueue that the Lua thread polls for commands, or the
---   error text when the server could not start (port already in use,
---   no address). Binding happens synchronously so a failure reaches
---   the caller — previously it killed a forked thread silently while
---   the engine logged "listening". Only the accept loop is forked.
+-- | What a boot mode does about a listener lost AFTER it bound (#2170),
+--   as data rather than as effects, so both halves are assertable
+--   without capturing a handle.
 --
---   @builtin@ is consulted on the per-connection client thread BEFORE a
---   command is marshaled to the Lua thread: if it returns @Just resp@
---   the command is handled here (off the Lua thread) and @resp@ is sent
---   back; @Nothing@ falls through to the Lua thread as before. This is
---   how long-blocking ops ('world.waitForInit'/'waitForChunks') avoid
---   monopolising the single Lua thread — they only poll world-state
---   refs, so the client thread can run them while the Lua thread keeps
---   serving other connections.
-startDebugServer ∷ Int → (Text → IO (Maybe Text))
-                 → IO (Either Text (TQueue DebugCommand))
-startDebugServer 0 _ = do
-    -- Port 0 means no TCP listener at all. Binding to port 0 would ask
-    -- the OS for an ephemeral port, contradicting the "no TCP server"
-    -- dump-mode contract (#46) and opening a network surface.
-    -- Emit the ready marker on stderr (stdout is reserved for JSON) and
-    -- hand back an inert queue that nothing ever feeds.
-    --
-    -- This function has no boot-mode context, so it cannot tell dump's
-    -- deliberate sentinel from a console-required mode that was handed
-    -- a 0: that is 'listenerAction's job, and a 'ConsoleRequired' mode
-    -- never reaches this branch (#1190).
-    hPutStrLn stderr "READY port=0"
-    hFlush stderr
-    Right <$> atomically newTQueue
-startDebugServer port builtin = do
-    cmdQueue ← atomically newTQueue
-    r ← try $ do
-        let hints = defaultHints
-                { addrFlags = [AI_PASSIVE]
-                , addrSocketType = Stream
-                }
-        addrs ← getAddrInfo (Just hints) (Just "127.0.0.1") (Just (show port))
-        addr ← case addrs of
-            (a:_) → return a
-            []    → ioError (userError "getAddrInfo returned no addresses")
-        sock ← openSocket addr
-        (do setSocketOption sock ReuseAddr 1
-            bind sock (addrAddress addr)
-            listen sock 4) `onException` close sock
-        return sock
-    case r of
-        Left (e ∷ SomeException) → return (Left (tshow e))
-        Right sock → do
-            -- Ready signal on stdout — agents can wait for this line
-            -- to know the debug console is accepting connections.
-            -- (Dump mode, port 0, is handled above and never reaches here.)
-            hPutStrLn stdout ("READY port=" <> show port)
-            hFlush stdout
-            _ ← forkIO $ acceptLoop sock cmdQueue builtin `finally` close sock
-            return (Right cmdQueue)
+--   The two failures are deliberately separate: #1190's
+--   'DebugListenerFailure' is a listener that never STARTED and aborts
+--   the boot, while this is one that started, printed @READY@, served
+--   connections, and then died. A client that followed the documented
+--   wait-for-@READY@ contract has already connected by then, so
+--   aborting the boot is not available — the engine has to be shut
+--   down instead.
+data ListenerLossResponse = ListenerLossResponse
+    { llrMessage ∷ !Text
+      -- ^ The stderr line. Names the port and the cause in EVERY mode:
+      --   a console-optional engine goes on running, but the operator
+      --   still has to be told the console it may be about to use is
+      --   gone.
+    , llrShutdown ∷ !Bool
+      -- ^ Whether the engine must now stop. True exactly for a
+      --   'ConsoleRequired' mode, whose only control surface this was.
+    } deriving (Eq, Show)
 
-pollDebugCommand ∷ TQueue DebugCommand → IO (Maybe DebugCommand)
-pollDebugCommand = atomically . tryReadTQueue
+-- | The response for a mode, port and cause.
+listenerLossResponse ∷ BootMode → Int → Text → ListenerLossResponse
+listenerLossResponse mode port cause = case debugConsolePolicy mode of
+    ConsoleRequired → ListenerLossResponse
+        { llrMessage = base
+            <> " -- " <> bootModeName mode
+            <> " mode has no other control surface, so the engine is "
+            <> "shutting down."
+        , llrShutdown = True
+        }
+    ConsoleOptional → ListenerLossResponse
+        { llrMessage = base
+            <> " -- " <> bootModeName mode
+            <> " mode continues without a console."
+        , llrShutdown = False
+        }
+  where
+    base = listenerLostMessage port cause
 
-acceptLoop ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
-acceptLoop sock cmdQueue builtin = do
-    (conn, _) ← accept sock
-    _ ← forkIO $ handleClient conn cmdQueue builtin
-    acceptLoop sock cmdQueue builtin
+-- | Report a lost listener on stderr and answer whether the engine must
+--   stop. The caller owns the shutdown itself, because this module
+--   deliberately knows nothing of 'Engine.Core.State.EngineEnv'.
+reportDebugListenerLoss ∷ BootMode → Int → Text → IO Bool
+reportDebugListenerLoss mode port cause = do
+    let response = listenerLossResponse mode port cause
+    putStderrLine (llrMessage response)
+    return (llrShutdown response)
 
-handleClient ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text)) → IO ()
-handleClient conn cmdQueue builtin =
-    (do sendAll conn "synarchy debug console\n> "
-        clientLoop conn cmdQueue builtin BS.empty
-    ) `finally` close conn
-
-clientLoop ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text))
-          → BS.ByteString → IO ()
-clientLoop conn cmdQueue builtin leftover = do
-    chunk ← recv conn 4096
-    if BS.null chunk
-        then return ()  -- client disconnected
-        else do
-            let buf = leftover <> chunk
-            processLines conn cmdQueue builtin buf
-
-processLines ∷ Socket → TQueue DebugCommand → (Text → IO (Maybe Text))
-            → BS.ByteString → IO ()
-processLines conn cmdQueue builtin buf =
-    case BS8.elemIndex '\n' buf of
-        Nothing → clientLoop conn cmdQueue builtin buf  -- no complete line yet
-        Just idx →
-            let (line, rest) = BS.splitAt idx buf
-                remaining = BS.drop 1 rest  -- skip the \n
-                cmdText = T.strip $ TE.decodeUtf8Lenient line
-            in if T.null cmdText
-               then do
-                   sendAll conn "> "
-                   processLines conn cmdQueue builtin remaining
-               else do
-                   -- Built-ins (long-blocking waits) run HERE, on the
-                   -- client thread, so they never freeze the Lua thread.
-                   mBuiltin ← builtin cmdText
-                   result ← case mBuiltin of
-                       Just r  → return r
-                       Nothing → do
-                           responseMVar ← newEmptyMVar
-                           atomically $ writeTQueue cmdQueue
-                                          (DebugCommand cmdText responseMVar)
-                           -- Wait for Lua thread to process and respond.
-                           -- Timeout guards against deadlock: if the Lua
-                           -- thread crashes after dequeuing the command
-                           -- but before filling the MVar, an unbounded
-                           -- takeMVar would block forever (the crash
-                           -- handler only drains the TQueue, not
-                           -- already-dequeued commands).
-                           mResult ← timeout 30000000 (takeMVar responseMVar)
-                           return $ fromMaybe
-                             "ERROR: command timed out (Lua thread may have crashed)"
-                             mResult
-                   sendAll conn (TE.encodeUtf8 result)
-                   sendAll conn "\n> "
-                   processLines conn cmdQueue builtin remaining
+putStderrLine ∷ Text → IO ()
+putStderrLine t = hPutStrLn stderr (T.unpack t) >> hFlush stderr

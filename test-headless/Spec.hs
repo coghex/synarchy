@@ -254,6 +254,7 @@ import qualified Test.Headless.Core.LoopStartup as LoopStartup
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
+import qualified Test.Headless.Core.DebugSocket as DebugSocket
 import qualified Test.Headless.App.Cli as AppCli
 import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
@@ -869,6 +870,7 @@ main = hspec $ do
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
     DebugListener.spec
+    DebugSocket.spec
     AppCli.spec
     AppChunkRegion.spec
     AppResourceRoot.spec
