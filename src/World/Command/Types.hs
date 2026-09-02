@@ -237,13 +237,15 @@ data WorldCommand
         --   rather than by add-eligibility, so a standing designation
         --   stays clearable even after its tree stops qualifying.
     | WorldCancelChop WorldPageId Int Int (Maybe FloraInstanceId)
-        -- ^ Remove a chop designation (the chop AI's completion, or a
-        --   player cancel). #1854: with an instance id, EXACTLY that
-        --   plant's designation goes — the felling acolyte cancels the
-        --   tree it claimed and leaves its co-tenants designated. Without
-        --   one the gesture is the player's tile-granularity cancel and
+        -- ^ Remove a chop designation — the chop AI's, not the
+        --   player's. #1854: with an instance id, EXACTLY that plant's
+        --   designation goes, so the felling acolyte cancels the tree it
+        --   claimed and leaves its co-tenants designated. Without one it
         --   clears every designation standing on (gx, gy), pending legacy
-        --   entries included.
+        --   entries included; since #1856 that shape serves only the AI's
+        --   restored-job fallback (which knows its tile but not which of
+        --   its plants it had claimed) and the legacy migration drain.
+        --   The PLAYER's erase is 'WorldEraseChopInstances'.
     | WorldSetChopDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed chop-designation markers.
     | WorldSetTillAnchor WorldPageId Int Int

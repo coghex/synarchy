@@ -240,8 +240,14 @@ readInstanceIdArray idx = do
 --   #1854: WITH an instance id exactly that plant's designation goes —
 --   the chop AI's completion passes the id it claimed, so felling one
 --   of two designated trees on a tile leaves the other designated.
---   WITHOUT one this is the player's tile-granularity cancel and clears
---   every designation standing there.
+--
+--   WITHOUT one it clears every designation standing on the tile. That
+--   is NOT a player path (#1856): the player's erase gesture is
+--   screen-space and exact-identity ('chopEraseAtFn' \/
+--   'chopEraseInRectFn'). It remains for the AI's restored-job
+--   fallback, where a job knows its TILE but not which of that tile's
+--   plants it had claimed, and for the legacy tile-keyed migration
+--   drain. Do not route a new player interaction through it.
 chopCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 chopCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1

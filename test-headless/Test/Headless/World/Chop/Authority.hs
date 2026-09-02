@@ -19,11 +19,18 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.IORef (readIORef, writeIORef)
+import qualified Data.Map as Map
+import Data.IORef (readIORef, writeIORef, modifyIORef')
 import Data.List (sort)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv(..), loggerRef, worldManagerRef)
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import World.Flora.HitTest (FloraHitView(..), floraHitView)
+import World.Render.Camera.Types
+    (WorldCameraSnapshot(..), WorldQuadCache(..))
 import Structure.Types (emptyChunkStructures)
 import World.Chop.Types (chopDesignationTile)
 import World.Chunk.Types
@@ -209,6 +216,45 @@ spec = describe "Chop authority" $ beforeAll setup $ do
         handleWorldDesignateChopInstancesCommand env logger
             (WorldPageId "no_such_page") [plantId 1] "wood"
         designated ws `shouldReturn` []
+
+    describe "the picker's placement camera" $ do
+
+        -- 'floraHitView' is the IO assembly the pure selection spec
+        -- deliberately bypasses, so the wiring that reads the quad
+        -- cache is only covered here. A cached quad's wrap alias is
+        -- baked into its world coordinates, so placement has to come
+        -- from the camera the cache was BUILT with, not the live one.
+        let liveCam = (11.0, 22.0) ∷ (Float, Float)
+            cachedCam = (99.0, -44.0) ∷ (Float, Float)
+            cacheAt pos = WorldQuadCache
+                { wqcGen = 0
+                , wqcCamera = WorldCameraSnapshot
+                    { wcsPosition = pos, wcsZoom = 12
+                    , wcsZSlice = zSlice, wcsFbSize = (800, 600)
+                    , wcsFacing = FaceSouth }
+                , wqcSolarSlot = 0
+                , wqcQuads = Map.empty }
+
+        it "takes placement from the cache the drawn quads came from" $ \env → do
+            ws ← resetPage env
+            let rv = toRenderViewCapability env
+            modifyIORef' (rvCameraRef rv) $ \c →
+                c { camPosition = liveCam }
+            writeIORef (wsQuadCacheRef ws) (Just (cacheAt cachedCam))
+            view ← floraHitView env ws
+            (fhvPlaceCamX view, fhvPlaceCamY view) `shouldBe` cachedCam
+            -- …while the VIEW transform stays live: cached world
+            -- coordinates are looked at through the live camera.
+            (fhvCamX view, fhvCamY view) `shouldBe` liveCam
+
+        it "falls back to the live camera when no cache exists yet" $ \env → do
+            ws ← resetPage env
+            let rv = toRenderViewCapability env
+            modifyIORef' (rvCameraRef rv) $ \c →
+                c { camPosition = liveCam }
+            writeIORef (wsQuadCacheRef ws) Nothing
+            view ← floraHitView env ws
+            (fhvPlaceCamX view, fhvPlaceCamY view) `shouldBe` liveCam
 
     describe "erase" $ do
 

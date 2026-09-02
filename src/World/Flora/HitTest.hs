@@ -75,7 +75,10 @@ import World.Render.FloraProjection
     (FloraGeom(..), floraGeom, floraVisibleInSlice)
 import World.Render.SpriteDepth
     (FrontWallLift, frameFrontWallLift, liftSpriteSortKey)
-import World.Render.ViewBounds (ViewBounds, computeViewBounds)
+import World.Render.Camera (placementCamera, quadCacheMargins)
+import World.Render.Camera.Types (WorldCameraSnapshot(..))
+import World.Render.ViewBounds
+    (ViewBounds, expandViewBounds, viewBoundsAt)
 import World.Generate.Types (WorldGenParams(..))
 import World.State.Types (WorldState(..), pageWrapWorldSize)
 import World.Tile.Types (WorldTileData(..))
@@ -106,9 +109,20 @@ data FloraSelectMode
 --   two different frames, and so the whole rule stays a pure function
 --   that a spec can drive with synthetic chunks.
 data FloraHitView = FloraHitView
+    -- The PLACEMENT half: the camera the flora currently on screen was
+    -- built with ('World.Render.Camera.placementCamera'). A cached
+    -- quad's wrap alias is baked into its world coordinates, so
+    -- deriving placement from the LIVE camera puts a seam-side tree a
+    -- whole world away from where it is drawn for as long as the cache
+    -- is reused across the alias midpoint.
     { fhvFacing      ∷ !CameraFacing
-    , fhvZoom        ∷ !Float
     , fhvZSlice      ∷ !Int
+    , fhvPlaceCamX   ∷ !Float
+    , fhvPlaceCamY   ∷ !Float
+    -- The VIEW half: the LIVE camera, which is what the pixel→world
+    -- unprojection must use — cached world coordinates are viewed
+    -- through the live camera every frame.
+    , fhvZoom        ∷ !Float
     , fhvCamX        ∷ !Float
     , fhvCamY        ∷ !Float
     , fhvFbW         ∷ !Int
@@ -139,6 +153,7 @@ floraHitView env worldState = do
     let rv = toRenderViewCapability env
         wsc = toWorldSimCapability env
     camera       ← readIORef (rvCameraRef rv)
+    cachedQuads  ← readIORef (wsQuadCacheRef worldState)
     (winW, winH) ← readIORef (rvWindowSizeRef rv)
     (fbW, fbH)   ← readIORef (rvFramebufferSizeRef rv)
     texSizes     ← readIORef (rvTextureSizeRef rv)
@@ -152,10 +167,21 @@ floraHitView env worldState = do
     let calendar = maybe defaultCalendarConfig wgpCalender paramsM
         zoom = camZoom camera
         effDepth = min viewDepth (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
+        live = WorldCameraSnapshot
+            { wcsPosition = camPosition camera
+            , wcsZoom     = zoom
+            , wcsZSlice   = camZSlice camera
+            , wcsFbSize   = (fbW, fbH)
+            , wcsFacing   = camFacing camera
+            }
+        placed = placementCamera cachedQuads live
+        (placeX, placeY) = wcsPosition placed
     pure FloraHitView
-        { fhvFacing      = camFacing camera
+        { fhvFacing      = wcsFacing placed
+        , fhvZSlice      = wcsZSlice placed
+        , fhvPlaceCamX   = placeX
+        , fhvPlaceCamY   = placeY
         , fhvZoom        = zoom
-        , fhvZSlice      = camZSlice camera
         , fhvCamX        = fst (camPosition camera)
         , fhvCamY        = snd (camPosition camera)
         , fhvFbW         = fbW
@@ -164,7 +190,12 @@ floraHitView env worldState = do
         , fhvWinH        = winH
         , fhvWorldSize   = worldSize
         , fhvEffDepth    = effDepth
-        , fhvViewBounds  = computeViewBounds camera fbW fbH effDepth
+        -- The cache's OWN coverage: its snapshot's bounds widened by
+        -- the very margins 'World.Render.Quads' widens them with, so a
+        -- chunk the cache built is still a candidate here.
+        , fhvViewBounds  = expandViewBounds (quadCacheMargins placed)
+                               (viewBoundsAt (wcsPosition placed)
+                                   (wcsZoom placed) fbW fbH effDepth)
         , fhvTiles       = tileData
         , fhvCatalog     = catalog
         , fhvHarvests    = harvests
@@ -187,7 +218,7 @@ floraSelectCandidates view mode =
     | (coord, lc) ← HM.toList (wtdChunks (fhvTiles view))
     , Just wrapOff ← [isChunkVisibleWrapped (fhvFacing view)
                           (fhvWorldSize view) (fhvViewBounds view)
-                          (fhvCamX view) (fhvCamY view) coord]
+                          (fhvPlaceCamX view) (fhvPlaceCamY view) coord]
     , fd ← chunkFloraDraws (fhvCatalog view) (fhvDaysPerYear view)
                (fhvAbsDay view) (fhvHarvests view) (lcCoord lc) lc
     , let inst = fdInstance fd

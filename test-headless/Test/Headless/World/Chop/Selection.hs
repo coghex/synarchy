@@ -38,7 +38,7 @@ import World.Flora.Identity (FloraInstanceId, generatedFloraInstanceId)
 import World.Flora.Types
 import World.Fluid.Types (emptyIceMap)
 import World.Generate (chunkToGlobal)
-import World.Grid (gridToWorld, tileHeight, tileWidth)
+import World.Grid (gridToWorld, tileHeight, tileWidth, worldWrapPeriod)
 import World.Render.FloraDraws (FloraDraw(..), chunkFloraDraws)
 import World.Render.FloraMarker (floraMarkerQuad)
 import World.Render.FloraProjection (FloraGeom(..))
@@ -53,7 +53,11 @@ import Engine.Scene.Types.Batch (sortQuadsByLayer, quadPainterOrder)
 import World.Render.FloraQuads (floraToQuad)
 import Engine.Graphics.Vulkan.Types.Vertex
     (Vec2(..), Vertex, pos, faceMapId, noFaceMapVertexId)
-import World.Render.ViewBounds (computeViewBounds)
+import World.Render.Camera (cameraChanged, quadCacheMargins)
+import World.Render.Camera.Types (WorldCameraSnapshot(..))
+import World.Render.ChunkCulling (isChunkVisibleWrapped)
+import World.Render.ViewBounds
+    (computeViewBounds, expandViewBounds, viewBoundsAt)
 import World.Tile.Types (WorldTileData(..))
 
 -- * Fixture
@@ -199,8 +203,11 @@ viewOfWith facing (camX, camY) tiles designated =
                             , camFacing = facing
                             , camZSlice = zSlice }
     in FloraHitView
-        { fhvFacing = facing, fhvZoom = zoom, fhvZSlice = zSlice
-        , fhvCamX = camX, fhvCamY = camY
+        { fhvFacing = facing, fhvZSlice = zSlice
+        -- Placement and view coincide unless a case moves them apart,
+        -- which is exactly what the cache-reuse case below does.
+        , fhvPlaceCamX = camX, fhvPlaceCamY = camY
+        , fhvZoom = zoom, fhvCamX = camX, fhvCamY = camY
         , fhvFbW = fbW, fhvFbH = fbH, fhvWinW = winW, fhvWinH = winH
         , fhvWorldSize = worldSize, fhvEffDepth = effDepth
         , fhvViewBounds = computeViewBounds cam fbW fbH effDepth
@@ -218,8 +225,11 @@ viewOfWith facing (camX, camY) tiles designated =
 pixelOf ∷ FloraHitView → (Float, Float) → (Float, Float)
 pixelOf view (wx, wy) =
     let aspect = fromIntegral fbW / fromIntegral fbH ∷ Float
-        vw = zoom * aspect
-        vh = zoom
+        -- The VIEW's own zoom, never the fixture default: a case that
+        -- moves the camera out (the cache-reuse seam cases) has to be
+        -- aimed through the projection the picker will actually use.
+        vw = fhvZoom view * aspect
+        vh = fhvZoom view
     in ( fromIntegral winW * (((wx - fhvCamX view) / vw) + 1) / 2
        , fromIntegral winH * (((wy - fhvCamY view) / vh) + 1) / 2 )
 
@@ -739,6 +749,84 @@ spec = describe "Chop selection" $ do
                 (pickFloraAt view (SelectChoppable "wood") (fst px) (snd px))
                 `shouldBe` Just winner
 
+    describe "placement follows the CACHE, not the live camera" $ do
+
+        -- Cached flora quads carry world coordinates with the chunk's
+        -- wrap alias baked in, and that alias flips discontinuously
+        -- where the camera is equidistant from two alias images — half
+        -- a world from the chunk. 'cameraChanged' tolerates a pan of
+        -- camEpsilon + the cache margins before rebuilding, and BOTH
+        -- scale with zoom, so the further out the camera is the more
+        -- easily a reuse straddles that midpoint. Zoomed far enough out
+        -- for the midpoint to be ON SCREEN — which is the only way a
+        -- picker could be asked about such a tree at all — the reuse
+        -- window (~13 world units here) dwarfs the pan needed to cross
+        -- it.
+        let farZoom = 40.0 ∷ Float
+            seamChunk = ChunkCoord 2 3
+            (sgx, sgy) = chunkToGlobal seamChunk 8 8
+            seamTree = plantAt 1 woodId (8, 8)
+            seamTiles = tilesOf [chunkWith seamChunk flat [seamTree]]
+            (treeX, treeY) = gridToWorld FaceNorth sgx sgy
+            halfPeriod = fst (worldWrapPeriod FaceNorth worldSize) * 0.5
+            -- Either side of the alias midpoint, a small pan apart.
+            nearSide = (treeX - halfPeriod + 2.0, treeY)
+            farSide  = (treeX - halfPeriod - 2.0, treeY)
+            farView (cx, cy) =
+                (viewOf FaceNorth (cx, cy) seamTiles HM.empty)
+                    { fhvZoom = farZoom
+                    , fhvViewBounds = expandViewBounds
+                        (quadCacheMargins (snapAt (cx, cy) farZoom))
+                        (viewBoundsAt (cx, cy) farZoom fbW fbH effDepth) }
+            aliasFrom v (cx, cy) = isChunkVisibleWrapped FaceNorth worldSize
+                (fhvViewBounds v) cx cy seamChunk
+            anchorIn v = listToMaybe
+                [ (fgAnchorX g, fgAnchorY g)
+                | (pk, g) ← floraSelectCandidates v (SelectChoppable "wood")
+                , fpInstanceId pk ≡ instanceId 1 ]
+
+        it "the fixture really straddles a VISIBLE alias flip" $ do
+            -- Both cameras must see the chunk, and must see it through
+            -- DIFFERENT aliases — otherwise the cases below prove
+            -- nothing.
+            let vNear = farView nearSide
+                vFar  = farView farSide
+            aliasFrom vNear nearSide `shouldSatisfy` isJust
+            aliasFrom vFar  farSide  `shouldSatisfy` isJust
+            aliasFrom vNear nearSide `shouldNotBe` aliasFrom vFar farSide
+            -- …and the pan between them is inside the window that
+            -- REUSES the cache rather than rebuilding it.
+            cameraChanged (snapAt nearSide farZoom) (snapAt farSide farZoom)
+                `shouldBe` False
+
+        it "places a tree where the CACHED camera placed it" $ do
+            let cached = farView nearSide
+                -- The live camera has panned across the midpoint; the
+                -- cache has NOT rebuilt, so placement must not move.
+                straddling = cached { fhvCamX = fst farSide
+                                    , fhvCamY = snd farSide }
+                naive = farView farSide
+            map (fpInstanceId . fst)
+                (floraSelectCandidates straddling (SelectChoppable "wood"))
+                `shouldBe` [instanceId 1]
+            anchorIn straddling `shouldBe` anchorIn cached
+            -- The control: taking placement from the live camera too
+            -- would move the tree a whole world.
+            anchorIn naive `shouldSatisfy` isJust
+            anchorIn straddling `shouldNotBe` anchorIn naive
+
+        it "still selects at the pixel that cached tree is drawn at" $ do
+            let straddling = (farView nearSide) { fhvCamX = fst farSide
+                                                , fhvCamY = snd farSide }
+            -- Cached world coordinates, live view transform — the
+            -- pairing the fix establishes, exercised end to end.
+            Just pa ← pure (anchorPixel straddling (instanceId 1))
+            let (x1, y1, x2, y2) = boxAround pa 30
+            map fpInstanceId
+                (pickFloraInRect straddling (SelectChoppable "wood")
+                    x1 y1 x2 y2)
+                `shouldBe` [instanceId 1]
+
     describe "the committed marker" $ do
 
         let markerTex = TextureHandle 21
@@ -883,3 +971,9 @@ seTag = fromIntegral (fromEnum SWallSE)
 -- | A vertex's position, for comparing two quads' rects.
 rectOf ∷ Vertex → (Float, Float)
 rectOf v = case pos v of Vec2 x y → (x, y)
+
+-- | A camera snapshot at a position and zoom, in this fixture's frame.
+snapAt ∷ (Float, Float) → Float → WorldCameraSnapshot
+snapAt p z = WorldCameraSnapshot
+    { wcsPosition = p, wcsZoom = z, wcsZSlice = zSlice
+    , wcsFbSize = (fbW, fbH), wcsFacing = FaceNorth }

@@ -31,7 +31,9 @@ import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Construct.Extent (structureDragExtent)
-import World.Render.ViewBounds (computeViewBounds)
+import World.Render.Camera (placementCamera, quadCacheMargins)
+import World.Render.ViewBounds
+    (computeViewBounds, expandViewBounds, viewBoundsAt)
 import World.Render.ChunkCulling (isChunkVisibleWrapped)
 import World.Render.HitTest (pickWorldTile)
 import World.Render.TileQuads
@@ -194,6 +196,7 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
     -- by 'World.Flora.Designation.forgetFloraInstances'). An EVICTED
     -- chunk draws nothing either, exactly as its trees draw nothing.
     chopDesigns ← readIORef (wsChopDesignationsRef worldState)
+    cachedQuads ← readIORef (wsQuadCacheRef worldState)
     floraCat    ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
     harvests    ← readIORef (wsFloraHarvestsRef worldState)
     worldDate   ← readIORef (wsDateRef worldState)
@@ -207,6 +210,22 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
         -- annotation sunk behind the trunk it belongs to.
         spriteLift = frameFrontWallLift facing worldSize zSlice
                          effectiveDepth (wtdChunks tileData)
+        -- This pass is per-frame while the flora it annotates is
+        -- CACHED, so the marker must place itself with the camera those
+        -- cached quads were built with (#1856). Reading the live camera
+        -- instead sends the icon a whole world away from its tree for
+        -- as long as a reused cache straddles the wrap-alias midpoint.
+        placed = placementCamera cachedQuads WorldCameraSnapshot
+            { wcsPosition = camPosition camera
+            , wcsZoom     = zoom
+            , wcsZSlice   = camZSlice camera
+            , wcsFbSize   = (fbW, fbH)
+            , wcsFacing   = camFacing camera
+            }
+        (placeX, placeY) = wcsPosition placed
+        markerBounds = expandViewBounds (quadCacheMargins placed)
+            (viewBoundsAt (wcsPosition placed) (wcsZoom placed)
+                 fbW fbH effectiveDepth)
         chopDesignQuads = case chopDesignTexture cs' of
             Nothing → V.empty
             Just tex
@@ -216,15 +235,17 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                           (floraTexSize texSizes tex) tileAlpha
                           (fdGX fd) (fdGY fd) tex
                     | (coord, lc) ← HM.toList (wtdChunks tileData)
-                    , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
-                                          vb camX camY coord]
+                    , Just wrapOff ← [isChunkVisibleWrapped
+                                          (wcsFacing placed) worldSize
+                                          markerBounds placeX placeY coord]
                     , fd ← chunkFloraDraws floraCat daysPerYear absDay
                                harvests (lcCoord lc) lc
                     , let inst = fdInstance fd
                     , HM.member (fiInstanceId inst) chopDesigns
                     , floraVisibleInSlice zSlice effectiveDepth inst
-                    , let base = floraGeom facing (fdGX fd) (fdGY fd) inst
-                                     (fdTexture fd) texSizes zSlice wrapOff
+                    , let base = floraGeom (wcsFacing placed) (fdGX fd)
+                                     (fdGY fd) inst (fdTexture fd) texSizes
+                                     (wcsZSlice placed) wrapOff
                           geom = base { fgSortKey =
                               liftSpriteSortKey spriteLift (lcCoord lc)
                                   (fdGX fd) (fdGY fd) (fgSortKey base) }

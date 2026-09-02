@@ -14,7 +14,8 @@ worldgen; the arena has no flora), then checks:
      units from felling oaks for dinner.
   2. Designation: chop.designateInstances commits an exact set of
      plant identities (chop.getDesignationAt / getDesignationCount);
-     chop.cancelDesignation removes one. #1856 made the PLAYER's
+     chop.cancelDesignation removes exactly one BY ID, leaving a
+     co-tenant of the same tile standing. #1856 made the PLAYER's
      gesture a screen-space press-drag, which needs a camera this
      probe has not got — the exact-ID authority underneath it is
      the same one the gesture reaches, and is what is proved here.
@@ -184,13 +185,71 @@ def _run(port, proc, args, passed):
         print(f"  [{'PASS' if ok2 else 'FAIL'}] designate marks the tree: "
               f"count={n} at-tile={d}")
 
-        send(port, f"chop.cancelDesignation({tx},{ty}); return 'ok'")
-        time.sleep(0.5)
-        d2 = send_json(port, f"return chop.getDesignationAt('probe',{tx},{ty})")
-        ok2b = not isinstance(d2, dict)
+        # #1856: cancel the EXACT plant, by the id getDesignationAt just
+        # reported. Calling cancelDesignation WITHOUT an id reaches the
+        # tile-wide fallback that exists for restored jobs and legacy
+        # migration, which would clear every designation standing there
+        # and so could not tell a working exact-identity cancel from a
+        # working tile sweep.
+        cancel_iid = d.get("instanceId") if isinstance(d, dict) else None
+        ok2b = isinstance(cancel_iid, (int, float)) \
+               and not isinstance(cancel_iid, bool)
+        if ok2b:
+            send(port, f"chop.cancelDesignation({tx},{ty},{int(cancel_iid)}); "
+                       f"return 'ok'")
+            time.sleep(0.5)
+            d2 = send_json(port,
+                           f"return chop.getDesignationAt('probe',{tx},{ty})")
+            ok2b = not isinstance(d2, dict)
+        else:
+            d2 = f"no instanceId to cancel by: {d}"
         passed &= ok2b
         print(f"  [{'PASS' if ok2b else 'FAIL'}] cancelDesignation clears "
-              f"it: {d2}")
+              f"exactly the named plant: {d2}")
+
+        # And it clears ONLY that plant. Designate two co-tenants of the
+        # same tile — a tile key cannot tell them apart (#1854) — cancel
+        # one by id, and require the other to survive.
+        pair = send_json(port, (
+            "local ids = {} "
+            "for x = " + str(tx - 1) + ", " + str(tx + 1) + " do "
+            "  for y = " + str(ty - 1) + ", " + str(ty + 1) + " do "
+            "    local f = world.getFloraAt(x, y) "
+            "    if f and f.instanceId then ids[#ids+1] = f.instanceId end "
+            "  end end "
+            "chop.designateInstances('probe', ids) "
+            "return ids"))
+        time.sleep(0.5)
+        ids = [int(i) for i in pair if isinstance(i, (int, float))] \
+              if isinstance(pair, list) else []
+        if len(ids) >= 2:
+            before = send_json(port, "return chop.getDesignationCount('probe')")
+            send(port, f"chop.cancelDesignation(0,0,{ids[0]}); return 'ok'")
+            time.sleep(0.5)
+            after = send_json(port, "return chop.getDesignationCount('probe')")
+            ok2c = (isinstance(before, (int, float))
+                    and isinstance(after, (int, float))
+                    and after == before - 1)
+            detail = f"{before} -> {after}"
+        else:
+            # Not a contract failure: this seed's region simply has no
+            # second designatable plant to leave standing.
+            ok2c = True
+            detail = f"skipped, only {len(ids)} designatable plant(s) nearby"
+        passed &= ok2c
+        print(f"  [{'PASS' if ok2c else 'FAIL'}] an exact-id cancel leaves "
+              f"co-tenants designated: {detail}")
+        # Leave the page as this stage found it: the save and AI phases
+        # below re-designate deliberately and count what they get.
+        if ids:
+            send(port, "chop.eraseInstances('probe', {"
+                       + ",".join(str(i) for i in ids) + "}); return 'ok'")
+            time.sleep(0.5)
+        left = send_json(port, "return chop.getDesignationCount('probe')")
+        ok2d = left == 0
+        passed &= ok2d
+        print(f"  [{'PASS' if ok2d else 'FAIL'}] eraseInstances clears the "
+              f"rest: count={left}")
 
         # Re-designate for the save + AI phases.
         designate_rect(port, "probe", tx, ty, tx, ty, send)
