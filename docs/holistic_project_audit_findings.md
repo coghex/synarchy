@@ -74,28 +74,28 @@ pass broadened HPA-4, HPA-7, and HPA-35 with independently verified evidence.
 - [x] HPA-1. Lateral fluid equalization can underflow its source volume — [#2042]
 - [x] HPA-2. Runtime fluid ignores the cylindrical world seam — [#2044]
 - [ ] HPA-3. Transfers between unlike fluids silently change fluid identity — [deferred]: reaction epic pending via /design-epic
-- [ ] HPA-4. Session replacement retains independent history and transient UI
-- [ ] HPA-5. Legacy save read exceptions leave the load transaction active
-- [ ] HPA-6. Forced worker shutdown returns before the worker has exited
-- [ ] HPA-7. Debug-console trust, admission, and listener lifetime are unbounded
-- [ ] HPA-8. The Cabal source distribution omits required resources
-- [ ] HPA-9. Stale review-approval removal fails open
-- [ ] HPA-10. Grouped combat and injury histories bypass their retention caps
-- [ ] HPA-11. Public scene text and UI-layer sprites are omitted from rendering
-- [ ] HPA-12. Settings Back cannot restore most applied-but-unsaved video values
-- [ ] HPA-15. Video configuration validation stops at the intended UI
-- [ ] HPA-19. Local configuration persistence has no common durable-write contract
-- [ ] HPA-13. Startup completion measures dispatch instead of successful readiness
-- [ ] HPA-18. Worker startup has no general partial-acquisition rollback
-- [ ] HPA-14. Runtime intervals use discontinuous wall time without a valid first sample
-- [ ] HPA-16. A Lua update that changes its interval is scheduled twice
-- [ ] HPA-17. Lua callback isolation cannot contain nontermination or chronic failure
-- [ ] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal
-- [ ] HPA-21. Plant-designation species bypass the flora load gate
-- [ ] HPA-22. Save-barrier acknowledgements do not establish a closed quiescence boundary
-- [ ] HPA-23. Unknown-component preservation fails open when a generation cannot be read
-- [ ] HPA-24. Slot creation and autosave rotation omit parent-directory durability
-- [ ] HPA-25. A fresh world's center chunk is never admitted to fluid simulation
+- [x] HPA-4. Session replacement retains independent history and transient UI — [#2156]
+- [x] HPA-5. Legacy save read exceptions leave the load transaction active — [#2162]
+- [x] HPA-6. Forced worker shutdown returns before the worker has exited — [#2165]
+- [x] HPA-7. Debug-console trust, admission, and listener lifetime are unbounded — [#2170]
+- [x] HPA-8. The Cabal source distribution omits required resources — [#2175]
+- [x] HPA-9. Stale review-approval removal fails open — [#2184]
+- [x] HPA-10. Grouped combat and injury histories bypass their retention caps — [#2189]
+- [x] HPA-11. Public scene text and UI-layer sprites are omitted from rendering — [#2192]
+- [x] HPA-12. Settings Back cannot restore most applied-but-unsaved video values — [#2194]
+- [x] HPA-15. Video configuration validation stops at the intended UI — [#2198]
+- [x] HPA-19. Local configuration persistence has no common durable-write contract — [#2202]
+- [x] HPA-13. Startup completion measures dispatch instead of successful readiness — [#2203]
+- [x] HPA-18. Worker startup has no general partial-acquisition rollback — [no-issue]
+- [x] HPA-14. Runtime intervals use discontinuous wall time without a valid first sample — [#2204]
+- [x] HPA-16. A Lua update that changes its interval is scheduled twice — [#2205]
+- [x] HPA-17. Lua callback isolation cannot contain nontermination or chronic failure — [no-issue]
+- [ ] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal — [deferred]: flora species identity epic pending via /design-epic
+- [ ] HPA-21. Plant-designation species bypass the flora load gate — [deferred]: FSI-2 of the flora species identity epic filed
+- [x] HPA-22. Save-barrier acknowledgements do not establish a closed quiescence boundary — [#2221]
+- [x] HPA-23. Unknown-component preservation fails open when a generation cannot be read — [#2227]
+- [x] HPA-24. Slot creation and autosave rotation omit parent-directory durability — [#2229]
+- [x] HPA-25. A fresh world's center chunk is never admitted to fluid simulation — [#2232]
 - [ ] HPA-26. Reusing a world-page name can adopt the previous incarnation's state
 - [ ] HPA-27. Normal world initialization discards runtime material registrations
 - [ ] HPA-28. A non-finite time scale crashes the world worker
@@ -212,7 +212,7 @@ A pure tick with `Lava 7` above an occupied `Lake 1` cell produced an empty sour
 
 ## Session and runtime lifecycle
 
-### HPA-4. Session replacement retains independent history and transient UI
+### [#2156] HPA-4. Session replacement retains independent history and transient UI
 
 **Severity:** Medium–High
 
@@ -257,7 +257,7 @@ A bare production-module Lua harness inserted a thought for UID 7, drained the e
 - **Scope and constraints:** Preserve the existing survivor reconciliation and HUD/world rebinding. Clear selected UID/tab and scroll state without re-firing ordinary user callbacks. Test a reused UID and initially visible modal/card surfaces.
 - **Remaining uncertainty:** Thought-history retention was reproduced directly; visible modal persistence was established structurally but not exercised in an offscreen session.
 
-### HPA-5. Legacy save read exceptions leave the load transaction active
+### [#2162] HPA-5. Legacy save read exceptions leave the load transaction active
 
 **Severity:** Medium
 
@@ -278,7 +278,7 @@ The supported legacy flat-save path reads its file after `beginLoad` and pause h
 - **Scope and constraints:** Preserve the deliberate rule that a failed load leaves simulation paused. Asynchronous exceptions must continue to propagate rather than being converted into ordinary load failures.
 - **Remaining uncertainty:** The exception path is direct but was not induced through a live Lua API call during this audit.
 
-### HPA-6. Forced worker shutdown returns before the worker has exited
+### [#2165] HPA-6. Forced worker shutdown returns before the worker has exited
 
 **Severity:** Medium
 
@@ -299,7 +299,7 @@ The shared worker loop catches `SomeException`, which includes asynchronous `Thr
 - **Scope and constraints:** Preserve fail-stop handling for synchronous tick failures and idempotent normal shutdown. Add focused coverage for asynchronous termination and the post-timeout completion signal.
 - **Remaining uncertainty:** The race requires a worker to exceed the ten-second graceful timeout and was not deliberately induced.
 
-### HPA-7. Debug-console trust, admission, and listener lifetime are unbounded
+### [#2170] HPA-7. Debug-console trust, admission, and listener lifetime are unbounded
 
 **Severity:** Medium
 
@@ -344,7 +344,7 @@ threads and buffers, and permanently kill the discarded listener through an
 
 ## Distribution and governance
 
-### HPA-8. The Cabal source distribution omits required resources
+### [#2175] HPA-8. The Cabal source distribution omits required resources
 
 **Severity:** Medium
 
@@ -369,7 +369,7 @@ Comparison against tracked resources found 59 omitted files across the atlas ind
 - **Scope and constraints:** Continue excluding gitignored local configuration state. Add resource patterns narrowly enough to avoid leaking runtime-local files, and give the source manifest an automated completeness check.
 - **Remaining uncertainty:** The package declares that it is not published to Hackage, but the repository still maintains and documents `sdist` as a supported validation artifact.
 
-### HPA-9. Stale review-approval removal fails open
+### [#2184] HPA-9. Stale review-approval removal fails open
 
 **Severity:** Medium
 
@@ -393,7 +393,7 @@ The review workflow describes its stale-approval policy as fail-closed, but supp
 
 ## Frontend state and rendering APIs
 
-### HPA-10. Grouped combat and injury histories bypass their retention caps
+### [#2189] HPA-10. Grouped combat and injury histories bypass their retention caps
 
 **Severity:** Medium
 
@@ -417,7 +417,7 @@ A bare Lua harness injected 1,000 encounters separated beyond the rejoin window.
 - **Scope and constraints:** Cover both one very large group and many expired groups. Preserve the rejoin-window protection against numeric UID reuse.
 - **Remaining uncertainty:** None at draft time; the uncapped growth was reproduced directly.
 
-### HPA-11. Public scene text and UI-layer sprites are omitted from rendering
+### [#2192] HPA-11. Public scene text and UI-layer sprites are omitted from rendering
 
 **Severity:** Low–Medium
 
@@ -445,7 +445,7 @@ Repository-wide reference inspection found no production consumer of `bmTextBatc
 
 ## Settings state and persistence
 
-### HPA-12. Settings Back cannot restore most applied-but-unsaved video values
+### [#2194] HPA-12. Settings Back cannot restore most applied-but-unsaved video values
 
 **Severity:** High
 
@@ -472,7 +472,7 @@ snapshots; the other video settings do not have them.
 - **Scope and constraints:** Preserve live application, Save-as-Apply-then-persist, brightness and tooltip live preview, autosave's separate storage, and responsive UI-scale notifications. Add coverage for every video field rather than only the existing snapshot-backed exceptions.
 - **Remaining uncertainty:** The state contradiction is direct. No rendered Settings interaction was run during the static follow-up.
 
-### HPA-15. Video configuration validation stops at the intended UI
+### [#2198] HPA-15. Video configuration validation stops at the intended UI
 
 **Severity:** Medium–High
 
@@ -499,7 +499,7 @@ timing, or layout code.
 - **Scope and constraints:** Preserve backward-compatible optional YAML fields and the documented default fallback for malformed files. Define policy for unsupported resolutions, legal MSAA samples, finite/ranged scales, brightness, and frame limits before choosing clamping versus rejection.
 - **Remaining uncertainty:** No deliberately malformed local configuration was launched; the unvalidated data flow is direct.
 
-### HPA-19. Local configuration persistence has no common durable-write contract
+### [#2202] HPA-19. Local configuration persistence has no common durable-write contract
 
 **Severity:** Medium–Low
 
@@ -528,7 +528,7 @@ unconditional success, while autosave exposes an explicit failure result.
 
 ## Startup readiness and acquisition
 
-### HPA-13. Startup completion measures dispatch instead of successful readiness
+### [#2203] HPA-13. Startup completion measures dispatch instead of successful readiness
 
 **Severity:** High
 
@@ -556,7 +556,9 @@ metric rather than a readiness metric.
 - **Scope and constraints:** Preserve incremental per-frame dispatch and existing texture callbacks. Required YAML/content absence needs a fail-fast or explicit degraded-mode decision; optional visuals may continue through fallback behavior without blocking all startup.
 - **Remaining uncertainty:** No shipped file was damaged or removed during the static follow-up. The false-success control flow is direct; which individual assets should be required remains a product decision.
 
-### HPA-18. Worker startup has no general partial-acquisition rollback
+### [no-issue] HPA-18. Worker startup has no general partial-acquisition rollback
+
+> **Disposition:** No issue — the window is real but empty: the five non-refusable workers' pre-fork startup is `getPOSIXTime`/`newIORef`/`pure`/a capability read (`src/World/Thread.hs:48`, `src/Unit/Thread.hs:45-50`, `src/Sim/Thread.hs:52`, `src/Combat/Thread.hs:56`, `src/Engine/Input/Thread.hs:54`), so only resource exhaustion can throw after an earlier fork; the one worker with real startup failure modes (Lua) already unwinds the exact partial set (#1190, `App.Boot.luaThreadOrAbort`) and treats a failed `init.lua` as an `Either`; no diagnostic is lost because `startWorkerThreadEither` logs before rethrowing and the `LogToHandle` backend flushes every line synchronously (`src/Engine/Core/Log/Format.hs:31`); and nothing acquired by then outlives process exit (workers start before any window, device, or save). #1147 requirement 7 deliberately kept cross-worker rollback out of the boot modules; a future fallible startup takes Lua's refusal path. Verified on master `5500e9771`.
 
 **Severity:** Medium–Low
 
@@ -586,7 +588,7 @@ diagnostics.
 
 ## Runtime timing and scripting
 
-### HPA-14. Runtime intervals use discontinuous wall time without a valid first sample
+### [#2204] HPA-14. Runtime intervals use discontinuous wall time without a valid first sample
 
 **Severity:** High
 
@@ -613,7 +615,7 @@ consumers defines a clamp or a host-suspend/clock-correction policy.
 - **Scope and constraints:** Preserve real UTC timestamps where they are actually displayed or persisted. Decide separately whether simulation should pause across host sleep, skip elapsed time, or catch up in bounded steps.
 - **Remaining uncertainty:** No system-clock discontinuity or held-input startup was executed. The zero-baseline and wall-clock data flows are direct.
 
-### HPA-16. A Lua update that changes its interval is scheduled twice
+### [#2205] HPA-16. A Lua update that changes its interval is scheduled twice
 
 **Severity:** Medium
 
@@ -638,7 +640,9 @@ arrives roughly two new intervals later.
 - **Scope and constraints:** Preserve tick-rate validation, event-only semantics, pause/resume, kill-during-callback behavior, and the accepted interval passed as `dt`. Add direct coverage for positive, zero, pause, and kill mutations from within `update`.
 - **Remaining uncertainty:** None in the control flow; no shipped script currently reaches it.
 
-### HPA-17. Lua callback isolation cannot contain nontermination or chronic failure
+### [no-issue] HPA-17. Lua callback isolation cannot contain nontermination or chronic failure
+
+> **Disposition:** No issue — scripts are trusted shipped code (as the finding states), so a nonterminating callback is a development bug with an immediate symptom and a chronically throwing one already logs its `file:line` every interval, which is the fail-loud signal wanted; a quarantine would hide it and would pause modules that legitimately throw until a precondition arrives. A wall-clock budget conflicts with the console's blocking built-ins (`world.waitForInit` polls with `threadDelay` for up to 300 s inside the Lua call, `src/Engine/Scripting/Lua/API/World/Lifecycle.hs:795-815`), and an instruction budget is new infrastructure — hslua-core 2.3.2 exposes no `sethook`, so it needs a C count hook in `cbits/lua_debug.c`, a budget value, and a console exemption — i.e. an epic-sized design decision, not an issue. Per-module error isolation and transaction-visible save/load callback failures (#1204) already hold. Verified on master `5500e9771`.
 
 **Severity:** Medium
 
@@ -668,7 +672,9 @@ yield contract, repeated-error backoff, or quarantine state.
 
 ## Content identity and validation
 
-### HPA-20. Persisted flora species identity is an OS-order-dependent ordinal
+### [deferred] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal
+
+> **Deferred:** Owner chose the epic path (two independent PRs — order-independent flora registration/placement, and persisting species by YAML name across `world-edits`, crop plots and plant designations — plus the open decision on relaying generated flora in existing saves) — precondition: the flora species identity design document is processed through `/process-design-doc` and its epic number exists to link here.
 
 **Severity:** High
 
@@ -717,7 +723,9 @@ species as a different one.
   migrate every persisted species reference, particularly groundcover crop
   plots and outstanding plant designations.
 
-### HPA-21. Plant-designation species bypass the flora load gate
+### [deferred] HPA-21. Plant-designation species bypass the flora load gate
+
+> **Deferred:** The fix is owned by slice FSI-2 of the pending flora species identity epic (`docs/flora_species_identity_design.md`, whose scope names `missingFloraReferences` "over plant designations") — precondition: FSI-2 is filed through `/process-design-doc` and its issue number exists to link here.
 
 **Severity:** Medium–High
 
@@ -762,7 +770,7 @@ farm AI after an unsuccessful planting attempt.
 
 ## Transaction integrity and durability
 
-### HPA-22. Save-barrier acknowledgements do not establish a closed quiescence boundary
+### [#2221] HPA-22. Save-barrier acknowledgements do not establish a closed quiescence boundary
 
 **Severity:** High
 
@@ -809,7 +817,7 @@ authorized work after snapshot or load publication has begun.
 - **Remaining uncertainty:** No scheduler interleaving was forced. The protocol
   explicitly documents and permits the unsafe interval.
 
-### HPA-23. Unknown-component preservation fails open when a generation cannot be read
+### [#2227] HPA-23. Unknown-component preservation fails open when a generation cannot be read
 
 **Severity:** High
 
@@ -853,7 +861,7 @@ guard exists to preserve.
 - **Remaining uncertainty:** A permission failure was not induced. The
   fail-open branch and destructive publication topology are direct.
 
-### HPA-24. Slot creation and autosave rotation omit parent-directory durability
+### [#2229] HPA-24. Slot creation and autosave rotation omit parent-directory durability
 
 **Severity:** Medium
 
@@ -896,7 +904,7 @@ slot directories under `saves/` without synchronizing `saves/` at all.
 
 ## World lifecycle and simulation
 
-### HPA-25. A fresh world's center chunk is never admitted to fluid simulation
+### [#2232] HPA-25. A fresh world's center chunk is never admitted to fluid simulation
 
 **Severity:** Medium–High
 

@@ -723,6 +723,23 @@ missing an entry, and asserts the audit reports the gap — this is the
 "detects an intentionally introduced unclassified root state owner" test
 the acceptance criteria requires.
 
+Since #2124 that command is a façade over four internal owner modules,
+none of them a gate of its own and none run by CI or `tools/ci-local.sh`
+directly: `tools/persistence_inventory_audit_haskell.py` owns item 1 and
+the typed persistent-reference field discovery (the comment/literal-
+aware Haskell record parser; its `extract_record_fields` is the single
+canonical parser the EngineEnv capability audit imports too),
+`tools/persistence_inventory_audit_lua.py` owns items 2 and 5–7 plus Lua
+reference-kind discovery (unchanged in what it recognizes and refuses),
+`tools/persistence_inventory_audit_policy.py` owns items 3–4 plus the
+save-component registration and test-coverage-map checks (the inventory
+document's parser, taxonomy and topology rules), and the data-only
+`tools/persistence_inventory_audit_common.py` holds the repository
+paths. The façade declares the root owners, reads each repository input
+once, composes the owners in the fixed check order, and prints the
+report; the scanners never read the repository or the inventory, and no
+owner imports the façade. The run and self-test commands are unchanged.
+
 The audit does not — and cannot, statically — verify that a "Persist
 exactly" field is actually wired into `toWorldPageSave`/
 `fromWorldPageSave` or the equivalent. That is a serialization-

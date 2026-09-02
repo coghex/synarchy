@@ -31,6 +31,37 @@ guarantee. Its job is narrower and mechanical: nothing gets ADDED to a
 root owner or the Lua save registry without an explicit classification
 decision landing alongside it.
 
+Internal owners (issue #2124). This file is the public façade and the
+composition boundary, not the implementation: it declares the audited
+root owners (ROOT_RECORDS), loads every repository input exactly once
+(`_load_repo_state`), composes the owners below in the fixed check
+order `audit()` documents, and prints the report. The three source-
+language and policy contracts each have one owner, and the dependency
+direction is one way only:
+
+  * tools/persistence_inventory_audit_common.py -- data-only leaf:
+    repository paths and source scope. Imported by the façade and the
+    policy owner; imports nothing local.
+  * tools/persistence_inventory_audit_haskell.py -- comment/literal-
+    aware Haskell record-field extraction and typed persistent-
+    reference discovery. A pure leaf (source text in, facts out). Its
+    `extract_record_fields` is the single canonical record parser; the
+    EngineEnv capability audit (tools/engine_env_capability_common.py
+    and its self-test) imports it from that owner, and it is also
+    RE-EXPORTED here under the same name as a compatibility contract
+    for any consumer that still names this module.
+  * tools/persistence_inventory_audit_lua.py -- Lua comment/string
+    handling, save-module registration discovery, registry-alias
+    detection and Lua reference-kind discovery. A pure leaf.
+  * tools/persistence_inventory_audit_policy.py -- the inventory
+    document's classification parser and taxonomy, the save-component
+    owner rows, registered-component derivation, and the coverage-map
+    check. Consumes extracted facts; imports only the common leaf.
+
+No extracted owner imports this façade, and no scanner reads the
+repository: every file is read once here and handed on as an immutable
+mapping.
+
 Usage:
   python3 tools/persistence_inventory_audit.py
 Exit codes: 0 = every root-owner field and Lua module has a valid
@@ -38,17 +69,26 @@ classification, 1 = one or more are missing or invalid.
 """
 from __future__ import annotations
 
-import re
-import sys
-from pathlib import Path
+from collections.abc import Mapping, Set as AbstractSet
+from types import MappingProxyType
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-INVENTORY_PATH = REPO_ROOT / "docs" / "persistence_state_inventory.md"
-SCRIPTS_DIR = "scripts"
-
-# The `### ` heading text every Lua registration is classified under
-# (docs/persistence_state_inventory.md SS7, "Lua persistence registry").
-LUA_OWNER_HEADING = "Lua persistence registry"
+import persistence_inventory_audit_common as common
+# The canonical Haskell record parser, re-exported under this module's
+# name as a compatibility contract (#2124 requirement 5): a consumer
+# importing `extract_record_fields` from here binds the SAME object the
+# EngineEnv capability audit binds from the owner, so both audits
+# derive "the live field set" through ONE parser.
+from persistence_inventory_audit_haskell import (  # noqa: F401
+    extract_record_fields, find_typed_reference_fields)
+from persistence_inventory_audit_lua import (
+    extract_lua_registered_modules, find_lua_reference_kinds,
+    find_lua_register_aliases, find_lua_register_dynamic_names,
+    find_untracked_registry_aliases)
+from persistence_inventory_audit_policy import (
+    LUA_OWNER_HEADING, LUA_REFERENCE_KIND_OWNER, REFERENCE_FIELD_OWNER,
+    VALID_CLASSIFICATIONS, derive_registered_component_ids,
+    find_component_registration_violations, find_coverage_map_violations,
+    is_valid_classification, parse_classified_names)
 
 # (label, file relative to repo root, regex matching the record's
 # `data X = X` line). `label` doubles as the exact `### label` heading
@@ -83,1517 +123,24 @@ ROOT_RECORDS: list[tuple[str, str, str]] = [
     ("SaveData", "src/World/Save/Types.hs", r"^data SaveData = SaveData\b"),
 ]
 
-# Matches a field declaration's leading name + arrow within a single
-# top-level record segment (see _split_top_level_fields) -- `\s*` here
-# already spans newlines, so a field name and its `∷`/`::` written on
-# DIFFERENT physical lines still match.
-FIELD_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)")
-# A segment that is JUST a bare identifier (no arrow) -- part of a
-# grouped declaration `name1, name2 :: Type` where several names share
-# one trailing type signature. See extract_record_fields.
-BARE_NAME_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*$")
-# `package.loaded`'s own field access -- Lua lets `loaded` be reached
-# either by dot access (`package.loaded`, the common idiom, used
-# everywhere in this codebase) or by BRACKET indexing the exact same
-# field (`package["loaded"]`/`package['loaded']`) -- the same dot-vs-
-# bracket duality every OTHER field access in this file already
-# tolerates (`saveMods.register` vs `saveMods["register"]`). Shared by
-# every "is this the package.loaded cache slot" check below, so the two
-# forms can't drift apart the way _REGISTER_TABLE_REF/_TABLE_CONSTRUCTOR
-# fixes did when the parens tolerance wasn't originally shared (round
-# 20). The dot form keeps a trailing `\b` (guards against a coincidental
-# longer field name like a hypothetical `package.loadedFoo` being
-# mistaken for this one); the bracket form doesn't need one -- the
-# quote delimiters around the literal `'loaded'`/`"loaded"` key already
-# make it exact, with no prefix-matching ambiguity possible.
-_PACKAGE_LOADED_ACCESS_RE_FRAGMENT = (
-    r"package\s*(?:\.\s*loaded\b|\[\s*(?:'loaded'|\"loaded\")\s*\])"
-)
-# The module-path string `"scripts.lib.save_modules"` itself, in every
-# Lua string-literal form this scanner recognizes elsewhere (single-
-# quoted, double-quoted, or a long-bracket string) -- `require()` and
-# `package.loaded[...]`'s bracket index both take this as a plain
-# string ARGUMENT, so both accept a long-bracket string
-# (`require([[scripts.lib.save_modules]])`,
-# `package.loaded[ [[scripts.lib.save_modules]] ]`) exactly as validly
-# as either quote form; only the quoted forms were originally
-# recognized. Ungrouped `=*` on each side, same reasoning as the
-# `.register`-access-key fix (round 22): a new capturing group here
-# would renumber every group after it in the several patterns that
-# already depend on positional `\1`/`\2` backreferences elsewhere for
-# unrelated matching (the module NAME argument, the `.register`-key
-# `=`-run), silently breaking them; an actual open/close `=`-run
-# mismatch is a Lua syntax error regardless, so this can't be
-# exploited. Shared by every occurrence of this literal string
-# throughout the file, closing require() and package.loaded[...]
-# together in one place rather than leaving one fixed and one not (the
-# exact shape of gap rounds 20/21 both found).
-_SAVE_MODULES_PATH_STRING_RE_FRAGMENT = (
-    r"(?:'scripts\.lib\.save_modules'|\"scripts\.lib\.save_modules\""
-    r"|\[=*\[scripts\.lib\.save_modules\]=*\])"
-)
-# `require("scripts.lib.save_modules")` (or any recognized string form
-# of its argument), as a complete call expression -- shared by every
-# place that needs to match the CALL, not just the bare path string.
-# Lua's function-call sugar lets a call's SOLE argument be a bare
-# string (or table) literal with NO parens at all --
-# `require "scripts.lib.save_modules"` is exactly as valid, and exactly
-# as live, a call as the parenthesized form (this is a real, common Lua
-# idiom for `require` specifically). The paren-free branch needs no
-# extra "complete argument" check the way REGISTER_RE's parenthesized
-# module-NAME argument does: sugar syntax syntactically permits ONLY a
-# single string/table literal as the entire argument list, so a
-# computed/concatenated name (`require "a" .. "b"`) isn't even
-# expressible this way -- there's nothing after the string to mistake
-# for a continuation of the SAME argument, only a chained access on the
-# call's RESULT (`.register(...)`), which the callers of this fragment
-# already handle. Every consumer of this fragment (REQUIRE_SAVE_MODULES_RE,
-# the chained-access/sanctioned-local escape checks) inherits paren-free
-# recognition automatically since they're all built from this one
-# shared fragment (round 23) rather than duplicating it.
-_REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT = (
-    r"require\s*(?:\(\s*" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r"\s*\)"
-    r"|" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r")"
-)
-# `[...]` bracket-indexing the module path string -- shared by every
-# place that indexes `package.loaded` (or, historically, anything else)
-# with this literal path, so a long-bracket-string index isn't
-# recognized in some call sites and not others.
-_SAVE_MODULES_PATH_INDEX_RE_FRAGMENT = (
-    r"\[\s*" + _SAVE_MODULES_PATH_STRING_RE_FRAGMENT + r"\s*\]"
-)
-# The registry table is called `saveMods` at every real require site
-# (`local saveMods = require("scripts.lib.save_modules")`) but is
-# `saveModules` inside its OWN definition file -- match either local
-# name, the table reached directly off its OWN require() call with
-# no local binding at all (`require("scripts.lib.save_modules")
-# .register(...)`, fully traceable since the module path is a literal
-# string identifying this exact registry), OR the table reached
-# directly off `package.loaded["scripts.lib.save_modules"]` (or its
-# bracket-indexed sibling `package["loaded"]["scripts.lib.save_modules"]`,
-# per _PACKAGE_LOADED_ACCESS_RE_FRAGMENT above) -- Lua's `require()`
-# itself reads/writes exactly this cache slot, so this is a THIRD
-# spelling of the identical singleton table, not a different one;
-# `package.loaded[...].register(...)` is exactly as direct and
-# traceable as the require()-chained form. Lua also lets a table field
-# be reached by BRACKET indexing instead of dot access
-# (`saveMods["register"](...)`/`saveMods['register'](...)`) -- a
-# perfectly ordinary direct call, not an alias, so it's recognized as
-# an alternate spelling of the same access rather than flagged. Lua
-# also allows the bare name to be wrapped in ANY number of redundant
-# parens -- `(saveMods).register(...)`, `((saveMods)).register(...)`,
-# arbitrarily deep, are all exactly as direct a call as the bare form,
-# just with cosmetic grouping (the require()/package.loaded forms are
-# already parenthesized-looking via their own call/index syntax and
-# aren't wrapped like this in practice, so parens support is scoped to
-# the bare-name alternative). Unlike an arbitrary-depth ALIAS chain
-# (each hop introduces a genuinely NEW identifier this audit can't
-# enumerate in advance -- real interpretation territory, the accepted
-# limitation described in item 6 of SS7 below), redundant parens around
-# one FIXED, already-known token are a regular pattern: `\(+`/`\)+`
-# (one-or-more, not "optional") cover any depth in a single bounded
-# match, so this is fully general, not "one more level" -- no future
-# depth of parens can bypass it. This is its OWN alternative (requiring
-# AT LEAST one paren on each side) rather than making the parens
-# optional around the plain bare-name alternative: an UNCONDITIONALLY
-# optional paren (`\(*`/`\)*`, tried first and reverted) let its
-# accompanying `\s*` swallow ordinary PRECEDING whitespace/indentation
-# even with NO paren present at all (the regex engine finds the
-# leftmost successful match, and whitespace before an unparenthesized
-# `saveMods` satisfies `\(*\s*` with zero parens matched), silently
-# shifting every real match's start position earlier by however much
-# leading whitespace precedes it -- desyncing the position-based
-# function-definition-site exclusion in find_lua_register_dynamic_names
-# that surfaced this. Requiring `\(+` (never satisfiable with zero
-# parens) keeps the parenthesized alternative fully separate from the
-# whitespace-free bare-name one, so this failure mode can't recur.
-_REGISTER_TABLE_REF = (
-    r"(?:\(+\s*save(?:Mods|Modules)\s*\)+"
-    r"|save(?:Mods|Modules)"
-    r"|" + _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT
-    + r"|" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT + r")"
-)
-# The `.register` access itself, in every form this scanner
-# recognizes: dot access, bracket-indexed with either quote style, or
-# bracket-indexed with a Lua LONG-BRACKET string
-# (`[ [[register]] ]`/`[ [=[register]=] ]`/...) -- the same
-# long-bracket string form REGISTER_RE_LONGBRACKET already tolerates
-# for the MODULE NAME argument, just not yet applied to the ACCESS KEY
-# itself. DELIBERATELY UNGROUPED (`=*` on each side, not a capturing
-# `(=*)` backreferenced for equality) -- this fragment gets embedded
-# into REGISTER_RE/REGISTER_RE_LONGBRACKET/ALIAS_RE, which each already
-# use their OWN positional `\1` backreference downstream (for the
-# MODULE NAME's quote/bracket matching); inserting a NEW capturing
-# group here would renumber every group after it, silently breaking
-# those unrelated backreferences (confirmed by testing group counts
-# before settling on this fix). Not requiring the open/close `=`-run
-# lengths to match is a deliberate, harmless over-acceptance: an
-# actual mismatch (`[=[register]==]`) is a Lua SYNTAX ERROR, so no real
-# or adversarial script could ever contain one for this to matter. A
-# trailing `\b` on the dot form (absent before this fix) also closes a
-# latent imprecision: without it, `saveMods.registerFoo` was matched as
-# if `.register` were a complete access with unrelated trailing text,
-# not as the (correctly unrelated) longer identifier it actually is.
-# Shared by every "is this a `.register` access" check in this file, so
-# a future new access spelling can't drift between call sites the way
-# `package.loaded`'s dot-vs-bracket spellings did before they shared a
-# fragment (round 21).
-_REGISTER_ACCESS_SUFFIX_RE_FRAGMENT = (
-    r"(?:\.\s*register\b"
-    r"|\[\s*(?:'register'|\"register\"|\[=*\[register\]=*\])\s*\])"
-)
-_REGISTER_ACCESS = (
-    _REGISTER_TABLE_REF + r"\s*" + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT
-)
-# `require("scripts.lib.save_modules")` itself, standalone -- used to
-# find every occurrence of the registry table being fetched, so each
-# one can be checked against the sanctioned patterns below.
-REQUIRE_SAVE_MODULES_RE = re.compile(_REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT)
-# Sanctioned continuation #1: the require() result is chained straight
-# into `.register`/`["register"]` access (a direct call, or the
-# require-chained alias form -- both already handled by REGISTER_RE/
-# REGISTER_RE_LONGBRACKET/ALIAS_RE via _REGISTER_ACCESS).
-_REQUIRE_CHAINED_ACCESS_RE = re.compile(
-    _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT + r"\s*"
-    + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT)
-# Sanctioned continuation #2: the require() result is bound to a local
-# named EXACTLY `saveMods`/`saveModules`, the codebase's own
-# convention -- a later `saveMods.register(...)` is tracked by that
-# name already (REGISTER_RE etc. above).
-_REQUIRE_SANCTIONED_LOCAL_RE = re.compile(
-    r"local\s+(?:saveMods|saveModules)\s*=\s*"
-    + _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT)
-# `package.loaded["scripts.lib.save_modules"]` itself, standalone --
-# the FETCH-side sibling of REQUIRE_SAVE_MODULES_RE, since it's the
-# exact same singleton table under a second legitimate spelling. Every
-# occurrence must be checked against its OWN three sanctioned
-# continuations below, the same way every require() occurrence is --
-# otherwise `local registry = package.loaded["scripts.lib.save_modules"];
-# registry.register(...)` re-aliases the table through a spelling the
-# original require()-only escape check never looked at, invisibly to
-# the audit (the register-access recognizer added alongside the direct-
-# call support only catches an IMMEDIATE `.register`/`["register"]`
-# chain, not a table reference stored in a local first).
-_PACKAGE_LOADED_SAVE_MODULES_RE = re.compile(
-    _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT)
-# Sanctioned continuation #1: chained straight into `.register`/
-# `["register"]` access -- a direct call, or the package.loaded-chained
-# alias form (both already handled by REGISTER_RE/REGISTER_RE_LONGBRACKET/
-# ALIAS_RE via _REGISTER_ACCESS, which now includes this receiver).
-_PACKAGE_LOADED_CHAINED_ACCESS_RE = re.compile(
-    _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT + r"\s*"
-    + _REGISTER_ACCESS_SUFFIX_RE_FRAGMENT)
-# Sanctioned continuation #2: bound to a local named EXACTLY
-# `saveMods`/`saveModules` -- the real registry's OWN definition-file
-# idiom, `local saveModules = package.loaded[...] or {}` (the trailing
-# `or {}` fallback, for the first-ever require(), is tolerated but not
-# required).
-_PACKAGE_LOADED_SANCTIONED_LOCAL_RE = re.compile(
-    r"local\s+(?:saveMods|saveModules)\s*=\s*"
-    + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT
-    + r"(?:\s*or\s*\{\s*\})?")
-# Sanctioned continuation #3: it's the ASSIGNMENT TARGET, not a fetch at
-# all -- `package.loaded["scripts.lib.save_modules"] = saveModules` is
-# the require()-caching WRITE half of the same real-file idiom (the
-# read half is continuation #2 above); a `=` immediately after (not
-# `==`, a comparison) means this occurrence is never read as a value
-# here, so it cannot itself be the source of a new alias.
-_PACKAGE_LOADED_ASSIGNMENT_TARGET_RE = re.compile(
-    _PACKAGE_LOADED_ACCESS_RE_FRAGMENT
-    + r"\s*" + _SAVE_MODULES_PATH_INDEX_RE_FRAGMENT
-    + r"\s*=(?!=)")
-# Tolerates whitespace/newlines before the opening paren/string (a call
-# split across lines, `saveMods . register(...)` with a spaced dot, or
-# `saveMods[ "register" ](...)` with spaced brackets), and either Lua
-# quote style for the module name -- `(['"])` captures the opening
-# quote and `\1` backreferences it as the closing delimiter, so
-# `'name'` and `"name"` both match and neither is truncated by the
-# OTHER quote character appearing inside it. The trailing `(?=\s*[,)])`
-# requires the literal to be the COMPLETE first argument -- immediately
-# followed by the arg-separating comma or the call's closing paren, not
-# concatenated with further expression text (`"unit_ai" .. "_untracked"`).
-# Without this, the regex captures just the literal PREFIX of whatever
-# the real (dynamically-built) module name turns out to be at runtime,
-# silently misreporting a call that actually registers a DIFFERENT,
-# unclassified name as if it re-registered the already-classified
-# literal alone -- see find_lua_register_dynamic_names for the
-# complementary hard-fail on a call that fails this completeness check.
-REGISTER_RE = re.compile(
-    _REGISTER_ACCESS + r"\s*\(\s*(['\"])((?:(?!\1).)*)\1(?=\s*[,)])")
-# Lua long-bracket strings: `[[name]]`, `[=[name]=]`, `[==[name]==]`, ...
-# -- the `=` run's LENGTH must match on both sides (Lua's own rule),
-# enforced here via backreference `\1` same as the quote form above.
-# Same completeness lookahead as REGISTER_RE.
-REGISTER_RE_LONGBRACKET = re.compile(
-    _REGISTER_ACCESS + r"\s*\(\s*\[(=*)\[(.*?)\]\1\](?=\s*[,)])", re.DOTALL)
-# The PAREN-FREE sibling of REGISTER_RE/REGISTER_RE_LONGBRACKET -- Lua's
-# function-call sugar lets a call's SOLE argument be a bare string
-# literal with NO parens at all (`saveMods.register "modname"` is
-# exactly as valid, and exactly as live, a call as
-# `saveMods.register("modname")` -- see _REQUIRE_SAVE_MODULES_CALL_RE_FRAGMENT
-# for the identical Lua feature applied to `require`). No completeness
-# lookahead is needed here the way REGISTER_RE's parenthesized form
-# needs one: sugar syntax syntactically permits ONLY a single string/
-# table literal as the ENTIRE argument list, so a computed/concatenated
-# name isn't even expressible this way -- there's no "more argument
-# text" position for a concatenation to occupy. Kept as fully SEPARATE
-# compiled patterns (not an optional `\(?` folded into REGISTER_RE
-# itself) specifically to avoid shifting REGISTER_RE's own group
-# numbering, which extract_lua_registered_modules depends on via
-# positional `m.group(2)`; two clean, self-contained patterns is safer
-# than one pattern juggling a conditional completeness check.
-REGISTER_RE_PARENFREE = re.compile(
-    _REGISTER_ACCESS + r"\s*(['\"])((?:(?!\1).)*)\1")
-REGISTER_RE_PARENFREE_LONGBRACKET = re.compile(
-    _REGISTER_ACCESS + r"\s*\[(=*)\[(.*?)\]\1\]", re.DOTALL)
-# Any direct call at all (register access immediately followed by an
-# opening paren), regardless of what the argument looks like -- used to
-# find calls whose module-name argument ISN'T a complete literal (see
-# find_lua_register_dynamic_names), by finding every direct call and
-# then checking which ones REGISTER_RE/REGISTER_RE_LONGBRACKET do NOT
-# also match at the exact same position.
-_REGISTER_CALL_RE = re.compile(_REGISTER_ACCESS + r"\s*\(")
-# `function saveModules.register(name, serializeFn, deserializeFn)` --
-# the real registry's OWN function DEFINITION (a Lua parameter list, not
-# a call) is syntactically indistinguishable from a call to
-# _REGISTER_CALL_RE (both are "register access immediately followed by
-# `(`"), and its bare-identifier parameter names never satisfy
-# REGISTER_RE/REGISTER_RE_LONGBRACKET's literal-argument check, so
-# without this exclusion the definition site itself would be
-# misreported as a "dynamic name" call. Captures the register-access
-# START position (group 1) so find_lua_register_dynamic_names can skip
-# any _REGISTER_CALL_RE match that starts there.
-_REGISTER_DEFINITION_RE = re.compile(r"function\s+(" + _REGISTER_ACCESS + r")")
-# A reference to `saveMods.register`/`saveModules.register` (dot OR
-# bracket form) NOT immediately followed by a call -- either the
-# parenthesized form `(` or a paren-free-sugar argument start (a quote
-# character, or a long-bracket opener `[[`/`[=`) -- i.e. the function is
-# being ALIASED into a variable/table field rather than called directly
-# (`local register = saveMods.register; register(...)` or
-# `local register = saveMods["register"]`). Without the paren-free
-# branches here, a genuine paren-free CALL (`saveMods.register
-# "modname"`) would be misread as a stored alias reference instead of
-# recognized as the live registration REGISTER_RE_PARENFREE/
-# REGISTER_RE_PARENFREE_LONGBRACKET now extract. REGISTER_RE/
-# REGISTER_RE_LONGBRACKET/REGISTER_RE_PARENFREE/
-# REGISTER_RE_PARENFREE_LONGBRACKET only recognize direct calls, so a
-# stored alias would silently bypass req 10's audit; rather than trying
-# to trace what an alias eventually gets called with (real
-# interpretation territory), any such reference is treated as a hard
-# failure on its own -- see find_lua_register_aliases.
-ALIAS_RE = re.compile(_REGISTER_ACCESS + r"(?!\s*(?:\(|['\"]|\[(?:\[|=)))")
-# A Lua long-bracket opener `[`, zero-or-more `=`, `[` -- shared by the
-# comment stripper (both long comments and long strings) and the
-# register-call matcher above.
-LONG_BRACKET_OPEN_RE = re.compile(r"\[(=*)\[")
-BACKTICK_RE = re.compile(r"`([^`]+)`")
-OWNER_HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 
-# The B2 save-component wire contract (#760): the on-disk save is now a
-# set of independently-versioned Haskell components riding inside the B1
-# envelope, NOT the positional SaveData/WorldPageSave aggregate. The
-# authoritative list of registered component ids is discovered from the
-# Haskell source below (every `ComponentId "..."` literal defined there),
-# and the inventory's `### Save components` section must classify each.
-# A component owner classified as persistent MUST be registered; an owner
-# classified rebuilt/reset/excluded needs no registration (requirement 5).
-SAVE_COMPONENTS_HEADING = "Save components"
-# A `ComponentId "..."` literal DEFINED anywhere (e.g. in Types.hs) does
-# NOT mean the component is registered -- the authoritative registry is
-# the `saveComponentRegistry` list (Component.hs) plus whatever the
-# envelope wires in directly (metadata). The registered set is therefore
-# DERIVED by tracing that membership, not by grepping id literals (#760
-# round-4 review: an id could be defined + documented but never
-# registered and still pass a literal-grep audit).
-# The Haskell `saveComponentRegistry` list of `registerComponent <codec>`.
-COMPONENT_REGISTRY_LIST_FILE = "src/World/Save/Component.hs"
-# Where the codecs named in that list are defined (each built via
-# `<codec> = componentCodec ComponentSpec { csComponent = <ident>, ... }`).
-# GLOBBED, not a
-# hand-maintained file list: a component added in a NEW file under the
-# same directory (the convention every existing component follows) was
-# otherwise invisible to this audit entirely -- `derive_registered_
-# component_ids` simply never resolved its codec and silently dropped
-# it from the registered set, so its missing `### Save components` row
-# went unreported. Mirrors tools/save_compat_audit.py's identical fix,
-# and `derive_registered_component_ids` now ALSO raises when a
-# registered codec cannot be resolved anywhere, so a component defined
-# somewhere else entirely still fails loudly instead of vanishing.
-COMPONENT_CODEC_FILES = tuple(
-    str(p.relative_to(REPO_ROOT))
-    for p in sorted((REPO_ROOT / "src/World/Save/Component").glob("*.hs")))
-# Where `<componentIdIdent> = ComponentId "<literal>"` bindings live.
-COMPONENT_ID_TYPES_FILE = "src/World/Save/Component/Types.hs"
-# Where the envelope wires in any non-gameplay-registry component
-# (currently just `metadata`) as a direct component spec tuple.
-COMPONENT_ENVELOPE_FILE = "src/World/Save/Envelope.hs"
-
-# `<ident> = ComponentId "<literal>"` -- maps an id identifier to its
-# on-disk string literal.
-COMPONENT_ID_BINDING_RE = re.compile(r'(\w+)\s*=\s*ComponentId\s+"([^"]+)"')
-# The `saveComponentRegistry = [ ... ]` list body (the `= [` distinguishes
-# the definition from the `∷ [RegisteredComponent]` type signature; the
-# list contains no nested `]`).
-SAVE_REGISTRY_BLOCK_RE = re.compile(r"saveComponentRegistry\s*=\s*\[(.*?)\]", re.S)
-# `registerComponent <codecName>` entries inside that list body.
-REGISTER_COMPONENT_RE = re.compile(r"registerComponent\s+(\w+)")
-# A component spec tuple `(<idIdent>, <ver>, True|False, ...)` -- how the
-# envelope registers the metadata component alongside the gameplay set.
-ENVELOPE_SPEC_ID_RE = re.compile(
-    r"\(\s*(\w+)\s*,\s*\w+\s*,\s*(?:True|False)\s*,")
-# Classifications that mean "this state is written to the save" and so
-# require a registered component to own it.
-PERSISTENT_CLASSIFICATIONS = (
-    "Persist exactly",
-    "Persist as identity/reference",
-)
-
-
-def _strip_haskell_comments(source: str) -> str:
-    """Blank out Haskell comments, preserving line structure.
-
-    Haskell `{- -}` block comments legally NEST, so a naive
-    non-nesting regex can leave a stray `}` behind (from inside an
-    outer comment whose first `-}` belongs to an inner one) that then
-    desyncs brace-depth tracking downstream. This walks the text once,
-    tracking nesting depth explicitly, so arbitrarily nested block
-    comments are fully removed regardless of what they contain.
-
-    Literal-aware in BOTH passes: `DataKinds`/`GHC.TypeLits` promoted
-    string/char literals (`Proxy "--"`, `Proxy "{-"`, `Proxy '}'`) are
-    legal even in a field's own type signature, and a literal's content
-    must never be scanned for `{-`/`-}`/`--` markers -- outside a
-    literal a `"{-"`-shaped substring is real code, but the equivalent
-    substring INSIDE a string literal is just three ordinary characters.
-    Skipping literals whole (rather than character-by-character) before
-    the block-comment nesting check is what prevents one field's
-    literal accidentally "opening" a comment that a LATER field's
-    literal then appears to "close", silently swallowing everything
-    (including real field declarations) in between.
-    """
-    out: list[str] = []
-    i = 0
-    n = len(source)
-    depth = 0
-    while i < n:
-        if depth == 0 and source[i] in ('"', "'"):
-            lit_end = _haskell_literal_end(source, i)
-            if lit_end is not None:
-                out.append(source[i:lit_end])
-                i = lit_end
-                continue
-        if source[i:i + 2] == "{-":
-            depth += 1
-            i += 2
-            continue
-        if depth > 0 and source[i:i + 2] == "-}":
-            depth -= 1
-            i += 2
-            continue
-        if depth > 0:
-            if source[i] == "\n":
-                out.append("\n")
-            i += 1
-            continue
-        out.append(source[i])
-        i += 1
-    no_block = "".join(out)
-    return _strip_haskell_line_comments(no_block)
-
-
-def _strip_haskell_line_comments(text: str) -> str:
-    """String-aware `--`-to-end-of-line comment strip (see caller)."""
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch == '"':
-            out.append(ch)
-            i += 1
-            while i < n and text[i] != '"':
-                if text[i] == "\\" and i + 1 < n:
-                    out.append(text[i])
-                    out.append(text[i + 1])
-                    i += 2
-                    continue
-                out.append(text[i])
-                i += 1
-            if i < n:
-                out.append(text[i])
-                i += 1
-            continue
-        if text[i:i + 2] == "--":
-            nl = text.find("\n", i)
-            i = n if nl == -1 else nl
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
-def _strip_lua_comments(text: str, *, keep_strings: bool = True) -> str:
-    """Blank out Lua comments, preserving line structure.
-
-    String-aware in the FULL sense: quoted (`'`/`"`, with `\\`-escapes
-    honored) AND long-bracket (`[[...]]`, `[=[...]=]`, ...) string
-    literals are recognized and their content is never treated as a
-    comment trigger -- a `--` embedded in EITHER string form must not
-    truncate the line, or a real `saveMods.register(...)` call
-    following it on the same line would be silently discarded. Lua long
-    COMMENTS (`--[[...]]`/`--[=[...]=]`/...) are likewise recognized
-    with their `=`-run level matched on both delimiters, and (per Lua's
-    own rule) don't nest.
-
-    By default string CONTENT is kept verbatim (`keep_strings=True`) --
-    callers that parse call arguments (which live inside those strings)
-    need it. Pass `keep_strings=False` for a code-SHAPE check, where a
-    string literal's text must not be mistaken for real code (e.g. an
-    error message that happens to mention "saveModules.register" is
-    not a reference to the function).
-    """
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch in ("'", '"'):
-            quote = ch
-            if keep_strings:
-                out.append(ch)
-            i += 1
-            while i < n and text[i] != quote:
-                if text[i] == "\\" and i + 1 < n:
-                    if keep_strings:
-                        out.append(text[i])
-                        out.append(text[i + 1])
-                    i += 2
-                    continue
-                if keep_strings:
-                    out.append(text[i])
-                i += 1
-            if i < n:
-                if keep_strings:
-                    out.append(text[i])
-                i += 1
-            continue
-        if text[i:i + 2] == "--":
-            long_open = LONG_BRACKET_OPEN_RE.match(text, i + 2)
-            if long_open:
-                close = "]" + long_open.group(1) + "]"
-                end = text.find(close, long_open.end())
-                i = n if end == -1 else end + len(close)
-                continue
-            nl = text.find("\n", i)
-            i = n if nl == -1 else nl
-            continue
-        # A bare long-bracket STRING (no leading `--`) must not be
-        # treated as code -- its content, which may itself contain
-        # `--`, is never a comment trigger either way.
-        long_open = LONG_BRACKET_OPEN_RE.match(text, i)
-        if long_open:
-            close = "]" + long_open.group(1) + "]"
-            end = text.find(close, long_open.end())
-            span_end = n if end == -1 else end + len(close)
-            if keep_strings:
-                out.append(text[i:span_end])
-            i = span_end
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
-# A promoted Char literal: `'` + one (possibly escaped) character + `'`.
-_CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^'\\])'")
-
-
-def _haskell_literal_end(text: str, i: int) -> int | None:
-    """If a Haskell string or char literal starts at text[i], return the
-    index just past its closing delimiter; otherwise None.
-
-    `DataKinds`/`GHC.TypeLits` promoted literals make BOTH string
-    (`Proxy "}"`) and char (`Proxy '}'`) literals legal even in a
-    field's own type, and either can contain a `{`/`}`/`,` that must
-    not be mistaken for a structural character.
-
-    A `'` is only treated as a literal opener when it's NOT a trailing
-    "prime" on the identifier just consumed (`foo'`, `bar''` are
-    ordinary Haskell identifiers) -- i.e. when the previous character
-    isn't itself an identifier character. A `'` that doesn't close
-    within one (possibly escaped) character is left alone too -- that's
-    a DataKinds promoted-constructor tick (`'Just`, `'[Int]`), which
-    contains no characters this scan needs to skip over.
-    """
-    ch = text[i]
-    if ch == '"':
-        j = i + 1
-        n = len(text)
-        while j < n and text[j] != '"':
-            j += 2 if text[j] == "\\" and j + 1 < n else 1
-        return min(j + 1, n)
-    if ch == "'":
-        if i > 0 and (text[i - 1].isalnum() or text[i - 1] in "_'"):
-            return None
-        m = _CHAR_LITERAL_RE.match(text, i)
-        return m.end() if m else None
-    return None
-
-
-def _find_matching_brace(text: str, open_index: int) -> int:
-    """Index of the `}` that closes the `{` at `open_index` in `text`.
-
-    String/char-literal-aware (see _haskell_literal_end) -- a promoted
-    literal's content is skipped over whole, never scanned
-    character-by-character, so it can't be mistaken for a structural
-    brace.
-    """
-    depth = 0
-    i = open_index
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch in ('"', "'"):
-            end = _haskell_literal_end(text, i)
-            if end is not None:
-                i = end
-                continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    raise ValueError("no matching closing brace found")
-
-
-def _split_top_level_fields(block: str) -> list[str]:
-    """Split a record's `{ ... }` block into one raw segment per field.
-
-    `block` includes the outer braces. Splits ONLY on commas at nesting
-    depth 0 relative to the block's own content (tracking `(`/`[`/`{`
-    vs `)`/`]`/`}` generically), so a comma inside a field's own type --
-    a tuple `(WorldPageId, WorldState)`, a list-of-tuples, etc. -- is
-    never mistaken for a field separator. String/char-literal-aware for
-    the same reason as _find_matching_brace: a literal's structural-
-    looking characters (braces, brackets, commas) are never counted.
-    """
-    inner = block[1:-1]
-    depth = 0
-    current: list[str] = []
-    segments: list[str] = []
-    i = 0
-    n = len(inner)
-    while i < n:
-        ch = inner[i]
-        if ch in ('"', "'"):
-            end = _haskell_literal_end(inner, i)
-            if end is not None:
-                current.append(inner[i:end])
-                i = end
-                continue
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            segments.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-        i += 1
-    segments.append("".join(current))
-    return segments
-
-
-def extract_record_fields(source: str, record_start_pattern: str) -> list[str]:
-    """Field names declared in one Haskell record's brace block.
-
-    Comments are stripped first so a haddock comment's prose can never
-    desync the brace-depth tracker that finds the block's end. Field
-    names are extracted from top-level comma-delimited segments (see
-    _split_top_level_fields), not per PHYSICAL LINE, so a field whose
-    name and `∷`/`::` are written on different lines -- legal Haskell,
-    e.g. `, someField\n    ∷ Int` -- is still found.
-
-    Also handles GROUPED field declarations, where several names share
-    one trailing type signature: `{ name1, name2 ∷ Int }`. Each comma
-    still produces its own top-level segment, but only the LAST one
-    carries the arrow; a run of bare-identifier segments immediately
-    before an arrow-bearing one all belong to that same declaration.
-    """
-    cleaned = _strip_haskell_comments(source)
-    pat = re.compile(record_start_pattern, re.MULTILINE)
-    m = pat.search(cleaned)
-    if m is None:
-        raise ValueError(f"record start not found: {record_start_pattern!r}")
-    brace_start = cleaned.find("{", m.end())
-    if brace_start == -1:
-        raise ValueError(
-            f"no opening brace found after record start: {record_start_pattern!r}")
-    brace_end = _find_matching_brace(cleaned, brace_start)
-    block = cleaned[brace_start:brace_end + 1]
-    fields: list[str] = []
-    pending: list[str] = []
-    for segment in _split_top_level_fields(block):
-        fm = FIELD_NAME_RE.match(segment)
-        if fm:
-            fields.extend(pending)
-            fields.append(fm.group(1))
-            pending = []
-            continue
-        bm = BARE_NAME_RE.match(segment)
-        if bm:
-            pending.append(bm.group(1))
-        else:
-            pending = []
-    return fields
-
-
-def extract_lua_registered_modules(
-        scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
-    """(module name, file) for every saveMods.register("name", ...) call site.
-
-    Scans the whole (comment-stripped, string-PRESERVING) file as one
-    string rather than line-by-line, so a call whose arguments span
-    multiple lines is still found. Covers both Lua quoting forms for
-    the module name: `'...'`/`"..."` (REGISTER_RE) and long brackets
-    `[[...]]`/`[=[...]=]`/... (REGISTER_RE_LONGBRACKET), each with a
-    PAREN-FREE sugar-call sibling (REGISTER_RE_PARENFREE/
-    REGISTER_RE_PARENFREE_LONGBRACKET, for `saveMods.register "name"`
-    with no parens at all) -- a single call site uses exactly one form,
-    so none of the four ever double-match the same call.
-
-    Filters out any match whose START falls inside an (unrelated)
-    string-literal span -- otherwise a call-SHAPED mention inside prose
-    (a doc string like `[[example: saveMods.register("x", nil, nil)]]`)
-    reads as a real, live registration and produces a false CI failure
-    for a module that never actually gets registered. A real call's OWN
-    argument literal is never itself "unrelated": the match starts at
-    the receiver (`saveMods`/`require(...)`), before that literal
-    begins, so this never rejects a genuine call.
-    """
-    found: list[tuple[str, str]] = []
-    for relpath, text in sorted(scripts_text_by_file.items()):
-        cleaned = _strip_lua_comments(text)
-        spans = _string_literal_spans(cleaned)
-        for pattern in (REGISTER_RE, REGISTER_RE_LONGBRACKET,
-                        REGISTER_RE_PARENFREE, REGISTER_RE_PARENFREE_LONGBRACKET):
-            for m in pattern.finditer(cleaned):
-                if not any(start <= m.start() < end for start, end in spans):
-                    found.append((m.group(2), relpath))
-    return found
-
-
-# Typed persistent reference fields (issue #764, save-overhaul C3):
-# a DTO field typed with a "World.Save.Reference" wrapper
-# (SamePageRef/CrossPageRef) declares a durable cross-component
-# reference's scope at the TYPE level (requirement 2). Requirement 15's
-# persistence-reference audit: a newly introduced one without a
-# documented target kind/scope/validation/migration decision fails
-# here, exactly the way an unclassified root-owner field or Lua save
-# module already does above -- reusing parse_classified_names' existing
-# generic "### Owner" + "Classification" table parser (no new doc-
-# parsing machinery needed; see docs/persistence_state_inventory.md's
-# "### Typed persistent references" heading).
-#
-# Matches the wrapper ANYWHERE on the field's declaration line after the
-# `∷`/`::` separator (round-3 review, issue #764) -- not just when it's
-# the outermost type constructor. A field like
-# `psSim ∷ !(HM.HashMap (SamePageRef UnitId) UnitSimStateDTO)` types a
-# reference nested inside a HashMap KEY, not as the field's own top-level
-# type, which the original front-anchored pattern couldn't see. This
-# codebase's one-field-per-line style (already relied on by
-# `_extract_fields_from_brace_block`) keeps the match scoped to a single
-# field's own declaration rather than spilling into a sibling field.
-#
-# The leading punctuation class accepts `{` as well as `,` (issue #1246):
-# a record's FIRST field opens with `{ name :: ...` while every later one
-# opens with `, name :: ...`, so a comma-only prefix silently skipped
-# whichever typed reference happened to be declared first in its DTO.
-# Every reference field that existed before #1246 was a later one, which
-# is why the gap went unnoticed until `qtdInstance` (QueuedTransferDTO's
-# item-instance reference) landed at the head of its record.
-REFERENCE_FIELD_RE = re.compile(
-    r"^\s*[,{]?\s*([a-zA-Z_][a-zA-Z0-9_']*)\s*(?:∷|::)[^\n]*"
-    r"\b(?:SamePageRef|CrossPageRef)\b",
-    re.MULTILINE,
-)
-REFERENCE_FIELD_OWNER = "Typed persistent references"
-
-
-def find_typed_reference_fields(
-        component_sources: dict[str, str]) -> list[tuple[str, str]]:
-    """(fieldName, relpath) for every DTO field in `component_sources`
-    typed as a SamePageRef/CrossPageRef wrapper. Scans each whole file
-    (comment-stripped) rather than parsing individual record
-    boundaries -- these wrapper types are only ever used on a durable
-    reference field, so a bare textual match is unambiguous without
-    needing to know which specific record a field belongs to.
-    """
-    out: list[tuple[str, str]] = []
-    for relpath, source in sorted(component_sources.items()):
-        text = _strip_haskell_comments(source)
-        for m in REFERENCE_FIELD_RE.finditer(text):
-            out.append((m.group(1), relpath))
-    return out
-
-
-# Lua reference kinds (issue #764): the controlled `kind = "..."`
-# vocabulary a save component's `references()` hook reports
-# (scripts/unit_ai_save_refs.lua / scripts/building_spawn.lua). Scoped to
-# any file that registers a `references = <something>` spec field at
-# all -- either an inline `references = function(data) ... end` or (the
-# form both real registrations actually use) a named function reference
-# `references = unitAiReferences` -- not to the hook's own function
-# BODY specifically, since reliably finding a Lua function's matching
-# `end` (distinct from every nested `if`/`for`/`while`'s own `end`)
-# needs real block-structure parsing this regex-based audit doesn't
-# otherwise do anywhere. A same-file `kind = "..."` used for an
-# unrelated purpose would only ever cause over-inclusion (one more
-# string requiring a documented vocabulary entry), never a silently-
-# missed reference kind -- the same fail-safe direction this audit
-# already takes elsewhere (see the module docstring's "anything this
-# mapping can't classify" philosophy in tools/ci_probes.py, which this
-# mirrors).
-# Two established call shapes report a kind string (both real
-# registrations use one or the other): a direct table-constructor
-# literal (`{ kind = "building", id = bid }`, building_spawn.lua) and a
-# same-file `addRef(kind, id)`-style helper invoked with a literal
-# first argument (`addRef("unit", uid)`, unit_ai_save_refs.lua -- the
-# helper's OWN table constructor is `{ kind = kind, id = id }`, a
-# variable, not a literal, so only the CALL SITE's literal argument is
-# textually findable).
-LUA_REFERENCE_KIND_RES = (
-    re.compile(r'kind\s*=\s*"([a-z_]+)"'),
-    re.compile(r'addRef(?:List)?\(\s*"([a-z_]+)"'),
-)
-LUA_REFERENCE_KIND_OWNER = "Lua reference kinds"
-_LUA_REFERENCES_SPEC_FIELD_RE = re.compile(r"\breferences\s*=")
-
-# Round-5 review (issue #764): a REGISTRATION site can delegate its
-# `references = ` spec field to an imported helper module
-# (`references = refsMod.references`, unit_ai_save.lua) rather than
-# defining the hook inline or as a same-file named function
-# (`references = buildingSpawnReferences`, building_spawn.lua -- the
-# latter already worked under the original per-file gate, since the
-# kind literals AND the `references =` text share one file). The
-# former case only worked before by ACCIDENT: unit_ai_save_refs.lua
-# happens to independently satisfy the gate itself, via its own
-# internal `M.references = unitAiReferences` re-export line -- true
-# today, but not a structural guarantee (a differently-named re-export,
-# or a helper module split that never re-exports under that literal
-# name at all, would silently stop being scanned). These two regexes
-# instead trace the REAL relationship: which `require()`d module a
-# registration's `references = <var>.<field>` delegation actually
-# points at.
-_LUA_REQUIRE_LOCAL_RE = re.compile(
-    r"""\blocal\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*require\(\s*"""
-    r"""["']([\w.]+)["']\s*\)""")
-_LUA_REFERENCES_DELEGATE_RE = re.compile(
-    r"\breferences\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.[A-Za-z_][A-Za-z0-9_]*\b")
-
-
-def _delegated_reference_module_paths(cleaned_text: str) -> set[str]:
-    """relpaths of every `require()`d module a `references = <var>.<field>`
-    delegation in `cleaned_text` resolves to -- e.g. `references =
-    refsMod.references` alongside `local refsMod =
-    require("scripts.unit_ai_save_refs")` resolves to
-    "scripts/unit_ai_save_refs.lua". A delegation whose variable was
-    never `require()`d in the same file (or whose require target isn't
-    a real, present script) resolves to nothing -- this only ever
-    WIDENS which files get scanned for kind literals, it can't narrow
-    the existing per-file gate below.
-    """
-    delegated_vars = {
-        m.group(1) for m in _LUA_REFERENCES_DELEGATE_RE.finditer(cleaned_text)
-    }
-    if not delegated_vars:
-        return set()
-    paths: set[str] = set()
-    for m in _LUA_REQUIRE_LOCAL_RE.finditer(cleaned_text):
-        varname, module = m.group(1), m.group(2)
-        if varname in delegated_vars:
-            paths.add(module.replace(".", "/") + ".lua")
-    return paths
-
-
-def _required_module_paths(cleaned_text: str) -> set[str]:
-    """relpaths of every module `cleaned_text` `require()`s into a local.
-
-    Only ever applied to a DELEGATE helper module (see
-    `find_lua_reference_kinds`), never to registration sites at large.
-    """
-    return {
-        m.group(2).replace(".", "/") + ".lua"
-        for m in _LUA_REQUIRE_LOCAL_RE.finditer(cleaned_text)
-    }
-
-
-def find_lua_reference_kinds(
-        scripts_text_by_file: dict[str, str]) -> list[tuple[str, str]]:
-    """(kind, relpath) for every distinct reference-kind literal in a
-    file that registers a `references()` hook, OR in a helper module a
-    registration site `require()`s and delegates its `references = `
-    spec field to, OR in a module THAT helper itself `require()`s (see
-    LUA_REFERENCE_KIND_RES for the two kind-literal call shapes
-    recognised, and `_delegated_reference_module_paths` for the
-    delegation-following that closes the round-5 review gap).
-
-    The last hop closes the same class of gap one level further out
-    (issue #1589): a delegate helper can itself be split, moving the
-    kind literals into a module it requires -- as
-    scripts/unit_ai_save_refs.lua did when its reference SCHEMA moved to
-    scripts/unit_ai_ref_schema.lua. Without following it, four of the
-    nine documented kinds silently stopped being scanned and the audit
-    kept passing. It is deliberately taken only from a DELEGATE module,
-    not from every registration site: a registration site requires the
-    whole world (claim registries, the codec, save_modules), while a
-    delegate helper is by construction the reference layer itself. Even
-    so the direction stays the audit's usual fail-safe one -- an extra
-    scanned file can only demand one more documented vocabulary entry,
-    never hide a kind."""
-    cleaned_by_file = {
-        relpath: _strip_lua_comments(text)
-        for relpath, text in scripts_text_by_file.items()
-    }
-    scannable: set[str] = set()
-    delegates: set[str] = set()
-    for relpath, cleaned in cleaned_by_file.items():
-        if _LUA_REFERENCES_SPEC_FIELD_RE.search(cleaned):
-            scannable.add(relpath)
-        for delegated in _delegated_reference_module_paths(cleaned):
-            if delegated in scripts_text_by_file:
-                scannable.add(delegated)
-                delegates.add(delegated)
-    for delegate in sorted(delegates):
-        for required in _required_module_paths(cleaned_by_file[delegate]):
-            if required in scripts_text_by_file:
-                scannable.add(required)
-
-    out: list[tuple[str, str]] = []
-    for relpath in sorted(scannable):
-        cleaned = cleaned_by_file[relpath]
-        seen: set[str] = set()
-        for pattern in LUA_REFERENCE_KIND_RES:
-            for m in pattern.finditer(cleaned):
-                kind = m.group(1)
-                if kind not in seen:
-                    seen.add(kind)
-                    out.append((kind, relpath))
-    return out
-
-
-def _string_literal_spans(text: str) -> list[tuple[int, int]]:
-    """[start, end) ranges of Lua string literals (delimiters included)
-    in comment-stripped Lua text: quoted ('...'/"...") AND long-bracket
-    ([[...]]/[=[...]=]/...). `text` has already had comments stripped
-    (see callers), so any remaining long-bracket-shaped span here IS a
-    string, never a long comment -- those are already gone.
-
-    A quoted OR long-bracket string can contain prose that happens to
-    mention "saveModules.register" (an error message, a doc string
-    literal like `[[saveMods.register]]`); a match whose start falls in
-    one of these spans is not a real reference to the function.
-    """
-    spans: list[tuple[int, int]] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if ch in ("'", '"'):
-            quote = ch
-            start = i
-            i += 1
-            while i < n and text[i] != quote:
-                i += 2 if text[i] == "\\" and i + 1 < n else 1
-            if i < n:
-                i += 1
-            spans.append((start, i))
-            continue
-        long_open = LONG_BRACKET_OPEN_RE.match(text, i)
-        if long_open:
-            start = i
-            close = "]" + long_open.group(1) + "]"
-            end = text.find(close, long_open.end())
-            i = n if end == -1 else end + len(close)
-            spans.append((start, i))
-            continue
-        i += 1
-    return spans
-
-
-def find_lua_register_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:
-    """Files that reference saveMods.register/saveModules.register
-    WITHOUT calling it directly (e.g. `local r = saveMods.register`, or
-    the bracket form `local r = saveMods["register"]`).
-
-    extract_lua_registered_modules can only trace DIRECT calls; an
-    alias stored in a variable or table field and invoked later would
-    silently escape req 10's audit. Rather than attempting to trace
-    what an alias eventually gets called with, this enforces a
-    direct-call-only registration convention: any such reference is
-    itself reported, regardless of whether it's ever actually called.
-
-    Runs against string-PRESERVING stripped text (comments removed,
-    string content intact) -- unlike a blanket keep_strings=False,
-    which would also destroy the legitimate `["register"]` bracket
-    form's own quoted key -- and then discards any match whose START
-    falls inside a string literal's span, so a string literal's TEXT
-    (e.g. `error("saveModules.register: name must be a string")`, the
-    real registry's own validation message) is never mistaken for a
-    reference to the function.
-    """
-    offenders: list[str] = []
-    for relpath, text in sorted(scripts_text_by_file.items()):
-        cleaned = _strip_lua_comments(text)
-        spans = _string_literal_spans(cleaned)
-        if any(not any(start <= m.start() < end for start, end in spans)
-               for m in ALIAS_RE.finditer(cleaned)):
-            offenders.append(relpath)
-    return offenders
-
-
-def find_lua_register_dynamic_names(scripts_text_by_file: dict[str, str]) -> list[str]:
-    """Files with a direct saveMods.register(...)-shaped call whose
-    module-name argument is NOT a complete, standalone string/
-    long-bracket literal -- e.g. `saveMods.register("unit_ai" ..
-    "_untracked", ...)`, where `saveModules.register` (the real
-    function -- see scripts/lib/save_modules.lua) accepts and stores
-    whatever string the argument expression evaluates to at runtime,
-    but the literal PREFIX visible to static analysis ("unit_ai") is
-    already a classified name.
-
-    extract_lua_registered_modules (via REGISTER_RE/REGISTER_RE_LONGBRACKET)
-    only recognizes a call whose entire first argument is one literal;
-    tracing an arbitrary Lua expression (concatenation, a variable,
-    string.format(...), ...) to the string it evaluates to at runtime is
-    real interpretation territory, not a tractable regex improvement --
-    the same reasoning that makes an alias itself the failure elsewhere
-    in this module (find_lua_register_aliases,
-    find_untracked_registry_aliases). So rather than silently ignoring
-    a call whose argument extraction fails, or worse, silently matching
-    just the literal PREFIX and treating that as the whole registration,
-    this flags the CALL itself as a failure: every direct call
-    (_REGISTER_CALL_RE) whose argument doesn't ALSO satisfy REGISTER_RE/
-    REGISTER_RE_LONGBRACKET's completeness check is reported. The
-    codebase's real registration convention is a plain literal name
-    (verified against all 4 real call sites), so this never fires on
-    genuine code. Explicitly skips the registry's own `function
-    saveModules.register(name, ...)` DEFINITION site -- a Lua parameter
-    list is syntactically indistinguishable from a call to
-    _REGISTER_CALL_RE, but it's a declaration, not a registration.
-    """
-    offenders: list[str] = []
-    for relpath, text in sorted(scripts_text_by_file.items()):
-        cleaned = _strip_lua_comments(text)
-        spans = _string_literal_spans(cleaned)
-        definition_starts = {
-            m.start(1) for m in _REGISTER_DEFINITION_RE.finditer(cleaned)}
-        for m in _REGISTER_CALL_RE.finditer(cleaned):
-            if any(start <= m.start() < end for start, end in spans):
-                continue  # inside a string literal, not real code
-            if m.start() in definition_starts:
-                continue  # the registry's own function DEFINITION site
-            if REGISTER_RE.match(cleaned, m.start()) or \
-                    REGISTER_RE_LONGBRACKET.match(cleaned, m.start()):
-                continue  # a complete, well-formed literal argument
-            offenders.append(relpath)
-            break
-    return offenders
-
-
-# `TARGET = saveMods`/`TARGET = saveModules` (with or without a leading
-# `local`) where TARGET is anything other than the bare canonical name
-# -- re-aliasing the already-canonical table into a second variable OR
-# TABLE FIELD, the same violation class as an untracked require()
-# binding (see find_untracked_registry_aliases), just one hop later.
-# `local` is OPTIONAL: Lua's `=` is unambiguously assignment (unlike
-# C-style languages, Lua has no `==`-vs-`=` confusion inside an `if`,
-# since assignment is a statement, never an expression), so a bare
-# `registry = saveMods` re-assigning an already-declared (or even
-# implicitly global) variable is just as live a bypass as the `local`
-# form.
-#
-# TARGET covers Lua's full (finite, well-defined) assignment-target
-# grammar: a bare name, OR a name followed by one or more `.field`/
-# `[key]` accesses (`holder.registry`, `holder["registry"]`, chained
-# combinations) -- storing the registry table under a TABLE KEY, not
-# just a plain variable, is exactly as untraceable as a bare re-alias
-# once something later does `holder["registry"].register(...)`.
-#
-# The RHS must be the BARE name with NOTHING chained after it (no
-# `.field`/`[key]` at all -- not just `.register`/`["register"]`).
-# `\b` alone is satisfied by a following `.`, so without this the
-# regex would misread `saveModules.registry = saveModules.registry`
-# (the real registry's own reload-safety idiom, assigning its
-# `registry` SUB-TABLE to itself) as "bare saveModules aliased into
-# `registry`" -- `registry` there is a field access on the FIRST
-# `saveModules.registry`, not a plain variable, and the RHS is that
-# same sub-table, not the module table itself. Any `.register`/
-# `["register"]` access specifically is a different, already-covered
-# case (find_lua_register_aliases via ALIAS_RE) and is correctly
-# excluded here the same way any other field access is.
-_ASSIGNMENT_TARGET_RE_FRAGMENT = (
-    r"\w+(?:\s*\.\s*\w+|\s*\[\s*(?:'[^']*'|\"[^\"]*\"|\w+)\s*\])*"
-)
-# `package.loaded[modname] = <module table>` is Lua's own universal
-# require()-caching idiom (used by every Lua module in this codebase,
-# including save_modules.lua's own definition, per its header comment:
-# "Singleton via package.loaded so script reloads + multiple require()s
-# share the same registry") -- it is not a bypass attempt, it's how
-# require() itself expects a module to register its cache entry, and
-# nobody would realistically call `.register` through
-# `package.loaded["scripts.lib.save_modules"].register(...)` instead of
-# the local binding sitting right there. Excluded explicitly rather
-# than letting the general table-key case flag it.
-# A negative LOOKBEHIND for `.` or a word character is required so a
-# match can only start at a genuine, top-of-chain identifier boundary.
-# `\b` alone (tried first) is not enough: it blocks a match starting
-# mid-WORD (e.g. "ackage", a suffix of "package") but NOT one starting
-# right after a "." that continues a longer dotted chain -- since
-# ".loaded[...]" independently satisfies the target grammar as if
-# "loaded" were its own bare identifier, `finditer` happily starts a
-# match there instead, sidestepping the `package.loaded` exclusion
-# just as effectively as starting mid-word did. Requiring "nothing
-# word-like AND no dot" immediately before the match start closes both
-# routes at once.
-# The canonical name as a "complete value" -- optionally wrapped in ANY
-# depth of redundant parens (same reasoning as _REGISTER_TABLE_REF's
-# parenthesized receiver: a FIXED, already-known token wrapped in
-# `\(+`/`\)+` is a regular pattern coverable for any depth in one shot,
-# unlike arbitrary-depth aliasing), with nothing chained after it at
-# all. Shared by every "is this RHS/value truly the bare canonical
-# name" check below -- `{ [1] = (saveMods) }` needs the exact same
-# parens tolerance a plain `registry = (saveMods)` assignment would,
-# and duplicating the fragment per call site is exactly how the two
-# diverged before (round 20's finding: the table-constructor check
-# alone got the parens fix, the assignment-statement check didn't).
-_BARE_CANONICAL_VALUE_RE_FRAGMENT = (
-    r"\(*\s*save(?:Mods|Modules)\b\s*\)*(?!\s*[.\[])"
-)
-_BARE_REGISTRY_ALIAS_RE = re.compile(
-    r"(?<![.\w])(?:local\s+)?(?!saveMods\b|saveModules\b)"
-    r"(?!" + _PACKAGE_LOADED_ACCESS_RE_FRAGMENT + r")"
-    + _ASSIGNMENT_TARGET_RE_FRAGMENT
-    + r"\s*=\s*" + _BARE_CANONICAL_VALUE_RE_FRAGMENT)
-# The canonical name hidden as a TABLE CONSTRUCTOR field's value --
-# `{ [1] = saveMods }` (explicit key), `{ saveMods }` (positional, an
-# implicit integer key), or `{ registry = saveMods }` (named key) --
-# rather than the RHS of a subsequent `=` statement. Structurally
-# different from _BARE_REGISTRY_ALIAS_RE's grammar (a `{`/`,`-delimited
-# entry inside a table literal, not a standalone assignment statement),
-# so it needs its own pattern: a value position starts right after `{`
-# or `,` (optionally preceded by a `[expr] =` or `name =` key), and the
-# canonical name must be the COMPLETE entry -- bare (or parenthesized,
-# per the shared fragment above), with nothing chained after it,
-# immediately followed by the next `,` or the constructor's closing
-# `}` -- so `{ saveMods = require(...) }` (the canonical name used as a
-# KEY whose value is something else entirely) is correctly NOT matched.
-_TABLE_CONSTRUCTOR_ALIAS_RE = re.compile(
-    r"[{,]\s*(?:\[[^\]]*\]\s*=\s*|[A-Za-z_]\w*\s*=\s*)?"
-    + _BARE_CANONICAL_VALUE_RE_FRAGMENT + r"\s*[,}]")
-
-
-def find_untracked_registry_aliases(scripts_text_by_file: dict[str, str]) -> list[str]:
-    """Files where the registry table escapes to an untracked local
-    name -- either `require("scripts.lib.save_modules")`'s result
-    directly (`local registry = require("scripts.lib.save_modules")`),
-    the same via `package.loaded["scripts.lib.save_modules"]` (the
-    identical singleton table under its second legitimate spelling), or
-    a SECOND-level alias of the already-canonical name
-    (`local registry = saveMods`). Either way, a later
-    `registry.register("untracked", ...)` is a real, live registration
-    this audit's fixed-receiver-name matchers cannot trace.
-
-    `find_lua_register_aliases`/REGISTER_RE only ever look for the
-    FIXED receiver spellings `saveMods`/`saveModules`/a direct
-    `require(...)` or `package.loaded[...]` chain -- binding the
-    registry table to an ARBITRARY local name (or hiding it as a table
-    CONSTRUCTOR field's value, `{ [1] = saveMods }`/`{ saveMods }`/
-    `{ registry = saveMods }`) is a data-flow problem no amount of
-    regex matching on fixed names can trace (Lua allows any identifier,
-    and allows aliasing an alias). Rather than trying to enumerate
-    every possible name or chase arbitrary aliasing depth, this flags
-    the ESCAPE itself: every `require("scripts.lib.save_modules")`
-    occurrence, every `package.loaded["scripts.lib.save_modules"]`
-    occurrence, and every bare `saveMods`/`saveModules` occurrence, must
-    be either (a) chained straight into `.register`/`["register"]`
-    access (a direct call, or the alias-of-the-function form -- both
-    already covered elsewhere), (b) itself assigned to a local named
-    EXACTLY `saveMods`/`saveModules`, the codebase's own convention, or
-    (c) for `package.loaded[...]` specifically, itself the ASSIGNMENT
-    TARGET of the require()-caching write idiom
-    (`package.loaded[...] = saveModules`) rather than a value being
-    read. Anything else -- bound to another name, passed as an
-    argument, stored in a table under an arbitrary key OR as a table
-    constructor's field value -- means the registry table is now
-    reachable only through something this audit cannot trace, so it's a
-    hard failure on its own. A THIRD level of aliasing (re-aliasing the
-    SECOND local yet again), or hiding the canonical name behind
-    OTHER Lua binding constructs this audit doesn't specifically
-    pattern-match (multiple assignment, a function-call argument, a
-    for-loop variable, a closure, a coroutine, a metatable proxy), is a
-    known, accepted limitation of this static, non-interpreting
-    approach -- see docs/persistence_contract.md SS7 item 6 / SS8.
-    """
-    offenders: list[str] = []
-    for relpath, text in sorted(scripts_text_by_file.items()):
-        cleaned = _strip_lua_comments(text)
-        string_spans = _string_literal_spans(cleaned)
-        sanctioned_local_spans = [
-            (m.start(), m.end()) for m in _REQUIRE_SANCTIONED_LOCAL_RE.finditer(cleaned)]
-        package_loaded_sanctioned_local_spans = [
-            (m.start(), m.end())
-            for m in _PACKAGE_LOADED_SANCTIONED_LOCAL_RE.finditer(cleaned)]
-        untracked = False
-        for m in REQUIRE_SAVE_MODULES_RE.finditer(cleaned):
-            if any(start <= m.start() < end for start, end in string_spans):
-                continue  # inside a string literal, not real code
-            if _REQUIRE_CHAINED_ACCESS_RE.match(cleaned, m.start()):
-                continue  # chained into .register/["register"] access
-            if any(start <= m.start() < end for start, end in sanctioned_local_spans):
-                continue  # local saveMods/saveModules = require(...)
-            untracked = True
-            break
-        if not untracked:
-            for m in _PACKAGE_LOADED_SAVE_MODULES_RE.finditer(cleaned):
-                if any(start <= m.start() < end for start, end in string_spans):
-                    continue  # inside a string literal, not real code
-                if _PACKAGE_LOADED_CHAINED_ACCESS_RE.match(cleaned, m.start()):
-                    continue  # chained into .register/["register"] access
-                if _PACKAGE_LOADED_ASSIGNMENT_TARGET_RE.match(cleaned, m.start()):
-                    continue  # package.loaded[...] = saveModules cache write
-                if any(start <= m.start() < end
-                       for start, end in package_loaded_sanctioned_local_spans):
-                    continue  # local saveMods/saveModules = package.loaded(...)
-                untracked = True
-                break
-        if not untracked:
-            for m in _BARE_REGISTRY_ALIAS_RE.finditer(cleaned):
-                if not any(start <= m.start() < end for start, end in string_spans):
-                    untracked = True
-                    break
-        if not untracked:
-            for m in _TABLE_CONSTRUCTOR_ALIAS_RE.finditer(cleaned):
-                if not any(start <= m.start() < end for start, end in string_spans):
-                    untracked = True
-                    break
-        if untracked:
-            offenders.append(relpath)
-    return offenders
-
-
-# The five classifications the contract defines (docs/persistence_contract.md
-# SS2). The contract requires EXACTLY ONE per item, so a cell counts only
-# if its CORE text (after stripping bold markup and a trailing parenthetical
-# aside -- see _classification_core) EQUALS one of these exactly. That
-# accepts decorated variants ("Persist exactly (container)",
-# "**Exclude (new format)**") while rejecting both a bare "--"/blank
-# placeholder (core matches none of them) and a compound value like
-# "Rebuild + Persist (mixed)" (core is "Rebuild + Persist", which matches
-# none of them exactly either -- a plain substring test would have missed
-# this, since "Persist exactly" isn't literally present).
-VALID_CLASSIFICATIONS = (
-    "Persist exactly",
-    "Persist as identity/reference",
-    "Rebuild",
-    "Reset to default",
-    "Exclude",
-)
-_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
-
-
-def _classification_core(cell_text: str) -> str:
-    """Strip bold markup and one trailing parenthetical aside."""
-    text = cell_text.strip().replace("**", "")
-    text = _TRAILING_PAREN_RE.sub("", text)
-    return text.strip()
-
-
-def _is_valid_classification(cell_text: str) -> bool:
-    return _classification_core(cell_text) in VALID_CLASSIFICATIONS
-
-
-_NO_CLASSIFICATION_COLUMN = -1
-
-
-def parse_classified_names(inventory_text: str) -> dict[str, dict[str, str]]:
-    """Every backtick-quoted first-column name and its classification
-    cell's raw text, keyed by the nearest preceding `### OwnerName`
-    heading: `{owner: {name: classification_text}}`.
-
-    Classification is scoped PER OWNER, not globally and not merely per
-    `## N.` section: several distinct owners can share one numbered
-    section (WorldManager/WorldState both live under "## 3.", all four
-    save-envelope records under "## 4.") so a name is only "classified"
-    for the specific `###`-headed owner it's documented under -- a
-    different owner (a sibling record under the same section, or the
-    Lua registry) happening to share that name can't mask a missing
-    decision.
-
-    The "Classification" column's INDEX varies by table (EngineEnv/
-    EngineState put it 3rd, after Field/Scope; WorldManager/WorldState/
-    the save-envelope records put it 2nd; the Lua registry puts it 4th),
-    so each table's own header row is parsed to find it, rather than
-    assuming a fixed position.
-    """
-    by_owner: dict[str, dict[str, str]] = {}
-    current_owner: str | None = None
-    classification_idx: int | None = None
-    for line in inventory_text.splitlines():
-        heading = OWNER_HEADING_RE.match(line)
-        if heading:
-            current_owner = heading.group(1)
-            classification_idx = None
-            continue
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if classification_idx is None:
-            classification_idx = (cells.index("Classification")
-                                   if "Classification" in cells
-                                   else _NO_CLASSIFICATION_COLUMN)
-            continue
-        if classification_idx == _NO_CLASSIFICATION_COLUMN or current_owner is None:
-            continue
-        names = BACKTICK_RE.findall(cells[0]) if cells else []
-        if not names:
-            continue  # e.g. the `|---|---|` separator row
-        classification_text = (cells[classification_idx]
-                                if classification_idx < len(cells) else "")
-        for bt in names:
-            by_owner.setdefault(current_owner, {})[bt] = classification_text
-    return by_owner
-
-
-def parse_component_owner_rows(
-        inventory_text: str) -> list[tuple[str, str | None, str]]:
-    """Every row under the `### Save components` heading as
-    (owner name, declared ComponentId or None, classification cell text).
-
-    The section's table is `| Component | ComponentId | Classification |
-    ... |`; the ComponentId + Classification columns are found by their
-    own header labels (so extra trailing columns are tolerated).
-    """
-    rows: list[tuple[str, str | None, str]] = []
-    in_section = False
-    comp_idx: int | None = None
-    class_idx: int | None = None
-    for line in inventory_text.splitlines():
-        heading = OWNER_HEADING_RE.match(line)
-        if heading:
-            in_section = heading.group(1) == SAVE_COMPONENTS_HEADING
-            comp_idx = None
-            class_idx = None
-            continue
-        if not in_section or not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if class_idx is None and comp_idx is None:
-            comp_idx = (cells.index("ComponentId")
-                        if "ComponentId" in cells else _NO_CLASSIFICATION_COLUMN)
-            class_idx = (cells.index("Classification")
-                         if "Classification" in cells else _NO_CLASSIFICATION_COLUMN)
-            continue
-        if class_idx == _NO_CLASSIFICATION_COLUMN:
-            continue
-        names = BACKTICK_RE.findall(cells[0]) if cells else []
-        if not names:
-            continue  # separator row
-        cid: str | None = None
-        if comp_idx is not None and comp_idx >= 0 and comp_idx < len(cells):
-            cid_matches = BACKTICK_RE.findall(cells[comp_idx])
-            cid = cid_matches[0] if cid_matches else None
-        classification = (cells[class_idx]
-                          if class_idx < len(cells) else "")
-        rows.append((names[0], cid, classification))
-    return rows
-
-
-def derive_registered_component_ids(
-        registry_list_source: str,
-        codec_source: str,
-        id_types_source: str,
-        envelope_source: str = "") -> set[str]:
-    """Derive the set of ACTUALLY-registered component id string literals
-    from real registry membership, NOT from every `ComponentId "..."`
-    literal that happens to be defined (#760 round-4 review).
-
-    The trace:
-      1. `saveComponentRegistry = [ registerComponent <codec> ... ]`
-         names the registered codecs (Component.hs).
-      2. each `<codec> = componentCodec ComponentSpec { csComponent =
-         <idIdent>, ... }` names its component id identifier
-         (Session/Page/Entities/Knowledge.hs).
-      3. `<idIdent> = ComponentId "<literal>"` resolves it to the on-disk
-         literal (Types.hs).
-    The envelope additionally registers components as direct spec tuples
-    (`(<idIdent>, <ver>, True, ...)`, currently just metadata) that live
-    OUTSIDE the gameplay registry list; those are legitimately registered
-    too, so they are traced from the envelope source.
-
-    A component id literal that is DEFINED (in Types.hs) but reached by
-    NONE of these paths is intentionally excluded -- that is exactly the
-    "defined + documented but never wired into decode/assembly" gap the
-    audit must catch.
-    """
-    id_by_ident = dict(COMPONENT_ID_BINDING_RE.findall(id_types_source))
-    registered: set[str] = set()
-    block_m = SAVE_REGISTRY_BLOCK_RE.search(registry_list_source)
-    if block_m:
-        for codec in REGISTER_COMPONENT_RE.findall(block_m.group(1)):
-            m = re.search(
-                rf"{re.escape(codec)}\s*=\s*componentCodec\s+ComponentSpec\b"
-                rf"\s*\{{[^{{}}]*?csComponent\s*=\s*(\w+)",
-                codec_source, re.S)
-            if m is None:
-                raise ValueError(
-                    f"saveComponentRegistry registers '{codec}', but no "
-                    f"`{codec} = componentCodec ComponentSpec {{ csComponent "
-                    f"= ... }}` definition was found in any of "
-                    f"{COMPONENT_CODEC_FILES} -- a component declared in a "
-                    f"file this scan never looked at, or one that hand-rolls "
-                    f"the 'ComponentCodec' record instead of going through "
-                    f"the shared construction (issue #1093), would otherwise "
-                    f"be silently absent from the registered set, taking its "
-                    f"required `### Save components` row with it")
-            lit = id_by_ident.get(m.group(1))
-            if lit is None:
-                raise ValueError(
-                    f"codec '{codec}' names component id identifier "
-                    f"'{m.group(1)}', which has no `= ComponentId \"...\"` "
-                    f"binding in {COMPONENT_ID_TYPES_FILE}")
-            registered.add(lit)
-    for ident in ENVELOPE_SPEC_ID_RE.findall(envelope_source):
-        lit = id_by_ident.get(ident)
-        if lit is not None:
-            registered.add(lit)
-    return registered
-
-
-COVERAGE_MAP_HEADING = "Test coverage map"
-
-
-def parse_coverage_map_component_names(inventory_text: str) -> set[str]:
-    """Every backtick-quoted first-column name under the
-    `### Test coverage map` heading (docs/persistence_state_inventory.md
-    SS12, issue #767 requirement 3) -- a save ComponentId
-    (e.g. `core-session`) or a Lua persistence module reference
-    (`lua.unit_ai`), one row per persistent §10/§7 owner."""
-    names: set[str] = set()
-    in_section = False
-    for line in inventory_text.splitlines():
-        heading = OWNER_HEADING_RE.match(line)
-        if heading:
-            in_section = heading.group(1) == COVERAGE_MAP_HEADING
-            continue
-        if not in_section or not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if not cells or set(cells[0]) <= {"-", ":"}:
-            continue  # separator row
-        names.update(BACKTICK_RE.findall(cells[0]))
-    return names
-
-
-def find_coverage_map_violations(
-        inventory_text: str) -> list[str]:
-    """Requirement 3 (issue #767, save-overhaul D1): every persistent
-    §10 save component and every `Persist exactly` §7 Lua persistence
-    module must have a row in the `### Test coverage map` heading (SS12)
-    naming its owning component, canonical inspection path, round-trip
-    assertion, reset/rebuild assertion, and focused test -- an
-    inventory entry with a classification decision but no contract
-    coverage entry fails here, mirroring how a missing classification
-    decision itself already fails `find_component_registration_violations`/
-    the root-owner-field checks above."""
-    violations: list[str] = []
-    covered = parse_coverage_map_component_names(inventory_text)
-
-    for name, cid, classification in parse_component_owner_rows(inventory_text):
-        if _classification_core(classification) not in PERSISTENT_CLASSIFICATIONS:
-            continue  # rebuilt/reset/excluded owners need no coverage-map row
-        if cid is None:
-            continue  # already reported by find_component_registration_violations
-        if cid not in covered:
-            violations.append(
-                f"save component {name!r} (ComponentId {cid!r}) is classified "
-                f"persistent but has no row under the "
-                f"'### {COVERAGE_MAP_HEADING}' heading in {INVENTORY_PATH.name} "
-                f"-- add a coverage-map entry naming its canonical inspection "
-                f"path, round-trip assertion, and focused test "
-                f"(docs/persistence_contract.md requirement 3)")
-
-    classified_lua = parse_classified_names(inventory_text).get(LUA_OWNER_HEADING, {})
-    for name, classification in classified_lua.items():
-        if _classification_core(classification) != "Persist exactly":
-            continue  # reset-hook/excluded Lua modules need no coverage-map row
-        lua_ref = f"lua.{name}"
-        if lua_ref not in covered:
-            violations.append(
-                f'Lua save module "{name}" is classified persistent but has '
-                f"no row (as {lua_ref!r}) under the "
-                f"'### {COVERAGE_MAP_HEADING}' heading in {INVENTORY_PATH.name} "
-                f"-- add a coverage-map entry naming its canonical inspection "
-                f"path, round-trip assertion, and focused test "
-                f"(docs/persistence_contract.md requirement 3)")
-
-    return violations
-
-
-def find_component_registration_violations(
-        inventory_text: str, registered: set[str]) -> list[str]:
-    """The #760 registry linkage check: every save-component owner the
-    inventory classifies as PERSISTENT must map to an ACTUALLY-registered
-    `ComponentId` (see `derive_registered_component_ids`), while an owner
-    classified rebuilt/reset/excluded requires no registration; and
-    conversely every registered component must have a persistent-classified
-    inventory row (so a new component owner can't land without an explicit
-    decision).
-    """
-    violations: list[str] = []
-    documented: set[str] = set()
-    for name, cid, classification in parse_component_owner_rows(inventory_text):
-        core = _classification_core(classification)
-        if core not in PERSISTENT_CLASSIFICATIONS:
-            continue  # rebuilt/reset/excluded owners need no registration
-        if cid is None:
-            violations.append(
-                f"save component {name!r} is classified persistent "
-                f"({classification!r}) but its row declares no ComponentId "
-                f"under the '### {SAVE_COMPONENTS_HEADING}' heading in "
-                f"{INVENTORY_PATH.name}")
-            continue
-        documented.add(cid)
-        if cid not in registered:
-            violations.append(
-                f"save component {name!r} is classified persistent "
-                f"({classification!r}) but its ComponentId {cid!r} is not "
-                f"registered in the Haskell save-component registry "
-                f"(saveComponentRegistry in {COMPONENT_REGISTRY_LIST_FILE}, "
-                f"or the envelope's own component set)")
-    for cid in sorted(registered):
-        if cid not in documented:
-            violations.append(
-                f"registered save component {cid!r} has no persistent-"
-                f"classified row under the '### {SAVE_COMPONENTS_HEADING}' "
-                f"heading in {INVENTORY_PATH.name} -- add a classification "
-                f"decision for it (see docs/persistence_contract.md)")
-    return violations
-
-
-def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
+def audit(record_sources: Mapping[str, str],
+          scripts_text_by_file: Mapping[str, str],
           inventory_text: str,
           root_records: list[tuple[str, str, str]] | None = None,
-          registered_ids: set[str] | None = None,
-          component_sources: dict[str, str] | None = None) -> list[str]:
-    """Pure audit core. Returns a list of human-readable violations."""
+          registered_ids: AbstractSet[str] | None = None,
+          component_sources: Mapping[str, str] | None = None) -> list[str]:
+    """Pure audit core. Returns a list of human-readable violations.
+
+    The check ORDER is a contract (#2124 requirement 16): root-owner
+    fields, Lua save modules, aliased register functions, dynamic
+    registration names, untracked registry aliases, component
+    registration, coverage-map correspondence, typed Haskell
+    references, Lua reference kinds. `registered_ids` and
+    `component_sources` are optional: when either is None its check
+    family is skipped entirely, which is what lets the fixture-driven
+    self-test groups exercise the others in isolation.
+    """
     if root_records is None:
         root_records = ROOT_RECORDS
     classified = parse_classified_names(inventory_text)
@@ -1619,12 +166,12 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             if field not in classified_here:
                 violations.append(
                     f"{label}.{field} ({relpath}) has no classification under "
-                    f"the '### {label}' heading in {INVENTORY_PATH.name}")
-            elif not _is_valid_classification(classified_here[field]):
+                    f"the '### {label}' heading in {common.INVENTORY_PATH.name}")
+            elif not is_valid_classification(classified_here[field]):
                 violations.append(
                     f"{label}.{field} ({relpath})'s classification "
                     f"{classified_here[field]!r} under the '### {label}' "
-                    f"heading in {INVENTORY_PATH.name} is not one of "
+                    f"heading in {common.INVENTORY_PATH.name} is not one of "
                     f"{VALID_CLASSIFICATIONS}")
 
     classified_lua = classified.get(LUA_OWNER_HEADING, {})
@@ -1633,12 +180,12 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             violations.append(
                 f'Lua save module "{name}" (registered in {relpath}) has no '
                 f"classification under the '### {LUA_OWNER_HEADING}' heading "
-                f"in {INVENTORY_PATH.name}")
-        elif not _is_valid_classification(classified_lua[name]):
+                f"in {common.INVENTORY_PATH.name}")
+        elif not is_valid_classification(classified_lua[name]):
             violations.append(
                 f'Lua save module "{name}" (registered in {relpath})\'s '
                 f"classification {classified_lua[name]!r} under the "
-                f"'### {LUA_OWNER_HEADING}' heading in {INVENTORY_PATH.name} "
+                f"'### {LUA_OWNER_HEADING}' heading in {common.INVENTORY_PATH.name} "
                 f"is not one of {VALID_CLASSIFICATIONS}")
 
     for relpath in find_lua_register_aliases(scripts_text_by_file):
@@ -1684,13 +231,13 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
                     f'Typed persistent reference field "{field}" ({relpath}) '
                     f"has no classification under the "
                     f"'### {REFERENCE_FIELD_OWNER}' heading in "
-                    f"{INVENTORY_PATH.name}")
-            elif not _is_valid_classification(classified_refs[field]):
+                    f"{common.INVENTORY_PATH.name}")
+            elif not is_valid_classification(classified_refs[field]):
                 violations.append(
                     f'Typed persistent reference field "{field}" ({relpath})\'s '
                     f"classification {classified_refs[field]!r} under the "
                     f"'### {REFERENCE_FIELD_OWNER}' heading in "
-                    f"{INVENTORY_PATH.name} is not one of {VALID_CLASSIFICATIONS}")
+                    f"{common.INVENTORY_PATH.name} is not one of {VALID_CLASSIFICATIONS}")
 
     classified_kinds = classified.get(LUA_REFERENCE_KIND_OWNER, {})
     for kind, relpath in find_lua_reference_kinds(scripts_text_by_file):
@@ -1698,42 +245,61 @@ def audit(record_sources: dict[str, str], scripts_text_by_file: dict[str, str],
             violations.append(
                 f'Lua reference kind "{kind}" (used in {relpath}) has no '
                 f"classification under the '### {LUA_REFERENCE_KIND_OWNER}' "
-                f"heading in {INVENTORY_PATH.name}")
-        elif not _is_valid_classification(classified_kinds[kind]):
+                f"heading in {common.INVENTORY_PATH.name}")
+        elif not is_valid_classification(classified_kinds[kind]):
             violations.append(
                 f'Lua reference kind "{kind}" (used in {relpath})\'s '
                 f"classification {classified_kinds[kind]!r} under the "
                 f"'### {LUA_REFERENCE_KIND_OWNER}' heading in "
-                f"{INVENTORY_PATH.name} is not one of {VALID_CLASSIFICATIONS}")
+                f"{common.INVENTORY_PATH.name} is not one of {VALID_CLASSIFICATIONS}")
 
     return violations
 
 
-def _load_repo_state() -> tuple[dict[str, str], dict[str, str], str, set[str],
-                                 dict[str, str]]:
+def _load_repo_state() -> tuple[Mapping[str, str], Mapping[str, str], str,
+                                 AbstractSet[str], Mapping[str, str]]:
+    """Read every repository input the aggregate run needs, each exactly
+    once, and return them as immutable views.
+
+    One memoised reader serves every path, so a file that two inputs
+    name -- `COMPONENT_ID_TYPES_FILE` is also matched by
+    `COMPONENT_CODEC_FILES`'s glob of the same directory -- is read a
+    single time while `derive_registered_component_ids` still receives
+    the joined codec source and the id-types source as the separate
+    arguments it always has (#2124 requirement 14). The returned
+    mappings are read-only views (a caller that needs a mutated copy
+    takes `dict(...)` of one, as the self-test does) so no owner can
+    rescan or reshape the repository state behind another's back.
+    """
+    cache: dict[str, str] = {}
+
+    def read(relpath: str) -> str:
+        if relpath not in cache:
+            cache[relpath] = (common.REPO_ROOT / relpath).read_text(encoding="utf-8")
+        return cache[relpath]
+
     record_sources: dict[str, str] = {}
     for _, relpath, _ in ROOT_RECORDS:
         if relpath not in record_sources:
-            record_sources[relpath] = (REPO_ROOT / relpath).read_text(encoding="utf-8")
+            record_sources[relpath] = read(relpath)
     scripts_text_by_file: dict[str, str] = {}
-    for path in (REPO_ROOT / SCRIPTS_DIR).rglob("*.lua"):
-        rel = str(path.relative_to(REPO_ROOT))
+    for path in (common.REPO_ROOT / common.SCRIPTS_DIR).rglob("*.lua"):
+        rel = str(path.relative_to(common.REPO_ROOT))
         scripts_text_by_file[rel] = path.read_text(encoding="utf-8")
-    inventory_text = INVENTORY_PATH.read_text(encoding="utf-8")
-    registry_list_source = (REPO_ROOT / COMPONENT_REGISTRY_LIST_FILE).read_text(
-        encoding="utf-8")
+    inventory_text = common.INVENTORY_PATH.read_text(encoding="utf-8")
+    registry_list_source = read(common.COMPONENT_REGISTRY_LIST_FILE)
     component_sources: dict[str, str] = {
-        f: (REPO_ROOT / f).read_text(encoding="utf-8") for f in COMPONENT_CODEC_FILES
+        f: read(f) for f in common.COMPONENT_CODEC_FILES
     }
-    codec_source = "\n".join(component_sources[f] for f in COMPONENT_CODEC_FILES)
-    id_types_source = (REPO_ROOT / COMPONENT_ID_TYPES_FILE).read_text(
-        encoding="utf-8")
-    envelope_source = (REPO_ROOT / COMPONENT_ENVELOPE_FILE).read_text(
-        encoding="utf-8")
+    codec_source = "\n".join(
+        component_sources[f] for f in common.COMPONENT_CODEC_FILES)
+    id_types_source = read(common.COMPONENT_ID_TYPES_FILE)
+    envelope_source = read(common.COMPONENT_ENVELOPE_FILE)
     registered_ids = derive_registered_component_ids(
         registry_list_source, codec_source, id_types_source, envelope_source)
-    return (record_sources, scripts_text_by_file, inventory_text, registered_ids,
-            component_sources)
+    return (MappingProxyType(record_sources), MappingProxyType(scripts_text_by_file),
+            inventory_text, frozenset(registered_ids),
+            MappingProxyType(component_sources))
 
 
 def main() -> int:
@@ -1747,7 +313,7 @@ def main() -> int:
         for v in violations:
             print(f"  - {v}")
         print(f"\nAdd a classification row for each item above to "
-              f"{INVENTORY_PATH.relative_to(REPO_ROOT)} (see "
+              f"{common.INVENTORY_PATH.relative_to(common.REPO_ROOT)} (see "
               f"docs/persistence_contract.md for the taxonomy).")
         return 1
 

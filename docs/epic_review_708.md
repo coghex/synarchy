@@ -14,11 +14,11 @@ concrete precondition
 
 ## Status
 
-- [ ] ER-1. River naming still documents the pre-#1868 free-root instability
+- [x] ER-1. River naming still documents the pre-#1868 free-root instability — [#2231]
 
 ## 1. Generated-language contract maintenance
 
-### ER-1. River naming still documents the pre-#1868 free-root instability
+### [#2231] ER-1. River naming still documents the pre-#1868 free-root instability
 
 > **Captured note:** Correct `World.River.Naming`'s write-once rationale after
 > #1868: append-only concept ordinals keep every existing free root stable

@@ -59,6 +59,11 @@ into one network):
 
 Usage: python3 tools/machine_shop_probe.py [--port 9391]
 Exit 0 = every check passed.
+
+This probe implements the shared `probe-result/v1` contract: `--describe`
+prints its ordered stable checks without booting an engine, and a harnessed
+run writes structured events while a standalone run keeps its human-readable
+per-check output.
 """
 from __future__ import annotations
 
@@ -66,9 +71,50 @@ import argparse
 import glob
 import sys
 
+import probe_protocol
 from probelib import boot, quit_engine, send, send_json, init_arena, poll_until
 
 PAGE = "machine_shop_probe"
+LOG = "/tmp/machine_shop_probe_9391.log"
+LOG_NAME = "machine_shop_probe_engine.log"
+PROBE_KEY = "machine_shop"
+PROBE_CHECKS = [
+    ("electric_smelt_recipe", "smelt_steel_electric: power_draw>0, no fuel line"),
+    ("wiring_recipe", "machine_wiring: power_draw>0, station=machine"),
+    ("motor_recipe", "machine_electric_motor: power_draw>0, station=machine"),
+    ("coal_recipe_unchanged", "existing smelt_steel_lignite unaffected (power_draw=0, still has fuel)"),
+    ("machine_shop_registered", "machine_shop registered in building.listDefs() (req. 8)"),
+    ("machine_operation", "built machine_shop instance offers the 'machine' operation"),
+    ("coal_smelt_unwired", "existing coal-fired smelt still succeeds, furnace fully unwired"),
+    ("coal_output", "coal-smelted steel_bar appeared"),
+    ("electric_smelt_refuses_unwired", "smelt_steel_electric refuses (furnace unwired)"),
+    ("wiring_refuses_unwired", "machine_wiring refuses (machine_shop unwired)"),
+    ("motor_refuses_unwired", "machine_electric_motor refuses (machine_shop unwired)"),
+    ("networks_wired", "both groups wired into their own 2-node network"),
+    ("idle_drain_zero", "drainW == 0 on both networks at midnight (no bill claimed)"),
+    ("noon_generation", "time flip to noon landed (generationW > 300)"),
+    ("electric_smelt_powered", "smelt_steel_electric succeeds once furnace is powered"),
+    ("electric_smelt_output", "electric-smelted steel_bar appeared"),
+    ("wiring_powered", "machine_wiring succeeds once machine_shop is powered"),
+    ("wiring_output", "spooled wiring appeared"),
+    ("motor_powered", "machine_electric_motor succeeds once machine_shop is powered"),
+    ("motor_output", "assembled electric_motor appeared"),
+    ("manual_bill_queued", "manual bill queued"),
+    ("manual_bill_claimed", "manual claim succeeds"),
+    ("working_drain", "drainW reads machine_wiring's 120W once marked working"),
+    ("midnight_gate", "isStationPoweredForRecipe false at midnight (the AI's own pour gate)"),
+    ("midnight_progress_stalls", "progress stays 0 -- the (mirrored) AI gate blocks the pour while browned out"),
+    ("noon_gate", "isStationPoweredForRecipe true at noon"),
+    ("powered_cycle_executes", "craft.executeAt fires the cycle once progress hits 1.0 while powered"),
+    ("bill_completes", "completeBillCycle finishes the one-shot bill (remaining=0)"),
+]
+DESCRIPTOR = probe_protocol.build_descriptor(PROBE_KEY, PROBE_CHECKS)
+CHECK_ID_BY_LABEL = {label: check_id for check_id, label in PROBE_CHECKS}
+_REPORTER: probe_protocol.Reporter | None = None
+
+
+class ProbeSetupError(RuntimeError):
+    pass
 
 # Furnace group.
 FURNACE_XY = (6, 2)
@@ -87,8 +133,11 @@ def as_int(s) -> int | None:
 
 
 def check(passed: bool, ok: bool, label: str, detail="") -> bool:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {label}" + (f": {detail}" if detail else ""))
-    return passed and ok
+    if _REPORTER is None:
+        raise RuntimeError("machine-shop reporter is not initialised")
+    payload = {"detail": str(detail)} if detail != "" else None
+    _REPORTER.check(CHECK_ID_BY_LABEL[label], bool(ok), label, payload)
+    return passed and bool(ok)
 
 
 def bootstrap_defs(port: int) -> None:
@@ -124,7 +173,7 @@ def spawn_unit(port: int, x: float, y: float) -> int:
     autonomous ever runs, so there's no wandering goal to retire)."""
     uid = as_int(send(port, f"return unit.spawn('acolyte', {x}, {y})"))
     if uid is None:
-        sys.exit("unit.spawn failed")
+        raise ProbeSetupError("unit.spawn failed")
     return uid
 
 
@@ -135,10 +184,10 @@ def spawn_station(port: int, uid: int, def_name: str, gx: int, gy: int,
     raw = send(port, f"return building.spawn('{def_name}', {gx}, {gy})")
     bid = as_int(raw)
     if bid is None:
-        sys.exit(f"building.spawn('{def_name}') failed: {raw}")
+        raise ProbeSetupError(f"building.spawn('{def_name}') failed: {raw}")
     if not poll_until(5, lambda: send(
             port, f"return building.getInfo({bid}) and 'yes' or 'no'") == "yes"):
-        sys.exit(f"{def_name} instance never appeared")
+        raise ProbeSetupError(f"{def_name} instance never appeared")
     for item, count in materials.items():
         send(port,
              f"for i=1,{count} do unit.addItem({uid},'{item}'); "
@@ -146,11 +195,11 @@ def spawn_station(port: int, uid: int, def_name: str, gx: int, gy: int,
              f"return 'ok'")
     if send(port, f"return building.areMaterialsSatisfied({bid}) "
                   f"and 'yes' or 'no'") != "yes":
-        sys.exit(f"{def_name} materials not satisfied after delivery")
+        raise ProbeSetupError(f"{def_name} materials not satisfied after delivery")
     send(port, f"building.addBuildProgress({bid}, {progress}); return 'ok'")
     act = send(port, f"return building.getActivity({bid})")
     if act != "built":
-        sys.exit(f"{def_name} never reached built (activity={act})")
+        raise ProbeSetupError(f"{def_name} never reached built (activity={act})")
     return bid
 
 
@@ -165,7 +214,9 @@ def wire_up(port: int, uid: int, gx: int, gy: int) -> tuple[int, int]:
     batt_bid = as_int(send(port,
         f"local nid, bid = power.placeNode({uid}, 'high_voltage_battery', {gx + 4}, {gy}); return bid"))
     if panel_bid is None or batt_bid is None:
-        sys.exit(f"power.placeNode failed near ({gx},{gy}): panel={panel_bid} batt={batt_bid}")
+        raise ProbeSetupError(
+            f"power.placeNode failed near ({gx},{gy}): "
+            f"panel={panel_bid} batt={batt_bid}")
     send(port, f"require('scripts.wire').place({gx + 1}, {gy}); return 'ok'")
     send(port, f"require('scripts.wire').place({gx + 3}, {gy}); return 'ok'")
     return panel_bid, batt_bid
@@ -209,11 +260,26 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=9391)
+    ap.add_argument("--describe", action="store_true")
     args = ap.parse_args()
-    port = args.port
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args.port, rep)
+    finally:
+        rep.close()
+
+
+def _run(port: int, rep: probe_protocol.Reporter) -> int:
+    global _REPORTER
+    _REPORTER = rep
     passed = True
 
-    proc = boot(port, f"/tmp/machine_shop_probe_{port}.log")
+    default_log = LOG if port == 9391 else f"/tmp/machine_shop_probe_{port}.log"
+    proc = boot(port, rep.engine_log_path(LOG_NAME, default_log),
+                args=rep.engine_args())
     try:
         bootstrap_defs(port)
         init_arena(port, PAGE)
@@ -399,8 +465,11 @@ def main() -> int:
         passed = check(passed, remaining == "0",
                        "completeBillCycle finishes the one-shot bill (remaining=0)", remaining)
 
-        print("\n" + ("ALL MACHINE SHOP CHECKS PASSED" if passed else "SOME FAILED"))
+        rep.note("\n" + ("ALL MACHINE SHOP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
+    except ProbeSetupError as error:
+        rep.abort(str(error))
+        return 2
     finally:
         quit_engine(port, proc)
 
