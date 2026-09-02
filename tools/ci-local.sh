@@ -513,6 +513,27 @@ python3 tools/world_check.py --quick
 # and are manual-only, so without this companion a re-shared log would
 # only ever be noticed by a dev-machine run; the companion boots
 # nothing.
+# test_item_list_widget_probe is #1911's: the #1251 unit-to-unit escort
+# scenario in tools/item_list_widget_probe.py stages an escort and a
+# target that must be OUTSIDE the transfer contract's reach at the
+# instant a Mode A session is created. That precondition used to record
+# its result and DISCARD the Boolean, so a staging loop that exhausted
+# its four terrain-sensitive retries went on to create the session and
+# grade five checks against a pair already in reach -- where "the pair
+# opens" passes with no approach at all and "the target did not move for
+# the whole of the approach" measures a walk that never happened. It is
+# terminal now, and this companion is what executes that path: a
+# scripted console parks the target at a maximum-axis gap of exactly
+# 1.0, and the run is asserted to fail at SETUP, to send no
+# transfer_session.create, to grade none of the five, to leave the
+# simulation running with the session cleared, and to retain all four
+# attempted destinations and paused snapshots in the failure line. Its
+# positive control drives the same scenario over a console that lets the
+# gap open, so the negative result is a real difference rather than a
+# scenario that stops early either way. That probe is manual-only
+# needs-gpu and takes about fifteen minutes, and the failing path
+# depends on live terrain, so an ordinary run cannot be relied on to
+# reach it; the companion boots nothing.
 #
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
@@ -541,6 +562,7 @@ python3 tools/test_location_content_probe.py
 python3 tools/test_movement_probe.py
 python3 tools/test_farm_ai_probe.py
 python3 tools/test_probe_boot_logs.py
+python3 tools/test_item_list_widget_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the
