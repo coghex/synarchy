@@ -7,9 +7,10 @@
 --   click target from it, so the two cannot decide different assets or
 --   different geometry — the drift this slice removed was exactly a
 --   hit-test that sized from the instance's south handle and never
---   applied the sprite anchor the renderer did. The committed
---   building designation (#1845) consumes the same functions when it
---   replaces its generic marker.
+--   applied the sprite anchor the renderer did. The committed building
+--   designation consumes the same functions since #1845 replaced its
+--   generic marker, so a plan, a placement preview and the building
+--   itself are one picture at three opacities.
 --
 --   Everything here is PURE and takes the camera facing, the instance,
 --   the definition, the clock and the texture-size lookup as explicit

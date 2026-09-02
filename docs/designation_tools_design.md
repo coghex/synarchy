@@ -147,9 +147,10 @@ concrete precondition
   shipped any more.
 - A planned `CtBuilding` already names a building definition whose
   `bdSouthTexture`, pixel dimensions, footprint anchor, and `bdSpriteAnchor` drive
-  the placement ghost and final renderer. The current committed designation
-  instead expands one generic 96×64 marker across every footprint tile. The
-  building ghost must be one target-shaped sprite, not a repeated tile marker.
+  the placement ghost and final renderer. Before #1845 the committed designation
+  instead expanded one generic 96×64 marker across every footprint tile; the
+  building ghost had to be one target-shaped sprite, not a repeated tile marker,
+  and since #1845 it is.
 - **The building half is largely existing machinery** (verified 2026-08-28 at
   `dc470999`). `Building.Render.buildingToQuad` already draws the real
   `bdSouthTexture` at 0.6 alpha with correct scale, `bdSpriteAnchor` offset,

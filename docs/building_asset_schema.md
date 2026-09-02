@@ -173,8 +173,8 @@ from the manager.
 
 - **Camera selection** landed as BDA-2 (#2088, §8): placed, ghosted and
   hit-test geometry follow the active camera through `Building.Visual`.
-  The committed building DESIGNATION still draws its generic marker;
-  #1845 consumes the same boundary when it replaces that.
+  The committed building DESIGNATION consumes that same boundary since
+  #1845 replaced its generic marker with the building's own sprite.
 - **Destruction.** `destruction` decodes; nothing plays it. BDA-3.
 - **Preview direction/lifecycle controls.** The preview keeps decoding
   both forms — its static hint reads canonical `sprites.south` and falls

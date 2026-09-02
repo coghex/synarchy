@@ -45,9 +45,10 @@ deliberately keeps.
 The fixture world (#1587)
 -------------------------
 This probe reaches its world the way a player does — "Create World",
-then "Generate World" — because that flow is what wires
-``construction.setDesignateTexture`` (hud.lua). Left alone, that screen
-rolls a FRESH random seed every run
+then "Generate World" — because that flow is what brings up the real
+in-game HUD, camera and world the ghosts are graded against, which a raw
+debug-console ``world.initArena`` bypass would skip. Left alone, that
+screen rolls a FRESH random seed every run
 (``scripts/create_world/settings_tab.lua`` replaces an empty pending
 seed with ``randbox.newHexSeed()``), so the terrain this probe had to
 find a building site on was a different world each time — and a world
@@ -629,8 +630,9 @@ def main() -> int:
 
 def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     # -- Real UI flow to the in-game HUD (same path as tools/offscreen_probe.py):
-    # this is what actually wires up construction.setDesignateTexture (hud.lua),
-    # which a raw debug-console world.initArena bypass would skip.
+    # this is what actually brings up the gameplay camera and HUD the
+    # ghosts are graded against, which a raw debug-console
+    # world.initArena bypass would skip.
     menu_up = poll_until(60.0, lambda: find_widget(port, "Create World"))
     require_setup("loading screen -> main menu", bool(menu_up),
                   "the main menu never appeared, so the real UI flow to the "
@@ -671,8 +673,8 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
                   "the 'Continue' button could not be clicked.")
     hud_up = poll_until(60.0, lambda: not find_widget(port, "Continue"))
     require_setup("in-game HUD reached", bool(hud_up),
-                  "the in-game HUD never came up, so "
-                  "construction.setDesignateTexture was never wired.")
+                  "the in-game HUD never came up, so nothing was ever "
+                  "framed or graded.")
     time.sleep(2.0)  # let the first in-game frames render
 
     pageid = wid(port)
