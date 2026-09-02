@@ -193,6 +193,7 @@ library
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
                      Engine.Graphics.Config
+                     Engine.Graphics.Config.Domain
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer
                      Engine.Graphics.Vulkan.BufferUtils
