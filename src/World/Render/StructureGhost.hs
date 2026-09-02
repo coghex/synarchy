@@ -153,8 +153,13 @@ resolvedArt pa = ResolvedPieceArt
 --   ('PlanForAttempt'), or every one of them would count itself as the
 --   outstanding designation that refuses it.
 --
---   Buildings are not here. They keep the category-marker path in
---   "World.Render.CursorQuads" until DTV-10 (#1845) gives them their own.
+--   Buildings are not here, and no longer for want of their own art:
+--   since #1845 a building designation draws one sprite of its own
+--   definition, from "World.Render.CursorQuads". The two passes stay
+--   separate because a structure ghost's POSITION is resolved
+--   ('World.Construct.Plan' places a floor, a wall or a ceiling at
+--   different offsets above the same surface) while a building's is its
+--   own anchor tile.
 structureDesignationGhosts ∷ GhostEnv → (Int, V.Vector SortableQuad)
 structureDesignationGhosts ge
     | HM.null designs = (0, V.empty)

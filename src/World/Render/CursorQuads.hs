@@ -71,9 +71,11 @@ renderWorldCursorQuads env pageId worldState tileAlpha =
 --
 --   \"Candidates\" is the set the ACTIVE tool mode's returned vector is
 --   built from, and nothing else: the always-on marker builders (mine,
---   chop, till, plant, and construction designations expanded to their
---   full footprints) plus that mode's own hover, selection and preview
---   builders. This module is @Strict@, so every builder's bindings are
+--   chop, till, plant, and the two construction ghosts — one candidate
+--   per committed BUILDING designation since #1845 made it one sprite
+--   rather than one marker per footprint tile, and one per unpaid
+--   STRUCTURE site, counted by that builder itself) plus that mode's
+--   own hover, selection and preview builders. This module is @Strict@, so every builder's bindings are
 --   forced whichever mode is active — but a builder whose quads the
 --   mode does not return contributed no candidate to the answer, and
 --   counting it would pair a scanned total with an unrelated emitted

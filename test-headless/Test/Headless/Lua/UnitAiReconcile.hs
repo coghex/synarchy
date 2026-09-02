@@ -381,6 +381,14 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
         -- an id that still names a building is a job to finish, one
         -- that does not is a job whose building never appeared, and a
         -- job that has not reached its stake yet is neither.
+        -- The dropped job must hand its designation BACK, not merely
+        -- vanish: an engine-side entry left `claimed` by a job that no
+        -- longer exists is adopted as an orphan by the next scan and is
+        -- unavailable to anybody for a whole claim timeout.
+        , "local RELEASED = {}"
+        , "construction = { setJobStatus = function(w, x, y, st, at)"
+        , "  RELEASED[#RELEASED + 1] = w .. ':' .. x .. ',' .. y .. ':'"
+        , "    .. st .. ':' .. tostring(at) end }"
         , "local ai = { [1] = { constructJob = { x = 1, y = 1, attempt = 3,"
         , "                       category = 'building', building = 'hut',"
         , "                       stakedBid = 42 } },"
@@ -399,6 +407,10 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
         , "assert(ai[3].constructJob ~= nil,"
         , "  'a job that has not staked yet is left alone')"
         , "assert(scrubbedCount() == 1, 'exactly one edge dangled')"
+        , "assert(#RELEASED == 1,"
+        , "  'exactly the dropped job releases its designation')"
+        , "assert(RELEASED[1] == 'B:2,2:pending:4',"
+        , "  'on that unit own page and exact attempt: ' .. RELEASED[1])"
         ]
 
     it "refuses to run at all when a schema row names a release path no \

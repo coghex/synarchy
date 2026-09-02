@@ -103,7 +103,7 @@ local REF_SCHEMA = {
     -- stays pending, and it is re-claimed and re-staked. That is the
     -- honest outcome -- nothing was built.
     { holder = "table", field = "constructJob", sub = "stakedBid",
-      kind = "building", absentOk = true },
+      kind = "building", absentOk = true, drop = "constructJob" },
     { holder = "table", field = "pickupOrder", sub = "gid",
       kind = "ground_item" },
     { holder = "table", field = "forageTarget", sub = "gid",
