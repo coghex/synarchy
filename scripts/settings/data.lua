@@ -13,7 +13,6 @@ data.frameLimitMin = 30
 data.frameLimitMax = 240
 data.brightnessMin = 50
 data.brightnessMax = 300
-data.savedBrightness = nil
 data.tooltipDwellMin = 0
 data.tooltipDwellMax = 1000
 data.tooltipHintDelayMin = 0
@@ -25,12 +24,6 @@ data.saveIntervalMin = 1
 data.saveIntervalMax = 60
 data.saveDepthMin    = 1
 data.saveDepthMax    = 10
--- Snapshots of the last saved tooltip values, used by revert().
--- These (like savedBrightness) capture the saved state because dwell/hint
--- are live-previewed to the engine, so getTooltipDwellMs()/getTooltipHintDelayMs()
--- return the just-edited values, not what we should revert to.
-data.savedTooltipDwellMs = nil
-data.savedTooltipHintDelayMs = nil
 
 -- Standard resolutions
 data.resolutions = {
@@ -93,6 +86,59 @@ data.current = {
 }
 
 data.pending = {}
+
+-----------------------------------------------------------
+-- The persisted baseline for Back (#2194)
+--
+-- An independent value snapshot of every video field the Settings
+-- screen manages. Back restores from THIS, never from
+-- engine.getVideoConfig().
+--
+-- Why it has to exist: Apply pushes each pending value straight into
+-- the live rvVideoConfigRef through the per-field engine setters, and
+-- engine.getVideoConfig reads that same ref. Only engine.saveVideoConfig
+-- writes the ref out to config/video.local.yaml, and no registered verb
+-- reads that file back. So after an Apply WITHOUT Save the live and the
+-- persisted states are indistinguishable through the getter: the eight
+-- fields Back used to read back from it "reverted" to their applied
+-- values and stayed live until the process exited. Brightness and the
+-- two tooltip delays were already exempt because they were snapshotted
+-- in Lua; this table generalizes that snapshot to all eleven fields.
+--
+-- Refreshed at exactly the three points that establish a new persisted
+-- baseline, and nowhere else:
+--   * data.reload()       -- Settings state established from the
+--                            boot/default-loaded config
+--   * data.loadDefaults() -- factory-default state established
+--   * data.save()         -- after persistence returns
+-- Apply, live preview and Revert must NOT refresh it: Apply without
+-- Save is precisely the state Back has to undo.
+-----------------------------------------------------------
+
+local function copyVideo(src)
+    return {
+        width              = src.width,
+        height             = src.height,
+        windowMode         = src.windowMode,
+        uiScale            = src.uiScale,
+        vsync              = src.vsync,
+        frameLimit         = src.frameLimit,
+        msaa               = src.msaa,
+        brightness         = src.brightness,
+        pixelSnap          = src.pixelSnap,
+        textureFilter      = src.textureFilter,
+        tooltipDwellMs     = src.tooltipDwellMs,
+        tooltipHintDelayMs = src.tooltipHintDelayMs,
+    }
+end
+
+data.savedVideo = copyVideo(data.current)
+
+-- Make data.current the new persisted baseline. Callers are the three
+-- refresh points documented above.
+function data.captureSavedVideo()
+    data.savedVideo = copyVideo(data.current)
+end
 
 -----------------------------------------------------------
 -- Autosave state (#913)
@@ -284,6 +330,11 @@ function data.loadDefaults()
         uiScale = uiScale * 1.5
         engine.logInfo("Detected 1080p+ display, scaling UI to: " .. tostring(uiScale))
     end
+    -- The product must stay inside the engine's UI-scale domain (#2198):
+    -- engine.setUIScale REJECTS an out-of-domain value and leaves the
+    -- previous scale in place, so a default above uiScaleMax / 2.5 would
+    -- otherwise silently apply nothing on a 4K display.
+    uiScale = math.max(data.uiScaleMin, math.min(data.uiScaleMax, uiScale))
 
 
     -- Update current state
@@ -300,10 +351,11 @@ function data.loadDefaults()
     data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
     data.current.tooltipHintDelayMs = engine.getTooltipHintDelayMs() or 400
 
-    -- Snapshot brightness/tooltip values for revert
-    data.savedBrightness = data.current.brightness
-    data.savedTooltipDwellMs = data.current.tooltipDwellMs
-    data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
+    -- #2194: factory-default state is a new persisted baseline, so a
+    -- Back taken after Defaults returns to the defaults rather than to
+    -- whatever was on disk before them. This is the refresh point the
+    -- three per-field snapshots used to take here.
+    data.captureSavedVideo()
 
     -- Push all values to engine via individual setters
     engine.setResolution(data.current.width, data.current.height)
@@ -409,9 +461,8 @@ function data.reload()
     data.current.textureFilter = textureFilter or "nearest"
     data.current.tooltipDwellMs = engine.getTooltipDwellMs() or 400
     data.current.tooltipHintDelayMs = engine.getTooltipHintDelayMs() or 400
-    data.savedBrightness = data.current.brightness
-    data.savedTooltipDwellMs = data.current.tooltipDwellMs
-    data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
+    -- #2194: opening Settings establishes the baseline Back returns to.
+    data.captureSavedVideo()
     -- #913: the autosave family has its own engine accessor (it lives in
     -- config/save.local.yaml, not videoConfigRef), so it reloads
     -- alongside rather than through getVideoConfig above.
@@ -572,11 +623,11 @@ function data.save(widgetValues)
     -- #913: persist the just-applied autosave settings to
     -- config/save.local.yaml.
     data.saveSaveConfig()
-    -- Refresh revert snapshots so a later revert restores these saved values,
-    -- not the pre-save ones.
-    data.savedBrightness = data.current.brightness
-    data.savedTooltipDwellMs = data.current.tooltipDwellMs
-    data.savedTooltipHintDelayMs = data.current.tooltipHintDelayMs
+    -- Refresh the baseline so a later revert restores these saved values,
+    -- not the pre-save ones. #2194: this now covers all eleven fields,
+    -- and it runs AFTER persistence so the snapshot is of what actually
+    -- reached disk.
+    data.captureSavedVideo()
     engine.logInfo("Settings saved.")
     return result
 end
@@ -588,60 +639,72 @@ end
 function data.revert()
     engine.logInfo("Reverting settings to saved config...")
 
-    local w, h, wm, uiScale, vs, frameLimit, msaa, brightness,
-          pixelSnap, textureFilter = engine.getVideoConfig()
+    -- #2194: the baseline is data.savedVideo, NEVER engine.getVideoConfig().
+    -- That getter reads the live rvVideoConfigRef, which Apply has already
+    -- overwritten, so reverting to it reverts nothing.
+    local saved = data.savedVideo
 
-    if data.current.windowMode ~= wm then
-        engine.setWindowMode(wm)
+    -- Fields below reach the engine ONLY through data.apply, which moves
+    -- data.current in the same step -- so data.current is an accurate
+    -- record of what the engine holds for them and these guards are
+    -- sound. They are guards rather than unconditional calls because
+    -- several of these setters post to luaToEngineQueue (window
+    -- recreation, swapchain rebuild, texture-filter re-bind): a Back
+    -- that changed nothing must not trigger any of that.
+    if data.current.windowMode ~= saved.windowMode then
+        engine.setWindowMode(saved.windowMode)
     end
-    if data.current.uiScale ~= uiScale then engine.setUIScale(uiScale) end
-    if data.current.frameLimit ~= frameLimit then engine.setFrameLimit(frameLimit) end
-    if data.current.width ~= w or data.current.height ~= h then
-        engine.setResolution(w, h)
+    if data.current.uiScale ~= saved.uiScale then
+        engine.setUIScale(saved.uiScale)
+    end
+    if data.current.frameLimit ~= saved.frameLimit then
+        engine.setFrameLimit(saved.frameLimit)
+    end
+    if data.current.width ~= saved.width
+        or data.current.height ~= saved.height then
+        engine.setResolution(saved.width, saved.height)
+    end
+    if data.current.vsync ~= saved.vsync then
+        engine.setVSync(saved.vsync)
+    end
+    if data.current.msaa ~= saved.msaa then
+        engine.setMSAA(saved.msaa)
+    end
+    if data.current.pixelSnap ~= saved.pixelSnap then
+        engine.setPixelSnap(saved.pixelSnap)
+    end
+    if data.current.textureFilter ~= saved.textureFilter then
+        engine.setTextureFilter(saved.textureFilter)
     end
 
-    if data.current.vsync ~= vs then engine.setVSync(vs) end
-    if data.current.msaa ~= (msaa or 1) then engine.setMSAA(msaa or 1) end
+    -- Brightness and the two tooltip delays are LIVE-PREVIEWED: the
+    -- graphics-tab sliders call the engine setter directly and write
+    -- only data.pending (graphics_tab.lua), so for these three
+    -- data.current is NOT a record of what the engine holds and the
+    -- guard above would leave a previewed value live. Call them
+    -- unconditionally instead -- as brightness already did.
+    engine.setBrightness(saved.brightness)
+    engine.setTooltipDwellMs(saved.tooltipDwellMs)
+    engine.setTooltipHintDelayMs(saved.tooltipHintDelayMs)
 
-    local revertBrightness = data.savedBrightness or 100
-    engine.setBrightness(revertBrightness)
+    data.current.width              = saved.width
+    data.current.height             = saved.height
+    data.current.windowMode         = saved.windowMode
+    data.current.uiScale            = saved.uiScale
+    data.current.vsync              = saved.vsync
+    data.current.frameLimit         = saved.frameLimit
+    data.current.msaa               = saved.msaa
+    data.current.brightness         = saved.brightness
+    data.current.pixelSnap          = saved.pixelSnap
+    data.current.textureFilter      = saved.textureFilter
+    data.current.tooltipDwellMs     = saved.tooltipDwellMs
+    data.current.tooltipHintDelayMs = saved.tooltipHintDelayMs
 
-    local savedPixelSnap = pixelSnap or false
-    if data.current.pixelSnap ~= savedPixelSnap then
-        engine.setPixelSnap(savedPixelSnap)
-    end
-    local savedTextureFilter = textureFilter or "nearest"
-    if data.current.textureFilter ~= savedTextureFilter then
-        engine.setTextureFilter(savedTextureFilter)
-    end
-
-    local savedDwell = data.savedTooltipDwellMs or 400
-    if data.current.tooltipDwellMs ~= savedDwell then
-        engine.setTooltipDwellMs(savedDwell)
-    end
-
-    local savedHintDelay = data.savedTooltipHintDelayMs or 400
-    if data.current.tooltipHintDelayMs ~= savedHintDelay then
-        engine.setTooltipHintDelayMs(savedHintDelay)
-    end
-
-    data.current.width         = w
-    data.current.height        = h
-    data.current.windowMode    = wm
-    data.current.uiScale       = uiScale
-    data.current.vsync         = vs
-    data.current.frameLimit    = frameLimit
-    data.current.msaa          = msaa or 1
-    data.current.brightness    = revertBrightness
-    data.current.pixelSnap     = savedPixelSnap
-    data.current.textureFilter = savedTextureFilter
-    data.current.tooltipDwellMs = savedDwell
-    data.current.tooltipHintDelayMs = savedHintDelay
-
-    -- #913: Back must abandon unsaved autosave edits too. Re-reads the
-    -- effective config from disk (the last SAVED state) and re-notifies
-    -- the scheduler, mirroring what the video block above does by
-    -- pushing getVideoConfig's values back to the engine.
+    -- #913: Back must abandon unsaved autosave edits too. That family
+    -- has its own on-disk home (config/save.local.yaml) and its own
+    -- engine accessor, so it genuinely CAN re-read the last saved state
+    -- from disk -- which is why it keeps its own revert path rather
+    -- than joining the snapshot above.
     data.revertSave()
 end
 

@@ -84,7 +84,7 @@ collapsed declaration.
 | `construction` | worker-driven build, indexed by `build_progress / build_work` |
 | `appearance` | timed materialisation, indexed by elapsed game time |
 | `built` | the finished loop |
-| `destruction` | declarable, and deliberately not played yet — BDA-3 owns playback |
+| `destruction` | played once, forward, by the transient presentation a demolition captures (BDA-3, #2091) — never by a live instance; must declare `loop: false` and a finite positive `fps`, or the demolition is silent and the declaration is reported |
 
 The derived activity (`Building.Types.currentActivity`) splits with it:
 a positive-`build_work` instance short of its target is `Constructing`,
@@ -175,7 +175,7 @@ from the manager.
   hit-test geometry follow the active camera through `Building.Visual`.
   The committed building DESIGNATION still draws its generic marker;
   #1845 consumes the same boundary when it replaces that.
-- **Destruction.** `destruction` decodes; nothing plays it. BDA-3.
+- **Destruction.** `destruction` is played by `Building.Destruction` (BDA-3, #2091): the `BuildingDestroy` drain captures a render-only effect from the declared clip in the same transition that removes the instance, plays it once from the game clock, and prunes it at `frameCount / fps`. No fallback: a definition without the role is removed with no visual, and a looping, zero-, negative- or non-finite-fps declaration is reported with building/animation context and plays nothing.
 - **Preview direction/lifecycle controls.** The preview keeps decoding
   both forms — its static hint reads canonical `sprites.south` and falls
   back to legacy `sprite`, so an art slice's migration cannot silently

@@ -193,6 +193,7 @@ library
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
                      Engine.Graphics.Config
+                     Engine.Graphics.Config.Domain
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer
                      Engine.Graphics.Vulkan.BufferUtils
@@ -517,6 +518,7 @@ library
                      Building.Knowledge
                      Building.Knowledge.Live
                      Building.Command.Types
+                     Building.Destruction
                      Building.Thread.Command
                      Building.Render
                      Building.Visual
@@ -1434,6 +1436,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
+                   Test.Headless.Building.DestructionPresentation
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

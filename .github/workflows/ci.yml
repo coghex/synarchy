@@ -1127,6 +1127,18 @@ jobs:
         run: |
           python3 tools/review_gate_decision.py --self-test
 
+      # The other half of that gate (#2184): what the workflow DOES with
+      # the decision. The removal used to be `|| true` and the required
+      # check read the event payload, so a strip that failed and a strip
+      # that never reached the required check both looked like a healthy
+      # gate. This pins the applied-and-verified outcome policy and the
+      # review-gate.yml wiring it is useless without --- that workflow
+      # runs on an event no job here ever sees, so nothing else in this
+      # gate set can observe it. Pure, network-free, sub-second.
+      - name: Review-gate label policy self-test
+        run: |
+          python3 tools/review_gate_label_policy.py --self-test
+
       # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
       # check runs in this job and not in tools/ci-local.sh, or the other
       # way round, outside the audit's hard-coded exemption list (CI's

@@ -76,7 +76,11 @@ import GHC.Clock (getMonotonicTimeNSec)
 --   * 'ScUnits' — entries examined in the GLOBAL unit-manager map,
 --     before visible-page, texture or Z filtering.
 --   * 'ScBuildings' — entries examined in the GLOBAL building-manager
---     map, before visible-page, texture or Z filtering.
+--     state: every live instance in its instance map PLUS every stored
+--     destruction effect (#2091's transient, render-only presentation
+--     of a demolished building), before visible-page, texture or Z
+--     filtering. A frame holding only effects is therefore still
+--     measured, not reported as an empty pass.
 --   * 'ScStructures' — structure-piece records examined after their
 --     loaded chunk passes chunk-visibility culling.
 --   * 'ScGhost' — the optional building-ghost candidate: zero or one,

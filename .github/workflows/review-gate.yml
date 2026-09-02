@@ -10,14 +10,15 @@
 #     (red = "review verdict pending", merging blocked)
 #   - reviewer applies `reviewed:approve`  → check PASSES
 #   - a synchronize push that changes this PR's own patch → label
-#     auto-removed (stale approvals don't carry a changed PR through;
-#     re-approve)
+#     auto-removed AND the required check goes red for that head (stale
+#     approvals don't carry a changed PR through; re-approve)
 #   - a synchronize push that leaves this PR's own patch byte-identical
 #     (a "merge base into head" branch update, e.g. from strict branch
 #     protection's up-to-date-with-base requirement being satisfied by
 #     a human clicking "Update branch", or equivalent automation, after
-#     an unrelated sibling PR merges) → label is KEPT (#801 review, the
-#     original review-pr.py flakiness this caused)
+#     an unrelated sibling PR merges) → label is KEPT and the check
+#     stays green (#801 review, the original review-pr.py flakiness this
+#     caused)
 name: review-gate
 
 on:
@@ -25,26 +26,12 @@ on:
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
-  # This job name is the required-status-check context.
-  review-approved:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the reviewed:approve label
-        run: |
-          if [ "${{ contains(github.event.pull_request.labels.*.name, 'reviewed:approve') }}" = "true" ]; then
-            echo "reviewed:approve present — gate open"
-          else
-            echo "no reviewed:approve label — review verdict pending"
-            exit 1
-          fi
-
   # New commits that change this PR's own patch invalidate a prior
   # approval: strip the label so the gate closes until the reviewer
-  # re-approves the updated code. The removal fires an `unlabeled`
-  # event, which re-runs review-approved. A synchronize push that leaves
-  # this PR's own patch identical -- a base-branch update merged forward
-  # with no overlapping content -- leaves the label alone: the reviewed
-  # code hasn't actually changed, only the branch's ancestry has, and
+  # re-approves the updated code. A synchronize push that leaves this
+  # PR's own patch identical -- a base-branch update merged forward with
+  # no overlapping content -- leaves the label alone: the reviewed code
+  # hasn't actually changed, only the branch's ancestry has, and
   # stripping it anyway causes exactly the kind of race that made
   # review-pr.py report a spurious failure (#801 review).
   #
@@ -63,19 +50,36 @@ jobs:
   # case it cannot positively prove is content-free, and a crash, a bad
   # argument or an absent script (a branch that predates #1679) is a
   # non-zero exit too, so the `else` below strips.
+  #
+  # What the decision produces is not a mutation but a REPORT, consumed
+  # by `review-approved` below (#2184). Everything downstream of the
+  # decision used to be fail-open: the removal was `|| true`, so a
+  # refused or failed API call was indistinguishable from a correct
+  # strip, and the required check read the event payload rather than the
+  # result. tools/review_gate_label_policy.py --sync closes both: it
+  # attempts the removal, reads the label state back from GitHub
+  # AUTHORITATIVELY, fails this job when a strip cannot be shown to have
+  # taken effect, and exports the (decision, label) pair the gate needs.
+  # A green run of this job with `reviewed:approve` still present can
+  # therefore only have come from a KEEP, which is exactly what the PR
+  # drainer's branch-update path already assumes.
   dismiss-stale-approval:
     if: github.event.action == 'synchronize'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
+    outputs:
+      decision: ${{ steps.staleness.outputs.decision }}
+      label_present: ${{ steps.staleness.outputs.label_present }}
     steps:
       - name: Check out the pushed branch with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
-      - name: Remove reviewed:approve unless this push is a no-op branch update
+      - name: Decide, apply and verify this push's effect on reviewed:approve
+        id: staleness
         env:
           GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ github.event.before }}
@@ -98,11 +102,84 @@ jobs:
                --after "$AFTER" \
                --base-ref "$BASE_REF" \
                --base-sha "$BASE_SHA"; then
+            DECISION=keep
             echo "this PR's own patch is unchanged -- keeping reviewed:approve"
           else
-            echo "stripping reviewed:approve"
-            # Best effort, exactly as it has always been: the label may
-            # already be absent, and failing the job over that would turn
-            # a correct strip into a red required check.
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label reviewed:approve || true
+            DECISION=strip
+            echo "this PR's own patch changed -- stripping reviewed:approve"
           fi
+          # Applies the decision, verifies it against GitHub, writes the
+          # `decision` and `label_present` outputs, and exits non-zero
+          # when a strip cannot be proven to have taken effect.
+          python3 tools/review_gate_label_policy.py --sync \
+            --decision "$DECISION" \
+            --pr "$PR_NUMBER" \
+            --repo "$REPO"
+
+  # This job name is the required-status-check context.
+  #
+  # It used to answer from `github.event.pull_request.labels`, on the
+  # premise -- stated in this file until #2184 -- that stripping the
+  # label "fires an `unlabeled` event, which re-runs review-approved".
+  # It does not: **GitHub creates no workflow run for an event triggered
+  # by a `GITHUB_TOKEN` label edit**, which is deliberate loop
+  # prevention. So on a synchronize push to an approved PR the payload
+  # still carried `reviewed:approve`, this check went green, and no
+  # later run ever reconsidered it. Verified on PR #1142 (2026-08-06):
+  # `github-actions[bot]` removed the label at 15:19:48 and 23:08:16 and
+  # no review-gate run followed either removal; the 23:08:05 synchronize
+  # run stayed green with the label absent until a human re-labelled at
+  # 23:25.
+  #
+  # So this check no longer reads the payload on a synchronize event. It
+  # waits for `dismiss-stale-approval` to reach a terminal result and
+  # concludes success only when that job succeeded, its decision was
+  # positively KEEP, and its authoritative read found the label present.
+  # A strip, a failed or unverifiable removal, a failed read, a missing
+  # or unrecognised decision, and a dismissal job that did not succeed
+  # all leave this check RED for that head, with no dependence on any
+  # later label event.
+  #
+  # `if: ${{ !cancelled() }}` is load-bearing in both directions. The
+  # dependency is skipped on `opened`, `reopened`, `labeled` and
+  # `unlabeled`, and a `needs:` dependent of a skipped job is skipped
+  # too by default -- which would leave the required check absent on the
+  # very events that first close it and later reopen it. It must also
+  # RUN, not inherit, when the dependency FAILS, because a failed
+  # dismissal has to produce a red required check rather than a missing
+  # one. On those four events the event payload's own label list decides,
+  # exactly as it always has, which is how a reviewer's re-approval
+  # reopens the gate.
+  #
+  # The verdict lives in tools/review_gate_label_policy.py --gate for the
+  # same reason the staleness decision lives in a tools/ script: its
+  # `--self-test` runs in .github/workflows/ci.yml and tools/ci-local.sh
+  # and pins both the policy and this file's wiring, which no other gate
+  # in this repository can observe -- this workflow runs on an event CI
+  # never sees. Running the PR's own copy of that script is the same
+  # trust posture `dismiss-stale-approval` has always had for
+  # review_gate_decision.py: a `pull_request` workflow runs from the
+  # merge ref, so the PR can already edit this file itself.
+  review-approved:
+    needs: [dismiss-stale-approval]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the gate policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Require a live reviewed:approve verdict for this head
+        env:
+          EVENT_ACTION: ${{ github.event.action }}
+          PAYLOAD_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'reviewed:approve') }}
+          DISMISSAL_RESULT: ${{ needs.dismiss-stale-approval.result }}
+          DISMISSAL_DECISION: ${{ needs.dismiss-stale-approval.outputs.decision }}
+          DISMISSAL_LABEL: ${{ needs.dismiss-stale-approval.outputs.label_present }}
+        run: |
+          python3 tools/review_gate_label_policy.py --gate \
+            --event-action "$EVENT_ACTION" \
+            --payload-label "$PAYLOAD_LABEL" \
+            --dismissal-result "$DISMISSAL_RESULT" \
+            --dismissal-decision "$DISMISSAL_DECISION" \
+            --dismissal-label "$DISMISSAL_LABEL"
