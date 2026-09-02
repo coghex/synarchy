@@ -79,10 +79,17 @@ data ConstructDesignation = ConstructDesignation
     { cdZ        ∷ !Int
       -- ^ Surface z captured at designation time.
       --
-      --   A BUILDING marker still renders straight from it, no per-frame
-      --   column reads — the same trick as MineDesignation.
+      --   NEITHER ghost renders straight from it any more. A BUILDING
+      --   ghost draws at the z its stake will land on, read live from
+      --   the anchor's own terrain by the same
+      --   'Building.Placement.buildingAnchorZ' @building.spawn@ stamps
+      --   'biGridZ' from (#1845) — otherwise a terrain edit under a live
+      --   designation would leave the plan at a level the building will
+      --   not land on, and staking would visibly move it. This stored
+      --   value is that ghost's FALLBACK, for a non-resident chunk: the
+      --   one state nobody can answer for.
       --
-      --   A STRUCTURE ghost does not (#1846). This is a SURFACE level and
+      --   A STRUCTURE ghost does not either (#1846). This is a SURFACE level and
       --   the piece sits above it (floor, wall and wire at + 1, a ceiling
       --   at + 2, a post at its supporting floor's z), so the ghost draws
       --   at the final grid z 'World.Construct.Plan' resolves against
