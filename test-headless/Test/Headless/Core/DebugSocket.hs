@@ -30,8 +30,8 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue (tryReadTQueue)
 import Control.Exception
-    ( ArithException(..), Exception, SomeException, bracket, finally
-    , throwIO, toException, try )
+    ( ArithException(..), Exception, IOException, SomeException, bracket
+    , finally, throwIO, toException, try )
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import GHC.Clock (getMonotonicTimeNSec)
 import GHC.IO.Exception (IOErrorType(..))
@@ -551,12 +551,19 @@ readWhile budget keepGoing sock = do
 -- | A reset connection reads as a close: the peer is gone either way,
 --   and which of the two the kernel reports is not this module's
 --   contract.
+--
+--   'IOException' and NOT 'SomeException': the caller wraps this in
+--   'timeout', whose expiry arrives as an ASYNC exception, and a
+--   catch-all here would swallow it and hand back an empty string that
+--   'readWhile' would read as a clean close. That is not hypothetical —
+--   it silently turned every "the peer closed" assertion in this
+--   module into a tautology until a mutation run caught it.
 tryRecv ∷ Socket → IO BS.ByteString
 tryRecv sock = do
     attempt ← try (recv sock 4096)
     case attempt of
-        Left (_ ∷ SomeException) → return BS.empty
-        Right bytes              → return bytes
+        Left (_ ∷ IOException) → return BS.empty
+        Right bytes            → return bytes
 
 -- | Poll a predicate until it holds or the budget expires.
 waitUntil ∷ Int → IO Bool → IO Bool
