@@ -225,23 +225,29 @@ function M.jobPage(uid)
     return require("scripts.unit_ai_page").ofUnit(uid)
 end
 
--- Cancel one building job's designation on the JOB's own page.
+-- Cancel one construction job's designation on the JOB's own page, and
+-- return whatever it had already paid for.
 --
--- `construction.cancelDesignation` resolves the ACTIVE page, which is
--- not necessarily this job's and can move between two Lua calls in the
--- same tick; a cancellation that landed elsewhere would erase a
--- stranger's designation and leave this one standing.
--- `cancelDesignationForRefund` is the page-scoped, exact-attempt pop
--- this module already uses for structures. A building designation
--- carries no receipt (its materials are delivered to the staked
--- instance, not paid at designation time), so the popped job is
--- discarded rather than refunded.
-function M.cancelBuildingJob(wid, job)
-    if construction.cancelDesignationForRefund then
-        construction.cancelDesignationForRefund(wid, job.x, job.y, job.attempt)
-    else
-        construction.cancelDesignation(job.x, job.y, job.attempt)
-    end
+-- The ONE cancellation this module and its caller use, for both
+-- categories. `construction.cancelDesignation` resolves the ACTIVE
+-- page, which is not necessarily this job's and can move between two
+-- Lua calls in the same tick: a cancellation that landed elsewhere
+-- would erase a stranger's designation at the matching coordinate and
+-- leave this one standing.
+-- `cancelDesignationForRefund` is the page-scoped, exact-attempt pop —
+-- and it is atomic, so the receipt cannot be refunded twice by two
+-- callers racing over one entry.
+--
+-- The refund is the popped job's own receipt, so it is right for both:
+-- a structure job that had already paid gets its materials back on the
+-- ground, and a building job never has a receipt at all (its materials
+-- are delivered to the staked instance, not paid at designation time),
+-- so `refundStructureMaterials` returns immediately on its category.
+function M.cancelJob(wid, job)
+    local removed = construction.cancelDesignationForRefund(
+        wid, job.x, job.y, job.attempt)
+    if removed then M.refundStructureMaterials(removed) end
+    return removed
 end
 
 -- Is the building THIS job staked already standing at its anchor?
@@ -333,7 +339,7 @@ function M.stakeBuilding(wid, job, uid, info, now, params)
             return "working"
         end
         core.reportFailure(uid, "Can't build here — blueprint cancelled")
-        M.cancelBuildingJob(wid, job)
+        M.cancelJob(wid, job)
         return "gone"
     end
     if core.distance(info.gridX, info.gridY,
@@ -362,7 +368,7 @@ function M.stakeBuilding(wid, job, uid, info, now, params)
     -- stake landed never reaches here: it still holds the id, and the
     -- check at the top completed it.)
     core.reportFailure(uid, "Can't build here — blueprint cancelled")
-    M.cancelBuildingJob(wid, job)
+    M.cancelJob(wid, job)
     return "gone"
 end
 
@@ -388,9 +394,7 @@ function M.finishPlacement(wid, job, uid)
     -- the caller hands the tile back to the scan pool.
     if finalPlan == "unresolved-terrain" then return "deferred" end
     if finalPlan and finalPlan ~= "valid" then
-        local removed = construction.cancelDesignationForRefund(
-            wid, job.x, job.y, job.attempt)
-        if removed then M.refundStructureMaterials(removed) end
+        M.cancelJob(wid, job)
         reportFailure(uid,
             "Construction site changed — materials returned to the ground")
         return "gone"

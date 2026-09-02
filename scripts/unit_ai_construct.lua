@@ -357,7 +357,13 @@ local function constructExecute(uid, s, params)
                         reason = "resolver refused the site before material "
                                  .. "payment: " .. tostring(plan),
                     }
-                    construction.cancelDesignation(job.x, job.y, job.attempt)
+                    -- #1845: page-scoped, exact-attempt, and it hands
+                    -- back any receipt a predecessor had already paid.
+                    -- The page-blind form would erase whatever sits at
+                    -- this coordinate on whichever page happens to be
+                    -- SELECTED, and leave this job's designation
+                    -- standing while its claim was released.
+                    site.cancelJob(wid, job)
                     releaseConstructJob(wid, s, uid)
                     return
                 end

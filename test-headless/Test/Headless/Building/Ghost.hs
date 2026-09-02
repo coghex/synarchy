@@ -703,7 +703,8 @@ stakePrelude = lns
     -- cancelDesignation is recorded separately so a regression to it is
     -- visible rather than silently equivalent.
     , "  cancelDesignationForRefund = function(w, x, y, at)"
-    , "    calls[#calls+1] = { 'cancel', x, y, at, w }; return nil end,"
+    , "    calls[#calls+1] = { 'cancel', x, y, at, w }"
+    , "    return REMOVED end,"
     , "  cancelDesignation = function(x, y, at)"
     , "    calls[#calls+1] = { 'cancel-pageblind', x, y, at } end }"
     , "engine = { loadYaml = function() return nil end }"
@@ -712,6 +713,10 @@ stakePrelude = lns
     -- getActiveIds/getInfo from; `spawnResult` is what the engine says
     -- about the queued spawn.
     , "world = {}"
+    , "REMOVED = nil"
+    , "refunded = {}"
+    , "item = { spawnGround = function(name)"
+    , "  refunded[#refunded + 1] = name end }"
     , "spawnResult = 1"
     , "spawned = 0"
     , "spawnPage = nil"
@@ -902,6 +907,31 @@ stakeHandoffSpec =
         , "construction.getPendingJobs = function() return nil end"
         , "local got = site.pendingJobsOn('p1', 1, 2, 3, 4)"
         , "assert(type(got) == 'table' and #got == 0)"
+        ]
+
+    it "cancels through ONE page-scoped path that also returns what the\
+       \ job had paid" $ runsOk $ lns
+        [ stakePrelude
+        -- Both categories cancel the same way. The page-blind
+        -- `construction.cancelDesignation` would erase whatever sits at
+        -- this coordinate on whichever page is SELECTED — a stranger's
+        -- designation — and leave this job's own standing while its
+        -- claim was released.
+        , "REMOVED = { category = 'structure', x = 4, y = 7,"
+        , "            receipt = { { name = 'wiring', count = 2 } } }"
+        , "site.cancelJob('p1', job())"
+        , "local c = only('cancel')"
+        , "assert(c[5] == 'p1', 'the cancel names the job page')"
+        , "assert(c[4] == 11, 'and the exact attempt it observed')"
+        , "assert(#refunded == 2 and refunded[1] == 'wiring',"
+        , "  'a paid structure job gets its receipt back on the ground')"
+        -- A building job never carries a receipt, so the same call
+        -- refunds nothing rather than needing a second code path.
+        , "calls = {}; refunded = {}"
+        , "REMOVED = { category = 'building', x = 4, y = 7 }"
+        , "site.cancelJob('p1', job())"
+        , "assert(only('cancel')[5] == 'p1')"
+        , "assert(#refunded == 0, 'a building job has nothing to refund')"
         ]
 
     it "takes the job's page from the ACTING UNIT, never from the active\
