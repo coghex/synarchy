@@ -9,6 +9,8 @@ module Building.Types
     , bdSouthTexture
     , BuildingInstance(..)
     , BuildingGhost(..)
+    , DestructionClip(..)
+    , DestructionEffect(..)
     , BuildingManager(..)
     , emptyBuildingManager
     , nextBuildingId
@@ -166,8 +168,9 @@ data BuildingDef = BuildingDef
       -- ^ Lifecycle role → animation name in bdAnimations (#2080).
       --   Construction, timed appearance, the built loop and
       --   destruction are separately addressable; a definition declares
-      --   only the roles it has art for. 'RoleDestruction' is
-      --   declarable and not yet played — BDA-3 owns that.
+      --   only the roles it has art for. 'RoleDestruction' is played
+      --   ONCE by the transient 'DestructionEffect' a demolition
+      --   captures (#2091, BDA-3) — never by a live instance.
     , bdVisualClass ∷ !BuildingVisualClass
       -- ^ Which art family owns this building's textures (#2080).
       --   Records ownership for the art slices; it changes no
@@ -277,6 +280,59 @@ data BuildingGhost = BuildingGhost
     , bgValid   ∷ !Bool
     } deriving (Show, Eq)
 
+-- | A definition's @destruction@ role, RESOLVED and VALIDATED (#2091):
+--   a finite positive fps, a non-looping clip, and at least one frame.
+--   Built only by 'Building.Destruction.resolveDestructionClip', so
+--   every consumer can assume those invariants instead of re-checking
+--   them per frame.
+--
+--   'dcFrameCount' is the FACING-INDEPENDENT clip length (the longest
+--   facing's count, exactly as 'buildingAnimMaxFrames' derives it): the
+--   effect's duration and expiry come from it alone, so a camera turn
+--   can never re-time playback even where a hand-built clip's four
+--   lists differ in length.
+data DestructionClip = DestructionClip
+    { dcFps        ∷ !Float
+    , dcFrameCount ∷ !Int
+    , dcFrames     ∷ !(FacingAssets (V.Vector TextureHandle))
+    } deriving (Show, Eq)
+
+-- | The transient, render-only presentation of a demolished building
+--   (#2091, BDA-3). Captured by the @BuildingDestroy@ drain in the SAME
+--   manager transition that deletes the live instance, and holding
+--   everything the render pass needs afterwards — so drawing it never
+--   looks the removed building up again, because there is nothing
+--   left to look up.
+--
+--   It is NOT a building. It owns no inventory, storage, footprint
+--   occupancy, selection, knowledge, power, jobs or Lua identity; it
+--   is invisible to every query, hit test, placement check and save
+--   component, all of which walk 'bmInstances' alone. It lives in
+--   'bmDestructions', keyed by the demolished 'BuildingId' — one
+--   effect per identity — until the game clock passes its clip's
+--   duration, when the drain prunes it whether or not anything ever
+--   drew it.
+data DestructionEffect = DestructionEffect
+    { deBuildingId   ∷ !BuildingId
+      -- ^ The identity the effect was captured from — the map key,
+      --   repeated here so a diagnostic can name it.
+    , deDefName      ∷ !Text
+    , dePage         ∷ !WorldPageId
+      -- ^ The removed building's page: an effect on a hidden page is
+      --   counted but never drawn, and resumes at the clock's phase if
+      --   the page is shown again before expiry.
+    , deAnchorX      ∷ !Int
+    , deAnchorY      ∷ !Int
+    , deGridZ        ∷ !Int
+    , deAnchorOffset ∷ !Float
+      -- ^ 'Building.Visual.spriteAnchorOffset' of the definition,
+      --   captured so the geometry no longer needs it.
+    , deClip         ∷ !DestructionClip
+    , deStartedAt    ∷ !Double
+      -- ^ Game-clock seconds at demolition: frame zero. Read from the
+      --   same monotonic, pause-frozen clock as 'biSpawnedAt'.
+    } deriving (Show, Eq)
+
 data BuildingManager = BuildingManager
     { bmDefs      ∷ !(HM.HashMap Text BuildingDef)
     , bmInstances ∷ !(HM.HashMap BuildingId BuildingInstance)
@@ -285,14 +341,21 @@ data BuildingManager = BuildingManager
       -- ^ Single-select for now. Units use a HashSet; buildings stay
       --   single until there's a real multi-select use case. Cleared
       --   automatically when the selected building is destroyed.
+    , bmDestructions ∷ !(HM.HashMap BuildingId DestructionEffect)
+      -- ^ Every destruction presentation still playing (#2091), keyed
+      --   by the demolished building's id. Session-transient by design:
+      --   never persisted, empty in every freshly constructed manager
+      --   (boot, load replacement, 'BuildingClearAll'), and pruned by
+      --   the building command drain against the game clock.
     } deriving (Show, Eq)
 
 emptyBuildingManager ∷ BuildingManager
 emptyBuildingManager = BuildingManager
-    { bmDefs      = HM.empty
-    , bmInstances = HM.empty
-    , bmNextId    = 1
-    , bmSelected  = Nothing
+    { bmDefs         = HM.empty
+    , bmInstances    = HM.empty
+    , bmNextId       = 1
+    , bmSelected     = Nothing
+    , bmDestructions = HM.empty
     }
 
 nextBuildingId ∷ BuildingManager → (BuildingId, BuildingManager)

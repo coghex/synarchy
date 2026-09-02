@@ -12,9 +12,10 @@
 --
 --   BDA-1 introduced the shape; BDA-2 (#2088, 'Building.Visual')
 --   selects the view from the active camera for rendering and
---   hit-testing alike; BDA-3 owns destruction playback, and BDA-13
---   owns the final audit that rejects 'AssetLegacy' declarations from
---   shipped definitions.
+--   hit-testing alike; BDA-3 (#2091, 'Building.Destruction') plays the
+--   destruction role as a transient presentation after the building is
+--   gone, and BDA-13 owns the final audit that rejects 'AssetLegacy'
+--   declarations from shipped definitions.
 --
 --   The as-built reference — canonical YAML, every rejection, the two
 --   independent migration axes, and the loader's registry naming — is
@@ -134,8 +135,10 @@ isLegacyDeclared = (≡ AssetLegacy) ∘ faSource
 --   loop and destruction are separately addressable even when a
 --   particular definition declares only some of them.
 --
---   'RoleDestruction' is declarable here and deliberately not played
---   yet — BDA-3 owns destruction timing and playback.
+--   'RoleDestruction' is played once, forward, by the transient
+--   presentation a demolition captures ('Building.Destruction', BDA-3
+--   / #2091) — never by a live instance, which is gone the moment the
+--   destroy command runs.
 data BuildingRole
     = RoleConstruction
     | RoleAppearance

@@ -1,3 +1,30 @@
+-- | Texture loading and the scene SPRITE primitive family
+--   (@engine.spawnSprite@ / @setPos@ / @setColor@ / @setSize@ /
+--   @setVisible@ / @destroy@). The text primitive family lives in
+--   "Engine.Scripting.Lua.API.Text"; the two share the mutation verbs
+--   here, which act on whichever node kind the id names.
+--
+--   __Where a scene sprite sits relative to UI pages (#2192).__ The
+--   @layer@ argument is the sprite's render 'LayerId', and
+--   'World.Grid.uiLayerThreshold' (10) splits it in two:
+--
+--   * BELOW the threshold the sprite is world content: positioned in
+--     world units, frustum-culled, and interleaved by depth with the
+--     tiles and units of that layer through the same painter's merge.
+--   * AT or ABOVE it the sprite is a UI-pipeline quad in framebuffer
+--     pixels (origin top-left, @x@\/@y@ its CENTRE), never culled, and
+--     drawn as its own item at exactly that layer — above every world
+--     layer, and ordered against the UI pages' elements by layer number.
+--     Pages start at the threshold and climb by 'UI.Types.uiLayerBand'
+--     (HUD at the base, menus and modals in the tens of thousands, the
+--     debug band highest), so a layer just above 10 sits under every
+--     page while a layer above the debug band sits over all of them.
+--
+--   Within ONE layer the frame draws every sprite before every text, and
+--   within either kind world-derived content first, then scene
+--   primitives, then UI-page elements ("Engine.Scene.Assembly"). Every
+--   mutation is picked up by the next frame; an invisible or destroyed
+--   node draws nothing.
 module Engine.Scripting.Lua.API.Graphics
   ( loadTextureFn
   , getTextureSizeFn
