@@ -1239,6 +1239,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Load.Status
+                   Test.Headless.Load.Terminalize
                    Test.Headless.Load.ReplacementTeardown
                    Test.Headless.Save.Snapshot
                    Test.Headless.World.ArenaSeed
@@ -1525,4 +1526,10 @@ test-suite synarchy-test-headless
                 -- process, which nothing in-process can imitate: POSIX
                 -- record locks never conflict within one process.
                 , process
+                -- Test.Headless.Load.Terminalize's root-proof unreadable
+                -- legacy save is a Unix-domain socket bound at
+                -- saves/<name>.synworld (#2162): open(2) fails on it for
+                -- every user, root included, where a permission-bit
+                -- fixture would pass vacuously in CI's root container.
+                , network
     ghc-options: "-with-rtsopts=-N -A128M"

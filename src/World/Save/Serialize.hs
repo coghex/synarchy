@@ -211,6 +211,13 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     -- conservative 'LoadPaused' — genuinely all that's known without
     -- deeper instrumentation of this rare, deprecated path, and exactly
     -- what it reported before issue #1919.
+    --
+    --   The read below is deliberately bare: a throwing 'BS.readFile'
+    --   (permission error, a special file at the path, the file vanishing
+    --   after the existence check) propagates as an 'IOException', and
+    --   since #2162 the caller's 'guardAcceptedLoad' terminalizes the
+    --   accepted transaction with it, so it can no longer strand the
+    --   load status at 'LoadPaused'.
     decodeLegacyFile path = do
         bytes ← BS.readFile path
         let result = do
