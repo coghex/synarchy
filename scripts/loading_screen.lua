@@ -628,8 +628,22 @@ function loadingScreen.onFramebufferResize(width, height)
         -- self-contained re-show (loadingScreen.phase is this screen's
         -- own visibility proxy — "loading" while shown, "idle"/"done"
         -- once hidden).
+        --
+        -- #2203: "failed" is on-screen too — a terminal startup failure
+        -- stays up for good — so it counts as visible here. It also
+        -- needs REPAINTING: createUI() builds fresh widgets carrying
+        -- `statusText` ("Loading...") and an empty bar, which would
+        -- otherwise replace the retained failure message and its frozen
+        -- progress with a screen that reads like a boot still running.
+        -- This is the loading screen's ONE rebuild entry point
+        -- (scripts/ui/responsive.lua fans every resize and UI-scale
+        -- reflow through it), so repainting here covers both.
         local wasVisible = loadingScreen.phase == "loading"
+                        or loadingScreen.phase == "failed"
         loadingScreen.createUI()
+        if loadingScreen.phase == "failed" then
+            loadingScreen.paintStartup(require("scripts.startup_loader"))
+        end
         if wasVisible and loadingScreen.page then
             UI.showPage(loadingScreen.page)
         end

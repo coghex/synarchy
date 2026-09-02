@@ -301,7 +301,7 @@ bootStubs =
     , "scripts.world_manager", "scripts.world_view", "scripts.save_browser"
     , "scripts.hud", "scripts.test_arena", "scripts.pause_menu"
     , "scripts.build_tool_remote_warning", "scripts.lib.session_teardown"
-    , "scripts.ui.panel"
+    , "scripts.ui.panel", "scripts.debug"
     ]
 
 -- | Boot the real @uiManager@ the way the engine does, on one profile.
@@ -320,7 +320,12 @@ bootPrelude sc profile = T.unlines $ enginePrelude sc ⧺
     -- Any stub member is a function answering numbers, so the real
     -- createUI's layout arithmetic runs instead of erroring on nil.
     , "local function anyFn() return function() return 0, 0 end end"
-    , "UI = setmetatable({}, {__index = anyFn})"
+    , "nextWidget, shownPages = 0, {}"
+    , "UI = setmetatable({"
+    , "  newPage  = function() nextWidget = nextWidget + 1"
+    , "                        return nextWidget end,"
+    , "  showPage = function(p) shownPages[#shownPages + 1] = p end,"
+    , "}, {__index = anyFn})"
     ]
     ⧺ [ "package.preload['" <> m <> "'] = function()"
         <> " return setmetatable({}, {__index = anyFn}) end"
@@ -331,7 +336,6 @@ bootPrelude sc profile = T.unlines $ enginePrelude sc ⧺
     -- status line and the progress the screen actually carries can be
     -- read back rather than inferred from the loader's own state.
     ⧺ [ "labelTexts, barProgress = {}, {}"
-      , "local nextWidget = 0"
       , "package.preload['scripts.ui.label'] = function()"
       , "  return setmetatable({"
       , "    new = function() nextWidget = nextWidget + 1"
@@ -354,10 +358,16 @@ bootPrelude sc profile = T.unlines $ enginePrelude sc ⧺
       , "uiManager.showMenu = function(n) menus[#menus + 1] = tostring(n) end"
       , "package.loaded['scripts.ui_manager'] = uiManager"
       , "require('scripts.ui_manager_boot')"
+      -- The real post-resize reflow set boot's own resize handler
+      -- calls; every module it pulls in is already stubbed above.
+      , "require('scripts.ui_manager_resize')"
       , "SL = require('scripts.startup_loader')"
       , "LS = require('scripts.loading_screen')"
       -- The real boot sequence: init, a framebuffer, then both fonts
       -- arriving is what makes checkReady act.
+      -- The one rebuild entry point every resize and UI-scale reflow
+      -- reaches (scripts/ui/responsive.lua fans them all through it).
+      , "function resize(w, h) uiManager.onFramebufferResize(w, h) end"
       , "function boot(frames)"
       , "  uiManager.init(1)"
       , "  uiManager.onFramebufferResize(800, 600)"
@@ -378,6 +388,11 @@ bootPrelude sc profile = T.unlines $ enginePrelude sc ⧺
       , "      f and f.message or '-', tostring(#errors),"
       , "      labelTexts[LS.statusLabelId] or '-',"
       , "      string.format('%.6f', barProgress[LS.barId] or -1),"
+      -- The page currently on screen, or '-' when the last thing shown
+      -- is not the page the screen now owns (a rebuild that was never
+      -- re-shown leaves exactly that).
+      , "      (shownPages[#shownPages] == LS.page) and 'shown'"
+      , "        or 'hidden',"
       , "    }, '\\1')"
       , "end"
       ]
@@ -394,13 +409,19 @@ data Boot = Boot
     , bErrors    ∷ Int
     , bStatus    ∷ Text  -- ^ the text the status LABEL is left carrying
     , bBar       ∷ Text  -- ^ the progress the BAR is left carrying
+    , bShown     ∷ Text  -- ^ @shown@ when the page it owns is on screen
     } deriving (Show, Eq)
 
 runBoot ∷ Scenario → Text → IO Boot
-runBoot sc profile = do
-    out ← inVM (bootPrelude sc profile) "boot(400) return bootReport()"
+runBoot = runBootThen ""
+
+-- | Boot, then run one extra Lua statement before reporting.
+runBootThen ∷ Text → Scenario → Text → IO Boot
+runBootThen after sc profile = do
+    out ← inVM (bootPrelude sc profile)
+              ("boot(400) " <> after <> " return bootReport()")
     pure $ case T.splitOn "\1" out of
-        [ph, ms, bd, cp, ld, fl, msg, errs, status, barAt] →
+        [ph, ms, bd, cp, ld, fl, msg, errs, status, barAt, shown] →
             Boot { bPhase    = ph
                  , bMenus    = [ m | m ← T.splitOn "," ms, not (T.null m) ]
                  , bBootDone = bd ≡ "true"
@@ -411,8 +432,9 @@ runBoot sc profile = do
                  , bErrors   = readInt errs
                  , bStatus   = status
                  , bBar      = barAt
+                 , bShown    = shown
                  }
-        _ → Boot out [] False (-1) False False out (-1) out out
+        _ → Boot out [] False (-1) False False out (-1) out out out
   where
     readInt t | T.all isDigit t, not (T.null t) = read (T.unpack t)
               | otherwise                       = -1
@@ -688,6 +710,7 @@ spec = describe "Startup readiness" $ do
             bComplete b `shouldBe` 1
             bStatus b   `shouldBe` "Complete!"
             bBar b      `shouldBe` "1.000000"
+            bShown b    `shouldBe` "shown"
 
         it "normal boot: a parse failure stops at 'failed', logs no \
            \completion, runs no finishStartupBoot and shows no menu" $ do
@@ -705,6 +728,7 @@ spec = describe "Startup readiness" $ do
             -- and the bar is left short of full.
             bStatus b   `shouldBe` bMessage b
             bBar b      `shouldSatisfy` (< "1.000000")
+            bShown b    `shouldBe` "shown"
 
         it "normal boot: an empty family directory does the same" $ do
             b ← runBoot (Scenario ["data/units"] []) "normal"
@@ -732,6 +756,31 @@ spec = describe "Startup readiness" $ do
             -- this is also the proof that runArenaStartup showed it.
             bStatus b   `shouldBe` bMessage b
             bBar b      `shouldSatisfy` (< "1.000000")
+            bShown b    `shouldBe` "shown"
+
+        -- Round-1 review: a resize (and, through the same one entry
+        -- point, a UI-scale reflow) DESTROYS and rebuilds this page.
+        -- Only "loading" counted as visible, and createUI's fresh
+        -- widgets carry statusText and an empty bar -- so a failed
+        -- startup came back as a hidden page that, if shown, would have
+        -- read like a boot still in progress.
+        forM_ [ ("normal", Scenario [] ["data/recipes/b.yaml"])
+              , ("arena",  Scenario [] ["data/buildings/a.yaml"]) ]
+            $ \(profile, sc) →
+            it (T.unpack profile ⧺ " boot: a resize after the failure \
+                \keeps the message, the frozen bar and the page on \
+                \screen") $ do
+                before ← runBoot sc profile
+                b ← runBootThen "resize(1024, 768)" sc profile
+                bShown b  `shouldBe` "shown"
+                bStatus b `shouldBe` bMessage b
+                bBar b    `shouldBe` bBar before
+                -- and it is still terminal on the other side of the
+                -- rebuild
+                bPhase b    `shouldBe` "failed"
+                bMenus b    `shouldBe` []
+                bBootDone b `shouldBe` False
+                bComplete b `shouldBe` 0
 
     ------------------------------------------------------------------
     describe "every binding's result tells a broken file from an empty \
