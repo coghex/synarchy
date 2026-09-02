@@ -8,10 +8,13 @@ this file describes what the tree actually does today.
 
 Owners: `Building.Schema` (the vocabulary), `Engine.Asset.YamlBuildings`
 (decoding + rejection), `Engine.Scripting.Lua.API.Buildings.Yaml` (the
-loader conversion), `Building.Types` / `Building.Render` (the runtime).
+loader conversion), `Building.Types` (the runtime record),
+`Building.Visual` (the facing-aware selection / geometry boundary, §8),
+`Building.Render` / `Building.HitTest` (its two consumers).
 Gate: hspec `--match "building asset schema and lifecycle roles"`, plus
 `--match "Workbench construction animation"` /
-`"Machine Shop construction animation"` for the shipped-asset contract.
+`"Machine Shop construction animation"` for the shipped-asset contract,
+and `--match "Building camera-facing visuals"` for §8.
 
 ## 1. Four camera facings, never eight unit directions
 
@@ -161,13 +164,17 @@ indistinguishable from a real four-facing declaration.
 
 The build menu's pinned icon (`building_<name>_ui`, #2075's dual-use
 pair) is the SOUTH view, and `BuildingInstance.biTexture` is the south
-view copied at placement and re-resolved from `biDefName` at load.
+view copied at placement and re-resolved from `biDefName` at load. Neither
+is what the world draws: the rendered and hit-tested view is the active
+camera's (§8), and `biTexture` is read only when the definition is missing
+from the manager.
 
 ## 7. What this slice deliberately does NOT do
 
-- **Camera selection.** Rendering still reads the south view
-  (`bdSouthTexture`, `facingAsset FaceSouth`). BDA-2 owns making placed,
-  ghosted, designated and hit-test geometry follow the active camera.
+- **Camera selection** landed as BDA-2 (#2088, §8): placed, ghosted and
+  hit-test geometry follow the active camera through `Building.Visual`.
+  The committed building DESIGNATION still draws its generic marker;
+  #1845 consumes the same boundary when it replaces that.
 - **Destruction.** `destruction` decodes; nothing plays it. BDA-3.
 - **Preview direction/lifecycle controls.** The preview keeps decoding
   both forms — its static hint reads canonical `sprites.south` and falls
@@ -182,3 +189,68 @@ view copied at placement and re-resolved from `biDefName` at load.
 - **Persistence.** No orientation is stored, `BuildingInstanceSnapshot`
   is unchanged, and no save version moved. An in-flight build reloads
   under the construction role at the same progress.
+
+## 8. Camera selection and the render / hit-test ownership rule (BDA-2, #2088)
+
+`Building.Visual` is the ONE facing-aware boundary, and it is pure:
+every function takes the camera facing, the instance, the definition,
+the game clock / progress and the texture-size table as explicit
+arguments, because the scanned render entry points emit nothing without
+a texture system (the headless state) and the agreement below has to be
+assertable without a GPU.
+
+- **Selection.** The camera facing maps DIRECTLY onto the declared
+  view — `FaceSouth` → south, `FaceWest` → west, `FaceNorth` → north,
+  `FaceEast` → east (`facingAsset`). It is never composed with a stored
+  building orientation: `BuildingInstance` carries none and none was
+  added, so no save field moved. `pickBuildingFrame facing now inst def`
+  picks the lifecycle frame from the SELECTED direction's own frame
+  list; `placedBuildingVisual` wraps it with the two other cases — a
+  placed pre-delivery ghost shows the facing's STATIC view (flagged, and
+  drawn at 0.6 alpha), and an instance whose definition is missing from
+  the manager shows its stamped `biTexture`, facing-blind, on both
+  sides. `previewBuildingTexture` is the placement preview's static
+  view, and the one #1845's designation ghost consumes.
+- **Lifecycle is facing-independent.** `currentActivity` takes no
+  facing: construction indexes on `biBuildProgress / bdBuildWork`, the
+  timed roles on elapsed game time × fps (looped or clamped), and a
+  Built building without a `built` clip pins its lifecycle role's last
+  frame. The SAME rule is applied to the selected direction's REAL
+  count, so a direction with fewer frames (reachable until BDA-13
+  enforces counts) derives its index from its own length at the same
+  progress fraction, and an EMPTY direction falls back to that facing's
+  static sprite, never south's. A camera turn cannot flip Constructing /
+  Appearing / Built, and restarts, advances or rewinds nothing.
+- **Geometry.** `buildingQuadRect` sizes the quad from the SELECTED
+  handle's pixel size (the base tile size for a handle the table does
+  not know), centres it on the footprint's anchor tile and puts its
+  bottom edge on that tile's iso bottom plus `spriteAnchorOffset`
+  (`tile_bottom` drops it by `tileSideHeight`; `diamond_bottom` and a
+  missing definition do not) — at every facing. Rotation changes the
+  selected canvas and the projection; footprint, grid position, grid z
+  and sort ownership are untouched. The placed sort key is
+  texture-independent; the ghost preview's key keeps its canvas-height
+  term, so a facing with a taller canvas legitimately sorts the GHOST
+  differently.
+- **Ownership.** `Building.Render.buildingToQuad` and
+  `Building.HitTest.hitTestBuildingAt` both read `placedBuildingQuad`;
+  the placement preview reads `previewBuildingTexture` +
+  `buildingQuadRect`. Neither consumer decides an asset or a rect on its
+  own, so a click inside the visible quad targets that building and a
+  pixel lying only inside another view's bounds — the south sprite after
+  a rotation, or the un-dropped rect of a `tile_bottom` building — does
+  not, for a clickable pre-delivery ghost as much as a built one.
+  Everything else in the hit test is policy, not geometry, and is
+  unchanged: the active world only, the z-slice / view-depth band, the
+  degenerate-window guard, highest grid z wins, equal-z ties go to the
+  closer quad centre, and it stays quad-based rather than per-pixel.
+- **Outside the facing domain.** The build menu's `iconTex` is
+  `bdIconTexture`, the pinned south view; `bdSouthTexture` and
+  `biTexture` stay the camera-blind south handle for it and for the
+  def-missing fallback. A legacy declaration renders FaceSouth's output
+  at every facing by construction (one value in all four views).
+
+Gate: hspec `--match "Building camera-facing visuals"` — asymmetric
+fixtures (four distinct static handles and frame lists, a different
+canvas per facing) through the pure quad builders AND the real
+`hitTestBuildingAt` on a headless engine.

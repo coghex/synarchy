@@ -14,6 +14,8 @@ module Engine.Scripting.Lua.API.Items.Ground
     , itemPickupGroundFn
     , itemGetGroundForUnitFn
     , pickupGroundOnPage
+    , spawnSalvageOnPage
+    , worldSpawnLocationSignificantItemFn
     ) where
 
 import UPrelude
@@ -44,6 +46,11 @@ import World.Cursor.Types (CursorState(..))
 import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
                    , WorldGenParams(..), wmWorlds)
 import World.Weather.Ambient (ambientTempAt)
+import Location.Instance
+    ( LocationInstance(..), LocationInstanceId(..)
+    , LocationSignificantItem(..), latchLocationSignificantTaken
+    , lookupLocationInstance, registerLocationSignificantSpawn )
+import Data.List (find)
 
 -- | Resolve which world page a ground-item op targets: a named page
 --   (any in wmWorlds, even hidden / non-active) when a page-id is
@@ -61,6 +68,23 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 --   Spawns an item into the world at float tile coords. Optional
 --   props table: fill, quality, condition and temp (°C — spawns the
 --   item hot/cold; omitted = at ambient, #344).
+--
+--   Answers exactly ONE value, and must keep doing so: the debug
+--   console serializes every return value tab-separated, so a second
+--   one turns @return item.spawnGround(...)@ — which several probes
+--   parse as a bare number — into @"0\t14"@. A caller needing the
+--   spawned item's durable PHYSICAL identity resolves the ground id it
+--   gets back (@item.listGround@ reports @instanceId@ per row).
+--
+--   #917's location provenance does NOT come through here. There is no
+--   public verb that binds an already-spawned item to an obligation:
+--   any such verb is a substitution vector, because the id it is handed
+--   names whatever item is wearing that ground id by the time the call
+--   lands. A caller filling a guaranteed significant slot uses
+--   @world.spawnLocationSignificantItem@ instead, which spawns and
+--   binds in ONE engine-side step, takes the item definition from the
+--   obligation's own persisted @lsiItemDefName@ rather than from the
+--   caller, and removes the item again if the binding is refused.
 --   Resting height derives from terrain at render time, so items on
 --   slopes sit on the incline and items over dug tiles drop with
 --   the terrain. An explicit pageId (slot 5) pins the spawn to that
@@ -136,36 +160,155 @@ itemSpawnGroundFn env = do
             mWs ← Lua.liftIO $ resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
-                    let rng = ucStatRNGRef (toUnitCombatCapability env)
-                    -- Salvage quality and condition are #1421's rules and
-                    -- stay #1421's rules: resolved HERE, in the two draws
-                    -- and the order they always had, then handed to the
-                    -- materializer as root-scoped overrides (#1418). They
-                    -- describe how THIS item came to be lying in the
-                    -- world, so they deliberately do not reach the
-                    -- default contents it spawns holding.
-                    quality ← Lua.liftIO $ rollGroundQuality iDef mQuality rng
-                    condition ← Lua.liftIO $ rollGroundCondition base rng
-                    logger ← Lua.liftIO $
-                        readIORef (ccLoggerRef (toCoreCapability env))
-                    mInst ← Lua.liftIO $ materializeItem im logger rng
-                        (freshItemInstanceId env)
-                        pristineItem { ovFill      = mFill
-                                     , ovQuality   = Just quality
-                                     , ovCondition = Just condition
-                                     , ovTemp      = mTemp }
-                        name
-                    case mInst of
+                    mSpawned ← Lua.liftIO $ spawnSalvageOnPage env ws iDef
+                        name (realToFrac x) (realToFrac y)
+                        mFill mQuality base mTemp
+                    case mSpawned of
                         Nothing → Lua.pushnil >> return 1
-                        Just inst → do
-                            gid ← Lua.liftIO $
-                                atomicModifyIORef' (wsGroundItemsRef ws) $
-                                    spawnGroundItem inst (realToFrac x)
-                                                         (realToFrac y)
+                        Just (gid, _) → do
                             Lua.pushinteger (fromIntegral gid)
                             return 1
                 _ → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
+
+-- | Materialize one SALVAGE item and drop it on @ws@'s ground,
+--   answering @(groundId, instance)@ — the shared core of
+--   @item.spawnGround@ and of #917's atomic
+--   @world.spawnLocationSignificantItem@.
+--
+--   Extracted so the two cannot diverge: a location's guaranteed item
+--   is ordinary ground salvage and must be rolled by #1421's rules, in
+--   #1421's order, exactly as a loot-table drop is. It answers the
+--   materialized instance as well as the ground id because the
+--   significant path has to bind the item's PHYSICAL identity in the
+--   same breath, and re-reading it back off the ground map afterwards
+--   is precisely the window that would let something else be bound
+--   instead.
+spawnSalvageOnPage
+    ∷ EngineEnv → WorldState → ItemDef → Text → Float → Float
+    → Maybe Float → Maybe Float → Maybe GroundConditionBase → Maybe Float
+    → IO (Maybe (Int, ItemInstance))
+spawnSalvageOnPage env ws iDef name x y mFill mQuality base mTemp = do
+    im ← readReadOnlyRef
+        (crvItemManagerRef (toContentRegistriesViewCapability env))
+    let rng = ucStatRNGRef (toUnitCombatCapability env)
+    -- Salvage quality and condition are #1421's rules and stay #1421's
+    -- rules: resolved HERE, in the two draws and the order they always
+    -- had, then handed to the materializer as root-scoped overrides
+    -- (#1418). They describe how THIS item came to be lying in the
+    -- world, so they deliberately do not reach the default contents it
+    -- spawns holding.
+    quality ← rollGroundQuality iDef mQuality rng
+    condition ← rollGroundCondition base rng
+    logger ← readIORef (ccLoggerRef (toCoreCapability env))
+    mInst ← materializeItem im logger rng (freshItemInstanceId env)
+        pristineItem { ovFill      = mFill
+                     , ovQuality   = Just quality
+                     , ovCondition = Just condition
+                     , ovTemp      = mTemp }
+        name
+    forM mInst $ \inst → do
+        gid ← atomicModifyIORef' (wsGroundItemsRef ws) $
+                  spawnGroundItem inst x y
+        pure (gid, inst)
+
+-- | world.spawnLocationSignificantItem(instanceId, slot, x, y
+--   [, pageId]) → bool (#917). Spawn the guaranteed significant item
+--   one placed location owes for one slot, AND bind it to that slot,
+--   in a single engine call.
+--
+--   This is deliberately the ONLY way an obligation is ever filled, and
+--   the reason is what a separate public binding verb would allow: a
+--   caller could spawn or select an unrelated item of the right
+--   definition, bind it to an unbound slot, and pick THAT up. The
+--   location would then never spawn its own guaranteed item —
+--   @scripts\/locations.lua@ skips a bound slot — yet the unrelated
+--   pickup would clear the ruin. Definition and duplicate-identity
+--   checks cannot see that, because the substitute is a perfectly
+--   ordinary item of exactly the right kind.
+--
+--   So Lua never chooses WHICH item fills a slot. It chooses only
+--   WHERE: the definition comes from the obligation's own persisted
+--   'Location.Instance.lsiItemDefName', the item is materialized here,
+--   and the binding names the instance this call just created —
+--   never one looked back up off the ground map, which is the very
+--   window a substitution needs.
+--
+--   The item is ordinary ground salvage, rolled by #1421's rules
+--   through the same 'spawnSalvageOnPage' core @item.spawnGround@ uses,
+--   so a guaranteed reward is worn like anything else found lying in a
+--   ruin.
+--
+--   Answers whether the slot was filled: false for an unresolvable
+--   page, an unknown instance or slot, a slot already bound (which is
+--   how a resuming spawn tells "still owed" from "already done"), an
+--   obligation whose stored definition is no longer registered, or a
+--   materialization failure. Nothing is spawned when the binding
+--   cannot be made — the obligation is checked BEFORE the item exists,
+--   so a refused call leaves no orphan on the ground.
+worldSpawnLocationSignificantItemFn
+    ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldSpawnLocationSignificantItemFn env = do
+    idArg   ← Lua.tointeger 1
+    slotArg ← Lua.tointeger 2
+    xArg    ← Lua.tonumber 3
+    yArg    ← Lua.tonumber 4
+    pageArg ← Lua.tostring 5
+    filled ← case (idArg, slotArg, xArg, yArg) of
+        (Just rawId, Just slot, Just (Lua.Number x), Just (Lua.Number y))
+            | rawId ≥ 0 → Lua.liftIO $ do
+                mWs ← resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
+                case mWs of
+                    Nothing → pure False
+                    Just ws → do
+                        let iid = LocationInstanceId (fromIntegral rawId)
+                        -- Everything is decided from the CURRENT table
+                        -- before anything is created: an obligation
+                        -- that is unknown, already bound, or otherwise
+                        -- unfillable must cost no item.
+                        mOwed ← significantSlotDef ws iid (fromIntegral slot)
+                        im ← readReadOnlyRef (crvItemManagerRef
+                                 (toContentRegistriesViewCapability env))
+                        case mOwed ⌦ \d → (,) d ⊚ HM.lookup d (imDefs im) of
+                            Nothing → pure False
+                            Just (defName, iDef) → do
+                                mSpawned ← spawnSalvageOnPage env ws iDef
+                                    defName (realToFrac x) (realToFrac y)
+                                    Nothing Nothing Nothing Nothing
+                                case mSpawned of
+                                    Nothing → pure False
+                                    Just (gid, inst) → do
+                                        bound ← bindSpawned ws iid
+                                            (fromIntegral slot) defName inst
+                                        -- A binding that loses a race
+                                        -- takes its item back off the
+                                        -- ground rather than leaving an
+                                        -- unowned duplicate reward.
+                                        unless bound $ void $
+                                            atomicModifyIORef'
+                                                (wsGroundItemsRef ws)
+                                                (removeGroundItem gid)
+                                        pure bound
+        _ → pure False
+    Lua.pushboolean filled
+    return 1
+  where
+    significantSlotDef ws iid slot = do
+        mParams ← readIORef (wsGenParamsRef ws)
+        pure $ do
+            p ← mParams
+            inst ← lookupLocationInstance iid (wgpLocationInstances p)
+            entry ← find ((≡ slot) . lsiSlot) (liSignificant inst)
+            guard (isNothing (lsiInstanceId entry))
+            pure (lsiItemDefName entry)
+    bindSpawned ws iid slot defName inst =
+        atomicModifyIORef' (wsGenParamsRef ws) $ \mP → case mP of
+            Nothing → (mP, False)
+            Just p → case registerLocationSignificantSpawn iid slot defName
+                              (iiInstanceId inst) (wgpLocationInstances p) of
+                Just instances' →
+                    (Just p { wgpLocationInstances = instances' }, True)
+                Nothing → (mP, False)
 
 -- | Push ONE @{id, instanceId, defName, kind, x, y, fill, quality,
 --   qualityTier, condition, sharpness, weight}@ ground-item row,
@@ -511,4 +654,43 @@ pickupGroundOnPage env ws uid gid = do
                   then cs { selectedGroundItem = Nothing }
                   else cs
                 , () )
+            -- #917: this is THE authoritative ground→inventory
+            -- boundary, and it is where a location's guaranteed
+            -- significant item is latched as taken — only on a
+            -- successful insert, never on the rollback above, and
+            -- keyed on the item's physical 'iiInstanceId' rather than
+            -- @gid@, which the rollback would already have changed.
+            --
+            -- Deliberately faction-blind and command-blind: requirement
+            -- 3 says the first successful pickup by ANY unit latches
+            -- it, so a nomad looting the ruin counts exactly as an
+            -- acolyte does. Nothing here can ever clear the latch,
+            -- because nothing here writes @False@.
+            --
+            -- Scoped to @ws@, the page the item was taken from, like
+            -- every other write in this function: provenance is
+            -- @(page, instance)@, so consulting another page's table
+            -- could latch an obligation this pickup has nothing to do
+            -- with.
+            --
+            -- Written DIRECTLY rather than queued to the world thread,
+            -- unlike @world.markLocationContentsSpawned@ and its
+            -- siblings, and deliberately: queueing would open a window
+            -- in which the item has already left the ground but its
+            -- obligation is not yet latched. Every write in this
+            -- function is already a direct 'atomicModifyIORef'' on this
+            -- thread, and "World.Thread.Discovery" mutates the very
+            -- same ref the very same way, so the latch lands in the
+            -- same synchronous step as the removal it records.
+            when inserted $
+                atomicModifyIORef' (wsGenParamsRef ws) $ \mP →
+                    ( case mP of
+                        Just p → case latchLocationSignificantTaken
+                                        (iiInstanceId (giInst gi))
+                                        (wgpLocationInstances p) of
+                            Just instances' →
+                                Just p { wgpLocationInstances = instances' }
+                            Nothing → mP
+                        Nothing → mP
+                    , () )
             pure inserted

@@ -104,10 +104,11 @@ function M.onMouseDown(button, x, y)
     -- commit a placement onto a hidden/paused world behind an overlay.
     -- #742 review round 3: that right-click bypass is NOT a pure
     -- cancel for any of these five tools — with no pending anchor,
-    -- build_tool/mine_tool/chop_tool/till_tool/plant_tool's right-click
-    -- branch instead ERASES whatever designation sits under the cursor
-    -- (a real world mutation, see e.g. scripts/build_tool.lua's
-    -- MOUSE_RIGHT case). A modal-blocked right-click reaches here as an
+    -- build_tool/mine_tool/till_tool/plant_tool's right-click branch
+    -- instead ERASES whatever designation sits under the cursor (a real
+    -- world mutation, see e.g. scripts/build_tool.lua's MOUSE_RIGHT
+    -- case), and since #1856 chop's right button is a dedicated ERASE
+    -- gesture with no cancel meaning at all. A modal-blocked right-click reaches here as an
     -- ordinary game-route miss (debug/shell still need first refusal
     -- on it), so exclude UI.isInputBlocked() specifically from the
     -- bypass — the pre-#742 view/pause right-click-cancel behavior
@@ -129,9 +130,12 @@ function M.onMouseDown(button, x, y)
             return
         end
 
-        -- Chop designation tool claims clicks while active (anchor /
-        -- commit / cancel), same left=designate / right=cancel split
-        -- and #154 gate.
+        -- Chop designation tool claims BOTH buttons while active
+        -- (#1856): left arms an add gesture, right an erase, and each
+        -- must be claimed here so neither can fall through to unit
+        -- selection, a context menu or a move order. The effect itself
+        -- lands at RELEASE, through unit_drag_select's shared box
+        -- machinery, not at this press. Same #154 gate.
         local chopTool = require("scripts.chop_tool")
         if chopTool.handleMouseDown(button, x, y) then
             recordClick("chop_tool", nil, x, y)

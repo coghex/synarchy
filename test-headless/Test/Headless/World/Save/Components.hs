@@ -62,7 +62,7 @@ import Location.Types (emptyLocationRegistry)
 import Location.Bounds (AbsBounds(..))
 import Location.Instance
     ( LocationInstance(..), LocationInstances(..), LocationInstanceId(..)
-    , LocationLifecycle(..) )
+    , LocationLifecycle(..), LocationSignificantItem(..) )
 import World.Save.Snapshot.Adapter
     (SaveRequestMeta(..), snapshotSaveMetadata, snapshotToSaveData)
 import World.Save.Types
@@ -70,6 +70,8 @@ import World.Save.Types
     , UnitSnapshot(..), UnitInstanceSnapshot(..)
     , MissingDefRef(..), renderMissingDefRef, missingDefReferences
     , MissingItemDefRef(..), missingItemDefReferences
+    , MissingSignificantItemRef(..), missingSignificantItemReferences
+    , renderMissingSignificantItemRef
     , MissingRecipeRef(..), missingRecipeReferences
     , MissingBillOutputItemRef(..), missingBillOutputItemReferences
     , MissingConstructDefRef(..)
@@ -286,7 +288,7 @@ minimalSaveMetadataV1 = SaveMetadataV1
 --   component payload took. Used to prove the ENVELOPE-level dispatch
 --   recognizes and migrates a hand-built B1 envelope; the historical
 --   byte-for-byte fixture (recovered from git history) lives in
---   "Test.Headless.World.Save.Compat".
+--   "Test.Headless.World.Save.Compat.B1Fixture".
 minimalSaveDataV90 ∷ SaveDataV90
 minimalSaveDataV90 = SaveDataV90
     { sd90Metadata     = minimalFrozenSaveMetadataV90
@@ -335,6 +337,25 @@ minimalGlobals = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just page1
         , lcsX = 7, lcsY = 8, lcsZoom = 3, lcsFacing = FaceEast }
+    }
+
+-- | A placed location owing @entries@ (#917), with every other field
+--   at a value this check never reads.
+significantOwner ∷ [LocationSignificantItem] → LocationInstance
+significantOwner entries = LocationInstance
+    { liId              = LocationInstanceId 1
+    , liDefId           = "ruin_small"
+    , liChunk           = ChunkCoord 0 0
+    , liAnchor          = (8, 8)
+    , liBounds          = AbsBounds 6 6 10 10
+    , liDisplayName     = "Small Ruin"
+    , liGloss           = Nothing
+    , liEtymology       = Nothing
+    , liLifecycle       = LifecycleDiscovered
+    , liContentsSpawned = False
+    , liEncounter       = Nothing
+    , liSignificant     = entries
+    , liClearEventEmitted = False
     }
 
 minimalUnitInstance ∷ [ItemInstance] → UnitInstanceSnapshot
@@ -762,10 +783,19 @@ goldenRichPayloads ∷ [(Text, (Int, Text))]
 goldenRichPayloads =
     [ ("core-session",        (85,   "74d3010096cbbe2b"))
     , ("texture-palette",     (16,   "88201fb960ff6465"))
-      -- #2021 re-pinned: @world-pages@ v9 appends each page's optional
+      -- #2021 re-pinned: @world-pages@ v9 appended each page's optional
       -- generated-world id (17 bytes per page here — a present tag plus
-      -- 128 opaque bits). Only this component's rows move; no other
+      -- 128 opaque bits). Only this component's rows moved; no other
       -- component carries the id.
+      --
+      -- #917 took the component to v10 and did NOT move this row, which
+      -- is correct rather than an oversight: its two obligation fields
+      -- hang off a LOCATION INSTANCE, and these fixture pages carry
+      -- 'defaultWorldGenParams' — an EMPTY instance table — so there is
+      -- no record for them to append to. The v10 layout is pinned where
+      -- it can actually be observed, by
+      -- "a page owing significant contents encodes MORE than the same
+      -- page owing none" below.
     , ("world-pages",         (1340, "70b209601aaa96d0"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
@@ -792,7 +822,8 @@ goldenFullPayloads =
     [ ("core-session",        (85,  "0641eeed95100f9a"))
     , ("texture-palette",     (16,  "88201fb960ff6465"))
       -- #2021 re-pinned, same reason as goldenRichPayloads (one page
-      -- here, so 17 bytes rather than 34).
+      -- here, so 17 bytes rather than 34). #917 left it unmoved for the
+      -- same reason too — this page's location table is empty.
     , ("world-pages",         (700, "e99c20c10976e8b9"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",         (78,  "d70f14ce21048a09"))
@@ -1027,7 +1058,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 9
+            ccVersion worldPagesCodec `shouldBe` 10
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -1165,8 +1196,8 @@ spec = do
     -- ('decodeComponentValue' 's own @ccDecode@ then @ccValidate@
     -- sequence) at EVERY carrier shape, so no historical version
     -- routes around the check: the current 'LocationInstanceDTO' rides
-    -- @world-pages@ v8, frozen 'LocationInstanceDTOv4' rides v7,
-    -- 'LocationInstanceDTOv3' rides v6,
+    -- @world-pages@ v10, frozen 'LocationInstanceDTOv5' rides v8/v9,
+    -- 'LocationInstanceDTOv4' rides v7, 'LocationInstanceDTOv3' rides v6,
     -- 'LocationInstanceDTOv2' rides v4/v5 and 'LocationInstanceDTOv1'
     -- rides v2/v3 (one version per identical carrier shape suffices).
     -- @world-pages@ v1 predates persisted instances and carries no
@@ -1187,7 +1218,9 @@ spec = do
                             , liEtymology       = Nothing
                             , liLifecycle       = LifecycleUnknown
                             , liContentsSpawned = False
-                            , liEncounter       = Nothing }
+                            , liEncounter       = Nothing
+                            , liSignificant     = []
+                            , liClearEventEmitted = False }
                     , lisPendingLegacy = Nothing } }
             -- One box per carrier, all inverted on x, so a failure names
             -- which version leaked rather than which coordinate did.
@@ -1197,12 +1230,22 @@ spec = do
             degenerate = AbsBounds 6 6 6 6
 
             bytesAt ∷ Word32 → AbsBounds → BS.ByteString
-            bytesAt 9 b = S.encode (WorldPagesDTO
+            bytesAt 10 b = S.encode (WorldPagesDTO
                 [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            bytesAt 9 b = S.encode (WorldPagesDTOv9
+                [ PageCoreDTOv9
+                    { pc9PageId = page1
+                    , pc9GenParams = toWorldGenParamsDTOv7 (gpWith b)
+                    , pc9CameraX = 0, pc9CameraY = 0
+                    , pc9TimeHour = 0, pc9TimeMinute = 0
+                    , pc9DateYear = 1, pc9DateMonth = 1, pc9DateDay = 1
+                    , pc9MapMode = ZMDefault, pc9Identity = Nothing
+                    , pc9GeneratedId =
+                        Just (fixtureGeneratedWorldIdForPage page1) } ])
             bytesAt 8 b = S.encode (WorldPagesDTOv8
                 [ PageCoreDTOv8
                     { pc8PageId = page1
-                    , pc8GenParams = toWorldGenParamsDTO (gpWith b)
+                    , pc8GenParams = toWorldGenParamsDTOv7 (gpWith b)
                     , pc8CameraX = 0, pc8CameraY = 0
                     , pc8TimeHour = 0, pc8TimeMinute = 0
                     , pc8DateYear = 1, pc8DateMonth = 1, pc8DateDay = 1
@@ -1244,8 +1287,9 @@ spec = do
                     Right wp → Right (ccValidate worldPagesCodec wp)
 
             carriers ∷ [(String, Word32)]
-            carriers = [ ("v9 / LocationInstanceDTO",   9)
-                       , ("v8 / LocationInstanceDTO",   8)
+            carriers = [ ("v10 / LocationInstanceDTO",  10)
+                       , ("v9 / LocationInstanceDTOv5",  9)
+                       , ("v8 / LocationInstanceDTOv5",  8)
                        , ("v7 / LocationInstanceDTOv4", 7)
                        , ("v6 / LocationInstanceDTOv3", 6)
                        , ("v5 / LocationInstanceDTOv2", 5)
@@ -1337,6 +1381,34 @@ spec = do
             encodedPayloadDigests richSnapshot `shouldBe` goldenRichPayloads
             encodedPayloadDigests fullSnapshot `shouldBe` goldenFullPayloads
 
+        -- The golden rows above are pinned on pages with an EMPTY
+        -- location table, so they cannot witness #917's v10 layout at
+        -- all — which is exactly why an unmoved world-pages row reads
+        -- as a stale pin. This is the observation that settles it: the
+        -- obligation fields DO reach the wire, and the golden fixtures
+        -- simply have no location to carry them.
+        it "a page owing significant contents encodes MORE than the same \
+           \page owing none -- the v10 obligation fields reach the wire, \
+           \which the golden rows above cannot show because their \
+           \location tables are empty" $ do
+            let withInstance entries = (minimalPage page1)
+                    { pgsGenParams = canon (defaultWorldGenParams
+                        { wgpLocationInstances = LocationInstances
+                            { lisNextId        = 2
+                            , lisById          = HM.singleton
+                                (LocationInstanceId 1) (significantOwner entries)
+                            , lisPendingLegacy = Nothing } }) }
+                sizeOf page = case captureSessionSnapshot minimalGlobals [page] of
+                    Left errs → error ("fixture invalid: " <> show errs)
+                    Right s   → sum [ BS.length (rcEncode c s)
+                                    | c ← saveComponentRegistry
+                                    , rcId c ≡ worldPagesComponentId ]
+                owing = sizeOf (withInstance
+                            [LocationSignificantItem 1 "processing_unit"
+                                (Just 7) True])
+                empty' = sizeOf (withInstance [])
+            owing `shouldSatisfy` (> empty')
+
         it "probes EVERY registered component -- a new codec cannot escape \
            \the dispatch invariants below by simply not being listed" $
             map cpId codecProbes `shouldBe` map rcId saveComponentRegistry
@@ -1398,7 +1470,7 @@ spec = do
 
         -- unit-sim gained a third version with #1217's per-request hazard
         -- policy; it is the reader that exercises the rendering between
-        -- the two- and seven-version cases either side of it.
+        -- the two- and nine-version cases either side of it.
         it "reports an unsupported version identically for a THREE-version \
            \reader" $
             decodeErrorOf unitSimCodec 0 BS.empty
@@ -1406,13 +1478,14 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2, v3)")
 
-        it "reports an unsupported version identically for a NINE-version \
+        it "reports an unsupported version identically for a TEN-version \
            \reader" $
-            decodeErrorOf worldPagesCodec 10 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 10
+            decodeErrorOf worldPagesCodec 11 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 11
                     DecodePhase
                     "unsupported schema version \
-                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9)")
+                    \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
+                    \v10)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -2751,6 +2824,69 @@ spec = do
                             (HM.singleton (UnitId 1) u) 10 })
             HS.fromList (map midrDefName missing)
                 `shouldBe` HS.fromList ["first_aid_kit", "ghost_helmet"]
+
+    -- #917: an UNSPAWNED significant obligation names the item the next
+    -- chunk load will try to spawn. A save written before that spawn,
+    -- loaded against a build whose item set has moved on, would
+    -- otherwise publish into a state where the spawn fails forever and
+    -- the location can never clear — the load-path counterpart of the
+    -- authoring-time rejection in
+    -- 'Engine.Asset.YamlLocations.significantItemErrors'.
+    describe "missing significant-obligation item rejection (#917)" $ do
+        let pageOwing entries = [(page1, (minimalWorldPageSave page1)
+                { wpsGenParams = defaultWorldGenParams
+                    { wgpLocationInstances = LocationInstances
+                        { lisNextId = 2
+                        , lisById = HM.singleton (LocationInstanceId 1)
+                            (significantOwner entries)
+                        , lisPendingLegacy = Nothing } } })]
+
+        it "accepts an obligation whose stored item def still resolves" $
+            missingSignificantItemReferences
+                (HS.singleton "processing_unit")
+                (pageOwing [ LocationSignificantItem 1 "processing_unit"
+                                 Nothing False ])
+                `shouldBe` []
+
+        it "flags an UNSPAWNED obligation whose stored item def is gone, \
+           \naming the page, the location, the slot and the def" $
+            case missingSignificantItemReferences HS.empty
+                     (pageOwing [ LocationSignificantItem 3 "ghost_core"
+                                      Nothing False ]) of
+                [r] → do
+                    msirPage r     `shouldBe` page1
+                    msirInstance r `shouldBe` 1
+                    msirSlot r     `shouldBe` 3
+                    msirDefName r  `shouldBe` "ghost_core"
+                    renderMissingSignificantItemRef r `shouldSatisfy`
+                        \m → all (`T.isInfixOf` m)
+                            ["location #1", "slot 3", "ghost_core"]
+                other → expectationFailure
+                    ("expected one finding, got " <> show other)
+
+        it "IGNORES an obligation that already names a spawned item, \
+           \however its def has since fared -- nothing re-spawns a bound \
+           \slot, so its def name is a historical record and the item \
+           \may legitimately have been consumed or destroyed" $ do
+            missingSignificantItemReferences HS.empty
+                (pageOwing [ LocationSignificantItem 1 "ghost_core"
+                                 (Just 900) False ])
+                `shouldBe` []
+            missingSignificantItemReferences HS.empty
+                (pageOwing [ LocationSignificantItem 1 "ghost_core"
+                                 (Just 900) True ])
+                `shouldBe` []
+
+        it "reports every unspawned offender on the page, and only those" $
+            map msirSlot (missingSignificantItemReferences
+                (HS.singleton "processing_unit")
+                (pageOwing
+                    [ LocationSignificantItem 1 "processing_unit" Nothing False
+                    , LocationSignificantItem 2 "ghost_core" Nothing False
+                    , LocationSignificantItem 3 "ghost_core" (Just 901) True
+                    , LocationSignificantItem 4 "other_ghost" Nothing False
+                    ]))
+                `shouldBe` [2, 4]
 
     -- #1090: the three item enumerations became one. These pin what
     -- unification is FOR — that every consumer observes every

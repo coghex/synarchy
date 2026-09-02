@@ -88,7 +88,8 @@ import World.State.Types
 import World.Thread.Command.Cursor
     ( handleWorldCancelChopCommand, handleWorldCancelConstructCommand
     , handleWorldCancelPlantCommand, handleWorldCancelTillCommand
-    , handleWorldDesignateChopCommand, handleWorldDesignateConstructCommand
+    , handleWorldDesignateChopInstancesCommand
+    , handleWorldDesignateConstructCommand
     , handleWorldDesignateMineCommand, handleWorldDesignatePlantCommand
     , handleWorldDesignateTillCommand, handleWorldSetConstructStatusCommand
     , handleWorldSetMineAnchorCommand )
@@ -223,6 +224,13 @@ treesEverywhere coord = emptyFloraChunkData
             }
         | lx ← [0 .. chunkSize - 1 ∷ Int], ly ← [0 .. chunkSize - 1 ∷ Int] ]
     }
+
+-- | The id 'treesEverywhere' gave the tree standing on a canonical
+--   global tile — what #1856's exact-identity chop commit selects by.
+treeIdAt ∷ (Int, Int) → FloraInstanceId
+treeIdAt (gx, gy) =
+    let (coord, (lx, ly)) = globalToChunk gx gy
+    in fixtureFloraId coord lx ly "probe_tree"
 
 -- | 'fixtureFloraId' for a CANONICAL global tile — what a test that
 --   pins per-instance state (a regrowth timer, a designation) needs, now
@@ -510,14 +518,17 @@ engineSpec = beforeAll setup $ do
       keysOf (wsConstructDesignationsRef ws) `shouldReturn` drawnKeys
 
     it "chop" $ \(env, _) → do
+      -- #1856: chop commits an exact set of PLANT identities, not a
+      -- tile rectangle, so what the frame contract has to hold for is
+      -- the tile each designation RECORDS. A seam-spanning selection
+      -- names trees whose chunks are stored a whole world apart along
+      -- u; every one of them must record its canonical tile.
       ws ← resetPage env 0 treesEverywhere
       writeIORef (floraCatalogRef env) woodCatalog
       logger ← readIORef (loggerRef env)
-      handleWorldDesignateChopCommand env logger fixturePage
-          (fst anchorTile) (snd anchorTile)
-          (fst farTilePicked) (snd farTilePicked) "wood"
-      -- #1854: the map is keyed by PLANT now, so the frame contract is
-      -- checked on the canonical TILE each designation records.
+      let selected = [ treeIdAt tile | tile ← drawnKeys ]
+      handleWorldDesignateChopInstancesCommand env logger fixturePage
+          selected "wood"
       designatedTiles ws `shouldReturn` drawnKeys
 
   describe "Till is restricted to level ground" $ do
@@ -589,11 +600,11 @@ engineSpec = beforeAll setup $ do
               (\cs → cs { constructAnchor = Just anchorTile })
       unarmed `shouldBe` 0
 
-    it "chop" $ \(env, _) → do
-      ws ← resetPage env 0 noFlora
-      n ← previewQuadCount env ws ChopTool
-              (\cs → cs { chopAnchor = Just anchorTile })
-      n `shouldBe` length drawnKeys
+    -- #1856 removed chop's anchor→hover preview entirely: its gesture
+    -- is a screen-space press-drag whose box is a UI overlay
+    -- (scripts/unit_drag_select.lua), so the world render pass has no
+    -- chop rectangle to build and no seam frame to hold for. The
+    -- commit half above is where chop's frame contract now lives.
 
     it "till" $ \(env, _) → do
       ws ← resetPage env 0 noFlora

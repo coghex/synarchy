@@ -486,6 +486,22 @@ def main() -> int:
     return 1 if leftover else rc
 
 
+def load_items(port: int) -> None:
+    """Register every shipped item definition.
+
+    Required before `data/locations/ruin_small.yaml` will load at all:
+    since #917 a location's guaranteed significant content must resolve
+    against the item registry, and engine.loadLocationYaml rejects the
+    whole file when it does not. This is the same order
+    scripts/startup_loader.lua uses and data/locations/*.yaml's own
+    header states. The probe's OWN fixture YAMLs (THIN/DENSE) author no
+    significant content, so they need nothing here."""
+    send(port, "local fs = engine.listFiles('data/items', '.yaml') or {}; "
+               "for _, f in ipairs(fs) do "
+               "engine.loadItemYaml('data/items/' .. f) end; return #fs",
+         timeout=30.0)
+
+
 def run(args, root: str, token: str) -> int:
     slot_overlay = f"loc_overlay_probe_{token}"
     slot_centre = f"loc_centre_probe_{token}"
@@ -499,6 +515,7 @@ def run(args, root: str, token: str) -> int:
     #      are not lost. ----
     proc = boot_isolated(args.port, root)
     try:
+        load_items(args.port)
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
         # The stamper is auto-loaded at boot by scripts/init.lua (as in the
         # real game), so we only have to register the location defs here.
@@ -607,6 +624,7 @@ def run(args, root: str, token: str) -> int:
         # Load the defs + stamper as the game does at boot, then visit each
         # ruin's chunk. Each must materialize from the persisted overlay even
         # though the save contained no stamped geometry for it.
+        load_items(args.port)
         send(args.port, "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
         # The stamper is auto-loaded at boot by scripts/init.lua (as in the
         # real game), so we only have to register the location defs here.
@@ -769,6 +787,7 @@ def run(args, root: str, token: str) -> int:
         # then independently reproducible from its own command line.
         proc = boot_isolated(args.port, root)
         try:
+            load_items(args.port)
             send(args.port,
                  "engine.loadLocationYaml('data/locations/ruin_small.yaml'); return 'ok'")
             send(args.port, f"world.init('mx', {seed}, {size}, {plates}); return 'ok'")

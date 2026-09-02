@@ -17,17 +17,22 @@ import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
+import qualified Data.HashSet as HS
 import qualified Data.Yaml as Yaml
 import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
+    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
+    , listDirectory )
 import System.FilePath ((</>))
+import Data.List (sort)
+import Data.Foldable (toList)
+import qualified Data.Aeson.KeyMap as KeyMap
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
 import Engine.Asset.YamlLocations
     ( LocationYamlBounds(..), LocationYamlContent(..), LocationYamlCountRange(..)
     , LocationYamlDef(..), LocationYamlFile(..), authoredLocationCoordinateLimit
-    , loadLocationYaml )
+    , loadLocationYaml, significantItemErrors )
 import Location.Bounds
 
 decodeBounds ∷ BS.ByteString → Either String LocationYamlBounds
@@ -61,6 +66,36 @@ rejectedNamingFields lid fields =
 
 decodeFile ∷ BS.ByteString → Either String LocationYamlFile
 decodeFile = either (Left . show) Right . Yaml.decodeEither'
+
+-- | One decoded definition as a single-element list, for the checks
+--   that take the whole file's defs. Fails the example loudly rather
+--   than silently reporting no errors over an empty list — which is
+--   what a fixture that stopped parsing would otherwise look like.
+decodedDefs ∷ BS.ByteString → [LocationYamlDef]
+decodedDefs raw = case decodeDef raw of
+    Right d  → [d]
+    Left err → error ("Bounds fixture failed to decode: " <> err)
+
+-- | Every item def name the shipped @data/items@ tree registers, read
+--   the way the engine reads it: one file at a time, off disk. Used to
+--   prove the shipped ruin's guaranteed item is a real item rather
+--   than a name that merely looks plausible.
+shippedItemNames ∷ IO (HS.HashSet Text)
+shippedItemNames = do
+    files ← listDirectory "data/items"
+    fmap (HS.fromList . concat) $ forM (sort files) $ \f → do
+        raw ← Yaml.decodeFileEither ("data/items" </> f)
+        case raw ∷ Either Yaml.ParseException Yaml.Value of
+            Left err → error ("data/items/" <> f <> ": " <> show err)
+            Right v  → pure (itemNamesOf v)
+  where
+    itemNamesOf v = case v of
+        Yaml.Object o → case KeyMap.lookup "items" o of
+            Just (Yaml.Array xs) →
+                [ n | Yaml.Object e ← toList xs
+                    , Just (Yaml.String n) ← [KeyMap.lookup "name" e] ]
+            _ → []
+        _ → []
 
 spec ∷ Spec
 spec = describe "Location spatial bounds" $ do
@@ -315,6 +350,66 @@ spec = describe "Location spatial bounds" $ do
             -- constant index.
             bad `shouldNotSatisfy` rejectedNamingFields "t" ["content entry 2"]
 
+        -- #917: `significant` marks a GUARANTEED item the owning
+        -- location's clearance predicate waits on. It is legal on a
+        -- fixed `kind: item` entry and on NOTHING else — a loot-table
+        -- draw carrying it would make what a location owes depend on
+        -- what it rolled, and a unit or building could never be picked
+        -- up to discharge the obligation. Rejected HERE rather than at
+        -- spawn time, where warning and skipping would still burn the
+        -- location's exactly-once content lifecycle and leave it
+        -- permanently unclearable.
+        it "rejects `significant` on a loot_table entry" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: loot_table, id: ruin_common,\
+                \                significant: true } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        [ "content entry 1", "'ruin_common'", "'significant'"
+                        , "only for item content", "'loot_table'" ]
+
+        it "rejects `significant` on a unit entry, naming its position" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: item, id: canteen },\
+                \              { kind: unit, id: raider, significant: true } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        [ "content entry 2", "'raider'", "'significant'"
+                        , "'unit'" ]
+
+        it "rejects `significant` on a building entry" $
+            decodeDef
+                "{ id: t, builder: b, naming: { heads: [KEEP], modifiers: [ASH] },\
+                \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                \  contents: [ { kind: building, id: shed,\
+                \                significant: true } ] }"
+                `shouldSatisfy`
+                    rejectedNamingFields "t"
+                        ["content entry 1", "'significant'", "'building'"]
+
+        it "accepts `significant` on an item entry and defaults it to \
+           \false everywhere else -- an entry is incidental unless it \
+           \says otherwise" $
+            fmap (map (\c → (lycId c, lycSignificant c)) . lydContents)
+                (decodeDef
+                    "{ id: t, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: loot_table, id: ruin_common },\
+                    \              { kind: item, id: canteen },\
+                    \              { kind: item, id: processing_unit,\
+                    \                significant: true },\
+                    \              { kind: item, id: radio,\
+                    \                significant: false } ] }")
+                `shouldBe` Right [ ("ruin_common", False)
+                                 , ("canteen", False)
+                                 , ("processing_unit", True)
+                                 , ("radio", False) ]
+
         it "accepts positive multiplicities and retains the authored \
            \values exactly" $
             fmap (map (\c → (lycId c, lycCount c, lycRolls c)) . lydContents)
@@ -441,6 +536,20 @@ spec = describe "Location spatial bounds" $ do
                                 [("nomad_primitive",
                                   Just (LocationYamlCountRange 0 3),
                                   Just "death_only")]
+                        -- #917 requirement 6: the shipped ruin authors
+                        -- EXACTLY ONE guaranteed significant item, so a
+                        -- zero-nomad ruin stays uncleared until it is
+                        -- taken. Pinned by def name, because the reward
+                        -- must stay distinct from `radio` (D-6).
+                        [ lycId c | c ← lydContents def, lycSignificant c ]
+                            `shouldBe` ["processing_unit"]
+                        -- …and the two incidental `ruin_common` rolls
+                        -- keep authored index 1 (#948 keys each draw on
+                        -- the entry's POSITION, so the significant
+                        -- entry is appended, never inserted).
+                        take 1 [ (lycKind c, lycId c, lycRolls c)
+                               | c ← lydContents def ]
+                            `shouldBe` [("loot_table", "ruin_common", 2)]
                     defs → expectationFailure
                         ("expected exactly one location def, got "
                             <> show (length defs))
@@ -584,6 +693,53 @@ spec = describe "Location spatial bounds" $ do
                     other → expectationFailure
                         ("expected exactly one captured log entry, got "
                             <> show (length other))
+
+        -- #917: a guaranteed significant item that resolves against no
+        -- registered def is a HARDER failure than an ordinary content
+        -- id, which may warn and be skipped at spawn time (#90). The
+        -- obligation is created at PLACEMENT, so an item that can never
+        -- spawn leaves the location permanently unclearable — which is
+        -- why 'Engine.Scripting.Lua.API.Locations' rejects the whole
+        -- file on any result here, exactly as it does for a bad naming
+        -- scheme.
+        it "significantItemErrors names every unresolved guaranteed item \
+           \and ignores every incidental id, resolved or not" $ do
+            let registered = HS.fromList ["processing_unit", "rations"]
+                defs = decodedDefs
+                    "{ id: a, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: item, id: processing_unit,\
+                    \                significant: true },\
+                    \              { kind: item, id: no_such_item },\
+                    \              { kind: loot_table, id: no_such_table },\
+                    \              { kind: item, id: ghost_core,\
+                    \                significant: true } ] }"
+            significantItemErrors registered defs
+                `shouldBe` [ "location 'a': guaranteed significant content \
+                             \'ghost_core' names no registered item \
+                             \definition" ]
+
+        it "significantItemErrors accepts a file whose every guaranteed \
+           \item resolves, and an empty registry rejects one" $ do
+            let defs = decodedDefs
+                    "{ id: a, builder: b,\
+                    \  naming: { heads: [KEEP], modifiers: [ASH] },\
+                    \  bounds: { min_x: -2, min_y: -2, max_x: 2, max_y: 2 },\
+                    \  contents: [ { kind: item, id: processing_unit,\
+                    \                significant: true } ] }"
+            significantItemErrors (HS.singleton "processing_unit") defs
+                `shouldBe` []
+            length (significantItemErrors HS.empty defs) `shouldBe` 1
+
+        it "the shipped ruin_small.yaml's guaranteed item resolves \
+           \against the shipped item definitions" $ do
+            result ← Yaml.decodeFileEither "data/locations/ruin_small.yaml"
+            names ← shippedItemNames
+            case result of
+                Left err → expectationFailure (show (err ∷ Yaml.ParseException))
+                Right lf → significantItemErrors names (lyfLocations lf)
+                    `shouldBe` []
 
         it "a file whose defs are all in-domain still loads normally" $ do
             let contents = unlines

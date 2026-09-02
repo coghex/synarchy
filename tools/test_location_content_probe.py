@@ -182,11 +182,14 @@ INFRASTRUCTURE = ("engine_queries", "invocation")
 BOOT_CALL_SITES = 7
 PROCESS_LAUNCHES = 8
 
-#: The pre-split file's own diagnostic totals, recounted from the whole
-#: surface. Moving an assertion between owners is a visible edit here;
-#: losing one, or duplicating one, is a failure.
-TOTAL_PASS_DIAGNOSTICS = 45
-TOTAL_FAILURE_RECORDS = 67
+#: The whole surface's diagnostic totals, recounted across every owner.
+#: Moving an assertion between owners is a visible edit here; losing
+#: one, or duplicating one, is a failure. The pre-split file's own
+#: totals were 45/67; #917's `check_significant_contents` added the six
+#: PASS lines and eight failure records of the guaranteed-contents and
+#: compound-clearance scenario.
+TOTAL_PASS_DIAGNOSTICS = 51
+TOTAL_FAILURE_RECORDS = 75
 
 #: The values `run` used to accumulate in local variables across its
 #: phases (#2095's cross-scenario handoff). Each is now a field of the

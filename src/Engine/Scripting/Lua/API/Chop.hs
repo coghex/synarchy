@@ -1,24 +1,38 @@
 {-# LANGUAGE Strict #-}
 -- | Lua API for the chop-designation tool (issue #97) — the @chop.*@
---   namespace. Mirrors the construction-designation API (#95): the tool
---   drives setAnchor / clearAnchor / designate, the chop AI
---   (scripts/unit_ai_chop.lua) drives nearestDesignation /
---   getDesignationForInstance / cancelDesignation (claims are Lua-side
---   like dig jobs, so there is no engine-side job status), and the HUD
---   sets the marker texture.
+--   namespace.
 --
 --   #1854: a designation names one PLANT, not one tile — two wood-tagged
 --   trees can share a tile. Every verb here that identifies a
 --   designation therefore reports the plant's stable
 --   'World.Flora.Identity.FloraInstanceId' alongside its coords, and the
---   AI addresses its claimed tree by that id. The tile-shaped verbs stay
---   for the PLAYER's tile-granularity gestures (a cancel click clears
---   what the player pointed at) and for the "is there still work here?"
---   question.
+--   AI addresses its claimed tree by that id. The tile-shaped READ verbs
+--   stay for the \"is there still work here?\" question and for a
+--   restored job that knows its tile but not its plant.
+--
+--   #1856 replaced the PLAYER's two-click tile rectangle with a
+--   screen-space press-drag:
+--
+--     * @designateAt@ \/ @designateInRect@ add, @eraseAt@ \/
+--       @eraseInRect@ erase, symmetric through the one selection
+--       oracle ("World.Flora.HitTest");
+--     * @designateInstances@ \/ @eraseInstances@ are the exact-identity
+--       authority beneath them, for callers that already hold ids;
+--     * @setAnchor@, @clearAnchor@ and the tile-rectangle @designate@
+--       are GONE — the gesture has no world-side anchor and no tile
+--       rectangle crosses the queue.
+--
+--   The chop AI still drives nearestDesignation \/
+--   getDesignationForInstance \/ cancelDesignation (claims are Lua-side
+--   like dig jobs, so there is no engine-side job status), and the HUD
+--   sets the marker texture.
 module Engine.Scripting.Lua.API.Chop
-    ( chopSetAnchorFn
-    , chopClearAnchorFn
-    , chopDesignateFn
+    ( chopDesignateAtFn
+    , chopDesignateInRectFn
+    , chopEraseAtFn
+    , chopEraseInRectFn
+    , chopDesignateInstancesFn
+    , chopEraseInstancesFn
     , chopCancelDesignationFn
     , chopGetDesignationAtFn
     , chopGetDesignationsAtFn
@@ -29,6 +43,7 @@ module Engine.Scripting.Lua.API.Chop
     ) where
 
 import UPrelude
+import Data.ByteString (ByteString)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -39,7 +54,11 @@ import Data.Ord (comparing)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
-import Engine.Core.State (activeWorldPageFrom)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
+import Engine.Core.State (EngineEnv, activeWorldPageFrom)
+import World.Flora.HitTest
+    (FloraHitView, FloraPick(..), FloraSelectMode(..)
+    , floraHitView, pickFloraAt, pickFloraInRect)
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 import World.Page.Types (WorldPageId(..))
@@ -49,52 +68,171 @@ import World.Flora.Identity
 import World.Generate.Coordinates (canonicalTile, seamTileDist2)
 import World.Chop.Types
 
--- | chop.setAnchor(pageId, gx, gy) — first-click anchor.
-chopSetAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-chopSetAnchorFn wsc = do
-    pageIdArg ← Lua.tostring 1
-    gxArg     ← Lua.tonumber 2
-    gyArg     ← Lua.tonumber 3
-    case (pageIdArg, gxArg, gyArg) of
-        (Just pageIdBS, Just gx, Just gy) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue wsc) $
-                WorldSetChopAnchor pageId (round gx) (round gy)
-        _ → pure ()
-    return 0
+-- * The gesture surface (#1856)
+--
+-- Chop is a screen-space press-drag, so every player-facing verb here
+-- takes WINDOW pixels and resolves them through the shared selection
+-- oracle ("World.Flora.HitTest"), which derives its geometry from the
+-- values the renderer draws with. There is no tile rectangle and no
+-- world-side anchor left: what crosses the queue is an exact list of
+-- plant identities, and the world thread re-checks eligibility against
+-- live state before writing anything.
+--
+-- Each verb answers with the number of plants it SELECTED (not the
+-- number the world thread went on to accept, which it cannot know
+-- synchronously) so a Lua caller can tell an empty gesture from a
+-- productive one.
 
--- | chop.clearAnchor(pageId) — cancel the pending rectangle.
-chopClearAnchorFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-chopClearAnchorFn wsc = do
+-- | chop.designateAt(pageId, pixX, pixY [, tag]) → n
+--
+--   Click-add: the topmost eligible tree whose rendered sprite contains
+--   the pointer.
+chopDesignateAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+chopDesignateAtFn env = gesturePoint env (SelectChoppable . fromMaybe "wood")
+    (\wsc pageId tag picks →
+        Q.writeQueue (wsWorldQueue wsc) $
+            WorldDesignateChopInstances pageId (map fpInstanceId picks) tag)
+
+-- | chop.designateInRect(pageId, x1, y1, x2, y2 [, tag]) → n
+--
+--   Drag-add: every eligible tree whose rendered ground-contact anchor
+--   lies inside the drawn box. Either drag direction, closed bounds.
+chopDesignateInRectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+chopDesignateInRectFn env = gestureRect env (SelectChoppable . fromMaybe "wood")
+    (\wsc pageId tag picks →
+        Q.writeQueue (wsWorldQueue wsc) $
+            WorldDesignateChopInstances pageId (map fpInstanceId picks) tag)
+
+-- | chop.eraseAt(pageId, pixX, pixY) → n
+--
+--   Click-erase, the exact mirror of 'chopDesignateAtFn'. Candidates
+--   are the trees currently DESIGNATED, so a designation whose tree has
+--   stopped being add-eligible stays clearable (D-12).
+chopEraseAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+chopEraseAtFn env = gesturePoint env (const SelectDesignated)
+    (\wsc pageId _tag picks →
+        Q.writeQueue (wsWorldQueue wsc) $
+            WorldEraseChopInstances pageId (map fpInstanceId picks))
+
+-- | chop.eraseInRect(pageId, x1, y1, x2, y2) → n — drag-erase.
+chopEraseInRectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+chopEraseInRectFn env = gestureRect env (const SelectDesignated)
+    (\wsc pageId _tag picks →
+        Q.writeQueue (wsWorldQueue wsc) $
+            WorldEraseChopInstances pageId (map fpInstanceId picks))
+
+-- | chop.designateInstances(pageId, {instanceId, ...} [, tag]) → n
+--
+--   The exact-identity authority underneath the gesture verbs, exposed
+--   directly for callers that already hold ids — headless probes and
+--   specs, which have no camera to project through. It applies the SAME
+--   world-side eligibility re-check; @n@ is the number of well-formed
+--   ids submitted.
+chopDesignateInstancesFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopDesignateInstancesFn wsc = do
     pageIdArg ← Lua.tostring 1
+    iids ← readInstanceIdArray 2
+    tagArg ← Lua.tostring 3
     case pageIdArg of
-        Just pageIdBS → Lua.liftIO $ do
+        Just pageIdBS → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            Q.writeQueue (wsWorldQueue wsc) $ WorldClearChopAnchor pageId
-        _ → pure ()
-    return 0
+                tag = maybe "wood" TE.decodeUtf8Lenient tagArg
+            Lua.liftIO $ Q.writeQueue (wsWorldQueue wsc) $
+                WorldDesignateChopInstances pageId iids tag
+            Lua.pushinteger (fromIntegral (length iids)) >> return 1
+        _ → Lua.pushinteger 0 >> return 1
 
--- | chop.designate(pageId, x1, y1, x2, y2 [, tag]) — commit the
---   rectangle. Only tiles holding a currently-harvestable flora species
---   carrying @tag@ (default "wood") are designated — sweeping a forest
---   marks the trees, not the ground between them.
-chopDesignateFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-chopDesignateFn wsc = do
+-- | chop.eraseInstances(pageId, {instanceId, ...}) → n — the erase half.
+chopEraseInstancesFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopEraseInstancesFn wsc = do
+    pageIdArg ← Lua.tostring 1
+    iids ← readInstanceIdArray 2
+    case pageIdArg of
+        Just pageIdBS → do
+            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            Lua.liftIO $ Q.writeQueue (wsWorldQueue wsc) $
+                WorldEraseChopInstances pageId iids
+            Lua.pushinteger (fromIntegral (length iids)) >> return 1
+        _ → Lua.pushinteger 0 >> return 1
+
+-- | Shared body of the two point gestures.
+gesturePoint
+    ∷ EngineEnv
+    → (Maybe Text → FloraSelectMode)
+    → (WorldSimCapability → WorldPageId → Text → [FloraPick] → IO ())
+    → Lua.LuaE Lua.Exception Lua.NumResults
+gesturePoint env mkMode commit = do
+    pageIdArg ← Lua.tostring 1
+    xArg ← Lua.tonumber 2
+    yArg ← Lua.tonumber 3
+    tagArg ← Lua.tostring 4
+    withGesturePage env pageIdArg tagArg $ \view pageId tag → do
+        let picks = maybeToList
+                (pickFloraAt view (mkMode (Just tag)) (num xArg) (num yArg))
+        commit (toWorldSimCapability env) pageId tag picks
+        pure (length picks)
+
+-- | Shared body of the two box gestures.
+gestureRect
+    ∷ EngineEnv
+    → (Maybe Text → FloraSelectMode)
+    → (WorldSimCapability → WorldPageId → Text → [FloraPick] → IO ())
+    → Lua.LuaE Lua.Exception Lua.NumResults
+gestureRect env mkMode commit = do
     pageIdArg ← Lua.tostring 1
     x1Arg ← Lua.tonumber 2
     y1Arg ← Lua.tonumber 3
     x2Arg ← Lua.tonumber 4
     y2Arg ← Lua.tonumber 5
     tagArg ← Lua.tostring 6
-    case (pageIdArg, x1Arg, y1Arg, x2Arg, y2Arg) of
-        (Just pageIdBS, Just x1, Just y1, Just x2, Just y2) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                tag = maybe "wood" TE.decodeUtf8Lenient tagArg
-            Q.writeQueue (wsWorldQueue wsc) $
-                WorldDesignateChop pageId
-                    (round x1) (round y1) (round x2) (round y2) tag
-        _ → pure ()
-    return 0
+    withGesturePage env pageIdArg tagArg $ \view pageId tag → do
+        let picks = pickFloraInRect view (mkMode (Just tag))
+                        (num x1Arg) (num y1Arg) (num x2Arg) (num y2Arg)
+        commit (toWorldSimCapability env) pageId tag picks
+        pure (length picks)
+
+-- | Resolve the named page, snapshot the oracle's view of it, and push
+--   the selected count. A page that does not exist selects nothing.
+withGesturePage
+    ∷ EngineEnv
+    → Maybe ByteString
+    → Maybe ByteString
+    → (FloraHitView → WorldPageId → Text → IO Int)
+    → Lua.LuaE Lua.Exception Lua.NumResults
+withGesturePage env pageIdArg tagArg act = case pageIdArg of
+    Nothing → Lua.pushinteger 0 >> return 1
+    Just pageIdBS → do
+        let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+            tag = maybe "wood" TE.decodeUtf8Lenient tagArg
+        mgr ← Lua.liftIO $
+            readIORef (wsWorldManagerRef (toWorldSimCapability env))
+        case lookup pageId (wmWorlds mgr) of
+            Nothing → Lua.pushinteger 0 >> return 1
+            Just ws → do
+                n ← Lua.liftIO $ do
+                    view ← floraHitView env ws
+                    act view pageId tag
+                Lua.pushinteger (fromIntegral n) >> return 1
+
+num ∷ Maybe Lua.Number → Float
+num = maybe 0 realToFrac
+
+-- | Read a Lua array of instance ids, dropping any entry that is not a
+--   well-formed id. 'floraInstanceIdFromLua' refuses a number in
+--   neither namespace, so a bad element names no plant rather than
+--   silently matching one.
+readInstanceIdArray ∷ Lua.StackIndex → Lua.LuaE Lua.Exception [FloraInstanceId]
+readInstanceIdArray idx = do
+    isTable ← Lua.istable idx
+    if not isTable then pure [] else do
+        n ← Lua.rawlen idx
+        catMaybes ⊚ forM [1 .. n] (\i → do
+            _ ← Lua.rawgeti idx (fromIntegral i)
+            v ← Lua.tointeger (-1)
+            Lua.pop 1
+            pure (toInstanceId =≪ v))
 
 -- | chop.cancelDesignation(gx, gy [, instanceId]) — remove a
 --   designation on the active world (best-effort, returns nothing).
@@ -102,8 +240,14 @@ chopDesignateFn wsc = do
 --   #1854: WITH an instance id exactly that plant's designation goes —
 --   the chop AI's completion passes the id it claimed, so felling one
 --   of two designated trees on a tile leaves the other designated.
---   WITHOUT one this is the player's tile-granularity cancel and clears
---   every designation standing there.
+--
+--   WITHOUT one it clears every designation standing on the tile. That
+--   is NOT a player path (#1856): the player's erase gesture is
+--   screen-space and exact-identity ('chopEraseAtFn' \/
+--   'chopEraseInRectFn'). It remains for the AI's restored-job
+--   fallback, where a job knows its TILE but not which of that tile's
+--   plants it had claimed, and for the legacy tile-keyed migration
+--   drain. Do not route a new player interaction through it.
 chopCancelDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 chopCancelDesignationFn wsc = do
     gxArg ← Lua.tonumber 1

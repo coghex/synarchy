@@ -235,27 +235,34 @@ data WorldCommand
         -- ^ Wire path tool (#359): while true, the anchor→hover preview
         --   snaps to a straight 1-wide line (the build tool's commit
         --   snaps identically), instead of the default filled rectangle.
-    | WorldSetChopAnchor WorldPageId Int Int
-        -- ^ Chop tool (#97): first click anchors the designation
-        --   rectangle at (gx, gy). The render pass previews anchor→hover.
-    | WorldClearChopAnchor WorldPageId
-        -- ^ Chop tool: cancel the pending rectangle (right-click /
-        --   Escape / tool switch).
-    | WorldDesignateChop WorldPageId Int Int Int Int Text
-        -- ^ Chop tool: second click commits the rectangle
-        --   (gx1,gy1)–(gx2,gy2). Only tiles in loaded chunks holding a
-        --   currently-harvestable flora species carrying the given
-        --   harvest tag (the tool passes "wood") are designated, each at
-        --   its own surface z — trees grow across slopes, so unlike
-        --   mine/construct there is no per-z-level filter.
+    | WorldDesignateChopInstances WorldPageId [FloraInstanceId] Text
+        -- ^ Chop tool (#97, re-shaped by #1856): designate EXACTLY these
+        --   plants. The gesture that produced the list is screen-space
+        --   (a click on a tree sprite, or a drag box over their rendered
+        --   ground-contact anchors — "World.Flora.HitTest"), so the
+        --   selection rule lives entirely on the sending side and no
+        --   tile rectangle crosses the queue. The world thread still
+        --   re-checks eligibility against live state — the unchanged
+        --   Chop predicate, a harvestable species carrying the given
+        --   tag (the tool passes "wood") with no live regrowth timer —
+        --   because a tree can be felled between the gesture and the
+        --   drain. An id naming no resident plant is dropped, and the
+        --   F4 record reports it as such.
+    | WorldEraseChopInstances WorldPageId [FloraInstanceId]
+        -- ^ The symmetric erase (#1856 requirement 4): clear exactly
+        --   these plants' designations. Filtered by what is DESIGNATED
+        --   rather than by add-eligibility, so a standing designation
+        --   stays clearable even after its tree stops qualifying.
     | WorldCancelChop WorldPageId Int Int (Maybe FloraInstanceId)
-        -- ^ Remove a chop designation (the chop AI's completion, or a
-        --   player cancel). #1854: with an instance id, EXACTLY that
-        --   plant's designation goes — the felling acolyte cancels the
-        --   tree it claimed and leaves its co-tenants designated. Without
-        --   one the gesture is the player's tile-granularity cancel and
+        -- ^ Remove a chop designation — the chop AI's, not the
+        --   player's. #1854: with an instance id, EXACTLY that plant's
+        --   designation goes, so the felling acolyte cancels the tree it
+        --   claimed and leaves its co-tenants designated. Without one it
         --   clears every designation standing on (gx, gy), pending legacy
-        --   entries included.
+        --   entries included; since #1856 that shape serves only the AI's
+        --   restored-job fallback (which knows its tile but not which of
+        --   its plants it had claimed) and the legacy migration drain.
+        --   The PLAYER's erase is 'WorldEraseChopInstances'.
     | WorldSetChopDesignateTexture WorldPageId TextureHandle
         -- ^ Texture for committed chop-designation markers.
     | WorldSetTillAnchor WorldPageId Int Int

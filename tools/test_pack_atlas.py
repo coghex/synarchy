@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-test_pack_atlas.py — fixture self-test for tools/pack_atlas.py
-(#1257 inventory validation, #1258 atlas compilation).
+test_pack_atlas.py — fixture self-test for tools/pack_atlas.py and the
+`tools/pack_atlas_<owner>.py` modules behind it (#1257 inventory
+validation, #1258 atlas compilation, #2054 owner split).
 
 Every case builds a complete, isolated unit tree in a temporary
 directory (`data/units/` + `assets/textures/units/`) and runs the real
@@ -53,6 +54,17 @@ from typing import Callable, Dict, List, Optional, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pack_atlas  # noqa: E402
+# The owners behind the façade (#2054). Each case reads or patches the
+# module that actually holds the moved behaviour, so a patch can never
+# land on a façade attribute the implementation no longer reads.
+# pack_atlas_inventory is reached only through the façade's commands and
+# is neither read nor patched directly, so it is not imported here.
+import pack_atlas_budget  # noqa: E402
+import pack_atlas_compiler  # noqa: E402
+import pack_atlas_declarations  # noqa: E402
+import pack_atlas_image  # noqa: E402
+import pack_atlas_index  # noqa: E402
+import pack_atlas_shared  # noqa: E402
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -62,7 +74,7 @@ ALL8 = CANON5 + ["north-west", "west", "south-west"]
 
 # The row order the compiler uses, restricted per animation to the
 # authored set. Spelled out here rather than imported so a change to
-# `pack_atlas.ATLAS_DIRECTION_ORDER` has to be a deliberate edit in two
+# `pack_atlas_shared.ATLAS_DIRECTION_ORDER` has to be a deliberate edit in two
 # places instead of silently re-blessing itself.
 EXPECTED_ROW_ORDER = [
     "south", "south-west", "west", "north-west",
@@ -198,7 +210,7 @@ def duplicate_iend_png() -> bytes:
     twelve bytes earlier. Pillow's `verify()` stops at the first IEND
     and the decoder never reads that far, so nothing else notices.
     """
-    return png_bytes(32, 32) + pack_atlas.PNG_IEND_CHUNK
+    return png_bytes(32, 32) + pack_atlas_shared.PNG_IEND_CHUNK
 
 
 def chunk_then_iend_png() -> bytes:
@@ -208,7 +220,7 @@ def chunk_then_iend_png() -> bytes:
     between, so a check that only looked one chunk back would miss it.
     """
     return (png_bytes(32, 32) + png_chunk(b"tEXt", b"Comment\x00appended")
-            + pack_atlas.PNG_IEND_CHUNK)
+            + pack_atlas_shared.PNG_IEND_CHUNK)
 
 
 def not_an_image() -> bytes:
@@ -222,7 +234,7 @@ def other_format_png() -> bytes:
     Pillow will happily decode it; the engine's loader will not, so the
     inventory must reject it on FORMAT rather than on readability.
     """
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
     buffer = io.BytesIO()
     image_mod.new("RGBA", (4, 4), (12, 34, 56, 255)).save(buffer, format="BMP")
     return buffer.getvalue()
@@ -230,7 +242,7 @@ def other_format_png() -> bytes:
 
 def png_in_mode(mode: str, size: tuple[int, int] = (4, 4), **save: object) -> bytes:
     """A valid PNG in some colour type other than plain 8-bit RGBA."""
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
     buffer = io.BytesIO()
     image_mod.new(mode, size).save(buffer, format="PNG", **save)
     return buffer.getvalue()
@@ -249,17 +261,18 @@ class Fixture:
         # a stand-in, which makes "the real policy file still parses"
         # a property every case in this suite exercises.
         self.write_file(
-            pack_atlas.BUDGET_REL.as_posix(),
-            (pack_atlas.REPO_ROOT / pack_atlas.BUDGET_REL).read_bytes())
+            pack_atlas_budget.BUDGET_REL.as_posix(),
+            (pack_atlas.REPO_ROOT / pack_atlas_budget.BUDGET_REL).read_bytes())
 
     def budget(self) -> dict:
         """The fixture's budget document, as a mutable dict."""
         return json.loads(
-            (self.root / pack_atlas.BUDGET_REL).read_text(encoding="utf-8"))
+            (self.root / pack_atlas_budget.BUDGET_REL)
+            .read_text(encoding="utf-8"))
 
     def write_budget(self, doc: object) -> None:
         self.write_file(
-            pack_atlas.BUDGET_REL.as_posix(),
+            pack_atlas_budget.BUDGET_REL.as_posix(),
             json.dumps(doc, indent=2).encode("utf-8"))
 
     # -- assets --------------------------------------------------------
@@ -380,7 +393,7 @@ class Fixture:
 
 def rgba_png(width: int, height: int, colour: tuple[int, int, int, int]) -> bytes:
     """A solid RGBA PNG, written by the same library the compiler uses."""
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
     buffer = io.BytesIO()
     image_mod.new("RGBA", (width, height), colour).save(buffer, format="PNG")
     return buffer.getvalue()
@@ -404,10 +417,10 @@ def atlas_slots(path: Path, cell_w: int, cell_h: int) -> List[List[List[list]]]:
     corner: `(pad, pad)` is the cell's first texel and `(0, 0)` is the
     top-left corner square.
     """
-    pad = pack_atlas.CELL_PADDING
+    pad = pack_atlas_shared.CELL_PADDING
     slot_w = cell_w + 2 * pad
     slot_h = cell_h + 2 * pad
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
     with image_mod.open(path) as handle:
         image = handle.convert("RGBA")
         pixels = image.load()
@@ -432,7 +445,7 @@ def atlas_cells(path: Path, cell_w: int, cell_h: int) -> List[List[tuple]]:
     Reads the cell inside its padded slot, which is what `atlas_cell_uv`
     addresses — the gutter is `atlas_slots`' business.
     """
-    pad = pack_atlas.CELL_PADDING
+    pad = pack_atlas_shared.CELL_PADDING
     return [
         [
             {slot[pad + y][pad + x]
@@ -1434,7 +1447,7 @@ def assert_atlas_matches(
     assert record["rows"] == len(rows)
     assert record["cell_width"] == CELL[0] and record["cell_height"] == CELL[1]
     # The gutter is declared, and the sheet is sized for padded SLOTS.
-    pad = pack_atlas.CELL_PADDING
+    pad = pack_atlas_shared.CELL_PADDING
     assert record["cell_padding"] == pad
     assert record["atlas_width"] == record["columns"] * (CELL[0] + 2 * pad)
     assert record["atlas_height"] == record["rows"] * (CELL[1] + 2 * pad)
@@ -1484,7 +1497,7 @@ def gradient_png(width: int, height: int, seed: int) -> bytes:
     row from one built from any other row of the same frame, so the
     extrusion geometry needs art where every position is identifiable.
     """
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
     image = image_mod.new("RGBA", (width, height))
     pixels = image.load()
     for y in range(height):
@@ -1509,7 +1522,7 @@ def _compile_extrusion_ring(fx: Fixture) -> None:
     """
     unit, anim = "hero", "idle"
     width, height = 5, 4
-    pad = pack_atlas.CELL_PADDING
+    pad = pack_atlas_shared.CELL_PADDING
     # `flip: true` over the canonical five, so the layout is legal with
     # only a couple of rows of art to reason about.
     directions = CANON5
@@ -1563,7 +1576,7 @@ def _compile_extrusion_ring(fx: Fixture) -> None:
 
 def decode_rgba_texels(png: bytes) -> List[List[tuple]]:
     """A PNG's texels as `[y][x]`, through the compiler's own decoder."""
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
     with image_mod.open(io.BytesIO(png)) as handle:
         image = handle.convert("RGBA")
         pixels = image.load()
@@ -1616,8 +1629,8 @@ def _index_versions(fx: Fixture) -> None:
     build_unit(fx, "hero", [("idle", uniform(CANON5, 2), True)])
     fx.compile_ok()
     document = fx.index("hero")
-    assert document["schema_version"] == pack_atlas.INDEX_SCHEMA_VERSION
-    assert document["tool_version"] == pack_atlas.TOOL_VERSION
+    assert document["schema_version"] == pack_atlas_shared.INDEX_SCHEMA_VERSION
+    assert document["tool_version"] == pack_atlas_shared.TOOL_VERSION
     assert "schema_version" in document and "tool_version" in document
     assert document["digest_algorithm"] == "sha256"
     assert document["direction_order"] == EXPECTED_ROW_ORDER
@@ -1642,7 +1655,8 @@ def _playback_metadata(fx: Fixture) -> None:
     # Recorded as the engine's 32-bit `Float` will actually hold it, not
     # as the decimal the file spells: an index promising a rate the
     # runtime rounds would misdescribe playback.
-    assert record["fps"] == pack_atlas.narrow_to_runtime_float(0.1), record
+    assert record["fps"] == pack_atlas_image.narrow_to_runtime_float(0.1), (
+        record)
     assert record["fps"] != 0.1, (
         "fps was recorded at double precision, not narrowed")
     fx.validate_ok()
@@ -1789,11 +1803,11 @@ def _forged_index(fx: Fixture) -> None:
     forged = rgba_png(record["atlas_width"], record["atlas_height"],
                       (7, 7, 7, 255))
     fx.atlas_path("hero", "idle").write_bytes(forged)
-    frame = pack_atlas.decode_rgba8(fx.atlas_path("hero", "idle"))
-    record["atlas_digest"] = pack_atlas.content_digest(
+    frame = pack_atlas_image.decode_rgba8(fx.atlas_path("hero", "idle"))
+    record["atlas_digest"] = pack_atlas_compiler.content_digest(
         frame.width, frame.height, frame.pixels)
     fx.index_path("hero").write_bytes(
-        pack_atlas.canonical_index_bytes(document))
+        pack_atlas_compiler.canonical_index_bytes(document))
     fx.validate_fails("index entry disagrees with a fresh compile")
 
 
@@ -1804,7 +1818,7 @@ def _hand_edited_index(fx: Fixture) -> None:
     document = fx.index("hero")
     document["tool_version"] = document["tool_version"] + 1
     fx.index_path("hero").write_bytes(
-        pack_atlas.canonical_index_bytes(document))
+        pack_atlas_compiler.canonical_index_bytes(document))
     fx.validate_fails("generated-index metadata mismatch")
 
 
@@ -1851,12 +1865,15 @@ def _unnamed_mismatch_backstop(fx: Fixture) -> None:
     fx.index_path("hero").write_text(
         json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
-    blinded = pack_atlas.report_index_mismatch
-    pack_atlas.report_index_mismatch = lambda *a, **k: None
+    # Patched on the INDEX owner: `validate_unit_index` looks the name
+    # up on its own module at call time, so a patch on the façade would
+    # be a no-op and this case would pass vacuously.
+    blinded = pack_atlas_index.report_index_mismatch
+    pack_atlas_index.report_index_mismatch = lambda *a, **k: None
     try:
         fx.validate_fails("does not match a fresh compile")
     finally:
-        pack_atlas.report_index_mismatch = blinded
+        pack_atlas_index.report_index_mismatch = blinded
 
 
 @scenario("a reformatted but semantically identical index is rejected")
@@ -2009,18 +2026,20 @@ def _case_insensitive_atlas_collision(fx: Fixture) -> None:
     build_unit(fx, "hero", [("attack_RH_dagger", counts, False)])
     fx.compile_ok()
 
-    report = pack_atlas.Report()
-    decls = pack_atlas.load_declarations(report, fx.root / "data" / "units")
+    report = pack_atlas_shared.Report()
+    decls = pack_atlas_declarations.load_declarations(
+        report, fx.root / "data" / "units")
     assert not report.errors, report.errors
     decl = next(d for d in decls if d.name == "hero")
-    twin = pack_atlas.AnimDecl(
+    twin = pack_atlas_shared.AnimDecl(
         "hero", "attack_rh_dagger", False, dict(decl.anims[0].frames),
         "hero/attack_rh_dagger")
-    clashing = pack_atlas.UnitDecl(
+    clashing = pack_atlas_shared.UnitDecl(
         decl.name, decl.asset_only, decl.source, decl.anims + [twin],
         decl.aux_paths)
 
-    outcome = pack_atlas.compile_unit(report, fx.root, clashing, False)
+    outcome = pack_atlas_compiler.compile_unit(
+        report, fx.root, clashing, False)
     assert outcome is None, "a colliding atlas filename compiled"
     assert any("case-insensitive" in issue.msg for issue in report.errors), (
         f"the collision was not named: "
@@ -2038,17 +2057,17 @@ def _stream_end_contract(fx: Fixture) -> None:
     """
     good = png_bytes(32, 32)
     clean = fx.write_file("loose/good.png", good)
-    end, size, terminal = pack_atlas.locate_png_stream_end(clean)
+    end, size, terminal = pack_atlas_image.locate_png_stream_end(clean)
     assert (end, size) == (len(good), len(good)), (
         f"a clean PNG should end where the file does, got {end}/{size}")
-    assert terminal == pack_atlas.PNG_IEND_CHUNK
+    assert terminal == pack_atlas_shared.PNG_IEND_CHUNK
 
     # Trailing data moves the FILE's end, never the stream's.
     doubled = fx.write_file("loose/doubled.png", duplicate_iend_png())
-    end, size, terminal = pack_atlas.locate_png_stream_end(doubled)
+    end, size, terminal = pack_atlas_image.locate_png_stream_end(doubled)
     assert end == len(good), f"the stream end moved with the appended data: {end}"
-    assert size == len(good) + len(pack_atlas.PNG_IEND_CHUNK)
-    assert terminal == pack_atlas.PNG_IEND_CHUNK
+    assert size == len(good) + len(pack_atlas_shared.PNG_IEND_CHUNK)
+    assert terminal == pack_atlas_shared.PNG_IEND_CHUNK
 
     for label, data in [
         ("no IEND at all", good[:-12]),
@@ -2062,7 +2081,7 @@ def _stream_end_contract(fx: Fixture) -> None:
     ]:
         broken = fx.write_file("loose/broken.png", data)
         try:
-            pack_atlas.locate_png_stream_end(broken)
+            pack_atlas_image.locate_png_stream_end(broken)
         except ValueError as error:
             assert "IEND" in str(error), (
                 f"{label}: rejected for the wrong reason: {error}")
@@ -2079,17 +2098,17 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
     through. Without this, a later "simplification" down to a single
     call would keep the whole suite green.
     """
-    image_mod = pack_atlas.image_module()
+    image_mod = pack_atlas_image.image_module()
 
     # A correct payload under a wrong CRC: the full decode accepts it,
     # because Pillow never checks an IDAT checksum.
     checksum = fx.write_file("loose/bad_checksum.png", bad_checksum_png())
-    frame = pack_atlas.decode_rgba8(checksum)
+    frame = pack_atlas_image.decode_rgba8(checksum)
     assert (frame.width, frame.height) == (32, 32), (
         f"the bad-checksum fixture should still DECODE, got "
         f"{frame.width}x{frame.height}")
     try:
-        pack_atlas.validate_frame_image(checksum)
+        pack_atlas_image.validate_frame_image(checksum)
     except ValueError as error:
         assert "checksum" in str(error), (
             f"rejected for the wrong reason: {error}")
@@ -2104,7 +2123,7 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
     with image_mod.open(stream) as handle:
         handle.verify()          # raises if the container pass would object
     try:
-        pack_atlas.validate_frame_image(stream)
+        pack_atlas_image.validate_frame_image(stream)
     except ValueError as error:
         assert "decode" in str(error), f"rejected for the wrong reason: {error}"
     else:
@@ -2116,13 +2135,13 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
     # verify() breaks on IEND before checksumming and the decoder never
     # reads that far. Only the terminal comparison sees it.
     terminal = fx.write_file("loose/tampered_iend.png", tampered_iend_png())
-    frame = pack_atlas.decode_rgba8(terminal)
+    frame = pack_atlas_image.decode_rgba8(terminal)
     assert (frame.width, frame.height) == (32, 32), (
         "the tampered-IEND fixture should still DECODE")
     with image_mod.open(terminal) as handle:
         handle.verify()          # raises if Pillow objected to the tail
     try:
-        pack_atlas.validate_frame_image(terminal)
+        pack_atlas_image.validate_frame_image(terminal)
     except ValueError as error:
         assert "terminal checksum" in str(error), (
             f"rejected for the wrong reason: {error}")
@@ -2136,15 +2155,15 @@ def _both_decode_passes_earn_their_keep(fx: Fixture) -> None:
     # locating the real end of the stream catches it — which is why
     # that walk exists rather than a tail constant.
     doubled = fx.write_file("loose/duplicate_iend.png", duplicate_iend_png())
-    frame = pack_atlas.decode_rgba8(doubled)
+    frame = pack_atlas_image.decode_rgba8(doubled)
     assert (frame.width, frame.height) == (32, 32), (
         "the duplicate-IEND fixture should still DECODE")
     with image_mod.open(doubled) as handle:
         handle.verify()
-    assert doubled.read_bytes()[-12:] == pack_atlas.PNG_IEND_CHUNK, (
+    assert doubled.read_bytes()[-12:] == pack_atlas_shared.PNG_IEND_CHUNK, (
         "this fixture only means something while its TAIL is a valid IEND")
     try:
-        pack_atlas.validate_frame_image(doubled)
+        pack_atlas_image.validate_frame_image(doubled)
     except ValueError as error:
         assert "follow the IEND chunk" in str(error), (
             f"rejected for the wrong reason: {error}")
@@ -2166,11 +2185,14 @@ def _missing_decoder(fx: Fixture) -> None:
     valid_fixture(fx)
     fx.validate_ok()             # the same tree passes with a decoder present
 
-    saved_memo = pack_atlas._IMAGE_MODULE
+    # The memo lives on the IMAGE owner, which is the module
+    # `image_module()` reads it from; clearing a copy on the façade would
+    # leave the real memo populated and the case vacuous.
+    saved_memo = pack_atlas_image._IMAGE_MODULE
     sentinel = object()
     saved = {name: sys.modules.get(name, sentinel)
              for name in ("PIL", "PIL.Image")}
-    pack_atlas._IMAGE_MODULE = None
+    pack_atlas_image._IMAGE_MODULE = None
     # A None entry in sys.modules makes `from PIL import Image` raise
     # ImportError, which is exactly what an uninstalled Pillow does.
     for name in saved:
@@ -2178,7 +2200,7 @@ def _missing_decoder(fx: Fixture) -> None:
     try:
         code, output = fx.run()
     finally:
-        pack_atlas._IMAGE_MODULE = saved_memo
+        pack_atlas_image._IMAGE_MODULE = saved_memo
         for name, module in saved.items():
             if module is sentinel:
                 del sys.modules[name]
@@ -2392,10 +2414,10 @@ def _budget_document_required(fx: Fixture) -> None:
     budget_unit(fx, anims=2)
     fx.validate_ok()
 
-    fx.rm(pack_atlas.BUDGET_REL.as_posix())
+    fx.rm(pack_atlas_budget.BUDGET_REL.as_posix())
     fx.validate_fails("cannot read the unit texture budget")
 
-    fx.write_file(pack_atlas.BUDGET_REL.as_posix(), b"{not json")
+    fx.write_file(pack_atlas_budget.BUDGET_REL.as_posix(), b"{not json")
     fx.validate_fails("not valid JSON")
 
     fx.write_budget({"schema_version": 99})
@@ -2532,8 +2554,8 @@ def _budget_shipped_document(_fx: Fixture) -> None:
     # policy file parses through the real loader and that the shipped
     # roster is inside it. Reading the numbers rather than asserting
     # them keeps this from becoming a second place the threshold lives.
-    report = pack_atlas.Report()
-    budget = pack_atlas.load_budget(report, pack_atlas.REPO_ROOT)
+    report = pack_atlas_shared.Report()
+    budget = pack_atlas_budget.load_budget(report, pack_atlas.REPO_ROOT)
     assert budget is not None, (
         "the shipped budget document does not load: "
         + "; ".join(i.msg for i in report.errors))
@@ -2542,7 +2564,8 @@ def _budget_shipped_document(_fx: Fixture) -> None:
         f"D-2 is one atlas per animation, the document says "
         f"{budget.max_per_animation}")
     doc = json.loads(
-        (pack_atlas.REPO_ROOT / pack_atlas.BUDGET_REL).read_text("utf-8"))
+        (pack_atlas.REPO_ROOT / pack_atlas_budget.BUDGET_REL)
+        .read_text("utf-8"))
     confirmed = doc["resident_bytes"]
     assert confirmed["confirmed_by"] and confirmed["confirmed_on"], (
         "the recorded threshold carries no owner confirmation")

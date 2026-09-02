@@ -38,6 +38,7 @@ config/keybinds.legacy-neutral.local.yaml
 # migrateLegacyConfig — there is no legacy source to migrate from.
 config/save.local.yaml
 saves/
+/cache/zoom/
 .claude/
 .codex/
 src/World/Hydrology/DESIGN.md

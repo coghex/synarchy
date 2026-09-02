@@ -25,7 +25,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Control.Exception (Exception, throw, try)
-import Data.IORef (writeIORef, readIORef)
+import Data.IORef (writeIORef, readIORef, atomicModifyIORef')
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (EngineInitResult(..))
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
@@ -41,10 +41,18 @@ import Location.Overlay.Types (LocationOverlay)
 import Location.Instance
     ( LocationEncounter(..), LocationEncounterOccupant(..)
     , LocationInstance(..), LocationInstanceId(..), LocationInstances(..)
-    , LocationLifecycle(..), buildLocationInstances, instancesToList
+    , LocationLifecycle(..), LocationSignificantItem(..)
+    , buildLocationInstances, instancesToList
     , setLocationEncounterEpisodeState )
 import Location.Bounds (RelBounds(..))
 import Test.Headless.Location.Fixture (expectGeometry)
+import qualified HsLua as Lua
+import qualified Data.Text.Encoding as TE
+import Engine.Scripting.Lua.API.Items.Ground (pickupGroundOnPage)
+import Engine.Scripting.Lua.API.Items.Ground
+    (worldSpawnLocationSignificantItemFn)
+import Item.Ground (GroundItems(..), spawnGroundItem)
+import Item.Types (ItemInstance(..), ItemDef(..), ItemManager(..))
 import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Types
@@ -275,10 +283,16 @@ encounterParamsAt lifecycle occupants = pageParams
         , leAggressionAnnounced = False
         , leDisengageAnnounced = False
         , leCleared = null occupants
-        , leClearEventEmitted = null occupants
         }
     inst = original { liEncounter = Just encounter
-                    , liLifecycle = lifecycle }
+                    , liLifecycle = lifecycle
+                    -- #917 moved the one-shot clearance notice onto the
+                    -- instance. Seeded here exactly as the real
+                    -- constructor seeds it: SPENT for a location born
+                    -- already clearance-satisfied (a zero roll with no
+                    -- significant item — nobody cleared it), unspent
+                    -- while any condition is outstanding.
+                    , liClearEventEmitted = null occupants }
 
 occupantAt ∷ UnitId → (Float, Float) → LocationEncounterOccupant
 occupantAt uid home = LocationEncounterOccupant uid home False False
@@ -341,6 +355,7 @@ tickWithSight env pageId ws =
 
 spec ∷ Spec
 spec = beforeAll initEnv $ do
+    significantSpec
     describe "Location discovery (#780) — tickLocationDiscovery" $ do
 
         it "a player-faction unit standing ON the location marks it \
@@ -997,5 +1012,431 @@ spec = beforeAll initEnv $ do
             readIORef (wsGenParamsRef ws) >>= (\p →
                 lifecyclesOf p `shouldBe` Just [LifecycleCleared])
             evs ← eventsOnPage env "cost_guard_predeath"
+            map peCategory evs `shouldBe`
+                ["location_discovery", "location_clearance"]
+
+-- * #917 significant contents ---------------------------------------
+
+-- | The base page's sole instance carrying @entries@ as its guaranteed
+--   significant obligations, plus an optional encounter beside them, so
+--   one fixture covers all four authored-condition shapes.
+significantParams
+    ∷ LocationLifecycle → Maybe [LocationEncounterOccupant]
+    → [LocationSignificantItem] → WorldGenParams
+significantParams lifecycle mOccupants entries = pageParams
+    { wgpLocationInstances = base { lisById = HM.singleton (liId inst) inst } }
+  where
+    base = wgpLocationInstances pageParams
+    original = case instancesToList base of
+        (one:_) → one
+        [] → error "significant fixture has no base instance"
+    encounterFor occupants = LocationEncounter
+        { leRolledCount = length occupants
+        , leOccupants = occupants
+        , leRosterComplete = True
+        , leDeathOnlyClearance = True
+        , leActivated = False
+        , leEpisodeActive = False
+        , leAggressionAnnounced = False
+        , leDisengageAnnounced = False
+        , leCleared = null occupants
+        }
+    inst = original
+        { liEncounter = encounterFor <$> mOccupants
+        , liLifecycle = lifecycle
+        , liSignificant = entries
+        -- Seeded the way the real constructor seeds it: no location
+        -- owing an untaken item is ever born already satisfied.
+        , liClearEventEmitted = False
+        }
+
+newSignificantPage
+    ∷ EngineEnv → WorldPageId → LocationLifecycle
+    → Maybe [LocationEncounterOccupant] → [LocationSignificantItem]
+    → IO WorldState
+newSignificantPage env pageId lifecycle mOccupants entries = do
+    writeIORef (itemManagerRef env) significantItemDefs
+    ws ← emptyWorldState
+    writeIORef (wsGenParamsRef ws) $
+        Just (significantParams lifecycle mOccupants entries)
+    writeIORef (worldManagerRef env) $ emptyWorldManager
+        { wmWorlds = [(pageId, ws)], wmVisible = [pageId] }
+    pure ws
+
+-- | One spawned, untaken obligation bound to physical item @itemId@.
+owed ∷ Int → Word64 → LocationSignificantItem
+owed slot itemId = LocationSignificantItem
+    { lsiSlot        = slot
+    , lsiItemDefName = "processing_unit"
+    , lsiInstanceId  = Just itemId
+    , lsiTaken       = False
+    }
+
+-- | The two item definitions #917's own verb needs registered: it
+--   materializes from the obligation's persisted def name, so an
+--   unregistered one is a refusal rather than a spawn. `rations` is the
+--   decoy the substitution case needs.
+significantItemDefs ∷ ItemManager
+significantItemDefs = ItemManager $ HM.fromList
+    [ ("processing_unit", fixtureDef "processing_unit")
+    , ("rations", fixtureDef "rations") ]
+
+fixtureDef ∷ Text → ItemDef
+fixtureDef name = ItemDef
+    { idName = name, idDisplayName = name
+    , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
+    , idWeight = 0.4, idWeightSpec = Nothing
+    , idBulk = 0.4, idStorage = Nothing, idKind = "misc"
+    , idCategory = "Materials", idMake = "", idMaterial = ""
+    , idQualitySpec = Nothing, idQualityTiers = []
+    , idContainer = Nothing
+    , idDefaultContents = [], idFood = Nothing, idWeapon = Nothing
+    , idArmor = Nothing, idUnequippable = False, idBuffs = []
+    , idInsulation = 0, idSourcePath = "test-fixture"
+    }
+
+groundItem ∷ Word64 → ItemInstance
+groundItem iid = ItemInstance
+    { iiDefName     = "processing_unit"
+    , iiCurrentFill = 0
+    , iiQuality     = 100
+    , iiCondition   = 100
+    , iiWeight      = 0.4
+    , iiSharpness   = 100
+    , iiContents    = []
+    , iiInstanceId  = iid
+    , iiTemp        = Nothing
+    , iiBulk        = Just 0.4
+    , iiStorage     = Nothing
+    }
+
+-- | Drop @iid@ onto @ws@'s ground and answer its page-local ground id.
+dropOnGround ∷ WorldState → Word64 → IO Int
+dropOnGround ws iid =
+    atomicModifyIORef' (wsGroundItemsRef ws) (spawnGroundItem (groundItem iid) 8 8)
+
+-- | The one ground item on a page, for a fixture that spawned exactly
+--   one. Fails loudly rather than silently picking one of several.
+onlyGroundId ∷ WorldState → IO Int
+onlyGroundId ws = do
+    gis ← readIORef (wsGroundItemsRef ws)
+    case HM.keys (gisItems gis) of
+        [gid] → pure gid
+        other → error ("expected exactly one ground item, got "
+                          <> show (length other))
+
+groundCount ∷ WorldState → IO Int
+groundCount ws = HM.size ∘ gisItems <$> readIORef (wsGroundItemsRef ws)
+
+takenFlags ∷ WorldState → IO [Bool]
+takenFlags ws = do
+    mp ← readIORef (wsGenParamsRef ws)
+    pure [ lsiTaken e
+         | p ← maybeToList mp
+         , inst ← instancesToList (wgpLocationInstances p)
+         , e ← liSignificant inst ]
+
+-- | Call @world.spawnLocationSignificantItem(instanceId, slot, x, y,
+--   pageId)@ through the real Lua binding and answer what it handed
+--   back.
+--
+--   This is the ONLY way an obligation is ever filled (#917): the verb
+--   spawns the item AND binds it in one engine call, so nothing outside
+--   the engine ever chooses which item fills a slot. Driving the real
+--   binding is also the only way to observe that the binding is applied
+--   by the time the verb RETURNS, which is what closes the pickup race.
+spawnSignificant
+    ∷ EngineEnv → WorldPageId → Int → Int → (Float, Float) → IO Bool
+spawnSignificant env (WorldPageId page) iid slot (x, y) = Lua.run $ do
+    Lua.openlibs
+    Lua.pushinteger (fromIntegral iid)
+    Lua.pushinteger (fromIntegral slot)
+    Lua.pushnumber (realToFrac x)
+    Lua.pushnumber (realToFrac y)
+    Lua.pushstring (TE.encodeUtf8 page)
+    _ ← worldSpawnLocationSignificantItemFn env
+    Lua.toboolean Lua.top
+
+boundIds ∷ WorldState → IO [Maybe Word64]
+boundIds ws = do
+    mp ← readIORef (wsGenParamsRef ws)
+    pure [ lsiInstanceId e
+         | p ← maybeToList mp
+         , inst ← instancesToList (wgpLocationInstances p)
+         , e ← liSignificant inst ]
+
+significantSpec ∷ SpecWith EngineEnv
+significantSpec =
+    describe "compound clearance with significant contents (#917)" $ do
+
+        -- The binding is applied by the real Lua verb, ON THIS THREAD,
+        -- before it returns — not queued to the world thread. Every
+        -- ground pickup runs on this same thread, so a queued binding
+        -- would leave a window in which the item is already pickable
+        -- with its slot unbound: a pickup there latches nothing, the
+        -- binding then names an item already in an inventory, no second
+        -- ground pickup is possible, `contents_spawned` blocks a
+        -- respawn, and the location can never clear.
+        it "binds provenance SYNCHRONOUSLY, so a pickup issued the very \
+           \next instant cannot slip between the spawn and the binding" $
+           \env → do
+            let pageId = WorldPageId "sig_bind_race"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 809)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            -- No world thread runs in this suite at all, so a QUEUED
+            -- binding would still be unapplied here — which is exactly
+            -- the state the racing pickup below would find.
+            boundIds ws `shouldReturn` [Nothing]
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            bound ← boundIds ws
+            bound `shouldSatisfy` all isJust
+
+            -- …and because the item and its binding landed together,
+            -- the pickup latches.
+            gid ← onlyGroundId ws
+            pickupGroundOnPage env ws (UnitId 809) gid `shouldReturn` True
+            takenFlags ws `shouldReturn` [True]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+
+        -- #1990's guard, held against #917's own widening. Before
+        -- significant contents a zero-roll ruin admitted the clearance
+        -- pass for nothing; a version of #917 that polled every
+        -- unsatisfied location would have reintroduced exactly that,
+        -- on every tick, for the whole life of an unlooted ruin.
+        it "does NOT rasterize sight for a discovered location whose \
+           \guaranteed item is still on the floor — an unsatisfied \
+           \obligation is not clearance WORK, so the page short-circuits" $
+           \env → do
+            let pageId = WorldPageId "sig_cost_guard"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [owed 1 5081]
+            _ ← dropOnGround ws 5081
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 810)
+                    (testUnit pageId FactionPlayer 8 8) }
+            poisonSight ws
+            sightRasterized env pageId ws `shouldReturn` False
+
+        -- The whole reason binding is not a verb of its own. With a
+        -- public bind-this-ground-item API, a caller could spawn or
+        -- pick out an unrelated item of the right definition, bind it,
+        -- and take THAT — the location would never spawn its own
+        -- guaranteed item (a bound slot is skipped) and the unrelated
+        -- pickup would clear the ruin. Definition and duplicate-identity
+        -- checks cannot see it: the substitute is exactly the right
+        -- kind of item.
+        it "gives Lua no way to choose WHICH item fills a slot — an \
+           \unrelated ground item of the very same definition cannot \
+           \satisfy an obligation" $ \env → do
+            let pageId = WorldPageId "sig_no_substitution"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            -- A decoy of the RIGHT definition, lying on the same page.
+            decoy ← dropOnGround ws 5101
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            bound ← boundIds ws
+            -- The binding names the item the ENGINE just made, never
+            -- the decoy that was already there.
+            bound `shouldSatisfy` (≢ [Just 5101])
+            bound `shouldSatisfy` all isJust
+
+            -- Taking the decoy therefore latches nothing and clears
+            -- nothing, however identical it looks.
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 811)
+                    (testUnit pageId FactionPlayer 8 8) }
+            pickupGroundOnPage env ws (UnitId 811) decoy `shouldReturn` True
+            takenFlags ws `shouldReturn` [False]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+
+        it "refuses an unknown slot, an unknown instance, and a slot \
+           \already filled — and a refusal leaves NO item on the ground, \
+           \so a retry cannot orphan one" $ \env → do
+            let pageId = WorldPageId "sig_spawn_refusals"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            spawnSignificant env pageId 1 7 (8, 8) `shouldReturn` False
+            spawnSignificant env pageId 99 1 (8, 8) `shouldReturn` False
+            boundIds ws `shouldReturn` [Nothing]
+            groundCount ws `shouldReturn` 0
+
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            filled ← boundIds ws
+            groundCount ws `shouldReturn` 1
+            -- Write-once: a second call for the same slot is refused,
+            -- the first binding stands, and no second item is spawned.
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` False
+            boundIds ws `shouldReturn` filled
+            groundCount ws `shouldReturn` 1
+
+        it "holds a location with a completed encounter uncleared while \
+           \its guaranteed item is still on the floor, then clears it \
+           \exactly once when the item is taken" $ \env → do
+            let pageId = WorldPageId "sig_both_conditions"
+            -- Zero-nomad: #916's half is satisfied from the outset, so
+            -- what this pins is that the ITEM half alone still gates it.
+            ws ← newSignificantPage env pageId LifecycleUnknown (Just [])
+                     [owed 1 5001]
+            gid ← dropOnGround ws 5001
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 801)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            -- Sight discovers it, but it is NOT cleared: the item is
+            -- still there. One event, not two.
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+            eventsOnPage env "sig_both_conditions"
+                >>= (\evs → map peCategory evs `shouldBe` ["location_discovery"])
+
+            -- A real pickup through the authoritative ground boundary
+            -- latches the obligation.
+            pickupGroundOnPage env ws (UnitId 801) gid `shouldReturn` True
+            takenFlags ws `shouldReturn` [True]
+
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            -- Re-ticking cannot announce it twice.
+            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery env pageId ws
+            evs ← eventsOnPage env "sig_both_conditions"
+            map peCategory evs `shouldBe`
+                ["location_discovery", "location_clearance"]
+
+        it "needs EVERY obligation: taking one of two leaves the location \
+           \discovered" $ \env → do
+            let pageId = WorldPageId "sig_two_items"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [owed 1 5011, owed 2 5012]
+            gidA ← dropOnGround ws 5011
+            _    ← dropOnGround ws 5012
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 802)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            pickupGroundOnPage env ws (UnitId 802) gidA `shouldReturn` True
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+            takenFlags ws `shouldReturn` [True, False]
+            eventsOnPage env "sig_two_items" `shouldReturn` []
+
+        it "latches for a NON-PLAYER faction's pickup too — the location \
+           \was looted whoever did it" $ \env → do
+            let pageId = WorldPageId "sig_hostile_pickup"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [owed 1 5021]
+            gid ← dropOnGround ws 5021
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 803)
+                    (testUnit pageId FactionHostile 8 8) }
+
+            pickupGroundOnPage env ws (UnitId 803) gid `shouldReturn` True
+            takenFlags ws `shouldReturn` [True]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+
+        it "does NOT latch a pickup that failed and rolled back" $ \env → do
+            let pageId = WorldPageId "sig_failed_pickup"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [owed 1 5031]
+            gid ← dropOnGround ws 5031
+            -- No such unit: the item is removed, the insert fails, and
+            -- the rollback re-spawns it under a NEW ground id.
+            writeIORef (unitManagerRef env) emptyUnitManager
+
+            pickupGroundOnPage env ws (UnitId 999) gid `shouldReturn` False
+            takenFlags ws `shouldReturn` [False]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+
+            -- The restored item has a new ground id but the SAME
+            -- physical identity, so picking it up now does latch —
+            -- which is exactly why provenance is keyed on the physical
+            -- id rather than on the ground id.
+            gids ← HM.keys ∘ gisItems <$> readIORef (wsGroundItemsRef ws)
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 804)
+                    (testUnit pageId FactionPlayer 8 8) }
+            case gids of
+                [gid'] → do
+                    gid' `shouldNotBe` gid
+                    pickupGroundOnPage env ws (UnitId 804) gid'
+                        `shouldReturn` True
+                other → expectationFailure
+                    ("expected one restored ground item, got " <> show other)
+            takenFlags ws `shouldReturn` [True]
+
+        it "ignores an ordinary salvage pickup — an item no obligation \
+           \owns changes nothing" $ \env → do
+            let pageId = WorldPageId "sig_incidental_pickup"
+            ws ← newSignificantPage env pageId LifecycleDiscovered Nothing
+                     [owed 1 5041]
+            _        ← dropOnGround ws 5041
+            lootGid  ← dropOnGround ws 5042
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 805)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            pickupGroundOnPage env ws (UnitId 805) lootGid `shouldReturn` True
+            takenFlags ws `shouldReturn` [False]
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+            eventsOnPage env "sig_incidental_pickup" `shouldReturn` []
+
+        it "never clears a location that authors NEITHER condition, \
+           \however long the tick polls it" $ \env → do
+            let pageId = WorldPageId "sig_no_condition"
+            ws ← newSignificantPage env pageId LifecycleUnknown Nothing []
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 806)
+                    (testUnit pageId FactionPlayer 8 8) }
+
+            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleDiscovered])
+            evs ← eventsOnPage env "sig_no_condition"
+            map peCategory evs `shouldBe` ["location_discovery"]
+
+        it "keeps a pre-discovery recovery private, then announces the \
+           \deferred clearance exactly once on first sight" $ \env → do
+            let pageId = WorldPageId "sig_hidden_recovery"
+            ws ← newSignificantPage env pageId LifecycleUnknown Nothing
+                     [owed 1 5051]
+            gid ← dropOnGround ws 5051
+            -- A hostile scavenger takes it while the site is unknown to
+            -- the player: nothing is revealed and nothing is announced.
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 807)
+                    (testUnit pageId FactionHostile 8 8) }
+            pickupGroundOnPage env ws (UnitId 807) gid `shouldReturn` True
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleUnknown])
+            eventsOnPage env "sig_hidden_recovery" `shouldReturn` []
+
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.fromList
+                    [ (UnitId 807, testUnit pageId FactionHostile 8 8)
+                    , (UnitId 808, testUnit pageId FactionPlayer 8 8) ] }
+            tickLocationDiscovery env pageId ws
+            tickLocationDiscovery env pageId ws
+            readIORef (wsGenParamsRef ws) >>= (\p →
+                lifecyclesOf p `shouldBe` Just [LifecycleCleared])
+            evs ← eventsOnPage env "sig_hidden_recovery"
             map peCategory evs `shouldBe`
                 ["location_discovery", "location_clearance"]

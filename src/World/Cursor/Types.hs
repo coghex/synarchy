@@ -80,12 +80,12 @@ data CursorState = CursorState
     --   rectangle every other structure piece designates. Set from Lua
     --   (construction.setLineMode) when entering/leaving wire placement.
     , constructLineMode ∷ Bool
-    -- | Chop-designation tool (#97): first-click anchor tile. Mirrors
-    --   'mineAnchor' — the render pass previews the anchor→hover
-    --   rectangle until the second click commits it.
-    , chopAnchor ∷ Maybe (Int, Int)
-    -- | Texture for committed chop-designation markers (set from Lua
-    --   like the cursor textures; rendered over designated trees).
+    -- | Texture for the committed chop-designation marker (set from
+    --   Lua like the cursor textures). #1856: ONE alpha icon per
+    --   designated tree, anchored to that tree's rendered ground
+    --   contact — not the full-tile ground overlay it replaced, and
+    --   there is no chop ANCHOR any more because the gesture is a
+    --   screen-space press-drag rather than two tile clicks.
     , chopDesignTexture ∷ Maybe TextureHandle
     -- | Till-designation tool (#333): first-click anchor tile. Mirrors
     --   'mineAnchor' — the render pass previews the anchor→hover
@@ -133,7 +133,6 @@ emptyCursorState =
         , constructBuildingTexture = Nothing
         , constructStructureTarget = Nothing
         , constructLineMode = False
-        , chopAnchor = Nothing
         , chopDesignTexture = Nothing
         , tillAnchor = Nothing
         , tillDesignTexture = Nothing
