@@ -9,11 +9,13 @@ module Engine.Asset.YamlLocations
     , LocationYamlDef(..)
     , LocationYamlFile(..)
     , loadLocationYaml
+    , significantItemErrors
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Text as T
+import qualified Data.HashSet as HS
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value(..), Object)
 import Data.Aeson.Types (parseEither, Parser)
 import qualified Data.Aeson.Key as Key
@@ -68,6 +70,13 @@ data LocationYamlContent = LocationYamlContent
     , lycRolls    ∷ !Int
     , lycCountRange ∷ !(Maybe LocationYamlCountRange)
     , lycClearance ∷ !(Maybe Text)
+    , lycSignificant ∷ !Bool
+      -- ^ #917: mark this entry a GUARANTEED SIGNIFICANT item — one the
+      --   owning location's clearance predicate waits on. Legal ONLY on
+      --   @kind: item@; 'LocationYamlDef''s 'FromJSON' instance rejects
+      --   it anywhere else, which is what keeps a @loot_table@ draw out
+      --   of the predicate no matter what it rolls. Defaults to
+      --   'False', so an entry is incidental unless it says otherwise.
     } deriving (Show, Eq, Generic)
 
 instance FromJSON LocationYamlContent where
@@ -80,6 +89,7 @@ instance FromJSON LocationYamlContent where
         ⊛ v .:? "rolls"    .!= 1
         ⊛ v .:? "count_range"
         ⊛ v .:? "clearance"
+        ⊛ v .:? "significant" .!= False
 
 -- | The authoritative spatial contract (#777): an inclusive,
 --   axis-aligned tile box relative to the location's anchor. Required
@@ -391,6 +401,22 @@ instance FromJSON LocationYamlDef where
                             <> " ('" <> lycId c <> "'): unsupported encounter "
                             <> "clearance policy '" <> policy
                             <> "' (supported: death_only)"))
+            -- #917: the significant flag is a property of a FIXED item
+            -- entry and of nothing else. A loot-table draw is a draw —
+            -- letting it carry the flag would make what a location owes
+            -- depend on what it rolled, which is exactly what
+            -- requirement 4 forbids — and a unit or building is not an
+            -- item anyone can pick up, so an obligation naming one
+            -- could never be discharged. Rejected HERE rather than at
+            -- spawn time, where warning and skipping would still burn
+            -- the location's exactly-once content lifecycle and leave
+            -- it permanently unclearable.
+            when (lycSignificant c ∧ lycKind c ≢ "item") $
+                fail (T.unpack ("location '" <> lid
+                    <> "': content entry " <> tshow entryIx
+                    <> " ('" <> lycId c <> "'): 'significant' is "
+                    <> "supported only for item content, not '"
+                    <> lycKind c <> "'"))
             when (isNothing (lycCountRange c) ∧ isJust (lycClearance c)) $
                 fail (T.unpack ("location '" <> lid
                     <> "': content entry " <> tshow entryIx
@@ -440,3 +466,36 @@ instance FromJSON LocationYamlFile where
 loadLocationYaml ∷ LoggerState → FilePath → IO [LocationYamlDef]
 loadLocationYaml logger =
     loadYamlList logger "location" "location definitions" lyfLocations
+
+-- | Every GUARANTEED SIGNIFICANT content entry (#917) naming an item id
+--   that is not in @registered@, one message per offending entry.
+--
+--   Pure and registry-parameterised for the same reason
+--   'Location.Naming.locationNamingErrors' is: the check belongs beside
+--   the authored shape it constrains, while the registry it resolves
+--   against is only available in the API loader
+--   ("Engine.Scripting.Lua.API.Locations"), which calls this and
+--   rejects the whole file on any result.
+--
+--   This is deliberately STRICTER than an ordinary content id, which
+--   may warn and be skipped at spawn time (#90). An incidental entry
+--   that spawns nothing costs the location some salvage; a significant
+--   one that spawns nothing costs it its clearance FOREVER — the
+--   obligation is created at placement, @item.spawnGround@ then fails
+--   on every chunk load, and the compound predicate can never be
+--   satisfied. Rejecting the file is the only outcome that does not
+--   materialize a permanently unclearable world.
+--
+--   Only the ITEM id is resolved. The KIND restriction is a structural
+--   rule the definition parser above already enforces, so anything
+--   reaching here is a @kind: item@ entry.
+significantItemErrors ∷ HS.HashSet Text → [LocationYamlDef] → [Text]
+significantItemErrors registered defs =
+    [ "location '" <> lydId d
+        <> "': guaranteed significant content '" <> lycId c
+        <> "' names no registered item definition"
+    | d ← defs
+    , c ← lydContents d
+    , lycSignificant c
+    , not (HS.member (lycId c) registered)
+    ]

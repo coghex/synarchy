@@ -251,7 +251,11 @@ data WorldState = WorldState
       --   (surface z, build target, status, progress; see
       --   World.Construct.Types). Written by the world thread
       --   (WorldDesignateConstruct / cancel / set-status commands), read
-      --   by the render pass (blueprint ghost) and the build AI (#96).
+      --   by the render pass and the build AI (#96). The render pass
+      --   draws a BUILDING as a category blueprint and a STRUCTURE as
+      --   the piece's own art (#1846), and reads this map for a second
+      --   reason besides drawing it: a wire ghost's connection variant
+      --   counts designated neighbours (D-22).
       --   Persisted in saves (wpsConstructDesignations).
     , wsConstructAttemptRef ∷ IORef ConstructAttemptId
       -- ^ This page's construction ATTEMPT allocator (#1844): the id the
@@ -437,13 +441,13 @@ data WorldState = WorldState
       --   creation path — 'WorldInit', arena init, or load staging — can
       --   forget to assign one, and no consumer has an absent case to
       --   handle. Staging OVERWRITES it with the saved id when the save
-      --   carries one (@world-pages@ v9); a page restored from a
-      --   pre-v9 save simply keeps the fresh id minted here, which is
+      --   carries one (@world-pages@ v9 and later); a page restored
+      --   from a pre-v9 save simply keeps the fresh id minted here, which is
       --   requirement 7's "assigned a fresh id during transactional load
       --   staging, not derived from anything in the legacy save".
       --
-      --   Persisted per page in @world-pages@ v9 (authoritative) and
-      --   copied into the @"metadata"@ component at v3 so a
+      --   Persisted per page in @world-pages@ (authoritative, since
+      --   v9) and copied into the @"metadata"@ component at v3 so a
       --   @listSaves@-depth read can obtain it without decoding any
       --   gameplay component.
     }

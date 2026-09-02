@@ -19,6 +19,7 @@ import UPrelude
 import Test.Hspec
 import Data.IORef (readIORef)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
@@ -290,6 +291,7 @@ resolverSpec = describe "the resolver" $ do
         , pwStage        = emptyStructureStage
         , pwDesignations = designs
         , pwCatalog      = cat
+        , pwProposedWire = HS.empty
         }
 
     designated tile aid piece = HM.singleton

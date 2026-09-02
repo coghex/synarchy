@@ -28,6 +28,9 @@ module World.Save.Types
     , MissingItemDefRef(..)
     , renderMissingItemDefRef
     , missingItemDefReferences
+    , MissingSignificantItemRef(..)
+    , renderMissingSignificantItemRef
+    , missingSignificantItemReferences
     , MissingRecipeRef(..)
     , renderMissingRecipeRef
     , missingRecipeReferences
@@ -62,7 +65,8 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Structure.Palette (TexPalette)
 import Location.Instance
-    ( LocationGeometryError, LocationInstance(..), instancesToList
+    ( LocationGeometryError, LocationInstance(..), LocationInstanceId(..)
+    , LocationSignificantItem(..), instancesToList
     , resolveLegacyLocationInstances )
 import Location.Types (LocationRegistry)
 import World.Generate.Types (WorldGenParams(..))
@@ -305,8 +309,21 @@ data WorldPageSave = WorldPageSave
     , wpsConstructNextAttempt ∷ !ConstructAttemptId
       -- ^ #1844: this page's construction ATTEMPT allocator.
         -- ^ Construction designations (#95): build target + status +
-        --   progress per tile. Like mine designations, ghosts re-render
-        --   from the stored z, so restoration needs no chunk loading.
+        --   progress per tile.
+        --
+        --   A BUILDING marker re-renders from the stored z like a mine
+        --   designation, so its restoration needs no chunk loading.
+        --
+        --   A STRUCTURE ghost does need resident terrain (#1846): it
+        --   draws the piece's own art at the final grid z
+        --   'World.Construct.Plan' resolves, and that resolution reads
+        --   live terrain. This is NOT a restoration requirement — the
+        --   record restores exactly as it always did, and no load waits
+        --   on a chunk — but such a ghost is simply ABSENT until its
+        --   chunk publishes, which is the resolver's
+        --   @unresolved-terrain@ outcome and is deliberately
+        --   indistinguishable from any other frame in which the terrain
+        --   is not yet there.
     , wpsGroundItems  ∷ !GroundItems
         -- ^ Items lying in the world. Full ItemInstances + float
         --   positions; resting height derives from terrain at render,
@@ -1046,6 +1063,58 @@ missingItemDefReferences itemDefs pages = concatMap pageRefs pages
         [ MissingItemDefRef src pid (iiInstanceId i) (iiDefName i)
         | i ← flattenItemInstances inst
         , not (HS.member (iiDefName i) itemDefs) ]
+
+-- | A saved GUARANTEED SIGNIFICANT obligation (#917) that has not been
+--   spawned yet and whose stored item def name no longer resolves.
+--
+--   Same load-validation contract as 'MissingItemDefRef', and for a
+--   sharper reason than most: the obligation is what
+--   @scripts\/locations.lua@ will try to spawn the next time the
+--   location's chunk loads. If its def is gone, that spawn fails on
+--   every attempt, @contents_spawned@ is never marked, and the location
+--   can never satisfy its clearance predicate — the same unrecoverable
+--   outcome 'Engine.Asset.YamlLocations.significantItemErrors' refuses
+--   at the AUTHORING boundary, arriving here by the other route: a save
+--   written before the item spawned, loaded against a build whose
+--   definition set has moved on.
+--
+--   Deliberately restricted to UNSPAWNED obligations. Once one names a
+--   physical item, nothing re-spawns it — the def name is then a
+--   historical record of what was made, and the item may legitimately
+--   have been consumed or destroyed — so a deregistered def there is
+--   inert rather than fatal, and rejecting the load over it would
+--   refuse a save nothing is actually wrong with.
+data MissingSignificantItemRef = MissingSignificantItemRef
+    { msirPage     ∷ !WorldPageId
+    , msirInstance ∷ !Int          -- ^ the owning 'LocationInstanceId'
+    , msirSlot     ∷ !Int          -- ^ the obligation's own slot
+    , msirDefName  ∷ !Text         -- ^ the unresolved item definition name
+    } deriving (Show, Eq)
+
+renderMissingSignificantItemRef ∷ MissingSignificantItemRef → Text
+renderMissingSignificantItemRef r =
+    "location #" <> tshow (msirInstance r) <> " on page '"
+        <> unWorldPageId (msirPage r) <> "' owes an unspawned significant \
+           \item at slot " <> tshow (msirSlot r)
+        <> " referencing unknown item definition '" <> msirDefName r <> "'"
+
+-- | Every unspawned significant obligation across every page whose
+--   stored def name is absent from the registered item-definition key
+--   set. Empty ⇒ every obligation the load would still have to spawn
+--   can actually be spawned.
+missingSignificantItemReferences
+    ∷ HS.HashSet Text                     -- ^ registered item def names
+    → [(WorldPageId, WorldPageSave)]
+    → [MissingSignificantItemRef]
+missingSignificantItemReferences itemDefs pages =
+    [ MissingSignificantItemRef pid (unLocationInstanceId (liId inst))
+                                (lsiSlot e) (lsiItemDefName e)
+    | (pid, w) ← pages
+    , inst ← instancesToList (wgpLocationInstances (wpsGenParams w))
+    , e ← liSignificant inst
+    , isNothing (lsiInstanceId e)
+    , not (HS.member (lsiItemDefName e) itemDefs)
+    ]
 
 -- | A saved craft bill whose 'cbRecipe' does not resolve against the
 --   currently-registered recipe catalogue. Same load-validation

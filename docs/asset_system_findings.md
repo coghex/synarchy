@@ -188,6 +188,31 @@ This removes the intended at-a-glance distinction and also uploads three separat
 - **Scope and constraints:** This can remain an asset-only change. A focused asset assertion should prevent the three semantic markers from becoming byte-identical again.
 - **Remaining uncertainty:** None at draft time.
 
+**Superseded direction (#1846).** The narrative above is the pre-epic reading and
+its "supply visually distinct category art" direction no longer describes where
+this is going. #1780 closed as superseded against epic
+[#1837](designation_tools_design.md) (design decision D-23), which
+replaces the category-marker MECHANISM rather than repainting it: a planned
+target is drawn as the target's own art, so there is no category marker to make
+distinct.
+
+- **#1846** did that for structures. `construct_designate_structure.png`, its
+  handle, its `scripts/hud.lua` wiring and the structure branch of
+  `construction.setDesignateTexture` are gone; a planned floor, ceiling, wall
+  edge, post or wire now previews and designates as the piece the placer will
+  build, at the placer's own grid z.
+- **#1845 (DTV-10)** owns the building half. Until it lands,
+  `construct_designate_building.png` is the one remaining category marker and
+  the only one this finding still describes; when it lands, the mechanism —
+  and the "three semantically distinct markers" this entry is about — is fully
+  retired.
+- `mine_designate.png` is untouched by either and remains the legitimate
+  original the two construction copies were made from.
+
+The byte-identity guard this entry asks for is therefore not worth adding to a
+family that is being dissolved; the durable protection is that neither
+replacement path has a category marker to duplicate.
+
 ### [#1782] ASSET-6. Five four-variant vegetation families contain only one visual variant
 
 > **Disposition:** Filed as #1782, an art issue for all 20 frames across the five

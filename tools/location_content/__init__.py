@@ -11,7 +11,9 @@ means growing a single 980-line `run`.
   * `engine_queries` — the read/act helpers more than one scenario uses.
   * `content` — ruin geometry, content and encounter spawning,
     registered-item validation, per-instance loot stability under
-    same/reverse visit order, and fresh-process no-respawn persistence.
+    same/reverse visit order, fresh-process no-respawn persistence, and
+    (#917) the guaranteed significant obligations and the compound
+    clearance predicate.
   * `knowledge` — sight-based player discovery, exact-once discovery
     events, per-unit memories, dangling-reference reconciliation, their
     save/load survival, and same-instance-id isolation across pages.

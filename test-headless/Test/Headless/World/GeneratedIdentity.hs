@@ -92,7 +92,9 @@ idOne, idTwo ∷ GeneratedWorldId
 idOne = fixtureGeneratedWorldIdForPage pageOne
 idTwo = fixtureGeneratedWorldIdForPage pageTwo
 
--- | A page core at the CURRENT (v9) wire shape.
+-- | A page core at the CURRENT wire shape (v9 when #2021 wrote this;
+--   v10 since #917, which appended significant-item obligations to the
+--   location table without touching this field).
 coreV9 ∷ WorldPageId → Maybe GeneratedWorldId → PageCoreDTO
 coreV9 pid gid = PageCoreDTO
     { pcPageId = pid, pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
@@ -104,7 +106,7 @@ coreV9 pid gid = PageCoreDTO
 --   no generated-world id at all.
 coreV8 ∷ WorldPageId → PageCoreDTOv8
 coreV8 pid = PageCoreDTOv8
-    { pc8PageId = pid, pc8GenParams = toWorldGenParamsDTO defaultWorldGenParams
+    { pc8PageId = pid, pc8GenParams = toWorldGenParamsDTOv7 defaultWorldGenParams
     , pc8CameraX = 0, pc8CameraY = 0, pc8TimeHour = 0, pc8TimeMinute = 0
     , pc8DateYear = 1, pc8DateMonth = 1, pc8DateDay = 1, pc8MapMode = ZMDefault
     , pc8Identity = Nothing }
@@ -171,7 +173,7 @@ pureSpec = describe "generated world identity (#2021)" $ do
             T.length (renderGeneratedWorldId gid) `shouldBe` 32
             renderGeneratedWorldId gid `shouldBe` renderGeneratedWorldId gid
 
-    describe "world-pages v9" $ do
+    describe "world-pages v9 (the version that added the field)" $ do
         it "round-trips a page's id byte-exactly through the real codec" $
             case decodeWorldPages 9 (S.encode (WorldPagesDTO [coreV9 pageOne (Just idOne)])) of
                 Left e   → expectationFailure (T.unpack (renderComponentError e))
@@ -216,9 +218,9 @@ pureSpec = describe "generated world identity (#2021)" $ do
                         Right wp → map pgsGeneratedId (HM.elems (wpBase wp))
                                        `shouldBe` [Nothing]
 
-        it "still accepts every historical version — v1 through v8 all \
+        it "still accepts every historical version — v1 through v9 all \
            \decode, so the bump added a reader rather than replacing one" $
-            worldPagesInputVersions `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            worldPagesInputVersions `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     describe "metadata v3" $ do
         it "still accepts every historical version — v1 and v2 both \
@@ -574,7 +576,7 @@ asLegacyV8Envelope (meta, snap) =
         (map toCoreV8 (L.sortOn pgsPageId (HM.elems (snapPages snap))))
     toCoreV8 p = PageCoreDTOv8
         { pc8PageId    = pgsPageId p
-        , pc8GenParams = toWorldGenParamsDTO (pgsGenParams p)
+        , pc8GenParams = toWorldGenParamsDTOv7 (pgsGenParams p)
         , pc8CameraX   = pgsCameraX p
         , pc8CameraY   = pgsCameraY p
         , pc8TimeHour  = pgsTimeHour p

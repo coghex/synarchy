@@ -435,7 +435,7 @@ def run(check) -> None:
                    "missing_count": 1}],
               str(gapturns[0]["oracle"].get("event_log_gaps")))
 
-        from critic import build_signals, friction_candidates, build_digest
+        from critic_signals import build_signals, friction_candidates, build_digest
         gapsignals = build_signals(gapdir, gapturns)
         check("the critic reads event_log_gaps as its own signal",
               gapsignals[0]["event_log_gaps"] == [

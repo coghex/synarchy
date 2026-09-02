@@ -326,6 +326,12 @@ fixturePage = WorldPageId "seam_frame_probe"
 wirePiece ∷ ConstructTarget
 wirePiece = CtStructure (StructurePiece "wire" "wire" Nothing)
 
+-- | The piece the build tool is ARMED with while a preview is being
+--   counted (#1846). A floor from the pack 'resetPage' registers, so its
+--   art resolves and it emits exactly one quad per candidate tile.
+floorPiece ∷ StructurePiece
+floorPiece = StructurePiece "dungeon_1" "floor" Nothing
+
 -- * Pure helpers
 
 spec ∷ Spec
@@ -565,17 +571,34 @@ engineSpec = beforeAll setup $ do
       n `shouldBe` length drawnKeys
 
     it "construction, including the wire line snap" $ \(env, _) → do
+      -- #1846: the preview draws the ARMED piece's own art, so the tool
+      -- has to be armed for anything to be previewed at all — the
+      -- anchor alone is now half a gesture. 'floorPiece' is the pack
+      -- 'resetPage' already registers, and a floor emits exactly one
+      -- quad per candidate, so the count still reads as "one per tile
+      -- the commit designates".
       ws ← resetPage env 0 noFlora
       rect ← previewQuadCount env ws BuildTool
-              (\cs → cs { constructAnchor = Just anchorTile })
+              (\cs → cs { constructAnchor = Just anchorTile
+                        , constructStructureTarget = Just floorPiece })
       rect `shouldBe` length drawnKeys
       -- Line mode picks its axis from the anchor-relative delta, which
       -- is meaningless in the canonical frame: a seam-crossing drag
       -- would snap to the wrong axis and preview a single tile.
       line ← previewQuadCount env ws BuildTool
               (\cs → cs { constructAnchor = Just anchorTile
+                        , constructStructureTarget = Just floorPiece
                         , constructLineMode = True })
       line `shouldBe` length drawnKeys
+
+    it "construction previews nothing until a piece is armed" $ \(env, _) → do
+      -- The other half of the same contract: an anchor with no armed
+      -- target is not a gesture, and previewing the last piece under a
+      -- bare anchor would be worse than previewing nothing.
+      ws ← resetPage env 0 noFlora
+      unarmed ← previewQuadCount env ws BuildTool
+              (\cs → cs { constructAnchor = Just anchorTile })
+      unarmed `shouldBe` 0
 
     -- #1856 removed chop's anchor→hover preview entirely: its gesture
     -- is a screen-space press-drag whose box is a UI overlay
@@ -1154,9 +1177,18 @@ configureSeamView env = do
                       * (((wx - camX) / (previewZoom * aspect)) + 1.0) / 2.0)
         pixY = round (fromIntegral previewWinH
                       * (((wy - camY) / previewZoom) + 1.0) / 2.0)
+    -- The view slice sits ABOVE the fixture's flat surface (#1846). A
+    -- structure ghost is drawn where the PIECE will sit — floor, wall
+    -- and wire at surface + 1, a ceiling at surface + 2 — and
+    -- 'Structure.Render.pieceWithinSliceBand' culls anything above the
+    -- camera's slice, so a slice level with the ground would cull every
+    -- structure ghost this fixture is trying to count. Gameplay looks
+    -- down on terrain from above for the same reason; every other
+    -- designation marker draws AT the surface and is indifferent to
+    -- this.
     writeIORef (cameraRef env) defaultCamera
         { camPosition = (camX, camY), camZoom = previewZoom
-        , camFacing = FaceSouth, camZSlice = zSlice }
+        , camFacing = FaceSouth, camZSlice = zSlice + 2 }
     writeIORef (windowSizeRef env) (previewWinW, previewWinH)
     writeIORef (framebufferSizeRef env) (previewFbW, previewFbH)
     pure (pixX, pixY)
