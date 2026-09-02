@@ -42,7 +42,7 @@ import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Char (isDigit)
-import Control.Exception (IOException, SomeException, try, finally)
+import Control.Exception (IOException, SomeException, try, finally, onException)
 import System.Directory (doesFileExist, removeFile, pathIsSymbolicLink)
 import System.FilePath (takeDirectory)
 import System.IO
@@ -102,13 +102,16 @@ rejectSymlinkedManagedPath dir = do
 
 -- | Flush the RTS-level write buffer, then durably sync the underlying
 --   file descriptor (POSIX @fsync@) before the written bytes are trusted
---   for anything. 'handleToFd' takes ownership of (and closes) the
---   Haskell-level 'Handle'; the caller must not use @h@ again after this
---   returns, success or failure.
+--   for anything. The 'Handle' is consumed on EVERY path out: 'handleToFd'
+--   takes ownership of (and closes) it on the way to the sync, and a
+--   failure BEFORE that hand-over — the flush itself, or the hand-over —
+--   closes it here, so a write that fails at the flush cannot leak a
+--   descriptor and, repeated, exhaust them. The caller must not use @h@
+--   again after this returns, success or failure.
 durableFlush ∷ Handle → IO ()
 durableFlush h = do
-    hFlush h
-    fd ← handleToFd h
+    hFlush h `onException` closeQuietly h
+    fd ← handleToFd h `onException` closeQuietly h
     fileSynchronise fd `finally` closeFd fd
 
 -- | Which step of 'writeBytesDurably' failed, so a caller can name its
@@ -119,9 +122,10 @@ data WriteStep = StepOpen | StepWrite | StepFlush
     deriving (Show, Eq)
 
 -- | Create-or-truncate @path@, write @bytes@, and 'durableFlush' before
---   returning. The handle is closed on every path out, so a failure
---   never leaks a descriptor, and every failure is returned with the
---   step it happened in rather than thrown. The bytes are NOT re-read
+--   returning. The handle is closed on every path out — here for a
+--   failed write, by 'durableFlush' itself for a failed flush or sync —
+--   so a failure never leaks a descriptor, and every failure is returned
+--   with the step it happened in rather than thrown. The bytes are NOT re-read
 --   here — every transaction built on this re-reads from disk itself,
 --   because what it compares the re-read against (an expected metadata,
 --   an expected digest) is its own business.

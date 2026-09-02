@@ -33,7 +33,8 @@ import System.Directory
     , removePathForcibly, getPermissions, setPermissions, Permissions(..)
     , renameDirectory )
 import System.FilePath ((</>))
-import System.IO (hClose, hGetLine)
+import System.IO (hClose, hGetLine, hIsClosed, hSetBinaryMode)
+import System.Posix.IO (createPipe, closeFd, fdToHandle)
 import System.Posix.User (getEffectiveUserID)
 import System.Process
     ( createProcess, proc, StdStream(..), CreateProcess(..), waitForProcess
@@ -42,6 +43,7 @@ import System.Process
 import World.GeneratedLibrary
 import World.GeneratedLibrary.Layout
 import World.GeneratedLibrary.Types (RegistryFile(..), emptyReconcileReport)
+import World.Save.Storage.Durable (WriteStep(..), durableFlush, writeBytesDurably)
 import World.Page.GeneratedId (GeneratedWorldId, renderGeneratedWorldId)
 import World.Save.Storage
     ( publishGeneration, renderPublishFailure, authoritativeFileName
@@ -326,6 +328,7 @@ preIdentityBytes =
 
 spec ∷ Spec
 spec = do
+    durableSpec
     layoutSpec
     recordSpec
     publishSpec
@@ -333,6 +336,35 @@ spec = do
     registrySpec
     containmentSpec
     coordinationSpec
+
+-- Durable primitives: the shared write helper never leaks -------------------
+
+durableSpec ∷ Spec
+durableSpec = describe "durable primitives" $ do
+    it "durableFlush closes the handle when the flush itself fails" $ do
+        -- A pipe whose read end is already closed: the buffered bytes
+        -- cannot be flushed (EPIPE), which is the failure that used to
+        -- happen before ownership of the handle had been handed over.
+        (readEnd, writeEnd) ← createPipe
+        closeFd readEnd
+        h ← fdToHandle writeEnd
+        hSetBinaryMode h True
+        BS.hPut h (BS.replicate 16 1)
+        r ← try (durableFlush h)
+        case r of
+            Left (_ ∷ SomeException) → pure ()
+            Right ()                 → expectationFailure "flush to a reader-less pipe succeeded"
+        hIsClosed h `shouldReturn` True
+
+    it "writeBytesDurably reports the step that failed and leaves no open handle behind" $
+        withScratch $ \root → do
+            -- A directory where the file should go: the open fails.
+            createDirectory (root </> "taken")
+            r ← writeBytesDurably (root </> "taken") "x"
+            fmap fst (either Just (const Nothing) r) `shouldBe` Just StepOpen
+            ok ← writeBytesDurably (root </> "fine") "payload"
+            ok `shouldSatisfy` either (const False) (const True)
+            BS.readFile (root </> "fine") `shouldReturn` "payload"
 
 -- Layout: identity text never becomes a path ------------------------------
 
