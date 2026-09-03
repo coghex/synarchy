@@ -922,6 +922,7 @@ library
                      World.Time.Local
                      World.Flora.Identity
                      World.Flora.Types
+                     World.Flora.Reference
                      World.Flora.Designation
                      World.Flora.HitTest
                      World.Flora.Growth
@@ -1182,6 +1183,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Breakthrough
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
+                   Test.Headless.WorldGen.ConfigLoad
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.Hazard
                    Test.Headless.Unit.Pathing.MoveToApi

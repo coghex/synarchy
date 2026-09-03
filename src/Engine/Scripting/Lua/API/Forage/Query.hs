@@ -27,7 +27,7 @@ import World.Types
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
                            growthPhaseTag, activeStageTag,
                            lifePhaseText, annualStageText)
-import World.Flora.CropPlot (CropPlot(..), cropPlotElapsedDays,
+import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
                              cropPlotInstance)
 import World.Generate.Coordinates (globalToChunk, chunkToGlobal,
                                   chunkInSeamRegion, seamTileDist2)
