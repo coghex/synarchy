@@ -26,9 +26,9 @@ import datetime
 import json
 
 from .support import (
-    COMMIT_A, COMMIT_B, DAY, NOW, SYNTHETIC, at, cli, cli_repo, expect,
-    expect_refusal, measurement, probe_census, registry, result_document,
-    scratch, seeded, summary_of, unchanged,
+    at, census_storage, census_summary, cli, cli_repo, COMMIT_A, COMMIT_B, DAY,
+    expect, expect_refusal, measurement, NOW, probe_census, registry,
+    result_document, scratch, seeded, summary_of, SYNTHETIC, unchanged,
 )
 
 import probe_engine  # type: ignore  # noqa: E402 -- `.support` installs tools/
@@ -49,9 +49,9 @@ def test_cohort_accumulation() -> None:
         # Two UNEQUAL batches on one commit. Averaging the stored batch
         # rates would give (0.5 + 0.1) / 2 = 0.30; the combined
         # numerator and denominator give 2 / 12 = 0.1667.
-        probe_census.record_result(path, measurement(runs=2, failures=1,
+        census_storage.record_result(path, measurement(runs=2, failures=1,
                                                      age_days=2))
-        probe_census.record_result(path, measurement(runs=10, failures=1,
+        census_storage.record_result(path, measurement(runs=10, failures=1,
                                                      age_days=1))
         summary = summary_of(path)
         expect(summary["requested_runs"] == 12
@@ -69,7 +69,7 @@ def test_cohort_accumulation() -> None:
         # The freshness anchor is the LATEST contributing timestamp, so
         # an out-of-order same-commit result adds counts without
         # dragging it backwards.
-        probe_census.record_result(path, measurement(runs=4, failures=0,
+        census_storage.record_result(path, measurement(runs=4, failures=0,
                                                      age_days=9))
         summary = summary_of(path)
         expect(summary["requested_runs"] == 16
@@ -88,9 +88,9 @@ def test_cohort_append_order() -> None:
         # A -> B -> A. Commit hashes have no intrinsic ordering, so the
         # third measurement opens a THIRD cohort rather than reopening
         # or merging with the first.
-        probe_census.record_result(path, measurement(COMMIT_A, age_days=6))
-        probe_census.record_result(path, measurement(COMMIT_B, age_days=4))
-        probe_census.record_result(path, measurement(COMMIT_A, runs=5,
+        census_storage.record_result(path, measurement(COMMIT_A, age_days=6))
+        census_storage.record_result(path, measurement(COMMIT_B, age_days=4))
+        census_storage.record_result(path, measurement(COMMIT_A, runs=5,
                                                      failures=5, age_days=2))
         census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
         expect([cohort["commit_sha"] for cohort in census["history"]]
@@ -116,7 +116,7 @@ def test_head_movement_is_not_a_census_event() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, measurement(COMMIT_A, age_days=3))
+        census_storage.record_result(path, measurement(COMMIT_A, age_days=3))
         before_bytes = path.read_bytes()
         before = summary_of(path)
 
@@ -151,7 +151,7 @@ def test_staleness_boundary() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, measurement(age_days=7))
+        census_storage.record_result(path, measurement(age_days=7))
         summary = summary_of(path, stale_after_seconds=14 * DAY)
         expect(summary["age_seconds"] == 7 * DAY,
                "age is the distance from the anchor to the evaluation time")
@@ -194,7 +194,7 @@ def test_unmeasured_and_zero_rate() -> None:
                and never["classification"] == "manual-only",
                "it still carries its inventory identity")
 
-        probe_census.record_result(
+        census_storage.record_result(
             path, measurement(probe="gamma", runs=8, failures=0, age_days=1))
         clean = summary_of(path, "gamma")
         expect(clean["measured"] is True and clean["failure_rate"] == 0.0
@@ -218,7 +218,7 @@ def test_unmeasured_and_zero_rate() -> None:
         no_runs["check_counts"] = {check["id"]: {"PASS": 0, "FAIL": 0,
                                                  "MISSING": 0}
                                    for check in no_runs["checks"]}
-        probe_census.record_result(path, no_runs)
+        census_storage.record_result(path, no_runs)
         empty = summary_of(path, "beta")
         expect(empty["measured"] is True and empty["requested_runs"] == 0
                and empty["failure_rate"] is None,
@@ -230,15 +230,15 @@ def test_history_only_statistic() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, measurement(COMMIT_A, runs=3,
+        census_storage.record_result(path, measurement(COMMIT_A, runs=3,
                                                      failures=3, age_days=30))
-        probe_census.record_result(path, measurement(COMMIT_B, runs=4,
+        census_storage.record_result(path, measurement(COMMIT_B, runs=4,
                                                      failures=1, age_days=9))
         # Promotion archives the current cohort and does not restore it
         # on a later downgrade, so `current` is null while the newest
         # measured statistic is real and must still be reported.
         with registry(ci_eligible=("alpha",)):
-            probe_census.ensure_document(path)
+            census_storage.ensure_document(path)
         census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
         expect(census["current"] is None and len(census["history"]) == 2,
                "promotion archives the current cohort, keeping both")
@@ -261,7 +261,7 @@ def test_history_only_statistic() -> None:
 
         # A downgrade refreshes the classification and nothing else, so
         # the archived statistic remains the authoritative one.
-        probe_census.ensure_document(path)
+        census_storage.ensure_document(path)
         after = summary_of(path, stale_after_seconds=9 * DAY)
         expect(after["cohort"] == "history"
                and after["commit_sha"] == COMMIT_B,
@@ -274,14 +274,14 @@ def test_cohort_semantic_refusals() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, measurement(age_days=1))
+        census_storage.record_result(path, measurement(age_days=1))
         before = path.read_bytes()
 
         # The placeholder `probe_flake` writes when git could not be
         # consulted is well-formed and schema-valid; it names no commit,
         # so it may not open or extend a cohort.
         expect_refusal(
-            lambda: probe_census.record_result(
+            lambda: census_storage.record_result(
                 path, measurement(commit="unknown", age_days=0)),
             "the `unknown` commit placeholder cannot open a cohort",
             "unknown", "no commit")
@@ -291,7 +291,7 @@ def test_cohort_semantic_refusals() -> None:
                             ("A" * 40, "an uppercase hash"),
                             ("z" * 40, "a non-hex hash")):
             expect_refusal(
-                lambda commit=commit: probe_census.record_result(
+                lambda commit=commit: census_storage.record_result(
                     path, measurement(commit=commit)),
                 f"{why} is refused as a cohort identity",
                 "lowercase hex")
@@ -300,7 +300,7 @@ def test_cohort_semantic_refusals() -> None:
         # A harness error is deliberately NOT gated: it contributes to
         # no cohort, and unmeasurable provenance is exactly what the
         # attempt log retains.
-        probe_census.record_result(path, result_document(
+        census_storage.record_result(path, result_document(
             status="harness-error", commit="unknown"))
         census = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
         expect(census["attempts"][-1]["commit_sha"] == "unknown"
@@ -315,7 +315,7 @@ def test_cohort_semantic_refusals() -> None:
         document = json.loads(path.read_text(encoding="utf-8"))
         document["probes"][0]["census"]["current"]["commit_sha"] = "unknown"
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 document, now=NOW, stale_after_seconds=DAY, probe="alpha"),
             "a stored cohort keyed by the placeholder refuses on READ",
             "unknown")
@@ -324,7 +324,7 @@ def test_cohort_semantic_refusals() -> None:
         stored["probes"][0]["census"]["current"]["samples"][0][
             "commit_sha"] = "unknown"
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 stored, now=NOW, stale_after_seconds=DAY, probe="alpha"),
             "a stored SAMPLE carrying the placeholder refuses on READ too",
             "sample 0", "unknown")
@@ -333,7 +333,7 @@ def test_cohort_semantic_refusals() -> None:
         stored["probes"][0]["census"]["current"]["samples"][0][
             "timestamp_utc"] = "2026-08-21 05:00:00"
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 stored, now=NOW, stale_after_seconds=DAY, probe="alpha"),
             "a stored sample whose timestamp cannot be read refuses on READ",
             "timestamp")
@@ -342,7 +342,7 @@ def test_cohort_semantic_refusals() -> None:
         stored["probes"][0]["census"]["current"]["samples"][0][
             "requested_runs"] = -3
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 stored, now=NOW, stale_after_seconds=DAY, probe="alpha"),
             "a stored negative run count refuses on READ",
             "negative")
@@ -350,7 +350,7 @@ def test_cohort_semantic_refusals() -> None:
         stored = json.loads(path.read_text(encoding="utf-8"))
         stored["probes"][0]["census"]["current"]["samples"] = []
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 stored, now=NOW, stale_after_seconds=DAY, probe="alpha"),
             "a stored cohort with no samples has no statistic and refuses",
             "no samples")
@@ -387,7 +387,7 @@ def test_cohort_semantic_refusals() -> None:
             with scratch() as damaged_root:
                 damaged_path = damaged_root / "probe_census.json"
                 seeded(damaged_path)
-                probe_census.record_result(damaged_path,
+                census_storage.record_result(damaged_path,
                                            measurement(COMMIT_A, age_days=3))
                 stored = json.loads(damaged_path.read_text(encoding="utf-8"))
                 damage(stored["probes"][0]["census"]["current"])
@@ -397,7 +397,7 @@ def test_cohort_semantic_refusals() -> None:
                                         (COMMIT_B, "different-commit")):
                     expect_refusal(
                         lambda follow_up=follow_up:
-                            probe_census.record_result(
+                            census_storage.record_result(
                                 damaged_path,
                                 measurement(follow_up, age_days=0)),
                         f"a {kind} measurement onto a stored cohort {why} "
@@ -410,7 +410,7 @@ def test_cohort_semantic_refusals() -> None:
         with scratch() as damaged_root:
             damaged_path = damaged_root / "probe_census.json"
             seeded(damaged_path)
-            probe_census.record_result(damaged_path,
+            census_storage.record_result(damaged_path,
                                        measurement(COMMIT_A, age_days=3))
             stored = json.loads(damaged_path.read_text(encoding="utf-8"))
             # Damaged the way a real placeholder-provenance census is —
@@ -422,7 +422,7 @@ def test_cohort_semantic_refusals() -> None:
             for sample in cohort["samples"]:
                 sample["commit_sha"] = "unknown"
             damaged_path.write_text(json.dumps(stored), encoding="utf-8")
-            probe_census.record_result(damaged_path, result_document(
+            census_storage.record_result(damaged_path, result_document(
                 status="harness-error", commit=COMMIT_B))
             after = json.loads(
                 damaged_path.read_text(encoding="utf-8"))["probes"][0]["census"]
@@ -435,23 +435,23 @@ def test_cohort_semantic_refusals() -> None:
         # unusable one is a refusal rather than a substituted default.
         good = json.loads(path.read_text(encoding="utf-8"))
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 good, now=datetime.datetime(2026, 8, 21),
                 stale_after_seconds=DAY),
             "a naive evaluation time is refused, never assumed to be UTC",
             "timezone-aware")
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 good, now=NOW, stale_after_seconds=-1),
             "a negative staleness horizon is refused",
             "nonnegative")
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 good, now=NOW, stale_after_seconds=float("inf")),
             "a non-finite staleness horizon is refused",
             "finite")
         expect_refusal(
-            lambda: probe_census.census_summary(
+            lambda: census_summary.census_summary(
                 good, now=NOW, stale_after_seconds=DAY, probe="nonesuch"),
             "summarizing a probe with no census row refuses",
             "no census row")
@@ -462,14 +462,14 @@ def test_summary_preserves_everything() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, measurement(COMMIT_A, age_days=20))
-        probe_census.record_result(path, measurement(COMMIT_B, age_days=10))
-        probe_census.record_result(path, measurement(COMMIT_C, age_days=1))
+        census_storage.record_result(path, measurement(COMMIT_A, age_days=20))
+        census_storage.record_result(path, measurement(COMMIT_B, age_days=10))
+        census_storage.record_result(path, measurement(COMMIT_C, age_days=1))
         before_bytes = path.read_bytes()
         document = json.loads(path.read_text(encoding="utf-8"))
         original = copy.deepcopy(document)
 
-        summaries = probe_census.census_summary(
+        summaries = census_summary.census_summary(
             document, now=NOW, stale_after_seconds=14 * DAY)
         expect(document == original,
                "summarizing mutates no part of the document it reads")
@@ -493,7 +493,7 @@ def test_summary_cli() -> None:
     print("\n-- the --summary CLI --")
     with registry(), cli_repo() as (_main_wt, census_path):
         cli("--seed")
-        probe_census.record_result(census_path,
+        census_storage.record_result(census_path,
                                    measurement(runs=4, failures=1, age_days=8))
 
         code, out, err = cli("--summary", "--as-of", at(0),

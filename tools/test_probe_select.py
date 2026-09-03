@@ -57,6 +57,10 @@ from fractions import Fraction
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
+import probe_census_contract  # noqa: E402
+import probe_census_records  # noqa: E402
+import probe_census_storage  # noqa: E402
+import probe_census_summary  # noqa: E402
 import probe_select as select  # noqa: E402
 
 FAILURES: list[str] = []
@@ -126,6 +130,17 @@ NO_CLOCK = types.SimpleNamespace(datetime=NoClockDatetime,
                                  timezone=datetime.timezone,
                                  timedelta=datetime.timedelta)
 
+#: Every module the census was split into by #2131, plus the facade. The
+#: tripwire has to reach whichever of them the selection path's census
+#: calls resolve `datetime` in -- `summarize_entry` and `require_horizon`
+#: are the summary owner's, and the `parse_timestamp` underneath them is
+#: the contract owner's -- and patching the facade alone would silently
+#: stop covering the census path the moment a function moved. Listing the
+#: whole family and patching every member that HAS a clock keeps that
+#: from being a thing anyone has to remember.
+CENSUS_MODULES = (probe_census, probe_census_contract, probe_census_records,
+                  probe_census_storage, probe_census_summary)
+
 
 class Pure:
     """Forbid processes, sockets, files and clocks for the whole run."""
@@ -146,7 +161,9 @@ class Pure:
             "time": time.time,
             "monotonic": time.monotonic,
             "select_datetime": select.datetime,
-            "census_datetime": probe_census.datetime,
+            "census_datetimes": [(module, module.datetime)
+                                 for module in CENSUS_MODULES
+                                 if hasattr(module, "datetime")],
         }
         subprocess.run = forbidden("started a subprocess")           # type: ignore[assignment]
         subprocess.Popen = forbidden("started a subprocess")         # type: ignore[assignment]
@@ -157,7 +174,12 @@ class Pure:
         time.time = forbidden("read the wall clock")                 # type: ignore[assignment]
         time.monotonic = forbidden("read a clock")                   # type: ignore[assignment]
         select.datetime = NO_CLOCK                                   # type: ignore[assignment]
-        probe_census.datetime = NO_CLOCK                             # type: ignore[assignment]
+        # Non-vacuous by construction: a family that patched nothing
+        # would be a tripwire covering no census module at all.
+        assert self._saved["census_datetimes"], (
+            "no census module exposes a clock to blind")
+        for module, _clock in self._saved["census_datetimes"]:
+            module.datetime = NO_CLOCK                           # type: ignore[assignment]
         return self
 
     def __exit__(self, *exc_info: object) -> bool:
@@ -170,7 +192,8 @@ class Pure:
         time.time = self._saved["time"]                              # type: ignore[assignment]
         time.monotonic = self._saved["monotonic"]                    # type: ignore[assignment]
         select.datetime = self._saved["select_datetime"]             # type: ignore[assignment]
-        probe_census.datetime = self._saved["census_datetime"]       # type: ignore[assignment]
+        for module, clock in self._saved["census_datetimes"]:
+            module.datetime = clock                              # type: ignore[assignment]
         return False
 
 
