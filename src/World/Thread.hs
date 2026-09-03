@@ -144,32 +144,36 @@ worldTickWith clock env lastTimeRef = do
 --   teardown lasts one unit tick, and the count is decremented by that
 --   reset itself ('World.State.Types.wmTeardownsPending').
 --
---   Withholding goes through 'Engine.Core.Queue.unreadQueue', which
---   restores the command to the FRONT of the queue and leaves the rest
---   of the queue untouched. Flushing the queue and rewriting it around
---   the withheld command would not do: a producer appending in that
---   window would be re-accepted AHEAD of a command it was accepted
---   after, so an arena's follow-up traffic could apply before the page
---   it names is registered. Restoring to the front cannot reorder
---   anything, because everything else is by construction behind it and
---   never leaves the queue.
+--   Withholding goes through 'Engine.Core.Queue.tryReadQueueWhen',
+--   which refuses the head inside the SAME transaction that took it:
+--   the message goes straight back to the front, the rest of the queue
+--   never moves, and neither counter advances, so a fence that looks at
+--   the same command on many ticks leaves the queue's telemetry exactly
+--   as it found it. Taking the command out and re-enqueuing it would be
+--   wrong twice over — a producer appending in that window would be
+--   re-accepted AHEAD of a command it was accepted after, and every
+--   look would be counted as fresh traffic.
+--
+--   The fence is read from the world manager BEFORE the queue call,
+--   because the decision needs 'IO' and the predicate does not. Reading
+--   it one step early is safe in the only direction that matters: this
+--   thread is where the count RISES (the destroy-all handler runs
+--   here), so a value read before a command cannot miss a boundary that
+--   command's predecessor opened, and a value that has since fallen
+--   only defers one extra tick.
 processAllCommands ∷ EngineEnv → LoggerState → IO ()
 processAllCommands env logger = do
-    mStamped ← Q.tryReadQueueStamped queue
-    case mStamped of
-        Nothing      → return ()
-        Just stamped → do
-            let cmd = Q.tsValue stamped
-            fenced ← if beginsSession cmd
-                        then (> 0) ∘ wmTeardownsPending
-                                 <$> readIORef (wsWorldManagerRef worldSim)
-                        else pure False
-            if fenced
-            then Q.unreadQueue queue stamped
-            else do
-                handleWorldCommand env logger cmd
-                settleSelection env
-                processAllCommands env logger
+    fenced ← (> 0) ∘ wmTeardownsPending
+                 <$> readIORef (wsWorldManagerRef worldSim)
+    mCmd ← Q.tryReadQueueWhen queue (\cmd → not (fenced ∧ beginsSession cmd))
+    case mCmd of
+        -- Either the queue is empty or its head is fenced. Both mean
+        -- this tick is done with it.
+        Nothing  → return ()
+        Just cmd → do
+            handleWorldCommand env logger cmd
+            settleSelection env
+            processAllCommands env logger
   where
     worldSim = toWorldSimCapability env
     queue    = wsWorldQueue worldSim

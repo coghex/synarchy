@@ -169,48 +169,54 @@ tryReadQueue q = STM.atomically $ do
           STM.modifyTVar' (queueCounters q) (countDequeue 1)
           return (Just (tsValue ts))
 
--- | 'tryReadQueue', handing back the element still WRAPPED in its
---   enqueue stamp so 'unreadQueue' can put it back unchanged.
+-- | 'tryReadQueue', but the head is removed only if @accept@ takes it.
+--   A refused head stays exactly where it was and NOTHING is counted —
+--   neither an enqueue nor a dequeue — so a consumer that declines a
+--   message leaves no trace in the telemetry at all.
 --
---   The pair exists for one consumer-side pattern: a drain that cannot
---   decide whether it may run a message until it has looked at it, and
---   must leave a message it declines exactly where it was
---   ("World.Thread"'s Exit-to-Menu fence, #2291). Deciding INSIDE the
---   transaction is not an option — the predicate would force the
---   element there, which is the O(backlog) hazard the module header
---   forbids — so the decision happens between two transactions and
---   'unreadQueue' repairs the queue afterwards.
+--   That neutrality is the point, not a detail. This exists for a drain
+--   that cannot decide whether it may run a message until it has looked
+--   at it ("World.Thread"\'s Exit-to-Menu fence, #2291), and such a
+--   drain looks at the same head on every tick until it may proceed.
+--   Counting each look would inflate @enqueued@ and @dequeued@ without
+--   bound while the queue stood still, breaking the module header's
+--   @depth == enqueued - dequeued@ contract in spirit — the counters
+--   name messages a producer ACCEPTED and a consumer DRAINED, and a
+--   deferral is neither.
 --
---   __Single-consumer only.__ Another consumer dequeuing between the two
---   calls would see the queue without the withheld element. Every
---   'Queue' here is drained by exactly one thread, and both calls must
---   be made by it.
-tryReadQueueStamped ∷ Queue α → IO (Maybe (Timestamped α))
-tryReadQueueStamped q = STM.atomically $ do
+--   Order and the enqueue stamp survive untouched: the refusal path
+--   puts the very same 'Timestamped' back at the FRONT inside the SAME
+--   transaction that took it, so no producer can interleave, nothing
+--   behind it moves, and a withheld message's reported age keeps
+--   counting from when the queue actually accepted it rather than
+--   restarting each time it is looked at.
+--
+--   @accept@ runs inside the transaction and must be cheap and pure —
+--   a constructor test, not a traversal. It sees the message already in
+--   WHNF ('writeQueue''s binder forced it on the producer's thread), so
+--   matching on it adds nothing to the transaction beyond what
+--   'tryReadTQueue' had already done. A decision that needs @IO@ (this
+--   fence reads an 'Data.IORef.IORef' first) resolves it BEFORE the
+--   call and passes the answer in.
+--
+--   'Nothing' means "no message is available to this consumer now",
+--   which covers both an empty queue and a refused head. A caller that
+--   stops draining on either — as the fence does, deliberately — needs
+--   no finer answer.
+tryReadQueueWhen ∷ Queue α → (α → Bool) → IO (Maybe α)
+tryReadQueueWhen q accept = STM.atomically $ do
     mts ← tryReadTQueue (queueTQueue q)
     case mts of
       Nothing  → return Nothing
       Just ~ts → do
-          STM.modifyTVar' (queueCounters q) (countDequeue 1)
-          return (Just ts)
-
--- | Put an element taken by 'tryReadQueueStamped' back at the FRONT of
---   the queue, carrying the enqueue instant it already had.
---
---   The front, not the tail, is what makes this order-preserving: a
---   producer that appended while the element was withheld lands BEHIND
---   it, which is where it belonged all along — it was accepted later.
---   Re-queuing through 'writeQueue' instead would let that producer
---   overtake, and flushing-and-rewriting the whole queue would do the
---   same in a wider window.
---
---   The stamp is carried rather than resampled so a withheld message's
---   reported age keeps counting from when the queue actually accepted
---   it; a deferral must not make a backlog look younger than it is.
-unreadQueue ∷ Queue α → Timestamped α → IO ()
-unreadQueue q ts = STM.atomically $ do
-    unGetTQueue (queueTQueue q) ts
-    STM.modifyTVar' (queueCounters q) countEnqueue
+          let val = tsValue ts
+          if accept val
+          then do
+              STM.modifyTVar' (queueCounters q) (countDequeue 1)
+              return (Just val)
+          else do
+              unGetTQueue (queueTQueue q) ts
+              return Nothing
 
 -- | Read with a timeout (microseconds). Don't wrap 'readQueue' in
 --   'System.Timeout.timeout' instead: its exception can arrive after

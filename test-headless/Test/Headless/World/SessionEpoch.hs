@@ -360,9 +360,9 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         registeredPages env `shouldReturn` [arenaPage]
         queuedWorld env     `shouldReturn` 0
 
-    it "withholding a page registration takes only that command out of \
-       \the queue, so nothing accepted during the deferral can overtake \
-       \it" $ withHeadlessEngineNoWorld $ \env → do
+    it "withholding a page registration leaves the queue — order, \
+       \counters and all — exactly as it found it" $
+        withHeadlessEngineNoWorld $ \env → do
         _ ← installSession env
         destroyAll env
         Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
@@ -371,19 +371,34 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         runWorldTick env
         after  ← Q.queueStats (worldQueue env)
 
-        -- The claim is about a CONCURRENT producer, which no
-        -- single-threaded example can schedule, so it is made against
-        -- the property that produces the guarantee: the deferral moves
-        -- the withheld head and NOTHING else. One dequeue, one enqueue,
-        -- both the arena command's. A deferral that flushed the queue
-        -- and rewrote it around the withheld command would show the
-        -- tail leaving and re-entering here — and a producer appending
-        -- in that window would be re-accepted AHEAD of a command it was
-        -- accepted after, applying an arena's follow-up traffic before
-        -- the page it names exists.
-        (qsDequeued after - qsDequeued before) `shouldBe` 1
-        (qsEnqueued after - qsEnqueued before) `shouldBe` 1
+        -- Two claims, both gated here.
+        --
+        -- ORDER: the real hazard is a producer appending DURING the
+        -- deferral, which no single-threaded example can schedule. So
+        -- it is gated through the property that produces the guarantee
+        -- — the refused head goes back inside the same transaction that
+        -- took it and the tail never moves, leaving nothing a
+        -- concurrent append could be reordered around.
+        --
+        -- TELEMETRY: the counters name messages a producer ACCEPTED and
+        -- a consumer DRAINED. A deferral is neither, and the fence
+        -- looks at the same head on every tick until it lifts, so a
+        -- deferral that counted would inflate both without bound while
+        -- the queue stood still.
+        (qsDequeued after - qsDequeued before) `shouldBe` 0
+        (qsEnqueued after - qsEnqueued before) `shouldBe` 0
         qsDepth after `shouldBe` 2
+
+        -- Still nothing after a second look at the same head — the
+        -- unbounded half of the telemetry claim, since the fence looks
+        -- again on every tick until it lifts.
+        runWorldTick env
+        later ← Q.queueStats (worldQueue env)
+        (qsDequeued later - qsDequeued before) `shouldBe` 0
+        (qsEnqueued later - qsEnqueued before) `shouldBe` 0
+
+        -- Read last: this one really does flush and rewrite, so it
+        -- moves the counters the assertions above are about.
         queuedWorldOrder env `shouldReturn` ["InitArena", "InitArenaDone"]
         registeredPages env  `shouldReturn` []
 
