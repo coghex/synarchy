@@ -26,6 +26,7 @@ import Engine.Core.State (EngineEnv, loggerRef
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
@@ -33,8 +34,9 @@ import Engine.Asset.Manager (generateTextureHandle, updateTextureState)
 import Engine.Asset.TextureNameRegistry (lookupTextureName, registerTextureName)
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Asset.YamlMaterials
-    (MaterialDef(..), loadMaterialYaml, materialPropsFromDef)
-import Engine.Asset.YamlVegetation (VegetationDef(..), loadVegetationYaml)
+    (MaterialDef(..), loadMaterialYamlOutcome, materialPropsFromDef)
+import Engine.Asset.YamlVegetation
+    (VegetationDef(..), loadVegetationYamlOutcome)
 import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
@@ -63,15 +65,14 @@ loadMaterialYamlFn ∷ EngineEnv → LuaBackendState
 loadMaterialYamlFn env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 -- Parse the single YAML file
-                defs ← loadMaterialYaml logger filePath
+                mDefs ← loadMaterialYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
 
                 -- For each MaterialDef, load 3 textures and register names
                 let (lteq, _) = lbsMsgQueues backendState
@@ -125,10 +126,9 @@ loadMaterialYamlFn env backendState = do
                 logDebug logger CatAsset $
                     "loadMaterialYaml: loaded " <> tshow total
                     <> " textures from " <> T.pack filePath
-                return total
+                return (isJust mDefs, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
 
 -- | Parse a vegetation YAML, load variant textures as @veg_tile_\<vegId\>@,
 --   and queue load requests. Returns number of textures queued.
@@ -137,15 +137,14 @@ loadVegetationYamlFn ∷ EngineEnv → LuaBackendState
 loadVegetationYamlFn env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 -- Parse the single vegetation YAML file
-                defs ← loadVegetationYaml logger filePath
+                mDefs ← loadVegetationYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
 
                 -- For each VegetationDef, load 1 texture per variant
                 let (lteq, _) = lbsMsgQueues backendState
@@ -168,10 +167,9 @@ loadVegetationYamlFn env backendState = do
                 logDebug logger CatAsset $
                     "loadVegetationYaml: loaded " <> tshow total
                     <> " textures from " <> T.pack filePath
-                return total
+                return (isJust mDefs, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
 
 -- | Helper: generate a handle, register the name, queue the load
 --   request under an EXPLICIT upload policy.
@@ -246,14 +244,13 @@ loadFloraYamlFn ∷ EngineEnv → LuaBackendState
 loadFloraYamlFn env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
-                defs ← loadFloraYaml logger filePath
+                mDefs ← loadFloraYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
 
                 let (lteq, _) = lbsMsgQueues backendState
                     catRef = wsFloraCatalogRef (toWorldSimCapability env)
@@ -267,10 +264,9 @@ loadFloraYamlFn env backendState = do
                     "loadFloraYaml: loaded " <> tshow (length defs)
                     <> " species (" <> tshow total
                     <> " textures) from " <> T.pack filePath
-                return total
+                return (isJust mDefs, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
 
 unknownFloraTexture ∷ FilePath
 unknownFloraTexture = "assets/textures/flora/unknown_flora.png"
