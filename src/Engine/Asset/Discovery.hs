@@ -3,9 +3,13 @@
 --
 --   Deliberately NOT a replacement for @engine.listFiles@
 --   ('Engine.Scripting.Lua.API.Core.listFilesFn'), which stays flat and
---   OS-ordered for every one of its callers: flora IDs are allocated in
---   load order and salt worldgen placement, so recursing or sorting
---   there would change same-seed output.
+--   OS-ordered for every one of its callers: a family whose contents are
+--   NOT organized into subdirectories has no tree to walk, and recursing
+--   on its behalf would change which files it discovers. A flat family
+--   that needs a deterministic ORDER — @data\/flora@, whose sequential
+--   @FloraId@s a save's numeric references name — applies
+--   @startupLoader.canonicalFileOrder@ at its own call site (#2241)
+--   rather than moving here.
 --
 --   Ordering is NOT this module's business. The walk hands back
 --   whatever order the filesystem enumerated, exactly as 'listDirectory'

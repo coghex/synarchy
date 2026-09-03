@@ -10,9 +10,9 @@
 --
 --   This is the construction parallel to 'World.Mine.Types': a per-tile
 --   designation layer keyed by global tile coords, persisted in saves,
---   and rendered as a ghost — since #1846 a STRUCTURE ghost is the
---   piece's own art at the z the placer will use, while a BUILDING is
---   still a category blueprint. Unlike mining (which removes
+--   and rendered as a ghost of the thing itself — a STRUCTURE piece's
+--   own art at the z the placer will use (#1846), a BUILDING's own
+--   sprite at its anchor (#1845). Unlike mining (which removes
 --   material) construction ADDS it; the execution side is issue #96, so
 --   this module is purely the data the designation tool stores.
 module World.Construct.Types
@@ -28,8 +28,6 @@ module World.Construct.Types
     , constructStatusToText
     , textToConstructStatus
     , constructTargetCategory
-    , constructDesignationFootprint
-    , constructDesignationFootprintSize
     ) where
 
 import UPrelude
@@ -37,7 +35,7 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
-import Building.Types (BuildingDef(..), footprintTiles)
+
 import World.Construct.Attempt (ConstructAttemptId)
 import World.Construct.Receipt
     (ConstructPayment(..), MaterialReceipt, isPaid, paymentReceipt)
@@ -81,10 +79,17 @@ data ConstructDesignation = ConstructDesignation
     { cdZ        ∷ !Int
       -- ^ Surface z captured at designation time.
       --
-      --   A BUILDING marker still renders straight from it, no per-frame
-      --   column reads — the same trick as MineDesignation.
+      --   NEITHER ghost renders straight from it any more. A BUILDING
+      --   ghost draws at the z its stake will land on, read live from
+      --   the anchor's own terrain by the same
+      --   'Building.Placement.buildingAnchorZ' @building.spawn@ stamps
+      --   'biGridZ' from (#1845) — otherwise a terrain edit under a live
+      --   designation would leave the plan at a level the building will
+      --   not land on, and staking would visibly move it. This stored
+      --   value is that ghost's FALLBACK, for a non-resident chunk: the
+      --   one state nobody can answer for.
       --
-      --   A STRUCTURE ghost does not (#1846). This is a SURFACE level and
+      --   A STRUCTURE ghost does not either (#1846). This is a SURFACE level and
       --   the piece sits above it (floor, wall and wire at + 1, a ceiling
       --   at + 2, a post at its supporting floor's z), so the ghost draws
       --   at the final grid z 'World.Construct.Plan' resolves against
@@ -165,57 +170,11 @@ textToConstructStatus _          = Nothing
 -- | "structure" | "building" — the designation's target CLASS, as the
 --   debug log line and @construction.getDesignationAt@ report it.
 --
---   It no longer picks a ghost texture. #1846 gave every structure piece
---   its own art, so a structure ghost is resolved from the piece's own
---   descriptor and only a BUILDING still has a category placeholder —
---   which DTV-10 (#1845) retires in turn.
+--   It no longer picks a ghost texture, and no longer picks anything
+--   else about the drawing either: #1846 resolves a structure ghost
+--   from the piece's own descriptor and #1845 resolves a building
+--   ghost from its own definition, so neither category has a
+--   placeholder left to select.
 constructTargetCategory ∷ ConstructTarget → Text
 constructTargetCategory (CtStructure _) = "structure"
 constructTargetCategory (CtBuilding  _) = "building"
-
--- | Tile footprint one BUILDING designation renders across (#95
---   blueprint ghost requirement, completed by #807). A structure piece is already one
---   map entry PER TILE — the designation tool tiles the whole
---   rectangle at commit time (Construct.hs's handleWorldDesignateConstructCommand),
---   so it renders as just its own anchor here. A building target is
---   the opposite: ALWAYS one anchor-only map entry, one durable job,
---   regardless of the def's footprint size — this is what expands
---   that single entry into the full 'footprintTiles' rectangle using
---   the SAME anchor/tile_size convention 'Building.Placement.canPlaceAt'
---   and 'building.spawn' use, so the render pass can't drift from
---   placement. A def missing from the supplied map (a broken save or
---   mod) falls back to the anchor tile alone rather than guessing
---   geometry — the caller is responsible for surfacing that
---   observably (see 'World.Render.CursorQuads').
-constructDesignationFootprint
-    ∷ HM.HashMap Text BuildingDef → (Int, Int) → ConstructDesignation
-    → [(Int, Int)]
-constructDesignationFootprint defs (ax, ay) cd = case cdTarget cd of
-    CtStructure _      → [(ax, ay)]
-    CtBuilding defName → case HM.lookup defName defs of
-        Just def → footprintTiles ax ay (bdTileW def) (bdTileH def)
-        Nothing  → [(ax, ay)]
-
--- | How many tiles 'constructDesignationFootprint' would enumerate,
---   without enumerating them.
---
---   Written for the scene-assembly telemetry (#1921), whose counters may
---   not allocate in proportion to the sources they count: the cursor
---   pass has to report how many footprint candidates it evaluated, and
---   rebuilding each rectangle just to take its 'length' would allocate
---   exactly what the requirement forbids. Deliberately mirrors the
---   function above case for case — including the missing-def fallback
---   to the anchor tile alone — so the two cannot disagree about what a
---   designation covers.
-constructDesignationFootprintSize
-    ∷ HM.HashMap Text BuildingDef → ConstructDesignation → Int
-constructDesignationFootprintSize defs cd = case cdTarget cd of
-    CtStructure _      → 1
-    CtBuilding defName → case HM.lookup defName defs of
-        -- 'Building.Types.footprintTiles' is the product of two
-        -- ranges, @[ax .. ax + w - 1]@ by @[ay .. ay + h - 1]@, so its
-        -- length is exactly this — including the degenerate
-        -- non-positive dimensions, where both the range and this
-        -- product are empty.
-        Just def → max 0 (bdTileW def) * max 0 (bdTileH def)
-        Nothing  → 1

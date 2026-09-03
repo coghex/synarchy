@@ -20,7 +20,8 @@
 --   optionality — not that every one of those facts must be new BYTES
 --   on the wire. For a same-page reference (the only kind any field
 --   uses today — 'CraftBillDTO''s station/claimant,
---   'PowerNodeDTO''s host building, see "World.Save.Component.Entities"),
+--   'PowerNodeDTO''s host building, both declared in
+--   "World.Save.Component.EntitySystems"),
 --   the owning page is always the SAME page as the record carrying the
 --   reference — a fact fixed by which component the field lives in,
 --   not by a value that could vary per-entry. 'SamePageRef' therefore
@@ -44,7 +45,8 @@
 --   'SamePageRef' also derives 'Hashable' (issue #764):
 --   a same-page reference can be the very thing a wire DTO's
 --   'Data.HashMap.Strict.HashMap' is keyed BY, not only a field value
---   inside one — see "World.Save.Component.Entities"'s @PageSimDTO@,
+--   inside one — see "World.Save.Component.EntitySimulation"'s
+--   @PageSimDTO@,
 --   whose @psSim@ map key is a unit-simulation state's OWNING unit,
 --   itself a same-page cross-component reference exactly like a bill's
 --   station.
@@ -156,7 +158,7 @@ contentKindText ck = case ck of
 --   record has no cereal discriminant, so wrapping an existing field in
 --   'SamePageRef' changes its Haskell TYPE (a genuine schema event,
 --   handled with the frozen-DTO discipline's explicit migration seam —
---   see "World.Save.Component.Entities"'s craft-bill/power-node v1→v2
+--   see "World.Save.Component.EntitySystems"'s craft-bill/power-node v1→v2
 --   migration) without changing its encoded bytes.
 newtype SamePageRef a = SamePageRef { unSamePageRef ∷ a }
     deriving stock (Show, Eq, Generic)

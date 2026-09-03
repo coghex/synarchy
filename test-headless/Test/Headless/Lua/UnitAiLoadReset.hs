@@ -110,8 +110,16 @@ prelude = lns
     , "    YAML_READS = YAML_READS + 1"
     , "    return { build = { post = { materials = {}, build_work = 1.0 } } } end }"
     , "unit = { exists = function(u) return LIVE[u] == true end,"
+    -- #1845: the construct lifecycle takes its page from the ACTING
+    -- UNIT, not from world.getActiveWorldId, so this fixture's units
+    -- have to report one. It is PAGE — these are active-page units —
+    -- which keeps every case below exactly the scenario it was written
+    -- as. Dropping it is not a detail: the construct path deliberately
+    -- selects nothing for a unit whose page cannot be established, and
+    -- six of the cases below go red.
     , "  getInfo = function(u) return LIVE[u]"
-    , "    and { gridX = 0, gridY = 0, defName = 'acolyte' } or nil end,"
+    , "    and { gridX = 0, gridY = 0, defName = 'acolyte', page = PAGE }"
+    , "    or nil end,"
     , "  getStat = function() return 1.0 end,"
     , "  getSkill = function() return 25.0 end,"
     , "  getInventory = function() return {} end,"

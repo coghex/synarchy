@@ -10,6 +10,12 @@ screenshots each finding's call actually saw, and writes a matching
 `findings.json` + `report.md` — the candidate list and the per-call
 audit (`adjudication_calls`) embedded so nothing is silently dropped.
 
+Both artifacts land in `out_dir` (default: the trace directory). The
+JSON keeps every screenshot path exactly as the trace records it, while
+the Markdown's image links are rebased onto the report's own directory
+so they resolve wherever `--out` puts it (#2220); the trace itself is
+never written to or copied out of.
+
 The `critic` argument is duck-typed: anything with an
 `adjudicate(digest, manual, frames, ask=None)` method, so the production
 `critic_model.Critic` and the self-test's deterministic fakes share this
@@ -148,5 +154,9 @@ def run_critic(trace_dir: str, critic, manual_path: str | None = None,
         f.write("\n")
     report_path = os.path.join(out_dir, "report.md")
     with open(report_path, "w") as f:
-        f.write(render_report(meta, data, warnings, turns))
+        # the rendered report's image links are rebased onto its own
+        # directory (#2220) — `findings.json` above keeps the
+        # trace-relative spelling its readers join back to the trace on.
+        f.write(render_report(meta, data, warnings, turns,
+                              trace_dir=trace_dir, report_dir=out_dir))
     return report_path, findings_path

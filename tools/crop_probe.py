@@ -10,20 +10,25 @@ Boots a headless engine and checks BOTH growth forms the farming epic
      flora. The real shipped `tomato_plant` ships with worldGen
      density 0.0 (no wild spawn; #335/#336 own player-driven planting),
      so it can never place in an ordinary generated world — to exercise
-     it headless anyway, this probe loads a SECOND copy of its exact
-     YAML entry (parsed straight out of data/flora/crops.yaml, not
-     hand-duplicated) with only the worldGen tolerances relaxed for
-     guaranteed placement, mirroring flora_growth_probe.py's
-     probe_berry pattern but deriving it from the real content so the
-     phases/annualCycle/harvestable data under test is byte-identical
-     to what ships.
+     it headless anyway, this probe loads a copy of its exact YAML
+     entry (parsed straight out of data/flora/crops.yaml, not
+     hand-duplicated) under the DISTINCT name `probe_row_crop`, with
+     only the worldGen tolerances relaxed for guaranteed placement.
+     Everything else — phases, annualCycle, cycleOverrides, the
+     harvestable block and so the `tomato` yield item — is
+     byte-identical to what ships, which is the point of deriving it
+     from the real content rather than hand-writing a proxy. The name
+     has to differ because #2241 made a duplicate authored flora name
+     a whole-file refusal: the authored name is a species' stable key.
   2. Groundcover crop: NOT a FloraInstance at all — planted via the new
      world.plantCropAt primitive into a World.Flora.CropPlot, and
      rendered as the tile's veg-fill rather than a floating sprite.
      Tests the REAL shipped `wheat` species + `wheat_grain` item
      directly (planting doesn't depend on worldGen density). Also
-     checks world.plantCropAt REFUSES a row_crop species (tomato_plant)
-     — only a groundcover_crop can become a CropPlot.
+     checks world.plantCropAt REFUSES a row_crop species — the SHIPPED
+     `tomato_plant`, not the relaxed copy, so the refusal is asserted
+     against real content — because only a groundcover_crop can become
+     a CropPlot.
 
 Checks per form: growth is derived and visibly advances (age/phase),
 a harvest yields the species' item, and (groundcover only) the planted
@@ -58,11 +63,15 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
-# Throwaway row-crop fixture (mirrors flora_growth_probe.py's
-# Max-tolerance worldGen override for the placement-tolerant tomato_plant
-# double below — same numbers flora_growth_probe.py's probe_berry uses,
+# Max-tolerance worldGen override for the placement-tolerant row-crop
+# copy below — same numbers flora_growth_probe.py's probe_berry uses,
 # just relaxed so it places on any seed's geography regardless of the
 # shipped species' real (narrower) climate gate.
+# The probe's own row-crop species name. Distinct from the shipped
+# `tomato_plant` it is copied from, because a duplicate authored flora
+# name is refused whole-file since #2241.
+PROBE_ROW_CROP = "probe_row_crop"
+
 RELAXED_WORLDGEN = {
     "minTemp": -60, "maxTemp": 60, "idealTemp": 15,
     "minPrecip": 0.0, "maxPrecip": 5.0, "idealPrecip": 0.8,
@@ -90,21 +99,25 @@ def bootstrap(port):
     # shouldn't wild-spawn), so it can never place in an ordinary
     # generated world. To exercise the REAL shipped row-crop content
     # (not a hand-written proxy), parse its exact entry back out of
-    # data/flora/crops.yaml and reload it under the SAME name with only
-    # worldGen relaxed — phases/annualCycle/cycleOverrides/harvestable
-    # (and so the "tomato" yield item) are byte-identical to what ships.
-    # Appended after the real flora so THEIR placement hashes (indexed
-    # by registration order) are untouched; the two same-named
-    # registrations don't collide (World.Flora.Placement keys placement
-    # by FloraId, not name — see Engine.Scripting.Lua.API.Forage's
-    # findSpeciesByName docstring for the one place name matters, which
-    # this doesn't affect since both copies share the same category).
+    # data/flora/crops.yaml and reload it with only worldGen relaxed —
+    # phases/annualCycle/cycleOverrides/harvestable (and so the "tomato"
+    # yield item) stay byte-identical to what ships.
+    #
+    # Under a DIFFERENT authored name. #2241 made the authored name a
+    # species' stable key: it salts the placement roll, names the plant
+    # in its instance identity, and a second definition claiming it is
+    # now a whole-file refusal. Re-registering the shipped tomato_plant
+    # is therefore no longer an option, and reusing the shipped entry
+    # as-is is not either — its density is 0.0 by design. Registering
+    # after the shipped flora, before world.init, remains what makes it
+    # visible to worldgen.
     with open("data/flora/crops.yaml") as f:
         crops = yaml.safe_load(f)
     tomato = copy.deepcopy(
         next(e for e in crops["flora"] if e["name"] == "tomato_plant"))
+    tomato["name"] = PROBE_ROW_CROP
     tomato["worldGen"] = {**tomato["worldGen"], **RELAXED_WORLDGEN}
-    path = f"{SPROOT}/probe_tomato_plant.yaml"
+    path = f"{SPROOT}/{PROBE_ROW_CROP}.yaml"
     with open(path, "w") as f:
         yaml.safe_dump({"flora": [tomato]}, f)
     load_fixture_yaml(port, "engine.loadFloraYaml", path)
@@ -227,12 +240,13 @@ def _run(port, proc, args, passed):
 
         # ============== 1. Row crop (natural placement) ==============
         set_date(port, "probe", 2, 1, 5)  # dormant/budding season baseline
-        tile = find_species_tile(port, "tomato_plant")
+        tile = find_species_tile(port, PROBE_ROW_CROP)
         if not tile:
-            print("  [FAIL] tomato_plant not found in region — try another seed")
+            print(f"  [FAIL] {PROBE_ROW_CROP} not found in region — "
+                  f"try another seed")
             return 1
 
-        es = growth_entries(port, *tile, "tomato_plant")
+        es = growth_entries(port, *tile, PROBE_ROW_CROP)
         ok1a = len(es) == 3
         passed &= ok1a
         print(f"  [{'PASS' if ok1a else 'FAIL'}] row-crop category places "
@@ -243,7 +257,8 @@ def _run(port, proc, args, passed):
         print(f"  [{'PASS' if ok1b else 'FAIL'}] row-crop instances report "
               f"derived growth state: {es}")
 
-        # Season window (tomato_plant's real annualCycle: dormant@0 /
+        # Season window (the shipped tomato_plant annualCycle this copy
+        # carries verbatim: dormant@0 /
         # budding@30 / flowering@60 / fruiting@90 / senescing@240):
         # dormant/budding now, fruiting once the date moves into its window.
         ok1c = all(e.get("stage") in ("dormant", "budding")
@@ -252,7 +267,7 @@ def _run(port, proc, args, passed):
         print(f"  [{'PASS' if ok1c else 'FAIL'}] row crop not harvestable "
               f"before its fruiting window: {es}")
         set_date(port, "probe", 2, 7, 21)  # day-of-year ~202, in [90,240)
-        es2 = growth_entries(port, *tile, "tomato_plant")
+        es2 = growth_entries(port, *tile, PROBE_ROW_CROP)
         ok1d = any(e.get("stage") == "fruiting" and e.get("harvestable")
                    for e in es2)
         passed &= ok1d

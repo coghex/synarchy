@@ -379,6 +379,7 @@ library
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlResult
                      Engine.Scripting.Lua.API.YamlTextures
+                     Engine.Core.ConfigWrite
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
@@ -863,6 +864,7 @@ library
                      World.State.Types
                      World.Save.Types
                      World.Save.Snapshot
+                     World.Save.PageOrder
                      World.Save.Snapshot.Adapter
                      World.Save.Envelope.Types
                      World.Save.Envelope.Codec
@@ -876,6 +878,9 @@ library
                      World.Save.Component.Session
                      World.Save.Component.Page
                      World.Save.Component.Entities
+                     World.Save.Component.EntitySnapshots
+                     World.Save.Component.EntitySimulation
+                     World.Save.Component.EntitySystems
                      World.Save.Component.Knowledge
                      World.Save.Component.Transfer
                      World.Save.Component
@@ -1185,7 +1190,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Render.PickFrame
                    Test.Headless.Unit.HitTest
                    Test.Headless.Unit.Atlas
+                   Test.Headless.Unit.Atlas.Consumers
+                   Test.Headless.Unit.Atlas.Document
+                   Test.Headless.Unit.Atlas.Freshness
+                   Test.Headless.Unit.Atlas.Index
                    Test.Headless.Unit.Atlas.Loader
+                   Test.Headless.Unit.Atlas.Rejection
+                   Test.Headless.Unit.Atlas.Sheet
                    Test.Headless.Unit.Anim
                    Test.Headless.Unit.Injury
                    Test.Headless.Unit.InjurySpeed
@@ -1245,6 +1256,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.GeneratedLibrary
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
+                   Test.Headless.Save.AutosaveRotation
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.OwnerPark
@@ -1283,6 +1295,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
+                   Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
@@ -1391,6 +1404,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.TimeLocal
                    Test.Headless.World.FloraGrowth
                    Test.Headless.World.FloraIdentity
+                   Test.Headless.World.FloraOrder
                    Test.Headless.River.CalderaHazard
                    Test.Headless.River.InlandSources
                    Test.Headless.World.Render.FrontWallLift
@@ -1410,6 +1424,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Render.QuadVertices
                    Test.Headless.Core.ConfigState
+                   Test.Headless.Core.ConfigWrite
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener
                    Test.Headless.Core.DebugSocket
@@ -1448,6 +1463,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
                    Test.Headless.Building.DestructionPresentation
+                   Test.Headless.Building.Ghost
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

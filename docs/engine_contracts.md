@@ -70,6 +70,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Roles (#265)](#roles-265)
 - [Crafting and bills (#325/#326/#329/#343/#795)](#crafting-and-bills-325326329343795)
 - [Power (#358-#361, #590/#591, #1206)](#power-358-361-590591-1206)
+- [Flora species identity: the authored name is the key (#2241)](#flora-species-identity-the-authored-name-is-the-key-2241)
 - [Farming (#331-#336)](#farming-331-336)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
@@ -79,6 +80,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Autosave: staging, rotation order, and the intent mutex](#autosave-staging-rotation-order-and-the-intent-mutex)
 - [Save/load transaction: phases and failure semantics](#saveload-transaction-phases-and-failure-semantics)
 - [Enum append-only audit: baseline and payload normalization](#enum-append-only-audit-baseline-and-payload-normalization)
+- [Local-config writes: one atomic-replace helper (#2202)](#local-config-writes-one-atomic-replace-helper-2202)
 - [Config-writing tests: the isolation fixture (#1357)](#config-writing-tests-the-isolation-fixture-1357)
 - [Config state and legacy migration (#638/#786/#1937)](#config-state-and-legacy-migration-6387861937)
 
@@ -112,7 +114,8 @@ duplicate-function audit, the Unicode-operator audit, the Lua
 strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
-`src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
+`src/Engine/Scripting/Lua/`), the config-write / persistence-inventory /
+EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
 findings-report-status audits (each
@@ -135,7 +138,28 @@ reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
 parity audit itself.
 
-**The bare-name-icon check (#1740)** is the newest member.
+**The config-write audit (#2202)** is the newest member.
+`tools/config_write_audit.py` is structural, not a text filter: it
+requires every module in its checked-in config-persistence set to
+contain no raw `encodeFile`/`writeFile`/`copyFile`/`renameFile` and to
+import `Engine.Core.ConfigWrite`, requires any OTHER file under
+`src/`/`app/` that names a `config/` literal to contain no raw write
+unless it carries an exemption reason, and requires the helper itself to
+still CALL the durable primitives it is built from (import lines are
+excluded from that check, so deleting a call cannot hide behind an
+import). Its raw-write vocabulary includes `removeFile` and friends,
+because a config family that publishes by DELETING owes the same
+directory sync as one that publishes by renaming. The shape is
+deliberate: the issue's own
+`rg 'encodeFile|writeFile' src app | rg 'config/'` acceptance returned
+no matches on the defective snapshot, because the raw write and the
+`config/` literal sat on different lines and three of the six writers
+never name a config path at all. Comment and string-literal awareness
+comes from `unicode_operator_audit.py`'s lexer, so a haddock naming
+`encodeFile` — which several of these modules now do, describing what
+they replaced — is never a hit. See §Local-config writes.
+
+**The bare-name-icon check (#1740)** was the previous newest member.
 `tools/bare_name_icon_asset_check.py` resolves every authoritative
 bare-name icon reference — `scripts/injuries.lua`'s `KIND_ICON`,
 `INJURY_ICON` and its four icon-carrying functions,
@@ -170,8 +194,8 @@ error naming `file:line`. Per-FAMILY fallback-asset presence stays
 `assets/textures/icons/location/` is outside `ICON_SUBDIRS` and owned by
 `tools/location_map_icon_asset_check.py`.
 
-**The world-determinism content-identity self-test (#1724)** was the
-previous newest member. `tools/test_determinism.py` is the executable
+**The world-determinism content-identity self-test (#1724)** is an
+earlier member. `tools/test_determinism.py` is the executable
 specification of what `tools/world_determinism.py` means by
 "content-identical" — a reversed tile array and a reordered-key tile
 must hash EQUAL, while a changed field, a missing tile and an unstable
@@ -647,7 +671,7 @@ remain separately pinned to nearest and linear respectively.
 (D-4). No directory rule survives the tree as it stands:
 `assets/textures/icons/location/*` are drawn on the world's zoom map
 while the rest of `icons/` is toolbar chrome;
-`assets/textures/ui/hud/utility/{zoom,world}_*` and the six
+`assets/textures/ui/hud/utility/{zoom,world}_*` and the four
 `*_designate` markers are loaded in `hud.init` beside real chrome but
 handed to `world.set*CursorTexture` / `<tool>.setDesignateTexture` and
 drawn in the world; and `assets/textures/utility/white.png` is drawn by
@@ -2504,6 +2528,116 @@ demonstrate that half.
 
 ---
 
+## Local-config writes: one atomic-replace helper (#2202)
+
+Enforced by hspec `--match "Core.ConfigWrite"` and
+`tools/config_write_audit.py` (CI + `make ci`).
+
+**Every write under `config/` goes through
+`Engine.Core.ConfigWrite`.** It writes a fresh, uniquely named
+temporary in the TARGET'S OWN directory, `fsync`s it, `rename(2)`s it
+onto the target, and then `fsync`s the target's DIRECTORY — a file's
+own `fsync` says nothing about the directory entry naming it. The
+primitives are `World.Save.Storage.Durable`'s, reused rather than
+reimplemented; the save transaction itself
+(`World.Save.Storage.publishGeneration`) is not reused, because it is
+bound to the save-slot envelope and its `.prev` rotation. The
+durability stance is the one `World.Save.Storage` already documented —
+plain POSIX `fsync`, never macOS's `F_FULLFSYNC` — and is not reopened
+here.
+
+Six writers route through it: video (`Engine.Graphics.Config`),
+keybinds (`Engine.Input.Bindings`), notification overrides and their
+boot-time materializer (`Engine.Asset.YamlNotifications`), autosave
+(`Engine.Save.Config`), and both of `Engine.Core.Init`'s legacy paths —
+the migration copy and the #1937 neutrality record. The migration copy
+matters most: migration is gated on the local file's mere EXISTENCE, so
+one interrupted partial copy used to suppress every later migration
+attempt permanently.
+
+**Deleting is a publication too.** The autosave family's "no overrides
+left" state is the ABSENCE of `config/save.local.yaml`, not an empty
+document, so `removeConfigFile` unlinks and then `fsync`s the parent
+directory before reporting success — an unlink is a directory-entry
+change exactly like the publish rename. Without that sync a crash after
+the reported success could leave the old file on disk and restore
+autosave settings the player had just reset. It distinguishes "removed"
+from "nothing was there" (nothing changed, so nothing is synced),
+reports a failed unlink without claiming the file is gone, and reports
+an unconfirmed post-unlink sync as `Left` while the unlink itself
+stands.
+
+**Failure is stated by phase.** Every pre-rename failure leaves the
+previous target byte-identical. A directory-sync failure happens AFTER
+the rename, so it returns `Left` — durability is unconfirmed — while
+the visible target is the COMPLETE new file, never a partial one.
+Synchronous filesystem failures become a descriptive `Left` naming the
+path and the cause; ASYNCHRONOUS exceptions clean up the temporary and
+are rethrown, because
+`Engine.Scripting.Lua.API.Internal.registerLuaFunction` re-throws them
+on purpose so shutdown's `killThread` still reaches the Lua thread.
+
+**Cleanup ownership spans every pre-rename phase, and a cleanup failure
+is never swallowed.** The temporary is owned from the moment its name is
+claimed until the rename consumes it, under an `onException` that covers
+every escaping exception whatever its source — a rethrown asynchronous
+one included, which is exactly the path a per-branch discard misses. If
+the removal itself fails, its warning is appended to the `Left` already
+being returned: "every returned outcome leaves no temporary" is either
+true or said out loud, never quietly false.
+
+Ownership starts one step earlier than that, inside
+`World.Save.Storage.Durable.claimUniquePath` itself: it opens a real
+file and only then removes it, so the caller cannot own the placeholder
+before the claim returns its name. The claim therefore runs under
+`mask_` with an `onException` covering `hClose`'s one interruptible
+point, and the exception always propagates — this closes a leak, never
+a shutdown path. Every caller of the primitive gains that, the save
+transaction and the generated-world library included.
+
+**Outcome vocabulary.** Every Haskell writer returns `Either Text ()`.
+`engine.saveVideoConfig`, `engine.saveKeybinds`,
+`engine.setNotificationOverrides` and `engine.setSaveConfig` each
+return `true` on success and `false` on failure, log the path and the
+cause at warning level, and NEVER raise a Lua error for a filesystem
+failure — a raised one used to abort `data.save()` before autosave
+settings were persisted. Higher-level boot workflows (`loadOverrides`,
+`migrateLegacyConfig`, `recordNeutralLegacy`) keep their own return
+types but consume the outcome explicitly, and never log a success line
+after a `Left`.
+
+**A failed write must not move a baseline either.** `data.save()`
+refreshes Settings Back's persisted video baseline
+(`data.captureSavedVideo`) only when `engine.saveVideoConfig()` returned
+true. Adopting values that reached the live ref but never reached disk
+would leave Back with no way back to the configuration that is
+genuinely saved — the same class of loss the durable write exists to
+prevent, one layer up.
+
+**Live state on a failed write is unchanged, per family, by design.**
+Video and keybinds keep the already-applied live ref; notifications
+keep the live merge (the YAML is the next-session record, the in-memory
+config routes the next emit); autosave keeps its existing semantics —
+it has no live ref, and the Lua scheduler was already notified
+independently. Rolling any of them back would take an applied setting
+away from the player in order to report a disk failure, which is
+strictly worse than losing it at the next boot with a warning.
+
+The audit is STRUCTURAL rather than a text filter for a reason: the
+issue's own `rg 'encodeFile|writeFile' src app | rg 'config/'`
+acceptance returned NO MATCHES on the defective snapshot, because the
+raw write and the `config/` literal sat on different lines and three of
+the writers never name a config path at all. It reasons about modules
+instead — the config-persistence set must contain no raw
+write/copy/rename and must import the helper; any other file naming a
+`config/` literal must contain no raw write; and the helper must still
+call the durable primitives it is built from. `removeFile`,
+`removePathForcibly` and `removeDirectoryRecursive` count as raw writes
+inside the config-persistence set, so the deletion side cannot regress
+past the durability contract either.
+
+---
+
 ## Config-writing tests: the isolation fixture (#1357)
 
 Enforced by hspec `--match "Settings Defaults keybind persistence"`
@@ -2806,6 +2940,88 @@ no public `power.removeNode`. Gates: `power_probe.py`,
 `power_workshop_probe.py`, `machine_shop_probe.py`, hspec
 `--match "power node demolition"`; pure algorithm in
 `Test.Headless.Power.Network`.
+
+---
+
+## Flora species identity: the authored name is the key (#2241)
+
+A flora species' authored YAML `name` is its stable key. The numeric
+`FloraId` is a SESSION-LOCAL registration ordinal and nothing durable
+may be derived from it.
+
+**Three consequences, each with its own gate.**
+
+1. **Placement never depends on catalog position.**
+   `worldGenSpecies` returns species in canonical authored-name order
+   (`floraWorldGenKey`, tie-broken by `FloraId` so the order stays
+   total when a `fcWorldGen` entry has no `fcSpecies` record — such an
+   entry keys off a synthetic `\SOH`-prefixed spelling of its id, which
+   no authored name can collide with). The per-tile placement ROLL and
+   each instance's own offset/variant/age draw are salted from that
+   same key (`floraPlacementSalt` / `floraInstanceSalt`,
+   `World.Flora.Identity`), never from an index into the list. So
+   discovery order, registration order and `HashMap` traversal order
+   cannot change generated flora.
+
+   This is ORDER-independence, not final-layout invariance. Flora share
+   one occupancy map and `markOccupied` lets an earlier placement
+   suppress a later candidate, so adding or removing a species that
+   ACTUALLY PLACES may still move another's plants. That competition is
+   deliberate. A species that never occupies a tile changes nothing at
+   all, however it reorders the catalog.
+
+2. **`data/flora` loads in canonical byte order.**
+   `queueNormalProfile` uses `addYamlDirCanonical`, a flat directory
+   sorted through `startupLoader.canonicalFileOrder`. It is the one flat
+   family that sorts, because its sequential ids are what a save's
+   numeric flora references name; every other flat family keeps
+   `engine.listFiles`'s raw enumeration, and `engine.listFiles` itself
+   does NOT sort. All three `addYaml...` verbs stay at exactly three
+   arguments — `tools/save_compat_migration_probe.py` parses those call
+   shapes verbatim.
+
+3. **A duplicate authored name is refused, whole-file and atomically.**
+   `engine.loadFloraYaml` preflights a file against the live catalog AND
+   against itself before allocating an id, registering a texture or
+   queueing a load, so a refusal leaves no partial registration from the
+   definitions ahead of the collision. It answers `(0, true, <name>)` —
+   the file DECODED, so `pushYamlResult`'s decode-only second value is
+   unchanged for the other eleven families; the third value exists only
+   on a refusal, so a healthy call's arity is still one bare and two
+   when asked. `scripts/startup_loader.lua` turns that third value into
+   a TERMINAL startup failure naming the file and the name. The runtime
+   verb `flora.register` is nonfatal by contrast: a collision returns
+   `nil`, warns, and mutates nothing.
+
+**Legacy numeric references are reinterpreted once, on purpose.**
+Canonical registration renumbers nearly the whole shipped catalog, so a
+`FloraId` persisted in a `WorldEditDTO`, `CropPlotDTO` or
+`PlantDesignationDTO` before #2241 generally names a different species
+afterwards. Accepted, not mitigated: `currentSaveVersion` is a worldgen
+bookkeeping marker with no on-disk compatibility role, so its bump
+neither migrates nor rejects anything. Name-based persistence is #2243.
+
+**Chop reconciliation is bounded by ownership.** `admitChunkFlora` drops
+every durable chop designation whose canonical tile the admitted chunk
+owns but whose `FloraInstanceId` that chunk does not hold, with a
+diagnostic per removal. It never inspects a designation another chunk
+owns, so an entry whose chunk is simply not resident survives.
+
+Design record:
+[`docs/flora_species_identity_design.md`](flora_species_identity_design.md).
+Gates: hspec `--match "World.FloraOrder"` (two opposing registration
+orders, the impossible-fit lexically-earlier species, the checked-in
+seed-42/world-size-64 golden, and the pre-change numeric-reference
+fixture — both fixtures live under `test-headless/data/flora-order/` and
+are re-capturable through the env vars the module header names, and
+neither is registered in `docs/save_compat/manifest.json`, so neither
+owes the save-compat gate); `--match "Startup"` (the two-order loader
+proof in `Startup asset logging`, the shipped-duplicate readiness
+failure in `Startup readiness`); `--match "Asset.FloraContent"`
+(whole-file refusal atomicity, `flora.register`'s nonfatal refusal);
+`--match "Chop authority"` (the three-designation reconciliation case).
+Flora stays outside `tools/world_check.py`'s baselines, so no terrain
+recapture is owed.
 
 ---
 

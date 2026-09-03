@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The SS5 inventory-row contract of engine_env_capability_audit.py
-(issue #876; extracted from tools/test_engine_env_capability_audit.py
+"""The SS5 inventory-row contract of
+engine_env_capability_inventory.py (issue #876; extracted from
+tools/test_engine_env_capability_audit.py
 by issue #2062).
 
 Issue #876's acceptance: the audit detects an intentionally introduced
@@ -25,8 +26,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from engine_env_capability_audit import (  # type: ignore  # noqa: E402
-    ENGINE_ENV_PATTERN, audit, parse_inventory,
+from engine_env_capability_common import (  # type: ignore  # noqa: E402
+    ENGINE_ENV_PATTERN,
+)
+from engine_env_capability_inventory import (  # type: ignore  # noqa: E402
+    audit_source, parse_inventory,
 )
 from test_engine_env_capability_audit_support import (  # noqa: E402
     FIELD_ONE_ROW, FIELD_THREE_ROW, FIELD_TWO_ROW, INVENTORY_HEADER,
@@ -37,7 +41,7 @@ from test_engine_env_capability_audit_support import (  # noqa: E402
 
 
 def test_complete_inventory_has_no_violations():
-    violations = audit(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
     expect(violations == [],
            f"a fully valid inventory (single-writer + genuinely "
            f"multi-reader/multi-writer + justified-immutable fields) "
@@ -46,14 +50,14 @@ def test_complete_inventory_has_no_violations():
 
 def test_missing_row_detected():
     doc = inventory_doc(render_rows=FIELD_TWO_ROW)  # fieldThree's row dropped
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldThree" in v and "no row" in v for v in violations),
            "dropping fieldThree's row entirely must be flagged as missing")
 
 
 def test_duplicate_row_detected():
     doc = inventory_doc(render_rows=FIELD_TWO_ROW + FIELD_THREE_ROW + FIELD_ONE_ROW)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "more than one inventory row" in v
                for v in violations),
            "fieldOne appearing under two different capability headings "
@@ -66,7 +70,7 @@ def test_stale_row_detected():
         "| `Boot` (`src/Fake/Init.hs:1`) | `IORef Int` | `src/Fake/Init.hs:1` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=FIELD_ONE_ROW + fake_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldFour" in v and "no longer exists" in v for v in violations),
            "a row for a field absent from the live EngineEnv declaration "
            "must be flagged as stale")
@@ -74,7 +78,7 @@ def test_stale_row_detected():
 
 def test_unknown_capability_heading_detected():
     doc = inventory_doc(core_init_heading="### misc")
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "not one of" in v for v in violations),
            "a generic bucket heading ('misc') must not satisfy the "
            "capability-owner requirement")
@@ -85,7 +89,7 @@ def test_row_with_no_enclosing_heading_detected():
     # heading has been seen.
     preamble = f"{INVENTORY_HEADER}{FIELD_ONE_ROW}\n"
     doc = inventory_doc(preamble=preamble, core_init_rows="", render_rows=FIELD_TWO_ROW + FIELD_THREE_ROW)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("no enclosing" in v for v in violations),
            "a table row with no capability heading in scope at all must "
            "be flagged, not silently ignored")
@@ -106,7 +110,7 @@ def test_malformed_capability_heading_resets_scope():
         f"{INVENTORY_HEADER}{FIELD_TWO_ROW}{FIELD_THREE_ROW}\n"
         "## 6. Something else entirely\n\n"
     )
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("malformed" in v.lower() and "###" in v for v in violations),
            "a malformed '### ' heading itself must be reported")
     expect(any("no enclosing" in v for v in violations),
@@ -122,7 +126,7 @@ def test_malformed_capability_heading_resets_scope():
 def test_unknown_lifecycle_detected():
     bad_row = FIELD_ONE_ROW.replace("boot-process", "some-made-up-lifecycle")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Lifecycle cell" in v for v in violations),
            "an unrecognized lifecycle identifier must be rejected")
 
@@ -133,7 +137,7 @@ def test_unknown_thread_role_detected():
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Readers cell" in v
                and "SomeMadeUpThread" in v for v in violations),
            "a Readers cell naming no recognized thread role must be rejected")
@@ -150,7 +154,7 @@ def test_mixed_valid_and_unknown_role_detected():
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Readers cell" in v
                and "AlienThread" in v for v in violations),
            "a Readers cell mixing one valid role (MainRender) with one "
@@ -169,7 +173,7 @@ def test_bare_unquoted_unknown_role_detected():
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Readers cell" in v
                and "AlienThread" in v for v in violations),
            "a bare, unquoted, uncited role-shaped word (AlienThread) "
@@ -187,7 +191,7 @@ def test_lower_camel_unknown_role_detected():
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Readers cell" in v
                and "alienThread" in v for v in violations),
            "a lower-camel-cased, unquoted, uncited role-shaped word "
@@ -206,7 +210,7 @@ def test_conjunction_joined_unknown_role_detected():
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Readers cell" in v
                and "AlienThread" in v for v in violations),
            "an 'and'-joined unknown role (AlienThread) sitting beside a "
@@ -230,7 +234,7 @@ def test_wrong_shaped_quoted_role_detected():
             "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
             "| None | — |\n")
         doc = inventory_doc(core_init_rows=bad_row)
-        violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+        violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
         expect(any("fieldOne" in v and "Readers cell" in v
                    and bad_token in v for v in violations),
                f"a wrong-shaped quoted role ({bad_token}) sitting beside a "
@@ -253,7 +257,7 @@ def test_arbitrary_joiner_unknown_role_detected():
             "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
             "| None | — |\n")
         doc = inventory_doc(core_init_rows=bad_row)
-        violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+        violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
         expect(any("fieldOne" in v and "Readers cell" in v
                    and ("grammar" in v or "AlienThread" in v)
                    for v in violations),
@@ -268,7 +272,7 @@ def test_blank_reader_decision_detected():
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` | `src/Fake/Init.hs:5` "
         "| None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "no Readers decision" in v for v in violations),
            "a blank Readers cell must be flagged as a missing decision, "
            "distinct from an unrecognized-role cell")
@@ -279,7 +283,7 @@ def test_unjustified_none_writer_detected():
         "| `fieldOne` | boot-process | `MainRender` (`src/Fake/Reader.hs:10`) "
         "| None | `IORef Int` | `src/Fake/Init.hs:5` | None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Writers cell" in v for v in violations),
            "a bare 'None' with no parenthetical justification must be "
            "rejected -- only a JUSTIFIED no-writers claim is valid")
@@ -290,7 +294,7 @@ def test_whitespace_only_none_justification_detected():
         "| `fieldOne` | boot-process | `MainRender` (`src/Fake/Reader.hs:10`) "
         "| None (   ) | `IORef Int` | `src/Fake/Init.hs:5` | None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Writers cell" in v for v in violations),
            "a 'None ( )' cell whose parenthetical holds only whitespace "
            "must be rejected -- it records no actual reason, so it is "
@@ -302,7 +306,7 @@ def test_justified_none_writer_accepted():
     # fieldThree in the complete fixture already exercises this; a
     # focused re-check in isolation guards against the two cases being
     # accidentally conflated.
-    violations = audit(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
     expect(not any("fieldThree" in v for v in violations),
            "fieldThree's justified 'None (immutable boot configuration...)' "
            "writers cell must be accepted, not flagged")
@@ -311,7 +315,7 @@ def test_justified_none_writer_accepted():
 def test_missing_sync_contract_detected():
     bad_row = FIELD_ONE_ROW.replace("`IORef Int`", "-")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Sync cell" in v for v in violations),
            "a placeholder Sync cell ('-') must be rejected")
 
@@ -323,7 +327,7 @@ def test_blank_init_shutdown_notes_detected():
         "| `fieldOne` | boot-process | `MainRender` (`src/Fake/Reader.hs:10`) "
         "| `Boot` (`src/Fake/Init.hs:5`) | `IORef Int` |  |  |  |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "Init cell" in v for v in violations),
            "a blank Init cell must be flagged")
     expect(any("fieldOne" in v and "Shutdown cell" in v for v in violations),
@@ -337,7 +341,7 @@ def test_em_dash_notes_accepted():
     # a legitimate, deliberate answer -- a bare em-dash there (this
     # document's own convention throughout) must NOT be rejected the
     # way a blank Sync/Init/Shutdown cell is.
-    violations = audit(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
     expect(not any("Notes cell" in v for v in violations),
            "an em-dash Notes cell (used throughout the complete fixture) "
            "must be accepted, not flagged as blank")
@@ -348,7 +352,7 @@ def test_missing_grounding_evidence_detected():
         "| `fieldOne` | boot-process | `MainRender` (somewhere) "
         "| `Boot` (elsewhere) | IORef Int | boot init | None | — |\n")
     doc = inventory_doc(core_init_rows=bad_row)
-    violations = audit(SYNTHETIC_ENGINE_ENV, doc)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, doc)
     expect(any("fieldOne" in v and "cites no source-location evidence" in v
                for v in violations),
            "a row with no backtick-quoted .hs/.lua citation anywhere must "
@@ -356,7 +360,7 @@ def test_missing_grounding_evidence_detected():
 
 
 def test_valid_multi_reader_multi_writer_field_passes():
-    violations = audit(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
+    violations = audit_source(SYNTHETIC_ENGINE_ENV, SYNTHETIC_INVENTORY_COMPLETE)
     expect(not any("fieldTwo" in v for v in violations),
            "fieldTwo's genuinely multi-reader/multi-writer classification "
            "(WorldThread + LuaThread on both sides) must pass cleanly")
@@ -380,7 +384,7 @@ def test_parse_inventory_only_scans_section_5():
 def test_audit_against_the_real_repo():
     real_source = real_engine_env_source()
     real_inventory = real_inventory_text()
-    violations = audit(real_source, real_inventory)
+    violations = audit_source(real_source, real_inventory)
     expect(violations == [],
            f"the real EngineEnv + the real inventory doc should have zero "
            f"violations, got: {violations}")

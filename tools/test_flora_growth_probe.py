@@ -51,11 +51,15 @@ is a way the probe would leak, collide, or stop proving what it claims:
     exist: a directory that was never created is reported as such, not
     as empty.
   * Registration ORDER is unchanged — the sorted real flora, then
-    `probe_berry`, then `probe_clover` — because placement hashes are
-    indexed by it; both fixture bodies are byte-for-byte what they were;
-    and `load_fixture_yaml`'s positive-registration check still guards
-    both, so a fixture that registers nothing still stops the probe at
-    setup (#1342).
+    `probe_berry`, then `probe_clover`. Since #2241 placement rolls are
+    salted from each species' authored NAME rather than from its
+    registration position, so this order no longer decides anyone's
+    layout; it is pinned because the fixtures must register BEFORE
+    `world.init` reads the catalog, and because a silent reordering is
+    still a change nobody asked for. Both fixture bodies are
+    byte-for-byte what they were, and `load_fixture_yaml`'s
+    positive-registration check still guards both, so a fixture that
+    registers nothing still stops the probe at setup (#1342).
 
 No engine, no world, no worldgen, no GPU: every test here runs against
 temporary directories in about a second.
@@ -876,8 +880,11 @@ def recorded_console(fixture_reply: str = "3"):
 
 def test_bootstrap_loads_real_flora_then_berry_then_clover() -> None:
     print("\ntest_bootstrap_loads_real_flora_then_berry_then_clover")
-    # Placement hashes are indexed by registration order, so the real
-    # species' rolls AND probe_berry's own index depend on this sequence.
+    # The shipped flora must register before the two fixtures, and both
+    # fixtures before world.init reads the catalog. Since #2241 the
+    # sequence no longer decides anyone's placement roll (those are
+    # salted from the authored name), but it is still the sequence the
+    # probe depends on and a silent reordering is still a regression.
     with stand_in_data_tree(["zz_late.yaml", "aa_early.yaml"]), \
             fresh_run() as art:
         with recorded_console() as calls:

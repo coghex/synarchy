@@ -37,18 +37,23 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
+import qualified Data.HashMap.Strict as HM
+import qualified Data.List as L
 import System.Directory
     ( createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory
-    , removeDirectoryRecursive )
-import System.FilePath ((</>))
+    , listDirectory, removeDirectoryRecursive )
+import System.FilePath ((</>), takeExtension)
+import World.Flora.Types (FloraSpecies(..), FloraCatalog(..))
 import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Isolation
+    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..) )
 import Engine.Core.State
-    ( loggerRef, luaToEngineQueue, luaQueue, assetPoolRef
-    , nextObjectIdRef, inputStateRef )
+    ( EngineEnv, floraCatalogRef, loggerRef, luaToEngineQueue, luaQueue
+    , assetPoolRef, nextObjectIdRef, inputStateRef )
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
@@ -92,17 +97,28 @@ normalFams =
 arenaFams ∷ [Fam]
 arenaFams = [ f | f ← normalFams, famId f ≢ "flora" ]
 
+-- | Does this family's queue entry canonicalize what the enumeration
+--   handed it? Items because they are a recursive TREE (#1232); flora
+--   because its per-file load order is observable in the shipped
+--   product — sequential 'FloraId' allocation, and a save's numeric
+--   flora references (#2241).
+famCanonical ∷ Fam → Bool
+famCanonical f = famTree f ∨ famId f ≡ "flora"
+
 -- | The two files every family is given, as paths RELATIVE to the
 --   family directory. Items get a nested second file so the recursive
---   walk is exercised too, handed back in a deliberately non-canonical
---   enumeration order so the sort is asserted rather than assumed.
+--   walk is exercised too. Both canonicalizing families are handed a
+--   deliberately non-canonical enumeration order so the sort is
+--   asserted rather than assumed.
 famRels ∷ Fam → [Text]
 famRels f
-    | famTree f = ["nested/f2.yaml", "f1.yaml"]
-    | otherwise = ["f1.yaml", "f2.yaml"]
+    | famTree f      = ["nested/f2.yaml", "f1.yaml"]
+    | famCanonical f = ["f2.yaml", "f1.yaml"]
+    | otherwise      = ["f1.yaml", "f2.yaml"]
 
--- | The order the queue must actually load them in: as enumerated for a
---   flat directory, canonically sorted for a tree.
+-- | The order the queue must actually load them in: as enumerated for
+--   an ordinary flat directory, canonically sorted for a tree or for
+--   flora.
 famLoadOrder ∷ Fam → [Text]
 famLoadOrder f
     | famTree f = ["f1.yaml", "nested/f2.yaml"]
@@ -138,10 +154,22 @@ famSum f = sum [ famCount (famIndex f) rel | rel ← famLoadOrder f ]
 data Scenario = Scenario
     { scAbsent ∷ [Text]  -- ^ family directories whose enumeration answers nil
     , scZero   ∷ [Text]  -- ^ family directories whose files all return 0
+    , scRels   ∷ [(Text, [Text])]
+      -- ^ family directories whose RAW enumeration order is overridden.
+      --   The same file set, handed back differently — which is the only
+      --   way "the load order is a transformation over what the OS
+      --   enumerated" can be told from "the OS happened to enumerate it
+      --   that way" (#1232 requirement 11, #2241 requirement 1).
     }
 
 fullScenario ∷ Scenario
-fullScenario = Scenario [] []
+fullScenario = Scenario [] [] []
+
+-- | What @engine.listFiles@ hands this family back under this scenario.
+scenarioRels ∷ Scenario → Fam → [Text]
+scenarioRels sc f = case lookup (famDir f) (scRels sc) of
+    Just rels → rels
+    Nothing   → famRels f
 
 luaQuoted ∷ Text → Text
 luaQuoted t = "'" <> t <> "'"
@@ -202,13 +230,18 @@ luaPrelude sc = T.unlines $
   where
     filesTable = luaTable
         [ (famDir f, "{ " <> T.intercalate ", "
-              (map luaQuoted (famRels f)) <> " }")
+              (map luaQuoted (scenarioRels sc f)) <> " }")
         | f ← normalFams, famDir f `notElem` scAbsent sc ]
+    -- Keyed by PATH, over both what the enumeration handed back and
+    -- what the queue is expected to load, so an override naming
+    -- different files than famLoadOrder still resolves every call.
     countsTable = luaTable
         [ ( famDir f <> "/" <> rel
           , tshow (if famDir f `elem` scZero sc
                        then 0 else famCount (famIndex f) rel) )
-        | f ← normalFams, rel ← famLoadOrder f ]
+        | f ← normalFams
+        , rel ← nubOrd (scenarioRels sc f ⧺ famLoadOrder f) ]
+    nubOrd = foldr (\x acc → x : filter (≢ x) acc) []
 
 -- | One profile run's observable output.
 data RunResult = RunResult
@@ -250,6 +283,30 @@ parseRun out =
     callMark = "@@CALLS@@"
     nonEmpty t = [ l | l ← T.lines t, not (T.null l) ]
 
+-- | The shipped @data\/flora@ file names, in canonical byte order.
+shippedFloraRels ∷ IO [Text]
+shippedFloraRels =
+    map T.pack ∘ L.sort ∘ filter ((≡ ".yaml") ∘ takeExtension)
+        <$> listDirectory "data/flora"
+
+-- | Just the @data\/flora@ loader calls one run made, in order.
+floraCalls ∷ RunResult → [Text]
+floraCalls = filter ("data/flora/" `T.isPrefixOf`) ∘ rrCalls
+
+-- | Register these flora files, in this order, into a FRESH private
+--   engine through the real @engine.loadFloraYaml@ binding, and hand
+--   back the @FloraId@-to-authored-name mapping that produced.
+--
+--   A new engine per call, because the catalog is cumulative and a
+--   second registration of the same shipped names would (since #2241,
+--   correctly) be refused rather than renumbered.
+floraMappingFor ∷ [Text] → IO [(Word16, Text)]
+floraMappingFor paths = do
+    b ← newBindings
+    forM_ paths $ \p → void (callBinding b "loadFloraYaml" p)
+    cat ← readIORef (floraCatalogRef (bnEnv b))
+    pure (L.sort [ (k, fsName sp) | (k, sp) ← HM.toList (fcSpecies cat) ])
+
 -- | The aggregate lines only, located by their stable prefix — never by
 --   a line count over everything the loader logged.
 aggregates ∷ RunResult → [Text]
@@ -276,10 +333,25 @@ expectedAggregate f total files =
 data Bindings = Bindings
     { bnLua ∷ LuaBackendState
     , bnLog ∷ IORef [LogEntry]
+    , bnEnv ∷ EngineEnv
+    , bnIsolated ∷ Bool
+      -- ^ Was the BOOT isolated? Sampled inside 'newBindings''s own
+      --   bracket: an example entering a bracket of its own to ask
+      --   would answer True however the engine booted, which is no
+      --   guard at all.
     }
 
+--   ISOLATED (#1357): engine initialization is itself a @config\/@
+--   writer — 'Engine.Core.Init' migrates legacy config and
+--   'Engine.Asset.YamlNotifications.loadOverrides' materializes an
+--   absent @config\/notifications.local.yaml@ — so every private engine
+--   this module boots would otherwise write the developer's checkout.
+--   The wrap is on the BOOT, which is the writer; the shipped @data\/@
+--   these bindings then read is symlinked into the scratch root and
+--   resolves unchanged either way.
 newBindings ∷ IO Bindings
-newBindings = do
+newBindings = withIsolatedResourceRoot $ do
+    isolated ← isInsideIsolatedResourceRoot
     EngineInitResult env ← initializeEngineHeadlessQuiet
     ref ← newIORef []
     logger ← initLogger defaultLogConfig
@@ -292,7 +364,7 @@ newBindings = do
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
-    pure (Bindings ls ref)
+    pure (Bindings ls ref env isolated)
 
 -- | Call one binding through the real Lua API and return what it handed
 --   back to Lua alongside every entry it logged.
@@ -498,7 +570,7 @@ spec = describe "Startup asset logging" $ do
         it "reports a family whose files all return zero as a zero \
            \aggregate over the files it still loaded — and warns about \
            \nothing (requirements 4 and 5)" $ do
-            let sc = Scenario [] ["data/recipes"]
+            let sc = Scenario [] ["data/recipes"] []
             r ← runProfile sc "normal"
             [ l | l ← aggregates r, "recipe " `T.isInfixOf` l ]
                 `shouldBe` [ "Startup assets: recipe loaded 0 from 2 file(s)" ]
@@ -506,7 +578,7 @@ spec = describe "Startup asset logging" $ do
 
         it "still emits an aggregate for a family whose directory yields \
            \NO files at all (requirement 4)" $ do
-            let sc = Scenario ["data/infections"] []
+            let sc = Scenario ["data/infections"] [] []
             r ← runProfile sc "normal"
             [ l | l ← aggregates r, "infection " `T.isInfixOf` l ]
                 `shouldBe`
@@ -520,6 +592,40 @@ spec = describe "Startup asset logging" $ do
             -- and the family is simply skipped, not loaded with a phantom path
             [ p | p ← rrCalls r, "data/infections" `T.isPrefixOf` p ]
                 `shouldBe` []
+
+        it "boots its private engines inside the scratch resource root, \
+           \never the checkout (#1357)" $ do
+            b ← newBindings
+            bnIsolated b `shouldBe` True
+
+        it "loads data/flora in canonical BYTE order from two opposing \
+           \raw enumerations, and so registers one FloraId-to-name \
+           \mapping either way (#2241 requirement 1)" $ do
+            -- Driven over the REAL shipped file set rather than the two
+            -- synthetic f1/f2 names: the mapping half below registers
+            -- them through the real engine binding, and a synthetic file
+            -- registers no species at all.
+            rels ← shippedFloraRels
+            length rels `shouldSatisfy` (> 2)
+            let expected = [ "data/flora/" <> r | r ← rels ]
+                enumeration order' =
+                    Scenario [] [] [("data/flora", order')]
+            forwardRun  ← runProfile (enumeration rels) "normal"
+            backwardRun ← runProfile (enumeration (reverse rels)) "normal"
+            floraCalls forwardRun  `shouldBe` expected
+            floraCalls backwardRun `shouldBe` expected
+
+            -- The mapping the real engine ends up with, once per order.
+            canonical  ← floraMappingFor (floraCalls forwardRun)
+            canonical' ← floraMappingFor (floraCalls backwardRun)
+            canonical' `shouldBe` canonical
+            -- and the premise, without which the two lines above would
+            -- hold no matter what the loader did: registration order
+            -- genuinely determines the mapping, so a loader that passed
+            -- the raw enumeration through would produce a different one.
+            raw ← floraMappingFor (reverse expected)
+            raw `shouldNotBe` canonical
+            map snd (L.sort raw) `shouldNotBe` map snd (L.sort canonical)
 
         it "keeps its own queued-count line, which is not an aggregate" $ do
             r ← runProfile fullScenario "normal"

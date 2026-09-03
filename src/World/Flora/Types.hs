@@ -33,6 +33,7 @@ module World.Flora.Types
     , nextFloraId
     , insertWorldGen
     , worldGenSpecies
+    , floraWorldGenKey
     , isPlantableCropCategory
     ) where
 
@@ -41,6 +42,8 @@ import Control.DeepSeq (NFData(..))
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
+import qualified Data.Text as T
+import Data.List (sortOn)
 import Data.Hashable (Hashable(..))
 import Engine.Asset.Handle (TextureHandle(..))
 import World.Flora.Identity (FloraInstanceId)
@@ -317,9 +320,41 @@ insertWorldGen ∷ FloraId → FloraWorldGen → FloraCatalog → FloraCatalog
 insertWorldGen (FloraId fid) wg cat =
     cat { fcWorldGen = HM.insert fid wg (fcWorldGen cat) }
 
+-- | Every world-generating species, in CANONICAL AUTHORED-NAME ORDER
+--   (#2241).
+--
+--   Sorted rather than handed back in 'HM.toList' order because that
+--   order is a hash-table artefact: it moves when an unrelated species
+--   is registered, and worldgen walks this list to decide which plants
+--   a tile holds. Sorting it is only half the fix — the rolls
+--   themselves are salted from 'floraWorldGenKey' rather than from a
+--   position in this list ('World.Flora.Placement') — but it is the
+--   half that makes the VISIT order, and so the shared-occupancy
+--   competition between species that do place, deterministic.
+--
+--   The 'FloraId' is the tie-break, which is what keeps this a TOTAL
+--   order: two entries can share a key only when neither has a species
+--   record, and ids are unique by construction.
 worldGenSpecies ∷ FloraCatalog → [(FloraId, FloraWorldGen)]
 worldGenSpecies cat =
-    map (\(k, v) → (FloraId k, v)) $ HM.toList (fcWorldGen cat)
+    sortOn (\(fid, _) → (floraWorldGenKey cat fid, unFloraId fid))
+        [ (FloraId k, v) | (k, v) ← HM.toList (fcWorldGen cat) ]
+
+-- | The stable authored key one world-gen entry is ordered and salted
+--   by (#2241): the species' own YAML @name@.
+--
+--   'fcWorldGen' and 'fcSpecies' are independent maps, and
+--   @flora.registerForWorldGen@ accepts any numeric id, so an entry
+--   with NO species record is reachable and has no authored name. Such
+--   an entry falls back to a synthetic key built from its numeric id —
+--   the only stable thing it has — rather than collapsing every
+--   nameless entry onto one shared key and therefore one shared
+--   placement roll. The @\SOH@ prefix is not a legal character in an
+--   authored YAML name, so the two spaces cannot collide.
+floraWorldGenKey ∷ FloraCatalog → FloraId → Text
+floraWorldGenKey cat fid@(FloraId n) = case lookupSpecies fid cat of
+    Just sp → fsName sp
+    Nothing → "\SOHworldgen:" <> T.pack (show n)
 
 -- | The two worldGen category tags (World.Flora.Placement) that mark a
 --   species as a plantable crop — a row_crop 'FloraInstance' (#334) or a

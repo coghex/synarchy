@@ -173,8 +173,8 @@ from the manager.
 
 - **Camera selection** landed as BDA-2 (#2088, §8): placed, ghosted and
   hit-test geometry follow the active camera through `Building.Visual`.
-  The committed building DESIGNATION still draws its generic marker;
-  #1845 consumes the same boundary when it replaces that.
+  The committed building DESIGNATION consumes that same boundary since
+  #1845 replaced its generic marker with the building's own sprite.
 - **Destruction.** `destruction` is played by `Building.Destruction` (BDA-3, #2091): the `BuildingDestroy` drain captures a render-only effect from the declared clip in the same transition that removes the instance, plays it once from the game clock, and prunes it at `frameCount / fps`. No fallback: a definition without the role is removed with no visual, and a looping, zero-, negative- or non-finite-fps declaration is reported with building/animation context and plays nothing.
 - **Preview direction/lifecycle controls.** The preview keeps decoding
   both forms — its static hint reads canonical `sprites.south` and falls

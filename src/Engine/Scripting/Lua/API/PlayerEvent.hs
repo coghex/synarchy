@@ -280,6 +280,14 @@ getNotificationCfgFn env = do
 --   @overrides@ table is shaped @{ catId = {log=b, popup=b, pause=b}
 --   ... }@; missing categories and missing fields are left alone.
 --   Unknown category ids are ignored with a dev-log warning.
+--
+--   Returns @true@ when the file was durably replaced and @false@ when
+--   the write failed (#2202), logging the path and the cause at warning
+--   level; a filesystem failure never raises a Lua error. The live merge
+--   below is NOT rolled back on a failed write — the in-memory config is
+--   what routes the next emit, the YAML is the next-session record — and
+--   'Engine.Asset.YamlNotifications.writeNotificationOverrides' states
+--   that policy on the writer itself.
 setNotificationOverridesFn ∷ EngineEnv
                            → Lua.LuaE Lua.Exception Lua.NumResults
 setNotificationOverridesFn env = do
@@ -320,9 +328,13 @@ setNotificationOverridesFn env = do
             -- the in-memory update — the in-memory cfg is what
             -- routes the next emit; the YAML is the next-session
             -- record.
-            Lua.liftIO $ writeNotificationOverrides
+            written ← Lua.liftIO $ writeNotificationOverrides
                 "config/notifications.local.yaml" updated
-            Lua.pushboolean True
+            case written of
+                Right () → pure ()
+                Left err → Lua.liftIO $ logWarn logger CatEvent $
+                    "setNotificationOverrides: " <> err
+            Lua.pushboolean (either (const False) (const True) written)
             return 1
 
 -- | Read a Lua table of shape

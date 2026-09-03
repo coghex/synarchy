@@ -46,11 +46,29 @@ TOOLS = Path(__file__).resolve().parent
 IMPORT = re.compile(
     r"^(import selftestlib\b|from selftestlib import )", re.M)
 
+
+def _named(path: Path) -> str:
+    """A roster entry's identity: its path relative to `tools/`.
+
+    A bare filename stopped being unique once the roster went recursive
+    (#2130) -- `support.py` exists in two packages -- and a failure that
+    names neither one is a failure a reader cannot act on.
+    """
+    return str(path.relative_to(TOOLS))
+
 #: Everything under `tools/` that imports the shared helper, in either
 #: spelling. Deriving the roster instead of freezing it means a newly
 #: converted file joins these checks the day it lands.
+#:
+#: RECURSIVE since #2130: a self-test that outgrows one file now splits
+#: into a `tools/` PACKAGE of case owners -- `persistence_inventory_audit_
+#: tests/` (#2138), `probe_runner_tests/` (#2130) -- and a non-recursive
+#: glob left every one of those children unchecked, which is a region of
+#: the suite where a reintroduced local `expect`, a direct
+#: `FAILURES.append` or a narrating print would go unnoticed. The
+#: minimums below are floors, so a roster that grows still satisfies them.
 IMPORTERS = sorted(
-    path for path in TOOLS.glob("*.py")
+    path for path in TOOLS.rglob("*.py")
     if path.name not in {"selftestlib.py", Path(__file__).name}
     and IMPORT.search(path.read_text(encoding="utf-8")))
 
@@ -304,10 +322,10 @@ def test_verbosity_does_not_leak_into_the_next_invocation() -> None:
 def test_the_roster_is_not_truncated() -> None:
     expect(len(SCRIPTS) >= MINIMUM_SCRIPTS,
            f"at least {MINIMUM_SCRIPTS} self-tests import the shared helper "
-           f"(found {len(SCRIPTS)}: {sorted(p.name for p in SCRIPTS)})")
+           f"(found {len(SCRIPTS)}: {sorted(_named(p) for p in SCRIPTS)})")
     expect(len(IMPORTERS) >= MINIMUM_IMPORTERS,
            f"at least {MINIMUM_IMPORTERS} tools/ files import it in total "
-           f"(found {len(IMPORTERS)}: {sorted(p.name for p in IMPORTERS)})")
+           f"(found {len(IMPORTERS)}: {sorted(_named(p) for p in IMPORTERS)})")
 
 
 def test_no_importer_keeps_a_local_helper() -> None:
@@ -316,7 +334,7 @@ def test_no_importer_keeps_a_local_helper() -> None:
         local = [node.name for node in tree.body
                  if isinstance(node, ast.FunctionDef) and node.name == "expect"]
         expect(not local,
-               f"{path.name} defines no local expect (found {local})")
+               f"{_named(path)} defines no local expect (found {local})")
 
 
 def test_no_importer_registers_a_failure_behind_the_count() -> None:
@@ -325,7 +343,7 @@ def test_no_importer_registers_a_failure_behind_the_count() -> None:
     for path in IMPORTERS:
         text = path.read_text(encoding="utf-8")
         expect("FAILURES.append" not in text,
-               f"{path.name} registers failures through the helper, not by "
+               f"{_named(path)} registers failures through the helper, not by "
                f"appending to FAILURES directly")
 
 
@@ -333,9 +351,9 @@ def test_every_converted_script_routes_both_verdicts() -> None:
     for path in SCRIPTS:
         text = path.read_text(encoding="utf-8")
         expect("return selftestlib.concluded(1)" in text,
-               f"{path.name}'s failing verdict goes through concluded()")
+               f"{_named(path)}'s failing verdict goes through concluded()")
         expect(re.search(r"return selftestlib\.concluded\(\s*0", text) is not None,
-               f"{path.name}'s passing verdict goes through concluded()")
+               f"{_named(path)}'s passing verdict goes through concluded()")
 
 
 def test_every_converted_script_offers_the_flag() -> None:
@@ -343,12 +361,12 @@ def test_every_converted_script_offers_the_flag() -> None:
         text = path.read_text(encoding="utf-8")
         expect("selftestlib.parse_verbose()" in text
                or "selftestlib.add_verbose_option(" in text,
-               f"{path.name} accepts -v/--verbose")
+               f"{_named(path)} accepts -v/--verbose")
 
 
 def test_the_narrating_body_survives_only_in_the_module() -> None:
     narrating = sorted(
-        path.name for path in TOOLS.glob("*.py")
+        _named(path) for path in TOOLS.rglob("*.py")
         if NARRATION.search(path.read_text(encoding="utf-8")))
     expect(narrating == ["selftestlib.py"],
            f"only the shared module narrates a passing assertion "

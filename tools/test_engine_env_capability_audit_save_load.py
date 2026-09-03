@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The SaveLoadCapability projection contract of
-engine_env_capability_audit.py (issue #899, E8; extracted from
+engine_env_capability_saveload.py (issue #899, E8; extracted from
 tools/test_engine_env_capability_audit.py by issue #2062).
 
 `audit_save_load_projection` is the static half of E8's correspondence
@@ -26,10 +26,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from engine_env_capability_audit import (  # type: ignore  # noqa: E402
+from engine_env_capability_common import (  # type: ignore  # noqa: E402
+    parse_projection_bindings,
+)
+from engine_env_capability_saveload import (  # type: ignore  # noqa: E402
     SAVE_LOAD_CAPABILITY_FILE, SAVE_LOAD_CAPABILITY_MODULE,
     SAVE_LOAD_PROJECTION, audit_save_load_projection,
-    parse_projection_bindings,
 )
 from test_engine_env_capability_audit_support import expect  # noqa: E402
 

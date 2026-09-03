@@ -1,4 +1,12 @@
--- Flora Loader - enumerates data/flora/*.yaml and loads each one
+-- Flora Loader - enumerates data/flora/*.yaml and loads each one.
+--
+-- NOT the production path: startup_loader.lua's addYamlDirCanonical is,
+-- and nothing currently requires this module or scripts/flora_catalog.lua.
+-- Anything that DOES wire it back up must sort through
+-- startupLoader.canonicalFileOrder first (#2241): flora ids are handed
+-- out in load order, a save's numeric flora references name them, and
+-- engine.listFiles returns raw filesystem order, which differs between
+-- machines.
 local floraLoader = {}
 
 function floraLoader.loadAll(folder)

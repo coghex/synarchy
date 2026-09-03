@@ -551,9 +551,14 @@ resumeScriptFn backendState = do
 -- | List files in a directory matching an extension.
 --   Returns a Lua array of filenames, or nil if the directory doesn't exist.
 --   NB: order is OS-dependent (listDirectory) — callers that need a
---   deterministic order must sort themselves. (Do NOT sort here: flora
---   IDs are allocated in load order and salt worldgen placement, so a
---   global sort would change same-seed flora output.)
+--   deterministic order must sort themselves. Do NOT sort here: this
+--   binding's whole point is that ordering is the CALLER's decision, so
+--   @scripts\/startup_loader.lua@'s canonical order stays a pure,
+--   testable transformation over an already-enumerated list rather than
+--   something buried inside the enumeration (#1232). @data\/flora@ is
+--   the caller that needs one — its sequential @FloraId@s are what a
+--   save's numeric flora references name — and since #2241 it applies
+--   @canonicalFileOrder@ itself, at its own call site.
 listFilesFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
 listFilesFn = do
     dirArg ← Lua.tostring 1

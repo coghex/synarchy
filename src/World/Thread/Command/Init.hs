@@ -74,7 +74,7 @@ import World.Generate.Config (WorldGenConfig(..)
                               , normalizeWorldGenInputs)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog)
-import World.Thread.ChunkLoading (dispatchLocationStamps)
+import World.Thread.ChunkLoading (admitChunksToSim, dispatchLocationStamps)
 
 handleWorldInitCommand ∷ EngineEnv → LoggerState → WorldPageId
     → Word64 → Int → Int → Maybe WorldIdentity → IO ()
@@ -466,6 +466,23 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the init queue, so the chunk-loading dispatch never sees it.
     dispatchLocationStamps env params pageId [centerChunk]
 
+    -- Admit it to the fluid simulation for the SAME reason (#2232). The
+    -- centre reaches residency without passing either streaming loader,
+    -- and both of those skip a coord already in wsTilesRef by design, so
+    -- nothing downstream ever seeds it: on a fresh world the centre's
+    -- fluid never ticked and nothing could cross its four boundaries
+    -- until a live edit happened to land in it.
+    --
+    -- Exactly one seed, from the same builder the init-queue consumer
+    -- uses, carrying the POST-admission chunk publishSeedChunks just
+    -- wrote. Enqueued here — before 'seedInitialQueue' below — because
+    -- simQueue is FIFO and the dump path enqueues SimFastSettleAll once
+    -- the init queue drains: a seed written after that point would miss
+    -- the settle. The centre is excluded from the queue this seeds
+    -- ('initialChunkQueue'), so no later drain can seed it a second
+    -- time.
+    admitChunksToSim env params pageId [centerChunk]
+
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
     -- Register the initial box as durable demand and APPEND exactly what
@@ -601,6 +618,19 @@ handleWorldInitArenaCommand env logger pageId = do
     _ ← evaluate (force allChunks)
 
     writeIORef (wsGenParamsRef worldState) (Just arenaParams)
+
+    -- Admit every generated arena chunk to the fluid simulation (#2232).
+    -- An arena page has no streaming loader at all — these chunks are the
+    -- page's whole residency and are published straight to wsTilesRef —
+    -- so without this every chunk stayed inert until an edit landed in
+    -- it, and fluid placed in one chunk could not flow into an unedited
+    -- neighbour. Same builder as the streaming loaders, one seed per
+    -- chunk, using the same 'arenaParams' the topology is derived from.
+    --
+    -- Enqueued after the chunks are resident and BEFORE LoadDone is
+    -- published: LoadDone is what world.waitForInit and the dump path's
+    -- settle wait on, so a seed written after it could race the settle.
+    admitChunksToSim env arenaParams pageId allChunks
 
     -- Mark as fully loaded immediately (no progressive loading needed)
     writeIORef (wsLoadPhaseRef worldState) LoadDone

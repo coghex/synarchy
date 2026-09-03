@@ -36,6 +36,40 @@
 --   starting a new cycle, so the interrupted save still lands rather
 --   than being overwritten.
 --
+--   == The durability boundary (issue #2229)
+--
+--   Every move a cycle makes — the retire rename, the shift, the staged
+--   generation's rename into @autosave-1@, and the single removal —
+--   changes @saves\/@'s OWN entry list, and a rename returning says
+--   nothing about that list being on disk
+--   ('World.Save.Storage.Durable.syncDirectory'). Left unsynced, a
+--   rotation reported as complete could be wholly absent after a crash,
+--   which is what the ordering above exists to prevent.
+--
+--   So @saves\/@ is synced at each point where the shape reported as
+--   complete changes: after 'clearRetired' actually removes a leftover
+--   retired generation, after 'performRotation' finishes its renames and
+--   BEFORE the retired generation is removed, and once more after that
+--   removal (only when one actually happened — a family that was not
+--   full retires nothing and has no removal entry to persist). A sync
+--   failure fails the autosave with a message naming the directory,
+--   which reaches the player through
+--   'Engine.Scripting.Lua.API.Save.autosaveSlotVerb' like any other
+--   refusal.
+--
+--   That placement preserves the resumable-family guarantee rather than
+--   weakening it. A failure of the pre-removal sync leaves the retired
+--   generation still on disk — the same partially-shifted family an
+--   interruption already produces, which the next cycle finishes. A
+--   failure of the post-removal sync leaves an already-durable numbered
+--   family and, at worst, a retired directory whose disappearance is
+--   still in flight; the next cycle's 'clearRetired' discards it again
+--   regardless.
+--
+--   The seams 'prepareAutosaveCycleWithSync' and
+--   'finalizeAutosaveRotationWithSync' exist only so the headless gate
+--   can inject a failing sync; production always uses the real one.
+--
 --   == Manual saves are never overwritten
 --
 --   @autosave-3@ is a perfectly legal name to type into the manual save
@@ -99,14 +133,16 @@ module World.Save.Autosave
     , isAutosaveStagingSlot
     , publicSaveListings
     , prepareAutosaveCycle
+    , prepareAutosaveCycleWithSync
     , finalizeAutosaveRotation
+    , finalizeAutosaveRotationWithSync
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, SomeException, try)
 import System.Directory
     ( doesDirectoryExist, doesFileExist, removeDirectoryRecursive
     , renameDirectory )
@@ -116,6 +152,7 @@ import Engine.Save.Config (rotationDepthMin, rotationDepthMax)
 import World.Save.Serialize
     (listSaves, savesDirectory, saveExtension, SaveListing(..))
 import World.Save.Types (SaveMetadata(..))
+import World.Save.Storage.Durable (syncDirectory)
 import qualified World.Save.Storage as Storage
 
 -- | The reserved name prefix. Not a namespace the save-name validator
@@ -290,7 +327,17 @@ linkSafetyProblem slots = do
 --   lands instead of being overwritten by the next one.
 prepareAutosaveCycle
     ∷ LoggerState → HS.HashSet Text → Int → IO (Either Text ())
-prepareAutosaveCycle logger luaKnownNames requestedDepth = do
+prepareAutosaveCycle = prepareAutosaveCycleWithSync syncDirectory
+
+-- | 'prepareAutosaveCycle' with its directory-sync seam supplied by the
+--   caller (issue #2229). Production passes
+--   'World.Save.Storage.Durable.syncDirectory'; the headless gate
+--   injects a failing sync to prove the sync is reached and its failure
+--   propagated, without depending on a real @fsync@ ever failing.
+prepareAutosaveCycleWithSync
+    ∷ (FilePath → IO ()) → LoggerState → HS.HashSet Text → Int
+    → IO (Either Text ())
+prepareAutosaveCycleWithSync syncDir logger luaKnownNames requestedDepth = do
     let depth = clampDepth requestedDepth
     slots ← readSlotStates logger luaKnownNames (cycleSlotNames depth)
     problem ← cycleProblem slots
@@ -303,14 +350,15 @@ prepareAutosaveCycle logger luaKnownNames requestedDepth = do
             -- discarding it now is that cycle's own intended outcome
             -- finally completing -- and it has to go before this cycle
             -- can retire anything into that name.
-            retiredCleared ← clearRetired logger slots
+            retiredCleared ← clearRetired syncDir logger slots
             case retiredCleared of
-                Left err → pure (Left err)
+                Left err → pure (Left ("autosave refused: " <> err))
                 Right () | any stagedGeneration slots → do
                     logInfo logger CatWorld
                         "Autosave: a previously published generation was \
                         \never rotated in -- doing that first"
-                    finalizeAutosaveRotation logger luaKnownNames depth
+                    finalizeAutosaveRotationWithSync syncDir logger
+                        luaKnownNames depth
                 Right () → pure (Right ())
   where
     stagedGeneration s =
@@ -319,8 +367,16 @@ prepareAutosaveCycle logger luaKnownNames requestedDepth = do
 -- | Remove a leftover retired generation, if one is present. Always runs
 --   BEFORE a cycle retires anything of its own, since that rename needs
 --   the name free.
-clearRetired ∷ LoggerState → [SlotState] → IO (Either Text ())
-clearRetired logger slots =
+--
+--   The removal is a change to @saves\/@'s OWN entry list, so it is
+--   synced before the caller may treat the name as free (issue #2229) —
+--   otherwise a rotation that retires into that name reports a family
+--   shape a crash could still unwind. Returns the reason WITHOUT a
+--   prefix; each caller supplies its own ("autosave refused" versus
+--   "autosave rotation refused").
+clearRetired
+    ∷ (FilePath → IO ()) → LoggerState → [SlotState] → IO (Either Text ())
+clearRetired syncDir logger slots =
     case [ s | s ← slots
          , ssName s ≡ autosaveRetiredSlotName, ssDirExists s ] of
         [] → pure (Right ())
@@ -329,11 +385,25 @@ clearRetired logger slots =
                 "Autosave: discarding the generation a previous rotation \
                 \had already retired"
             result ← try (removeDirectoryRecursive (ssDir retired))
-            pure $ case result ∷ Either IOException () of
-                Left e → Left ("autosave refused: could not discard the \
-                               \previously retired generation: "
-                               <> tshow e)
-                Right () → Right ()
+            case result ∷ Either IOException () of
+                Left e → pure (Left ("could not discard the previously \
+                                     \retired generation: " <> tshow e))
+                Right () → syncSavesDirectory syncDir
+
+-- | Make @saves\/@'s own entry list durable (issue #2229). Every
+--   rename and removal an autosave cycle performs happens IN @saves\/@,
+--   so the family shape a cycle reports as complete is only really on
+--   disk once this has returned — the same rule
+--   'World.Save.Storage.publishGeneration' applies to a slot it creates,
+--   and the one 'World.Save.Storage.Durable.syncDirectory' documents.
+--   The message always names the directory; the caller prefixes it.
+syncSavesDirectory ∷ (FilePath → IO ()) → IO (Either Text ())
+syncSavesDirectory syncDir = do
+    result ← try (syncDir savesDirectory)
+    pure $ case result ∷ Either SomeException () of
+        Left e → Left ("could not make the save directory '"
+                       <> T.pack savesDirectory <> "' durable: " <> tshow e)
+        Right () → Right ()
 
 -- | Ownership first, then containment — both across the WHOLE cycle
 --   range, before any of it is touched.
@@ -348,7 +418,14 @@ cycleProblem slots = case firstProblem slots of
 --   'autosaveIncomingSlotName' actually succeeded.
 finalizeAutosaveRotation
     ∷ LoggerState → HS.HashSet Text → Int → IO (Either Text ())
-finalizeAutosaveRotation logger luaKnownNames requestedDepth = do
+finalizeAutosaveRotation = finalizeAutosaveRotationWithSync syncDirectory
+
+-- | 'finalizeAutosaveRotation' with its directory-sync seam supplied by
+--   the caller (issue #2229) — see 'prepareAutosaveCycleWithSync'.
+finalizeAutosaveRotationWithSync
+    ∷ (FilePath → IO ()) → LoggerState → HS.HashSet Text → Int
+    → IO (Either Text ())
+finalizeAutosaveRotationWithSync syncDir logger luaKnownNames requestedDepth = do
     let depth = clampDepth requestedDepth
     slots ← readSlotStates logger luaKnownNames (cycleSlotNames depth)
     let byName = HM.fromList [ (ssName s, s) | s ← slots ]
@@ -360,11 +437,12 @@ finalizeAutosaveRotation logger luaKnownNames requestedDepth = do
         Just reason → pure (Left ("autosave rotation refused: " <> reason))
         Nothing → do
             -- The retire rename below needs that name free.
-            retiredCleared ← clearRetired logger slots
+            retiredCleared ← clearRetired syncDir logger slots
             case (retiredCleared, incoming, retired) of
-                (Left err, _, _) → pure (Left err)
+                (Left err, _, _) →
+                    pure (Left ("autosave rotation refused: " <> err))
                 (Right (), Just inc, Just ret) | ssDirExists inc →
-                    performRotation logger depth slotAt inc ret
+                    performRotation syncDir logger depth slotAt inc ret
                 _ → pure (Left "autosave rotation refused: nothing was \
                                \published to rotate in")
 
@@ -398,9 +476,9 @@ finalizeAutosaveRotation logger luaKnownNames requestedDepth = do
 --   until step 4 every generation is still on disk, just not all of it
 --   inside the numbered family.
 performRotation
-    ∷ LoggerState → Int → (Int → Maybe SlotState) → SlotState → SlotState
-    → IO (Either Text ())
-performRotation logger depth slotAt incoming retired = do
+    ∷ (FilePath → IO ()) → LoggerState → Int → (Int → Maybe SlotState)
+    → SlotState → SlotState → IO (Either Text ())
+performRotation syncDir logger depth slotAt incoming retired = do
     let occupied i = maybe False ssDirExists (slotAt i)
     result ← try $ do
         -- 1. Room for the shift: the first already-free index, or — only
@@ -425,10 +503,43 @@ performRotation logger depth slotAt incoming retired = do
         -- 3. The staged generation becomes the newest.
         forM_ (slotAt 1) $ \newest →
             renameDirectory (ssDir incoming) (ssDir newest)
-        -- 4. Only now, with the whole family in its final shape, is the
-        --    retired generation actually gone.
-        stillRetired ← doesDirectoryExist (ssDir retired)
-        when stillRetired $ removeDirectoryRecursive (ssDir retired)
-    pure $ case result ∷ Either IOException () of
-        Left e   → Left ("autosave rotation failed: " <> tshow e)
-        Right () → Right ()
+    case result ∷ Either IOException () of
+        Left e   → pure (Left (rotationFailed (tshow e)))
+        Right () → afterRenames
+  where
+    rotationFailed reason = "autosave rotation failed: " <> reason
+    -- 4. Persist the family's new shape BEFORE the only destructive
+    --    step runs (issue #2229). Every rename above changed @saves/@'s
+    --    own entry list, and nothing has synced it; removing the retired
+    --    generation on top of entries that may not survive a crash is
+    --    what would turn "an interruption leaves a partially shifted
+    --    family" into "an interruption loses a generation". Failing here
+    --    therefore leaves the retired generation UNDELETED, exactly the
+    --    resumable state an interrupted rotation already produces.
+    afterRenames = do
+        synced ← syncSavesDirectory syncDir
+        case synced of
+            Left reason → pure (Left (rotationFailed reason))
+            Right ()    → afterFamilySync
+    -- 5. Only now, with the whole family in its final shape AND that
+    --    shape durable, is the retired generation actually gone.
+    afterFamilySync = do
+        removal ← try $ do
+            stillRetired ← doesDirectoryExist (ssDir retired)
+            when stillRetired $ removeDirectoryRecursive (ssDir retired)
+            pure stillRetired
+        case removal ∷ Either IOException Bool of
+            Left e      → pure (Left (rotationFailed (tshow e)))
+            -- Nothing aged out (the family was not full), so there is no
+            -- removal entry to persist and the sync above already
+            -- covered every change this rotation made.
+            Right False → pure (Right ())
+            Right True  → do
+                synced ← syncSavesDirectory syncDir
+                pure $ case synced of
+                    -- The numbered family is already durable from step
+                    -- 4; only the retired directory's disappearance may
+                    -- still be in flight, and a resumed cycle's own
+                    -- 'clearRetired' discards it again either way.
+                    Left reason → Left (rotationFailed reason)
+                    Right ()    → Right ()

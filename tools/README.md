@@ -60,6 +60,28 @@ Checks for: dry-below-sea tiles, ocean-on-land (cascade bug), fluid-under-
 terrain, floating fluid, terrain spikes/pits, river chunk gaps, river mouth
 drops, isolated islands/fluids, minBound leaks, surface inconsistencies.
 
+Since #2224 the file is a façade over six internal owners, which have no
+command line of their own: `world_audit_core.py` (the constants,
+`Issue`/`AuditResult` and the tile helpers), `world_audit_policy.py`
+(BUG/QUALITY classification and the calibrated quality thresholds), and
+one module per check family — `world_audit_checks_columns.py` (5 per-tile
+column checks), `world_audit_checks_boundaries.py` (9 neighbour-pair
+checks), `world_audit_checks_regions.py` (7 connectivity checks) and
+`world_audit_checks_soils.py` (2 material-placement checks). The façade
+composes their inventories into `ALL_CHECKS` in the historical key order
+and refuses, at import, an owner that has gone absent or empty, a key two
+owners both claim, one function reached under two keys, or a check the
+order drops.
+
+`world_check.py`, `world_stress.py`, `world_baseline.py` and the
+self-tests take every audit VALUE from `world_audit`, and the façade
+re-exports the whole pre-split public surface so they did not change.
+There is one deliberate exception, and it reads no value:
+`test_audit_categories.py` imports `world_audit_core` by name to locate
+its source file, because an `Issue(...)` in the core or the façade
+belongs to no check and would otherwise escape the emitted-category
+inventory. The commands above are unchanged.
+
 ### `world_determinism.py`
 Runs the dump multiple times for the same seed and verifies the output is
 content-identical across runs. Reports which tiles differ if the pipeline is
@@ -127,7 +149,8 @@ it must. Sub-second, engine-free, and it never writes under
 
 Since #2070 the file is a façade: it composes and runs the ordered group
 inventories of six owner modules — `test_audit_categories.py` (the
-emitted-category inventory derived from `world_audit.py`'s source),
+emitted-category inventory derived from the source of every module
+backing the live `ALL_CHECKS` registry, #2224),
 `test_audit_world_audit.py`, `test_audit_world_check.py`,
 `test_audit_content_hash.py`, `test_audit_strict_capture.py` and
 `test_audit_missing_baseline.py` — over the shared fixtures and assertion
@@ -451,7 +474,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `cooking_probe.py` | #346 | arena | Kitchen workshop + cooking skill/`basic_cuisine` knowledge + `basic_food.yaml` coffee recipe: content shape, all-or-nothing consumption, crafter-derived quality (#343), 100 °C output temperature (#344). |
 | `craft_probe.py` | #325, #326, #343, #327 | arena | `craft.*` API: catalogue, execute, work stations, crafter-derived quality, smelting. |
 | `craft_bill_probe.py` | #329 | arena | Craft-bill backend (`craft.addBill`/claim/progress/complete verbs) + `craft_job` AI: claim a bill, source inputs from the ground and from cargo storage, work the built station, the fresh output instances laid down at the station (a carried same-def item stays carried), knowledge gate. |
-| `crop_probe.py` | #334 | worldgen (isolated resource root) | Row-crop natural placement (`tomato_plant`) + groundcover `world.plantCropAt` (`wheat`) into a `CropPlot`, growth under the real clock, harvest, refusal for a row_crop species, save/load round-trip. |
+| `crop_probe.py` | #334 | worldgen (isolated resource root) | Row-crop natural placement (`probe_row_crop`, the shipped `tomato_plant` entry verbatim under a distinct authored name and with relaxed worldGen tolerances — #2241 refuses a duplicate flora name outright) + groundcover `world.plantCropAt` (`wheat`) into a `CropPlot`, growth under the real clock, harvest, refusal for a row_crop species, save/load round-trip. |
 | `debug_console_boot_probe.py` | #1190, #1365 | none (no world and no GPU in any boot: every failing boot dies before the engine action, and the four normal boots quit as soon as they have answered — seconds in total) | Required-debug-console boot contract for the two windowless modes. `--headless`/`--offscreen` must FAIL when their only interactive control surface never comes up: port 0 (issue #46's "no TCP listener" sentinel, which belongs to `--dump` alone) is refused before a socket is touched, and a real `Left` from the listener — both an invalid service (`--port -1`) and a genuine `EADDRINUSE` against a port the probe itself holds — aborts the boot. Each case must exit non-zero on its own inside a bounded timeout, print NO `READY` marker on stdout, name the selected mode / effective port / specific cause on stderr, and leave cleanup EVIDENCE rather than a bare vanished process: the pre-thread Lua state's close and the exact worker count torn down (0 for headless, whose first worker is Lua; 1 for offscreen, which starts the input thread first) are each announced by the step that performs them, and offscreen must never reach its engine action, so Vulkan is never initialized. Also pins the two unchanged behaviours: `--dump` still exits 0 with valid JSON and its `READY port=0` marker, and a successful headless bind still reaches `engine.quit()` over the console and exits 0 — its FIRST post-READY command staying that quit (#1283), which is why the widget check below boots separately rather than querying it first. Since #1365 it is also the blocking CI gate for `scripts/ui/*`, and check 8 is what earns that: a normal headless boot is asked, over its own console, which `scripts.ui.*` modules `package.loaded` actually holds, and the gate fails both when one of the 28 modules a non-preview boot loads is absent AND when the boot logged any Lua load/init failure — because `callModuleFunction` and `engine.loadScript` both log and DISCARD a Lua error, so READY plus a clean exit is no evidence at all that the widget kit loaded. Each half of that signal has its own negative regression against a really-broken boot on an alternate resource root: a `focus_indicator` that raises after it has already self-registered into `package.loaded` (a live partial table the presence half cannot see, caught and NAMED by the log half), and a covered module no longer required anywhere in the boot (absent with nothing logged at all, which only the presence half sees). |
 | `disarm_probe.py` | #193 | arena | Disabled-hand auto-drop must re-fire. |
 | `etymology_probe.py` | #1104, #1604, #1608 | worldgen (size 64, one offscreen boot; `--self-test` boots nothing) | Name etymology through the REAL in-game UI, windowless: a world named through the genuine `world.suggestName` -> `world.init` path (so its stored name really was rendered from the expression stored beside it), then all three entry points — the world's own name, a discovered location, and a river reached by selecting one of its visible segments through `world.getRiverAt`'s stable-identity resolution — opening ONE panel, retargeted rather than duplicated. Every control is located through the name plate's and the panel's own `dump()` oracles and clicked with `input.click` at its real interactive bounds, never a hardcoded coordinate. Asserts populated content (stored name, whole gloss, morpheme rows carrying concept/role/realized spelling/canonical free spelling/English lemma) and re-derives #1104 requirement 3 ITSELF — the reported surface tokens must concatenate back to the stored name — rather than trusting the engine's own claim that they do; that a bound form reports its free spelling as ONE morpheme; that a recurrence entry leaks nothing beyond an entity kind and an already-visible name; the honest unavailable state for a CUSTOM-named world (stored name still shown, reason `custom`, no invented morphemes); and that a resize keeps the panel valid and pointed at the same entity while close leaves no rows or stale viewport handle. Phases 3 and 4 each require the fixture to SUPPLY their entity: since #1604 a world that placed no location, or generated no named river with segments, is a `FIXTURE` failure naming the seed, world size and plate count and exits non-zero, rather than a `SKIP` that let a required phase vanish from an `all checks passed` run — as does phase 3's precondition (`main_world` active, and the chunk load around the camera drained to a zero remainder, which is the world-thread synchronization point that makes an empty location list an answer about the world rather than about timing). Phase 6's long-scroll case is a fixture requirement too, for a different reason (#1608): the phase MANUFACTURES its overflow by rebuilding the HUD at 800x600 under UI scale 4.0 — deliberately out of envelope — so nothing overflowing means that configuration stopped working and the six arrow and wheel routing checks never ran, reported as a `FIXTURE` failure naming the last panel dump's `rowCount`, `visibleRows` and `scrollbar` (each labelled even when the dump carried none of them) rather than a `SKIP`; the forced scale is restored on every exit from the phase, the failing one included. Only phase 5's bound-form/recurrence rows stay legitimately data-dependent and still skip. `--self-test` grades that classification with synthetic readings and no engine at all — phase 6's overflow readings included, since making a live run stop overflowing means breaking the very configuration it depends on — and it is the only coverage the missing-LOCATION branch can get — #997 places a guaranteed location on any world with land, so only a landless one reaches it; the missing-river branch also has a live fixture in `--size 8`, which generates no rivers at all. |
@@ -1038,9 +1061,10 @@ cannot be unlinked — residue from a source it only read; the
 `_make_owner_writable` treatment is `location_embark_probe.py`'s, #1569);
 and an outside directory holding same-named decoys comes through
 byte-identical. It also pins what the
-probe still proves after the move: the registration ORDER placement hashes
-are indexed by — the sorted shipped flora, then `probe_berry`, then
-`probe_clover` — both fixture bodies by `sha256`, and `load_fixture_yaml`
+probe still proves after the move: the registration ORDER the fixtures
+depend on — the sorted shipped flora, then `probe_berry`, then
+`probe_clover`, all before `world.init` — both fixture bodies by
+`sha256`, and `load_fixture_yaml`
 still stopping the run at setup on a fixture that registers nothing
 (#1342).
 
@@ -1572,18 +1596,48 @@ Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
 
-Since #2034 that gate is composed of two case owners: its own, and
-`tools/test_probe_census_promotion.py`, whose five promotion cases it runs
-from that module's `CASES` inventory into the same `selftestlib.FAILURES`
-list — so a promotion regression still fails it, and a case added there joins
-it without being listed twice. `tools/probe_census_selftest_support.py` is the
-ONE source of the synthetic world both owners drive: the registries and the
-fixture that installs them, the scratch tree and scratch repository, the
-in-process CLI driver, the realistic result document, the fixed evaluation
-moment and `expect_refusal`. Like `tools/test_probe_census_page.py`, the
-promotion owner is separately runnable for iteration (`python3
-tools/test_probe_census_promotion.py`) and is a step in NEITHER `make ci` nor
-GitHub CI — `test_probe_census.py` is the registered one.
+Since #2034 and #2129 that gate is a facade over six case owners, and holds no
+test body itself. Five live in `tools/probe_census_tests/` — `storage` (12
+groups), `policy` (11), `validation` (5), `cohort` (9) and `outcomes` (2) — and
+the sixth is `tools/test_probe_census_promotion.py`, whose five promotion cases
+the facade runs from that module's own `CASES` inventory through its
+`run_cases()`, into the same `selftestlib.FAILURES` list. So a promotion
+regression still fails the gate, and a case added to any owner joins it without
+being listed twice. `tools/probe_census_selftest_support.py` is the ONE source
+of the synthetic world all six drive: the registries and the fixture that
+installs them, the scratch tree and scratch repository, the in-process CLI
+driver, the realistic result document, the fixed evaluation moment and
+`expect_refusal`; `tools/probe_census_tests/support.py` re-exports it and adds
+the fixtures more than one family inside that package reads. Like
+`tools/test_probe_census_page.py`, the promotion owner is separately runnable
+for iteration (`python3 tools/test_probe_census_promotion.py`) and is a step in
+NEITHER `make ci` nor GitHub CI — `test_probe_census.py` is the registered one.
+
+```bash
+python3 tools/test_probe_census.py                     # the gate, unchanged
+python3 tools/test_probe_census.py --family cohort     # one owner only
+python3 tools/test_probe_census.py --family policy -v  # with the #1922 detail
+```
+
+`--family` takes exactly `storage`, `policy`, `validation`, `cohort`,
+`promotion` or `outcomes`; any other value exits 2 and lists all six. A focused
+run is the aggregate's own groups for that family, in the aggregate's order,
+and it is most of the iteration cost gone for five of them: `validation` drives
+the exhaustive schema surface and dominates the runtime, while each of the
+other five finishes in well under a second. The bare command stays what CI and
+`tools/ci-local.sh` invoke, and its order is INTERLEAVED — the two outcomes
+groups run third, the storage family's five persistence groups run after the
+whole validation family, and the two policy CLI groups run after those. Before
+any group runs, the facade refuses a composition that could report a shortened
+green run: `selftestlib.concluded`'s vacuity guard only catches a run that
+asserted nothing at all, so the facade separately cross-checks the family
+roster against the modules on disk, requires each family to declare at least
+the groups it carried at the split, requires each family's fragments to
+reconstruct its own inventory, and requires the order to run every declared
+group exactly once. It also re-checks the three static properties
+`tools/test_selftestlib.py` cannot see there — that gate globs `tools/*.py`
+non-recursively, so no module in the package may define its own assertion
+helper, register a failure behind the tally, or narrate a passing assertion.
 
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
 self-test, and since #1429 it runs unconditionally in CI's probe-runner
@@ -2630,7 +2684,7 @@ engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.
 
-### `deflake_handoff.py` — the handoff contract both consumers read (#2097)
+### `deflake_handoff.py` — the handoff contract both consumers read (#2097, #2180)
 
 The `deflake-outcome-handoff/v1` envelope, and every rule the two consumers
 below share. No CLI: it records nothing, publishes nothing, and imports
@@ -2645,6 +2699,27 @@ invocation, path, worktree, descriptor, artifact and producer-binding rule,
 `require_reproduced` — #1437's two-part reproduction qualification, which
 every route past the `cannot-reproduce` fork rests on — and the `utc_now` /
 `reuse_stored_timestamp` pair a durable record is stamped and replayed with.
+
+Since #2180 `deflake_handoff.py` is the stable public import FAÇADE for all of
+that — the contract narrative and the re-export surface, and no rule's
+implementation — over four internal owners in one acyclic, one-way order.
+Nothing below imports the façade or either consumer, so an owner can change
+without either workflow being rebuilt around it:
+
+| Owner | What it defines |
+|---|---|
+| `deflake_handoff_grammar.py` | The envelope vocabulary: the schemas, the roles, `ROUTE_ENDING`, `RouteOwnership`, `EXIT_CONTRACT`, the limits, `HandoffError` and `NonSuccess`, the object/text/identity/list/NUL/usable-path grammar, `delegate_census_grammar`, and the artifact-reference, configuration, input-identity and invocation-identity validators. A leaf WITHIN this family only — the upstream `deflake_diagnosis` and `probe_census` rules it applies are called, never copied. |
+| `deflake_handoff_measurement.py` | `Measurement`, `require_measurement` and `require_reproduced`: trustworthiness from the harness exit and the document's own status, the run and aggregate reconciliation, the per-check and target-hit reading, and the durable per-measurement summary. Consumes the grammar owner and #1437's result validators. |
+| `deflake_handoff_producer.py` | `require_diagnosis_outcome`, `REFERENCE_FIELDS` and the per-batch reference parsing, the measurement-to-producer binding, `require_worktree_boundary`, `declared_worktrees`, the artifact-list rebuild, and BOTH descriptor rules. Consumes the grammar and measurement owners. |
+| `deflake_handoff_assembly.py` | `Handoff`, `require_handoff`, `utc_now` and `reuse_stored_timestamp`: the whole-document assembly, the per-route role inventory, the cross-role checks, and the retry reconciler. Consumes all three, and INVOKES the producer owner's descriptor rules rather than defining a second copy. |
+
+`require_reproduced` stays with the measurement owner even though it takes a
+`Handoff`: it reads only that object's `targets` and `acceptable_failures`, so
+the reference is a deferred annotation behind a `TYPE_CHECKING` guard and the
+runtime graph stays one-way. `test_the_handoff_owners_stay_one_way` pins that
+as the single permitted reverse reference, and
+`test_the_handoff_facade_exports_the_canonical_objects` executes the identity
+rule the consumers' compatibility bindings rest on.
 
 `require_diagnosis_outcome` and `require_handoff` take `owned` EXPLICITLY: a
 shared contract that defaulted to one consumer's routes would answer for that
@@ -3382,7 +3457,13 @@ rebuild is the human eyeball this check exists to prompt.
 ```
 tools/
 ├── README.md               (this file)
-├── world_audit.py          (audit a single dump)
+├── world_audit.py          (audit a single dump — the façade)
+├── world_audit_core.py             (its constants, result types, tile helpers)
+├── world_audit_policy.py           (its BUG/QUALITY classification and thresholds)
+├── world_audit_checks_columns.py       (its per-tile column-integrity checks)
+├── world_audit_checks_boundaries.py    (its neighbour-pair boundary checks)
+├── world_audit_checks_regions.py       (its connectivity/topology checks)
+├── world_audit_checks_soils.py         (its material-placement checks)
 ├── world_determinism.py    (detect race conditions)
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)
