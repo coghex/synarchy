@@ -8,7 +8,9 @@ module Engine.Scripting.Lua.Thread.Console
   ) where
 
 import UPrelude
-import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
+import Engine.Scripting.Lua.DebugServer
+    ( DebugCommand(..), claimDebugCommand, completeDebugCommand
+    , pollDebugCommand )
 import Engine.Scripting.Lua.API.Shell (luaValueToText)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
 import World.State.Types (wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
@@ -18,20 +20,36 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.Read as T
 import Data.IORef (readIORef, writeIORef)
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.MVar (putMVar)
 import Control.Concurrent.STM.TQueue (TQueue)
 
 -- | Process all pending debug commands from the TCP server.
 --   Each command is a line of Lua code. We execute it via
 --   loadstring + pcall and send the result back through the MVar.
+--
+--   Dequeuing is not executing (#2282). A command is run only if
+--   'claimDebugCommand' succeeds, which is the single point at which
+--   this drain wins the race against a client whose response wait
+--   expired, against the load handoff, and against a shutdown drain.
+--   A failed claim means the command was cancelled first: it is
+--   discarded UNRUN, its reply already belongs to whoever cancelled it,
+--   and the drain moves straight on to the next one. That — and not the
+--   emptiness of the queue — is what stops a stale command mutating a
+--   session whose client was told it had not.
+--
+--   The answer is published with 'completeDebugCommand', which never
+--   blocks: by now the client may already have given up, and the old
+--   @putMVar@ on a full-or-abandoned channel would have wedged this
+--   single Lua thread.
 processDebugCommands ∷ Lua.State → TQueue DebugCommand → IO ()
 processDebugCommands lst debugQueue = do
     mCmd ← pollDebugCommand debugQueue
     case mCmd of
         Nothing → return ()
-        Just (DebugCommand cmdText responseMVar) → do
-            result ← executeDebugLua lst cmdText
-            putMVar responseMVar result
+        Just cmd → do
+            claimed ← claimDebugCommand cmd
+            when claimed $ do
+                result ← executeDebugLua lst (dcCommand cmd)
+                completeDebugCommand cmd result
             processDebugCommands lst debugQueue
 
 -- | Debug-console BUILT-INS, run on the per-connection client thread

@@ -19,6 +19,15 @@
 --   is by design.
 module Engine.Scripting.Lua.DebugServer.Types
     ( DebugCommand(..)
+      -- * The command lifecycle
+    , DebugCommandState(..)
+    , newDebugCommand
+    , claimDebugCommand
+    , cancelDebugCommand
+    , completeDebugCommand
+    , readDebugCommandState
+    , commandCancelledMessage
+    , commandUnknownOutcomeMessage
       -- * Bounds
     , DebugServerLimits(..)
     , defaultDebugServerLimits
@@ -51,9 +60,10 @@ import UPrelude
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Control.Concurrent (ThreadId)
-import Control.Concurrent.MVar (MVar)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, tryPutMVar)
+import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue (TQueue)
-import Control.Concurrent.STM.TVar (TVar)
+import Control.Concurrent.STM.TVar (TVar, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Exception (SomeException, fromException)
 import GHC.IO.Exception (IOErrorType(..))
 import Network.Socket (Socket, SockAddr, accept)
@@ -61,11 +71,131 @@ import System.IO (hPutStrLn, hFlush, stderr)
 import System.IO.Error (ioeGetErrorType, tryIOError)
 
 -- | One line of Lua handed from a client connection to the Lua thread,
---   with the channel its answer comes back on.
+--   with the channel its answer comes back on and the lifecycle cell
+--   that decides, once and for all, whether it ever runs.
 data DebugCommand = DebugCommand
     { dcCommand  ∷ !Text      -- ^ Lua code to evaluate
     , dcResponse ∷ !(MVar Text)  -- ^ Response channel
+    , dcState    ∷ !(TVar DebugCommandState)
+      -- ^ The one linearization point every party contends through
+      --   ('claimDebugCommand' \/ 'cancelDebugCommand'). Never written
+      --   directly: the two operations are what make execution and
+      --   cancellation mutually exclusive (#2282).
     }
+
+-- | Where a queued command is in its one-way lifecycle.
+--
+--   Exactly one transition out of 'DebugCommandQueued' ever succeeds,
+--   and both destinations are terminal, which is the whole content of
+--   #2282's requirement 2: a command is either EXECUTED (claimed, then
+--   run and answered by whoever claimed it) or CANCELLED BEFORE
+--   EXECUTION (a client whose response wait expired, a load handoff, a
+--   shutdown drain) — never both, and never neither.
+--
+--   A cancelled command therefore stays on the queue until a drain
+--   dequeues it, and that drain's 'claimDebugCommand' fails: an
+--   unclaimed cancelled command is permanently unclaimable, so no later
+--   tick, on any page, can run it.
+data DebugCommandState
+    = DebugCommandQueued
+      -- ^ On the queue and still eligible — the only state either
+      --   transition below accepts as its precondition.
+    | DebugCommandClaimed
+      -- ^ Claimed for execution immediately before the evaluator is
+      --   invoked. "Started" means exactly this, and nothing about how
+      --   far the evaluator has got.
+    | DebugCommandCancelled
+      -- ^ Cancelled before it was ever claimed. Its reply has already
+      --   been published by the canceller.
+    deriving (Eq, Show)
+
+-- | A fresh command, queued, with an empty response channel.
+--
+--   The single constructor for a real 'DebugCommand': assembling the
+--   record by hand is how a caller ends up with a lifecycle cell in the
+--   wrong state, so 'Engine.Scripting.Lua.DebugServer.Client' and every
+--   test go through this.
+newDebugCommand ∷ Text → IO DebugCommand
+newDebugCommand cmdText = do
+    responseMVar ← newEmptyMVar
+    stateVar ← newTVarIO DebugCommandQueued
+    return (DebugCommand cmdText responseMVar stateVar)
+
+-- | Claim a dequeued command for execution, atomically.
+--
+--   'True' means this caller — and only this caller — may now evaluate
+--   it and publish its answer with 'completeDebugCommand'. 'False'
+--   means it was cancelled first and must be DISCARDED unrun; its
+--   reply already belongs to whoever cancelled it.
+claimDebugCommand ∷ DebugCommand → IO Bool
+claimDebugCommand cmd = atomically $ do
+    st ← readTVar (dcState cmd)
+    case st of
+        DebugCommandQueued → do
+            writeTVar (dcState cmd) DebugCommandClaimed
+            return True
+        _ → return False
+
+-- | Cancel a command that has not been claimed, answering its waiting
+--   client with @reply@.
+--
+--   The ONE cancellation operation: the response-wait expiry, the load
+--   handoff (#763) and the shutdown\/crash drains all go through it, so
+--   there is a single place where a cancellation can lose to a claim.
+--   A cancellation that loses returns 'False' and touches neither the
+--   lifecycle nor the response channel — the claimed command's own
+--   answer is the only thing that may ever land there.
+cancelDebugCommand ∷ DebugCommand → Text → IO Bool
+cancelDebugCommand cmd reply = do
+    won ← atomically $ do
+        st ← readTVar (dcState cmd)
+        case st of
+            DebugCommandQueued → do
+                writeTVar (dcState cmd) DebugCommandCancelled
+                return True
+            _ → return False
+    when won $ void (tryPutMVar (dcResponse cmd) reply)
+    return won
+
+-- | Publish a CLAIMED command's answer without blocking.
+--
+--   'Control.Concurrent.MVar.tryPutMVar' rather than @putMVar@ on
+--   purpose: by the time the evaluator finishes, the client that
+--   queued the command may already have given up on it and reported
+--   'commandUnknownOutcomeMessage'. A blocking put there would wedge
+--   the single Lua thread on an answer nobody is coming back for
+--   (#2282 requirement 4). Nothing is lost by the drop — the response
+--   channel is per-command and that client never reads it again.
+completeDebugCommand ∷ DebugCommand → Text → IO ()
+completeDebugCommand cmd result = void (tryPutMVar (dcResponse cmd) result)
+
+-- | The command's current lifecycle state, for a caller that needs to
+--   observe rather than transition.
+readDebugCommandState ∷ DebugCommand → IO DebugCommandState
+readDebugCommandState = readTVarIO ∘ dcState
+
+-- | What a client is told when its response wait expired and the
+--   command had NOT been claimed — so it is now cancelled and can
+--   never run.
+--
+--   Stable protocol text. It says CANCELLED rather than ERROR because
+--   nothing failed and nothing happened: the session is exactly as the
+--   client left it, so re-sending the line is safe.
+commandCancelledMessage ∷ Text
+commandCancelledMessage =
+    "CANCELLED: command timed out before execution started"
+
+-- | What a client is told when its response wait expired and the
+--   command HAD been claimed.
+--
+--   Stable protocol text. It is deliberately not the old "Lua thread
+--   may have crashed": the overwhelmingly likelier cause is a Lua tick
+--   that ran long (a slow @update@ callback, a save\/load holding the
+--   capture lock), and the command may well complete normally after
+--   this line is sent. Re-sending it would apply the mutation twice.
+commandUnknownOutcomeMessage ∷ Text
+commandUnknownOutcomeMessage =
+    "ERROR: command timed out after execution started; outcome unknown"
 
 -- | Every finite bound the console holds a client to.
 --
@@ -75,8 +205,10 @@ data DebugCommand = DebugCommand
 --   observe, and a 64-connection cap is not a thing it should open).
 --
 --   Every field is finite by construction. \"No limit\" is deliberately
---   not representable: the unbounded versions of all five are exactly
---   what issue #2170 was filed about.
+--   not representable: the unbounded versions of the first five are
+--   exactly what issue #2170 was filed about, and the sixth
+--   ('dslCommandResponseMicros') was already finite in production
+--   before #2282 made it injectable.
 data DebugServerLimits = DebugServerLimits
     { dslMaxConnections ∷ !Int
       -- ^ How many client connections may be ADMITTED at once, counted
@@ -110,6 +242,15 @@ data DebugServerLimits = DebugServerLimits
       --   consecutive failure ('acceptRetryDelayFor'). Non-zero in
       --   production so a persistent failure cannot spin the loop;
       --   zero in tests so the budget is exercised without waiting.
+    , dslCommandResponseMicros ∷ !Int
+      -- ^ How long a client waits for the LUA THREAD to answer a
+      --   queued command before it gives up and tries to cancel it.
+      --   'commandResponseTimeoutMicros' — 30 seconds — in production
+      --   and nowhere else; the field exists (#2282) so an hspec
+      --   example can drive the expiry in milliseconds rather than
+      --   sitting out half a minute per case. Deliberately separate
+      --   from 'dslIdleTimeoutMicros': this is time with a command IN
+      --   FLIGHT and is never counted as idle.
     } deriving (Eq, Show)
 
 -- | At most this many client connections at once.
@@ -154,11 +295,16 @@ defaultAcceptRetryDelayMicros ∷ Int
 defaultAcceptRetryDelayMicros = 50000
 
 -- | How long a client waits for the LUA THREAD to answer a command it
---   forwarded. Unchanged by #2170 and deliberately separate from
---   'dslIdleTimeoutMicros': this is a command IN FLIGHT, and the guard
---   exists for a Lua thread that dequeued a command and then died
---   before filling the response, which an unbounded wait would turn
---   into a permanently stuck connection.
+--   forwarded: the PRODUCTION value of 'dslCommandResponseMicros', and
+--   unchanged by #2170 and #2282 alike.
+--
+--   Deliberately separate from 'dslIdleTimeoutMicros': this is a
+--   command IN FLIGHT. The guard exists because the Lua thread may
+--   never answer at all — it died after claiming the command, or it is
+--   simply taking longer than a client is willing to wait — which an
+--   unbounded wait would turn into a permanently stuck connection.
+--   What happens WHEN it expires is #2282's contract, not this
+--   number's: see 'cancelDebugCommand'.
 commandResponseTimeoutMicros ∷ Int
 commandResponseTimeoutMicros = 30000000
 
@@ -169,7 +315,7 @@ acceptRetryDelayFor ∷ DebugServerLimits → Int → Int
 acceptRetryDelayFor limits n =
     dslAcceptRetryDelayMicros limits * (2 ^ min 8 (max 0 n ∷ Int))
 
--- | The production bounds, all five at once.
+-- | The production bounds, all six at once.
 defaultDebugServerLimits ∷ DebugServerLimits
 defaultDebugServerLimits = DebugServerLimits
     { dslMaxConnections         = defaultMaxConnections
@@ -177,6 +323,7 @@ defaultDebugServerLimits = DebugServerLimits
     , dslIdleTimeoutMicros      = defaultIdleTimeoutMicros
     , dslAcceptRetryBudget      = defaultAcceptRetryBudget
     , dslAcceptRetryDelayMicros = defaultAcceptRetryDelayMicros
+    , dslCommandResponseMicros  = commandResponseTimeoutMicros
     }
 
 -- | Whether a failed @accept@ is worth retrying.

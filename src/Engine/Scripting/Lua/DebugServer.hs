@@ -46,6 +46,14 @@
 module Engine.Scripting.Lua.DebugServer
     ( -- * Re-exported console
       DebugCommand(..)
+    , DebugCommandState(..)
+    , newDebugCommand
+    , claimDebugCommand
+    , cancelDebugCommand
+    , completeDebugCommand
+    , readDebugCommandState
+    , commandCancelledMessage
+    , commandUnknownOutcomeMessage
     , DebugConsole(..)
     , DebugListener
     , DebugServerConfig(..)

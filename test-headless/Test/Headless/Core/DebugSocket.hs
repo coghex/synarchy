@@ -8,6 +8,16 @@
 --   client, notice its listening socket dying for good, and finally be
 --   stopped by name.
 --
+--   The second top-level group here is #2282's command lifecycle: what
+--   the expiry of a client's response wait MEANS for the command still
+--   sitting on the queue. It shares this module's fixtures because it
+--   needs exactly the same thing — a real 'startDebugServer' on a real
+--   loopback port with no engine behind it — and it drives the Lua
+--   thread's side through the production 'claimDebugCommand' \/
+--   'completeDebugCommand' pair rather than a paraphrase of them, since
+--   the arbitration under test is precisely what a hand-rolled stand-in
+--   would get wrong.
+--
 --   Every example here drives the REAL 'startDebugServer' over REAL
 --   loopback sockets, with no engine and no Lua state:
 --   'startDebugServer' takes a config carrying a port and a built-in
@@ -27,7 +37,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Control.Concurrent (forkIO, killThread, threadDelay)
-import Control.Concurrent.MVar (putMVar)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue (TQueue, tryReadTQueue)
 import Control.Exception
@@ -47,14 +57,19 @@ import Engine.Core.Types (BootMode(..))
 import Engine.Scripting.Lua.DebugServer
 
 spec ∷ Spec
-spec = describe "debug-console socket supervision (#2170)" $ do
-    ownerSpec
-    acceptSupervisionSpec
-    lossPolicySpec
-    connectionCapSpec
-    lineCapSpec
-    idleSpec
-    classifySpec
+spec = do
+    describe "debug-console socket supervision (#2170)" $ do
+        ownerSpec
+        acceptSupervisionSpec
+        lossPolicySpec
+        connectionCapSpec
+        lineCapSpec
+        idleSpec
+        classifySpec
+    -- A group of its own, not a child of the supervision describe: the
+    -- two are separately selectable gates and #2282's acceptance runs
+    -- them separately.
+    commandCancellationSpec
 
 -- ---------------------------------------------------------------- --
 -- The owner
@@ -424,10 +439,11 @@ idleSpec = describe "the idle timeout" $ do
             dequeued ← newIORef Nothing
             responder ← forkIO $ do
                 mCmd ← waitForCommand (consoleQueue console) twoSeconds
-                forM_ mCmd $ \(DebugCommand text mvar) → do
-                    writeIORef dequeued (Just text)
+                forM_ mCmd $ \cmd → do
+                    writeIORef dequeued (Just (dcCommand cmd))
+                    void (claimDebugCommand cmd)
                     threadDelay (idleMicros * 3)
-                    putMVar mvar "queued-ok"
+                    completeDebugCommand cmd "queued-ok"
             sendAll client "return 1\n"
             reply ← readUntilContains fiveSeconds "queued-ok" client
             killThread responder
@@ -437,8 +453,182 @@ idleSpec = describe "the idle timeout" $ do
             readIORef dequeued `shouldReturn` Just "return 1"
 
   it "leaves the queued-command response wait at the production 30 \
-     \seconds, which the idle timeout neither shortens nor replaces" $
+     \seconds, which the idle timeout neither shortens nor replaces" $ do
     commandResponseTimeoutMicros `shouldBe` 30000000
+    -- #2282 made the wait injectable through 'dslCommandResponseMicros'
+    -- so an hspec example can drive its expiry in milliseconds. The
+    -- PRODUCTION value is unchanged, and this is what says so: the
+    -- default is that same constant and not a second number beside it.
+    dslCommandResponseMicros defaultDebugServerLimits
+        `shouldBe` commandResponseTimeoutMicros
+
+-- ---------------------------------------------------------------- --
+-- The command lifecycle (#2282)
+-- ---------------------------------------------------------------- --
+
+-- | What the expiry of a client's response wait means for the command
+--   still on the queue.
+--
+--   Before #2282 it meant nothing: the client was told the Lua thread
+--   "may have crashed" and served the next line, while the command sat
+--   there and was executed in full by whichever later drain reached it
+--   — against a session whose client had already been told it had not
+--   run. The three examples below are that defect and its two halves.
+--
+--   Every one drives the REAL client loop over a REAL socket, and the
+--   stand-in for the Lua thread's drain uses the REAL
+--   'claimDebugCommand' \/ 'completeDebugCommand' pair, because the
+--   whole contract is which side of that pair wins.
+commandCancellationSpec ∷ Spec
+commandCancellationSpec = describe "debug-console command cancellation (#2282)" $ do
+
+  it "pins both expiry replies as protocol text, and neither of them \
+     \blames a crash that did not happen" $ do
+    commandCancelledMessage
+        `shouldBe` "CANCELLED: command timed out before execution started"
+    commandUnknownOutcomeMessage
+        `shouldBe` "ERROR: command timed out after execution started; \
+                   \outcome unknown"
+    commandCancelledMessage
+        `shouldSatisfy` (not ∘ T.isInfixOf "crash")
+    commandUnknownOutcomeMessage
+        `shouldSatisfy` (not ∘ T.isInfixOf "crash")
+
+  it "cancels a command the Lua thread never reached: the client is \
+     \told so, and the drain that does reach it executes nothing" $ do
+    diags ← newDiagnostics
+    let waitMicros = 300000
+    withServer (testConfig diags (withResponseWait waitMicros)) $ \port console →
+        withClient port $ \client → do
+            void $ readUntilContains oneSecond "> " client
+            -- Nothing drains the queue while this is in flight, so the
+            -- wait can only expire with the command still queued.
+            sendAll client "world.setDate('some_page', 9999, 1, 1)\n"
+            reply ← readUntilContains fiveSeconds cancelledNeedle client
+            reply `shouldSatisfy` BS.isInfixOf cancelledNeedle
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf unknownNeedle)
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf "crash")
+            -- Now the Lua thread finally gets there. The command is
+            -- still ON the queue — cancellation is a lifecycle
+            -- transition, not a removal — so the drain sees it, fails
+            -- to claim it, and runs nothing.
+            (executed, seen) ← standInDrain (consoleQueue console)
+            seen `shouldBe` (1 ∷ Int)
+            executed `shouldBe` (0 ∷ Int)
+            leftover ← pollDebugCommand (consoleQueue console)
+            isNothing leftover `shouldBe` True
+
+  it "reports an unknown outcome for a command the Lua thread had \
+     \already claimed, and keeps that command's late answer off the \
+     \connection entirely" $ do
+    diags ← newDiagnostics
+    let waitMicros = 500000
+    withServer (testConfig diags (withResponseWait waitMicros)) $ \port console → do
+        claims ← newIORef ([] ∷ [(Text, Bool)])
+        latePublished ← newEmptyMVar
+        -- The stand-in claims every command the instant it dequeues it
+        -- — which for "slow" is well INSIDE the wait — and then answers
+        -- "slow" well outside it, from a thread of its own so the drain
+        -- itself never blocks. That is the long-running-tick case: the
+        -- command really did start, and its answer really does arrive,
+        -- just too late for the client that asked.
+        responder ← forkIO ∘ forever $ do
+            mCmd ← waitForCommand (consoleQueue console) fiveSeconds
+            forM_ mCmd $ \cmd → do
+                claimed ← claimDebugCommand cmd
+                atomicModifyIORef' claims
+                    (\xs → (xs <> [(dcCommand cmd, claimed)], ()))
+                if dcCommand cmd ≡ "slow"
+                  then void ∘ forkIO $ do
+                      threadDelay (waitMicros * 3)
+                      completeDebugCommand cmd "late-answer"
+                      putMVar latePublished ()
+                  else completeDebugCommand cmd ("ok:" <> dcCommand cmd)
+        flip finally (killThread responder) ∘ withClient port $ \client → do
+            void $ readUntilContains oneSecond "> " client
+            sendAll client "slow\n"
+            firstReply ← readUntilContains fiveSeconds unknownNeedle client
+            firstReply `shouldSatisfy` BS.isInfixOf unknownNeedle
+            firstReply `shouldSatisfy` (not ∘ BS.isInfixOf cancelledNeedle)
+            firstReply `shouldSatisfy` (not ∘ BS.isInfixOf "late-answer")
+            -- Wait for the late answer to be PUBLISHED before asking
+            -- anything else of this connection, so its absence below is
+            -- a real absence rather than a race the assertion won.
+            published ← timeout fiveSeconds (takeMVar latePublished)
+            published `shouldBe` Just ()
+            sendAll client "second\n"
+            secondReply ← readUntilContains fiveSeconds "ok:second" client
+            secondReply `shouldSatisfy` BS.isInfixOf "ok:second"
+            secondReply `shouldSatisfy` (not ∘ BS.isInfixOf "late-answer")
+            -- Both commands were genuinely claimed: the first one's
+            -- reply is "unknown" because it STARTED, not because the
+            -- stand-in declined it.
+            readIORef claims `shouldReturn` [("slow", True), ("second", True)]
+
+  it "leaves a command answered within the wait exactly as it was, and \
+     \nothing can retro-cancel it afterwards" $ do
+    diags ← newDiagnostics
+    withServer (testConfig diags (withResponseWait twoSeconds)) $ \port console → do
+        handled ← newIORef Nothing
+        responder ← forkIO $ do
+            mCmd ← waitForCommand (consoleQueue console) fiveSeconds
+            forM_ mCmd $ \cmd → do
+                claimed ← claimDebugCommand cmd
+                -- Recorded BEFORE the answer is published, so it is
+                -- already readable by the time the client sees a reply.
+                writeIORef handled (Just (cmd, claimed))
+                when claimed $ completeDebugCommand cmd "42"
+        flip finally (killThread responder) ∘ withClient port $ \client → do
+            void $ readUntilContains oneSecond "> " client
+            sendAll client "return 42\n"
+            reply ← readUntilContains fiveSeconds "42" client
+            reply `shouldSatisfy` BS.isInfixOf "42"
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf cancelledNeedle)
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf unknownNeedle)
+            mHandled ← readIORef handled
+            case mHandled of
+                Nothing → expectationFailure
+                    "the stand-in never dequeued the command"
+                Just (cmd, claimed) → do
+                    claimed `shouldBe` True
+                    -- Mutual exclusion, from the other side: an
+                    -- executed command can never be cancelled after the
+                    -- fact, and the loser leaves the lifecycle alone.
+                    lost ← cancelDebugCommand cmd "REJECTED: too late"
+                    lost `shouldBe` False
+                    readDebugCommandState cmd `shouldReturn` DebugCommandClaimed
+
+-- | Shrink only the response wait, leaving every other bound at its
+--   production value.
+withResponseWait ∷ Int → DebugServerConfig → DebugServerConfig
+withResponseWait micros cfg = cfg
+    { dscBuiltin = neverBuiltin
+    , dscLimits  = (dscLimits cfg) { dslCommandResponseMicros = micros } }
+
+-- | The Lua thread's drain with the Lua taken out: dequeue everything,
+--   'claimDebugCommand' each one exactly as 'processDebugCommands'
+--   does, and report @(executed, dequeued)@.
+--
+--   A command it cannot claim is discarded UNRUN and counted only in
+--   the second number, which is what makes "expected zero executions"
+--   an assertion about behaviour rather than about an empty queue.
+standInDrain ∷ TQueue DebugCommand → IO (Int, Int)
+standInDrain queue = go 0 0
+  where
+    go executed seen = do
+        mCmd ← pollDebugCommand queue
+        case mCmd of
+            Nothing → return (executed, seen)
+            Just cmd → do
+                claimed ← claimDebugCommand cmd
+                when claimed $ completeDebugCommand cmd "executed"
+                go (if claimed then executed + 1 else executed) (seen + 1)
+
+-- | The two expiry replies as socket bytes, DERIVED from the constants
+--   the client actually sends rather than retyped beside them.
+cancelledNeedle, unknownNeedle ∷ BS.ByteString
+cancelledNeedle = TE.encodeUtf8 commandCancelledMessage
+unknownNeedle   = TE.encodeUtf8 commandUnknownOutcomeMessage
 
 -- | Poll the command queue the way the Lua thread's own tick does.
 waitForCommand ∷ TQueue DebugCommand → Int → IO (Maybe DebugCommand)

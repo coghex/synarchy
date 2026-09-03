@@ -18,7 +18,7 @@ module Test.Headless.Lua.DebugQueue (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Concurrent.MVar (newEmptyMVar, tryTakeMVar)
+import Control.Concurrent.MVar (tryTakeMVar)
 import Control.Concurrent.STM (atomically, modifyTVar')
 import Control.Concurrent.STM.TQueue (newTQueue, writeTQueue, tryReadTQueue)
 import Data.IORef (newIORef)
@@ -32,8 +32,10 @@ import Engine.Load.Status
     ( LoadPhase(..), LoadOutcome(..), LoadStatus(..)
     , ReconciliationFailure(..), beginLoad, readLoadStatus, loadInProgress )
 import Engine.Scripting.Lua.API (registerLuaAPI)
-import Engine.Scripting.Lua.DebugServer (DebugCommand(..))
-import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.DebugServer
+    ( DebugCommand(..), DebugCommandState(..), claimDebugCommand
+    , newDebugCommand, readDebugCommandState )
+import Engine.Scripting.Lua.Thread (createLuaBackendState, drainDebugQueue)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaMsg(..), LuaScript(..))
 -- Issue #1589: the reconciliation context 'LuaSaveLoaded' now carries.
@@ -126,7 +128,27 @@ markSet ls name = Lua.runWith (lbsLuaState ls) $ do
 spec ∷ SpecWith EngineEnv
 spec = do
     staleDebugCommandSpec
+    shutdownDrainSpec
     reconciliationFailureSpec
+
+-- | The load handoff's rejection, verbatim. Pinned rather than matched
+--   loosely (#2282): it is protocol text a client reads, and \"contains
+--   REJECTED\" would survive a rewording that broke every consumer.
+loadHandoffRejection ∷ T.Text
+loadHandoffRejection =
+    "REJECTED: a load transaction replaced the session while this \
+    \command was queued"
+
+-- | Queue one command on @ls@'s private debug queue and hand it back,
+--   so a case can inspect its response channel AND its lifecycle
+--   afterwards. Built through 'newDebugCommand' — the same constructor
+--   the real client loop uses — so its lifecycle starts where a real
+--   command's does.
+queueDebugCommand ∷ LuaBackendState → T.Text → IO DebugCommand
+queueDebugCommand ls cmdText = do
+    cmd ← newDebugCommand cmdText
+    atomically $ writeTQueue (lbsDebugQueue ls) cmd
+    pure cmd
 
 staleDebugCommandSpec ∷ SpecWith EngineEnv
 staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation (round 10 review, issue #763)" $ do
@@ -135,56 +157,97 @@ staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation
        \against the replacement session" $ \env → do
         ls ← newBareBackendWithDebugQueue env
         stateRef ← newIORef ThreadRunning
-        respVar ← newEmptyMVar
-        atomically $ writeTQueue (lbsDebugQueue ls)
-            (DebugCommand "world.setDate('some_page', 9999, 1, 1)" respVar)
+        cmd ← queueDebugCommand ls "world.setDate('some_page', 9999, 1, 1)"
 
         processLuaMsg env ls stateRef
             (LuaSaveLoaded 123456 [] [] emptyLoadReconcileContext)
 
-        resp ← tryTakeMVar respVar
+        resp ← tryTakeMVar (dcResponse cmd)
         case resp of
             Nothing → expectationFailure
                 "stale debug command's response MVar was never resolved \
                 \-- its caller (netcat, a script) would hang"
             Just msg → do
-                msg `shouldSatisfy` T.isInfixOf "REJECTED"
+                -- Exact, not \"contains REJECTED\": #2282 rewrote the
+                -- cancellation path underneath this reply and left the
+                -- reply itself alone, which is only worth anything if
+                -- something says so.
+                msg `shouldBe` loadHandoffRejection
                 -- The command itself must never have been evaluated —
                 -- only its MVar was resolved with a rejection message.
                 msg `shouldSatisfy` (not . T.isInfixOf "setDate")
+
+    it "makes a rejected command permanently unclaimable, so no later \
+       \processDebugCommands call can run it however it got requeued" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        stateRef ← newIORef ThreadRunning
+        cmd ← queueDebugCommand ls "world.setDate('some_page', 9999, 1, 1)"
+
+        processLuaMsg env ls stateRef
+            (LuaSaveLoaded 123456 [] [] emptyLoadReconcileContext)
+
+        -- #2282: being off the queue was never what stopped this
+        -- command; the lifecycle transition is. The drain's own claim
+        -- must fail on it, and the state it fails against is terminal.
+        readDebugCommandState cmd `shouldReturn` DebugCommandCancelled
+        claimDebugCommand cmd `shouldReturn` False
+        readDebugCommandState cmd `shouldReturn` DebugCommandCancelled
 
     it "cancels every stale command queued at the handoff, not just the \
        \first" $ \env → do
         ls ← newBareBackendWithDebugQueue env
         stateRef ← newIORef ThreadRunning
-        respVar1 ← newEmptyMVar
-        respVar2 ← newEmptyMVar
-        atomically $ writeTQueue (lbsDebugQueue ls)
-            (DebugCommand "return 1" respVar1)
-        atomically $ writeTQueue (lbsDebugQueue ls)
-            (DebugCommand "return 2" respVar2)
+        cmd1 ← queueDebugCommand ls "return 1"
+        cmd2 ← queueDebugCommand ls "return 2"
 
         processLuaMsg env ls stateRef
             (LuaSaveLoaded 654321 [] [] emptyLoadReconcileContext)
 
-        r1 ← tryTakeMVar respVar1
-        r2 ← tryTakeMVar respVar2
-        r1 `shouldSatisfy` maybe False (T.isInfixOf "REJECTED")
-        r2 `shouldSatisfy` maybe False (T.isInfixOf "REJECTED")
+        r1 ← tryTakeMVar (dcResponse cmd1)
+        r2 ← tryTakeMVar (dcResponse cmd2)
+        r1 `shouldBe` Just loadHandoffRejection
+        r2 `shouldBe` Just loadHandoffRejection
+        claimDebugCommand cmd1 `shouldReturn` False
+        claimDebugCommand cmd2 `shouldReturn` False
 
     it "leaves the debug queue empty afterward (no leftover stale \
        \commands for a later processDebugCommands call to pick up)" $ \env → do
         ls ← newBareBackendWithDebugQueue env
         stateRef ← newIORef ThreadRunning
-        respVar ← newEmptyMVar
-        atomically $ writeTQueue (lbsDebugQueue ls)
-            (DebugCommand "return 1" respVar)
+        _ ← queueDebugCommand ls "return 1"
 
         processLuaMsg env ls stateRef
             (LuaSaveLoaded 42 [] [] emptyLoadReconcileContext)
 
         remaining ← atomically $ tryReadTQueue (lbsDebugQueue ls)
         isNothing remaining `shouldBe` True
+
+shutdownDrainSpec ∷ SpecWith EngineEnv
+shutdownDrainSpec = describe "debug-queue shutdown drain (issue #2282)" $ do
+    it "keeps the orderly-teardown reply and makes the drained command \
+       \unclaimable" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        cmd ← queueDebugCommand ls "return 1"
+
+        drainDebugQueue (lbsDebugQueue ls) "engine shutting down"
+
+        tryTakeMVar (dcResponse cmd) `shouldReturn` Just "engine shutting down"
+        readDebugCommandState cmd `shouldReturn` DebugCommandCancelled
+        claimDebugCommand cmd `shouldReturn` False
+        remaining ← atomically $ tryReadTQueue (lbsDebugQueue ls)
+        isNothing remaining `shouldBe` True
+
+    it "keeps the crash-teardown reply, which names the exception and \
+       \is the one place a crash may still be claimed" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        cmd ← queueDebugCommand ls "return 1"
+
+        drainDebugQueue (lbsDebugQueue ls)
+            "ERROR: Lua thread crashed: divide by zero"
+
+        tryTakeMVar (dcResponse cmd)
+            `shouldReturn` Just "ERROR: Lua thread crashed: divide by zero"
+        claimDebugCommand cmd `shouldReturn` False
 
 -- | Issue #1204. The @onSaveLoaded@ broadcast is the load transaction's
 --   last step, and its callbacks do correctness-critical reconciliation
