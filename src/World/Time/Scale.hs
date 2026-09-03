@@ -28,7 +28,7 @@ module World.Time.Scale
     , acceptedTimeScale
     , describeTimeScaleRefusal
     , maxTimeScale
-    , maxClockDayCount
+    , worstCaseDayCount
       -- * The clock's own constants
     , clockMinutesPerDay
     , clockMaxInDayMinute
@@ -37,6 +37,8 @@ module World.Time.Scale
       -- * Representation guards
     , floorToInt
     , addChecked
+    , mulCheckedNonNeg
+    , nextDownFloat
     ) where
 
 import UPrelude
@@ -68,39 +70,72 @@ clockMaxElapsedStep = realToFrac maxElapsedStep
 
 -- * The accepted domain
 
--- | The largest day count one tick is allowed to produce.
+-- | The day count a worst-case NORMAL tick produces at @scale@: one
+--   starting at 'clockMaxInDayMinute' and running for a full
+--   'clockMaxElapsedStep'. 'Nothing' when that count is not
+--   representable as an 'Int'.
 --
---   NOT @maxBound ∷ Int@, and deliberately not compared against
---   @fromIntegral (maxBound ∷ Int) ∷ Float@: 2^63−1 is not representable
---   in 'Float' and rounds UP to 2^63, so a scale passing such a
---   comparison could still floor past 'Int'. @maxBound \`div\` 2 + 1@ is
---   the next power of two down (2^62 on a 64-bit 'Int'), which is both
---   exactly representable in 'Float' and provably ≤ @maxBound@.
-maxClockDayCount ∷ Int
-maxClockDayCount = maxBound `div` 2 + 1
+--   This is 'advanceWorldClock''s own first step, at the inputs that
+--   maximise it, so a scale this answers 'Just' for cannot overflow the
+--   day count on any normal tick — a shorter step or an earlier start
+--   only makes the total smaller.
+worstCaseDayCount ∷ Float → Maybe Int
+worstCaseDayCount scale = floorToInt
+    ((clockMaxInDayMinute + scale * clockMaxElapsedStep) / clockMinutesPerDay)
 
--- | The largest stored scale the boundary accepts.
+-- | The largest stored scale the boundary accepts: the largest 'Float'
+--   whose worst-case tick still floors to a representable 'Int' day
+--   count.
 --
---   Derived from the constants above by inverting the clock's own
---   arithmetic: a worst-case normal tick starts at 'clockMaxInDayMinute'
---   and runs for a full 'clockMaxElapsedStep', so the day count it
---   produces is
+--   FOUND, not chosen, and not left to a closed form. The algebraic
+--   solution of
 --
 --   > (clockMaxInDayMinute + scale * clockMaxElapsedStep) / clockMinutesPerDay
+--   >     ≡ intFloorUpperExclusive
 --
---   and this is the @scale@ at which that equals 'maxClockDayCount'.
---   Every intermediate is exact in 'Float' (1440 = 45·2^5 and 0.25 =
---   2^-2 are exact, and subtracting 1439 falls below the ulp at that
---   magnitude), so the accepted maximum floors to exactly
---   'maxClockDayCount' rather than to something one ulp past it.
+--   is only a starting point: every step of it rounds, and a bound that
+--   rounded UP would admit a scale that overflows — exactly the trap in
+--   comparing against @fromIntegral (maxBound ∷ Int) ∷ Float@, which is
+--   2^63 rather than 2^63−1. So the search walks DOWN one representable
+--   'Float' at a time until 'worstCaseDayCount' — the very predicate
+--   'advanceWorldClock' evaluates — actually answers 'Just'. The bound
+--   therefore cannot drift from the arithmetic it guards, and it is the
+--   largest safe scale rather than a convenient round number below it.
 --
---   'World.Time.Types.advanceWorldClock' still guards each 'floor'
---   independently via 'floorToInt': the ceiling is the contract, that
---   guard is what makes the function total regardless.
+--   In practice the walk takes one step. The budget is a termination
+--   guarantee, not an expectation: it bounds the search at far more
+--   steps than any rounding can cost, and a search that somehow
+--   exhausted it would refuse everything but a paused clock rather than
+--   return an unproven bound.
 maxTimeScale ∷ Float
-maxTimeScale =
-    (fromIntegral maxClockDayCount * clockMinutesPerDay - clockMaxInDayMinute)
-        / clockMaxElapsedStep
+maxTimeScale = search maxSearchSteps algebraicCeiling
+  where
+    algebraicCeiling =
+        (intFloorUpperExclusive * clockMinutesPerDay - clockMaxInDayMinute)
+            / clockMaxElapsedStep
+    search ∷ Int → Float → Float
+    search budget scale
+      | budget ≤ 0 ∨ scale ≤ 0 = 0
+      | otherwise = case worstCaseDayCount scale of
+          Just _  → scale
+          Nothing → search (budget - 1) (nextDownFloat scale)
+
+-- | The search budget above. 64 is many times the handful of ulps any
+--   rounding in the algebraic starting point can cost.
+maxSearchSteps ∷ Int
+maxSearchSteps = 64
+
+-- | The next 'Float' strictly below a positive finite @x@.
+--
+--   'decodeFloat' normalises to a 24-bit significand, so decrementing it
+--   and re-encoding at the same exponent is exactly one step down —
+--   including across a binade boundary, where the decremented
+--   significand simply denormalises into the next binade's spacing.
+nextDownFloat ∷ Float → Float
+nextDownFloat x = case decodeFloat x of
+    (mant, ex)
+      | mant ≤ 0  → x
+      | otherwise → encodeFloat (mant - 1) ex
 
 -- | Why a time scale was refused. Each maps to one diagnostic in
 --   'describeTimeScaleRefusal'.
@@ -203,3 +238,20 @@ addChecked a b
   | b ≥ 0 ∧ a > maxBound - b = Nothing
   | b < 0 ∧ a < minBound - b = Nothing
   | otherwise                = Just (a + b)
+
+-- | Multiplication of NON-NEGATIVE 'Int's that reports overflow instead
+--   of wrapping into it. A negative operand is reported as
+--   unrepresentable rather than silently handled: every caller here
+--   multiplies calendar extents, which are floored at 1 or 0 first.
+--
+--   The calendar needs this as much as 'addChecked' does.
+--   'calendarDaysPerYear' multiplies two authored 'Int' fields, and a
+--   product that wraps to zero turns the carry's @divMod@ into a divide
+--   by zero — which is a crash, not a clamped answer, and would break the
+--   world clock's totality contract from a data file.
+mulCheckedNonNeg ∷ Int → Int → Maybe Int
+mulCheckedNonNeg a b
+  | a < 0 ∨ b < 0        = Nothing
+  | b ≡ 0                = Just 0
+  | a > maxBound `div` b = Nothing
+  | otherwise            = Just (a * b)

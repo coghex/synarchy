@@ -7,6 +7,8 @@ module World.Time.Types
     , advanceWorldClock
     , WorldDate(..)
     , worldDateAddDaysChecked
+    , calendarDaysPerYearChecked
+    , worldDateToDayOfYearChecked
     , defaultWorldDate
     , worldDateToDayOfYear
     , worldDateAddDays
@@ -171,28 +173,55 @@ worldDateAddDays cc delta date@(WorldDate year _ _)
                      (doy `div` dpm + 1)
                      (doy `mod` dpm + 1)
 
--- | 'worldDateAddDays', but reporting the carries it cannot represent
---   instead of wrapping through them (#2280).
+-- | 'worldDateAddDays', but reporting every carry it cannot represent
+--   instead of wrapping through it or crashing on it (#2280).
 --
---   'wdYear' is an 'Int': a day count near 'World.Time.Scale.maxClockDayCount'
---   carries enough years to overflow it, and the wrap would silently
---   land the world in a negative year. 'Nothing' says "this date cannot
---   be advanced by this many days"; 'advanceWorldClock' answers that
---   with the unchanged clock. For every delta whose carry fits, the
---   result is exactly 'worldDateAddDays'.
+--   Three distinct 'Int' hazards live on this path, and the clock's
+--   totality contract needs all three closed:
+--
+--     * 'wdYear' is an 'Int', and a day count near the accepted scale
+--       ceiling carries enough years to overflow it. The wrap would
+--       silently land the world in a negative year.
+--     * 'calendarDaysPerYear' MULTIPLIES two authored calendar fields.
+--       'CalendarConfig' arrives from world-gen data, not from a
+--       validated range, so that product can wrap — and a product that
+--       wraps to zero turns the @divMod@ below into a divide by zero,
+--       which is a crash rather than a wrong answer.
+--     * 'worldDateToDayOfYear' multiplies the (clamped) month index by
+--       the month length, which can overflow for the same reason.
+--
+--   'Nothing' says "this date cannot be advanced by this many days";
+--   'advanceWorldClock' answers that with the unchanged clock. For every
+--   input whose intermediates fit, the result is exactly
+--   'worldDateAddDays'.
 worldDateAddDaysChecked ∷ CalendarConfig → Int → WorldDate → Maybe WorldDate
 worldDateAddDaysChecked cc delta date@(WorldDate year _ _)
     | delta ≤ 0 = Just date
-    | otherwise = case addChecked (worldDateToDayOfYear cc date) delta of
-        Nothing → Nothing
-        Just total →
-            let dpm = max 1 (ccDaysPerMonth cc)
-                (yearsCarried, doy) = total `divMod` calendarDaysPerYear cc
-            in case addChecked year yearsCarried of
-                Nothing → Nothing
-                Just year' → Just (WorldDate year'
-                                             (doy `div` dpm + 1)
-                                             (doy `mod` dpm + 1))
+    | otherwise = do
+        daysPerYear ← calendarDaysPerYearChecked cc
+        dayOfYear ← worldDateToDayOfYearChecked cc date
+        total ← addChecked dayOfYear delta
+        let dpm = max 1 (ccDaysPerMonth cc)
+            (yearsCarried, doy) = total `divMod` daysPerYear
+        year' ← addChecked year yearsCarried
+        pure (WorldDate year' (doy `div` dpm + 1) (doy `mod` dpm + 1))
+
+-- | 'calendarDaysPerYear' with its product checked. Never zero when it
+--   answers 'Just': both factors are floored at 1 exactly as the
+--   unchecked version floors them, so the quotient it feeds is safe.
+calendarDaysPerYearChecked ∷ CalendarConfig → Maybe Int
+calendarDaysPerYearChecked cc =
+    mulCheckedNonNeg (max 1 (ccDaysPerMonth cc)) (max 1 (ccMonthsPerYear cc))
+
+-- | 'worldDateToDayOfYear' with its product and sum checked. The same
+--   clamping, so an in-range calendar gives the identical answer.
+worldDateToDayOfYearChecked ∷ CalendarConfig → WorldDate → Maybe Int
+worldDateToDayOfYearChecked cc (WorldDate _ month day) =
+    let dpm = max 1 (ccDaysPerMonth cc)
+        mpy = max 1 (ccMonthsPerYear cc)
+        m   = max 1 (min mpy month)
+        d   = max 1 (min dpm day)
+    in mulCheckedNonNeg (m - 1) dpm ⌦ \whole → addChecked whole (d - 1)
 
 -- | Whole days elapsed since the world epoch (year 1, month 1, day 1 —
 --   'defaultWorldDate'), i.e. a monotonic absolute day counter. This is

@@ -166,14 +166,22 @@ requireLifespan what sp fi = case instanceLifespan sp fi of
         expectationFailure (what <> ": expected a lifespan, got Nothing")
         pure 0.0
 
+-- | A calendar whose year length is not computable: @ccDaysPerMonth *
+--   ccMonthsPerYear@ wraps past 'Int' and lands on zero, which the
+--   unchecked 'calendarDaysPerYear' would hand straight to a @divMod@.
+wrappingCalendar ∷ CalendarConfig
+wrappingCalendar = defaultCalendarConfig
+    { ccDaysPerMonth  = maxBound `div` 2 + 1
+    , ccMonthsPerYear = 4 }
+
 -- | A 'Float' @NaN@, written so no literal division survives constant
 --   folding into a different value.
 nanScale ∷ Float
 nanScale = 0 / 0
 
 -- | The next 'Float' strictly above a positive finite @x@ — the
---   just-over-the-line value #2280's ceiling examples need, computed
---   from 'maxTimeScale' itself rather than from a copied literal.
+--   just-over-the-line value the ceiling examples need, computed from
+--   'maxTimeScale' itself rather than from a copied literal.
 nextUpFloat ∷ Float → Float
 nextUpFloat x =
     let (mant, ex) = decodeFloat x
@@ -231,15 +239,29 @@ spec = do
                 rolled `shouldBe` 0
 
         it "accepts the derived ceiling itself, and floors to exactly the \
-           \representable day count" $ do
+           \day count the shared domain predicts" $ do
             -- The worst case the ceiling is derived FROM: the last minute
-            -- of a day plus one whole maxElapsedStep. Anything larger
-            -- would floor past 'maxClockDayCount'.
+            -- of a day plus one whole maxElapsedStep.
             let (t, _, rolled) = advanceWorldClock defaultCalendarConfig
                     maxTimeScale 0.25 (WorldTime 23 59) (WorldDate 1 1 1)
-            rolled `shouldBe` maxClockDayCount
+            Just rolled `shouldBe` worstCaseDayCount maxTimeScale
             wtHour t `shouldSatisfy` (\h -> h >= 0 && h <= 23)
             wtMinute t `shouldSatisfy` (\m -> m >= 0 && m <= 59)
+
+        it "puts the ceiling at the LARGEST safe scale, not a round number \
+           \below it" $ do
+            -- The bound is only correct if it is tight: one representable
+            -- step above it must actually overflow the Int day count, and
+            -- the value itself must not. A ceiling that merely happened to
+            -- be safe (half the range, say) would pass the example above
+            -- while needlessly refusing scales the clock handles fine.
+            worstCaseDayCount maxTimeScale `shouldSatisfy` isJust
+            worstCaseDayCount (nextUpFloat maxTimeScale) `shouldBe` Nothing
+            forM_ [maxTimeScale / 2, maxTimeScale * 0.75, maxTimeScale] $
+                \scale -> case worstCaseDayCount scale of
+                    Nothing -> expectationFailure
+                        ("worst-case day count overflowed at " ++ show scale)
+                    Just days -> days `shouldSatisfy` (\d -> d >= 0)
 
         it "accepts the 50000 probe scale and carries its whole-day count" $ do
             -- tools/farm_ai_probe.py and tools/crop_probe.py both drive
@@ -258,6 +280,19 @@ spec = do
                     3000.0 180.0 (WorldTime 6 0) (WorldDate maxBound 1 1)
             t `shouldBe` WorldTime 6 0
             d `shouldBe` WorldDate maxBound 1 1
+            rolled `shouldBe` 0
+
+        it "refuses a carry whose calendar year length cannot be computed" $ do
+            -- CalendarConfig comes from world-gen data, not from a
+            -- validated range: this one's ccDaysPerMonth * ccMonthsPerYear
+            -- wraps to zero, which would turn the carry's divMod into a
+            -- divide by zero. Totality means the unchanged clock, not a
+            -- crash.
+            calendarDaysPerYearChecked wrappingCalendar `shouldBe` Nothing
+            let (t, d, rolled) = advanceWorldClock wrappingCalendar
+                    1.0 3600.0 (WorldTime 23 0) (WorldDate 1 1 1)
+            t `shouldBe` WorldTime 23 0
+            d `shouldBe` WorldDate 1 1 1
             rolled `shouldBe` 0
 
         it "refuses a non-finite elapsed step" $ do
