@@ -430,7 +430,7 @@ initializeEngineWith logBackend = do
   injuryEventsRef ← newIORef Combat.Types.emptyEventQueue
   thoughtEventsRef ← newIORef Combat.Types.emptyEventQueue
   actionOutcomeRef ← newIORef emptyActionOutcomeQueue
-  worldGenConfig ← loadWorldGenConfig "config/world_gen_default.yaml"
+  worldGenConfig ← loadWorldGenConfig logger "config/world_gen_default.yaml"
   worldGenConfigRef ← newIORef worldGenConfig
   pathingConfig ← loadPathingConfig logger "config/pathing.yaml"
   pathingConfigRef ← newIORef pathingConfig

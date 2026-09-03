@@ -1183,6 +1183,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Breakthrough
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
+                   Test.Headless.WorldGen.ConfigLoad
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.Hazard
                    Test.Headless.Unit.Pathing.MoveToApi
