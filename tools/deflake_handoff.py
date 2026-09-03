@@ -226,13 +226,26 @@ owner above. The deterministic verification command is unchanged:
 """
 from __future__ import annotations
 
-from deflake_handoff_assembly import (
+import os
+import sys
+
+# The pre-split module put its own directory on `sys.path` before
+# importing anything beside it, which is what makes the repository-root
+# spelling `import tools.deflake_handoff` resolve: `tools/` has no
+# `__init__.py`, so it is an implicit namespace package whose modules
+# still import each other by bare name. This façade's re-exports run at
+# import time, so the bootstrap has to happen before the first of them
+# or the public contract would resolve only for callers who had already
+# put `tools/` on the path themselves. The four internal owners each
+# carry the same bootstrap ahead of their own sibling imports.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from deflake_handoff_assembly import (  # noqa: E402
     Handoff,
     require_handoff,
     reuse_stored_timestamp,
     utc_now,
 )
-from deflake_handoff_grammar import (
+from deflake_handoff_grammar import (  # noqa: E402
     DIAGNOSIS_OUTCOME_SCHEMA,
     EXIT_CONTRACT,
     HANDOFF_SCHEMA,
@@ -253,12 +266,12 @@ from deflake_handoff_grammar import (
     require_input_identity,
     require_invocation_identity,
 )
-from deflake_handoff_measurement import (
+from deflake_handoff_measurement import (  # noqa: E402
     Measurement,
     require_measurement,
     require_reproduced,
 )
-from deflake_handoff_producer import (
+from deflake_handoff_producer import (  # noqa: E402
     REFERENCE_FIELDS,
     declared_worktrees,
     require_diagnosis_outcome,

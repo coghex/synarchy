@@ -8109,6 +8109,40 @@ def test_the_handoff_owners_stay_one_way() -> None:
                    f"annotation")
 
 
+def test_the_handoff_family_imports_as_repository_modules() -> None:
+    """#2180: every owner resolves under the `tools.` package spelling too.
+
+    `tools/` carries no `__init__.py`, so it is an implicit namespace
+    package: `import tools.deflake_handoff` from the repository root is
+    a supported spelling, and under it the directory holding these
+    modules is NOT on `sys.path`. Sibling imports by bare name resolve
+    anyway only because each module inserts its own directory first —
+    which the pre-split `deflake_handoff.py` did before importing
+    `deflake_diagnosis`, and which the façade must keep doing before the
+    first of its re-exports, since those run at import time.
+
+    Asserted for the whole family rather than the façade alone because
+    the same bootstrap is what makes each owner importable on its own,
+    and a new owner added without one would fail the same way.
+    """
+    root = Path(dd.__file__).resolve().parent.parent
+    family = ("tools.deflake_handoff", "tools.deflake_handoff_grammar",
+              "tools.deflake_handoff_measurement",
+              "tools.deflake_handoff_producer",
+              "tools.deflake_handoff_assembly",
+              "tools.deflake_outcome", "tools.deflake_issue")
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    for module in family:
+        done = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=str(root), capture_output=True, text=True, timeout=120,
+            env=environment)
+        expect(done.returncode == 0,
+               f"`import {module}` from the repository root must resolve; "
+               f"exited {done.returncode}\n{done.stderr[-400:]}")
+
+
 def main() -> int:
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_") and callable(value)]
