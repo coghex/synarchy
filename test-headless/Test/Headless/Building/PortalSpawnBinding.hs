@@ -19,8 +19,9 @@
 --   stub is a wrapper around @building.getActiveIds@ that lands a
 --   selection change immediately AFTER the real snapshot and before the
 --   real commit — the interleaving the race needs, made deterministic.
---   'installPageSwitch' is 'Test.Headless.Building.PageBinding'\'s seam,
---   reused for the same reason.
+--   'installPageSwitch' is
+--   'Test.Headless.Building.PageBinding.Support'\'s seam, reused for the
+--   same reason.
 --
 --   The engine runs NO worker threads, so a queued 'UnitSpawn' stays in
 --   its queue: "no unit was created" is asserted on the queue and on the
@@ -309,8 +310,8 @@ evalDebug ls src = T.dropAround (≡ '"') <$> executeDebugLua (lbsLuaState ls) s
 
 -- | @__pageSwitch(mode)@ — a SYNCHRONOUS page-selection change driven by
 --   the REAL production handlers, callable from inside a Lua stub. This
---   is 'Test.Headless.Building.PageBinding'\'s seam: it is what lets a
---   scenario land a change at an exact point INSIDE one
+--   is 'Test.Headless.Building.PageBinding.Support'\'s seam: it is what
+--   lets a scenario land a change at an exact point INSIDE one
 --   @buildingSpawn.update@ call rather than only before or after it.
 --
 --   @"toB"@ hides A and shows B. @"aba"@ additionally returns to A, so
