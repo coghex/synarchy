@@ -29,8 +29,7 @@ import Engine.Core.State (EngineEnv, EngineLifecycle(..), lifecycleRef
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM)
 import Engine.Loop.Timing (primeFrameTiming)
-import Engine.Save.Barrier
-    (SaveOwner(..), acknowledgeCurrent, captureLocked, ownerGated)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
 import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
 
 -- | Everything that genuinely differs between the three main loops.
@@ -248,13 +247,16 @@ promoteToRunning env =
 --   things. Parking this thread's own work is safe at any point,
 --   because nothing is destroyed by it: whatever stays in
 --   'luaToEngineQueue' is still there afterwards, whichever way the
---   transaction ends. Flushing that queue is NOT safe that early — it
---   is irreversible, and a load that fails at ANY point before the
---   publish (another owner times out, 'applyLuaLoad' raises) leaves the
---   OLD session live and unchanged by contract, so its queued scene/UI
---   work must still be there to run. The boundary is the first moment
---   the publish is actually committed to, so the flush waits for
---   'captureLocked' while the park does not.
+--   transaction ends. Flushing that queue is irreversible, and a load
+--   that fails at ANY point before the publish (another owner times
+--   out, 'applyLuaLoad' raises) leaves the OLD session live and
+--   unchanged by contract, so its queued scene/UI work must still be
+--   there to run. That is why the park widens from 'captureLocked' to
+--   'ownerGated' here while the flush does NOT: it keeps its own,
+--   strictly narrower gate inside
+--   'discardLuaMessagesForActiveLoad' — 'Engine.Load.Status.loadPublishCommitted',
+--   which is true only once the publish command is actually being
+--   queued, later than both the park AND the capture boundary.
 --
 --   'lmEndOfTick' still runs every tick regardless (called by
 --   'runLoopTick' after this), so a rendering mode keeps presenting
@@ -264,12 +266,10 @@ runGatedByCaptureLock mode env = do
     locked ← liftIO $ ownerGated (saveBarrierRef env) SaveRender
     if locked
         then do
-            atBoundary ← liftIO $ captureLocked (saveBarrierRef env)
-            when atBoundary $ do
-                discarded ← liftIO $ discardLuaMessagesForActiveLoad env
-                when (discarded > 0) $
-                    logWarnM CatLua $ "Load publication discarded "
-                        <> tshow discarded <> " stale Lua-to-engine message(s)"
+            discarded ← liftIO $ discardLuaMessagesForActiveLoad env
+            when (discarded > 0) $
+                logWarnM CatLua $ "Load publication discarded "
+                    <> tshow discarded <> " stale Lua-to-engine message(s)"
         else do
             lmCameraUpdates mode
             processLuaMessages

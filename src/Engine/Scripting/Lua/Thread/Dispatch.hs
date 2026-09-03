@@ -4,6 +4,8 @@
 module Engine.Scripting.Lua.Thread.Dispatch
   ( processLuaMsg
   , processLuaMsgs
+    -- * The load-publication commit, exported for its gate
+  , commitLoadPublish
   ) where
 
 import UPrelude
@@ -520,7 +522,6 @@ handleLoadStaged env ls requestId = do
             Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
           Right () → do
             reachSnapshot (saveBarrierRef env) barrierRequestId
-            advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
             applied ← Lua.runWith (lbsLuaState ls) (applyLuaLoad logger)
             case applied of
               -- applyLuaLoad is only reachable after prepareLoad already
@@ -568,7 +569,32 @@ handleLoadStaged env ls requestId = do
                 -- transaction ends.
                 atomicModifyIORef' (worldManagerRef env) $ \mgr →
                     (requestSelectionChange True ([], []) mgr, ())
-                Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
+                commitLoadPublish env requestId
+
+-- | Commit this load to publication: announce 'LoadWaitingPublish' and
+--   queue the world thread's 'WorldLoadPublish', as ONE action (#2221).
+--
+--   They are one action because the phase is what tells the rest of the
+--   engine the publication is committed
+--   ('Engine.Load.Status.loadPublishCommitted'), and the queued command
+--   is what makes that true. Anything IRREVERSIBLE that a publication
+--   justifies keys off the phase — above all the render owner's
+--   'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad',
+--   which destroys the old session's queued scene\/UI work.
+--
+--   So the phase must not be announced anywhere EARLIER than this. Not
+--   at 'reachSnapshot': 'applyLuaLoad' runs after the boundary and can
+--   still fail, and that failure aborts with the OLD session live and,
+--   by @docs\/persistence_contract.md@, unchanged — its queued work
+--   still has to run. Announcing it there (as this did before #2221)
+--   licensed the flush during a window where nothing was committed to
+--   at all. Keeping the two in one function is what stops that pairing
+--   drifting apart again; the announcement precedes the write, so no
+--   consumer can observe the queued command without the phase.
+commitLoadPublish ∷ EngineEnv → Int → IO ()
+commitLoadPublish env requestId = do
+    advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
+    Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
 --   Used by 'LuaSaveLoaded' to hand the surviving loaded-page unit /

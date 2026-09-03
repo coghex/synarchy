@@ -26,7 +26,7 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (ecHeadless)
 import qualified Engine.Core.Queue as Q
-import Engine.Load.Status (loadInProgress)
+import Engine.Load.Status (loadPublishCommitted)
 import Engine.Scripting.Lua.Message.Scene ( handleSpawnText, handleSetText
                                            , handleSpawnSprite, handleSetPos
                                            , handleSetColor, handleSetSize
@@ -124,18 +124,26 @@ spanTextureLoads policy msgs =
     isTextureLoadUnder _                             = False
 
 -- | Drop work produced by the old Lua/UI session while a whole-session load
---   holds its publication boundary.  The render consumers call this only
---   while 'captureLocked': preserving these messages until the next unlocked
---   tick would let their scene/UI mutations land on the replacement session.
---   The boundary specifically, NOT the render owner's own #2221 park, which
---   starts earlier — the park is reversible and this flush is not, and a
---   load that fails before the publish must leave the old session's queued
---   work intact (see @Engine.Loop.Mode.runGatedByCaptureLock@).
+--   commits to publication: preserving these messages until the next
+--   unlocked tick would let their scene/UI mutations land on the
+--   replacement session.
+--
+--   The gate is 'loadPublishCommitted', NOT 'loadInProgress' and not the
+--   capture boundary (#2221). Both of those open strictly earlier than
+--   the publish is committed to, and this flush is irreversible: a load
+--   that fails before 'World.Command.Types.WorldLoadPublish' is queued
+--   — another owner times out, or
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'\'s
+--   @applyLuaLoad@ raises — leaves the OLD session live and, by
+--   @docs/persistence_contract.md@, unchanged, so that session's queued
+--   work must still be there to run. The render owner's own #2221 park
+--   starts earlier still and is deliberately not this gate: parking
+--   destroys nothing, so it is safe where the flush is not.
 --   A normal save has no generation replacement, so it deliberately retains
 --   its queued work.
 discardLuaMessagesForActiveLoad ∷ EngineEnv → IO Int
 discardLuaMessagesForActiveLoad env = do
-    loading ← loadInProgress (loadStatusRef env)
+    loading ← loadPublishCommitted (loadStatusRef env)
     if loading
         then length <$> Q.flushQueue (luaToEngineQueue env)
         else pure 0

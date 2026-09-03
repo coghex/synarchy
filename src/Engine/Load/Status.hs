@@ -33,7 +33,7 @@ module Engine.Load.Status
     , ReconciliationFailure(..)
     , LoadStatusRef, newLoadStatusRef
     , beginLoad, advanceLoad, failLoad, finishLoad, failReconciliation
-    , readLoadStatus, loadInProgress
+    , readLoadStatus, loadInProgress, loadPublishCommitted
     , StageGate(..), unarmedStageGate
     , defaultStageGateHold, maxStageGateHold
     , armStageGate, releaseStageGate, readStageGate, awaitStageGate
@@ -311,6 +311,27 @@ readLoadStatus (LoadStatusRef _ statusR _) = readIORef statusR
 
 loadInProgress ∷ LoadStatusRef → IO Bool
 loadInProgress ref = maybe False ((≡ Nothing) . lsOutcome) <$> readLoadStatus ref
+
+-- | True only once this load's publication is COMMITTED — the Lua side
+--   applied cleanly and 'World.Command.Types.WorldLoadPublish' has been
+--   queued for the world thread — and not yet terminal (#2221).
+--
+--   'loadInProgress' cannot answer that question and must not be used
+--   for it. A load is "in progress" from the moment it is requested,
+--   including the whole window between 'Engine.Save.Barrier.reachSnapshot'
+--   and the outcome of
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'\'s
+--   @applyLuaLoad@ — and an apply failure there aborts with the OLD
+--   session still live and, by
+--   @docs/persistence_contract.md@, unchanged. Anything IRREVERSIBLE
+--   that a publication would justify (above all
+--   'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad'
+--   destroying that session's queued work) must therefore wait for
+--   this, not for the capture boundary, which opens strictly earlier.
+loadPublishCommitted ∷ LoadStatusRef → IO Bool
+loadPublishCommitted ref =
+    maybe False (\s → lsOutcome s ≡ Nothing ∧ lsPhase s ≡ LoadWaitingPublish)
+        <$> readLoadStatus ref
 
 -- | Test-only (issue #1181): arm the staging gate so the NEXT load
 --   transaction parks before staging. @holdSeconds@ is clamped into

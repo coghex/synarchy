@@ -2399,17 +2399,24 @@ snapshot that transaction captured), while a load publish DISCARDS it
 `World.Load.Publish.discardStaleQueues` for the rest) because it was
 queued against the session being replaced.
 
-**Parking is gated on the park; DISCARDING is gated on the boundary.**
-Parking an owner destroys nothing — whatever stays queued is still
-there however the transaction ends — but a discard is irreversible, and
-a load that fails anywhere before the publish leaves the OLD session
-live and unchanged by contract, so its queued work must survive. So
-every irreversible flush waits for `captureLocked`, never for the
-earlier park: `Engine.Loop.Mode.runGatedByCaptureLock` parks the render
-owner's camera and Lua-message work from its own final acknowledgement
-but calls `discardLuaMessagesForActiveLoad` only at the boundary, and
-the world owner's `processAuthorizedSave` discard likewise only ever
-triggers on a batch that actually contains the `WorldLoadPublish`.
+**Parking is gated on the park; DISCARDING is gated on the publication
+being COMMITTED.** Parking an owner destroys nothing — whatever stays
+queued is still there however the transaction ends — but a discard is
+irreversible, and a load that fails anywhere before `WorldLoadPublish`
+is queued leaves the OLD session live and, by
+`docs/persistence_contract.md`, unchanged, so its queued work must
+survive. Neither the park nor the capture boundary is late enough to
+license one: `applyLuaLoad` runs AFTER `reachSnapshot` and can still
+fail. So every irreversible flush waits for
+`Engine.Load.Status.loadPublishCommitted` — phase `LoadWaitingPublish`,
+non-terminal — which `Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish`
+establishes as ONE action with the enqueue of the publish command
+itself. `Engine.Loop.Mode.runGatedByCaptureLock` therefore parks the
+render owner's camera and Lua-message work from its own final
+acknowledgement while `discardLuaMessagesForActiveLoad` keeps that
+narrower gate, and the world owner's `processAuthorizedSave` discard
+likewise only ever triggers on a batch that actually contains the
+`WorldLoadPublish`.
 
 Gates: hspec `--match "save snapshot barrier"` (the bare-barrier park
 protocol in `Test.Headless.Save.Barrier`, and the owner-loop
