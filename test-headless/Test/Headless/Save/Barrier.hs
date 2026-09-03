@@ -161,3 +161,176 @@ spec = describe "save snapshot barrier" $ do
         ssPhase <$> status `shouldBe` Just SaveFailed
         ssOutcome <$> status `shouldBe` Just (Just (SaveAborted "disk full"))
         saveInProgress b `shouldReturn` False
+
+    -- Issue #2221 (#757 requirement 5, restored): an acknowledgement is
+    -- a WAIT, not mutual exclusion -- the transaction still needs every
+    -- OTHER owner's final acknowledgement plus the initiator's
+    -- reachSnapshot before the boundary exists. An owner whose gate
+    -- asked only captureLocked therefore read False in that gap and
+    -- could start a fresh unlocked tick that was still running when the
+    -- snapshot was captured (save) or when publishStagedSession swapped
+    -- the session refs (load). 'ownerGated' parks each owner from its
+    -- OWN final-pass acknowledgement instead.
+    describe "post-final-acknowledgement owner park (issue #2221)" $ do
+        -- Three owners, none of them SaveLua: SaveLua is the one owner
+        -- acknowledgeSave deliberately carries across a pass reset (it
+        -- is the blocked initiator), so leaving it out keeps every
+        -- assertion below about the ordinary worker-owner protocol.
+        let owners = [SaveWorld, SaveUnit, SaveRender]
+            ackAll b n = mapM_ (acknowledgeSave b n) owners
+            -- Drive the transaction to the START of its final pass:
+            -- every owner has drained twice and none has acknowledged
+            -- the third (final) pass yet.
+            atFinalPass = do
+                b ← newSaveBarrier
+                Right n ← beginSave b (Set.fromList owners)
+                ackAll b n
+                ackAll b n
+                pure (b, n)
+
+        it "an earlier-pass acknowledgement parks nobody, so the \
+           \multi-pass causal drain is unchanged" $ do
+            b ← newSaveBarrier
+            Right n ← beginSave b (Set.fromList owners)
+            acknowledgeSave b n SaveWorld
+            ownerGated b SaveWorld `shouldReturn` False
+            ackAll b n
+            -- Second pass: still not the final one.
+            acknowledgeSave b n SaveWorld
+            ownerGated b SaveWorld `shouldReturn` False
+            ownerGated b SaveUnit  `shouldReturn` False
+
+        it "a final-pass acknowledgement parks ONLY the owner that made \
+           \it, leaving the others free to finish their own pass" $ do
+            (b, n) ← atFinalPass
+            mapM_ (\o → ownerGated b o `shouldReturn` False) owners
+            acknowledgeSave b n SaveWorld
+            ownerGated b SaveWorld  `shouldReturn` True
+            ownerGated b SaveUnit   `shouldReturn` False
+            ownerGated b SaveRender `shouldReturn` False
+            -- An owner that is still free really can complete the pass:
+            -- park it too and the barrier reaches the boundary normally.
+            acknowledgeSave b n SaveUnit
+            ownerGated b SaveUnit `shouldReturn` True
+            acknowledgeSave b n SaveRender
+            mapM_ (\o → ownerGated b o `shouldReturn` True) owners
+            waitForOwners 1000 b n `shouldReturn` Right ()
+
+        it "a parked owner is parked BEFORE the boundary exists -- the \
+           \global capture lock is still open at that point" $ do
+            (b, n) ← atFinalPass
+            acknowledgeSave b n SaveWorld
+            -- The whole point: captureLocked (the only gate before
+            -- #2221) still answers False here.
+            captureLocked b `shouldReturn` False
+            ownerGated b SaveWorld `shouldReturn` True
+
+        it "an acknowledgement from an owner this transaction never \
+           \registered parks nothing, but the global capture lock still \
+           \gates it at the boundary" $ do
+            b ← newSaveBarrier
+            Right n ← beginSave b (Set.singleton SaveWorld)
+            acknowledgeSave b n SaveRender
+            ownerGated b SaveRender `shouldReturn` False
+            acknowledgeSave b n SaveWorld
+            acknowledgeSave b n SaveWorld
+            acknowledgeSave b n SaveWorld
+            ownerGated b SaveWorld  `shouldReturn` True
+            ownerGated b SaveRender `shouldReturn` False
+            reachSnapshot b n
+            ownerGated b SaveRender `shouldReturn` True
+
+        it "releaseCaptureLock unparks every owner before encoding \
+           \finishes (#758), and failSave unparks them on the spot" $ do
+            (b, n) ← atFinalPass
+            ackAll b n
+            reachSnapshot b n
+            mapM_ (\o → ownerGated b o `shouldReturn` True) owners
+            releaseCaptureLock b n
+            mapM_ (\o → ownerGated b o `shouldReturn` False) owners
+            -- Still mid-transaction: the encode/disk step has not
+            -- reported yet, so nothing is terminal.
+            saveInProgress b `shouldReturn` True
+
+            (b2, n2) ← atFinalPass
+            acknowledgeSave b2 n2 SaveWorld
+            ownerGated b2 SaveWorld `shouldReturn` True
+            failSave b2 n2 "owner did not respond"
+            mapM_ (\o → ownerGated b2 o `shouldReturn` False) owners
+
+        it "a finished transaction leaves no park state behind, so the \
+           \next one starts clean" $ do
+            (b, n) ← atFinalPass
+            ackAll b n
+            reachSnapshot b n
+            releaseCaptureLock b n
+            finishSave b n
+            mapM_ (\o → ownerGated b o `shouldReturn` False) owners
+            Right n2 ← beginSave b (Set.fromList owners)
+            mapM_ (\o → ownerGated b o `shouldReturn` False) owners
+            -- And the fresh transaction parks on its OWN final pass,
+            -- not on anything inherited from the previous one.
+            ackAll b n2
+            mapM_ (\o → ownerGated b o `shouldReturn` False) owners
+            ackAll b n2
+            acknowledgeSave b n2 SaveWorld
+            ownerGated b SaveWorld  `shouldReturn` True
+            ownerGated b SaveUnit   `shouldReturn` False
+
+        -- Requirement 2: the boundary is reached only when no owner has
+        -- a gated tick in flight. reachSnapshot used to check nothing
+        -- but request identity and outcome, so a premature call could
+        -- declare the boundary while owners were still mid-pass.
+        it "reachSnapshot refuses to declare the boundary before the \
+           \final pass is complete" $ do
+            (b, n) ← atFinalPass
+            reachSnapshot b n
+            status ← readSaveStatus b
+            ssPhase <$> status `shouldBe` Just SavePausing
+            captureLocked b `shouldReturn` False
+            acknowledgeSave b n SaveWorld
+            acknowledgeSave b n SaveUnit
+            reachSnapshot b n
+            captureLocked b `shouldReturn` False
+            -- Only the last outstanding owner's acknowledgement opens it.
+            acknowledgeSave b n SaveRender
+            reachSnapshot b n
+            captureLocked b `shouldReturn` True
+
+        it "reachSnapshot cannot re-close the capture window \
+           \releaseCaptureLock already opened" $ do
+            (b, n) ← atFinalPass
+            ackAll b n
+            reachSnapshot b n
+            releaseCaptureLock b n
+            reachSnapshot b n
+            status ← readSaveStatus b
+            ssPhase <$> status `shouldBe` Just SaveEncoding
+            captureLocked b `shouldReturn` False
+
+        it "a parked owner's routine per-tick acknowledgement is inert: \
+           \it neither inflates the pass count nor unparks anything" $ do
+            (b, n) ← atFinalPass
+            ackAll b n
+            before ← readSaveStatus b
+            ssQuiescencePasses <$> before `shouldBe` Just 3
+            ackAll b n
+            ackAll b n
+            after ← readSaveStatus b
+            ssQuiescencePasses <$> after `shouldBe` Just 3
+            ssPhase <$> after `shouldBe` Just SaveWaitingOwners
+            mapM_ (\o → ownerGated b o `shouldReturn` True) owners
+
+        -- Requirement 4: timeout semantics are kept, and a report that
+        -- named only the outstanding owners could no longer distinguish
+        -- an owner that never ran from one still mid-pass now that
+        -- owners park at different points of the same transaction.
+        it "a timeout names the outstanding owners AND the phase the \
+           \transaction stalled in" $ do
+            (b, n) ← atFinalPass
+            acknowledgeSave b n SaveWorld
+            acknowledgeSave b n SaveUnit
+            timedOut ← waitForOwners 1000 b n
+            timedOut `shouldBe`
+                Left "timed out waiting for save state owners: \
+                     \[SaveRender] in phase SavePausing"

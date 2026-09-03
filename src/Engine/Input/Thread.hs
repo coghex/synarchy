@@ -38,7 +38,7 @@ import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
 import Engine.Core.Thread
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
 import Engine.Input.Thread.Dispatch (processInputs, processInput)
 
 startInputThread ∷ EngineEnv → IO ThreadState
@@ -87,7 +87,11 @@ inputTick env = do
     -- lock boundary is left there (and discarded by
     -- World.Load.Publish's queue flush) rather than being
     -- dispatched against the replacement session.
-    locked ← captureLocked (saveBarrierRef env)
+    -- #2221: 'ownerGated', not 'captureLocked' — this owner stays
+    -- parked from its own final-pass acknowledgement until capture
+    -- completes, so a pre-transaction input event cannot be dispatched
+    -- in the gap between that acknowledgement and the boundary.
+    locked ← ownerGated (saveBarrierRef env) SaveInput
     unless locked $ do
         inpSt ← readIORef (ivInputStateRef (toInputViewCapability env))
         -- processInputs publishes to inputStateRef after each

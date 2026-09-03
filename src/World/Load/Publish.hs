@@ -19,6 +19,10 @@ module World.Load.Publish
     ( publishStagedSession
       -- * The load-publish transient reset, exported for its gate
     , resetTransientState
+      -- * The owner-queue discard, exported for its gate (#2221): what
+      --   an owner parked at the boundary left queued must be proven to
+      --   die here rather than survive into the replacement session.
+    , discardStaleQueues
     ) where
 
 import Engine.Graphics.Solar (maxSolarPages)
@@ -83,7 +87,7 @@ publishStagedSession env logger requestId staged = do
     -- Lua-TO-engine queue ('luaToEngineQueue', drained by the main/
     -- offscreen render thread's 'Engine.Scripting.Lua.Message.processLuaMessages')
     -- is handled the same way, on ITS OWN consumer thread — see
-    -- 'Engine.Loop''s captureLocked gate — for the identical reason:
+    -- 'Engine.Loop''s save-barrier owner gate — for the identical reason:
     -- flushing it from here (an earlier attempt) raced
     -- that thread's own drain and, observed empirically, could leave a
     -- load transaction's publish-side work permanently stuck instead of

@@ -13,7 +13,7 @@
 --     zoom-atlas GPU uploads from raw pixel bytes.
 module Engine.Scripting.Lua.Message
   ( processLuaMessages
-  , discardLuaMessagesForActiveLoad
+  , discardStaleLuaToEngineWork
     -- * Exposed for regression coverage
   , spanTextureLoads
   ) where
@@ -26,7 +26,6 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (ecHeadless)
 import qualified Engine.Core.Queue as Q
-import Engine.Load.Status (loadInProgress)
 import Engine.Scripting.Lua.Message.Scene ( handleSpawnText, handleSetText
                                            , handleSpawnSprite, handleSetPos
                                            , handleSetColor, handleSetSize
@@ -123,18 +122,48 @@ spanTextureLoads policy msgs =
     isTextureLoadUnder (LuaLoadTextureRequest _ _ p) = p ≡ policy
     isTextureLoadUnder _                             = False
 
--- | Drop work produced by the old Lua/UI session while a whole-session load
---   holds its publication boundary.  The render consumers call this only
---   while 'captureLocked': preserving these messages until the next unlocked
---   tick would let their scene/UI mutations land on the replacement session.
---   A normal save has no generation replacement, so it deliberately retains
---   its queued work.
-discardLuaMessagesForActiveLoad ∷ EngineEnv → IO Int
-discardLuaMessagesForActiveLoad env = do
-    loading ← loadInProgress (loadStatusRef env)
-    if loading
-        then length <$> Q.flushQueue (luaToEngineQueue env)
-        else pure 0
+-- | The load publication's CUTOVER on @luaToEngineQueue@: drop
+--   everything the replaced session left queued, and nothing else
+--   (#2221). Returns how many were dropped, for the caller's log.
+--
+--   This is a plain flush because its ONE caller,
+--   'Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish', is the
+--   only place where "everything currently queued" and "the replaced
+--   session's work" are the same set. Three facts hold there and
+--   nowhere else, which is why the decision cannot be re-derived from
+--   engine state at some later moment:
+--
+--   * The publication is COMMITTED. @applyLuaLoad@ has already
+--     succeeded, so the load can no longer abort back onto the old
+--     session — which, by @docs\/persistence_contract.md@, would have
+--     survived unchanged with this work still owed a run.
+--   * No producer is running. @luaToEngineQueue@ is written by the Lua
+--     API, which runs on the Lua thread — the very thread executing
+--     this call inside @handleLoadStaged@.
+--   * No NEW-session work exists yet. @WorldLoadPublish@ has not been
+--     queued, so 'World.Load.Publish.publishStagedSession' has not run,
+--     so the @LuaSaveLoaded@ reconciliation it queues — whose
+--     @onSaveLoaded@ handlers legitimately enqueue new-session work such
+--     as @LuaLoadTextureRequest@s — cannot have produced anything.
+--
+--   A later flush satisfies none of the last two. In particular a
+--   render-thread flush keyed off any load state cannot: the world
+--   thread publishes and releases on its own schedule, so by the time
+--   that thread next ticks, the replacement session may already have
+--   queued work the flush would destroy along with the backlog.
+--
+--   The consumer ('processLuaMessages', on the render\/headless owner)
+--   cannot be draining concurrently either: that owner is a registered
+--   'Engine.Save.Barrier.SaveOwner' of this transaction, parked since
+--   its final-pass acknowledgement, and the barrier reached its
+--   boundary only because that acknowledgement had already landed AFTER
+--   its last drain completed.
+--
+--   A normal save has no generation replacement and never reaches this
+--   path, so it deliberately retains its queued work.
+discardStaleLuaToEngineWork ∷ EngineEnv → IO Int
+discardStaleLuaToEngineWork env =
+    length <$> Q.flushQueue (luaToEngineQueue env)
 
 -- | Run a GPU-touching action unless the engine is headless: skipped when
 --   'ecHeadless' is true (no device), run otherwise. Lets the single

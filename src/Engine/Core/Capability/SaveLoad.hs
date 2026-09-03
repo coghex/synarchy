@@ -16,7 +16,7 @@
 --   replaces every capability's state atomically, so narrowing them
 --   would only reconstruct an env-shaped aggregate one level down. What
 --   this record narrows is the much larger set of NON-permanent
---   touchpoints — the per-tick @captureLocked@ checks and
+--   touchpoints — the per-tick @ownerGated@ checks and
 --   @acknowledgeCurrent@ acknowledgments the world\/input\/sim\/unit\/
 --   combat loops make, and the allocator's any-thread bump.
 --
@@ -91,7 +91,7 @@ data SaveLoadCapability = SaveLoadCapability
     -- ^ Boot-process. The save\/load quiesce barrier every state-owner
     --   thread acknowledges — @WorldThread@, @UnitThread@,
     --   @CombatThread@, @SimThread@, @InputThread@, @MainRender@ and
-    --   @LuaThread@ each check 'Engine.Save.Barrier.captureLocked' in
+    --   @LuaThread@ each check 'Engine.Save.Barrier.ownerGated' in
     --   their own loop and answer with
     --   'Engine.Save.Barrier.acknowledgeCurrent' under their OWN
     --   'Engine.Save.Barrier.SaveOwner' tag. Opaque and internally

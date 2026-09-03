@@ -370,8 +370,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- A thrown exception is a capture failure, not a
                                 -- disk failure: fail the transaction directly
                                 -- and skip the release entirely — failSave's own
-                                -- phase transition already unblocks
-                                -- 'captureLocked' for every other owner.
+                                -- terminal outcome already unblocks every other
+                                -- owner's gate, the global capture lock and each
+                                -- owner's own post-final-ack park alike (#2221).
                                 encodedOrErr ← try (evaluate
                                     (encodeSessionSnapshot meta snap luaComponents))
                                 case encodedOrErr of

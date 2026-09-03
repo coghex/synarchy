@@ -27,7 +27,7 @@ import Engine.Core.Thread
     , startWorkerThread)
 import Engine.Core.State
     (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked, saveInProgress)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated, saveInProgress)
 import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
 import Combat.Types (CombatCommand(..))
@@ -89,7 +89,10 @@ combatTick env tick = do
             -- A save boundary drains accepted combat commands
             -- before acknowledging; ordinary pause retains the
             -- historical no-work behaviour.
-            locked ← captureLocked (saveBarrierRef env)
+            -- #2221: the per-OWNER gate, not the global capture lock.
+            -- Once this owner has acknowledged the final quiescence
+            -- pass it must drain nothing more until capture completes.
+            locked ← ownerGated (saveBarrierRef env) SaveCombat
             saving ← saveInProgress (saveBarrierRef env)
             when (saving ∧ not locked) $ processAllCommands env
             acknowledgeCurrent (saveBarrierRef env) SaveCombat
