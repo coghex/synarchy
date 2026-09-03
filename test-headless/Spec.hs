@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
+import qualified Test.Headless.WorldGen.ConfigLoad as WorldGenConfigLoad
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
 import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
@@ -622,6 +623,9 @@ main = hspec $ do
     describe "WorldGen.Breakthrough" Breakthrough.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
+    -- #2286: filesystem + logger only. Deliberately OUTSIDE the shared
+    -- worldgen engine above -- the loader never generates a world.
+    describe "world-generation config loading" WorldGenConfigLoad.spec
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
