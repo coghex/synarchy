@@ -33,6 +33,23 @@ branch protection also requires the probe context directly. The parity
 audit structurally pins the aggregate dependencies and both probe commands.
 Behavior probes remain opt-in locally.
 
+`ci_parity_audit.py` is a facade over five owner modules (#2159); the two
+commands, the audited scope and the exemption list are unchanged by that
+split. `ci_parity_shell.py` is the leaf that lexes shell and extracts
+`python3 tools/*.py` invocations, and defines the `AuditError` every layer
+raises. `ci_parity_config.py` single-sources the production constants --
+the compared paths, the three job names, the aggregate's dependencies, the
+probe contract, the diagnostic labels and `EXEMPT_COMMANDS` with its reason
+per entry -- so both the facade and the workflow owner can read them without
+importing each other. `ci_parity_workflow.py` parses the workflow YAML,
+compares the two gate sets in both directions, and pins the aggregate and
+probe job topology. `ci_parity_save_compat.py` owns the #1360 wiring check.
+`test_ci_parity_audit.py` holds every fixture and case, reached only through
+`--self-test`; it also pins the split itself -- no owner imports the facade,
+the facade holds no implementation body, each re-export is the canonical
+object, and every parity module still selects the save-compat gate it
+decides the timing of.
+
 `-Werror` itself lives in `synarchy.cabal`'s checked-in warning policy, so
 every build already carries it; `ci-local.sh` only scopes a temporary
 `-fforce-recomp` via `cabal.project.local` (forcing a genuine recheck of

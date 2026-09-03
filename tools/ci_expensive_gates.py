@@ -229,7 +229,22 @@ SAVE_COMPAT_GLOBS = [
     # audit that keeps those two sides honest. An edit to any of them
     # can change WHEN the coverage runs, so it has to face the coverage
     # itself.
+    #
+    # Issue #2159 split that audit into a facade plus four production
+    # owners and a self-test owner, and the save-compat wiring the
+    # facade used to hold is now a module of its own -- so EVERY one of
+    # them is named here. Dropping any would silently narrow this
+    # selector: the module that decides when the reproducibility member
+    # runs would stop selecting the member it decides about. Explicit
+    # per-module patterns rather than a blanket `tools/ci_parity*`,
+    # matching the form used for the #2049 owners above, so a future
+    # `tools/ci_parity_*_probe.py` cannot be swept in unexamined; the
+    # parity audit's own self-test enumerates `tools/ci_parity_*.py`
+    # from the filesystem and fails if one of them stops selecting here.
     "tools/ci_expensive_gates.py", "tools/ci_parity_audit.py",
+    "tools/ci_parity_shell.py", "tools/ci_parity_config.py",
+    "tools/ci_parity_workflow.py", "tools/ci_parity_save_compat.py",
+    "tools/test_ci_parity_audit.py",
     "tools/ci-local.sh", "Makefile", ".github/workflows/ci.yml",
 ]
 
@@ -687,6 +702,15 @@ def self_test() -> int:
         # The wiring on both sides, and the parity audit over it.
         ("save-compat", ["tools/ci_expensive_gates.py"], True),
         ("save-compat", ["tools/ci_parity_audit.py"], True),
+        # Issue #2159's owner modules. Each is named individually in
+        # SAVE_COMPAT_GLOBS, so a PR touching only one still pays for the
+        # coverage whose selection that module decides -- the save-compat
+        # owner most of all, since it IS the wiring check.
+        ("save-compat", ["tools/ci_parity_shell.py"], True),
+        ("save-compat", ["tools/ci_parity_config.py"], True),
+        ("save-compat", ["tools/ci_parity_workflow.py"], True),
+        ("save-compat", ["tools/ci_parity_save_compat.py"], True),
+        ("save-compat", ["tools/test_ci_parity_audit.py"], True),
         ("save-compat", ["tools/ci-local.sh"], True),
         ("save-compat", ["Makefile"], True),
         ("save-compat", [".github/workflows/ci.yml"], True),
