@@ -565,6 +565,47 @@ commandCancellationSpec = describe "debug-console command cancellation (#2282)" 
             -- stand-in declined it.
             readIORef claims `shouldReturn` [("slow", True), ("second", True)]
 
+  it "surfaces the LOAD HANDOFF's rejection to the waiting client, \
+     \never an unknown outcome, when its queued command is cancelled \
+     \out from under it" $ do
+    diags ← newDiagnostics
+    let waitMicros = 800000
+    withServer (testConfig diags (withResponseWait waitMicros)) $ \port console → do
+        -- Stand in for #763's handoff drain: dequeue the still-QUEUED
+        -- command and cancel it through the same shared operation while
+        -- the client's wait is still running. The command never
+        -- executes, so an unknown outcome would be wrong twice over --
+        -- it would claim the session might have been touched, and it
+        -- would throw away a rejection this client is entitled to see.
+        --
+        -- SCOPE. This is the interleaving a test can pin: the
+        -- cancellation lands INSIDE the wait, so the rejection reaches
+        -- the client through the response channel. The other half of
+        -- the same race -- a cancellation landing in the few
+        -- instructions between the wait expiring and the client's own
+        -- 'cancelDebugCommand' -- is not reachable from out here,
+        -- because whichever canceller wins fills that channel and a
+        -- blocked 'takeMVar' is handed the value directly. What decides
+        -- that half is 'cancelDebugCommand' telling an already-CANCELLED
+        -- command apart from a CLAIMED one, and
+        -- @Test.Headless.Lua.DebugQueue@'s second-canceller example
+        -- pins exactly that.
+        cancelled ← newEmptyMVar
+        responder ← forkIO $ do
+            mCmd ← waitForCommand (consoleQueue console) twoSeconds
+            forM_ mCmd $ \cmd → do
+                outcome ← cancelDebugCommand cmd loadHandoffRejection
+                putMVar cancelled outcome
+        flip finally (killThread responder) ∘ withClient port $ \client → do
+            void $ readUntilContains oneSecond "> " client
+            sendAll client "world.setDate('some_page', 9999, 1, 1)\n"
+            won ← timeout twoSeconds (takeMVar cancelled)
+            won `shouldBe` Just (Just loadHandoffRejection)
+            reply ← readUntilContains fiveSeconds rejectionNeedle client
+            reply `shouldSatisfy` BS.isInfixOf rejectionNeedle
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf unknownNeedle)
+            reply `shouldSatisfy` (not ∘ BS.isInfixOf cancelledNeedle)
+
   it "leaves a command answered within the wait exactly as it was, and \
      \nothing can retro-cancel it afterwards" $ do
     diags ← newDiagnostics
@@ -595,7 +636,7 @@ commandCancellationSpec = describe "debug-console command cancellation (#2282)" 
                     -- executed command can never be cancelled after the
                     -- fact, and the loser leaves the lifecycle alone.
                     lost ← cancelDebugCommand cmd "REJECTED: too late"
-                    lost `shouldBe` False
+                    lost `shouldBe` Nothing
                     readDebugCommandState cmd `shouldReturn` DebugCommandClaimed
 
 -- | Shrink only the response wait, leaving every other bound at its
@@ -626,9 +667,21 @@ standInDrain queue = go 0 0
 
 -- | The two expiry replies as socket bytes, DERIVED from the constants
 --   the client actually sends rather than retyped beside them.
-cancelledNeedle, unknownNeedle ∷ BS.ByteString
+cancelledNeedle, unknownNeedle, rejectionNeedle ∷ BS.ByteString
 cancelledNeedle = TE.encodeUtf8 commandCancelledMessage
 unknownNeedle   = TE.encodeUtf8 commandUnknownOutcomeMessage
+rejectionNeedle = TE.encodeUtf8 loadHandoffRejection
+
+-- | The load handoff's rejection, verbatim
+--   ('Engine.Scripting.Lua.Thread.Dispatch'). Duplicated here rather
+--   than imported because the production text is a string literal
+--   inline in that handler; @Test.Headless.Lua.DebugQueue@ pins it
+--   against the real path, and this module only needs a distinguishable
+--   third reply.
+loadHandoffRejection ∷ Text
+loadHandoffRejection =
+    "REJECTED: a load transaction replaced the session while this \
+    \command was queued"
 
 -- | Poll the command queue the way the Lua thread's own tick does.
 waitForCommand ∷ TQueue DebugCommand → Int → IO (Maybe DebugCommand)

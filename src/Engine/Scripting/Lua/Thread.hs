@@ -88,10 +88,16 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
         -- freed out from under a thread that might still be holding a
         -- command against it.
         stopDebugConsole (llsConsole lls)
-        -- Answer any debug commands still queued at teardown so their
-        -- client threads (and netcat connections) don't sit out the full
-        -- 30 s response timeout while the engine shuts down. Mirrors the
-        -- crash handler's drain.
+        -- Cancel every debug command still queued at teardown. Note the
+        -- ORDER, which #2170 fixed deliberately and #2282 did not
+        -- change: the console is stopped FIRST, so by the time this
+        -- runs every client handler has been closed, killed and joined
+        -- and no socket client is left to read the reply. What the
+        -- drain still buys is the lifecycle transition -- the queued
+        -- commands are CANCELLED and so can never be executed by
+        -- anything that outlives this teardown -- plus a filled
+        -- response cell for any in-process waiter. Mirrors the crash
+        -- handler's drain.
         drainDebugQueue (llsDebugQueue lls) "engine shutting down"
         Lua.close (lbsLuaState (llsBackend lls))
     , wsOnCrash     = \lls e → do
@@ -124,10 +130,13 @@ data LuaLoopState = LuaLoopState
 --
 --   Goes through the shared 'cancelDebugCommand' (#2282), so a drained
 --   command is not merely off the queue with its response filled: it is
---   CANCELLED, and a later claim on it can never succeed. The two
---   replies this is called with — @"engine shutting down"@ for the
---   orderly stop and @"ERROR: Lua thread crashed: ..."@ for the crash
---   handler — are unchanged.
+--   CANCELLED, and a later claim on it can never succeed. That — not
+--   the reply — is what this contributes at teardown, because both
+--   callers stop the console BEFORE draining and no socket client
+--   survives to read anything. The two replies it is called with —
+--   @"engine shutting down"@ for the orderly stop and
+--   @"ERROR: Lua thread crashed: ..."@ for the crash handler — are
+--   unchanged, and remain the answer any in-process waiter sees.
 drainDebugQueue ∷ TQueue DebugCommand → T.Text → IO ()
 drainDebugQueue debugQueue reply = go
   where

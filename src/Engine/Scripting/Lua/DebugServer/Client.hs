@@ -137,22 +137,30 @@ processLines cfg cmdQueue conn buf =
 --
 --   On expiry the command is not simply abandoned (#2282). The wait
 --   races the Lua thread's 'claimDebugCommand' through the command's
---   one lifecycle cell, and exactly one of two things is true
---   afterwards:
+--   one lifecycle cell, and 'cancelDebugCommand' reports which of three
+--   things happened:
 --
 --   * the cancellation WON — the command was still queued, is now
 --     permanently unclaimable, and will be discarded unrun by whichever
 --     drain dequeues it. The session is untouched, so the client is
 --     told 'commandCancelledMessage' and may safely re-send.
---   * the cancellation LOST — the Lua thread had already claimed the
---     command and is running it. Its answer will be published into a
---     response channel nobody is reading any more, so the client is
---     told 'commandUnknownOutcomeMessage' and must NOT re-send.
+--   * the command was ALREADY CANCELLED by someone else — a load
+--     handoff (#763) or a teardown drain got there while this wait was
+--     running out. It did not execute either, so the honest reply is
+--     that canceller's own, which is what 'cancelDebugCommand' hands
+--     back. Reporting an unknown outcome here would be wrong twice
+--     over: it would claim the session might have been touched when it
+--     was not, and it would discard a rejection the client is entitled
+--     to see.
+--   * the cancellation LOST to a claim — the Lua thread is running the
+--     command. Its answer will be published into a response channel
+--     nobody is reading any more, so the client is told
+--     'commandUnknownOutcomeMessage' and must NOT re-send.
 --
---   Either way the reply is this command's own and the connection moves
---   on: a late answer cannot surface as a stray line on it, because the
---   response channel is per-command and this loop never looks at that
---   one again.
+--   In every case the reply is this command's own and the connection
+--   moves on: a late answer cannot surface as a stray line on it,
+--   because the response channel is per-command and this loop never
+--   looks at that one again.
 runCommand ∷ DebugServerConfig → TQueue DebugCommand → Text → IO Text
 runCommand cfg cmdQueue cmdText = do
     mBuiltin ← dscBuiltin cfg cmdText
@@ -167,9 +175,7 @@ runCommand cfg cmdQueue cmdText = do
                 Just r  → return r
                 Nothing → do
                     cancelled ← cancelDebugCommand cmd commandCancelledMessage
-                    return $ if cancelled
-                             then commandCancelledMessage
-                             else commandUnknownOutcomeMessage
+                    return (fromMaybe commandUnknownOutcomeMessage cancelled)
 
 -- | Say why, then stop serving. The send is best-effort — the reason
 --   the connection is being dropped is frequently the reason it can no

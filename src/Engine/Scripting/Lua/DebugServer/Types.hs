@@ -104,9 +104,17 @@ data DebugCommandState
       -- ^ Claimed for execution immediately before the evaluator is
       --   invoked. "Started" means exactly this, and nothing about how
       --   far the evaluator has got.
-    | DebugCommandCancelled
-      -- ^ Cancelled before it was ever claimed. Its reply has already
-      --   been published by the canceller.
+    | DebugCommandCancelled !Text
+      -- ^ Cancelled before it was ever claimed, carrying the reply the
+      --   WINNING canceller published.
+      --
+      --   The reply lives in the state rather than only in the response
+      --   'MVar' because the two are not written together: the state
+      --   transition is the atomic part and the 'MVar' fill follows it.
+      --   A second party arriving in between — the client whose
+      --   response wait just expired, most concretely — would read an
+      --   empty channel and have to guess. Here it reads the winner's
+      --   actual reply instead.
     deriving (Eq, Show)
 
 -- | A fresh command, queued, with an empty response channel.
@@ -142,20 +150,44 @@ claimDebugCommand cmd = atomically $ do
 --   The ONE cancellation operation: the response-wait expiry, the load
 --   handoff (#763) and the shutdown\/crash drains all go through it, so
 --   there is a single place where a cancellation can lose to a claim.
---   A cancellation that loses returns 'False' and touches neither the
---   lifecycle nor the response channel — the claimed command's own
---   answer is the only thing that may ever land there.
-cancelDebugCommand ∷ DebugCommand → Text → IO Bool
+--
+--   The result is the reply the command's cancellation ACTUALLY
+--   carries, which is not always the one passed in — three cases, and
+--   the middle one is the whole reason this returns a 'Maybe' 'Text'
+--   rather than a 'Bool':
+--
+--   * @Just reply@ — this caller won, and @reply@ is now the command's
+--     answer.
+--   * @Just other@ — the command was ALREADY cancelled, by a canceller
+--     that published @other@. Nothing is overwritten and the caller is
+--     told what that answer is, because "someone else cancelled it" and
+--     "it started running" are opposite facts about whether the session
+--     was touched, and a caller that conflated them would report the
+--     wrong one. A client whose response wait expires at the same
+--     instant a load handoff rejects its queued command is exactly that
+--     caller.
+--   * 'Nothing' — the command was CLAIMED and is running. The lifecycle
+--     and the response channel are both left alone; the claimed
+--     command's own answer is the only thing that may ever land there.
+cancelDebugCommand ∷ DebugCommand → Text → IO (Maybe Text)
 cancelDebugCommand cmd reply = do
-    won ← atomically $ do
+    outcome ← atomically $ do
         st ← readTVar (dcState cmd)
         case st of
             DebugCommandQueued → do
-                writeTVar (dcState cmd) DebugCommandCancelled
-                return True
-            _ → return False
-    when won $ void (tryPutMVar (dcResponse cmd) reply)
-    return won
+                writeTVar (dcState cmd) (DebugCommandCancelled reply)
+                return (Just (reply, True))
+            DebugCommandCancelled winning → return (Just (winning, False))
+            DebugCommandClaimed → return Nothing
+    case outcome of
+        Nothing → return Nothing
+        Just (winning, wonIt) → do
+            -- Only the WINNER fills the channel. A later canceller must
+            -- not overwrite the answer a waiting client is about to
+            -- read, and a loser to a claim must not put anything there
+            -- at all.
+            when wonIt $ void (tryPutMVar (dcResponse cmd) winning)
+            return (Just winning)
 
 -- | Publish a CLAIMED command's answer without blocking.
 --

@@ -191,9 +191,11 @@ staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation
         -- #2282: being off the queue was never what stopped this
         -- command; the lifecycle transition is. The drain's own claim
         -- must fail on it, and the state it fails against is terminal.
-        readDebugCommandState cmd `shouldReturn` DebugCommandCancelled
+        readDebugCommandState cmd
+            `shouldReturn` DebugCommandCancelled loadHandoffRejection
         claimDebugCommand cmd `shouldReturn` False
-        readDebugCommandState cmd `shouldReturn` DebugCommandCancelled
+        readDebugCommandState cmd
+            `shouldReturn` DebugCommandCancelled loadHandoffRejection
 
     it "cancels every stale command queued at the handoff, not just the \
        \first" $ \env → do
@@ -245,7 +247,7 @@ productionDrainSpec = describe "debug-console command cancellation (issue #2282,
         ls ← newBareBackendWithDebugQueue env
         cmd ← queueDebugCommand ls "__drainWitness = 'ran'"
         cancelled ← cancelDebugCommand cmd "CANCELLED: for the test"
-        cancelled `shouldBe` True
+        cancelled `shouldBe` Just "CANCELLED: for the test"
 
         -- Twice, because \"no later drain runs it, in any tick\" is the
         -- requirement -- one pass emptying the queue would prove less.
@@ -281,8 +283,27 @@ productionDrainSpec = describe "debug-console command cancellation (issue #2282,
 
         readLuaGlobal ls "__skippedRan" `shouldReturn` Nothing
         readLuaGlobal ls "__keptRan" `shouldReturn` Just "yes"
-        readDebugCommandState skipped `shouldReturn` DebugCommandCancelled
+        readDebugCommandState skipped
+            `shouldReturn` DebugCommandCancelled "CANCELLED: for the test"
         readDebugCommandState kept `shouldReturn` DebugCommandClaimed
+
+    it "hands a SECOND canceller the winning canceller's reply rather \
+       \than its own, and overwrites nothing" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        cmd ← queueDebugCommand ls "__drainWitness = 'ran'"
+
+        first ← cancelDebugCommand cmd loadHandoffRejection
+        first `shouldBe` Just loadHandoffRejection
+        -- The client's response wait expiring a moment later is exactly
+        -- this second call. It must learn that the command was
+        -- CANCELLED (so the session is untouched and its own reply is
+        -- moot), not mistake the failed transition for "it started".
+        second ← cancelDebugCommand cmd "CANCELLED: command timed out \
+                                        \before execution started"
+        second `shouldBe` Just loadHandoffRejection
+        tryTakeMVar (dcResponse cmd) `shouldReturn` Just loadHandoffRejection
+        readDebugCommandState cmd
+            `shouldReturn` DebugCommandCancelled loadHandoffRejection
 
     it "cannot be cancelled after the drain has claimed it: the load \
        \handoff and both teardown drains all lose that race" $ \env → do
@@ -294,7 +315,7 @@ productionDrainSpec = describe "debug-console command cancellation (issue #2282,
         lost ← cancelDebugCommand cmd
             "REJECTED: a load transaction replaced the session while \
             \this command was queued"
-        lost `shouldBe` False
+        lost `shouldBe` Nothing
         -- The claimed command's own answer is what survives in the
         -- response channel; the late rejection landed nowhere.
         resp ← tryTakeMVar (dcResponse cmd)
@@ -311,7 +332,8 @@ shutdownDrainSpec = describe "debug-queue shutdown drain (issue #2282)" $ do
         drainDebugQueue (lbsDebugQueue ls) "engine shutting down"
 
         tryTakeMVar (dcResponse cmd) `shouldReturn` Just "engine shutting down"
-        readDebugCommandState cmd `shouldReturn` DebugCommandCancelled
+        readDebugCommandState cmd
+            `shouldReturn` DebugCommandCancelled "engine shutting down"
         claimDebugCommand cmd `shouldReturn` False
         remaining ← atomically $ tryReadTQueue (lbsDebugQueue ls)
         isNothing remaining `shouldBe` True
