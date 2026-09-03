@@ -262,8 +262,26 @@ function M.register(aiState)
         -- Not at apply() time: Lua components are applied while the
         -- OUTGOING session is still current, so a designation query
         -- there answers about the world being replaced.
-        version = 8,
-        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8 },
+        -- v9 (issue #1845): a constructJob carries the BUILDING it
+        -- staked (constructJob.stakedBid), between the queued spawn and
+        -- the completion that retires the job. Durable rather than
+        -- derived: it is the only thing that tells a resumed job whether
+        -- its OWN stake landed, rather than whether something that
+        -- merely looks like it is standing at the tile -- and
+        -- designation admission does not check occupancy, so a stranger
+        -- really can be. A v1-v8 payload predates the field and decodes
+        -- with it ABSENT, which is exactly right and is the honest
+        -- reading rather than a default: at most one job per unit can be
+        -- inside that window, the window is a tick or two wide, and a
+        -- payload written without the field cannot say which job that
+        -- was. Such a job resumes as not-yet-staked and re-stakes; the
+        -- engine refuses a spawn onto an occupied tile, so it cannot
+        -- double-build. unit_ai_ref_schema.lua declares the field as a
+        -- typed `building` edge with its own drop path, so a v9 payload
+        -- whose stake did not survive the load has that job released and
+        -- its designation handed back to `pending`.
+        version = 9,
+        inputVersions = { 1, 2, 3, 4, 5, 6, 7, 8, 9 },
         required = true,
         scope = "global",
         -- Requirement 2 (round-8 review): unit_ai_save_refs.lua's
@@ -349,6 +367,16 @@ function M.register(aiState)
             -- PUBLISHED session's designations, which exist neither at
             -- decode time nor at apply() time. It happens in
             -- unit_ai_reconcile.lua, off the onSaveLoaded broadcast.
+            --
+            -- v8 -> v9 (#1845) is identity, for the same reason v3->v4
+            -- through v6->v7 are: a payload written before
+            -- constructJob.stakedBid existed has no such field, and its
+            -- ABSENCE already means the only thing those bytes could
+            -- mean -- "this job is not inside its staking window". A
+            -- default would be a guess about which job was, and the
+            -- payload cannot say. The resumed job re-stakes, and the
+            -- engine's own occupancy refusal is what stops that
+            -- double-building (version field, above).
             --
             -- #2055's runtime-default normalization is deliberately NOT
             -- here either. One of the three defaults reads the CLOCK,
