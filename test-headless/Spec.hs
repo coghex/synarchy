@@ -285,6 +285,7 @@ import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
+import qualified Test.Headless.Save.OwnerPark as SaveOwnerPark
 import qualified Test.Headless.Load.Status as LoadStatus
 import qualified Test.Headless.Load.Terminalize as LoadTerminalize
 import qualified Test.Headless.Save.Snapshot as SaveSnapshot
@@ -678,6 +679,7 @@ main = hspec $ do
     describe "autosave staging slots (#1413)" AutosaveListing.spec
     MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
+    describe "Save.OwnerPark" SaveOwnerPark.spec
     describe "Load.Status" LoadStatus.spec
     describe "Load.Terminalize" LoadTerminalize.spec
     describe "Save.Snapshot" SaveSnapshot.spec

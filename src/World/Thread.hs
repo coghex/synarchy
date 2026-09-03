@@ -33,7 +33,7 @@ import World.Thread.Command (handleWorldCommand)
 import World.Command.Types (WorldCommand(..))
 import World.State.Types (settleSelectionProjection)
 import World.Types (WorldManager(..))
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
 
 -- * Start World Thread
 
@@ -72,7 +72,15 @@ worldTickWith clock env lastTimeRef = do
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
     dt ← sampleElapsed clock lastTimeRef
 
-    locked ← captureLocked (slSaveBarrierRef (toSaveLoadCapability env))
+    -- #2221: 'ownerGated', not 'captureLocked'. From this owner's own
+    -- final-pass acknowledgement the tick takes the authorized-command
+    -- branch below, so 'drainInitQueues'/'updateChunkLoading' can no
+    -- longer enqueue fresh unit/building/sim work after every owner has
+    -- already drained its three passes. The world owner's standing
+    -- exception is unchanged and is exactly what this branch is: it
+    -- keeps consuming the authorized WorldSave / WorldLoadPublish
+    -- commands, and defers (save) or discards (load publish) the rest.
+    locked ← ownerGated (slSaveBarrierRef (toSaveLoadCapability env)) SaveWorld
     if locked
         then processAuthorizedSave env logger
         else do

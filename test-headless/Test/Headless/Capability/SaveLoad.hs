@@ -10,7 +10,7 @@
 --   that several threads observe the SAME one.
 --
 --   A projection that copied 'slSaveBarrierRef' would hand the world
---   thread a barrier no save ever locks, so its @captureLocked@ gate
+--   thread a barrier no save ever locks, so its @ownerGated@ gate
 --   would read 'False' straight through a capture window and its
 --   @acknowledgeCurrent@ would answer a barrier nobody is waiting on —
 --   a save that quietly captures a session mid-write. A projection that
@@ -82,7 +82,7 @@ spec = do
 
     it "the barrier handle is the one the save owners acknowledge" $ \env → do
       -- The single most consequential alias: every state-owner thread
-      -- checks captureLocked and answers acknowledgeCurrent on this
+      -- checks ownerGated and answers acknowledgeCurrent on this
       -- exact handle. A copy here silently breaks save quiescence
       -- rather than failing loudly.
       sameContainer (slSaveBarrierRef (toSaveLoadCapability env))

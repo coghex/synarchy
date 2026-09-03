@@ -20,7 +20,7 @@ import Engine.Core.Capability.WorldSim
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
 import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
 import Engine.Core.Log (logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
 import World.Page.Types (WorldPageId(..))
@@ -71,7 +71,10 @@ simTick ∷ EngineEnv → IORef SimState → IO (Maybe (IORef SimState))
 simTick env simStateRef = do
     logger ← readIORef (ccLoggerRef (toCoreCapability env))
     -- Process all pending commands
-    locked ← captureLocked (saveBarrierRef env)
+    -- #2221: 'ownerGated', not 'captureLocked' — parked from this
+    -- owner's own final-pass acknowledgement, so no fluid tick and no
+    -- WorldApplyFluids writeback can straddle the boundary.
+    locked ← ownerGated (saveBarrierRef env) SaveSimulation
     unless locked $ processSimCommands env logger simStateRef
 
     ss ← readIORef simStateRef
