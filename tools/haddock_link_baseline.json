@@ -6,6 +6,10 @@
       "link": "'App.Boot.patchBootConfig'"
     },
     {
+      "path": "src/Blood/Types.hs",
+      "link": "'Combat.Wounds.woundKind'"
+    },
+    {
       "path": "src/Engine/Asset/YamlFlora.hs",
       "link": "'Engine.Asset.YamlItems.requirePositiveQuantity'"
     },
@@ -72,6 +76,10 @@
     {
       "path": "src/Engine/Core/Thread.hs",
       "link": "'Engine.Scripting.Lua.DebugServer.tryAnyIO'"
+    },
+    {
+      "path": "src/Engine/Core/Types.hs",
+      "link": "'Engine.Preview.Building.pbeFrames'"
     },
     {
       "path": "src/Engine/Graphics/Vulkan/Recreate.hs",

@@ -45,7 +45,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from haddock_link_audit import (  # type: ignore
-    LINK_RE, build_index, comment_text_spans, main)
+    LINK_RE, build_index, comment_text_spans, main, parse_module)
 
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
@@ -197,6 +197,50 @@ module Gamma ( Hidden ) where
 data Hidden = Hidden
     { hiddenSize ∷ Int
     }
+""")
+
+
+def test_documented_record_field_is_reported() -> None:
+    """The false negative this pins: an indented comment between two
+    fields used to END the declaration block, so every field after it
+    vanished from the index and its link was dismissed as a name with no
+    definition anywhere -- the same silent pass a Lua verb gets."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.hiddenSize' — Gamma exports Hidden, but not its fields.
+run ∷ Int
+run = 0
+""", "a record field declared after a doc comment",
+        needle="'Gamma.hiddenSize'", Gamma="""\
+module Gamma ( Hidden ) where
+data Hidden = Hidden
+    { visibleSize ∷ Int
+      -- ^ Documented, which used to truncate the declaration here.
+
+    , hiddenSize ∷ Int
+      -- ^ And a blank line above, which used to truncate it too.
+    }
+""")
+
+
+def test_field_group_after_a_comment_still_resolves() -> None:
+    """The same truncation in the other direction: a field lost from the
+    index is also a field `Type(..)` can no longer supply, which turns a
+    perfectly live link into a false POSITIVE."""
+    _expect_clean("""\
+module Beta ( run ) where
+-- | 'Gamma.lateSize' resolves through Gamma's Hidden(..).
+run ∷ Int
+run = 0
+""", "a documented record field reached through `Type(..)`", Gamma="""\
+module Gamma ( Hidden(..) ) where
+data Hidden = Hidden
+    { earlySize ∷ Int
+      -- ^ Documented.
+    , lateSize ∷ Int
+    }
+lateSize' ∷ Int
+lateSize' = 0
 """)
 
 
@@ -354,23 +398,70 @@ wind = 0
 """)
 
 
-def test_self_reexport_exports_everything() -> None:
-    """`module M` inside M's own export list re-exports every name in
-    scope there -- `Engine.Core.State` is the tree's canonical case
-    (`module Engine.Core.State, module Engine.Core.Lifecycle`), and
-    every link into it resolves, record fields included."""
+SELF_REEXPORT = """\
+module Gamma
+    ( module Gamma
+    ) where
+import Alpha
+data Gizmo = Gizmo
+    { gizmoWidth ∷ Int
+    }
+tucked ∷ Int
+tucked = 0
+"""
+
+
+def test_self_reexport_supplies_its_own_names() -> None:
+    """`module M` inside M's own export list re-exports what is in
+    scope there, so M's own functions AND record fields resolve.
+    `Engine.Core.State` is the tree's canonical case (`module
+    Engine.Core.State, module Engine.Core.Lifecycle`), and every link
+    into it names one of its definitions or `EngineEnv` fields."""
     _expect_clean("""\
 module Beta ( run ) where
 -- | 'Gamma.tucked' and 'Gamma.gizmoWidth' both resolve.
 run ∷ Int
 run = 0
-""", "a module re-exporting itself", Gamma="""\
+""", "a module re-exporting its own names", Gamma=SELF_REEXPORT)
+
+
+def test_self_reexport_supplies_an_unqualified_import() -> None:
+    _expect_clean("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' is in scope in Gamma through `import Alpha`.
+run ∷ Int
+run = 0
+""", "a self re-export carrying an unqualified import", Gamma=SELF_REEXPORT)
+
+
+def test_self_reexport_does_not_supply_a_foreign_name() -> None:
+    """The false negative this pins: a self re-export is NOT a wildcard.
+    `module Gamma (module Gamma)` says nothing about a name Gamma
+    neither defines nor has in scope, and treating it as a blanket yes
+    suppresses a genuinely dead link."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.hidden' — Alpha hides it, so it is not in Gamma's scope.
+run ∷ Int
+run = 0
+""", "a name outside a self-re-exporting module's scope",
+        needle="'Gamma.hidden'", Gamma=SELF_REEXPORT)
+
+
+def test_qualified_import_does_not_feed_a_self_reexport() -> None:
+    """`import qualified Alpha` brings in `Alpha.visible`, not
+    `visible`, so a self re-export cannot carry it."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' — Gamma only imports Alpha qualified.
+run ∷ Int
+run = 0
+""", "a qualified import feeding a self re-export",
+        needle="'Gamma.visible'", Gamma="""\
 module Gamma
     ( module Gamma
     ) where
-data Gizmo = Gizmo
-    { gizmoWidth ∷ Int
-    }
+import qualified Alpha
 tucked ∷ Int
 tucked = 0
 """)
@@ -599,6 +690,25 @@ def test_unicode_syntax_signatures_are_recognized() -> None:
            f"{index.record_fields}")
 
 
+def test_a_field_type_tail_is_not_a_definition() -> None:
+    """Record fields are anchored to the `{` or `,` that opens them.
+    Unanchored, the scan for the second field starts inside the FIRST
+    field's TYPE, so `{ a ∷ Int, b ∷ Bool }` yields the invented name
+    `nt` -- a definition named after a type's tail, which can make an
+    unrelated dead link look real."""
+    facts = parse_module("src/M.hs", """\
+module M ( T(..) ) where
+data T = T
+    { alpha ∷ Int
+    , beta, gamma ∷ Bool
+    }
+""")
+    expect(facts is not None and facts.record_fields == {
+        "T": {"alpha", "beta", "gamma"}},
+        "exactly the three declared fields must be indexed, got "
+        f"{facts.record_fields if facts else None}")
+
+
 def test_comment_spans_exclude_strings_and_quasiquotes() -> None:
     """Comment spans are reported by the shared scanner, never inferred
     by subtracting code spans -- strings and quasiquotes are non-code
@@ -686,6 +796,8 @@ TESTS = [
     test_same_module_continuation_signature_target_is_reported,
     test_char_literal_does_not_swallow_a_later_comment,
     test_unexported_record_field_is_reported,
+    test_documented_record_field_is_reported,
+    test_field_group_after_a_comment_still_resolves,
     test_app_tree_is_scanned,
     test_new_finding_absent_from_the_baseline_fails,
     test_stale_baseline_entry_fails,
@@ -693,7 +805,10 @@ TESTS = [
     test_exported_target_is_permitted,
     test_module_reexport_is_permitted,
     test_comment_inside_an_export_list_is_permitted,
-    test_self_reexport_exports_everything,
+    test_self_reexport_supplies_its_own_names,
+    test_self_reexport_supplies_an_unqualified_import,
+    test_self_reexport_does_not_supply_a_foreign_name,
+    test_qualified_import_does_not_feed_a_self_reexport,
     test_module_reexport_does_not_supply_a_hidden_name,
     test_module_without_an_export_list_is_permitted,
     test_record_field_through_open_type_export_is_permitted,
@@ -710,6 +825,7 @@ TESTS = [
     test_quasiquote_is_permitted,
     test_constructor_link_is_permitted,
     test_unicode_syntax_signatures_are_recognized,
+    test_a_field_type_tail_is_not_a_definition,
     test_comment_spans_exclude_strings_and_quasiquotes,
     test_baseline_generation_is_deterministic,
     test_command_line_entry_point_runs,

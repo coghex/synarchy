@@ -123,6 +123,14 @@ QUASIQUOTE_OPEN_RE = re.compile(r"\[[a-z_][A-Za-z0-9_']*\|")
 MODULE_HEADER_RE = re.compile(
     r"^module\s+([A-Z][A-Za-z0-9_'.]*)", re.MULTILINE)
 
+# An UNQUALIFIED import, in either qualifier position (`import qualified
+# M` and ImportQualifiedPost's `import M qualified`). A qualified import
+# brings no unqualified name into scope, so it can never feed a `module
+# M` self re-export.
+IMPORT_RE = re.compile(
+    r"^import\s+(qualified\s+)?([A-Z][A-Za-z0-9_'.]*)\s*(qualified\b)?",
+    re.MULTILINE)
+
 # A top-level signature, matched against a declaration BLOCK that starts
 # at column 0. `\s*` spans newlines, so the continuation-line form
 #
@@ -139,8 +147,14 @@ SIGNATURE_RE = re.compile(
     re.DOTALL)
 
 DATA_HEADER_RE = re.compile(r"\A(?:data|newtype)\s+([A-Z][A-Za-z0-9_']*)")
+
+# A record field group inside a `{ … }`, anchored to the `{` or `,` that
+# opens it. The anchor is load-bearing: unanchored, the second field of
+# `{ a ∷ Int, b ∷ Bool }` is found by scanning forward from the previous
+# `∷`, which starts inside the TYPE and reads `Int, b` as the field
+# group `nt, b` -- inventing a definition named after a type's tail.
 RECORD_FIELD_RE = re.compile(
-    r"([a-z_][A-Za-z0-9_']*(?:\s*,\s*[a-z_][A-Za-z0-9_']*)*)\s*(?:∷|::)")
+    r"[{,]\s*([a-z_][A-Za-z0-9_']*(?:\s*,\s*[a-z_][A-Za-z0-9_']*)*)\s*(?:∷|::)")
 
 
 @dataclass(frozen=True)
@@ -178,6 +192,9 @@ class ModuleFacts:
     exported_open_types: set[str]
     #: Modules named by a `module X` re-export in the export list.
     reexported_modules: set[str]
+    #: Modules imported UNQUALIFIED, whose names are therefore in scope
+    #: unqualified and can be carried by a `module M` self re-export.
+    unqualified_imports: set[str]
     #: Every top-level function this module defines.
     defined: set[str]
     #: `T -> {field, …}` for each record declared here.
@@ -243,24 +260,29 @@ def _sanitize(text: str) -> str:
 
 
 def _top_level_blocks(code: str) -> list[str]:
-    """Every declaration block of `code` -- a column-0 line plus the
-    indented lines that continue it."""
+    """Every declaration block of `code` -- a column-0 line plus every
+    line up to the next one.
+
+    ONLY a column-0 declaration ends a block. Neither a comment nor a
+    blank line may, because both sit INSIDE real declarations all over
+    this tree: a documented record puts a `-- ^` line between two
+    fields, and a long signature or record is routinely broken by a
+    blank one. Cutting there truncates the declaration before its
+    closing brace, which loses the fields after the comment and makes an
+    unexported one look like a name with no definition at all -- a
+    silent false NEGATIVE, the direction a ratchet must never fail in.
+
+    A column-0 comment does not start a block either: `haskell_code_only`
+    masks it to NULs, and a comment never declares anything."""
     blocks: list[str] = []
     current: list[str] | None = None
     for line in code.splitlines():
-        # A column-0 NUL is a comment starting there, and a comment never
-        # starts a declaration -- so it continues the block it sits in
-        # rather than cutting a signature in half.
         if line[:1].strip("\x00").strip():
             if current is not None:
                 blocks.append("\n".join(current))
             current = [line]
         elif current is not None:
-            if not _sanitize(line).strip():
-                blocks.append("\n".join(current))
-                current = None
-            else:
-                current.append(line)
+            current.append(line)
     if current is not None:
         blocks.append("\n".join(current))
     return blocks
@@ -348,6 +370,12 @@ def parse_module(rel_path: str, text: str) -> ModuleFacts | None:
                 for sub in _split_names(subordinates):
                     exported.add(sub.strip("()").strip())
 
+    unqualified_imports: set[str] = set()
+    for match in IMPORT_RE.finditer(_sanitize(code)):
+        if match.group(1) or match.group(3):
+            continue
+        unqualified_imports.add(match.group(2))
+
     defined: set[str] = set()
     record_fields: dict[str, set[str]] = {}
     for block in map(_sanitize, _top_level_blocks(code)):
@@ -358,11 +386,13 @@ def parse_module(rel_path: str, text: str) -> ModuleFacts | None:
         data = DATA_HEADER_RE.match(block)
         if data is not None:
             fields = record_fields.setdefault(data.group(1), set())
-            for group in re.findall(r"\{(.*?)\}", block, re.DOTALL):
+            # The braces stay IN the slice: `RECORD_FIELD_RE` anchors
+            # the first field on the opening `{`.
+            for group in re.findall(r"\{.*?\}", block, re.DOTALL):
                 for field_match in RECORD_FIELD_RE.finditer(group):
                     fields.update(_split_names(field_match.group(1)))
     return ModuleFacts(name, rel_path, has_list, exported, open_types,
-                       reexports, defined, record_fields)
+                       reexports, unqualified_imports, defined, record_fields)
 
 
 def _haskell_sources(repo_root: Path) -> list[Path]:
@@ -428,14 +458,28 @@ def exports_symbol(index: Index, module: str, symbol: str,
             return True
     for reexported in facts.reexported_modules:
         if reexported == module:
-            # `module M` inside M's OWN export list re-exports every
-            # name in scope there -- each local definition, record field
-            # and constructor, plus everything imported unqualified. So
-            # it exports whatever is asked of it. Engine.Core.State is
-            # the tree's canonical example (`module Engine.Core.State,
-            # module Engine.Core.Lifecycle`), and every link into it
-            # resolves.
-            return True
+            # `module M` inside M's OWN export list re-exports the names
+            # IN SCOPE there under their unqualified spelling: what M
+            # declares (functions and record fields alike) and what its
+            # unqualified imports bring in. It is NOT a wildcard over
+            # the whole tree -- `module Alpha (module Alpha)` says
+            # nothing about a `hidden` that only Gamma defines and Alpha
+            # never imports, and treating it as a blanket yes would
+            # suppress that genuinely dead link. Engine.Core.State is
+            # the tree's canonical case (`module Engine.Core.State,
+            # module Engine.Core.Lifecycle`): every link into it names
+            # one of its own definitions or EngineEnv fields, so it
+            # resolves on the first clause.
+            if symbol in facts.defined:
+                return True
+            if any(symbol in fields
+                   for fields in facts.record_fields.values()):
+                return True
+            for imported in facts.unqualified_imports:
+                if imported in modules and exports_symbol(
+                        index, imported, symbol, seen | {module}):
+                    return True
+            continue
         if exports_symbol(index, reexported, symbol, seen | {module}):
             return True
     return False
