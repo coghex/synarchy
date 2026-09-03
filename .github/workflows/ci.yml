@@ -2,7 +2,7 @@
 # test tiers on Linux — the first automated validation of the Linux
 # build (development is on macOS).
 #
-# Job layout (four jobs, three of them workers):
+# Job layout (five jobs, three of them workers):
 #   - resolve-image   resolves/publishes the immutable, content-addressed CI
 #                     image every worker below runs in (#784).
 #   - test-and-audits everything that needs a Cabal build product: the
