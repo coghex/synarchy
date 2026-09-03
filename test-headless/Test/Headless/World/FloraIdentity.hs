@@ -40,7 +40,8 @@ import World.Chop.Types
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Chunk.Types
 import World.Edit.Types (WorldEdit(..), WorldEdits)
-import World.Flora.CropPlot (CropPlot(..), cropPlotInstance)
+import World.Flora.CropPlot (CropPlotOf(..), cropPlotInstance)
+import World.Flora.Reference (FloraRef(..))
 import World.Flora.Designation
 import World.Flora.Harvest (tickFloraHarvests)
 import World.Flora.Identity
@@ -361,19 +362,34 @@ spec = do
             , plantedFloraInstanceId 3 ]
 
       it "leaves a v2 payload's own ids and cursor exactly as written" $ do
+        -- Encoded at v2 and decoded through the real codec rather than
+        -- hand-built at the current shape: #2243 put a migration between
+        -- the two, and a hand-built current slice would skip the very
+        -- step this example exists to prove is id-preserving.
         let iid = plantedFloraInstanceId 9
-            slice = PageEditsDTO fixturePage
-                (HM.singleton (ChunkCoord 0 0)
-                    [WePlaceFloraWithIdD 1 2 berryId 5 1.5 iid]) 10
-        case applyWorldEdits 2 (WorldEditsDTO [slice])
-                 (HM.singleton fixturePage basePage) of
-            Left errs → expectationFailure (show errs)
-            Right pages → case HM.lookup fixturePage pages of
-                Nothing → expectationFailure "page missing"
-                Just p → do
-                    map plantedIdOf (chunkLog (pgsEdits p) (ChunkCoord 0 0))
-                      `shouldBe` [iid]
-                    pgsPlantedFloraCursor p `shouldBe` 10
+            dto = WorldEditsDTOv2
+                [ PageEditsDTOv2 fixturePage
+                    (HM.singleton (ChunkCoord 0 0)
+                        [WePlaceFloraWithIdDv2 1 2 berryId 5 1.5 iid]) 10 ]
+        case ccDecode worldEditsCodec 2 (S.encode dto) of
+          Left e → expectationFailure (show e)
+          Right decoded →
+            case applyWorldEdits 2 decoded
+                     (HM.singleton fixturePage basePage) of
+                Left errs → expectationFailure (show errs)
+                Right pages → case HM.lookup fixturePage pages of
+                    Nothing → expectationFailure "page missing"
+                    Just p → do
+                        map plantedIdOf
+                            (chunkLog (pgsEdits p) (ChunkCoord 0 0))
+                          `shouldBe` [iid]
+                        pgsPlantedFloraCursor p `shouldBe` 10
+                        -- And the species crossed as the LEGACY ordinal
+                        -- it was, for the load boundary to resolve —
+                        -- never renamed by the migration (#2243, D-2).
+                        [ ref | WePlaceFloraRef _ _ ref _ _ _
+                                  ← chunkLog (pgsEdits p) (ChunkCoord 0 0) ]
+                          `shouldBe` [FloraByLegacyId berryId]
 
     describe "world-activity v3 → v4" $ do
 
@@ -393,9 +409,9 @@ spec = do
                     padPendingHarvests s `shouldBe` HM.singleton (13, 14) 42.5
                 _ → expectationFailure "expected one page slice"
 
-      it "accepts v1, v2, v3, v4 and v5, so no shipped payload lost its \
-         \decoder" $
-        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5]
+      it "accepts v1, v2, v3, v4, v5 and v6, so no shipped payload lost \
+         \its decoder" $
+        ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6]
 
       it "does not follow the live harvest alias into the frozen v1/v2 \
          \layout: a tile-keyed timer still decodes as a tile-keyed timer" $ do
@@ -486,15 +502,22 @@ legacyCursor ∷ Word64
 legacyCursor = snd migratedLegacy
 
 -- | Only the planting entries of one chunk's log, in stored order.
+--
+--   #2243: an ASSEMBLED page's planting entries are 'WePlaceFloraRef' —
+--   the species is named by then, whatever version the payload was
+--   written at, and the id-bearing numeric form is decode-only. The id
+--   assignment these fixtures pin is unchanged; only which constructor
+--   carries it moved.
 chunkLog ∷ WorldEdits → ChunkCoord → [WorldEdit]
 chunkLog edits coord =
-    [ e | e@(WePlaceFloraWithId {}) ← HM.lookupDefault [] coord edits ]
+    [ e | e@(WePlaceFloraRef {}) ← HM.lookupDefault [] coord edits ]
 
 -- | The id a planting entry carries. An id-LESS entry reaching this
 --   would be a live session holding one, which 'applyWorldEdits'
 --   rewrites away — 'floraInstanceIdNone' makes that visible as a
 --   failing comparison rather than a pattern-match crash.
 plantedIdOf ∷ WorldEdit → FloraInstanceId
+plantedIdOf (WePlaceFloraRef _ _ _ _ _ iid)    = iid
 plantedIdOf (WePlaceFloraWithId _ _ _ _ _ iid) = iid
 plantedIdOf _ = floraInstanceIdNone
 

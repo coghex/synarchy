@@ -20,6 +20,7 @@ module Test.Headless.World.Save.Compat.Baselines
     , containerKnowledgeSpec
     , riverNamesSpec
     , movementHazardSpec
+    , floraSpeciesNameSpec
     ) where
 
 import UPrelude
@@ -35,6 +36,10 @@ import qualified Data.Text as T
 
 import World.Save.Envelope
     (decodeSessionEnvelope, encodeSessionSnapshot, LuaComponentSpec(..))
+import World.Edit.Types (WorldEdit(..))
+import World.Flora.CropPlot (CropPlotOf(..))
+import World.Flora.Reference (FloraRef(..), renderFloraRef)
+import World.Plant.Types (PlantDesignationOf(..))
 import World.Save.Types
     ( SaveMetadata(..), BuildingSnapshot(..), UnitSnapshot(..)
     , BuildingInstanceSnapshot(..), UnitInstanceSnapshot(..)
@@ -788,3 +793,56 @@ resolveSnapshotLocations snap = snap
         { pgsGenParams = expectGeometry
             (resolveLegacyLocationParams emptyLocationRegistry
                                          (pgsGenParams p)) }
+
+-- | #2243's mirror of the two above, and for the same reason. Every
+--   baseline written before the slice landed carries its species as
+--   ordinals, which decode into 'FloraByLegacyId' references — so
+--   "a fixture decoded" says nothing about whether the CURRENT shape
+--   was actually exercised. The canonical summaries do not expose any
+--   of the three reference sites, so decoding alone would pass on a
+--   fixture that happened to carry none of them at all.
+floraSpeciesNameSpec ∷ Spec
+floraSpeciesNameSpec =
+    describe "flora species names across baselines (issue #2243)" $ do
+        let luaNames = HS.fromList ["unit_ai", "building_spawn"]
+            withRefs path k = do
+                bytes ← BS.readFile path
+                case decodeSessionEnvelope luaNames luaNames bytes of
+                    Left err → expectationFailure
+                        (path <> " did not decode: " <> T.unpack err)
+                    Right (_, snap, _, _) → k
+                        (L.sortOn (fmap renderFloraRef)
+                            (concatMap pageSpeciesRefs
+                                (HM.elems (snapPages snap))))
+            pageSpeciesRefs p =
+                [ ("edit log", ref)
+                | es ← HM.elems (pgsEdits p)
+                , WePlaceFloraRef _ _ ref _ _ _ ← es ]
+                ⧺ [ ("crop plot", cpSpecies cp)
+                  | cp ← HM.elems (pgsCropPlots p) ]
+                ⧺ [ ("plant designation", ptCrop pd)
+                  | pd ← HM.elems (pgsPlantDesignations p) ]
+
+        it "the tracked current-version baseline really carries all \
+           \THREE reference sites, each naming its species by the \
+           \authored YAML name -- so this coverage can never decay into \
+           \'a fixture with no flora references decoded fine'" $
+            withRefs
+                "test-headless/data/save-compat/x1-flora-species-names.bin" $
+                \refs → refs `shouldBe`
+                    [ ("crop plot", FloraByName "wheat")
+                    , ("edit log", FloraByName "tomato_plant")
+                    , ("plant designation", FloraByName "wheat") ]
+
+        it "a tracked baseline written BEFORE the slice decodes its own \
+           \planted crop as the ORDINAL it recorded, carried forward by \
+           \the migration for the load boundary to resolve (D-2) -- \
+           \never silently renamed by the decoder" $
+            withRefs
+                "test-headless/data/save-compat/s1-flora-instance-identity.bin" $
+                \refs → do
+                    map fst refs `shouldBe` ["edit log"]
+                    map snd refs `shouldSatisfy` all isLegacyOrdinal
+  where
+    isLegacyOrdinal (FloraByLegacyId _) = True
+    isLegacyOrdinal (FloraByName _)     = False

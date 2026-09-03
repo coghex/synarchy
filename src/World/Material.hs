@@ -276,6 +276,11 @@ registerMaterial idx props (MaterialRegistry vec known) =
 --   silently reject a save referencing a valid custom material as
 --   "unknown", and discard the live registrations entirely on publish
 --   even for an otherwise-successful load.
+--
+--   Normal @world.init@ publishes its own per-world rebuild through
+--   this SAME function (issue #2278), so a fresh world and a loaded
+--   world resolve the session's registrations by one policy rather
+--   than two. This is that one policy; a second one is not to appear.
 mergeMaterialRegistry ∷ MaterialRegistry → MaterialRegistry → MaterialRegistry
 mergeMaterialRegistry base (MaterialRegistry overlayVec overlayKnown) =
     HS.foldl'
