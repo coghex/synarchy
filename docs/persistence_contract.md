@@ -385,12 +385,29 @@ dropping the in-progress stamp.
   that this build does not recognize, and which the writer itself
   marked optional) must never be silently discarded on the next save to
   the SAME slot. Rather than threading opaque payload bytes through live
-  session state, `World.Save.Storage`'s publish transaction reads the
-  slot's CURRENT authoritative generation before ever writing a new
-  candidate: if it carries any component this build doesn't recognize,
-  the whole publish is refused (`PhaseForeignOptionalData`) — the
-  original file, and whatever it contains, is simply never overwritten.
-  A different save-slot name remains unaffected.
+  session state, `World.Save.Storage`'s publish transaction inspects the
+  slot's existing generations before ever writing a new candidate: BOTH
+  the authoritative `world.synworld` AND the retained
+  `world.synworld.prev`, because a corrupt-authoritative recovery leaves
+  the generation a load actually reads sitting at `.prev`, where an
+  ordinary publish would stage it aside and sweep it away. If either
+  carries a component this build doesn't recognize, the whole publish is
+  refused (`PhaseForeignOptionalData`) — the original files, and
+  whatever they contain, are simply never overwritten. A different
+  save-slot name remains unaffected.
+- **An existing generation that cannot be READ refuses the publish**
+  (`PhaseExistingGenerationRead`, issue #2227). A file that is present
+  but unreadable — a permission refusal, an I/O error, a file something
+  else holds open — is neither absent nor proven free of unknown
+  optional data, so it does not pass the guard above: the publish is
+  refused before any candidate file is created, naming that exact
+  generation path and carrying the underlying I/O error, and both
+  generations are left byte-for-byte as they were. Only genuine absence
+  (a first publish, or a previous-only recovery state) is treated as
+  nothing to protect. Bytes that read successfully but do not
+  structurally decode are unchanged by this rule: they report no
+  unknown components, and #1203's corrupt-versus-incompatible topology
+  split still decides what the transaction does with them.
 
 ## 6. Existing save/load test & probe disposition
 

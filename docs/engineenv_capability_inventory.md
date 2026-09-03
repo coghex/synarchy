@@ -1277,6 +1277,25 @@ module that no longer writes the field fails just as loudly, so the map
 can never decay into a mere upper bound. Its **keys** are checked
 against the live record in both directions too.
 
+Since #2228 that focused self-test is itself a façade over four case
+owners — `..._writers_map.py` (the map contract and pass-on residue),
+`..._writers_scanner.py` (import scope, tokenization, and
+mutation-expression classification), `..._writers_projections.py`
+(capability-record and projection discovery), and
+`..._writers_conformance.py` (mutation-primitive provenance, shadow
+exemptions, and the writer map against the real repository) — over one
+`..._writers_support.py`. The two public commands are unchanged:
+
+```bash
+python3 tools/test_engine_env_capability_audit.py   # the CI-visible gate
+python3 tools/test_engine_env_capability_writers.py # focused iteration
+```
+
+and the focused one now also takes
+`--only map|scanner|projections|conformance`. No child module is a
+command or a CI entry: registering one on either side of the
+CI/`make ci` pair would fail `tools/ci_parity_audit.py`.
+
 Design authority:
 [`capability_mutation_authority_design.md`](capability_mutation_authority_design.md)
 (CMA-1; decisions D-2, D-2a, D-4, D-5). Read it before widening any
