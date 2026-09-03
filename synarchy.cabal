@@ -1273,6 +1273,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Identity
                    Test.Headless.World.MapImagePlan
                    Test.Headless.World.MapImageAdmission
+                   Test.Headless.World.MaterialRegistryMerge
                    Test.Headless.World.CursorInfo
                    Test.Headless.World.CursorTextureDispatch
                    Test.Headless.World.SelectTileZ
