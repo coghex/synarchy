@@ -68,6 +68,7 @@ import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
 import qualified Test.Headless.Startup.AssetLogging as StartupAssetLogging
+import qualified Test.Headless.Startup.Readiness as StartupReadiness
 import qualified Test.Headless.Asset.MaterialMoveCost as AssetMaterialMoveCost
 import qualified Test.Headless.Preview.Discovery as PreviewDiscovery
 import qualified Test.Headless.Unit.Atlas as UnitAtlas
@@ -247,6 +248,7 @@ import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
+import qualified Test.Headless.Core.ConfigWrite as ConfigWrite
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
@@ -607,6 +609,7 @@ main = hspec $ do
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
     StartupAssetLogging.spec
+    StartupReadiness.spec
     describe "material move_cost validation" AssetMaterialMoveCost.spec
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
@@ -881,6 +884,7 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    describe "Core.ConfigWrite" ConfigWrite.spec
     FixtureLogging.spec
     LogCategoryEnv.spec
     LogMonad.spec

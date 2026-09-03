@@ -25,13 +25,14 @@ import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
 import Engine.Asset.Types (AssetPool)
 import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool
                                              , loadAndRegisterAtlasWithPool
                                              , resolveTexturePath)
 import Unit.Atlas.Index (AtlasLoadError(..), atlasTextureRequests
                         , renderAtlasLoadError)
 import Unit.Atlas.Yaml (resolveUnitAtlases)
-import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim, UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYaml, unitYamlBodyPartToBodyPart)
+import Engine.Asset.YamlUnits (UnitYamlDef(..), UnitYamlAnim, UnitYamlStat(..), UnitYamlSkill(..), UnitYamlBody(..), UnitYamlBodyAttr(..), UnitYamlInventoryEntry(..), UnitYamlModifier(..), UnitYamlNaturalWeapon(..), UnitYamlStrike(..), UnitYamlNaturalResistance(..), loadUnitYamlOutcome, unitYamlBodyPartToBodyPart)
 import Engine.Asset.YamlNames (loadNamePool)
 import System.FilePath (takeDirectory, (</>), (<.>))
 import Unit.Types
@@ -47,24 +48,22 @@ loadUnitYamlFn ∷ EngineEnv → LuaBackendState
 loadUnitYamlFn env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
                 (lteq, _) = lbsMsgQueues backendState
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
-                defs ← loadUnitYaml logger filePath
+                mDefs ← loadUnitYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
                 total ← registerUnitDefs env (lbsAssetPool backendState) lteq
                             resolveUnitAtlases filePath defs
                 logDebug logger CatAsset $
                     "loadUnitYaml: loaded " <> tshow total
                     <> " unit definitions from " <> T.pack filePath
-                return total
+                return (isJust mDefs, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
 
 -- | How a unit's atlas-backed animations are resolved. Production
 --   passes 'resolveUnitAtlases', which reads the compiled index off

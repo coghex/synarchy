@@ -16,6 +16,7 @@ module Engine.Asset.YamlUnits
     , UnitYamlFile(..)
     , UnitYamlAssetDef(..)
     , loadUnitYaml
+    , loadUnitYamlOutcome
     , loadUnitYamlAssets
     , unitYamlBodyPartToBodyPart
     ) where
@@ -28,7 +29,7 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import Data.List (intercalate)
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlList, loadYamlListOutcome)
 import Unit.Types.Combat (BodyPart(..))
 
 -- | One named animation as loaded from YAML. Per-direction frame paths;
@@ -501,12 +502,20 @@ instance FromJSON UnitYamlFile where
             _ → pure (UnitYamlFile (fromMaybe [] gameplay)
                                    (fromMaybe [] assets))
 
+-- | 'loadUnitYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadUnitYaml'.
+loadUnitYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [UnitYamlDef])
+loadUnitYamlOutcome logger =
+    loadYamlListOutcome logger "unit" "unit definitions" uyfUnits
+
 -- | The GAMEPLAY unit definitions in a file. Asset-only declarations are
 --   not returned, so nothing downstream registers, textures, lists or
 --   spawns them.
 loadUnitYaml ∷ LoggerState → FilePath → IO [UnitYamlDef]
-loadUnitYaml logger =
-    loadYamlList logger "unit" "unit definitions" uyfUnits
+loadUnitYaml logger path =
+    fromMaybe [] ⊚ loadUnitYamlOutcome logger path
 
 -- | The ASSET-ONLY declarations in a file (#1257). Read by the asset
 --   inventory and by tests; deliberately not by unit registration.

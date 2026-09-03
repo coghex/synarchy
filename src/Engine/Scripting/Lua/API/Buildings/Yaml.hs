@@ -17,10 +17,12 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegister, resolveTexturePath)
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Asset.YamlBuildings (BuildingYamlDef(..), BuildingYamlAnim(..),
-                                   BuildingYamlTileSize(..), loadBuildingYaml)
+                                   BuildingYamlTileSize(..),
+                                   loadBuildingYamlOutcome)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Schema
 import Building.Types
@@ -32,14 +34,13 @@ loadBuildingYamlFn ∷ EngineEnv → LuaBackendState
 loadBuildingYamlFn env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
-                defs ← loadBuildingYaml logger filePath
+                mDefs ← loadBuildingYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
 
                 let (lteq, _) = lbsMsgQueues backendState
 
@@ -172,7 +173,6 @@ loadBuildingYamlFn env backendState = do
                 logDebug logger CatAsset $
                     "loadBuildingYaml: loaded " <> tshow total
                     <> " building definitions from " <> T.pack filePath
-                return total
+                return (isJust mDefs, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
