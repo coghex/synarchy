@@ -84,12 +84,19 @@ data Fixture = Fixture
       --   that was evicted and reloaded WOULD legitimately be seeded
       --   twice, so the duplicate check is only honest while this is
       --   empty.
+    , fxWorldCycle    ∷ (Int, Int)
+      -- ^ ('SimActivateWorld', 'SimDeactivateWorld') counts for that
+      --   page in the post-cycle flush. The world thread writes these
+      --   from the show\/hide handlers, so a zero deactivation count
+      --   means the hide never happened and the no-duplicate example
+      --   proved nothing about a hide\/show cycle.
     , fxWorldTopo     ∷ SimTopology
     , fxWorldCentre   ∷ LoadedChunk
       -- ^ The resident centre chunk, read from @wsTilesRef@.
     , fxArenaSeeds    ∷ [Seed]
     , fxArenaReseeds  ∷ [Seed]
     , fxArenaUnloads  ∷ [ChunkCoord]
+    , fxArenaCycle    ∷ (Int, Int)
     , fxArenaTopo     ∷ SimTopology
     }
 
@@ -170,11 +177,13 @@ setup env = do
         { fxWorldSeeds   = seedsFor worldPageId flushA
         , fxWorldReseeds = seedsFor worldPageId (flushB ⧺ flushC ⧺ flushD)
         , fxWorldUnloads = unloadsFor worldPageId allFlushes
+        , fxWorldCycle   = cycleFor worldPageId flushB
         , fxWorldTopo    = simTopologyForParams params
         , fxWorldCentre  = centre
         , fxArenaSeeds   = seedsFor arenaPageId flushC
         , fxArenaReseeds = seedsFor arenaPageId flushD
         , fxArenaUnloads = unloadsFor arenaPageId allFlushes
+        , fxArenaCycle   = cycleFor arenaPageId flushD
         , fxArenaTopo    = simTopologyForParams aparams
         }
 
@@ -191,11 +200,25 @@ settle ws = go (0 ∷ Int)
           remaining ← readIORef (wsInitQueueRef ws)
           if null remaining ∧ n ≥ 4 then pure () else go (n + 1)
 
--- | Hide the page and show it again, blocking until the world thread
---   has applied each command — 'wmVisible' is what those handlers write,
---   so polling it is a real fence rather than a sleep.
+-- | Drive a real hide\/show cycle on a page, blocking until the world
+--   thread has applied each command.
+--
+--   'wmVisible' is what those handlers write, so polling it is a fence
+--   rather than a sleep — and it is also why the SHOW comes first.
+--   Neither init handler touches 'wmVisible' (the arena becomes visible
+--   only on @WorldInitArenaDone@, which this fixture never sends), so a
+--   page is still hidden when it is generated: hiding it straight away
+--   would be a no-op whose fence is satisfied instantly, and the show
+--   after it would be the page's FIRST show rather than half of a
+--   cycle. Showing first makes the hide that follows a real one from
+--   any starting state.
+--
+--   A fence that runs out of patience FAILS. Giving up quietly would
+--   hand the examples the same non-cycle it exists to rule out.
 hideShow ∷ EngineEnv → WorldPageId → IO ()
 hideShow env pid = do
+    sendWorldCommand env (WorldShow pid)
+    awaitVisible True
     sendWorldCommand env (WorldHide pid)
     awaitVisible False
     sendWorldCommand env (WorldShow pid)
@@ -204,7 +227,9 @@ hideShow env pid = do
     awaitVisible want = go (0 ∷ Int)
       where
         go n
-          | n ≥ 100   = pure ()
+          | n ≥ 200   = expectationFailure
+              ("page " ⧺ show pid ⧺ " never became "
+               ⧺ (if want then "visible" else "hidden"))
           | otherwise = do
               mgr ← readIORef (worldManagerRef env)
               if (pid `elem` wmVisible mgr) ≡ want
@@ -218,6 +243,14 @@ seedsFor pid cmds =
 
 unloadsFor ∷ WorldPageId → [SimCommand] → [ChunkCoord]
 unloadsFor pid cmds = [ coord | SimChunkUnloaded p coord ← cmds, p ≡ pid ]
+
+-- | How many times this page was activated and deactivated in @cmds@ —
+--   the evidence that 'hideShow' really cycled the page rather than
+--   sending two commands the handlers discarded.
+cycleFor ∷ WorldPageId → [SimCommand] → (Int, Int)
+cycleFor pid cmds =
+    ( length [ () | SimActivateWorld p _ ← cmds, p ≡ pid ]
+    , length [ () | SimDeactivateWorld p ← cmds, p ≡ pid ] )
 
 -- * Replaying captured seeds
 
@@ -334,8 +367,12 @@ spec = beforeAllWith setup $ do
 
         it "seeds no chunk twice across a region request, a hide/show \
            \cycle and a camera pass" $ \fx → do
-            -- Honest only while nothing was evicted: an evicted chunk is
-            -- reloaded, and a reload SHOULD seed again.
+            -- Honest only while the cycle really happened and nothing
+            -- was evicted: a page that was never deactivated was never
+            -- hidden, and an evicted chunk is reloaded, which SHOULD
+            -- seed again.
+            snd (fxWorldCycle fx) `shouldSatisfy` (> 0)
+            fst (fxWorldCycle fx) `shouldSatisfy` (> 0)
             fxWorldUnloads fx `shouldBe` []
             let coords = map seedCoord (fxWorldSeeds fx ⧺ fxWorldReseeds fx)
             sort coords `shouldBe` sort (nub coords)
@@ -365,6 +402,8 @@ spec = beforeAllWith setup $ do
 
         it "seeds no arena chunk twice across a region request and a \
            \hide/show cycle" $ \fx → do
+            snd (fxArenaCycle fx) `shouldSatisfy` (> 0)
+            fst (fxArenaCycle fx) `shouldSatisfy` (> 0)
             fxArenaUnloads fx `shouldBe` []
             let coords = map seedCoord (fxArenaSeeds fx ⧺ fxArenaReseeds fx)
             sort coords `shouldBe` sort (nub coords)
