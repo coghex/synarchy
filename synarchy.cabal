@@ -379,6 +379,7 @@ library
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlResult
                      Engine.Scripting.Lua.API.YamlTextures
+                     Engine.Core.ConfigWrite
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
@@ -1409,6 +1410,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Render.QuadVertices
                    Test.Headless.Core.ConfigState
+                   Test.Headless.Core.ConfigWrite
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener
                    Test.Headless.Core.DebugSocket
