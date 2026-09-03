@@ -27,6 +27,8 @@ module Test.Headless.Core.ConfigWrite (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent
+  (forkIO, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Exception
   (ErrorCall(..), SomeAsyncException(..), SomeException, throwIO, toException
   , try)
@@ -64,7 +66,8 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Data.Aeson (FromJSON(..), withObject, (.:))
 import Data.Proxy (Proxy(..))
-import World.Save.Storage.Durable (WriteStep(..))
+import System.Timeout (timeout)
+import World.Save.Storage.Durable (WriteStep(..), claimUniquePath)
 
 import Test.Headless.Harness (withHeadlessEngine)
 import Test.Headless.Harness.Isolation
@@ -164,6 +167,11 @@ newBareLuaBackend env = do
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
     pure ls
+
+-- | The debug console is single-line, so a scenario is spelled as
+--   semicolon-separated statements joined here.
+luaLines ∷ [Text] → Text
+luaLines = T.intercalate " "
 
 evalOk ∷ LuaBackendState → Text → IO Text
 evalOk ls code = do
@@ -372,6 +380,31 @@ helperSpec = describe "Engine.Core.ConfigWrite publish sequence" $ do
         -- durability is unconfirmed.
         doesFileExist target `shouldReturn` False
 
+    it "leaves no placeholder behind when an asynchronous exception \
+       \lands inside the temporary CLAIM" $ inTemp $ \dir → do
+        -- Round-2 review: the claim opens a real file and only then
+        -- removes it, so between those two steps a file existed that
+        -- nothing owned — and 'writeConfigBytesWith' cannot own it
+        -- either, because the claim has not returned its name yet. A
+        -- @killThread@ landing there left a tmp- file in the player's
+        -- config/ for ever, under a name no later run reproduces.
+        --
+        -- Kill a claiming thread repeatedly so a delivery lands inside
+        -- that window. Every iteration of the loop the thread runs is
+        -- spent inside the claim, so the window is where a kill almost
+        -- always lands; forty rounds make "it never landed there" not a
+        -- way this can pass.
+        finished ← timeout 20000000 $ forM_ [1 ∷ Int .. 40] $ \_ → do
+            started ← newEmptyMVar
+            tid ← forkIO $ do
+                putMVar started ()
+                forever (void (claimUniquePath dir "tmp-claim"))
+            takeMVar started
+            threadDelay 300
+            killThread tid
+        finished `shouldBe` Just ()
+        entriesOf dir `shouldReturn` []
+
     it "copies a config file durably, and reports an unreadable source \
        \without touching the destination" $ inTemp $ \dir → do
         let src = dir </> "legacy.yaml"
@@ -529,6 +562,29 @@ luaVerbSpec =
                 \local ok = engine.saveVideoConfig(); \
                 \return ok, engine.getTooltipDwellMs()"
             T.splitOn "\t" result `shouldBe` ["false", "311"]
+
+    it "a failed video save leaves Settings Back's baseline on the \
+       \configuration that is actually saved" $
+        withBlockedConfig "config/video.local.yaml" $ \ls → do
+            -- Round-2 review: data.save() refreshed the revert baseline
+            -- unconditionally, so a failed write adopted values that
+            -- only ever reached the live ref — and Back could no longer
+            -- reach the configuration genuinely on disk.
+            result ← evalOk ls $ luaLines
+                [ "local d = require('scripts.settings.data');"
+                , "engine.setTooltipDwellMs(400);"
+                , "d.reload(); d.resetPending();"
+                -- Edit, then save into the blocked path.
+                , "d.apply({tooltipDwellMs = 250});"
+                , "local live = engine.getTooltipDwellMs();"
+                , "d.save({});"
+                , "d.revert();"
+                , "return live, engine.getTooltipDwellMs(),"
+                , "  d.savedVideo.tooltipDwellMs"
+                ]
+            -- The edit was live before the revert, and the revert put
+            -- the SAVED value back rather than adopting the unsaved one.
+            T.splitOn "\t" result `shouldBe` ["250", "400", "400"]
 
     it "engine.saveKeybinds returns false and keeps the live bindings" $
         withBlockedConfig "config/keybinds.local.yaml" $ \ls → do
