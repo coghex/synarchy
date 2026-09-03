@@ -200,6 +200,54 @@ data Hidden = Hidden
 """)
 
 
+def test_open_type_export_does_not_borrow_a_namesake_type() -> None:
+    """The false negative this pins: `T(..)` must stand for the fields
+    of the `T` that reached THIS module, never the tree-wide union of
+    every type with that name. Three type names are declared twice in
+    this tree, so one module's `Config(..)` must not satisfy another's
+    link."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.hiddenSize' — Gamma's own Config has no such field.
+run ∷ Int
+run = 0
+""", "a `Type(..)` export borrowing a namesake type's fields",
+        needle="'Gamma.hiddenSize'", Gamma="""\
+module Gamma ( Config(..) ) where
+data Config = Config
+    { visibleSize ∷ Int
+    }
+""", Delta="""\
+module Delta ( Config(..) ) where
+data Config = Config
+    { hiddenSize ∷ Int
+    }
+""")
+
+
+def test_open_type_export_follows_its_own_import(  ) -> None:
+    """And the other direction, two hops out: `Unit.Types` exports
+    `UnitManager(..)` for a record declared in `Unit.Types.Manager`."""
+    _expect_clean("""\
+module Beta ( run ) where
+-- | 'Gamma.gadgetSize' resolves through the Gadget Gamma imported.
+run ∷ Int
+run = 0
+""", "a `Type(..)` export resolved through the import that supplied it",
+        Gamma="""\
+module Gamma ( Gadget(..) ) where
+import Zeta
+""", Zeta="""\
+module Zeta ( Gadget(..) ) where
+import Delta
+""", Delta="""\
+module Delta ( Gadget(..) ) where
+data Gadget = Gadget
+    { gadgetSize ∷ Int
+    }
+""")
+
+
 def test_documented_record_field_is_reported() -> None:
     """The false negative this pins: an indented comment between two
     fields used to END the declaration block, so every field after it
@@ -412,11 +460,11 @@ tucked = 0
 
 
 def test_self_reexport_supplies_its_own_names() -> None:
-    """`module M` inside M's own export list re-exports what is in
-    scope there, so M's own functions AND record fields resolve.
-    `Engine.Core.State` is the tree's canonical case (`module
-    Engine.Core.State, module Engine.Core.Lifecycle`), and every link
-    into it names one of its definitions or `EngineEnv` fields."""
+    """`module M` in M's own export list names the entities in scope
+    under BOTH `e` and `M.e` (Haskell 2010 §5.2) — M's own declarations,
+    functions and record fields alike. `Engine.Core.State` is the tree's
+    canonical case, and every link into it names one of its definitions
+    or an `EngineEnv` field."""
     _expect_clean("""\
 module Beta ( run ) where
 -- | 'Gamma.tucked' and 'Gamma.gizmoWidth' both resolve.
@@ -425,45 +473,139 @@ run = 0
 """, "a module re-exporting its own names", Gamma=SELF_REEXPORT)
 
 
-def test_self_reexport_supplies_an_unqualified_import() -> None:
-    _expect_clean("""\
+def test_self_reexport_does_not_carry_an_import() -> None:
+    """A name Gamma merely imports is in scope as `visible` and
+    `Alpha.visible`, never `Gamma.visible`, so `module Gamma` does not
+    carry it. `module Alpha` is the entry that would."""
+    _expect_reported("""\
 module Beta ( run ) where
--- | 'Gamma.visible' is in scope in Gamma through `import Alpha`.
+-- | 'Gamma.visible' — Gamma imports it, but does not re-export Alpha.
 run ∷ Int
 run = 0
-""", "a self re-export carrying an unqualified import", Gamma=SELF_REEXPORT)
+""", "an imported name under a self re-export",
+        needle="'Gamma.visible'", Gamma=SELF_REEXPORT)
 
 
 def test_self_reexport_does_not_supply_a_foreign_name() -> None:
     """The false negative this pins: a self re-export is NOT a wildcard.
     `module Gamma (module Gamma)` says nothing about a name Gamma
-    neither defines nor has in scope, and treating it as a blanket yes
+    neither defines nor imports, and treating it as a blanket yes
     suppresses a genuinely dead link."""
     _expect_reported("""\
 module Beta ( run ) where
--- | 'Gamma.hidden' — Alpha hides it, so it is not in Gamma's scope.
+-- | 'Gamma.hidden' — Alpha hides it, so it is nowhere in Gamma.
 run ∷ Int
 run = 0
 """, "a name outside a self-re-exporting module's scope",
         needle="'Gamma.hidden'", Gamma=SELF_REEXPORT)
 
 
-def test_qualified_import_does_not_feed_a_self_reexport() -> None:
-    """`import qualified Alpha` brings in `Alpha.visible`, not
-    `visible`, so a self re-export cannot carry it."""
+def test_selected_import_restricts_a_module_reexport() -> None:
+    """The false negative this pins: `module Alpha` carries only what
+    Gamma's own import of Alpha brought in. Following Alpha's whole
+    export surface instead launders a dead link clean."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' — Gamma imports only Widget from Alpha.
+run ∷ Int
+run = 0
+""", "a selected import restricting a `module X` re-export",
+        needle="'Gamma.visible'", Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha (Widget(..))
+""")
+
+
+def test_selected_import_supplies_what_it_names() -> None:
+    """The same rule in the other direction, over a MULTI-LINE import
+    list: a list read as absent would widen the import back to
+    everything Alpha exports."""
+    _expect_clean("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' is exactly what Gamma selected.
+run ∷ Int
+run = 0
+""", "a multi-line selected import feeding a `module X` re-export",
+        Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha
+    ( Widget(..)
+    , visible
+    )
+""")
+
+
+def test_multi_line_import_list_still_restricts() -> None:
+    """Import lists routinely span lines, and a list read only as far as
+    the `import` line never closes its parentheses — so it reads as
+    ABSENT, which widens the import back to everything the module
+    exports and hides the dead link. This fixture is the discriminating
+    one: the positive case above passes either way."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' — the multi-line list selects Widget only.
+run ∷ Int
+run = 0
+""", "a multi-line import list restricting a `module X` re-export",
+        needle="'Gamma.visible'", Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha
+    ( Widget(..)
+    )
+""")
+
+
+def test_hiding_import_restricts_a_module_reexport() -> None:
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' — Gamma hides it on the way in.
+run ∷ Int
+run = 0
+""", "a `hiding` import restricting a `module X` re-export",
+        needle="'Gamma.visible'", Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha hiding (visible)
+""")
+
+
+def test_qualified_import_cannot_feed_a_module_reexport() -> None:
+    """`import qualified Alpha` puts `Alpha.visible` in scope but not
+    `visible`, so `module Alpha` carries nothing."""
     _expect_reported("""\
 module Beta ( run ) where
 -- | 'Gamma.visible' — Gamma only imports Alpha qualified.
 run ∷ Int
 run = 0
-""", "a qualified import feeding a self re-export",
+""", "a qualified import feeding a `module X` re-export",
         needle="'Gamma.visible'", Gamma="""\
 module Gamma
-    ( module Gamma
+    ( module Alpha
     ) where
 import qualified Alpha
-tucked ∷ Int
-tucked = 0
+""")
+
+
+def test_post_qualified_import_cannot_feed_a_module_reexport() -> None:
+    """ImportQualifiedPost spells the same thing after the name."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' — same import, qualifier written after the name.
+run ∷ Int
+run = 0
+""", "an ImportQualifiedPost import feeding a `module X` re-export",
+        needle="'Gamma.visible'", Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha qualified
 """)
 
 
@@ -685,9 +827,9 @@ def test_unicode_syntax_signatures_are_recognized() -> None:
     expect(index.definitions.get("hidden") == {"Alpha"},
            "the defining module must be recorded so the diagnostic can "
            f"name it, got {index.definitions.get('hidden')}")
-    expect("widgetLabel" in index.record_fields.get("Widget", set()),
-           "a record field must be indexed against its own type, got "
-           f"{index.record_fields}")
+    expect(index.definitions.get("widgetLabel") == {"Alpha"},
+           "a record field must be indexed as a definition of its own "
+           f"module, got {index.definitions.get('widgetLabel')}")
 
 
 def test_a_field_type_tail_is_not_a_definition() -> None:
@@ -796,6 +938,8 @@ TESTS = [
     test_same_module_continuation_signature_target_is_reported,
     test_char_literal_does_not_swallow_a_later_comment,
     test_unexported_record_field_is_reported,
+    test_open_type_export_does_not_borrow_a_namesake_type,
+    test_open_type_export_follows_its_own_import,
     test_documented_record_field_is_reported,
     test_field_group_after_a_comment_still_resolves,
     test_app_tree_is_scanned,
@@ -806,9 +950,14 @@ TESTS = [
     test_module_reexport_is_permitted,
     test_comment_inside_an_export_list_is_permitted,
     test_self_reexport_supplies_its_own_names,
-    test_self_reexport_supplies_an_unqualified_import,
+    test_self_reexport_does_not_carry_an_import,
     test_self_reexport_does_not_supply_a_foreign_name,
-    test_qualified_import_does_not_feed_a_self_reexport,
+    test_selected_import_restricts_a_module_reexport,
+    test_selected_import_supplies_what_it_names,
+    test_multi_line_import_list_still_restricts,
+    test_hiding_import_restricts_a_module_reexport,
+    test_qualified_import_cannot_feed_a_module_reexport,
+    test_post_qualified_import_cannot_feed_a_module_reexport,
     test_module_reexport_does_not_supply_a_hidden_name,
     test_module_without_an_export_list_is_permitted,
     test_record_field_through_open_type_export_is_permitted,

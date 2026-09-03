@@ -123,13 +123,13 @@ QUASIQUOTE_OPEN_RE = re.compile(r"\[[a-z_][A-Za-z0-9_']*\|")
 MODULE_HEADER_RE = re.compile(
     r"^module\s+([A-Z][A-Za-z0-9_'.]*)", re.MULTILINE)
 
-# An UNQUALIFIED import, in either qualifier position (`import qualified
-# M` and ImportQualifiedPost's `import M qualified`). A qualified import
-# brings no unqualified name into scope, so it can never feed a `module
-# M` self re-export.
-IMPORT_RE = re.compile(
-    r"^import\s+(qualified\s+)?([A-Z][A-Za-z0-9_'.]*)\s*(qualified\b)?",
-    re.MULTILINE)
+# An import head, matched against a declaration BLOCK: the qualifier in
+# either position (`import qualified M` and ImportQualifiedPost's
+# `import M qualified`), the alias, and `hiding`. Whatever follows is
+# the import list, read separately because it routinely spans lines.
+IMPORT_HEAD_RE = re.compile(
+    r"\Aimport\s+(qualified\s+)?([A-Z][A-Za-z0-9_'.]*)\s*(qualified\b)?"
+    r"\s*(?:as\s+([A-Z][A-Za-z0-9_'.]*))?\s*(hiding\b)?\s*")
 
 # A top-level signature, matched against a declaration BLOCK that starts
 # at column 0. `\s*` spans newlines, so the continuation-line form
@@ -181,6 +181,32 @@ class Finding:
                 f"(defined in {', '.join(self.defined_in)})")
 
 
+@dataclass(frozen=True)
+class ImportSpec:
+    """One `import` declaration, as the export rules need to read it."""
+    module: str
+    qualified: bool
+    alias: str | None
+    hiding: bool
+    #: The explicit import list flattened to names, or `None` when the
+    #: import carries no list at all.
+    names: frozenset[str] | None
+
+    def supplies(self, symbol: str) -> bool:
+        """Does this import bring `symbol` into scope UNQUALIFIED, as
+        far as this declaration alone decides?
+
+        Whether the imported module actually exports it is the caller's
+        half of the question; this half is the restriction the import
+        list or `hiding` clause applies on top."""
+        if self.qualified:
+            return False
+        if self.names is None:
+            return True
+        return (symbol not in self.names) if self.hiding else (
+            symbol in self.names)
+
+
 @dataclass
 class ModuleFacts:
     """What one module's source says about its exports and definitions."""
@@ -192,9 +218,8 @@ class ModuleFacts:
     exported_open_types: set[str]
     #: Modules named by a `module X` re-export in the export list.
     reexported_modules: set[str]
-    #: Modules imported UNQUALIFIED, whose names are therefore in scope
-    #: unqualified and can be carried by a `module M` self re-export.
-    unqualified_imports: set[str]
+    #: Every `import` this module declares, restrictions included.
+    imports: tuple[ImportSpec, ...]
     #: Every top-level function this module defines.
     defined: set[str]
     #: `T -> {field, …}` for each record declared here.
@@ -333,6 +358,63 @@ def _split_export_entries(body: str) -> list[str]:
     return [entry.strip() for entry in entries if entry.strip()]
 
 
+def _parse_name_entry(entry: str) -> tuple[str, set[str], bool]:
+    """One export- or import-list entry as `(head, subordinates, open)`.
+
+    `T(..)` yields `("T", set(), True)`; `T(a, b)` yields its two named
+    subordinates; `(<+>)` and `type T` yield the bare name."""
+    # `type Foo`, `pattern Bar`, `data Baz(..)`: the namespace keyword is
+    # not part of the name.
+    entry = re.sub(r"\A(?:type|pattern|data)\s+", "", entry.strip())
+    subordinate_text = ""
+    paren = entry.find("(")
+    if paren != -1 and not entry.startswith("("):
+        subordinate_text = entry[paren + 1:].rstrip().rstrip(")")
+        entry = entry[:paren]
+    head = entry.strip().strip("()").strip()
+    if subordinate_text.strip() == "..":
+        return head, set(), True
+    return head, {sub.strip("()").strip()
+                  for sub in _split_names(subordinate_text)}, False
+
+
+def _parse_import(block: str, head: re.Match[str]) -> ImportSpec:
+    """One `import` declaration block.
+
+    The list is read from the block rather than the line, because import
+    lists routinely span several indented lines -- and a list read as
+    absent would silently widen the import to everything the module
+    exports."""
+    rest = block[head.end():].lstrip()
+    names: frozenset[str] | None = None
+    if rest.startswith("("):
+        depth = 0
+        for i, char in enumerate(rest):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    flat: set[str] = set()
+                    for entry in _split_export_entries(rest[1:i]):
+                        name, subordinates, is_open = _parse_name_entry(entry)
+                        if name:
+                            flat.add(name)
+                        # `T(..)` names every subordinate of T; the
+                        # import cannot enumerate them, so the type's
+                        # own field set is what resolves them later.
+                        flat.update(subordinates)
+                        if is_open:
+                            flat.add(name)
+                    names = frozenset(flat)
+                    break
+    return ImportSpec(module=head.group(2),
+                      qualified=bool(head.group(1) or head.group(3)),
+                      alias=head.group(4),
+                      hiding=bool(head.group(5)),
+                      names=names)
+
+
 def parse_module(rel_path: str, text: str) -> ModuleFacts | None:
     """Everything the audit needs to know about one Haskell source."""
     code = haskell_code_only(text)
@@ -350,35 +432,24 @@ def parse_module(rel_path: str, text: str) -> ModuleFacts | None:
             if entry.startswith("module "):
                 reexports.add(entry[len("module "):].strip())
                 continue
-            # `type Foo`, `pattern Bar`, `data Baz(..)`: the namespace
-            # keyword is not part of the exported name.
-            entry = re.sub(r"\A(?:type|pattern|data)\s+", "", entry)
-            subordinates = ""
-            paren = entry.find("(")
-            if paren != -1 and not entry.startswith("("):
-                subordinates = entry[paren + 1:].rstrip().rstrip(")")
-                entry = entry[:paren]
-            head = entry.strip().strip("()").strip()
+            head, subordinates, is_open = _parse_name_entry(entry)
             if head:
                 exported.add(head)
                 # A qualified re-export (`GLFW.setWindowSize`) exports
                 # the name under its own last component.
                 exported.add(head.rsplit(".", 1)[-1])
-            if subordinates.strip() == "..":
+            if is_open:
                 open_types.add(head)
-            else:
-                for sub in _split_names(subordinates):
-                    exported.add(sub.strip("()").strip())
+            exported.update(subordinates)
 
-    unqualified_imports: set[str] = set()
-    for match in IMPORT_RE.finditer(_sanitize(code)):
-        if match.group(1) or match.group(3):
-            continue
-        unqualified_imports.add(match.group(2))
-
+    imports: list[ImportSpec] = []
     defined: set[str] = set()
     record_fields: dict[str, set[str]] = {}
     for block in map(_sanitize, _top_level_blocks(code)):
+        head_match = IMPORT_HEAD_RE.match(block)
+        if head_match is not None:
+            imports.append(_parse_import(block, head_match))
+            continue
         signature = SIGNATURE_RE.match(block)
         if signature is not None:
             defined.update(_split_names(signature.group(1)))
@@ -392,7 +463,7 @@ def parse_module(rel_path: str, text: str) -> ModuleFacts | None:
                 for field_match in RECORD_FIELD_RE.finditer(group):
                     fields.update(_split_names(field_match.group(1)))
     return ModuleFacts(name, rel_path, has_list, exported, open_types,
-                       reexports, unqualified_imports, defined, record_fields)
+                       reexports, tuple(imports), defined, record_fields)
 
 
 def _haskell_sources(repo_root: Path) -> list[Path]:
@@ -407,15 +478,14 @@ class Index:
     """The whole tree, as the detection rule needs to see it."""
     #: Module name -> what its source says.
     modules: dict[str, ModuleFacts]
-    #: Symbol -> the modules that define it.
+    #: Symbol -> the modules that define it. Record fields are folded in
+    #: here, because a field IS a linkable definition -- but only for
+    #: the "is this a real name at all" question. No EXPORT decision
+    #: reads a tree-wide field pool: two modules may declare the same
+    #: type name (three pairs do here), and one's fields must never
+    #: satisfy the other's `T(..)`. `open_type_fields` resolves that per
+    #: module instead.
     definitions: dict[str, set[str]]
-    #: Type name -> its record fields, pooled across the tree. A module
-    #: routinely exports `T(..)` for a `T` DECLARED somewhere else
-    #: (`Unit.Types` exports `UnitManager(..)`, declared in
-    #: `Unit.Types.Manager`), so resolving that group against the
-    #: exporting module's own declarations alone reports its fields as
-    #: dead when they are exported perfectly well.
-    record_fields: dict[str, set[str]]
 
 
 def build_index(repo_root: Path) -> Index:
@@ -426,15 +496,57 @@ def build_index(repo_root: Path) -> Index:
         if facts is not None:
             modules[facts.name] = facts
     definitions: dict[str, set[str]] = {}
-    record_fields: dict[str, set[str]] = {}
     for facts in modules.values():
         for symbol in facts.defined:
             definitions.setdefault(symbol, set()).add(facts.name)
-        for type_name, fields in facts.record_fields.items():
-            record_fields.setdefault(type_name, set()).update(fields)
+        for fields in facts.record_fields.values():
             for field in fields:
                 definitions.setdefault(field, set()).add(facts.name)
-    return Index(modules, definitions, record_fields)
+    return Index(modules, definitions)
+
+
+def _names_type(index: Index, module: str, type_name: str,
+                seen: frozenset[str] = frozenset()) -> bool:
+    """Does `module` make `type_name` available to an importer?"""
+    if module in seen:
+        return False
+    facts = index.modules.get(module)
+    if facts is None or not facts.has_export_list:
+        return True
+    if type_name in facts.exported_names:
+        return True
+    return any(re_export != module
+               and _names_type(index, re_export, type_name, seen | {module})
+               for re_export in facts.reexported_modules)
+
+
+def open_type_fields(index: Index, module: str, type_name: str,
+                     seen: frozenset[str] = frozenset()) -> set[str]:
+    """The fields `module`'s `T(..)` export actually stands for.
+
+    Resolved by following how `T` reached `module`, never by the
+    tree-wide union of every type with that name: `Alpha`'s
+    `Config(..)` must not be satisfied by an unrelated `Other.Config`'s
+    fields. `module` itself first, then the modules it imports that
+    make `T` available, recursively -- which is exactly the path that
+    put `T` in scope. `Unit.Types` exports `UnitManager(..)` for a
+    record declared in `Unit.Types.Manager`, and every such export in
+    this tree resolves within two hops."""
+    if module in seen:
+        return set()
+    facts = index.modules.get(module)
+    if facts is None:
+        return set()
+    local = facts.record_fields.get(type_name)
+    if local:
+        return set(local)
+    fields: set[str] = set()
+    for spec in facts.imports:
+        if spec.module in index.modules and _names_type(
+                index, spec.module, type_name):
+            fields |= open_type_fields(index, spec.module, type_name,
+                                       seen | {module})
+    return fields
 
 
 def exports_symbol(index: Index, module: str, symbol: str,
@@ -454,31 +566,40 @@ def exports_symbol(index: Index, module: str, symbol: str,
     if symbol in facts.exported_names:
         return True
     for type_name in facts.exported_open_types:
-        if symbol in index.record_fields.get(type_name, ()):
+        if symbol in open_type_fields(index, module, type_name):
             return True
     for reexported in facts.reexported_modules:
         if reexported == module:
-            # `module M` inside M's OWN export list re-exports the names
-            # IN SCOPE there under their unqualified spelling: what M
-            # declares (functions and record fields alike) and what its
-            # unqualified imports bring in. It is NOT a wildcard over
-            # the whole tree -- `module Alpha (module Alpha)` says
-            # nothing about a `hidden` that only Gamma defines and Alpha
-            # never imports, and treating it as a blanket yes would
-            # suppress that genuinely dead link. Engine.Core.State is
-            # the tree's canonical case (`module Engine.Core.State,
-            # module Engine.Core.Lifecycle`): every link into it names
-            # one of its own definitions or EngineEnv fields, so it
-            # resolves on the first clause.
+            # `module M` in M's OWN export list names the entities in
+            # scope under BOTH `e` and `M.e` (Haskell 2010 §5.2), which
+            # is exactly M's own top-level declarations -- functions and
+            # record fields alike. A name M merely imports is in scope
+            # as `e` and `N.e`, never `M.e`, so it is NOT carried here;
+            # `module N` is the entry that carries those, and it is
+            # handled below. Engine.Core.State is the tree's canonical
+            # case (`module Engine.Core.State, module
+            # Engine.Core.Lifecycle`): every link into it names one of
+            # its own definitions or an EngineEnv field.
             if symbol in facts.defined:
                 return True
             if any(symbol in fields
                    for fields in facts.record_fields.values()):
                 return True
-            for imported in facts.unqualified_imports:
-                if imported in modules and exports_symbol(
-                        index, imported, symbol, seen | {module}):
-                    return True
+            continue
+        # `module N` carries only what M's own imports of N actually
+        # brought into scope. `import Alpha (other)` beside
+        # `module Alpha` re-exports `other` and nothing else, so
+        # following Alpha's whole export surface here would launder a
+        # dead link clean. An import that names N but restricts it, or
+        # imports it qualified, supplies nothing.
+        supplied_by_an_import = False
+        for spec in facts.imports:
+            if spec.module != reexported or not spec.supplies(symbol):
+                continue
+            supplied_by_an_import = True
+            break
+        if not supplied_by_an_import and any(
+                spec.module == reexported for spec in facts.imports):
             continue
         if exports_symbol(index, reexported, symbol, seen | {module}):
             return True
