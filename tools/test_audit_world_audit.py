@@ -1016,6 +1016,109 @@ def test_registry_composition_fails_closed() -> None:
            f"{off}")
 
 
+#: Every public (non-underscore) module-level name `world_audit` exposed
+#: at the revision before the #2224 split, read off that revision's module
+#: object and pinned here as a literal. The split promised the whole
+#: surface, not just the audit's own names, so the incidental stdlib
+#: re-exports (`math`, `dataclass`, `field`, and the modules the façade
+#: still uses itself) are in the list too.
+PRE_SPLIT_PUBLIC_SURFACE = [
+    "ALL_CHECKS",
+    "Any",
+    "AuditResult",
+    "BUG_CATEGORIES",
+    "CHUNK_SIZE",
+    "Counter",
+    "DESERT_MATS",
+    "FLOATING_FLUID_DEPTH",
+    "INT64_MIN",
+    "Issue",
+    "OCEAN_ON_LAND_THRESHOLD",
+    "Path",
+    "QUALITY_CATEGORIES",
+    "QUALITY_THRESHOLDS",
+    "RIVER_MOUTH_DROP_THRESHOLD",
+    "SEA_LEVEL",
+    "SPIKE_THRESHOLD",
+    "WETLAND_MATS",
+    "annotations",
+    "argparse",
+    "audit_dump",
+    "check_desert_soil_on_slope",
+    "check_dry_below_sea",
+    "check_flat_isolated_water",
+    "check_floating_fluid",
+    "check_floating_water",
+    "check_fluid_under_terrain",
+    "check_island_1tile",
+    "check_isolated_fluid",
+    "check_lake_hole",
+    "check_lava_rim_containment",
+    "check_mid_river_cliff",
+    "check_minbound_leak",
+    "check_multi_island",
+    "check_ocean_on_land",
+    "check_river_chunk_gaps",
+    "check_river_mouth_drop",
+    "check_submerged_bump",
+    "check_surface_inconsistent",
+    "check_terrain_spikes_pits",
+    "check_water_above_land",
+    "check_water_cliff",
+    "check_water_water_cliff",
+    "check_wetland_on_slope",
+    "chunk_of",
+    "classify_category",
+    "compute_stats",
+    "crosses_chunk_boundary",
+    "dataclass",
+    "field",
+    "format_text",
+    "json",
+    "load_dump_file",
+    "main",
+    "math",
+    "neighbors4",
+    "parse_region",
+    "run_dump",
+    "severity_of",
+    "statistics",
+    "subprocess",
+    "sys",
+]
+
+
+def test_facade_public_surface_is_complete() -> None:
+    """`world_audit` still exposes every public name it exposed before the
+    #2224 split, and the check functions it exposes are the same objects
+    the registry runs (#2224).
+
+    Consumers import the façade and nothing below it, so a name that
+    stopped being reachable through `world_audit` is a broken import for
+    someone even when every owner module is healthy."""
+    print("test_facade_public_surface_is_complete")
+
+    now = {name for name in dir(world_audit) if not name.startswith("_")}
+    lost = [name for name in PRE_SPLIT_PUBLIC_SURFACE if name not in now]
+    expect(not lost,
+           f"names that were importable from world_audit before the split "
+           f"and no longer are: {lost}")
+
+    # Guard the pin itself: a truncated list would pass vacuously.
+    expect(len(PRE_SPLIT_PUBLIC_SURFACE) >= 62,
+           f"the pinned pre-split surface has shrunk to "
+           f"{len(PRE_SPLIT_PUBLIC_SURFACE)} names — it is a record of what "
+           f"the split promised, not a list to prune")
+
+    # The re-exported check functions are the registry's own objects, not
+    # copies that could drift from what audit_dump actually runs.
+    for key, check_fn in world_audit.ALL_CHECKS.items():
+        name = check_fn.__name__
+        expect(getattr(world_audit, name, None) is check_fn,
+               f"world_audit.{name} must be the same object ALL_CHECKS"
+               f"[{key!r}] runs")
+
+
 #: This owner's inventory, in two fragments. The aggregate has always
 #: run the two emitted-category groups (owned by
 #: `test_audit_categories`) INSIDE the audit block, between these
@@ -1054,6 +1157,7 @@ TESTS_TRAILING = (
     test_wetland_on_slope,
     test_desert_soil_on_slope,
     test_registry_composition_fails_closed,
+    test_facade_public_surface_is_complete,
 )
 
 TESTS = TESTS_LEADING + TESTS_TRAILING

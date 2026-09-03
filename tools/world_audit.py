@@ -11,7 +11,7 @@ Composition (#2224)
 This module is the command and the import-compatible façade. It holds
 orchestration, statistics, dump I/O, text formatting, argument parsing
 and `main()`; the audit's model, its classification policy and its 23
-checks live with five owners:
+checks live with six owners:
 
   `world_audit_core`               the constants, `Issue`/`AuditResult`,
                                    and the tile-neighbourhood helpers;
@@ -24,7 +24,7 @@ checks live with five owners:
 
 Dependencies run one way: core imports no other owner, each check owner
 imports core alone, policy imports no check owner, and only this façade
-imports all five. Consumers -- `world_check.py`, `world_stress.py`,
+imports all six. Consumers -- `world_check.py`, `world_stress.py`,
 `world_baseline.py` and the audit self-tests -- take the audit's whole
 surface from here, so every public name below stays importable from
 `world_audit` whichever owner now defines it. (`test_audit_categories`
@@ -48,6 +48,15 @@ import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+# Compatibility re-exports, unused here. `math`, `dataclass` and `field`
+# were module-level names of the pre-#2224 world_audit and so are part of
+# the surface the split promised to preserve; their only users moved to
+# `world_audit_core`. Bound to the same objects that module binds --
+# they are stdlib singletons -- and pinned by
+# `test_facade_public_surface_is_complete`.
+import math  # noqa: F401
+from dataclasses import dataclass, field  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 

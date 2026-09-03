@@ -60,21 +60,27 @@ Checks for: dry-below-sea tiles, ocean-on-land (cascade bug), fluid-under-
 terrain, floating fluid, terrain spikes/pits, river chunk gaps, river mouth
 drops, isolated islands/fluids, minBound leaks, surface inconsistencies.
 
-Since #2224 the file is a façade over five internal owners, which have no
-command line of their own and which nothing outside the family imports:
-`world_audit_core.py` (the constants, `Issue`/`AuditResult` and the tile
-helpers), `world_audit_policy.py` (BUG/QUALITY classification and the
-calibrated quality thresholds), and one module per check family —
-`world_audit_checks_columns.py` (5 per-tile column checks),
-`world_audit_checks_boundaries.py` (9 neighbour-pair checks),
-`world_audit_checks_regions.py` (7 connectivity checks) and
+Since #2224 the file is a façade over six internal owners, which have no
+command line of their own: `world_audit_core.py` (the constants,
+`Issue`/`AuditResult` and the tile helpers), `world_audit_policy.py`
+(BUG/QUALITY classification and the calibrated quality thresholds), and
+one module per check family — `world_audit_checks_columns.py` (5 per-tile
+column checks), `world_audit_checks_boundaries.py` (9 neighbour-pair
+checks), `world_audit_checks_regions.py` (7 connectivity checks) and
 `world_audit_checks_soils.py` (2 material-placement checks). The façade
 composes their inventories into `ALL_CHECKS` in the historical key order
 and refuses, at import, an owner that has gone absent or empty, a key two
 owners both claim, one function reached under two keys, or a check the
-order drops. `world_check.py`, `world_stress.py`, `world_baseline.py` and
-the self-tests import `world_audit` and nothing below it. The commands
-above are unchanged.
+order drops.
+
+`world_check.py`, `world_stress.py`, `world_baseline.py` and the
+self-tests take every audit VALUE from `world_audit`, and the façade
+re-exports the whole pre-split public surface so they did not change.
+There is one deliberate exception, and it reads no value:
+`test_audit_categories.py` imports `world_audit_core` by name to locate
+its source file, because an `Issue(...)` in the core or the façade
+belongs to no check and would otherwise escape the emitted-category
+inventory. The commands above are unchanged.
 
 ### `world_determinism.py`
 Runs the dump multiple times for the same seed and verifies the output is
