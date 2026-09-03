@@ -519,18 +519,26 @@ writerSpec = describe "config writers report a failed write" $ do
             -- Requirement: never log the success line after a Left.
             said `shouldNotContainText` "Wrote default notification overrides"
 
-    it "migrateLegacyConfig reports a failed copy and leaves the local \
-       \path absent, so a later boot can retry" $ inTemp $ \dir → do
-        (logger, drain) ← capturingLogger
-        let legacy = dir </> "video.yaml"
-        writeFile legacy "required: 7\n"
-        local ← unwritablePath dir "video.local.yaml"
-        migrateLegacyConfig probeCfg logger Nothing legacy local
-        doesFileExist local `shouldReturn` False
-        saidAll drain ["could not be migrated", T.pack local]
-        -- The migration never happened, so resolution still falls back
-        -- to the versioned default rather than to a half-written file.
-        resolveConfigPath local legacy `shouldReturn` legacy
+    it "migrateLegacyConfig carries the durable copy's own cause into \
+       \#2210's destination warning, and leaves the local path absent" $
+        inTemp $ \dir → do
+            (logger, drain) ← capturingLogger
+            let legacy = dir </> "video.yaml"
+            writeFile legacy "required: 7\n"
+            local ← unwritablePath dir "video.local.yaml"
+            migrateLegacyConfig probeCfg logger Nothing legacy local
+            doesFileExist local `shouldReturn` False
+            -- #2210 owns the wording — the destination is blamed, never
+            -- the legacy file — and #2202 owns the cause inside it: the
+            -- copy is now the durable helper, so its 'Left' is what the
+            -- warning reports.
+            saidAll drain
+                [ "is valid, but writing it to", T.pack local
+                , "could not create the directory for" ]
+            -- The migration never happened, so resolution still falls
+            -- back to the versioned default rather than to a
+            -- half-written file.
+            resolveConfigPath local legacy `shouldReturn` legacy
 
     it "migrateLegacyConfig reports a failed neutrality record and still \
        \leaves the local path absent" $ inTemp $ \dir → do

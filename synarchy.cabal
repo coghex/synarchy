@@ -1378,6 +1378,12 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TransferGestures
                    Test.Headless.UI.ConsumableGesture
                    Test.Headless.UI.TransferSession
+                   Test.Headless.UI.TransferSession.Fixture
+                   Test.Headless.UI.TransferSession.Lifecycle
+                   Test.Headless.UI.TransferSession.CreationBoundary
+                   Test.Headless.UI.TransferSession.Failure
+                   Test.Headless.UI.TransferSession.Gestures
+                   Test.Headless.UI.TransferSession.Registration
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
