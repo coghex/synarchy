@@ -13,6 +13,7 @@ module Engine.Asset.YamlItems
     , ItemYamlBuff(..)
     , ItemYamlFile(..)
     , loadItemYaml
+    , loadItemYamlOutcome
     ) where
 
 import UPrelude
@@ -26,7 +27,7 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 
 -- | Parse a REQUIRED authored physical quantity that must be a finite,
 --   strictly positive number, diagnosing every rejection BY DEFINITION
@@ -782,6 +783,13 @@ instance FromJSON ItemYamlFile where
     parseJSON = withObject "ItemYamlFile" $ \v → ItemYamlFile
         ⊚ v .: "items"
 
+-- | 'loadItemYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadItemYaml'.
+loadItemYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [ItemYamlDef])
+loadItemYamlOutcome logger =
+    loadYamlListOutcome logger "item" "item definitions" iyfItems
+
 loadItemYaml ∷ LoggerState → FilePath → IO [ItemYamlDef]
-loadItemYaml logger =
-    loadYamlList logger "item" "item definitions" iyfItems
+loadItemYaml logger path = fromMaybe [] ⊚ loadItemYamlOutcome logger path

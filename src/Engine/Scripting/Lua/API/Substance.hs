@@ -23,6 +23,7 @@ import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
 import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Asset.YamlSubstance
 import Substance.Types
 
@@ -35,14 +36,13 @@ loadSubstanceYamlFn ∷ CoreCapability → ContentRegistriesCapability
 loadSubstanceYamlFn core regs = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
-                defs ← loadSubstanceYaml logger filePath
+                mDefs ← loadSubstanceYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
                 total ← foldM (\acc d → do
                     let sbsDef = SubstanceDef
                             { sbsName              = syName d
@@ -65,9 +65,8 @@ loadSubstanceYamlFn core regs = do
                 logDebug logger CatAsset $
                     "loadSubstanceYaml: loaded " <> tshow total
                     <> " substances from " <> T.pack filePath
-                return total
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+                return (isJust mDefs, total)
+            pushYamlResult parsed count
 
 -- | substance.get(name) → table or nil. Returns the substance's full
 --   property set so Lua-side combat math (when it lands) can read

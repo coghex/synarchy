@@ -377,6 +377,7 @@ library
                      Engine.Scripting.Lua.API.Forage.Harvest
                      Engine.Scripting.Lua.API.Forage.Crop
                      Engine.Scripting.Lua.API.Flora
+                     Engine.Scripting.Lua.API.YamlResult
                      Engine.Scripting.Lua.API.YamlTextures
                      Engine.Core.Defaults
                      Engine.Core.Init
@@ -1220,6 +1221,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
                    Test.Headless.Startup.AssetLogging
+                   Test.Headless.Startup.Readiness
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building
@@ -1377,6 +1379,12 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.TransferGestures
                    Test.Headless.UI.ConsumableGesture
                    Test.Headless.UI.TransferSession
+                   Test.Headless.UI.TransferSession.Fixture
+                   Test.Headless.UI.TransferSession.Lifecycle
+                   Test.Headless.UI.TransferSession.CreationBoundary
+                   Test.Headless.UI.TransferSession.Failure
+                   Test.Headless.UI.TransferSession.Gestures
+                   Test.Headless.UI.TransferSession.Registration
                    Test.Headless.World.Calendar
                    Test.Headless.World.Climate
                    Test.Headless.World.TimeLocal
