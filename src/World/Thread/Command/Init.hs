@@ -72,7 +72,9 @@ import World.Generate.Config (WorldGenConfig(..)
                               , applyConfigToParams
                               , timelineParamsOf
                               , minimumWorldSize
-                              , normalizeWorldGenInputs)
+                              , normalizeWorldGenInputs
+                              , describeWorldGenRejection
+                              , repairWorldGenConfig)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Thread.Helpers (sendGenLog)
 import World.Thread.ChunkLoading (admitChunksToSim, dispatchLocationStamps)
@@ -186,7 +188,20 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- Step 1: Timeline (now co-evolves climate)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
     sendGenLog env "Building geological timeline..."
-    worldGenCfg0 ← readIORef (wsWorldGenConfigRef worldSim)
+    storedGenCfg ← readIORef (wsWorldGenConfigRef worldSim)
+    -- #2288 requirement 4: generation may not receive an out-of-domain
+    -- floating-point setting from ANY producer. Both producers that can
+    -- write this ref -- the YAML loader and world.setGenConfig -- refuse
+    -- one at their own boundary, so this repair is the consumer-side
+    -- guard that makes the guarantee independent of them, exactly as
+    -- 'World.Time.Types.advanceWorldClock' re-checks the time scale the
+    -- Lua boundary already refused (#2280). It is silent for every
+    -- configuration either boundary can produce.
+    let (worldGenCfg0, genCfgRejections) = repairWorldGenConfig storedGenCfg
+    forM_ genCfgRejections $ \(r, dflt) →
+        logWarn logger CatWorld $
+            "World init: " <> describeWorldGenRejection r
+              <> "; using the default " <> dflt
     let erosionIntensity = wgcErosionIntensity worldGenCfg0
         volcanicActivity = wgcVolcanicActivity worldGenCfg0
         lavaPoolDepth    = wgcLavaPoolDepth worldGenCfg0
