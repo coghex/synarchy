@@ -109,6 +109,7 @@ import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffecti
 import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
+import qualified Test.Headless.Sim.Admission as SimAdmission
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Sim.Conservation as SimConservation
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
@@ -470,6 +471,14 @@ main = hspec $ do
     -- both halves -- the codec round trip and the live capture/restore.
     aroundAll withHeadlessEngine $
         describe "persistence contract" WorldTransferOrders.spec
+    -- Own engine (#2232): generates a private w8 page AND an arena page,
+    -- then FLUSHES the sim queue to read what init seeded -- both of
+    -- which the shared-worlds engine above must not see. The flush is
+    -- only sound because no sim worker drains that queue in a headless
+    -- fixture, so it must not share an engine with anything else that
+    -- reads it.
+    aroundAll withHeadlessEngine $
+        describe "sim chunk admission" SimAdmission.spec
     -- Own engine (#1596): both halves EDIT their own private w8 pages
     -- and hand-deliver WorldApplyFluids batches to the live world
     -- thread, which the shared-worlds engine above must not see. The
