@@ -70,6 +70,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Roles (#265)](#roles-265)
 - [Crafting and bills (#325/#326/#329/#343/#795)](#crafting-and-bills-325326329343795)
 - [Power (#358-#361, #590/#591, #1206)](#power-358-361-590591-1206)
+- [Flora species identity: the authored name is the key (#2241)](#flora-species-identity-the-authored-name-is-the-key-2241)
 - [Farming (#331-#336)](#farming-331-336)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
@@ -2855,6 +2856,88 @@ no public `power.removeNode`. Gates: `power_probe.py`,
 `power_workshop_probe.py`, `machine_shop_probe.py`, hspec
 `--match "power node demolition"`; pure algorithm in
 `Test.Headless.Power.Network`.
+
+---
+
+## Flora species identity: the authored name is the key (#2241)
+
+A flora species' authored YAML `name` is its stable key. The numeric
+`FloraId` is a SESSION-LOCAL registration ordinal and nothing durable
+may be derived from it.
+
+**Three consequences, each with its own gate.**
+
+1. **Placement never depends on catalog position.**
+   `worldGenSpecies` returns species in canonical authored-name order
+   (`floraWorldGenKey`, tie-broken by `FloraId` so the order stays
+   total when a `fcWorldGen` entry has no `fcSpecies` record — such an
+   entry keys off a synthetic `\SOH`-prefixed spelling of its id, which
+   no authored name can collide with). The per-tile placement ROLL and
+   each instance's own offset/variant/age draw are salted from that
+   same key (`floraPlacementSalt` / `floraInstanceSalt`,
+   `World.Flora.Identity`), never from an index into the list. So
+   discovery order, registration order and `HashMap` traversal order
+   cannot change generated flora.
+
+   This is ORDER-independence, not final-layout invariance. Flora share
+   one occupancy map and `markOccupied` lets an earlier placement
+   suppress a later candidate, so adding or removing a species that
+   ACTUALLY PLACES may still move another's plants. That competition is
+   deliberate. A species that never occupies a tile changes nothing at
+   all, however it reorders the catalog.
+
+2. **`data/flora` loads in canonical byte order.**
+   `queueNormalProfile` uses `addYamlDirCanonical`, a flat directory
+   sorted through `startupLoader.canonicalFileOrder`. It is the one flat
+   family that sorts, because its sequential ids are what a save's
+   numeric flora references name; every other flat family keeps
+   `engine.listFiles`'s raw enumeration, and `engine.listFiles` itself
+   does NOT sort. All three `addYaml...` verbs stay at exactly three
+   arguments — `tools/save_compat_migration_probe.py` parses those call
+   shapes verbatim.
+
+3. **A duplicate authored name is refused, whole-file and atomically.**
+   `engine.loadFloraYaml` preflights a file against the live catalog AND
+   against itself before allocating an id, registering a texture or
+   queueing a load, so a refusal leaves no partial registration from the
+   definitions ahead of the collision. It answers `(0, true, <name>)` —
+   the file DECODED, so `pushYamlResult`'s decode-only second value is
+   unchanged for the other eleven families; the third value exists only
+   on a refusal, so a healthy call's arity is still one bare and two
+   when asked. `scripts/startup_loader.lua` turns that third value into
+   a TERMINAL startup failure naming the file and the name. The runtime
+   verb `flora.register` is nonfatal by contrast: a collision returns
+   `nil`, warns, and mutates nothing.
+
+**Legacy numeric references are reinterpreted once, on purpose.**
+Canonical registration renumbers nearly the whole shipped catalog, so a
+`FloraId` persisted in a `WorldEditDTO`, `CropPlotDTO` or
+`PlantDesignationDTO` before #2241 generally names a different species
+afterwards. Accepted, not mitigated: `currentSaveVersion` is a worldgen
+bookkeeping marker with no on-disk compatibility role, so its bump
+neither migrates nor rejects anything. Name-based persistence is #2243.
+
+**Chop reconciliation is bounded by ownership.** `admitChunkFlora` drops
+every durable chop designation whose canonical tile the admitted chunk
+owns but whose `FloraInstanceId` that chunk does not hold, with a
+diagnostic per removal. It never inspects a designation another chunk
+owns, so an entry whose chunk is simply not resident survives.
+
+Design record:
+[`docs/flora_species_identity_design.md`](flora_species_identity_design.md).
+Gates: hspec `--match "World.FloraOrder"` (two opposing registration
+orders, the impossible-fit lexically-earlier species, the checked-in
+seed-42/world-size-64 golden, and the pre-change numeric-reference
+fixture — both fixtures live under `test-headless/data/flora-order/` and
+are re-capturable through the env vars the module header names, and
+neither is registered in `docs/save_compat/manifest.json`, so neither
+owes the save-compat gate); `--match "Startup"` (the two-order loader
+proof in `Startup asset logging`, the shipped-duplicate readiness
+failure in `Startup readiness`); `--match "Asset.FloraContent"`
+(whole-file refusal atomicity, `flora.register`'s nonfatal refusal);
+`--match "Chop authority"` (the three-designation reconciliation case).
+Flora stays outside `tools/world_check.py`'s baselines, so no terrain
+recapture is owed.
 
 ---
 

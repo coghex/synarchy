@@ -232,6 +232,7 @@ import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.Chop.Selection as ChopSelection
 import qualified Test.Headless.World.Chop.Authority as ChopAuthority
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
+import qualified Test.Headless.World.FloraOrder as FloraOrder
 import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
@@ -831,6 +832,7 @@ main = hspec $ do
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     describe "World.FloraGrowth" FloraGrowth.spec
+    describe "World.FloraOrder" FloraOrder.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec
     describe "World.Render.FrontWallLift" FrontWallLift.spec
     describe "World.Render.StructureRotation" StructureRotation.spec

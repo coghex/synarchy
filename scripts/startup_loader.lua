@@ -35,10 +35,11 @@ end
 
 -- The stable identifier each YAML registry family reports under, keyed
 -- by its DIRECTORY rather than passed as a fourth argument to
--- addYamlDir/addYamlTree. Those two call shapes are parsed verbatim by
--- `tools/save_compat_migration_probe.py`, which derives production's
--- registry bootstrap from `queueNormalProfile`'s source; keeping them
--- at exactly three arguments is what keeps that check working.
+-- addYamlDir/addYamlDirCanonical/addYamlTree. Those three call shapes
+-- are parsed verbatim by `tools/save_compat_migration_probe.py`, which
+-- derives production's registry bootstrap from `queueNormalProfile`'s
+-- source; keeping them at exactly three arguments is what keeps that
+-- check working.
 --
 -- A directory absent from this table still aggregates — under its own
 -- path — so a family added later reports something honest rather than
@@ -96,19 +97,32 @@ end
 local function addYamlFamily(dir, label, loaderFn, paths)
     local family = yamlFamilies[dir] or dir
     local total, seen = 0, 0
-    local failed = {}
+    local failed, refused = {}, {}
     for _, path in ipairs(paths) do
         addItem(label, function()
             -- #2203: the SECOND argument opts this ONE call site in to
             -- the binding's parse outcome. Every other caller passes
             -- the path alone and still gets exactly one number back.
-            local n, parsed = loaderFn(path, true)
+            --
+            -- #2241 added an optional THIRD value, pushed only when a
+            -- binding refused a whole file on a post-decode SEMANTIC
+            -- collision (today: a duplicate flora name). `parsed` keeps
+            -- its decode-only meaning -- such a file decoded perfectly
+            -- well -- so the arity a healthy call answers with is
+            -- unchanged at two, and eleven of the twelve families never
+            -- push a third value at all.
+            local n, parsed, refusal = loaderFn(path, true)
             total = total + asCount(n)
             seen  = seen + 1
             -- `~= true`, not `== false`: a queued YAML binding that
             -- answers no outcome at all has not reported that its file
             -- parsed, and this loader's whole job is to stop guessing.
-            if parsed ~= true then failed[#failed + 1] = path end
+            if parsed ~= true then
+                failed[#failed + 1] = path
+            elseif refusal then
+                refused[#refused + 1] = { path = path,
+                                          name = tostring(refusal) }
+            end
         end)
     end
     addItem(label, function()
@@ -123,6 +137,20 @@ local function addYamlFamily(dir, label, loaderFn, paths)
             startupLoader.fail({ family = family, dir = dir,
                                  kind = "parse", paths = failed,
                                  path = failed[1], failedCount = #failed,
+                                 files = seen })
+        elseif #refused > 0 then
+            -- A refused file registered NOTHING, so continuing would
+            -- reach the main menu with a family the author believes is
+            -- loaded. Terminal, exactly like a parse failure -- and the
+            -- message names both the file and the colliding name,
+            -- because "some file in data/flora has a duplicate" is not
+            -- a diagnostic anyone can act on.
+            startupLoader.fail({ family = family, dir = dir,
+                                 kind = "duplicate",
+                                 path = refused[1].path,
+                                 name = refused[1].name,
+                                 paths = refused,
+                                 failedCount = #refused,
                                  files = seen })
         elseif seen == 0 then
             startupLoader.fail({ family = family, dir = dir,
@@ -172,15 +200,44 @@ function startupLoader.canonicalFileOrder(relPaths)
     return ordered
 end
 
+-- Flat counterpart of addYamlTree: one directory, no recursion, but
+-- the same canonicalFileOrder over what engine.listFiles enumerated
+-- (#2241).
+--
+-- A family uses this when its per-file load ORDER is observable in the
+-- shipped product. data/flora is the one that is: its definitions are
+-- assigned sequential FloraIds as they register, those ids are what a
+-- save's numeric flora references name, and engine.listFiles hands
+-- back raw filesystem order, which differs between machines. Sorting
+-- happens HERE, in flora's own consumer, rather than inside
+-- engine.listFiles -- every other flat family keeps the enumeration it
+-- has always had.
+--
+-- Deliberately spelled as an `addYaml...(dir, label, loaderFn)` call
+-- with exactly three arguments, like its two siblings, because
+-- `tools/save_compat_migration_probe.py` reads queueNormalProfile's
+-- source to derive production's registry bootstrap.
+local function addYamlDirCanonical(dir, label, loaderFn)
+    local files = engine.listFiles(dir, ".yaml")
+    local paths = {}
+    if files then
+        for _, fname in ipairs(startupLoader.canonicalFileOrder(files)) do
+            paths[#paths + 1] = dir .. "/" .. fname
+        end
+    end
+    addYamlFamily(dir, label, loaderFn, paths)
+end
+
 -- Recursive counterpart of addYamlDir: enqueues every YAML under `dir`
 -- at ANY depth, ONE queue entry per file (so `loaderFn` still sees each
 -- file exactly once and the loading screen keeps its per-file progress
 -- granularity), in canonicalFileOrder.
 --
 -- Only trees whose contents may be organized into subdirectories use
--- this. Everything else stays on addYamlDir's flat, OS-ordered
--- engine.listFiles: flora IDs are allocated in load order and salt
--- worldgen placement.
+-- this. A flat family whose load order is observable uses
+-- addYamlDirCanonical instead; everything else stays on addYamlDir's
+-- flat, OS-ordered engine.listFiles, because its ids come from each
+-- definition's own `name:` and nothing downstream can see the order.
 local function addYamlTree(dir, label, loaderFn)
     local rels = engine.listFilesRecursive(dir, ".yaml")
     local paths = {}
@@ -333,7 +390,12 @@ local hudScenePaths = {
 local function queueNormalProfile()
     addYamlDir("data/materials",  "Loading materials...",  engine.loadMaterialYaml)
     addYamlDir("data/vegetation", "Loading vegetation...", engine.loadVegetationYaml)
-    addYamlDir("data/flora",      "Loading flora...",      engine.loadFloraYaml)
+    -- Flora is the one FLAT family loaded in canonical byte order
+    -- (#2241): its FloraIds are allocated as definitions register, and
+    -- a save's WorldEdit/CropPlot/PlantDesignation rows carry those
+    -- numbers, so an OS-dependent enumeration would have made the same
+    -- shipped catalog mean different things on different machines.
+    addYamlDirCanonical("data/flora", "Loading flora...",     engine.loadFloraYaml)
     addYamlDir("data/substances", "Loading substances...", engine.loadSubstanceYaml)
     addYamlDir("data/infections", "Loading infections...", engine.loadInfectionYaml)
     addYamlDir("data/recipes",    "Loading recipes...",    engine.loadRecipeYaml)
@@ -471,6 +533,12 @@ function startupLoader.failureMessage(info)
         return string.format(
             "Startup failed: %s discovered no YAML files in %s",
             info.family, info.dir)
+    end
+    if info.kind == "duplicate" then
+        return string.format(
+            "Startup failed: %s refused %s (duplicate definition name "
+            .. "'%s'; %d of %d file(s) refused)",
+            info.family, info.path, info.name, info.failedCount, info.files)
     end
     return string.format(
         "Startup failed: %s could not parse %s (%d of %d file(s) failed)",

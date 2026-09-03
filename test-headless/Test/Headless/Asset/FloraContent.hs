@@ -1,6 +1,14 @@
 -- | Production flora-content coverage. Unlike the pure growth fixtures, this
 --   loads the shipped YAML so an approved texture family cannot remain
 --   unregistered without a focused test noticing.
+--
+--   Since #2241 it also owns the ATOMICITY of flora's duplicate-name
+--   refusal, which needs the real @engine.loadFloraYaml@ binding rather
+--   than the pure decoder: what has to be shown is that a refused file
+--   leaves no trace in any of the four things registration touches — the
+--   catalog, the id allocator, the texture-name registry and the asset
+--   load queue — and three of those four are engine state the decoder
+--   never reaches.
 module Test.Headless.Asset.FloraContent (spec) where
 
 import UPrelude
@@ -10,24 +18,44 @@ import Data.List (nub, sort)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import System.Directory (doesFileExist, listDirectory)
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Asset.TextureNameRegistry (lookupTextureName)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Init (EngineInitResult(..))
+import Engine.Core.Queue (QueueStats(..), queueStats)
+import Engine.Core.State
+    ( EngineEnv, floraCatalogRef, loggerRef, luaToEngineQueue, luaQueue
+    , assetPoolRef, nextObjectIdRef, inputStateRef )
+import Engine.Core.Thread (ThreadControl(..))
+import Engine.Scripting.Lua.API (registerLuaAPI)
+import Engine.Scripting.Lua.Thread (createLuaBackendState)
+import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
+import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness.Isolation
+    ( isInsideIsolatedResourceRoot, withExclusiveTempDirectory
+    , withIsolatedResourceRoot )
+import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Asset.YamlFlora
 import Engine.Asset.YamlItems
     ( ItemYamlDef(..), ItemYamlFood(..), ItemYamlWeight(..), loadItemYaml )
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.Log
-    (LoggerState, LogBackend(..), LogConfig(..), defaultLogConfig, initLogger)
+    ( LoggerState, LogBackend(..), LogConfig(..), LogEntry(..)
+    , LogLevel(..), defaultLogConfig, initLogger )
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Flora.Growth (instanceLifespan)
 import World.Flora.Placement (computeChunkFlora, speciesFitnessDetail)
 import World.Flora.Render (resolveFloraTexture)
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types
-    ( AnnualCycleKey(..), AnnualStage(..), FloraChunkData(..)
+    ( AnnualCycleKey(..), AnnualStage(..), FloraCatalog(..)
+    , FloraChunkData(..)
     , FloraId(..), FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
-    , LifePhase(..), LifecycleType(..), emptyFloraCatalog, insertSpecies
-    , insertWorldGen, newFloraSpecies )
+    , LifePhase(..), LifecycleType(..), emptyFloraCatalog, findSpeciesByName
+    , insertSpecies, insertWorldGen, newFloraSpecies )
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Material
     (MaterialId(..), MaterialRegistry, materialIdByName)
@@ -73,6 +101,224 @@ spec = do
 
         it "resolves adult, juvenile, seasonal, and dead textures exactly" $
             withCattail (\_ def → assertCattailTextures def)
+
+    describe "duplicate authored names (#2241 requirement 4)" $ do
+
+        it "boots inside the scratch resource root, never the checkout \
+           \(#1357)" $ withFloraEngine $ \_ →
+            isInsideIsolatedResourceRoot `shouldReturn` True
+
+        it "refuses a whole file whose second definition collides, \
+           \leaving no catalog insert, no fcNextId advance, no texture \
+           \registration and no queued load" $ withFloraEngine $ \eng → do
+            -- The colliding definition is SECOND and the unique one
+            -- FIRST, which is the shape the atomicity claim is about:
+            -- registerFloraSpecies allocates an id and queues textures
+            -- well before its catalog insert, so a refusal decided when
+            -- the collision is REACHED would already have registered the
+            -- definition ahead of it.
+            _ ← loadFlora eng "data/flora/saguaro.yaml"
+            before ← snapshotFlora eng
+            withFloraFixture "collide" mixedDuplicateYaml $ \path → do
+                (count, parsed, refusal) ← loadFloraOutcome eng path
+                (count, parsed) `shouldBe` ("0", "true")
+                refusal `shouldBe` "saguaro"
+                after ← snapshotFlora eng
+                after `shouldBe` before
+                -- and specifically: the unique definition that sat ahead
+                -- of the collision registered nothing at all.
+                cat ← readIORef (floraCatalogRef (feEnv eng))
+                findSpeciesByName "probe_2241_unique" cat `shouldBe` Nothing
+                nameRegistered eng "flora_base_probe_2241_unique"
+                    `shouldReturn` False
+                -- And the boot-visible diagnostic names BOTH the file
+                -- and the colliding name; "something in data/flora is
+                -- duplicated" is not a diagnostic anyone can act on.
+                errs ← loggedAt eng LevelError "duplicate flora name"
+                length errs `shouldBe` 1
+                errs `shouldSatisfy` all (T.isInfixOf "'saguaro'")
+                errs `shouldSatisfy` all (T.isInfixOf path)
+
+        it "refuses a file that duplicates a name WITHIN itself, with \
+           \nothing already in the catalog to collide with" $
+            withFloraEngine $ \eng → do
+            before ← snapshotFlora eng
+            withFloraFixture "selfdup" selfDuplicateYaml $ \path → do
+                (count, parsed, refusal) ← loadFloraOutcome eng path
+                (count, parsed) `shouldBe` ("0", "true")
+                refusal `shouldBe` "probe_2241_twice"
+                snapshotFlora eng `shouldReturn` before
+
+        it "accepts the same file once its collision is gone, so the \
+           \refusal is about the duplicate and not about the fixture" $
+            withFloraEngine $ \eng → do
+            withFloraFixture "unique" uniqueFloraYaml $ \path → do
+                (count, parsed, refusal) ← loadFloraOutcome eng path
+                parsed `shouldBe` "true"
+                refusal `shouldBe` "nil"
+                count `shouldNotBe` "0"
+                cat ← readIORef (floraCatalogRef (feEnv eng))
+                (fsName ∘ snd <$> findSpeciesByName "probe_2241_unique" cat)
+                    `shouldBe` Just "probe_2241_unique"
+
+        it "flora.register stays NONFATAL on a collision: nil, a warning, \
+           \and no mutation" $ withFloraEngine $ \eng → do
+            first ← evalLua eng
+                "return tostring(flora.register('probe_2241_runtime', 0))"
+            first `shouldNotBe` "nil"
+            before ← snapshotFlora eng
+            again ← evalLua eng
+                "return tostring(flora.register('probe_2241_runtime', 0))"
+            again `shouldBe` "nil"
+            snapshotFlora eng `shouldReturn` before
+            -- The warning is half the contract: a silent nil leaves a
+            -- script author with a registration that vanished and no
+            -- way to find out why. It names the collision.
+            warned ← loggedAt eng LevelWarn "probe_2241_runtime"
+            length warned `shouldBe` 1
+            warned `shouldSatisfy` all ("flora.register refused" `T.isInfixOf`)
+
+-- * The private flora engine
+
+-- | A throwaway headless engine with the real Lua API registered.
+--
+--   PRIVATE per example: @engine.loadFloraYaml@ mutates shared engine
+--   state (catalog, asset pool, texture-name registry) in ways no
+--   @finally@ can undo — the same reasoning
+--   "Test.Headless.Asset.TextureFallback" records.
+--
+--   ISOLATED because the boot itself writes @config\/@ (#1357): engine
+--   initialization migrates legacy config and materializes an absent
+--   @config\/notifications.local.yaml@. The wrap goes AROUND the boot,
+--   never inside it, and the scratch root symlinks @data\/@, so the
+--   shipped YAML these examples load resolves unchanged.
+data FloraEngine = FloraEngine
+    { feEnv ∷ EngineEnv
+    , feLua ∷ LuaBackendState
+    , feLog ∷ IORef [LogEntry]
+      -- ^ Every entry the engine logged, newest last. Installed because
+      --   #2241's two refusals are only half observable without it: the
+      --   file refusal has to NAME the file and the colliding name, and
+      --   the runtime refusal's whole nonfatal contract is \"nil plus a
+      --   warning\" — a test that checks only the nil would pass against
+      --   a silent refusal.
+    }
+
+withFloraEngine ∷ (FloraEngine → Expectation) → Expectation
+withFloraEngine action = withIsolatedResourceRoot $ do
+    EngineInitResult env ← initializeEngineHeadlessQuiet
+    entries ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' entries (⧺ [e])) }
+    writeIORef (loggerRef env) logger
+    ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
+                               (assetPoolRef env) (nextObjectIdRef env)
+                               (inputStateRef env) (loggerRef env)
+    stateRef ← newIORef ThreadRunning
+    registerLuaAPI (lbsLuaState ls) env ls stateRef
+    action (FloraEngine env ls entries)
+
+-- | Entries at one level whose message mentions @needle@, newest last.
+loggedAt ∷ FloraEngine → LogLevel → Text → IO [Text]
+loggedAt eng lvl needle =
+    map leMessage ∘ filter (\e → leLevel e ≡ lvl
+                                 ∧ needle `T.isInfixOf` leMessage e)
+        <$> readIORef (feLog eng)
+
+evalLua ∷ FloraEngine → Text → IO Text
+evalLua eng src =
+    T.strip ∘ T.filter (≢ '"') <$> executeDebugLua (lbsLuaState (feLua eng)) src
+
+loadFlora ∷ FloraEngine → Text → IO Text
+loadFlora eng path =
+    evalLua eng ("return string.format('%d', engine.loadFloraYaml('"
+                 <> path <> "'))")
+
+-- | The three values the binding answers with when the caller opts in:
+--   count, parse outcome, and #2241's refusal detail (@nil@ when the
+--   file was not refused).
+loadFloraOutcome ∷ FloraEngine → Text → IO (Text, Text, Text)
+loadFloraOutcome eng path = do
+    out ← evalLua eng
+        ("local n, parsed, refusal = engine.loadFloraYaml('" <> path
+         <> "', true); return string.format('%d|%s|%s', n, \
+            \tostring(parsed), tostring(refusal))")
+    case T.splitOn "|" out of
+        [n, parsed, refusal] → pure (n, parsed, refusal)
+        _                    → pure (out, out, out)
+
+-- | Everything a flora registration touches, captured together: a
+--   refusal must move none of it.
+data FloraSnapshot = FloraSnapshot
+    { fsnNextId   ∷ Word16
+    , fsnSpecies  ∷ [Text]
+    , fsnWorldGen ∷ Int
+    , fsnEnqueued ∷ Word64  -- ^ cumulative asset-queue writes
+    } deriving (Show, Eq)
+
+snapshotFlora ∷ FloraEngine → IO FloraSnapshot
+snapshotFlora eng = do
+    cat ← readIORef (floraCatalogRef (feEnv eng))
+    stats ← queueStats (fst (lbsMsgQueues (feLua eng)))
+    pure FloraSnapshot
+        { fsnNextId   = fcNextId cat
+        , fsnSpecies  = sort [ fsName sp | sp ← HM.elems (fcSpecies cat) ]
+        , fsnWorldGen = HM.size (fcWorldGen cat)
+        , fsnEnqueued = qsEnqueued stats
+        }
+
+nameRegistered ∷ FloraEngine → Text → IO Bool
+nameRegistered eng name = do
+    reg ← readIORef (rvTextureNameRegistryRef
+                        (toRenderViewCapability (feEnv eng)))
+    pure (isJust (lookupTextureName name reg))
+
+-- | Write one throwaway flora YAML into a directory this call created,
+--   and hand its path to @action@.
+--
+--   'withExclusiveTempDirectory', never a predictable @\/tmp@ path
+--   claimed with @createDirectoryIfMissing@: the suite's rule is that a
+--   cleanup routine may only ever delete a directory the SAME call
+--   made ('Test.Headless.Harness.Isolation'). A fixed name would adopt
+--   — and then recursively remove — a stale root from an interrupted
+--   run, or somebody else's data.
+withFloraFixture ∷ String → String → (Text → Expectation) → Expectation
+withFloraFixture label body action =
+    withExclusiveTempDirectory ("synarchy-2241-" ⧺ label) $ \dir → do
+        let path = dir ⊘ "probe.yaml"
+        writeFile path body
+        action (T.pack path)
+
+-- | One unique definition FIRST, then one whose name is already in the
+--   catalog.
+mixedDuplicateYaml ∷ String
+mixedDuplicateYaml = floraFile ["probe_2241_unique", "saguaro"]
+
+-- | Two definitions in one file sharing a name nothing else has.
+selfDuplicateYaml ∷ String
+selfDuplicateYaml = floraFile ["probe_2241_twice", "probe_2241_twice"]
+
+-- | 'mixedDuplicateYaml' with the collision removed.
+uniqueFloraYaml ∷ String
+uniqueFloraYaml = floraFile ["probe_2241_unique"]
+
+floraFile ∷ [String] → String
+floraFile names = unlines ("flora:" : concatMap floraEntry names)
+
+floraEntry ∷ String → [String]
+floraEntry name =
+    [ "  - name: " ⧺ name
+    , "    type: groundcover"
+    , "    texDir: \"assets/textures/flora\""
+    , "    worldGen:"
+    , "      category: groundcover"
+    , "      minTemp: 0"
+    , "      maxTemp: 40"
+    , "      idealTemp: 20"
+    , "      minPrecip: 0"
+    , "      maxPrecip: 1"
+    , "      idealPrecip: 0.5"
+    ]
 
 withCattail
     ∷ (MaterialRegistry → FloraYamlDef → Expectation)
@@ -396,8 +642,15 @@ assertCattailPlacement registry def =
                 standingFluid = exposedFluid V.//
                     [(target, Just (FluidCell Lake surfZ))]
                 climate = cattailClimate worldSize
+                -- Seed 10, not the original 7: #2241 re-salted the
+                -- placement roll off the species' authored NAME instead
+                -- of its position in worldGenSpecies, so every seed's
+                -- roll moved once. The contrast this example asserts —
+                -- the SAME tile places when exposed and never when
+                -- submerged — is unchanged; only the seed at which the
+                -- exposed half rolls in had to be re-picked.
                 place fluid = fcdInstances $ computeChunkFlora
-                    "test-page" 7 worldSize (ChunkCoord 0 0)
+                    "test-page" 10 worldSize (ChunkCoord 0 0)
                     surfaceMap surfaceMats surfaceSlopes fluid climate catalog
                 exposed = place exposedFluid
                 submerged = place standingFluid

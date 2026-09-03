@@ -5,11 +5,11 @@ Boots a headless engine on a real generated world (flora placement needs
 worldgen; the arena has no plants), then checks:
 
   0. Fixture: the probe registers its OWN harvestable food species,
-     `probe_forage_berry`, after the shipped data/flora (#1766), so
-     every stage below has a subject on ANY seed instead of waiting for
-     worldgen to happen to drop a raspberry or a clover inside the
-     scanned region. See PROBE_FORAGE_YAML for why its placement is
-     certain rather than merely likely.
+     `probe_forage_berry`, before world.init (#1766), so every stage
+     below has a subject on ANY seed instead of waiting for worldgen to
+     happen to drop a raspberry or a clover inside the scanned region.
+     See PROBE_FORAGE_YAML for why its placement is certain rather than
+     merely likely.
   1. API: world.findHarvestableFlora locates a harvestable tile in the
      loaded region; world.getFloraAt reports it harvestable.
   2. Harvest: world.harvestFlora spawns yield ground items, flips the
@@ -193,10 +193,13 @@ def save_and_reload(port, page, slot):
     return None
 
 
-# The probe's OWN harvestable food species (#1766). Registered AFTER the
-# shipped data/flora, so every real species keeps the catalog index its
-# placement roll is salted with and nothing about production placement
-# moves.
+# The probe's OWN harvestable food species (#1766). Registered after the
+# shipped data/flora and before world.init, which is what makes it
+# visible to worldgen at all. Since #2241 a placement roll is salted
+# from the species' own authored NAME, so adding this fixture cannot
+# move a shipped species' roll whatever order it registers in — what it
+# CAN still do is occupy a tile a shipped species would otherwise have
+# taken, which is deliberate cross-species competition, not a defect.
 #
 # Its whole job is to make "is there a harvestable food plant in the
 # loaded region?" a property of the PROBE rather than of the seed. Every

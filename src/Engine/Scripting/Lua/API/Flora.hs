@@ -14,8 +14,10 @@ import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (atomicModifyIORef', readIORef)
+import Engine.Core.Capability.Core (CoreCapability(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
+import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.YamlFlora (parsePhaseTag, parseCycleTag)
 import World.Flora.Types
@@ -49,8 +51,19 @@ floraExistsFn wsc = do
 
 -- * Registration
 
-floraRegisterFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-floraRegisterFn wsc = do
+-- | @flora.register(name, textureHandle)@ → the new numeric id, or
+--   @nil@.
+--
+--   #2241 made the authored name a species' stable key, so a name
+--   already in the catalog is refused here exactly as it is refused in
+--   a YAML file — but NONFATALLY, because this verb is a runtime call a
+--   script makes, not a boot-time readiness check. The refusal is
+--   atomic: the whole decision is taken inside the one
+--   'atomicModifyIORef'' that would otherwise have allocated the id, so
+--   a collision advances no cursor and inserts no species.
+floraRegisterFn ∷ CoreCapability → WorldSimCapability
+                → Lua.LuaE Lua.Exception Lua.NumResults
+floraRegisterFn ccap wsc = do
     nameArg ← Lua.tostring 1
     texArg  ← Lua.tointeger 2
 
@@ -60,14 +73,29 @@ floraRegisterFn wsc = do
                 baseTex = TextureHandle (fromIntegral texInt)
                 catRef = wsFloraCatalogRef wsc
 
-            fid ← Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
-                let (newId, cat') = nextFloraId cat
-                    species = newFloraSpecies name baseTex
-                    cat'' = insertSpecies newId species cat'
-                in (cat'', newId)
+            mFid ← Lua.liftIO $ atomicModifyIORef' catRef $ \cat →
+                case findSpeciesByName name cat of
+                    Just _  → (cat, Nothing)
+                    Nothing →
+                        let (newId, cat') = nextFloraId cat
+                            species = newFloraSpecies name baseTex
+                            cat'' = insertSpecies newId species cat'
+                        in (cat'', Just newId)
 
-            Lua.pushinteger (fromIntegral (unFloraId fid))
-            return 1
+            case mFid of
+                Just fid → do
+                    Lua.pushinteger (fromIntegral (unFloraId fid))
+                    return 1
+                Nothing → do
+                    Lua.liftIO $ do
+                        logger ← readIORef (ccLoggerRef ccap)
+                        logWarn logger CatAsset $
+                            "flora.register refused '" <> name
+                            <> "': that authored name is already "
+                            <> "registered, and a flora name is a "
+                            <> "species' stable key"
+                    Lua.pushnil
+                    return 1
         _ → do
             Lua.pushnil
             return 1
