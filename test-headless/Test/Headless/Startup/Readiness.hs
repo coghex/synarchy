@@ -34,20 +34,17 @@ module Test.Headless.Startup.Readiness (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.Char (isDigit)
 import Data.IORef (IORef, newIORef, writeIORef, modifyIORef')
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import System.Directory
-    ( createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory
-    , removeDirectoryRecursive )
 import System.FilePath ((</>))
 import Engine.Core.Init (EngineInitResult(..))
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Harness.Isolation
-    ( isInsideIsolatedResourceRoot, withIsolatedResourceRoot )
+    ( isInsideIsolatedResourceRoot, withExclusiveTempDirectory
+    , withIsolatedResourceRoot )
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogEntry(..) )
@@ -547,17 +544,10 @@ malformedFile ∷ String
 malformedFile = "entries:\n  - id: [unclosed\n"
 
 withFixtureDir ∷ String → [(FilePath, String)] → (FilePath → IO α) → IO α
-withFixtureDir label files action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> ("synarchy-2203-" ⧺ label)
-    removeIfPresent root
-    createDirectoryIfMissing True root
-    forM_ files $ \(rel, contents) → writeFile (root </> rel) contents
-    action root `finally` removeIfPresent root
-  where
-    removeIfPresent p = do
-        present ← doesDirectoryExist p
-        when present $ removeDirectoryRecursive p
+withFixtureDir label files action =
+    withExclusiveTempDirectory ("synarchy-2203-" ⧺ label) $ \root → do
+        forM_ files $ \(rel, contents) → writeFile (root </> rel) contents
+        action root
 
 -----------------------------------------------------------------------
 
