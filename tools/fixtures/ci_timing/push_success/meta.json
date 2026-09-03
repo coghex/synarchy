@@ -1,0 +1,17 @@
+{
+  "attempt": 1,
+  "conclusion": "success",
+  "createdAt": "2026-09-02T19:02:00Z",
+  "databaseId": 33670000001,
+  "displayTitle": "Merge pull request #2340 from coghex/issue-2091",
+  "event": "push",
+  "headBranch": "master",
+  "headSha": "00f3ff70c0000000000000000000000000000000",
+  "number": 3847,
+  "startedAt": "2026-09-02T19:02:04Z",
+  "status": "completed",
+  "updatedAt": "2026-09-02T19:23:04Z",
+  "url": "https://github.com/coghex/synarchy/actions/runs/33670000001",
+  "workflowDatabaseId": 305639254,
+  "workflowName": "CI"
+}

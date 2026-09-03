@@ -1,0 +1,17 @@
+{
+  "attempt": 1,
+  "conclusion": "cancelled",
+  "createdAt": "2026-09-02T20:00:00Z",
+  "databaseId": 33680000002,
+  "displayTitle": "Superseded push",
+  "event": "pull_request",
+  "headBranch": "issue-2277-ci-timing-report",
+  "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "number": 3848,
+  "startedAt": "2026-09-02T20:00:05Z",
+  "status": "completed",
+  "updatedAt": "2026-09-02T20:03:05Z",
+  "url": "https://github.com/coghex/synarchy/actions/runs/33680000002",
+  "workflowDatabaseId": 305639254,
+  "workflowName": "CI"
+}
