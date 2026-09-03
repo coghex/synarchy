@@ -345,8 +345,8 @@ data LuaMsg = LuaTextureLoaded TextureHandle AssetId
               -- ^ handle, generation. Issue #763: the
               -- generation is validated at DELIVERY time
               -- ('Engine.Scripting.Lua.Thread.Dispatch', gated behind
-              -- the same captureLocked check every Lua-thread message
-              -- is), not at upload-completion time — see
+              -- the same save-barrier owner gate every Lua-thread
+              -- message is), not at upload-completion time — see
               -- 'Engine.Core.State.worldPreviewGenerationRef'.
             | LuaShowPopup Text Text Float Float Float Float
                            (Maybe (Int, Int)) (Maybe Text)

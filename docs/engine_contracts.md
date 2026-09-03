@@ -2380,6 +2380,90 @@ unchanged: the broadcast still attempts every module.
 INCOMPATIBLE one reports directly with no fallback. Symlinked slot
 dirs/files are refused.
 
+**Every owner parks at its own final-pass acknowledgement (#2221).** The
+barrier establishes a WAIT, not mutual exclusion: an acknowledgement
+records only that the owner's current tick finished, and the boundary
+still needs every OTHER owner's final acknowledgement plus the
+initiator's `reachSnapshot`. So an owner's tick-boundary gate is
+`Engine.Save.Barrier.ownerGated`, never the bare `captureLocked` — from
+its own acknowledgement of the FINAL required quiescence pass, that
+owner performs no gated (persistent-state-mutating) work until the
+transaction reaches `SaveEncoding` or a terminal failure. Without it the
+acked owner starts a fresh unlocked tick that can still be running when
+the snapshot is captured (save) or when `publishStagedSession` swaps the
+session refs (load).
+
+The park is per-owner and final-pass-only. During the final pass an
+owner that has acknowledged is parked while owners that have not are
+still free to finish — otherwise the boundary would be unreachable —
+and earlier passes park nobody, so the multi-pass causal drain is
+unchanged. Acknowledgement stays a state update, never a block: parking
+gates WORK only, which is what lets `SaveUnit` and `SaveBuilding` share
+one loop and still both acknowledge. Two standing exceptions run inside
+the window because they ARE the transaction: the world owner keeps
+consuming its authorized `WorldSave`/`WorldLoadPublish` commands, and
+the Lua transaction driver (`saveWorldFn`'s component collection after
+`reachSnapshot`; `handleLoadStaged`'s Lua apply and `WorldLoadPublish`
+queueing) runs inline on a thread already blocked in the driver call.
+Ordinary Lua ticks are gated like any other owner's.
+
+`reachSnapshot` refuses to declare the boundary until the final pass is
+actually complete (`ssAcknowledged ≡ ssOwners`), and refuses to re-close
+a window `releaseCaptureLock` already opened. Release and failure clear
+the park immediately: #758's early release resumes every owner once the
+snapshot is captured, validated and encoded but before disk I/O
+finishes, and a failed or aborted transaction unparks everyone with no
+phase in between where gameplay briefly runs.
+
+What a parked owner leaves queued is disposed of by transaction kind: a
+save DEFERS it (the live session is the same session before and after,
+so it simply runs after release, and is therefore absent from the
+snapshot that transaction captured), while a load publish DISCARDS it
+(`World.Thread.partitionAuthorized` for the world queue,
+`World.Load.Publish.discardStaleQueues` for the rest) because it was
+queued against the session being replaced.
+
+**Parking is not a licence to DISCARD.** Parking an owner destroys
+nothing — whatever stays queued is still there however the transaction
+ends — so it is safe from that owner's own final acknowledgement. A
+discard is irreversible, and there is NO moment on an owner's own
+timeline that is a correct one for it:
+
+- Before the publication commits, a load can still fail —
+  `applyLuaLoad` runs AFTER `reachSnapshot` and can raise — and that
+  failure leaves the OLD session live and, by
+  `docs/persistence_contract.md`, unchanged, with its queued work still
+  owed a run. Neither the park nor the capture boundary is late enough.
+- After it commits, the REPLACEMENT session is already producing:
+  `publishStagedSession` queues `LuaSaveLoaded`, whose `onSaveLoaded`
+  handlers legitimately enqueue new-session work. A flush keyed off any
+  load state would destroy that along with the backlog, because the
+  world thread publishes and releases on its own schedule and an owner
+  is not guaranteed a tick in between.
+
+So the Lua-to-engine discard is a CUTOVER, taken exactly once at the
+one instant where "everything queued" and "the replaced session's work"
+are the same set: inside
+`Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish`, which cuts
+over (`Engine.Scripting.Lua.Message.discardStaleLuaToEngineWork`),
+announces `LoadWaitingPublish`, and queues `WorldLoadPublish` as one
+action. It runs on the PRODUCER thread — `luaToEngineQueue` is written
+by the Lua API, on the Lua thread executing this call — against a
+consumer that is provably parked, since the render owner is a
+registered owner of this transaction and the boundary was reached only
+after its final acknowledgement had already landed. The render owner
+therefore never discards at all: it stops consuming while parked and
+resumes afterwards. The world owner's `processAuthorizedSave` discard
+needs no cutover of its own: it only ever triggers on a batch that
+actually contains the `WorldLoadPublish`, and `discardStaleQueues`
+likewise runs inside the publish itself.
+
+Gates: hspec `--match "save snapshot barrier"` (the bare-barrier park
+protocol in `Test.Headless.Save.Barrier`, and the owner-loop
+consequences driven through the real tick entry points in
+`Test.Headless.Save.OwnerPark`); `tools/save_barrier_probe.py`,
+`tools/transactional_load_probe.py`.
+
 ---
 
 ## Enum append-only audit: baseline and payload normalization

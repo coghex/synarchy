@@ -15,6 +15,8 @@ module Engine.Loop.Mode
   , runLoopMode
   , runStartupHandshake
   , frameBudgetMicros
+    -- * The save-barrier handshake, exported for its gate
+  , runGatedByCaptureLock
   ) where
 
 import UPrelude
@@ -27,8 +29,8 @@ import Engine.Core.State (EngineEnv, EngineLifecycle(..), lifecycleRef
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM)
 import Engine.Loop.Timing (primeFrameTiming)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
-import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
+import Engine.Scripting.Lua.Message (processLuaMessages)
 
 -- | Everything that genuinely differs between the three main loops.
 --   Everything ELSE — the lifecycle dispatch, the startup handshake
@@ -216,12 +218,19 @@ promoteToRunning env =
 --   other owner uses (Unit/Building/Combat/Simulation, see e.g.
 --   'Unit.Thread').
 --
---   What owner participation establishes is that WAIT, not mutual
---   exclusion. Acknowledgment and the transaction's later move to the
---   snapshot boundary are separate steps, so this thread can observe
---   the lock clear and begin another unlocked tick in between. It is
---   the per-tick 'captureLocked' read below, not the handshake, that
---   makes ticks starting after the boundary skip their gated work.
+--   Owner participation establishes that WAIT; it is the per-tick gate
+--   read below, not the handshake, that decides whether THIS tick's
+--   gated work runs. Acknowledgment and the transaction's later move to
+--   the snapshot boundary are still separate steps — so that gate is
+--   'Engine.Save.Barrier.ownerGated', not 'captureLocked' (#2221).
+--   'captureLocked' alone would read False in the window between this
+--   thread's own final-pass acknowledgment and the boundary (which
+--   needs every OTHER owner's final ack plus the initiator's
+--   'reachSnapshot'), letting this thread begin another unlocked tick
+--   that could still be running when the publish writes cameraRef /
+--   worldQuadsRef. 'ownerGated' parks this owner from its own final
+--   acknowledgment until capture completes or the barrier is aborted,
+--   so no such tick is ever started.
 --
 --   EVERY load-capable mode acknowledges 'SaveRender', headless
 --   included: 'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'
@@ -234,21 +243,27 @@ promoteToRunning env =
 --   current transaction's owner set excludes 'SaveRender' — so this
 --   call is safe unconditionally, every tick, in every mode.
 --
+--   Parking is all this gate does. It never DISCARDS: the load
+--   publication's cutover on 'luaToEngineQueue' happens once, on the
+--   Lua thread, inside
+--   'Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish' — which is
+--   the only moment at which "everything queued" and "the replaced
+--   session's work" are the same set, and at which this thread is
+--   provably not draining. Trying to do it here instead cannot be made
+--   correct: too early and it destroys work an aborted load must keep;
+--   too late and the replacement session has already queued work of its
+--   own for it to destroy along with the backlog. So this thread simply
+--   stops consuming while parked, and resumes consuming afterwards.
+--
 --   'lmEndOfTick' still runs every tick regardless (called by
 --   'runLoopTick' after this), so a rendering mode keeps presenting
 --   throughout.
 runGatedByCaptureLock ∷ LoopMode σ → EngineEnv → EngineM σ ()
 runGatedByCaptureLock mode env = do
-    locked ← liftIO $ captureLocked (saveBarrierRef env)
-    if locked
-        then do
-            discarded ← liftIO $ discardLuaMessagesForActiveLoad env
-            when (discarded > 0) $
-                logWarnM CatLua $ "Load publication discarded "
-                    <> tshow discarded <> " stale Lua-to-engine message(s)"
-        else do
-            lmCameraUpdates mode
-            processLuaMessages
+    locked ← liftIO $ ownerGated (saveBarrierRef env) SaveRender
+    unless locked $ do
+        lmCameraUpdates mode
+        processLuaMessages
     liftIO $ acknowledgeCurrent (saveBarrierRef env) SaveRender
 
 -- | One 'EngineRunning' tick: pump the window system, do the gated

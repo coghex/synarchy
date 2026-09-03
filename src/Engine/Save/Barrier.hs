@@ -9,6 +9,7 @@ module Engine.Save.Barrier
     , SaveBarrier, newSaveBarrier, beginSave, acknowledgeSave, failSave
     , reachSnapshot, releaseCaptureLock, finishSave, waitForOwners
     , readSaveStatus, acknowledgeCurrent, captureLocked, saveInProgress
+    , ownerGated, ownersGated
     ) where
 
 import UPrelude
@@ -75,10 +76,21 @@ beginSave (SaveBarrier next status) owners = atomically $ do
 --   ('acks ≡ ssOwners s') this whole protocol is built on, wedging
 --   that transaction until 'waitForOwners' times out even once every
 --   REAL owner has acked.
+--
+--   'SaveWaitingOwners' is ignored for the same reason
+--   'SaveSnapshotBoundary' and 'SaveEncoding' are (#2221): that phase is
+--   reached only once every owner has acknowledged the FINAL quiescence
+--   pass, so every further ack is a parked owner's routine per-tick
+--   'acknowledgeCurrent' and has nothing left to record. Admitting them
+--   would inflate 'ssQuiescencePasses' past 'requiredQuiescencePasses'
+--   for as long as the initiator takes to reach the boundary, making the
+--   per-request park state ('ownerGated') depend on how many ticks
+--   happened to elapse rather than on the protocol.
 acknowledgeSave ∷ SaveBarrier → Int → SaveOwner → IO ()
 acknowledgeSave (SaveBarrier _ status) n owner = atomically $ do
     current ← readTVar status
     forM_ current $ \s → when (ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
+            ∧ ssPhase s ≢ SaveWaitingOwners
             ∧ ssPhase s ≢ SaveSnapshotBoundary ∧ ssPhase s ≢ SaveEncoding
             ∧ Set.member owner (ssOwners s)) $ do
         let acks = Set.insert owner (ssAcknowledged s)
@@ -112,14 +124,32 @@ waitForOwners micros (SaveBarrier _ status) n = do
             _ → do
                 timedOut ← readTVar delay
                 check timedOut
+                -- Name the outstanding OWNERS and the PHASE the
+                -- transaction stalled in: with owners parking from
+                -- their own final acknowledgement (#2221), "which
+                -- owners are missing" and "how far the transaction
+                -- got" are different questions, and a timeout report
+                -- that answers only the first cannot distinguish an
+                -- owner that never ran from one still mid-pass.
                 let missing = maybe [] (\s → Set.toList
                         (ssOwners s Set.\\ ssAcknowledged s)) current
+                    phase = maybe "no transaction" (tshow ∘ ssPhase) current
                 pure $ Left $ "timed out waiting for save state owners: "
-                    <> tshow missing
+                    <> tshow missing <> " in phase " <> phase
 
+-- | Declare the snapshot boundary. Refuses unless the FINAL quiescence
+--   pass is actually complete (#2221): the boundary means "no owner has
+--   a gated tick in flight", and only 'ssAcknowledged ≡ ssOwners' — the
+--   very condition 'waitForOwners' returns 'Right' on — establishes
+--   that. A premature call (the initiator racing ahead of the pass, a
+--   mis-sequenced caller) leaves the phase alone rather than locking
+--   owners out mid-pass and declaring a boundary they never reached.
+--   'SaveEncoding' is refused too, so a late call cannot re-close the
+--   capture window #758's 'releaseCaptureLock' already opened.
 reachSnapshot ∷ SaveBarrier → Int → IO ()
 reachSnapshot (SaveBarrier _ status) n = atomically $ modifyTVar' status $ fmap $ \s →
-    if ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing
+    if ssRequestId s ≡ n ∧ ssOutcome s ≡ Nothing ∧ ssPhase s ≢ SaveEncoding
+         ∧ ssAcknowledged s ≡ ssOwners s
        then s { ssPhase = SaveSnapshotBoundary } else s
 
 -- | #758: unblock 'captureLocked' — every state owner may resume
@@ -164,6 +194,11 @@ acknowledgeCurrent barrier owner = do
 -- | Once capture starts, persistent command consumers must leave subsequent
 -- work queued for after the transaction.  The world owner is the sole
 -- exception: it consumes the already-authorized WorldSave command itself.
+--
+-- This is the GLOBAL question, and it stays effective for every caller
+-- during 'SaveSnapshotBoundary' — including one that is not an owner of
+-- the transaction. An owner's own tick boundary asks 'ownerGated'
+-- instead (#2221), which is this plus that owner's post-final-ack park.
 captureLocked ∷ SaveBarrier → IO Bool
 captureLocked barrier = do
     current ← readSaveStatus barrier
@@ -173,3 +208,60 @@ saveInProgress ∷ SaveBarrier → IO Bool
 saveInProgress barrier = do
     current ← readSaveStatus barrier
     pure $ maybe False ((≡ Nothing) ∘ ssOutcome) current
+
+-- | The gate every state owner reads at its own tick boundary — the
+--   global capture lock OR this owner's own post-final-acknowledgement
+--   park (#2221). Owner loops read this instead of 'captureLocked';
+--   'captureLocked' remains the global question, and stays the right
+--   one for a caller that is not an owner of the transaction.
+ownerGated ∷ SaveBarrier → SaveOwner → IO Bool
+ownerGated barrier owner = ownersGated barrier [owner]
+
+-- | 'ownerGated' for a loop that answers for SEVERAL owners, decided
+--   against ONE reading of the barrier so the answer cannot straddle a
+--   phase change. 'Unit.Thread' is the case that needs it: 'SaveUnit'
+--   and 'SaveBuilding' share one physical loop, and the loop's gated
+--   work is skipped once EITHER of them is parked.
+ownersGated ∷ SaveBarrier → [SaveOwner] → IO Bool
+ownersGated barrier owners = do
+    current ← readSaveStatus barrier
+    pure $ case current of
+        Nothing → False
+        Just s  → ssPhase s ≡ SaveSnapshotBoundary ∨ any (ownerParked s) owners
+
+-- | #757 requirement 5, restored by #2221: once an owner acknowledges
+--   the boundary it must not mutate persistent state until capture is
+--   complete or the barrier is aborted.
+--
+--   The acknowledgement is not itself the boundary. The initiator still
+--   needs every OTHER owner's final acknowledgement and its own
+--   'reachSnapshot' before 'SaveSnapshotBoundary' exists, so an owner
+--   whose gate asked only 'captureLocked' would read False, start a
+--   fresh unlocked tick, and could still be running it when the world
+--   owner captures the snapshot (save) or when
+--   @World.Load.Publish.publishStagedSession@ swaps the session refs
+--   (load). Parking the owner from its own final acknowledgement until
+--   capture completes closes that window at its source, rather than
+--   one straddling write at a time.
+--
+--   Deliberately OWNER-SPECIFIC. During the final pass an owner that
+--   has acknowledged is parked while owners that have not are still
+--   free to finish their own pass — otherwise the barrier could never
+--   reach the boundary at all. Earlier passes park nobody:
+--   'ssQuiescencePasses' counts COMPLETED passes, so the final pass is
+--   the one running at @requiredQuiescencePasses - 1@, and the
+--   multi-pass causal drain keeps today's drain-and-continue behaviour
+--   exactly.
+--
+--   'SaveEncoding' is excluded because that is precisely where #758's
+--   'releaseCaptureLock' resumes every owner — before encoding's disk
+--   I/O finishes — and a terminal 'ssOutcome' is excluded so a failed
+--   or aborted transaction unparks everyone on the spot, with no
+--   intervening phase in which gameplay briefly runs.
+ownerParked ∷ SaveStatus → SaveOwner → Bool
+ownerParked s owner =
+    ssOutcome s ≡ Nothing
+    ∧ ssPhase s ≢ SaveEncoding
+    ∧ ssQuiescencePasses s ≥ requiredQuiescencePasses - 1
+    ∧ Set.member owner (ssOwners s)
+    ∧ Set.member owner (ssAcknowledged s)

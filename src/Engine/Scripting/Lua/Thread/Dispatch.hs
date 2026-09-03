@@ -4,6 +4,8 @@
 module Engine.Scripting.Lua.Thread.Dispatch
   ( processLuaMsg
   , processLuaMsgs
+    -- * The load-publication commit, exported for its gate
+  , commitLoadPublish
   ) where
 
 import UPrelude
@@ -32,9 +34,11 @@ import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
-import Engine.Load.Status (advanceLoad, failLoad, finishLoad, failReconciliation
+import Engine.Load.Status (advanceLoad, failLoad, finishLoad
+                          , failReconciliation
                           , ReconciliationFailure(..), LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
+import Engine.Scripting.Lua.Message (discardStaleLuaToEngineWork)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
 import World.Command.Types (WorldCommand(..))
 import World.Save.Payload (LoadReconcileContext(..))
@@ -520,7 +524,6 @@ handleLoadStaged env ls requestId = do
             Lua.runWith (lbsLuaState ls) (abortLuaLoad logger requestId)
           Right () → do
             reachSnapshot (saveBarrierRef env) barrierRequestId
-            advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
             applied ← Lua.runWith (lbsLuaState ls) (applyLuaLoad logger)
             case applied of
               -- applyLuaLoad is only reachable after prepareLoad already
@@ -568,7 +571,47 @@ handleLoadStaged env ls requestId = do
                 -- transaction ends.
                 atomicModifyIORef' (worldManagerRef env) $ \mgr →
                     (requestSelectionChange True ([], []) mgr, ())
-                Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
+                commitLoadPublish env requestId
+
+-- | Commit this load to publication, as ONE action (#2221): cut the
+--   replaced session's queued Lua-to-engine work over, announce
+--   'LoadWaitingPublish', and queue the world thread's
+--   'WorldLoadPublish'.
+--
+--   One action because this instant is the only one at which all three
+--   are simultaneously true and safe, and each of the others is what
+--   makes the cutover sound. 'applyLuaLoad' has already succeeded, so
+--   the load can no longer abort back onto the OLD session — which
+--   would have survived unchanged, with that queued work still owed a
+--   run. And 'WorldLoadPublish' has not been queued yet, so
+--   'World.Load.Publish.publishStagedSession' has not run and the
+--   @LuaSaveLoaded@ reconciliation it queues has not produced any
+--   NEW-session work for the cutover to destroy by mistake. Split them
+--   apart and the flush lands either where nothing is committed to, or
+--   where the replacement session is already producing.
+--
+--   Nothing here may move earlier. In particular the phase must not be
+--   announced at 'reachSnapshot', where it sat before #2221: the phase
+--   is the engine's statement that publication is committed, and
+--   between the boundary and this point it is not.
+--
+--   'Engine.Scripting.Lua.Message.discardStaleLuaToEngineWork' carries
+--   the full argument for why the flush belongs HERE — on the producer
+--   thread, against a parked consumer — rather than on the render owner
+--   that drains that queue.
+commitLoadPublish ∷ EngineEnv → Int → IO ()
+commitLoadPublish env requestId = do
+    logger ← readIORef (loggerRef env)
+    -- The sibling of the 'luaQueue' flush the caller just performed:
+    -- the two directions of Lua traffic are cut over together, both on
+    -- the Lua thread, both before the publish command exists.
+    discarded ← discardStaleLuaToEngineWork env
+    when (discarded > 0) $
+        logWarn logger CatWorld $
+            "Load publish discarded " <> tshow discarded
+            <> " stale Lua-to-engine message(s) queued by the replaced session"
+    advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
+    Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.
 --   Used by 'LuaSaveLoaded' to hand the surviving loaded-page unit /

@@ -24,7 +24,7 @@ import Engine.Core.Thread
     , startWorkerThread)
 import Engine.Core.State
     (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, captureLocked)
+import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownersGated)
 import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import Unit.Types
 import Unit.Sim.Types
@@ -99,7 +99,17 @@ unitTickWith seams env lastTimeRef utsRef = do
     dt ← sampleElapsed (tickClock seams) lastTimeRef
     tickStart ← readIORef lastTimeRef
 
-    locked ← captureLocked (saveBarrierRef env)
+    -- #2221: the per-OWNER gate rather than the global capture lock,
+    -- so this loop's gated work stops at its OWN final-pass
+    -- acknowledgement instead of waiting for the boundary the initiator
+    -- only declares once every other owner has acknowledged too.
+    -- Asked for BOTH owners this loop answers for, in one reading of
+    -- the barrier: they acknowledge together below, and the pair must
+    -- never disagree about whether this tick's work may run. The
+    -- acknowledgements themselves stay unconditional — parking is a
+    -- gate on WORK, never a block before an acknowledgement, so
+    -- 'SaveBuilding' can still ack after 'SaveUnit' has parked the loop.
+    locked ← ownersGated (saveBarrierRef env) [SaveUnit, SaveBuilding]
     unless locked $ processAllUnitCommands env utsRef
     paused ← readIORef (wsEnginePausedRef (toWorldSimCapability env))
     unless paused $ do

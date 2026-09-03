@@ -39,7 +39,7 @@ import Engine.Core.Thread
 import Engine.Core.State
     (EngineEnv(..), EngineLifecycle(..), requestEngineCleanup)
 import Engine.Core.Types (EngineConfig(..))
-import Engine.Save.Barrier (captureLocked)
+import Engine.Save.Barrier (SaveOwner(..), ownerGated)
 import Engine.Input.Types (InputState)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
@@ -334,7 +334,19 @@ luaTick env lls = do
     -- already passed the gate) and normal processing
     -- resumes on the first tick after the world thread
     -- calls releaseCaptureLock.
-    locked ← captureLocked (saveBarrierRef env)
+    --
+    -- #2221: this is the per-OWNER gate, so an ORDINARY
+    -- Lua tick is also parked from SaveLua's own
+    -- final-pass acknowledgement, not merely from the
+    -- boundary. The transaction DRIVER is deliberately
+    -- unaffected: saveWorldFn's collectLuaComponents (run
+    -- after reachSnapshot) and handleLoadStaged's
+    -- applyLuaLoad + WorldLoadPublish queueing both run
+    -- inline, synchronously, inside a call this loop is
+    -- already blocked in -- they never reach this gate, and
+    -- must not, since they are the authorized work the
+    -- transaction itself is made of.
+    locked ← ownerGated (saveBarrierRef env) SaveLua
     if locked
       then threadDelay 1000 >> pure (Just lls)
       else do
@@ -378,7 +390,7 @@ luaTick env lls = do
         -- THIS tick's unlocked work the instant it flips
         -- closes that window without needing to wait for the
         -- next tick's own (correctly gated) iteration.
-        lockedAfterMsgs ← captureLocked (saveBarrierRef env)
+        lockedAfterMsgs ← ownerGated (saveBarrierRef env) SaveLua
         if lockedAfterMsgs
           then pure (Just lls)
           else do
