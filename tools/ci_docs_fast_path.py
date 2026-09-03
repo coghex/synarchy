@@ -17,6 +17,15 @@ outright rather than merely delaying it, which is strictly worse than the
 cancellation bug it was meant to fix. So: skip the BUILD, retain the
 engine-free audits, and exclude docs whose own audit needs Cabal.
 
+Since #2272 that retention is STRUCTURAL rather than something this
+decision arranges: the engine-free audits live in their own
+`static-audits` job that carries no condition at all, so this selector's
+answer cannot reach them. What it still decides is the Cabal half of
+`test-and-audits` -- the build, the test suites, the headless suite,
+world_check, and (with the save-compat selector) that job's save
+audit. Widening eligibility here therefore no longer risks skipping an
+audit, but it does still risk skipping a real build.
+
 Eligibility is deliberately conservative -- it fails CLOSED, because the
 cost of a wrong "eligible" is an unverified master commit while the cost
 of a wrong "not eligible" is one slow-but-correct run:

@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
 #
 # Local mirror of the CI gate (#527). `make ci` runs this; it executes the
-# same checks .github/workflows/ci.yml's test-and-audits worker runs, in the same
-# order, so a green run here predicts a green run in CI ("green locally =>
-# green in CI").
+# same checks .github/workflows/ci.yml's two audited workers run between
+# them -- test-and-audits, which owns everything needing a Cabal build
+# product, and static-audits, which owns every engine-free `python3
+# tools/*.py` gate (#2272) -- in the same order, so a green run here
+# predicts a green run in CI ("green locally => green in CI"). CI splits
+# them into two jobs so the engine-free half does not queue behind the
+# build; `make ci` is one script, and the UNION of those two jobs is what
+# it mirrors.
 #
 # That parity is enforced, not merely intended (#1355): the last step runs
 # tools/ci_parity_audit.py, which compares this file's `python3 tools/*.py`
-# invocations against that job's, at command-and-arguments granularity and
-# in BOTH directions, and fails on any difference outside its hard-coded,
-# reason-carrying exemption list. Adding a check to one file without the
-# other now fails immediately instead of surfacing after a push. Two
-# things the audit deliberately does not compare: conditional control flow
-# (CI path-selects the graphical build, the unit-asset gate, world_check
-# and -- since #1364 -- the hspec step's SYNARCHY_FULL_TESTS=1 full tier
-# on PRs; this file runs all four unconditionally, which is what makes it
-# conservative), and the non-Python steps around them.
+# invocations against those two jobs', at command-and-arguments granularity
+# and in BOTH directions, and fails on any difference outside its
+# hard-coded, reason-carrying exemption list. It also rejects a command run
+# by both CI jobs before it takes their union, since the union alone cannot
+# tell a correctly split gate set from one CI pays for twice. Adding a check
+# to one file without the other now fails immediately instead of surfacing
+# after a push. Two things the audit deliberately does not compare:
+# conditional control flow (CI path-selects the graphical build, the
+# unit-asset gate, world_check and -- since #1364 -- the hspec step's
+# SYNARCHY_FULL_TESTS=1 full tier on PRs; this file runs all four
+# unconditionally, which is what makes it conservative), and the non-Python
+# steps around them.
 #
 # -Werror is part of synarchy.cabal's checked-in warning policy now
 # (#1057), so every build of the `synarchy` package -- here, in CI, or a
@@ -601,11 +609,13 @@ python3 tools/ci_cache_epoch.py --self-test
 python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
 
-# The gate that keeps this file honest (#1355): fails if a
-# `python3 tools/*.py` check runs in ci.yml's test-and-audits worker and not
-# here, or here and not there, outside the audit's hard-coded exemption
-# list. Without it the two drift silently, and they already had --- the
-# original five of the probe-runner self-tests above ran only in CI.
+# The gate that keeps this file honest (#1355, generalized to CI's two
+# audited workers in #2272): fails if a `python3 tools/*.py` check runs in
+# ci.yml's test-and-audits or static-audits worker and not here, or here and
+# in neither of them, or in both of them at once -- outside the audit's
+# hard-coded exemption list. Without it the two files drift silently, and
+# they already had --- the original five of the probe-runner self-tests
+# above ran only in CI.
 step "CI/local gate parity audit"
 python3 tools/ci_parity_audit.py --self-test
 python3 tools/ci_parity_audit.py

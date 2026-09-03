@@ -4,8 +4,8 @@
 Every constant the audit judges this repository by lives here and only
 here: the two files compared, the workflow jobs pinned, the aggregate's
 dependencies, the probe job's condition and required commands, the
-labels the diagnostics name, and the complete `EXEMPT_COMMANDS`
-inventory with each entry's reason.
+unit-asset gate's pinned guard, the labels the diagnostics name, and the
+complete `EXEMPT_COMMANDS` inventory with each entry's reason.
 
 Why a module of its own: `tools/ci_parity_workflow.py` consumes all of
 it, `tools/ci_parity_audit.py` consumes it too, and no extracted owner
@@ -27,16 +27,34 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_GATE_PATH = REPO_ROOT / "tools" / "ci-local.sh"
 
-#: The workflow worker whose gate set `make ci` mirrors.
+#: The Cabal-backed worker: the build, hspec, the two save-compatibility
+#: steps and world_check. Named on its own as well as in AUDITED_JOBS
+#: because the save-compat wiring checks inspect THIS job specifically --
+#: the commands they guard are the ones #2272 deliberately left here.
 AUDITED_JOB = "test-and-audits"
+
+#: The engine-free worker #2272 split out of it: every `python3 tools/*.py`
+#: gate that needs no Cabal build product, so none of them queue behind the
+#: build.
+STATIC_AUDIT_JOB = "static-audits"
+
+#: The workflow workers whose gate sets `make ci` mirrors, TOGETHER. The
+#: audit keeps each job's set separate, rejects any command run by two of
+#: them, and only then compares the union with tools/ci-local.sh: a set
+#: union taken first would hide a gate that CI pays for twice.
+AUDITED_JOBS = (AUDITED_JOB, STATIC_AUDIT_JOB)
+
+#: The job that resolves the CI image, and the only thing STATIC_AUDIT_JOB
+#: may wait on. Anything else in its `needs` puts it back behind a build.
+IMAGE_JOB = "resolve-image"
 
 #: The stable status context the drainer and branch protection consume.
 AGGREGATE_JOB = "build-test"
 
-#: The separate real-engine worker that runs alongside AUDITED_JOB on PRs.
+#: The separate real-engine worker that runs alongside AUDITED_JOBS on PRs.
 PROBE_JOB = "behavior-probes"
 
-AGGREGATE_NEEDS = frozenset({AUDITED_JOB, PROBE_JOB})
+AGGREGATE_NEEDS = frozenset({AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB})
 PROBE_JOB_IF = "github.event_name == 'pull_request'"
 PROBE_REQUIRED_COMMANDS = frozenset({
     "python3 tools/ci_probes.py --stdin",
@@ -45,8 +63,35 @@ PROBE_REQUIRED_COMMANDS = frozenset({
      "--exact --retries 1 --jobs 2"),
 })
 
-WORKFLOW_LABEL = ".github/workflows/ci.yml (job: %s)" % AUDITED_JOB
+def workflow_label(job: str) -> str:
+    """How a diagnostic names one workflow job."""
+    return ".github/workflows/ci.yml (job: %s)" % job
+
+
+WORKFLOW_LABEL = workflow_label(AUDITED_JOB)
+STATIC_AUDIT_LABEL = workflow_label(STATIC_AUDIT_JOB)
+#: How a diagnostic names the two-job union -- used for a command
+#: tools/ci-local.sh runs and NEITHER audited job does, where naming one
+#: job would point at the wrong place to add it.
+WORKFLOW_UNION_LABEL = ".github/workflows/ci.yml (jobs: %s)" % ", ".join(
+    AUDITED_JOBS)
 LOCAL_GATE_LABEL = "tools/ci-local.sh"
+
+#: The unit-asset gate's command, its pinned guard, and the selector
+#: invocation that guard's output must come from (#2272 requirement 4).
+#: The gate moved to STATIC_AUDIT_JOB with its selector; this pins that it
+#: kept BOTH halves of its behavior -- path-selective on pull requests,
+#: unconditional on every other event, so a path the selector does not
+#: list can never leave the inventory unchecked on master. Pinned rather
+#: than parsed: `if:` is a GitHub expression, and a half-understood
+#: evaluator would be a worse check than an exact match.
+UNIT_ASSET_GATE = "unit-assets"
+UNIT_ASSET_COMMAND = "python3 tools/pack_atlas.py --validate-only --strict"
+UNIT_ASSET_SELECTOR_COMMAND = (
+    "python3 tools/ci_expensive_gates.py --stdin --gate " + UNIT_ASSET_GATE)
+UNIT_ASSET_CI_IF = (
+    "github.event_name != 'pull_request' "
+    "|| steps.expensive-gates.outputs.unit-assets == 'true'")
 
 # Invocations one side deliberately runs and the other does not, each
 # keyed on the EXACT command so a neighbouring form is not exempted with
