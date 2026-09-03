@@ -90,7 +90,6 @@ nothing below imports this file.
 from __future__ import annotations
 
 import argparse
-
 import os
 import sys
 
@@ -115,7 +114,11 @@ from ci_parity_config import (
     WORKFLOW_PATH,
 )
 from ci_parity_save_compat import audit_save_compat_reproducibility_wiring
-from ci_parity_shell import AuditError, extract_invocations, split_shell_commands
+from ci_parity_shell import (
+    AuditError,
+    extract_invocations,
+    split_shell_commands,
+)
 from ci_parity_workflow import (
     audit_gate_sets,
     audit_parallel_gate_wiring,

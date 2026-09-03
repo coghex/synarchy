@@ -3,8 +3,9 @@
 
 The gate-set comparison in tools/ci_parity_workflow.py is a SET
 comparison: it proves both files run
-`test_save_compat_audit.py --only-reproducibility`, and nothing more. That is not enough for a check that is deliberately CONDITIONAL
-on both sides -- each file could run it under a different condition, or
+`test_save_compat_audit.py --only-reproducibility`, and nothing more.
+That is not enough for a check that is deliberately CONDITIONAL on
+both sides -- each file could run it under a different condition, or
 under none, and the set would still match. Requirement 7 of #1360 is
 that the two agree about WHEN it runs, so this module pins the
 condition itself.
