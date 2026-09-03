@@ -318,11 +318,17 @@ spec = beforeAllWith setup $ do
                         `shouldBe` lcTerrainSurfaceMap (fxWorldCentre fx)
                 _ → expectationFailure "expected exactly one centre seed"
 
-        it "seeds it before the init queue, ahead of every queued chunk" $
+        it "seeds it ahead of every chunk the init queue later drains" $
           \fx →
-            -- 'SimFastSettleAll' is enqueued behind the init queue's last
-            -- batch and only settles chunks already in sim state, so a
-            -- centre seed written after those would miss the settle.
+            -- What this discriminates against is seeding the centre from
+            -- the DRAIN loop (or any later tick) instead of from the init
+            -- handler: simQueue is FIFO and the dump path enqueues
+            -- 'SimFastSettleAll' once the init queue is empty, so a
+            -- centre seed that arrives behind the queue's last batch can
+            -- race the settle. It does not discriminate between two
+            -- placements INSIDE the handler, because 'seedInitialQueue'
+            -- only appends to the page's own init queue -- nothing
+            -- reaches simQueue until a later world tick.
             map seedCoord (take 1 (fxWorldSeeds fx))
                 `shouldBe` [centreCoord]
 
