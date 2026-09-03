@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
-"""Shared fixtures for `test_probe_census.py`'s two case owners (#2034).
+"""Shared fixtures for every census case owner (#2034, #2129).
 
-`tools/test_probe_census.py` is the complete census gate and
+`tools/test_probe_census.py` is the complete census gate.
 `tools/test_probe_census_promotion.py` is the focused owner of #1441's
-CI-promotion report. Both drive the same synthetic world, so this module
-is the ONE source of it: the synthetic registry and the context manager
-that installs it, the throwaway scratch tree, the scratch repository
-with a real `docs-wip` worktree, the in-process CLI driver, the realistic
-`probe-flake-result/v1` document, the fixed evaluation moment the
-staleness cases are written against, and the two assertion helpers that
-are census-specific rather than generic.
+CI-promotion report, and since #2129 the other five families live under
+`tools/probe_census_tests/`. All of them drive the same synthetic world,
+so this module is the ONE source of it: the synthetic registry and the
+context manager that installs it, the throwaway scratch tree, the
+scratch repository with a real `docs-wip` worktree, the in-process CLI
+driver, the realistic `probe-flake-result/v1` document, the fixed
+evaluation moment the staleness cases are written against, and the two
+assertion helpers that are census-specific rather than generic.
 
 Single-sourced for correctness, not tidiness. `FAILURES` is
-`tools/selftestlib.py`'s ONE list (#1922), re-exported here so both
-owners append to the same accumulator: two private copies would let the
-census gate exit 0 while the promotion owner had recorded a failure --
-and #2034's whole condition is that a promotion regression still fails
-`python3 tools/test_probe_census.py`. `expect_refusal` is here for the
-same reason `expect` is: a second copy is a second definition of what a
+`tools/selftestlib.py`'s ONE list (#1922), re-exported here so every
+owner appends to the same accumulator: private copies would let the
+census gate exit 0 while an owner had recorded a failure -- and #2034's
+whole condition is that a promotion regression still fails `python3
+tools/test_probe_census.py`. `expect_refusal` is here for the same
+reason `expect` is: a second copy is a second definition of what a
 controlled refusal looks like.
 
-The scope is fenced deliberately. Only what the promotion owner actually
-consumes moved here; every fixture the census gate alone uses -- the
-stored-schema documents, the sample and attempt records, the malformed
-mutators, the schema-file and dependency harnesses -- stays in
-`tools/test_probe_census.py`. `tools/test_probe_census_page.py`'s
-pre-existing private copies of `expect_refusal`, `registry` and
-`scratch` are deliberately NOT converged onto this module; that is a
-separate change to a separate gate.
+This module stays at the top level because the promotion owner is
+outside the #2129 package and reads it too.
+`tools/probe_census_tests/support.py` re-exports it and adds the
+fixtures shared only WITHIN that package, so an owner needs one import
+rather than two. `tools/test_probe_census_page.py`'s pre-existing
+private copies of `expect_refusal`, `registry` and `scratch` are
+deliberately NOT converged onto this module; that is a separate change
+to a separate gate.
 
 `tools/probe_claim_selftest_support.py` (#2100) is the in-repo precedent
 for this shape.

@@ -34,8 +34,10 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
+import importlib
 import json
 import os
 import re
@@ -49,6 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_probes  # type: ignore
 import deflake_diagnosis as dd  # type: ignore
+import deflake_handoff  # type: ignore
 import deflake_issue as di  # type: ignore
 import deflake_outcome as do  # type: ignore
 import probe_census  # type: ignore
@@ -8007,6 +8010,137 @@ def test_the_defect_command_line_reports_each_ending() -> None:
                f"and never as a traceback\n{done.stderr[:400]}")
         expect(Path(path).read_bytes() == before,
                "and none of those endings touched the census")
+
+
+def test_the_handoff_facade_exports_the_canonical_objects() -> None:
+    """#2180: the façade binds its owners' objects, it does not copy them.
+
+    `tools/deflake_handoff.py` is a re-export façade over four internal
+    owners, so every name a consumer reads through it has to be the ONE
+    object its owner defines. A copied alias would be a second
+    definition free to drift: `except deflake_outcome.HandoffError`
+    would stop catching what `deflake_handoff` raises, and an
+    `isinstance` against either `Measurement` would answer differently
+    depending on which module the caller imported.
+
+    Asserted here rather than left to inspection because #2097's
+    compatibility bindings in `deflake_outcome.py` are what the rest of
+    the repository imports, and nothing else executes the claim.
+    """
+    for name in ("HandoffError", "NonSuccess", "Measurement", "Handoff",
+                 "RouteOwnership"):
+        expect(getattr(do, name) is getattr(deflake_handoff, name),
+               f"deflake_outcome.{name} must BE deflake_handoff.{name}, "
+               f"not a copy")
+    for name in deflake_handoff.__all__:
+        expect(hasattr(deflake_handoff, name),
+               f"the façade declares {name} in __all__ but does not bind it")
+    owners = ("deflake_handoff_grammar", "deflake_handoff_measurement",
+              "deflake_handoff_producer", "deflake_handoff_assembly")
+    modules = {name: importlib.import_module(name) for name in owners}
+    for name in deflake_handoff.__all__:
+        bound = getattr(deflake_handoff, name)
+        defining = [module for module in modules.values()
+                    if getattr(module, name, None) is bound]
+        expect(defining,
+               f"{name} is on the façade but no internal owner defines it")
+
+
+def test_the_handoff_owners_stay_one_way() -> None:
+    """#2180: the four owners form an acyclic chain, and nothing above it.
+
+    The whole point of extracting them is that grammar, measurement,
+    producer binding and assembly can change independently. A back-edge
+    would restore exactly the entanglement #2097 removed: an owner that
+    imported the façade would be importing its own siblings through a
+    module whose only job is to re-export them, and an owner that
+    imported either consumer would make the two consumers each other's
+    prerequisite again.
+
+    The reverse reference `require_reproduced` needs — its `Handoff`
+    annotation — is pinned rather than excused: it must sit inside a
+    `TYPE_CHECKING` guard, where it is evaluated by a type checker and
+    never at run time, so the runtime graph stays one-way.
+    """
+    order = ["deflake_handoff_grammar", "deflake_handoff_measurement",
+             "deflake_handoff_producer", "deflake_handoff_assembly"]
+    forbidden = {"deflake_handoff", "deflake_outcome", "deflake_issue"}
+    directory = Path(dd.__file__).resolve().parent
+    for position, owner in enumerate(order):
+        source = (directory / f"{owner}.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        guarded, runtime = set(), set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            names = ({alias.name for alias in node.names}
+                     if isinstance(node, ast.Import) else {node.module or ""})
+            runtime |= names
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING"):
+                continue
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Import):
+                    guarded |= {alias.name for alias in inner.names}
+                elif isinstance(inner, ast.ImportFrom):
+                    guarded.add(inner.module or "")
+        runtime -= guarded
+        for name in sorted(runtime & forbidden):
+            expect(False,
+                   f"{owner} imports {name}; an internal owner depends on "
+                   f"neither the façade nor either consumer")
+        for name in sorted(guarded & forbidden):
+            expect(False,
+                   f"{owner} type-imports {name}; the façade and the "
+                   f"consumers are off-limits even under TYPE_CHECKING")
+        later = set(order[position + 1:])
+        for name in sorted(runtime & later):
+            expect(False,
+                   f"{owner} imports {name} at run time, which is later in "
+                   f"the one-way order {' -> '.join(order)}")
+        for name in sorted(guarded & later):
+            expect(name == "deflake_handoff_assembly"
+                   and owner == "deflake_handoff_measurement",
+                   f"{owner} type-imports {name}; the only permitted "
+                   f"reverse reference is require_reproduced's Handoff "
+                   f"annotation")
+
+
+def test_the_handoff_family_imports_as_repository_modules() -> None:
+    """#2180: every owner resolves under the `tools.` package spelling too.
+
+    `tools/` carries no `__init__.py`, so it is an implicit namespace
+    package: `import tools.deflake_handoff` from the repository root is
+    a supported spelling, and under it the directory holding these
+    modules is NOT on `sys.path`. Sibling imports by bare name resolve
+    anyway only because each module inserts its own directory first —
+    which the pre-split `deflake_handoff.py` did before importing
+    `deflake_diagnosis`, and which the façade must keep doing before the
+    first of its re-exports, since those run at import time.
+
+    Asserted for the whole family rather than the façade alone because
+    the same bootstrap is what makes each owner importable on its own,
+    and a new owner added without one would fail the same way.
+    """
+    root = Path(dd.__file__).resolve().parent.parent
+    family = ("tools.deflake_handoff", "tools.deflake_handoff_grammar",
+              "tools.deflake_handoff_measurement",
+              "tools.deflake_handoff_producer",
+              "tools.deflake_handoff_assembly",
+              "tools.deflake_outcome", "tools.deflake_issue")
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    for module in family:
+        done = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=str(root), capture_output=True, text=True, timeout=120,
+            env=environment)
+        expect(done.returncode == 0,
+               f"`import {module}` from the repository root must resolve; "
+               f"exited {done.returncode}\n{done.stderr[-400:]}")
 
 
 def main() -> int:
