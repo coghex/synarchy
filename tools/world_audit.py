@@ -8,7 +8,7 @@ Output is structured JSON, sorted for stable diffing against baselines.
 
 Composition (#2224)
 -------------------
-This module is the command and the import-compatible facade. It holds
+This module is the command and the import-compatible façade. It holds
 orchestration, statistics, dump I/O, text formatting, argument parsing
 and `main()`; the audit's model, its classification policy and its 23
 checks live with five owners:
@@ -23,11 +23,13 @@ checks live with five owners:
   `world_audit_checks_soils`       material placement on slopes (2).
 
 Dependencies run one way: core imports no other owner, each check owner
-imports core alone, policy imports no check owner, and only this facade
+imports core alone, policy imports no check owner, and only this façade
 imports all five. Consumers -- `world_check.py`, `world_stress.py`,
-`world_baseline.py` and the audit self-tests -- import this facade, so
-every public name below stays importable from `world_audit` whichever
-owner now defines it.
+`world_baseline.py` and the audit self-tests -- take the audit's whole
+surface from here, so every public name below stays importable from
+`world_audit` whichever owner now defines it. (`test_audit_categories`
+additionally imports `world_audit_core` by name, to locate its source
+for the emitted-category scan; it reads no value from it.)
 
 `compose_checks()` builds `ALL_CHECKS` from the owners' inventories in
 the historical key order and refuses, at import, any arrangement that
@@ -53,7 +55,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 #
 # Every public name this module exposed before the #2224 split stays
 # importable from `world_audit`, bound to the same object its owner
-# defines. Consumers never import an owner module directly.
+# defines. Nothing outside the family imports an owner for its values.
 
 from world_audit_core import (  # noqa: E402,F401
     SEA_LEVEL, CHUNK_SIZE, INT64_MIN,
