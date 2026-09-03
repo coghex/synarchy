@@ -3,7 +3,6 @@ module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
     , admitChunksToSim
-    , simChunkSeeds
     , dispatchLocationStamps
     , locationStampsFor
     ) where
@@ -306,8 +305,8 @@ dispatchLocationStamps env params pageId chunks =
 --   'SimChunkLoaded' per chunk, in the order given.
 --
 --   'SimChunkLoaded' and 'SimChunkEdited' are the ONLY two ways a chunk
---   enters sim state (#59/#60), and every loader below skips a coord
---   already in @wsTilesRef@ by design — so a chunk that becomes
+--   enters sim state (#59/#60), and both loaders in this module skip
+--   a coord already in @wsTilesRef@ by design — so a chunk that becomes
 --   resident without passing through one of them is never simulated,
 --   and nothing later repairs it: 'Sim.Command.Types.SimActivateWorld'
 --   only flips the active flag, and an edit in a neighbour wakes only
