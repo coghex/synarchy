@@ -57,6 +57,7 @@ from ci_parity_config import (  # noqa: E402
 )
 from ci_parity_save_compat import (  # noqa: E402
     LOCAL_BLOCK_BEGIN,
+    LOCAL_BLOCK_END,
     audit_save_compat_reproducibility_wiring,
 )
 from ci_parity_shell import AuditError, extract_invocations  # noqa: E402
@@ -490,6 +491,45 @@ def _save_compat_wiring_self_test() -> list[str]:
     _expect(failures,
             any("markers" in p for p in problems(local=unmarked)),
             f"a block with no markers should fail, got {problems(local=unmarked)}")
+
+    # (f2) ...and so does a DUPLICATED block. Only the first marker pair
+    #      is ever executed, so a second one invoking the member
+    #      unconditionally would otherwise sail through: the gate sets
+    #      still match (same command), the executed block still selects
+    #      correctly, and `make ci` would run the `cabal repl` on every
+    #      unrelated change with this audit reporting no problem at all.
+    duplicated = _WIRING_LOCAL_GOOD + (
+        "# " + LOCAL_BLOCK_BEGIN + "\n"
+        "python3 tools/test_save_compat_audit.py --only-reproducibility\n"
+        "# " + LOCAL_BLOCK_END + "\n")
+    _expect(failures,
+            any("exactly one of each" in p
+                for p in problems(local=duplicated)),
+            "a duplicated selection block should fail, got "
+            f"{problems(local=duplicated)}")
+
+    # (f3) A duplicated block is refused even when the extra one is
+    #      harmless, because "the block this audit executes" and "the
+    #      block that runs" must be the same block, not merely agree.
+    duplicated_inert = _WIRING_LOCAL_GOOD + (
+        "# " + LOCAL_BLOCK_BEGIN + "\n"
+        "echo nothing-to-see-here\n"
+        "# " + LOCAL_BLOCK_END + "\n")
+    _expect(failures,
+            any("exactly one of each" in p
+                for p in problems(local=duplicated_inert)),
+            "a duplicated selection block should fail even when inert, got "
+            f"{problems(local=duplicated_inert)}")
+
+    # (f4) A lone extra BEGIN marker is a malformed block, not a second
+    #      one -- also refused, so the count check cannot be satisfied by
+    #      pairing up stray markers.
+    stray_begin = _WIRING_LOCAL_GOOD + "# " + LOCAL_BLOCK_BEGIN + "\n"
+    _expect(failures,
+            any("exactly one of each" in p
+                for p in problems(local=stray_begin)),
+            "a stray extra begin marker should fail, got "
+            f"{problems(local=stray_begin)}")
 
     # (g) Making the reproducibility member unconditional fails, and so
     #     does swapping either guard for another gate's output.

@@ -117,10 +117,20 @@ _GATES_SCRIPT = REPO_ROOT / "tools" / "ci_expensive_gates.py"
 
 def extract_local_block(shell_text: str,
                         where: str = LOCAL_GATE_LABEL) -> str:
-    """The executable selection block delimited by the two markers."""
-    begin = shell_text.find(LOCAL_BLOCK_BEGIN)
-    end = shell_text.find(LOCAL_BLOCK_END)
-    if begin < 0 or end < 0:
+    """The executable selection block delimited by the two markers.
+
+    Requires EXACTLY one marker pair. Taking the first of several would
+    leave every later block unexecuted and unaudited, so a second one
+    running the reproducibility member unconditionally would evade this
+    check entirely: the gate SET still matches (it is the same command),
+    the first block still selects correctly, and `make ci` would pay for
+    the `cabal repl` on every unrelated change. Refusing a duplicate is
+    what keeps "the block this audit executes" and "the block that runs"
+    the same block.
+    """
+    begins = shell_text.count(LOCAL_BLOCK_BEGIN)
+    ends = shell_text.count(LOCAL_BLOCK_END)
+    if begins < 1 or ends < 1:
         raise AuditError(
             f"{where}: could not find the `{LOCAL_BLOCK_BEGIN}` / "
             f"`{LOCAL_BLOCK_END}` markers around the save-compat "
@@ -128,6 +138,17 @@ def extract_local_block(shell_text: str,
             "prove `make ci` selects the same way CI does; without the "
             "markers there is nothing to execute, and it will not fall "
             "back to trusting the text.")
+    if begins != 1 or ends != 1:
+        raise AuditError(
+            f"{where}: found {begins} `{LOCAL_BLOCK_BEGIN}` and {ends} "
+            f"`{LOCAL_BLOCK_END}` marker(s); there must be exactly one of "
+            "each. This audit executes ONE block to prove `make ci` selects "
+            "the same way CI does, so any further block would run "
+            "unexecuted and unaudited -- one of them invoking the "
+            "reproducibility member unconditionally would put its `cabal "
+            "repl` back on every run with this audit still green.")
+    begin = shell_text.find(LOCAL_BLOCK_BEGIN)
+    end = shell_text.find(LOCAL_BLOCK_END)
     if end < begin:
         raise AuditError(
             f"{where}: the block markers are in the wrong order.")
