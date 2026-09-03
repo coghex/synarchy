@@ -894,6 +894,47 @@ run = 0
 """, "a quasiquote containing a link and comment-like delimiters")
 
 
+def test_a_second_quasiquote_after_a_stray_block_opener_is_permitted() -> None:
+    """The false positive this pins: a raw quasiquote body may hold an
+    unmatched `{-` with no Haskell `-}`, which leaves the shared scanner
+    in a block-comment state for the whole rest of the file. A single
+    code-span scan then never sees the SECOND quasiquote's opener, so
+    that quote goes unmasked and its `--` line is read as a real
+    comment."""
+    _expect_clean("""\
+module Beta ( first, second, run ) where
+first ∷ String
+first = [glsl|
+  {- a block-comment opener in raw GLSL, never closed in Haskell
+  |]
+second ∷ String
+second = [glsl|
+  -- 'Alpha.hidden' is inside a quasiquote, not a comment
+  |]
+run ∷ Int
+run = 0
+""", "a quasiquote following one that opened a phantom comment")
+
+
+def test_a_second_quasiquote_after_a_stray_quote_is_permitted() -> None:
+    """The same resynchronisation, through the scanner's STRING state:
+    a lone `\"` in a raw body swallows the rest of the file just as
+    readily."""
+    _expect_clean("""\
+module Beta ( first, second, run ) where
+first ∷ String
+first = [glsl|
+  const char *s = "unterminated as far as Haskell is concerned
+  |]
+second ∷ String
+second = [glsl|
+  -- 'Alpha.hidden' is inside a quasiquote, not a comment
+  |]
+run ∷ Int
+run = 0
+""", "a quasiquote following one that opened a phantom string")
+
+
 def test_constructor_link_is_permitted() -> None:
     """D-1 scopes the arc to FUNCTIONS. The rule lives in the production
     `LINK_RE` itself, which is asserted directly as well as end to end:
@@ -1085,6 +1126,8 @@ TESTS = [
     test_string_literal_is_permitted,
     test_char_literal_is_permitted,
     test_quasiquote_is_permitted,
+    test_a_second_quasiquote_after_a_stray_block_opener_is_permitted,
+    test_a_second_quasiquote_after_a_stray_quote_is_permitted,
     test_constructor_link_is_permitted,
     test_unicode_syntax_signatures_are_recognized,
     test_a_field_type_tail_is_not_a_definition,

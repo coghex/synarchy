@@ -239,28 +239,42 @@ def mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
 def quasiquote_spans(text: str) -> list[tuple[int, int]]:
     """The `[name| … |]` spans of `text`.
 
-    Two passes, because the opener and the body need different views.
     The OPENER is located only inside a genuine code span, so a comment
     that merely contains `[frag|`-shaped text can never be mistaken for
     a real quasiquote boundary. The CLOSER is then found in the RAW
     text, because a `--` or `{-` inside the quasiquoted body opens a
     phantom comment state in the shared scanner (it has no quasiquote
-    state), which would hide the `|]` from a code-span-only search."""
-    code_only = haskell_code_only(text)
+    state), which would hide the `|]` from a code-span-only search.
+
+    One code-span view is not enough, which is why this masks and
+    RESCANS rather than walking a single scan. A raw quasiquote body may
+    legally contain an unmatched `{-` (or a lone `"`), and that leaves
+    the shared scanner in a comment or string state for the whole rest
+    of the file -- so a LATER quasiquote's opener is not inside any code
+    span and would never be found. Masking each quote as it is
+    discovered ends that phantom state at its source and resynchronises
+    the next scan. Only files that actually contain a quasiquote pay for
+    the extra passes."""
     spans: list[tuple[int, int]] = []
+    masked = text
     search_from = 0
     while True:
-        match = QUASIQUOTE_OPEN_RE.search(code_only, search_from)
+        match = QUASIQUOTE_OPEN_RE.search(haskell_code_only(masked),
+                                          search_from)
         if match is None:
             return spans
-        close = text.find("|]", match.end())
+        close = masked.find("|]", match.end())
         if close == -1:
             # An unterminated opener is a list comprehension or a stray
             # bracket, not a quasiquote. Skip past it rather than
             # masking the rest of the file.
             search_from = match.end()
             continue
-        spans.append((match.start(), close + 2))
+        span = (match.start(), close + 2)
+        spans.append(span)
+        # Positions are preserved one for one, so the next iteration's
+        # offsets stay valid in the original text.
+        masked = mask_spans(masked, [span])
         search_from = close + 2
 
 
