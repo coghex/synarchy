@@ -596,6 +596,12 @@ main = hspec $ do
     -- a source of interference.
     GenConfigDomain.pureSpec
     aroundAll withHeadlessEngineNoWorld GenConfigDomain.spec
+    -- The staging half needs a WORLD-thread-free engine too, but a
+    -- different one: it drives World.Load.Stage.stageSession against a
+    -- forged one-page save, so it must not gain (or disturb) the shared
+    -- worlds engine's pages. Its page is an arena page, so staging
+    -- rebuilds flat chunks instead of generating a world.
+    aroundAll withHeadlessEngineNoWorld GenConfigDomain.stagingSpec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE

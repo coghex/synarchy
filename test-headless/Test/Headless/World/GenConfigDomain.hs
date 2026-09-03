@@ -18,7 +18,7 @@
 --   without a home in these tables therefore gains coverage
 --   automatically, and one whose bound moves cannot leave a stale
 --   expectation behind.
-module Test.Headless.World.GenConfigDomain (pureSpec, spec) where
+module Test.Headless.World.GenConfigDomain (pureSpec, spec, stagingSpec) where
 
 import UPrelude
 import Test.Hspec
@@ -26,17 +26,31 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Yaml as Yaml
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
+import Data.List (find)
+import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
+import Engine.Core.Log
+    ( LogBackend(..), LogCategory(..), LogConfig(..), LogEntry(..)
+    , LogLevel(..), LoggerState, defaultLogConfig, initLogger )
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
+import Engine.Graphics.Camera (CameraFacing(..))
+import Structure.Palette (emptyTexPalette)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import World.Generate.Config
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
-import World.Load.Stage (stagedGenParamsWarning)
+import World.Load.Stage
+    (stageSession, renderStageError, stagedGenParamsWarning)
+import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Page.Types (WorldPageId(..))
+import World.Save.Component.Page (blankPageSnapshot)
+import World.Save.Snapshot (LiveCameraSnapshot(..), SessionSnapshot(..))
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
+import World.Save.Types (SaveData)
+import World.State.Types (WorldState(..))
 
 -- * The leaf table every example is driven from
 
@@ -434,11 +448,9 @@ pureSpec = describe "world-generation setting domains" $ do
             repairWorldGenConfig distinctConfig `shouldBe` (distinctConfig, [])
 
     describe "the save-side repair" $ do
-        let distinctParams = foldl' step defaultWorldGenParams paramsFloatLeaves
-            step p l = flSet l (distinctValue (flDomain l)) p
-            -- One setting a save could plausibly carry after this bug:
-            -- an infinity that generation saturated on and then persisted.
-            poisoned = distinctParams { wgpVolcanicActivity = 1 / 0 }
+        -- One setting a save could plausibly carry after this bug: an
+        -- infinity that generation saturated on and then persisted.
+        let poisoned = distinctParams { wgpVolcanicActivity = 1 / 0 }
 
         it "defaults only the invalid setting and keeps every sibling" $ do
             let (repaired, rejections) = repairWorldGenParams poisoned
@@ -567,3 +579,158 @@ spec = describe "world-generation setting domains" $
                 expectAcceptance call
                 cfg ← readIORef (worldGenConfigRef env)
                 wgcErosionIntensity cfg `shouldBe` 1.5
+
+-- * Staging
+
+-- | A logger whose entries are captured in emission order, so what
+--   staging SAYS is observable rather than inferred.
+capturingLogger ∷ IO (LoggerState, IO [LogEntry])
+capturingLogger = do
+    ref ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback
+            (\e → atomicModifyIORef' ref (\es → (e : es, ()))) }
+    pure (logger, reverse ⊚ readIORef ref)
+
+-- | Every float leaf of 'defaultWorldGenParams' moved to its distinct
+--   value, so a sibling that survives a neighbour's repair is
+--   observable rather than trivially equal to the default.
+distinctParams ∷ WorldGenParams
+distinctParams = foldl' step defaultWorldGenParams paramsFloatLeaves
+  where
+    step p leaf = flSet leaf (distinctValue (flDomain leaf)) p
+
+-- | The page every staging example loads.
+stagedPageId ∷ WorldPageId
+stagedPageId = WorldPageId "gen_domain_staged"
+
+-- | A one-page save carrying @params@, built the way a DECODED save is:
+--   'blankPageSnapshot' is the single construction every @world-pages@
+--   version's own decoder converges on — the current v10 and all seven
+--   migrated historical ones alike — and 'snapshotToSaveData' is the
+--   adapter that turns such a snapshot into the 'SaveData' staging
+--   consumes. Forging the params HERE therefore reaches 'stagePage'
+--   along the real route rather than a test-only shortcut.
+--
+--   The page is an ARENA page (seed 0 with the empty timeline, which is
+--   'World.Generate.Types.isArenaParams'), so staging takes the
+--   flat-chunk rebuild instead of generating a world. That keeps this a
+--   fast example about the repair, not about worldgen.
+saveWith ∷ WorldGenParams → SaveData
+saveWith params = snapshotToSaveData
+    (SaveRequestMeta "gen_domain_slot" "2026-09-03T00:00:00.000000Z" False)
+    SessionSnapshot
+        { snapGameTime       = 0
+        , snapTexPalette     = emptyTexPalette
+        , snapNextItemId     = 1
+        , snapNextBuildingId = 1
+        , snapNextUnitId     = 1
+        , snapActivePage     = stagedPageId
+        , snapVisiblePages   = [stagedPageId]
+        , snapLiveCamera     = LiveCameraSnapshot
+            { lcsOwnerPage = Just stagedPageId
+            , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceSouth }
+        , snapPages          = HM.singleton stagedPageId
+            (blankPageSnapshot stagedPageId params { wgpSeed = 0 })
+        }
+
+-- | Stage one such save and hand back the staged page's OWN gen params
+--   — read from the ref the staged world state publishes from — beside
+--   everything the logger emitted.
+stageWith ∷ HasCallStack ⇒ EngineEnv → WorldGenParams
+          → IO (WorldGenParams, [LogEntry])
+stageWith env params = do
+    (logger, drain) ← capturingLogger
+    matReg ← readIORef (materialRegistryRef env)
+    staged ← stageSession env logger (saveWith params) matReg ⌦ either
+        (\e → expectationFailure (T.unpack (renderStageError e))
+                ≫ error "unreachable")
+        pure
+    entries ← drain
+    case find ((≡ stagedPageId) . spPageId) (ssPages staged) of
+        Nothing → expectationFailure "the staged page is missing"
+                    ≫ error "unreachable"
+        Just sp → do
+            mParams ← readIORef (wsGenParamsRef (spWorldState sp))
+            case mParams of
+                Nothing → expectationFailure
+                    "the staged page published no gen params"
+                        ≫ error "unreachable"
+                Just p  → pure (p, entries)
+
+-- | Warnings whose message names @needle@.
+warningsMentioning ∷ Text → [LogEntry] → [LogEntry]
+warningsMentioning needle =
+    filter (\e → leLevel e ≡ LevelWarn ∧ needle `T.isInfixOf` leMessage e)
+
+-- | The staging half of the save-side contract.
+--
+--   The pure examples above prove 'repairWorldGenParams' and the
+--   warning helper in isolation, which is necessary and not sufficient:
+--   both would stay green if the wiring in 'World.Load.Stage.stagePage'
+--   were deleted. These drive a forged persisted save through the REAL
+--   staging entry point, so what is asserted is that staging applies
+--   the repair before the staged page can publish its params, and says
+--   so through its own logger.
+stagingSpec ∷ SpecWith EngineEnv
+stagingSpec = describe "world-generation setting domains" $
+  describe "a persisted save, through staging" $ do
+
+    it "publishes no out-of-domain setting, whatever the save stored" $
+      \env → do
+        -- Every leaf poisoned at once: if staging skipped the repair,
+        -- the staged page would publish fifteen non-finite settings.
+        let poisoned = foldl' (\p (leaf, bad) → flSet leaf (bvFloat bad) p)
+                              distinctParams
+                              (zip paramsFloatLeaves (cycle badValues))
+        (stagedParams, _) ← stageWith env poisoned
+        worldGenParamsRejections stagedParams `shouldBe` []
+
+    it "defaults only the invalid setting, keeps every sibling, and \
+       \warns with the page id, the full field and the stored value" $
+      \env → do
+        let poisoned = distinctParams { wgpVolcanicActivity = 1 / 0 }
+        -- Precondition: the save really does carry exactly one bad
+        -- setting, so "only this one defaulted" is a repair rather than
+        -- a coincidence.
+        map wgrField (worldGenParamsRejections poisoned)
+            `shouldBe` [fieldVolcanicActivity]
+
+        (stagedParams, entries) ← stageWith env poisoned
+
+        -- The rejected setting took the shipped default...
+        wgpVolcanicActivity stagedParams
+            `shouldBe` wgpVolcanicActivity defaultWorldGenParams
+        -- ...every sibling survived at the value the save stored...
+        forM_ paramsFloatLeaves $ \leaf →
+            unless (flField leaf ≡ fieldVolcanicActivity) $
+                (flField leaf, flGet leaf stagedParams)
+                    `shouldBe` (flField leaf, distinctValue (flDomain leaf))
+        -- ...and nothing else about the page moved.
+        wgpWorldSize stagedParams `shouldBe` wgpWorldSize poisoned
+        wgpLavaPoolDepth stagedParams `shouldBe` wgpLavaPoolDepth poisoned
+
+        -- The warning names the page, the field and the value, and it
+        -- is the ONLY gen-domain warning staging emitted.
+        case warningsMentioning "world_gen." entries of
+            [entry] → do
+                leCategory entry `shouldBe` CatWorld
+                forM_ [ unWorldPageId stagedPageId
+                      , fieldVolcanicActivity
+                      , "Infinity"
+                      , tshow (wgpVolcanicActivity defaultWorldGenParams) ]
+                    $ \needle → leMessage entry
+                        `shouldSatisfy` T.isInfixOf needle
+            other → expectationFailure
+                ("expected exactly one gen-domain warning, got "
+                 ⧺ show (map leMessage other))
+
+    it "says nothing when the save's settings are all in domain" $ \env → do
+        (stagedParams, entries) ← stageWith env distinctParams
+        -- The save's own values arrive untouched...
+        forM_ paramsFloatLeaves $ \leaf →
+            (flField leaf, flGet leaf stagedParams)
+                `shouldBe` (flField leaf, distinctValue (flDomain leaf))
+        -- ...and staging is silent about the domain.
+        map leMessage (warningsMentioning "world_gen." entries)
+            `shouldBe` []
