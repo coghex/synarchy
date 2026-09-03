@@ -19,7 +19,8 @@ import Language.Generated.Profile
 import Language.Generated.Root
 import Language.Generated.Render
 import Language.Generated.Signature
-import Language.Generated.Report (countDuplicateRoots)
+import Language.Generated.Report (buildSeedReport, countDuplicateRoots)
+import Language.Naming (mkNamer)
 import Test.Headless.Language.Generated.Support
 
 spec ∷ Ctx → Spec
@@ -204,9 +205,10 @@ spec Ctx{..} = do
         it "has zero root collisions over the complete production catalogue, for several seeds" $ do
             let seeds = [0, 1, 7, 42, 99, 12345, 999999]
                 collisionsFor sd =
-                    countDuplicateRoots (assignRoots (buildProfileV1 (LangSeed sd))
-                                                      prodOrds
-                                                      (conceptIds prodCat))
+                    countDuplicateRoots
+                        (expectRoots
+                            (assignRoots (buildProfileV1 (LangSeed sd))
+                                          prodOrds (conceptIds prodCat)))
             map collisionsFor seeds `shouldBe` map (const 0) seeds
 
         -- #1868. Placement moved from ascending id order to the
@@ -235,6 +237,13 @@ spec Ctx{..} = do
             -- Takes (and ignores) the ordinals so it shares
             -- 'movedUnder' with the real assignment below: the two are
             -- driven through one comparison, not two similar ones.
+            -- 'assignRoots' behind 'expectRoots', so it shares
+            -- 'movedUnder''s shape with the reference below. Every
+            -- profile in the panel has room for the catalogue, so the
+            -- unwrap never fires here.
+            assignRootsOk ∷ Profile → ConceptOrdinals → [ConceptId]
+                          → M.Map ConceptId Text
+            assignRootsOk prof ords ids = expectRoots (assignRoots prof ords ids)
             ascendingIdPlacement ∷ Profile → ConceptOrdinals → [ConceptId]
                                  → M.Map ConceptId Text
             ascendingIdPlacement prof _ords ids = foldl' step M.empty (sort ids)
@@ -269,7 +278,7 @@ spec Ctx{..} = do
             panel `shouldSatisfy` ((≡ 50) ∘ length)
             [ (generatorVersionInt ver, langSeedWord (profSeed prof))
               | (ver, _, prof) ← panel
-              , assignRoots prof prodOrds prodIds
+              , assignRootsOk prof prodOrds prodIds
                   ≢ ascendingIdPlacement prof prodOrds prodIds ] `shouldBe` []
 
         it "leaves every existing concept's root untouched when an id is \
@@ -281,7 +290,7 @@ spec Ctx{..} = do
             [ (generatorVersionInt ver, langSeedWord (profSeed prof), pid, moved)
               | entry@(ver, _, prof) ← panel
               , pid ← probeIds
-              , let moved = movedUnder assignRoots prodOrds pid entry
+              , let moved = movedUnder assignRootsOk prodOrds pid entry
               , not (null moved) ] `shouldBe` []
 
         it "would have caught the defect: ascending-id placement DOES \
@@ -463,7 +472,7 @@ spec Ctx{..} = do
                   , ("WRAITH", "apipi")
                   , ("WRATH", "iłjah")
                   ]
-            M.toList (assignRoots prof prodOrds prodIds)
+            M.toList (expectRoots (assignRoots prof prodOrds prodIds))
                 `shouldBe` [ (cid c, r) | (c, r) ← golden ]
 
     describe "every #709 name form renders natively (requirement 10)" $ do
@@ -533,7 +542,132 @@ spec Ctx{..} = do
             profileSignature (buildProfileV1 (LangSeed 321))
                 `shouldNotBe` profileSignature (buildProfileV1 (LangSeed 322))
 
+    describe "root-space capacity (#2206)" $ do
+        let v5 sd = buildProfileV5 (LangSeed sd)
+            prodIds = conceptIds prodCat
+            required = length prodIds
+
+        -- The requirement side of every assertion below. Pinned so a
+        -- catalogue that grew past what the shortfall numbers were
+        -- measured against fails HERE, naming the reason, instead of
+        -- quietly changing what "shortfall 7" means.
+        it "measures against the production catalogue's 151 concepts" $
+            required `shouldBe` 151
+
+        -- The two seeds #2206 names, with the capacity MEASURED off the
+        -- profile's real rendering rather than the naive product of its
+        -- shape counts (those can differ: a dual-role 'y' lets one
+        -- shape's output collide with another's).
+        it "reports the exact capacity and shortfall for seeds 1116 \
+           \and 1648" $ do
+            rootSpaceCapacity (v5 1116) required
+                `shouldBe` RootCapacityShort 144
+            rootSpaceCapacity (v5 1648) required
+                `shouldBe` RootCapacityShort 135
+            -- Stated as the shortfall the error text reports, so the
+            -- arithmetic behind "short by 7"/"short by 16" is pinned
+            -- and not just the capacity.
+            map (required -) [144, 135] `shouldBe` [7, 16]
+
+        it "rejects assignment for seed 1116, naming version, seed, \
+           \capacity, requirement and shortfall" $ do
+            assignLanguageRoots (v5 1116) prodOrds prodIds
+                `shouldSatisfy` isLeft'
+            case assignLanguageRoots (v5 1116) prodOrds prodIds of
+                Right _ → expectationFailure "assigned roots from a 144-root space"
+                Left err → do
+                    err `shouldBe` InsufficientRootSpace
+                        (GeneratorVersion 5) (LangSeed 1116) 144 151
+                    let msg = generatorErrorText err
+                    forM_ ["version 5", "seed 1116", "144", "151", "shortfall 7"] $
+                        \needle → msg `shouldSatisfy` T.isInfixOf needle
+
+        -- The gate must not fire on a profile that CAN name the
+        -- catalogue: over a window bracketing both offenders, exactly
+        -- the two are refused. Without this the check above would pass
+        -- just as happily against a gate that rejected everything.
+        it "refuses exactly the insufficient seeds over a window around \
+           \them" $ do
+            let refused = [ sd | sd ← [1100 .. 1700 ∷ Word64]
+                               , RootCapacityShort _ ←
+                                   [rootSpaceCapacity (v5 sd) required] ]
+            refused `shouldBe` [1116, 1648]
+
+        -- A rejection that stopped at 'assignRoots' would leave every
+        -- caller free to hang instead. These are the three production
+        -- consumers that return 'Either'; the etymology consumer keeps
+        -- its own result type and is covered in "Language etymology".
+        it "propagates the rejection through mkNamer" $
+            case mkNamer prodCat (LanguageProvenance (LangSeed 1116)
+                                                     (GeneratorVersion 5)) of
+                Right _ → expectationFailure "built a namer from a 144-root space"
+                Left err → generatorErrorText err
+                    `shouldSatisfy` T.isInfixOf "shortfall 7"
+
+        -- The min-length repair is part of the space, and no seeded
+        -- profile pins it: 1116's and 1648's shapes are CCV/CVC, which
+        -- always clear the three-character floor on their own. This
+        -- fixture is nothing but short syllables, so EVERY root it can
+        -- produce is a top-up.
+        it "counts the min-length repair's top-ups, not just the raw \
+           \syllable sequences" $ do
+            -- 5 consonants x 3 vowels = 15 two-character raw sequences,
+            -- every one of them below minNativeWordLength. A capacity
+            -- that stopped at the raw sequences would see exactly 15.
+            rootSpaceCapacity shortSyllableFixture 16
+                `shouldBe` RootCapacitySufficient
+            -- The whole space, bounded from first principles: strictly
+            -- more than the 15 raw sequences, and at most one top-up
+            -- syllable per raw (15 x 15).
+            case rootSpaceCapacity shortSyllableFixture 100000 of
+                RootCapacitySufficient → expectationFailure
+                    "a 15-syllable fixture cannot hold 100000 roots"
+                RootCapacityShort k →
+                    k `shouldSatisfy` (\n → n > 15 ∧ n ≤ 225)
+
+        it "propagates the rejection through buildSeedReport" $ do
+            case buildSeedReport prodCat (GeneratorVersion 5) 1116 of
+                Right _ → expectationFailure "reported a 144-root seed"
+                Left err → generatorErrorText err
+                    `shouldSatisfy` T.isInfixOf "shortfall 7"
+            -- The neighbouring seeds still report, so the rejection is
+            -- the seed's own and not the report path breaking.
+            buildSeedReport prodCat (GeneratorVersion 5) 1115
+                `shouldSatisfy` isRight'
+            buildSeedReport prodCat (GeneratorVersion 5) 1117
+                `shouldSatisfy` isRight'
+
+-- | A profile whose every syllable falls short of
+--   'minNativeWordLength': one @CV@ shape at exactly one syllable, over
+--   five consonants and three vowels. Hand-built rather than seed-drawn
+--   because no generated profile is guaranteed to have this shape, and
+--   the point is to drive 'Language.Generated.Root''s min-length repair
+--   from a space small enough to bound by hand.
+--
+--   Version 3 so its boundary policy is a real mediated one — a top-up
+--   join that was never mediated would be a different space.
+shortSyllableFixture ∷ Profile
+shortSyllableFixture = Profile
+    { profVersion        = GeneratorVersion 3
+    , profSeed           = LangSeed 0
+    , profConsonants     = "bhkst"
+    , profVowels         = "aeo"
+    , profSyllableShapes = [SyllableShape [ConsonantSlot, VowelSlot]]
+    , profMinSyllables   = 1
+    , profMaxSyllables   = 1
+    , profCompoundOrder  = ModifierFirst
+    , profPossessive     = PossessiveMarking OwnerFirst "h"
+    , profPlural         = PluralMarking "s"
+    , profJoin           = JoinCompact
+    , profOnset          = emptyOnsetRelation
+    , profBoundary       = profBoundary (boundaryFixture BoundaryEpenthetic)
+    }
+
 -- | A rendering succeeded.
 isRight' ∷ Either α β → Bool
 isRight' (Right _) = True
 isRight' (Left _)  = False
+
+-- | A rendering or assignment failed.
+isLeft' ∷ Either α β → Bool
+isLeft' = not ∘ isRight'

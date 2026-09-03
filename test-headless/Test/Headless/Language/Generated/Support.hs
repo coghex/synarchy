@@ -12,6 +12,7 @@ module Test.Headless.Language.Generated.Support
     , wordInitialOnsets
     , boundaryFixture
     , contractOk
+    , expectRoots
     ) where
 
 import UPrelude
@@ -32,6 +33,21 @@ import Language.Generated.Report (canonicalExpressions)
 
 cid ∷ Text → ConceptId
 cid = ConceptId
+
+-- | A root assignment that must succeed. Every profile this suite
+--   assigns over has room for the whole catalogue, so a #2206
+--   'Language.Generated.Types.InsufficientRootSpace' here is a defect
+--   in the code under test rather than an outcome a caller should be
+--   branching on — the specs that DO exercise the rejection assert the
+--   'Left' explicitly instead of coming through here.
+--
+--   Polymorphic in the payload so one helper serves both
+--   'Language.Generated.Root.assignRoots' and
+--   'Language.Generated.Root.assignLanguageRoots'.
+expectRoots ∷ Either GeneratorError α → α
+expectRoots (Right a) = a
+expectRoots (Left err) =
+    error (T.unpack ("root assignment failed: " <> generatorErrorText err))
 
 -- | The two-consonant onsets in a rendered NAME that a @CCV@ syllable
 --   provably produced: the first two glyphs, and the first two after
@@ -196,7 +212,8 @@ mkCtx prodCat = Ctx {..}
     -- roots plus whatever bound forms this version's selection
     -- accepted. Empty bound map below generator version 4.
     rootsFor ∷ Profile → LanguageRoots
-    rootsFor prof = assignLanguageRoots prof prodOrds (conceptIds prodCat)
+    rootsFor prof = expectRoots
+        (assignLanguageRoots prof prodOrds (conceptIds prodCat))
 
     renderingsFor ∷ Profile → [Either Text Text]
     renderingsFor prof =

@@ -518,7 +518,7 @@ suggestionStepLabel s = case s of
 -- | Resolve one suggestion, reusing 'lbsLanguageCache' wherever it
 --   still applies (#1106 requirement 8: the dice button runs
 --   synchronously on the UI's own thread, so a press must not re-read
---   and re-parse @data/language/concepts.yaml@ or re-derive 150 concept
+--   and re-parse @data/language/concepts.yaml@ or re-derive 151 concept
 --   roots).
 --
 --   Rerolling within one seed reuses both levels. Editing the seed is a
@@ -529,9 +529,14 @@ suggestionStepLabel s = case s of
 --   thereafter, so a broken installation costs one read rather than one
 --   per press (see 'LanguageCache' for why that is sticky).
 --
---   A profile-construction failure caches the catalogue it did resolve,
---   so an unconstructible generator version doesn't force a re-read
---   either.
+--   A suggester-construction failure caches the catalogue it did
+--   resolve, so neither an unconstructible generator version nor a
+--   profile with too small a root space (#2206) forces a re-read
+--   either. Note WHICH side of the cache that failure lands on: it
+--   writes @'LanguageCache' ('Right' cat) 'Nothing'@, never a 'Left'
+--   catalogue — the 'Left' is sticky ('StepFailed'), so recording a
+--   per-language failure there would poison every later seed in the
+--   session.
 resolveSuggestion
     ∷ LuaBackendState → Word64 → Int → IO (Either Text NameSuggestion)
 resolveSuggestion backendState seed ordinal = do

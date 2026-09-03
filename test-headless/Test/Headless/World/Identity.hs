@@ -34,11 +34,17 @@ import Data.List (find)
 import qualified Data.HashMap.Strict as HM
 import Engine.Core.State (EngineEnv(..))
 import Test.Headless.Harness
-    (sendWorldCommand, waitForWorldInit)
+    (getWorldGenParams, sendWorldCommand, waitForWorldInit)
+import Test.Headless.Harness.Log (newLogCapture)
+import Engine.Core.Log (initLogger)
+import Engine.Core.Log.Types (LogConfig(..), LogEntry(..), defaultLogConfig)
+import Location.Instance
+    (LocationInstance(..), instancesToList)
+import World.River.Naming (RiverName(..), riverNamesToList)
 import World.Types
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..)
-    , langSeedText )
+    , currentGeneratorVersion, langSeedText )
 import Language.Generated.Profile (generateProfile)
 import World.Save.Serialize (loadWorld, sanitizeSaveName)
 import World.Load.Stage (stageSession, renderStageError)
@@ -227,6 +233,92 @@ spec = do
             ws ← waitForWorldInit env (WorldPageId "id_generated_w8") 120
             ident ← readIORef (wsIdentityRef ws)
             ident `shouldBe` Just generatedIdent
+
+    -- #2206. Language seed 1116 builds a profile whose root space holds
+    -- 144 distinct roots against the catalogue's 151 concepts, so no
+    -- assignment over it exists. Before the capacity gate,
+    -- 'resolvePageNamer' did not fail here — it never returned, and the
+    -- world thread never finished initializing this page.
+    describe "a language too small to name the catalogue (#2206)" $ do
+        let shortPage = WorldPageId "id_short_roots_w8"
+            okPage    = WorldPageId "id_ample_roots_w8"
+            identFor sd = case mkGeneratedWorldIdentity
+                                  (Just "Vashenkoro") (Just "the salt reach")
+                                  (LanguageProvenance (LangSeed sd)
+                                                      currentGeneratorVersion)
+                                  Nothing of
+                Just i  → i
+                Nothing → error "identFor: normalization rejected a valid name"
+        -- Both pages use ONE world seed and size, so they differ only in
+        -- the language: same terrain, same placements, same rivers.
+
+        it "completes WorldInit, keeps the page identity, warns with the \
+           \generator error, and leaves the river table empty" $ \env → do
+            (backend, drain) ← newLogCapture
+            capture  ← initLogger defaultLogConfig { lcBackend = backend }
+            original ← readIORef (loggerRef env)
+            ws ← (do writeIORef (loggerRef env) capture
+                     sendWorldCommand env
+                         (WorldInit shortPage 31 8 3 (Just (identFor 1116)))
+                     -- Reaching this line at all is the regression: the
+                     -- unbounded reroll made this page never appear.
+                     waitForWorldInit env shortPage 120)
+                    `finally` writeIORef (loggerRef env) original
+
+            -- The identity is RETAINED, not swapped for another language.
+            readIORef (wsIdentityRef ws) `shouldReturn` Just (identFor 1116)
+
+            entries ← drain
+            let disabled = [ leMessage e | e ← entries
+                           , "Name generation disabled for this world: "
+                               `T.isPrefixOf` leMessage e ]
+            disabled `shouldSatisfy` (not ∘ null)
+            disabled `shouldSatisfy` any (T.isInfixOf "shortfall 7")
+            disabled `shouldSatisfy` any (T.isInfixOf "seed 1116")
+
+            params ← getWorldGenParams ws
+            case params of
+                Nothing → expectationFailure "the initialized page has no gen params"
+                Just p  → do
+                    -- The observable half of the no-namer fallback on a
+                    -- test-scale world: this page's rivers stay
+                    -- unnamed. The control below proves the same world
+                    -- DOES name them under a language with room for the
+                    -- catalogue, so this is not an empty table for want
+                    -- of rivers.
+                    riverNamesToList (wgpRiverNames p) `shouldBe` []
+                    -- The location half of the same fallback: whatever
+                    -- this page placed carries its definition's label,
+                    -- with no gloss and no etymology. Test-scale worlds
+                    -- place none, so the location clause of #2206
+                    -- requirement 7 is pinned where it IS observable —
+                    -- "Location naming"'s no-namer fixture, plus the
+                    -- mkLocationNamer rejection that routes this page
+                    -- to it.
+                    let insts = instancesToList (wgpLocationInstances p)
+                    map liGloss insts `shouldSatisfy` all isNothing
+                    map liEtymology insts `shouldSatisfy` all isNothing
+
+        -- The control. Same world seed and size, a language with room
+        -- for the catalogue: this page DOES carry generated location
+        -- names, so the fallback above is the language's doing and the
+        -- assertions on it are not passing over an empty world.
+        it "still names this world's rivers under a sufficient language" $
+            \env → do
+                sendWorldCommand env
+                    (WorldInit okPage 31 8 3 (Just (identFor 1117)))
+                ws ← waitForWorldInit env okPage 120
+                params ← getWorldGenParams ws
+                case params of
+                    Nothing → expectationFailure
+                        "the initialized page has no gen params"
+                    Just p  → do
+                        let named = riverNamesToList (wgpRiverNames p)
+                        named `shouldSatisfy` (not ∘ null)
+                        map (rvnDisplayName ∘ snd) named
+                            `shouldSatisfy` all (not ∘ T.null)
+                        map (rvnGloss ∘ snd) named
+                            `shouldSatisfy` all isJust
 
     describe "language-provenance query (#1092 requirement 5)" $ do
         -- Runs after page creation above, against those same live pages.
