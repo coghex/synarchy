@@ -101,9 +101,14 @@ data WorldSimCapability = WorldSimCapability
     --   own @wpsGenParams@. Read by @WorldThread@, read\/written by
     --   @LuaThread@.
   , wsGameTimeRef         ∷ IORef Double
-    -- ^ Monotonic-while-unpaused game clock, persisted exactly.
-    --   Written by @UnitThread@ (once per unpaused tick) and
-    --   @WorldThread@ (load publish); read by a concrete, enumerated
+    -- ^ Monotonic-while-unpaused game clock, persisted exactly —
+    --   monotonic WITHIN a session, that is: the two session boundaries
+    --   replace the value outright. Written by @UnitThread@ (once per
+    --   unpaused tick, and once more at the Exit-to-Menu boundary, where
+    --   'Unit.Thread.endSessionEpoch' restores
+    --   'Engine.Core.SessionEpoch.freshSessionGameTime' — #2291) and
+    --   @WorldThread@ (load publish, which installs the save's own
+    --   @sdGameTime@); read by a concrete, enumerated
     --   set of roles — @InputThread@, @CombatThread@, @WorldThread@,
     --   @UnitThread@ and @LuaThread@ — for event\/log timestamping.
     --   §5 enumerates them rather than writing @AnyThread@ on purpose:

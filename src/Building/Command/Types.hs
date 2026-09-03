@@ -29,4 +29,14 @@ data BuildingCommand
         -- ^ Drop every building instance + selection. Enqueued by
         --   world.destroyAll so the clear is ordered AFTER any in-flight
         --   BuildingSpawns on this queue (#58).
+    | BuildingEndSession
+        -- ^ The building half of the same Exit-to-Menu boundary
+        --   'Unit.Command.Types.UnitEndSession' marks (#2291), and the
+        --   same kind of value: a position, not work. Enqueued by
+        --   world.destroyAll immediately behind its 'BuildingClearAll',
+        --   and 'Building.Thread.Command.processAllBuildingCommands'
+        --   stops draining when it takes this off the queue, so a
+        --   building command queued after the boundary cannot be stamped
+        --   on the outgoing session's clock in the same tick that resets
+        --   it.
     deriving (Show)

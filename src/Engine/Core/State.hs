@@ -464,6 +464,20 @@ data EngineEnv = EngineEnv
     --   that need to freeze on pause (uiAnimStart, biSpawnedAt,
     --   usReviveUntil) reference this clock instead of POSIX wall-time.
     --   Updated by Unit.Thread.unitTick once per tick.
+    --
+    --   It is one PROCESS-wide counter, not a per-world one, so it has
+    --   three transitions and no others: seeded at boot with
+    --   'Engine.Core.SessionEpoch.freshSessionGameTime'; restored to
+    --   that same value by 'Unit.Thread.endSessionEpoch' when Exit to
+    --   Menu destroys every world (#2291), so the next game does not
+    --   inherit the previous session's accumulated total; and REPLACED
+    --   by the save's own @sdGameTime@ on a load publish
+    --   ('World.Load.Publish.publishStagedSession'). Creating an
+    --   additional page inside a live session is not one of them —
+    --   'World.Thread.Command.Init.handleWorldInitCommand' never writes
+    --   it. Because the unit tick advances it whenever the engine is
+    --   unpaused, without asking whether a page is live, menu time
+    --   accrues into it after boot and after an exit alike.
   , saveBarrierRef     ∷ SaveBarrier
     -- ^ Runtime-only coordinated-save transaction state.  It is diagnostic
     -- and synchronization state, never part of 'SaveData'.
@@ -550,8 +564,14 @@ data EngineEnv = EngineEnv
     --
     --   Rows and counter share this ONE ref so a sequence is assigned
     --   in the same atomic write that commits the row it names, and so
-    --   the counter outlives the load-publish row reset — see
-    --   'Engine.PlayerEvent.clearEventStoreRows'.
+    --   the counter outlives a row reset — see
+    --   'Engine.PlayerEvent.clearEventStoreRows'. The rows are reset at
+    --   BOTH session boundaries: a load publish
+    --   ('World.Load.Publish.resetTransientState') and an Exit to Menu
+    --   ('Unit.Thread.endSessionEpoch', #2291). \"Per-session only\"
+    --   above is that promise; before #2291 only the load half of it
+    --   was kept, and the previous session's rows stayed renderable and
+    --   clickable in the next game.
   , notificationCfgRef ∷ IORef NotificationCfg
     -- ^ Resolved notification settings keyed by category id. Loaded
     --   at boot from 'data/notification_categories.yaml' merged with
