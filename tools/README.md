@@ -3051,6 +3051,12 @@ globals, and a façade binding would accept that assignment and change nothing.
 Every other compatibility export is the canonical object its owner defines, so
 `except deflake_issue.PublicationFailed` catches what the tracker raises and a
 fake subclassing `deflake_issue.Publication` subclasses the real interface.
+That holds under BOTH import spellings: `tools/` is an implicit namespace
+package, so `tools.deflake_issue` and the bare `deflake_issue` a caller with
+`tools/` on `sys.path` gets are different modules to Python, and resolving an
+owner by bare name from the package spelling would load a second copy of it and
+make every identity above false. Each module therefore resolves its
+dependencies through `_sibling()`, under whichever spelling loaded it.
 
 "Engine" means production Haskell under `src/`/`app/` and shipped Lua under
 `scripts/`; probe implementation under `tools/*_probe.py` is explicitly not

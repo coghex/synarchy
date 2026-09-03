@@ -8214,6 +8214,33 @@ def test_the_handoff_family_imports_as_repository_modules() -> None:
                f"exited {done.returncode}\n{done.stderr[-400:]}")
 
 
+def issue_family_dependencies(source: str) -> set:
+    """Every `tools/` module one owner of the issue family depends on.
+
+    An import-node scan is not enough here. The family resolves each
+    dependency with `_sibling("<name>")` so that the `tools.` and bare
+    spellings of a module are the SAME object (#2157), and a scan that
+    only walked `ast.Import` would see no edges at all — passing the
+    acyclicity and no-implementation cases vacuously while a back-edge
+    sat in plain sight. So the literal argument of every `_sibling` call
+    counts as a dependency, exactly as an import would.
+    """
+    found = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            found.add(node.module or "")
+        elif (isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Name)
+              and node.func.id == "_sibling"
+              and node.args
+              and isinstance(node.args[0], ast.Constant)
+              and isinstance(node.args[0].value, str)):
+            found.add(node.args[0].value)
+    return found
+
+
 def test_the_issue_facade_exports_the_canonical_objects() -> None:
     """#2157: the façade binds its owners' objects, it does not copy them.
 
@@ -8300,12 +8327,11 @@ def test_the_issue_owners_stay_one_way() -> None:
     directory = Path(dd.__file__).resolve().parent
     for owner in sorted(family):
         source = (directory / f"{owner}.py").read_text(encoding="utf-8")
-        imported = set()
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.Import):
-                imported |= {alias.name for alias in node.names}
-            elif isinstance(node, ast.ImportFrom):
-                imported.add(node.module or "")
+        imported = issue_family_dependencies(source)
+        expect(imported,
+               f"{owner} reads as depending on nothing at all, which means "
+               f"the dependency scan has stopped seeing this family's "
+               f"edges rather than that the file has none")
         for name in sorted(imported & forbidden):
             expect(False,
                    f"{owner} imports {name}; an extracted owner depends on "
@@ -8378,17 +8404,100 @@ def test_the_issue_facade_keeps_only_what_it_composes() -> None:
     # walker's, and `hashlib` the publication key's. None of the four
     # has a caller left on the façade, and an import of one is the first
     # sign an implementation came back.
-    imported = set()
-    for node in ast.walk(facade):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module or "")
+    imported = issue_family_dependencies(
+        (directory / "deflake_issue.py").read_text(encoding="utf-8"))
+    for name in ("deflake_issue_document", "deflake_issue_evidence",
+                 "deflake_issue_record", "deflake_issue_tracker"):
+        expect(name in imported,
+               f"the façade must compose {name}; a scan that cannot see "
+               f"that edge cannot see a stale implementation either")
     for name in ("subprocess", "tempfile", "stat", "hashlib", "probe_flake",
                  "probe_protocol", "probe_runner_registry"):
         expect(name not in imported,
                f"the façade imports {name}, which only an extracted "
                f"implementation needs")
+
+
+def test_the_issue_family_is_one_module_under_either_spelling() -> None:
+    """#2157: `tools.<name>` and the bare name must not be two modules.
+
+    `tools/` is an implicit namespace package, so every file in it has
+    two import spellings and Python treats them as different modules. A
+    façade loaded as `tools.deflake_issue` that resolved its owners by
+    BARE name would therefore load a second copy of each, and every
+    guarantee this split rests on would be false in that process:
+    `tools.deflake_issue.issue_body is not
+    tools.deflake_issue_document.issue_body`, `except
+    tools.deflake_issue.PublicationFailed` would stop catching what
+    `tools.deflake_issue_tracker` raises, and lowering
+    `tools.deflake_issue_document.MAX_BODY_CHARS` would leave the module
+    that actually renders untouched.
+
+    Asserted in ONE fresh interpreter per spelling, because that is the
+    only place the defect exists — each module imports fine on its own,
+    and the compatibility cases above run under the bare spelling where
+    a bare-name resolution looks correct.
+    """
+    root = Path(dd.__file__).resolve().parent.parent
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    programs = {
+        "the tools. spelling": """
+import sys
+import tools.deflake_issue_document as document
+import tools.deflake_issue_evidence as evidence
+import tools.deflake_issue_record as record
+import tools.deflake_issue_tracker as tracker
+import tools.deflake_issue as facade
+assert facade.issue_body is document.issue_body, "issue_body"
+assert facade.publication_key is document.publication_key, "publication_key"
+assert facade.PublicationFailed is tracker.PublicationFailed, "PublicationFailed"
+assert facade.Publication is tracker.Publication, "Publication"
+assert facade.run_excerpts is evidence.run_excerpts, "run_excerpts"
+assert facade.Published is record.Published, "Published"
+assert tracker.carries_key is document.carries_key, "tracker->document"
+stray = sorted(name for name in sys.modules
+               if name.startswith("deflake_issue"))
+assert not stray, f"bare copies loaded beside the package ones: {stray}"
+""",
+        "the bare spelling": """
+import sys
+sys.path.insert(0, "tools")
+import deflake_issue_document as document
+import deflake_issue_tracker as tracker
+import deflake_issue as facade
+assert facade.issue_body is document.issue_body, "issue_body"
+assert facade.PublicationFailed is tracker.PublicationFailed, "PublicationFailed"
+stray = sorted(name for name in sys.modules
+               if name.startswith("tools.deflake_issue"))
+assert not stray, f"package copies loaded beside the bare ones: {stray}"
+""",
+    }
+    for label, program in programs.items():
+        done = subprocess.run([sys.executable, "-c", program], cwd=str(root),
+                              capture_output=True, text=True, timeout=120,
+                              env=environment)
+        expect(done.returncode == 0,
+               f"under {label} the façade and its owners must be ONE set of "
+               f"modules; exited {done.returncode}\n{done.stderr[-400:]}")
+
+    # The substituted constant is the case that matters most, since a
+    # duplicated document owner would leave the gate's own mutation seam
+    # pointing at a module nothing renders through.
+    seam = """
+import tools.deflake_issue_document as document
+import tools.deflake_issue as facade
+document.MAX_BODY_CHARS = 400
+source = facade.issue_body.__globals__["MAX_BODY_CHARS"]
+assert source == 400, f"the renderer still reads {source}"
+"""
+    done = subprocess.run([sys.executable, "-c", seam], cwd=str(root),
+                          capture_output=True, text=True, timeout=120,
+                          env=environment)
+    expect(done.returncode == 0,
+           f"lowering `tools.deflake_issue_document.MAX_BODY_CHARS` must "
+           f"reach the `issue_body` the façade composes; exited "
+           f"{done.returncode}\n{done.stderr[-400:]}")
 
 
 def test_the_issue_family_imports_as_repository_modules() -> None:

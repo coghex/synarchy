@@ -31,6 +31,7 @@ search-index match be recorded as a publication.
 """
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
@@ -39,19 +40,39 @@ import sys
 import tempfile
 
 # `tools/` carries no `__init__.py`, so it is an implicit namespace
-# package: under the repository-root spelling `import
-# tools.deflake_issue_tracker` this directory is NOT on `sys.path`, and
-# the sibling imports below resolve only because the pre-split module
-# put its own directory there first. Every owner in this family carries
-# the same bootstrap ahead of its own sibling imports.
+# package, and every module in it has TWO import spellings: the
+# `tools.<name>` one used from the repository root, and the bare one a
+# caller who put `tools/` on `sys.path` uses. Python treats those as
+# DIFFERENT modules, so resolving a sibling by bare name from a file
+# that was itself loaded as `tools.<name>` loads a second copy of it —
+# and then `tools.deflake_issue.issue_body is not
+# tools.deflake_issue_document.issue_body`, `except
+# tools.deflake_issue.PublicationFailed` stops catching what
+# `tools.deflake_issue_tracker` raises, and a substituted
+# `MAX_BODY_CHARS` lands on a module nothing renders through.
+#
+# So every dependency is resolved under the spelling that loaded THIS
+# module, and the path insertion below remains for the bare spelling and
+# for running this file directly as a script.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deflake_handoff  # noqa: E402
-from deflake_issue_document import (  # noqa: E402
-    ORIGIN_MARKER,
-    PUBLICATION_MARKER,
-    body_origin,
-    carries_key,
-)
+
+
+def _sibling(name: str):
+    """One `tools/` module, under the spelling that loaded this one."""
+    return importlib.import_module(
+        f"{__package__}.{name}" if __package__ else name)
+
+
+deflake_handoff = _sibling("deflake_handoff")
+_document = _sibling("deflake_issue_document")
+
+# The document owner's own objects, bound and not copied: a second
+# spelling of the standalone-marker rule would let a search-index match
+# be recorded as this attempt's publication.
+ORIGIN_MARKER = _document.ORIGIN_MARKER
+PUBLICATION_MARKER = _document.PUBLICATION_MARKER
+body_origin = _document.body_origin
+carries_key = _document.carries_key
 
 NonSuccess = deflake_handoff.NonSuccess
 

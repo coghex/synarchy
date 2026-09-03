@@ -181,26 +181,47 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib
 import json
 import os
 import sys
 from pathlib import Path
 
 # `tools/` carries no `__init__.py`, so it is an implicit namespace
-# package: under the repository-root spelling `import
-# tools.deflake_issue` this directory is NOT on `sys.path`, and the
-# sibling imports below resolve only because this module puts its own
-# directory there first. The re-exports run at import time, so the
-# bootstrap has to happen before the first of them or the public
-# contract would resolve only for callers who had already put `tools/`
-# on the path themselves. Each of the four owners carries the same
-# bootstrap ahead of its own sibling imports.
+# package, and every module in it has TWO import spellings: the
+# `tools.<name>` one used from the repository root, and the bare one a
+# caller who put `tools/` on `sys.path` uses. Python treats those as
+# DIFFERENT modules, so resolving an owner by bare name from a facade
+# that was itself loaded as `tools.deflake_issue` loads a SECOND copy of
+# it. Every guarantee below would then be false under that spelling:
+# `tools.deflake_issue.issue_body is not
+# tools.deflake_issue_document.issue_body`, `except
+# tools.deflake_issue.PublicationFailed` stops catching what
+# `tools.deflake_issue_tracker` raises, and a substituted
+# `MAX_BODY_CHARS` lands on a module nothing renders through.
+#
+# So every dependency is resolved under the spelling that loaded THIS
+# module, and the path insertion below remains for the bare spelling and
+# for running this file directly as a script.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deflake_diagnosis  # noqa: E402
-import deflake_handoff  # noqa: E402
-import probe_census  # noqa: E402
 
-# The compatibility surface, and the façade's own composition inputs in
+
+def _sibling(name: str):
+    """One `tools/` module, under the spelling that loaded this one."""
+    return importlib.import_module(
+        f"{__package__}.{name}" if __package__ else name)
+
+
+deflake_diagnosis = _sibling("deflake_diagnosis")
+deflake_handoff = _sibling("deflake_handoff")
+probe_census = _sibling("probe_census")
+
+_document = _sibling("deflake_issue_document")
+_evidence = _sibling("deflake_issue_evidence")
+_record = _sibling("deflake_issue_record")
+_tracker = _sibling("deflake_issue_tracker")
+
+# The compatibility surface, and the facade's own composition inputs in
 # one block: every name below is the CANONICAL object its owner defines,
 # bound here and not copied. So `deflake_issue.PublicationFailed is
 # deflake_issue_tracker.PublicationFailed`, an `except` against either
@@ -214,62 +235,57 @@ import probe_census  # noqa: E402
 # of `deflake_issue_document`'s own globals. A second binding here would
 # accept that assignment and change nothing at all, leaving the refusal
 # unexercised while the test appeared to drive it.
-from deflake_issue_document import (  # noqa: E402
-    COMMENT_OPENER,
-    KEY_SCHEMA,
-    MAX_DIAGNOSIS_EVIDENCE,
-    MAX_DIAGNOSIS_EVIDENCE_ITEM,
-    MAX_DIAGNOSIS_SUMMARY,
-    MAX_TITLE_CHARS,
-    NEUTRAL_OPENER,
-    ORIGIN_ANYWHERE,
-    ORIGIN_LINE,
-    ORIGIN_MARKER,
-    ORIGINS,
-    PUBLICATION_MARKER,
-    body_origin,
-    carries_key,
-    issue_body,
-    issue_title,
-    key_marker,
-    neutralize,
-    origin_marker,
-    probe_script,
-    prose_lines,
-    publication_key,
-    require_one_marker_each,
-)
-from deflake_issue_evidence import (  # noqa: E402
-    ENGINE_LOG_DIR,
-    MAX_EVIDENCE_FILES_PER_RUN,
-    MAX_EVIDENCE_RUNS,
-    MAX_EXCERPT_CHARS,
-    MAX_EXCERPT_LINES,
-    MAX_READ_BYTES,
-    RUN_EVIDENCE_FILES,
-    collect_evidence,
-    excerpt,
-    failing_runs,
-    open_run_directory,
-    run_excerpts,
-)
-from deflake_issue_record import (  # noqa: E402
-    Published,
-    outcome_record,
-    require_outcome_timestamp,
-    require_supported,
-    reuse_stored_publication,
-    stored_record,
-    utc_now,
-)
-from deflake_issue_tracker import (  # noqa: E402
-    ISSUE_URL,
-    GitHubPublication,
-    Publication,
-    PublicationFailed,
-    require_issue_identity,
-    require_reconciled_issue,
-)
+COMMENT_OPENER = _document.COMMENT_OPENER
+KEY_SCHEMA = _document.KEY_SCHEMA
+MAX_DIAGNOSIS_EVIDENCE = _document.MAX_DIAGNOSIS_EVIDENCE
+MAX_DIAGNOSIS_EVIDENCE_ITEM = _document.MAX_DIAGNOSIS_EVIDENCE_ITEM
+MAX_DIAGNOSIS_SUMMARY = _document.MAX_DIAGNOSIS_SUMMARY
+MAX_TITLE_CHARS = _document.MAX_TITLE_CHARS
+NEUTRAL_OPENER = _document.NEUTRAL_OPENER
+ORIGIN_ANYWHERE = _document.ORIGIN_ANYWHERE
+ORIGIN_LINE = _document.ORIGIN_LINE
+ORIGIN_MARKER = _document.ORIGIN_MARKER
+ORIGINS = _document.ORIGINS
+PUBLICATION_MARKER = _document.PUBLICATION_MARKER
+body_origin = _document.body_origin
+carries_key = _document.carries_key
+issue_body = _document.issue_body
+issue_title = _document.issue_title
+key_marker = _document.key_marker
+neutralize = _document.neutralize
+origin_marker = _document.origin_marker
+probe_script = _document.probe_script
+prose_lines = _document.prose_lines
+publication_key = _document.publication_key
+require_one_marker_each = _document.require_one_marker_each
+
+ENGINE_LOG_DIR = _evidence.ENGINE_LOG_DIR
+MAX_EVIDENCE_FILES_PER_RUN = _evidence.MAX_EVIDENCE_FILES_PER_RUN
+MAX_EVIDENCE_RUNS = _evidence.MAX_EVIDENCE_RUNS
+MAX_EXCERPT_CHARS = _evidence.MAX_EXCERPT_CHARS
+MAX_EXCERPT_LINES = _evidence.MAX_EXCERPT_LINES
+MAX_READ_BYTES = _evidence.MAX_READ_BYTES
+RUN_EVIDENCE_FILES = _evidence.RUN_EVIDENCE_FILES
+collect_evidence = _evidence.collect_evidence
+excerpt = _evidence.excerpt
+failing_runs = _evidence.failing_runs
+open_run_directory = _evidence.open_run_directory
+run_excerpts = _evidence.run_excerpts
+
+Published = _record.Published
+outcome_record = _record.outcome_record
+require_outcome_timestamp = _record.require_outcome_timestamp
+require_supported = _record.require_supported
+reuse_stored_publication = _record.reuse_stored_publication
+stored_record = _record.stored_record
+utc_now = _record.utc_now
+
+ISSUE_URL = _tracker.ISSUE_URL
+GitHubPublication = _tracker.GitHubPublication
+Publication = _tracker.Publication
+PublicationFailed = _tracker.PublicationFailed
+require_issue_identity = _tracker.require_issue_identity
+require_reconciled_issue = _tracker.require_reconciled_issue
 
 # The envelope, the route and the outcome are all named from their
 # owners rather than restated. A second spelling of one identifier is
