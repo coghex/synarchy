@@ -19,10 +19,7 @@ import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Data.IORef (newIORef, readIORef)
-import System.Directory
-    ( createDirectoryIfMissing, doesFileExist, getTemporaryDirectory
-    , listDirectory, removeDirectoryRecursive )
-import Control.Exception (finally)
+import System.Directory (doesFileExist, listDirectory)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.TextureNameRegistry (lookupTextureName)
 import Engine.Core.Capability.RenderView
@@ -38,7 +35,8 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Test.Headless.Harness.Isolation
-    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
+    ( isInsideIsolatedResourceRoot, withExclusiveTempDirectory
+    , withIsolatedResourceRoot )
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Asset.YamlFlora
 import Engine.Asset.YamlItems
@@ -243,14 +241,21 @@ nameRegistered eng name = do
                         (toRenderViewCapability (feEnv eng)))
     pure (isJust (lookupTextureName name reg))
 
+-- | Write one throwaway flora YAML into a directory this call created,
+--   and hand its path to @action@.
+--
+--   'withExclusiveTempDirectory', never a predictable @\/tmp@ path
+--   claimed with @createDirectoryIfMissing@: the suite's rule is that a
+--   cleanup routine may only ever delete a directory the SAME call
+--   made ('Test.Headless.Harness.Isolation'). A fixed name would adopt
+--   — and then recursively remove — a stale root from an interrupted
+--   run, or somebody else's data.
 withFloraFixture ∷ String → String → (Text → Expectation) → Expectation
-withFloraFixture label body action = do
-    tmp ← getTemporaryDirectory
-    let dir = tmp ⊘ ("synarchy-2241-" ⧺ label)
-        path = dir ⊘ "probe.yaml"
-    createDirectoryIfMissing True dir
-    writeFile path body
-    action (T.pack path) `finally` removeDirectoryRecursive dir
+withFloraFixture label body action =
+    withExclusiveTempDirectory ("synarchy-2241-" ⧺ label) $ \dir → do
+        let path = dir ⊘ "probe.yaml"
+        writeFile path body
+        action (T.pack path)
 
 -- | One unique definition FIRST, then one whose name is already in the
 --   catalog.

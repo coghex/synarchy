@@ -45,6 +45,8 @@ import System.Directory
 import System.FilePath ((</>), takeExtension)
 import World.Flora.Types (FloraSpecies(..), FloraCatalog(..))
 import Engine.Core.Init (EngineInitResult(..))
+import Test.Headless.Harness.Isolation
+    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
@@ -332,10 +334,24 @@ data Bindings = Bindings
     { bnLua ∷ LuaBackendState
     , bnLog ∷ IORef [LogEntry]
     , bnEnv ∷ EngineEnv
+    , bnIsolated ∷ Bool
+      -- ^ Was the BOOT isolated? Sampled inside 'newBindings''s own
+      --   bracket: an example entering a bracket of its own to ask
+      --   would answer True however the engine booted, which is no
+      --   guard at all.
     }
 
+--   ISOLATED (#1357): engine initialization is itself a @config\/@
+--   writer — 'Engine.Core.Init' migrates legacy config and
+--   'Engine.Asset.YamlNotifications.loadOverrides' materializes an
+--   absent @config\/notifications.local.yaml@ — so every private engine
+--   this module boots would otherwise write the developer's checkout.
+--   The wrap is on the BOOT, which is the writer; the shipped @data\/@
+--   these bindings then read is symlinked into the scratch root and
+--   resolves unchanged either way.
 newBindings ∷ IO Bindings
-newBindings = do
+newBindings = withIsolatedResourceRoot $ do
+    isolated ← isInsideIsolatedResourceRoot
     EngineInitResult env ← initializeEngineHeadlessQuiet
     ref ← newIORef []
     logger ← initLogger defaultLogConfig
@@ -348,7 +364,7 @@ newBindings = do
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
-    pure (Bindings ls ref env)
+    pure (Bindings ls ref env isolated)
 
 -- | Call one binding through the real Lua API and return what it handed
 --   back to Lua alongside every entry it logged.
@@ -576,6 +592,11 @@ spec = describe "Startup asset logging" $ do
             -- and the family is simply skipped, not loaded with a phantom path
             [ p | p ← rrCalls r, "data/infections" `T.isPrefixOf` p ]
                 `shouldBe` []
+
+        it "boots its private engines inside the scratch resource root, \
+           \never the checkout (#1357)" $ do
+            b ← newBindings
+            bnIsolated b `shouldBe` True
 
         it "loads data/flora in canonical BYTE order from two opposing \
            \raw enumerations, and so registers one FloraId-to-name \
