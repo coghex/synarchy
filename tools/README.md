@@ -2683,7 +2683,7 @@ engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.
 
-### `deflake_handoff.py` — the handoff contract both consumers read (#2097)
+### `deflake_handoff.py` — the handoff contract both consumers read (#2097, #2180)
 
 The `deflake-outcome-handoff/v1` envelope, and every rule the two consumers
 below share. No CLI: it records nothing, publishes nothing, and imports
@@ -2698,6 +2698,27 @@ invocation, path, worktree, descriptor, artifact and producer-binding rule,
 `require_reproduced` — #1437's two-part reproduction qualification, which
 every route past the `cannot-reproduce` fork rests on — and the `utc_now` /
 `reuse_stored_timestamp` pair a durable record is stamped and replayed with.
+
+Since #2180 `deflake_handoff.py` is the stable public import FAÇADE for all of
+that — the contract narrative and the re-export surface, and no rule's
+implementation — over four internal owners in one acyclic, one-way order.
+Nothing below imports the façade or either consumer, so an owner can change
+without either workflow being rebuilt around it:
+
+| Owner | What it defines |
+|---|---|
+| `deflake_handoff_grammar.py` | The envelope vocabulary: the schemas, the roles, `ROUTE_ENDING`, `RouteOwnership`, `EXIT_CONTRACT`, the limits, `HandoffError` and `NonSuccess`, the object/text/identity/list/NUL/usable-path grammar, `delegate_census_grammar`, and the artifact-reference, configuration, input-identity and invocation-identity validators. A leaf WITHIN this family only — the upstream `deflake_diagnosis` and `probe_census` rules it applies are called, never copied. |
+| `deflake_handoff_measurement.py` | `Measurement`, `require_measurement` and `require_reproduced`: trustworthiness from the harness exit and the document's own status, the run and aggregate reconciliation, the per-check and target-hit reading, and the durable per-measurement summary. Consumes the grammar owner and #1437's result validators. |
+| `deflake_handoff_producer.py` | `require_diagnosis_outcome`, `REFERENCE_FIELDS` and the per-batch reference parsing, the measurement-to-producer binding, `require_worktree_boundary`, `declared_worktrees`, the artifact-list rebuild, and BOTH descriptor rules. Consumes the grammar and measurement owners. |
+| `deflake_handoff_assembly.py` | `Handoff`, `require_handoff`, `utc_now` and `reuse_stored_timestamp`: the whole-document assembly, the per-route role inventory, the cross-role checks, and the retry reconciler. Consumes all three, and INVOKES the producer owner's descriptor rules rather than defining a second copy. |
+
+`require_reproduced` stays with the measurement owner even though it takes a
+`Handoff`: it reads only that object's `targets` and `acceptable_failures`, so
+the reference is a deferred annotation behind a `TYPE_CHECKING` guard and the
+runtime graph stays one-way. `test_the_handoff_owners_stay_one_way` pins that
+as the single permitted reverse reference, and
+`test_the_handoff_facade_exports_the_canonical_objects` executes the identity
+rule the consumers' compatibility bindings rest on.
 
 `require_diagnosis_outcome` and `require_handoff` take `owned` EXPLICITLY: a
 shared contract that defaulted to one consumer's routes would answer for that
