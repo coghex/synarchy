@@ -33,9 +33,10 @@ import Engine.Load.Status
     , ReconciliationFailure(..), beginLoad, readLoadStatus, loadInProgress )
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.DebugServer
-    ( DebugCommand(..), DebugCommandState(..), claimDebugCommand
-    , newDebugCommand, readDebugCommandState )
+    ( DebugCommand(..), DebugCommandState(..), cancelDebugCommand
+    , claimDebugCommand, newDebugCommand, readDebugCommandState )
 import Engine.Scripting.Lua.Thread (createLuaBackendState, drainDebugQueue)
+import Engine.Scripting.Lua.Thread.Console (processDebugCommands)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaMsg(..), LuaScript(..))
 -- Issue #1589: the reconciliation context 'LuaSaveLoaded' now carries.
@@ -129,6 +130,7 @@ spec ∷ SpecWith EngineEnv
 spec = do
     staleDebugCommandSpec
     shutdownDrainSpec
+    productionDrainSpec
     reconciliationFailureSpec
 
 -- | The load handoff's rejection, verbatim. Pinned rather than matched
@@ -221,6 +223,83 @@ staleDebugCommandSpec = describe "LuaSaveLoaded stale debug-command cancellation
 
         remaining ← atomically $ tryReadTQueue (lbsDebugQueue ls)
         isNothing remaining `shouldBe` True
+
+-- | Read a Lua global back as text, or @Nothing@ when it is nil. The
+--   witness a queued command either did or did not run.
+readLuaGlobal ∷ LuaBackendState → T.Text → IO (Maybe T.Text)
+readLuaGlobal ls name = Lua.runWith (lbsLuaState ls) $ do
+    _ ← Lua.getglobal (Lua.Name (TE.encodeUtf8 name)) ∷ Lua.LuaE Lua.Exception Lua.Type
+    value ← Lua.tostring (-1)
+    Lua.pop 1
+    pure (TE.decodeUtf8Lenient <$> value)
+
+productionDrainSpec ∷ SpecWith EngineEnv
+productionDrainSpec = describe "debug-console command cancellation (issue #2282, the real Lua drain)" $ do
+    -- These drive the PRODUCTION 'processDebugCommands' against a real
+    -- Lua state, not a stand-in. Requirement 1 is a claim about that
+    -- function and nothing else: a cancelled command must never be
+    -- executed by any later drain, and the only honest witness is a
+    -- side effect the drain would have left in the Lua state.
+    it "never executes a command that was cancelled before the drain \
+       \reached it, however long it stays queued" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        cmd ← queueDebugCommand ls "__drainWitness = 'ran'"
+        cancelled ← cancelDebugCommand cmd "CANCELLED: for the test"
+        cancelled `shouldBe` True
+
+        -- Twice, because \"no later drain runs it, in any tick\" is the
+        -- requirement -- one pass emptying the queue would prove less.
+        processDebugCommands (lbsLuaState ls) (lbsDebugQueue ls)
+        processDebugCommands (lbsLuaState ls) (lbsDebugQueue ls)
+
+        readLuaGlobal ls "__drainWitness" `shouldReturn` Nothing
+        -- The reply is still the canceller's, untouched by the drain.
+        tryTakeMVar (dcResponse cmd) `shouldReturn` Just "CANCELLED: for the test"
+        remaining ← atomically $ tryReadTQueue (lbsDebugQueue ls)
+        isNothing remaining `shouldBe` True
+
+    it "still executes an uncancelled command and answers it, so the \
+       \case above is a cancellation and not a broken drain" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        cmd ← queueDebugCommand ls "__drainWitness = 'ran'"
+
+        processDebugCommands (lbsLuaState ls) (lbsDebugQueue ls)
+
+        readLuaGlobal ls "__drainWitness" `shouldReturn` Just "ran"
+        resp ← tryTakeMVar (dcResponse cmd)
+        resp `shouldSatisfy` isJust
+        readDebugCommandState cmd `shouldReturn` DebugCommandClaimed
+
+    it "skips only the cancelled command and runs the rest of the \
+       \queue behind it" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        skipped ← queueDebugCommand ls "__skippedRan = 'yes'"
+        kept ← queueDebugCommand ls "__keptRan = 'yes'"
+        void $ cancelDebugCommand skipped "CANCELLED: for the test"
+
+        processDebugCommands (lbsLuaState ls) (lbsDebugQueue ls)
+
+        readLuaGlobal ls "__skippedRan" `shouldReturn` Nothing
+        readLuaGlobal ls "__keptRan" `shouldReturn` Just "yes"
+        readDebugCommandState skipped `shouldReturn` DebugCommandCancelled
+        readDebugCommandState kept `shouldReturn` DebugCommandClaimed
+
+    it "cannot be cancelled after the drain has claimed it: the load \
+       \handoff and both teardown drains all lose that race" $ \env → do
+        ls ← newBareBackendWithDebugQueue env
+        cmd ← queueDebugCommand ls "__drainWitness = 'ran'"
+
+        processDebugCommands (lbsLuaState ls) (lbsDebugQueue ls)
+
+        lost ← cancelDebugCommand cmd
+            "REJECTED: a load transaction replaced the session while \
+            \this command was queued"
+        lost `shouldBe` False
+        -- The claimed command's own answer is what survives in the
+        -- response channel; the late rejection landed nowhere.
+        resp ← tryTakeMVar (dcResponse cmd)
+        resp `shouldSatisfy` maybe False (not ∘ T.isInfixOf "REJECTED")
+        readDebugCommandState cmd `shouldReturn` DebugCommandClaimed
 
 shutdownDrainSpec ∷ SpecWith EngineEnv
 shutdownDrainSpec = describe "debug-queue shutdown drain (issue #2282)" $ do
