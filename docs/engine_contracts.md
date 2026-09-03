@@ -87,6 +87,10 @@ exactly why the detail could move out of the always-loaded file.
 - [CLI value validation (#1191)](#cli-value-validation-1191)
 - [Debug-console listener policy (#1190)](#debug-console-listener-policy-1190)
 
+**Engine core**
+
+- [Monotonic elapsed time (#2204)](#monotonic-elapsed-time-2204)
+
 **Process gates**
 
 - [Findings-report lane split: why it matters](#findings-report-lane-split-why-it-matters)
@@ -2494,6 +2498,56 @@ The per-mode decision is
 `Engine.Scripting.Lua.DebugServer.debugConsolePolicy`, keyed on
 `EngineConfig`'s `ecBootMode` — `ecHeadless` can't tell dump from
 headless and is `False` for offscreen.
+
+---
+
+## Monotonic elapsed time (#2204)
+
+Four interval consumers turn "seconds since my last sample" into
+simulation or pacing: the render loop's frame timing
+(`Engine.Loop.Timing`), the world tick (`World.Thread`), the unit tick
+(`Unit.Thread`), and the Lua scheduler
+(`Engine.Scripting.Lua.Util.nowSeconds`, whose six call sites are all
+scheduling). All four read `GHC.Clock.getMonotonicTime` through
+`Engine.Core.Clock`. The deliberate WALL-clock consumers —
+`engine.realTime()`, log timestamps, save-metadata timestamps, and the
+seed mixed into `World.Page.GeneratedId` — are not elapsed-time
+consumers and keep their own sources.
+
+`Engine.Core.Clock` is the ONE boundary. `maxElapsedStep` is exactly
+`0.25` s; `sanitiseElapsed` maps a negative, `NaN`, or infinite
+difference to `0`, passes `[0, 0.25]` unchanged, and caps anything above
+at exactly `0.25`. Every raw difference the four consumers use passes
+through it — the render loop's pre-sleep `frameDt` and post-sleep
+`actualDt` SEPARATELY (pacing uses the first; the stored `deltaTime`
+and FPS window use the second), the world tick's `dt`, and the unit
+tick's simulation `dt` and its execution `elapsed`. A consumer that
+retains a raw clock sample replaces it with the CURRENT raw sample after
+every measurement (`sampleElapsed`), invalid, negative, and over-cap
+ones included, so excess above the cap is DROPPED, never carried into
+the next tick as debt. Catching up a host sleep is deliberately out of
+scope.
+
+The render loop takes its initial sample in
+`Engine.Loop.Mode.runStartupHandshake` (`primeFrameTiming`), before any
+frame is measured, so the first stored `deltaTime` is a real bounded
+frame, never a difference from the `0.0` in `defaultEngineState`. An
+unpaused world tick advances the calendar by exactly
+`sanitised seconds × effectiveTimeScale` game-minutes (an over-cap
+sample by `0.25 × effectiveTimeScale`) and can never hand
+`advanceWorldClock` a negative value. Lua's deadline rule after a due
+callback (`TickPolicy.advanceTick`) is stated in interval multiples and
+is independent of the cap: lateness below one complete interval keeps
+#1695's cadence (`oldDeadline + interval`); lateness of one complete
+interval or more drops the missed executions (`now + interval`), so a
+script whose clock jumps across several intervals runs once, leaves a
+deadline strictly later than the jumped clock, and is not due again
+when the pass repeats at that same `now`.
+
+Gate: hspec `--match "monotonic elapsed-time contract"`, which drives
+the real `updateFrameTimingWith`, `worldTickWith`, `unitTickWith`, and
+`runDueScripts` with an injected clock; production callers pass
+`monotonicSeconds`.
 
 ---
 

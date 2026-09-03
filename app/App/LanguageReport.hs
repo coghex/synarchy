@@ -3,8 +3,20 @@
 --   native/English renderings as JSON to stdout, then exit. Reads the
 --   production concept catalogue from disk and does pure computation
 --   only — no engine init, no world thread, no Lua, no GPU
---   (requirement 17), so it starts and finishes in a fraction of a
---   second regardless of how many seeds are requested.
+--   (requirement 17).
+--
+--   Cost model: a small fixed startup (one catalogue read), then work
+--   AND memory linear in the requested range — every seed's report is
+--   built and held before anything is written, because the whole
+--   document is encoded in one go. A wide range is correspondingly
+--   slow and correspondingly large in memory; this is not a
+--   constant-time dump.
+--
+--   The range is all-or-nothing. 'buildSeedReport' runs under 'mapM' in
+--   'Either', so ONE rejected seed — an unsupported generator version,
+--   or a profile whose root space cannot name the catalogue (#2206) —
+--   fails the entire run with status 1 and writes no partial JSON to
+--   stdout. Splitting a failing range is the caller's job.
 module App.LanguageReport
   ( runLanguageReport
   ) where

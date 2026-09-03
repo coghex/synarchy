@@ -415,6 +415,7 @@ library
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
                      Engine.Core.Queue
+                     Engine.Core.Clock
                      Engine.Scene.Base
                      Engine.Scene.Batch
                      Engine.Scene.Batch.Sprite
@@ -1415,6 +1416,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LogThresholdEnv
                    Test.Headless.Core.LoopStartup
+                   Test.Headless.Core.MonotonicClock
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp

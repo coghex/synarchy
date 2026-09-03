@@ -12,6 +12,7 @@ import UPrelude
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON)
+import GHC.Stack (HasCallStack)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | Decode a keyed YAML list file (`FromJSON f`), extract its list via
@@ -30,8 +31,19 @@ import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 --   @successPhrase@ names what was counted in the debug line (e.g.
 --   "recipes", "item definitions") — kept separate since the two
 --   messages don't always share a plural.
+--
+--   The 'HasCallStack' constraint is load-bearing and must stay
+--   (#2167). The calls below are the family's ONLY logging calls, so
+--   without it the logger's outermost-frame rule
+--   ('Engine.Core.Log.extractCallSite', #945) stops here and every
+--   loader's entry reports @YamlList@ instead of the domain module that
+--   failed — the attribution each loader had before #1008 extracted
+--   them. Both shared entry points thread the constraint so the chain
+--   runs out to the owning domain loader, which carries no constraint
+--   of its own; attribution stops there and never reaches that loader's
+--   own callers.
 loadYamlListOutcome
-    ∷ FromJSON f
+    ∷ (HasCallStack, FromJSON f)
     ⇒ LoggerState
     → Text            -- ^ parseNoun
     → Text            -- ^ successPhrase
@@ -57,7 +69,7 @@ loadYamlListOutcome logger parseNoun successPhrase toList path = do
 --   difference has always seen. The all-or-nothing decode rule and the
 --   two log lines are unchanged.
 loadYamlList
-    ∷ FromJSON f
+    ∷ (HasCallStack, FromJSON f)
     ⇒ LoggerState
     → Text            -- ^ parseNoun
     → Text            -- ^ successPhrase
