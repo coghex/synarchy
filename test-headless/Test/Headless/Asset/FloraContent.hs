@@ -37,6 +37,8 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness.Isolation
+    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Asset.YamlFlora
 import Engine.Asset.YamlItems
@@ -103,6 +105,10 @@ spec = do
 
     describe "duplicate authored names (#2241 requirement 4)" $ do
 
+        it "boots inside the scratch resource root, never the checkout \
+           \(#1357)" $ withFloraEngine $ \_ →
+            isInsideIsolatedResourceRoot `shouldReturn` True
+
         it "refuses a whole file whose second definition collides, \
            \leaving no catalog insert, no fcNextId advance, no texture \
            \registration and no queued load" $ withFloraEngine $ \eng → do
@@ -168,13 +174,19 @@ spec = do
 --   state (catalog, asset pool, texture-name registry) in ways no
 --   @finally@ can undo — the same reasoning
 --   "Test.Headless.Asset.TextureFallback" records.
+--
+--   ISOLATED because the boot itself writes @config\/@ (#1357): engine
+--   initialization migrates legacy config and materializes an absent
+--   @config\/notifications.local.yaml@. The wrap goes AROUND the boot,
+--   never inside it, and the scratch root symlinks @data\/@, so the
+--   shipped YAML these examples load resolves unchanged.
 data FloraEngine = FloraEngine
     { feEnv ∷ EngineEnv
     , feLua ∷ LuaBackendState
     }
 
 withFloraEngine ∷ (FloraEngine → Expectation) → Expectation
-withFloraEngine action = do
+withFloraEngine action = withIsolatedResourceRoot $ do
     EngineInitResult env ← initializeEngineHeadlessQuiet
     ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
                                (assetPoolRef env) (nextObjectIdRef env)

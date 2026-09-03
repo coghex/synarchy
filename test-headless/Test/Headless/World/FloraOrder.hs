@@ -72,6 +72,8 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
+import Test.Headless.Harness.Isolation
+    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
@@ -273,8 +275,27 @@ impossibleEntry = Entry name species (Just wg)
 --   (the catalog, the asset pool, the texture-name registry) in ways no
 --   @finally@ can cleanly undo; the same reasoning
 --   "Test.Headless.Asset.TextureFallback" records.
-loadShippedCatalog ∷ IO FloraCatalog
-loadShippedCatalog = do
+--
+--   ISOLATED because the boot ITSELF writes @config\/@ (#1357):
+--   'Engine.Core.Init' migrates legacy config and
+--   'Engine.Asset.YamlNotifications.loadOverrides' materializes an
+--   absent @config\/notifications.local.yaml@. This fixture runs on
+--   every headless-suite execution, so without the wrap it would touch
+--   a developer's real checkout on every run. The wrap goes AROUND the
+--   boot, never inside it, and the scratch root symlinks @data\/@, so
+--   the shipped YAML below resolves exactly as it does from the
+--   checkout. The catalog it returns is pure data and outlives the
+--   bracket safely; the checked-in fixtures are read by the examples,
+--   back in the real working directory.
+--
+--   Hands back whether the BOOT was isolated, sampled INSIDE the
+--   bracket. An example re-entering 'withIsolatedResourceRoot' to ask
+--   for itself would answer True whatever this function did, which is
+--   no guard at all; this is the only place the question can be put to
+--   the boot.
+loadShippedCatalog ∷ IO (FloraCatalog, Bool)
+loadShippedCatalog = withIsolatedResourceRoot $ do
+    isolated ← isInsideIsolatedResourceRoot
     EngineInitResult env ← initializeEngineHeadlessQuiet
     ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
                                (assetPoolRef env) (nextObjectIdRef env)
@@ -283,7 +304,8 @@ loadShippedCatalog = do
     registerLuaAPI (lbsLuaState ls) env ls stateRef
     loadFamily ls "data/materials" "loadMaterialYaml"
     loadFamily ls "data/flora"     "loadFloraYaml"
-    readIORef (floraCatalogRef env)
+    cat ← readIORef (floraCatalogRef env)
+    pure (cat, isolated)
   where
     loadFamily ls dir verb = do
         files ← L.sort ∘ filter ((≡ ".yaml") ∘ takeExtension)
@@ -421,14 +443,21 @@ spec = beforeAll loadShippedCatalog $ do
 
   describe "registration order" $ do
 
+    it "booted the engine inside the scratch resource root, never the \
+       \checkout (#1357)" $ \(_, isolated) →
+      -- Answered from the isolation fixture's OWN recorded root, sampled
+      -- at boot time, so it cannot be spoofed by a file on disk and
+      -- cannot pass by an example entering a bracket of its own.
+      isolated `shouldBe` True
+
     it "the shipped catalog holds no duplicate authored names, which is \
-       \what makes the name a usable species key" $ \shipped → do
+       \what makes the name a usable species key" $ \(shipped, _) → do
       let names = map enName (catalogEntries shipped)
       length names `shouldSatisfy` (> 8)
       L.nub names `shouldBe` names
 
     it "generates name-normalized-identical instances from two OPPOSING \
-       \registration orders" $ \shipped → do
+       \registration orders" $ \(shipped, _) → do
       let entries = catalogEntries shipped
           forward = reindexCatalog entries
           backward = reindexCatalog (reverse entries)
@@ -444,7 +473,7 @@ spec = beforeAll loadShippedCatalog $ do
       placeAll backward `shouldBe` placeAll forward
 
     it "places something on every sampled chunk, so the equivalence \
-       \above is not an equality between two empty layouts" $ \shipped → do
+       \above is not an equality between two empty layouts" $ \(shipped, _) → do
       let placed = placeAll (reindexCatalog (catalogEntries shipped))
       forM_ placed $ \(coord, nis) →
           (coord, length nis) `shouldSatisfy` ((> 0) ∘ snd)
@@ -452,7 +481,7 @@ spec = beforeAll loadShippedCatalog $ do
         `shouldSatisfy` ((> 1) ∘ length)
 
     it "is unmoved by an IMPOSSIBLE-FIT species that sorts first and \
-       \shifts every catalog position" $ \shipped → do
+       \shifts every catalog position" $ \(shipped, _) → do
       let entries  = catalogEntries shipped
           without  = reindexCatalog entries
           with     = reindexCatalog (impossibleEntry : entries)
@@ -469,7 +498,7 @@ spec = beforeAll loadShippedCatalog $ do
 
   describe "the seed-42 golden layout" $
 
-    it "matches the checked-in golden, byte for byte" $ \shipped → do
+    it "matches the checked-in golden, byte for byte" $ \(shipped, _) → do
       let live = renderGolden (placeAll shipped)
       checked ← withFixture "SYNARCHY_FLORA_GOLDEN_CAPTURE" goldenPath
                     (pure live)
@@ -483,7 +512,7 @@ spec = beforeAll loadShippedCatalog $ do
 
     it "resolve through the canonical catalog to the explicitly expected \
        \post-change species — a reinterpretation this slice accepts" $
-        \shipped → do
+        \(shipped, _) → do
       body ← withFixture "SYNARCHY_FLORA_LEGACY_CAPTURE" legacyPath
                  (pure renderLegacy)
       let named fid = fsName <$> lookupSpecies fid shipped
