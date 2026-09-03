@@ -434,7 +434,10 @@ def chrome_text(port: int, name: str):
 
 
 def format_age(elapsed: float) -> str:
-    """Mirror of `formatAge` in scripts/cargo_inventory_panel.lua.
+    """Mirror of `formatAge` in scripts/cargo_inventory_endpoints.lua.
+
+    (It lived in scripts/cargo_inventory_panel.lua until #2155 split the
+    endpoint owner out; the manager still re-exports it.)
 
     Deliberately restated here rather than read out of the panel: the
     checks below assert that the RENDERED label equals what the engine's

@@ -29,7 +29,10 @@
 --
 -- Both render through cargo_inventory_panel's OWN endpoint machinery
 -- (endpointView / endpointListParams / endpointStillThere /
--- endpointChildOf), so an escort pane shows a unit or a container
+-- endpointChildOf). Since #2155 those five are the manager's
+-- delegators onto scripts/cargo_inventory_endpoints.lua, unchanged in
+-- signature and still reached HERE through the manager, so an escort
+-- pane shows a unit or a container
 -- exactly the way a lone container window does — same header, same
 -- capacity and stored-weight line, same tabs, same rows, same "as of…"
 -- age on a remembered one. Nothing about an endpoint is re-derived here.
@@ -98,7 +101,8 @@ end
 -- Two 440-wide panels need 904 px at uiscale 1, and the supported
 -- envelope's formal minimum framebuffer is 800 wide — so at 800x600@1x
 -- the pair does not fit, and clamping each panel independently (which
--- is all `measurePane` and `UI.placePopup` can do on their own) lands
+-- is all `measurePane` -- scripts/cargo_inventory_render.lua's since
+-- #2155 -- and `UI.placePopup` can do on their own) lands
 -- them on top of each other rather than beside each other.
 -- `reserved_regions` cannot rescue that either: nudging cannot solve
 -- geometry with no solution.
