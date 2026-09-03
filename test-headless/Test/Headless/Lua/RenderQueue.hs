@@ -14,7 +14,8 @@ import Test.Hspec
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Load.Status
-    ( LoadPhase(..), advanceLoad, beginLoad, failLoad, finishLoad )
+    ( LoadPhase(..), advanceLoad, armStaleLuaDiscard, beginLoad, failLoad
+    , finishLoad )
 import Engine.Scripting.Lua.Message (discardLuaMessagesForActiveLoad)
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
 
@@ -25,8 +26,9 @@ spec = describe "Lua-to-engine load-publication queue" $ do
         Right requestId ← beginLoad (loadStatusRef env) "render-queue-test"
         Q.writeQueue (luaToEngineQueue env) (LuaSetBrightness 73)
         -- What 'Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish'
-        -- announces as it queues the publish command itself.
+        -- does as it queues the publish command itself.
         advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
+        armStaleLuaDiscard (loadStatusRef env)
 
         discarded ← discardLuaMessagesForActiveLoad env
         discarded `shouldBe` 1

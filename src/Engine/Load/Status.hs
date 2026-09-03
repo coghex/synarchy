@@ -33,7 +33,8 @@ module Engine.Load.Status
     , ReconciliationFailure(..)
     , LoadStatusRef, newLoadStatusRef
     , beginLoad, advanceLoad, failLoad, finishLoad, failReconciliation
-    , readLoadStatus, loadInProgress, loadPublishCommitted
+    , readLoadStatus, loadInProgress
+    , armStaleLuaDiscard, takeStaleLuaDiscard, staleLuaDiscardArmed
     , StageGate(..), unarmedStageGate
     , defaultStageGateHold, maxStageGateHold
     , armStageGate, releaseStageGate, readStageGate, awaitStageGate
@@ -216,13 +217,19 @@ stageGatePollMicros = 20000
 --   carries as @loadStatusRef@ (and 'Engine.Core.Capability.SaveLoad'
 --   already projects as @slLoadStatusRef@) rather than becoming a new
 --   root-owner field of its own.
+-- | The fourth ref is the stale-Lua-to-engine discard latch (#2221) —
+--   see 'armStaleLuaDiscard'. It lives here rather than on @EngineEnv@
+--   because it is load-lifecycle state, owned by exactly the module
+--   that owns the rest of it.
 data LoadStatusRef =
     LoadStatusRef !(IORef Int) !(IORef (Maybe LoadStatus)) !(IORef StageGate)
+                  !(IORef Bool)
     deriving (Eq)
 
 newLoadStatusRef ∷ IO LoadStatusRef
 newLoadStatusRef = LoadStatusRef <$> newIORef 0 <*> newIORef Nothing
                                  <*> newIORef unarmedStageGate
+                                 <*> newIORef False
 
 -- | Accept a new load request, allocating a fresh request id. Fails if
 --   another load is already in-flight (non-terminal outcome). Does NOT
@@ -232,7 +239,7 @@ newLoadStatusRef = LoadStatusRef <$> newIORef 0 <*> newIORef Nothing
 --   module into the save barrier — either shape was acceptable per the
 --   issue's review).
 beginLoad ∷ LoadStatusRef → Text → IO (Either Text Int)
-beginLoad (LoadStatusRef nextR statusR _) saveName = do
+beginLoad (LoadStatusRef nextR statusR _ _) saveName = do
     current ← readIORef statusR
     case current of
         Just s | lsOutcome s ≡ Nothing →
@@ -251,14 +258,14 @@ beginLoad (LoadStatusRef nextR statusR _) saveName = do
 --   terminal outcome — defensive; should not happen since only one load
 --   is ever in flight and only 'failLoad'/'finishLoad' end it.
 advanceLoad ∷ LoadStatusRef → Int → LoadPhase → IO ()
-advanceLoad (LoadStatusRef _ statusR _) n phase =
+advanceLoad (LoadStatusRef _ statusR _ _) n phase =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing = s { lsPhase = phase }
            | otherwise                                 = s
 
 failLoad ∷ LoadStatusRef → Int → Text → IO ()
-failLoad (LoadStatusRef _ statusR _) n err =
+failLoad (LoadStatusRef _ statusR _ _) n err =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
@@ -267,7 +274,7 @@ failLoad (LoadStatusRef _ statusR _) n err =
            | otherwise = s
 
 finishLoad ∷ LoadStatusRef → Int → IO ()
-finishLoad (LoadStatusRef _ statusR _) n =
+finishLoad (LoadStatusRef _ statusR _ _) n =
     atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
     step s | lsRequestId s ≡ n ∧ lsOutcome s ≡ Nothing =
@@ -294,7 +301,7 @@ finishLoad (LoadStatusRef _ statusR _) n =
 --   longer names the current transaction or one that already reached a
 --   terminal outcome.
 failReconciliation ∷ LoadStatusRef → Int → [ReconciliationFailure] → IO ()
-failReconciliation (LoadStatusRef _ statusR _) n failures
+failReconciliation (LoadStatusRef _ statusR _ _) n failures
     | null failures = pure ()
     | otherwise     = atomicModifyIORef' statusR $ \mS → (fmap step mS, ())
   where
@@ -307,31 +314,48 @@ failReconciliation (LoadStatusRef _ statusR _) n failures
            | otherwise = s
 
 readLoadStatus ∷ LoadStatusRef → IO (Maybe LoadStatus)
-readLoadStatus (LoadStatusRef _ statusR _) = readIORef statusR
+readLoadStatus (LoadStatusRef _ statusR _ _) = readIORef statusR
 
 loadInProgress ∷ LoadStatusRef → IO Bool
 loadInProgress ref = maybe False ((≡ Nothing) . lsOutcome) <$> readLoadStatus ref
 
--- | True only once this load's publication is COMMITTED — the Lua side
---   applied cleanly and 'World.Command.Types.WorldLoadPublish' has been
---   queued for the world thread — and not yet terminal (#2221).
+-- | Arm the stale-Lua-to-engine discard latch (#2221): a load has
+--   COMMITTED to publication, so the old session's queued
+--   Lua-to-engine work is now doomed and the render owner owes it
+--   exactly one 'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad'.
 --
---   'loadInProgress' cannot answer that question and must not be used
---   for it. A load is "in progress" from the moment it is requested,
---   including the whole window between 'Engine.Save.Barrier.reachSnapshot'
---   and the outcome of
---   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'\'s
---   @applyLuaLoad@ — and an apply failure there aborts with the OLD
---   session still live and, by
---   @docs/persistence_contract.md@, unchanged. Anything IRREVERSIBLE
---   that a publication would justify (above all
---   'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad'
---   destroying that session's queued work) must therefore wait for
---   this, not for the capture boundary, which opens strictly earlier.
-loadPublishCommitted ∷ LoadStatusRef → IO Bool
-loadPublishCommitted ref =
-    maybe False (\s → lsOutcome s ≡ Nothing ∧ lsPhase s ≡ LoadWaitingPublish)
-        <$> readLoadStatus ref
+--   A latch rather than a phase test, because the render owner is not
+--   guaranteed a tick inside the window a phase test would describe.
+--   The world thread processes @WorldLoadPublish@, publishes, and calls
+--   'Engine.Save.Barrier.releaseCaptureLock' (and later 'finishLoad')
+--   on its own schedule; if the render owner's next tick lands after
+--   all of that, its gate reads unlocked and the load reads terminal,
+--   and it would drain the OLD session's queue straight into the
+--   replacement with nothing left to say it should not have. The latch
+--   survives that: it is set once, at
+--   'Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish', and
+--   consumed by whichever render tick comes next, whenever that is.
+--
+--   Setting it only at the commit is what keeps a load that fails
+--   BEFORE the publish (another owner times out, @applyLuaLoad@ raises)
+--   from destroying work the old session — which by
+--   @docs\/persistence_contract.md@ survives unchanged — is still owed.
+armStaleLuaDiscard ∷ LoadStatusRef → IO ()
+armStaleLuaDiscard (LoadStatusRef _ _ _ latchR) = writeIORef latchR True
+
+-- | Consume the latch: 'True' exactly once per 'armStaleLuaDiscard',
+--   for whichever caller reads it first. Atomic, because the render
+--   owner reads it on a different thread from the Lua thread that arms
+--   it, and a discard that ran twice would flush a queue the
+--   replacement session had already started filling.
+takeStaleLuaDiscard ∷ LoadStatusRef → IO Bool
+takeStaleLuaDiscard (LoadStatusRef _ _ _ latchR) =
+    atomicModifyIORef' latchR $ \armed → (False, armed)
+
+-- | Read the latch without consuming it. For assertions only — a
+--   consumer uses 'takeStaleLuaDiscard'.
+staleLuaDiscardArmed ∷ LoadStatusRef → IO Bool
+staleLuaDiscardArmed (LoadStatusRef _ _ _ latchR) = readIORef latchR
 
 -- | Test-only (issue #1181): arm the staging gate so the NEXT load
 --   transaction parks before staging. @holdSeconds@ is clamped into
@@ -344,7 +368,7 @@ loadPublishCommitted ref =
 --   state; it does not extend the running hold's own deadline, which
 --   was fixed when that hold began.
 armStageGate ∷ LoadStatusRef → Double → IO ()
-armStageGate (LoadStatusRef _ _ gateR) holdSeconds =
+armStageGate (LoadStatusRef _ _ gateR _) holdSeconds =
     writeIORef gateR unarmedStageGate
         { sgArmed = True, sgHoldSeconds = clampedHold holdSeconds }
 
@@ -359,14 +383,14 @@ clampedHold s
 --   resumes on its next poll; an armed-but-never-reached gate is simply
 --   disarmed, so a probe's @finally@ can call this unconditionally.
 releaseStageGate ∷ LoadStatusRef → IO ()
-releaseStageGate (LoadStatusRef _ _ gateR) =
+releaseStageGate (LoadStatusRef _ _ gateR _) =
     atomicModifyIORef' gateR $ \g → (g { sgArmed = False }, ())
 
 -- | Test-only (issue #1181): the gate's current state, for a caller
 --   that must positively observe the hold before racing anything
 --   against it.
 readStageGate ∷ LoadStatusRef → IO StageGate
-readStageGate (LoadStatusRef _ _ gateR) = readIORef gateR
+readStageGate (LoadStatusRef _ _ gateR _) = readIORef gateR
 
 -- | Test-only (issue #1181): the world thread's park point, called
 --   once per load transaction immediately before staging.
@@ -380,7 +404,7 @@ readStageGate (LoadStatusRef _ _ gateR) = readIORef gateR
 --   Ending a hold always disarms the gate and clears 'sgHeldRequest',
 --   so exactly one transaction is ever held per arm.
 awaitStageGate ∷ LoadStatusRef → Int → IO Bool
-awaitStageGate (LoadStatusRef _ _ gateR) requestId = do
+awaitStageGate (LoadStatusRef _ _ gateR _) requestId = do
     gate ← readIORef gateR
     if not (sgArmed gate)
       then pure False

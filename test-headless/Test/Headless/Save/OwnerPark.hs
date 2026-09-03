@@ -37,14 +37,16 @@ import Engine.Core.State
     ( EngineEnv, loadStatusRef, loggerRef, luaToEngineQueue, saveBarrierRef
     , unitManagerRef )
 import Engine.Load.Status
-    ( LoadPhase(..), advanceLoad, beginLoad, failLoad, loadInProgress
-    , loadPublishCommitted )
+    ( LoadPhase(..), advanceLoad, beginLoad, failLoad, finishLoad
+    , loadInProgress, staleLuaDiscardArmed )
 import Engine.Loop.Headless (headlessMode)
 import Engine.Loop.Mode (runGatedByCaptureLock)
+import Engine.Scripting.Lua.Message (discardLuaMessagesForActiveLoad)
 import Engine.Scripting.Lua.Thread.Dispatch (commitLoadPublish)
 import Engine.Save.Barrier
     ( SaveOwner(..), acknowledgeSave, beginSave, captureLocked, failSave
-    , ownersGated, ownerGated, reachSnapshot, releaseCaptureLock )
+    , finishSave, ownersGated, ownerGated, reachSnapshot
+    , releaseCaptureLock )
 import Engine.Scripting.Lua.Types (LuaLogLevel(..), LuaToEngineMsg(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
 import Unit.Command.Types (UnitCommand(..))
@@ -314,32 +316,42 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         _ ← worldTickWith scripted env lastRef
         readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 59
 
-    -- Rounds 1 and 2 of review: the render owner's park and its DISCARD
-    -- are gated on different things on purpose. Parking is reversible —
-    -- whatever stays in 'luaToEngineQueue' is still there however the
-    -- transaction ends — but the flush is not, and a load that fails
-    -- anywhere before 'WorldLoadPublish' is queued leaves the OLD
-    -- session live and unchanged by contract. Neither the park (round
-    -- 1) nor the capture boundary (round 2) is late enough to license
-    -- it: 'applyLuaLoad' runs AFTER 'reachSnapshot' and can still fail.
-    -- The gate is 'loadPublishCommitted'.
+    -- Rounds 1-3 of review. The render owner's park and its DISCARD are
+    -- separate concerns, and neither gates the other. Parking is
+    -- reversible — whatever stays in 'luaToEngineQueue' is still there
+    -- however the transaction ends — but the flush is not, and a load
+    -- that fails anywhere before 'WorldLoadPublish' is queued leaves
+    -- the OLD session live and unchanged by contract. Neither the park
+    -- nor the capture boundary is late enough to license it
+    -- ('applyLuaLoad' runs AFTER 'reachSnapshot' and can still fail),
+    -- and no phase test is reliable either, because nothing guarantees
+    -- this thread a tick inside any particular window. The trigger is
+    -- the one-shot latch 'commitLoadPublish' arms.
     it "the render owner's park does NOT discard the old session's \
        \queued Lua-to-engine work: an aborted load leaves it intact" $
         withHeadlessEngineNoWorld $ \env → do
-        Right _ ← beginLoad (loadStatusRef env) "owner_park_load"
+        Right requestId ← beginLoad (loadStatusRef env) "owner_park_load"
         loadInProgress (loadStatusRef env) `shouldReturn` True
         Q.writeQueue (luaToEngineQueue env) (LuaLog LuaLogInfo "pre-load work")
 
         n ← armFinalPassOf env loadOwners [SaveRender]
         ownerGated (saveBarrierRef env) SaveRender `shouldReturn` True
         captureLocked (saveBarrierRef env) `shouldReturn` False
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
         runRenderTick env
         queuedLuaToEngine env `shouldReturn` 1
 
         -- The abort this protects: another owner never answers, so the
         -- transaction fails with the old session still live.
         failSave (saveBarrierRef env) n "an owner did not respond"
-        failLoad (loadStatusRef env) 1 "an owner did not respond"
+        failLoad (loadStatusRef env) requestId "an owner did not respond"
+        -- Asked directly rather than through a render tick: the owner
+        -- is unparked now, so a tick would PROCESS this message — which
+        -- is exactly right, and indistinguishable from a discard by
+        -- queue length alone. What must be true is that nothing ever
+        -- destroyed it.
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
+        discardLuaMessagesForActiveLoad env `shouldReturn` 0
         queuedLuaToEngine env `shouldReturn` 1
 
     it "the capture boundary alone does NOT license the discard: a Lua \
@@ -355,7 +367,7 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         n ← armFinalPassOf env loadOwners loadOwners
         reachSnapshot (saveBarrierRef env) n
         captureLocked (saveBarrierRef env) `shouldReturn` True
-        loadPublishCommitted (loadStatusRef env) `shouldReturn` False
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
         runRenderTick env
         queuedLuaToEngine env `shouldReturn` 1
 
@@ -364,6 +376,8 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         -- is still there to run.
         failSave (saveBarrierRef env) n "failed applying Lua state"
         failLoad (loadStatusRef env) requestId "failed applying Lua state"
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
+        discardLuaMessagesForActiveLoad env `shouldReturn` 0
         queuedLuaToEngine env `shouldReturn` 1
 
     it "the render owner discards the old session's queued work once the \
@@ -376,14 +390,63 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         queuedLuaToEngine env `shouldReturn` 1
 
         -- Every remaining owner answers, the initiator declares the
-        -- boundary, and the Lua side applies cleanly and announces the
+        -- boundary, and the Lua side applies cleanly and commits the
         -- publish: the stale work must not survive into the replacement.
         mapM_ (acknowledgeSave (saveBarrierRef env) n) parkOwners
         reachSnapshot (saveBarrierRef env) n
-        advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
-        loadPublishCommitted (loadStatusRef env) `shouldReturn` True
+        commitLoadPublish env requestId
         runRenderTick env
         queuedLuaToEngine env `shouldReturn` 0
+
+    -- Round 3: the render owner is not guaranteed a tick inside the
+    -- capture window. The world thread processes WorldLoadPublish,
+    -- publishes, releases the barrier and finishes the load on its own
+    -- schedule, so the FIRST render tick of the whole transaction can
+    -- land after all of it — unlocked gate, terminal load. A discard
+    -- that keyed off either would drain the old session's queue
+    -- straight into the replacement; the latch survives both.
+    it "a render tick that happens only AFTER the world publishes, \
+       \releases and finishes still discards the old session's work \
+       \before processing anything" $ withHeadlessEngineNoWorld $ \env → do
+        Right requestId ← beginLoad (loadStatusRef env) "owner_park_load"
+        Q.writeQueue (luaToEngineQueue env) (LuaLog LuaLogInfo "pre-load work")
+
+        n ← armFinalPassOf env loadOwners loadOwners
+        reachSnapshot (saveBarrierRef env) n
+        commitLoadPublish env requestId
+        -- Everything the world thread does with WorldLoadPublish, with
+        -- no render tick anywhere in between.
+        releaseCaptureLock (saveBarrierRef env) n
+        finishSave (saveBarrierRef env) n
+        finishLoad (loadStatusRef env) requestId
+        ownerGated (saveBarrierRef env) SaveRender `shouldReturn` False
+        loadInProgress (loadStatusRef env) `shouldReturn` False
+
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` True
+        runRenderTick env
+        queuedLuaToEngine env `shouldReturn` 0
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
+
+    it "the discard is owed exactly once: a later tick keeps the \
+       \replacement session's own queued work" $
+        withHeadlessEngineNoWorld $ \env → do
+        Right requestId ← beginLoad (loadStatusRef env) "owner_park_load"
+        Q.writeQueue (luaToEngineQueue env) (LuaLog LuaLogInfo "pre-load work")
+        n ← armFinalPassOf env loadOwners loadOwners
+        reachSnapshot (saveBarrierRef env) n
+        commitLoadPublish env requestId
+        releaseCaptureLock (saveBarrierRef env) n
+        finishSave (saveBarrierRef env) n
+        finishLoad (loadStatusRef env) requestId
+        runRenderTick env
+        queuedLuaToEngine env `shouldReturn` 0
+
+        -- The replacement session starts producing its own work. The
+        -- latch is spent, so this must survive to be processed.
+        Q.writeQueue (luaToEngineQueue env)
+                     (LuaLog LuaLogInfo "replacement session work")
+        discardLuaMessagesForActiveLoad env `shouldReturn` 0
+        queuedLuaToEngine env `shouldReturn` 1
 
     it "a parked render owner discards nothing when no load is in \
        \flight, so a save never loses queued Lua-to-engine work" $
@@ -396,28 +459,28 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         reachSnapshot (saveBarrierRef env) n
         runRenderTick env
         queuedLuaToEngine env `shouldReturn` 1
+        releaseCaptureLock (saveBarrierRef env) n
+        finishSave (saveBarrierRef env) n
+        -- A save never arms the latch, so the work is still there for
+        -- the resumed owner to PROCESS rather than having been thrown
+        -- away.
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
+        discardLuaMessagesForActiveLoad env `shouldReturn` 0
+        queuedLuaToEngine env `shouldReturn` 1
 
-    -- The publication commitment is ONE action, not two lines that can
-    -- drift apart: the phase that licenses the irreversible flush and
-    -- the command that actually publishes are produced together, after
-    -- 'applyLuaLoad' has already succeeded.
-    it "commitLoadPublish announces the publication and queues it \
-       \together, and neither exists before it" $
+    -- The publication commitment is ONE action, not lines that can
+    -- drift apart: the phase, the latch that licenses the irreversible
+    -- flush, and the command that actually publishes are produced
+    -- together, after 'applyLuaLoad' has already succeeded.
+    it "commitLoadPublish announces the publication, arms the discard \
+       \and queues the publish together, and none exists before it" $
         withHeadlessEngineNoWorld $ \env → do
         Right requestId ← beginLoad (loadStatusRef env) "owner_park_load"
         advanceLoad (loadStatusRef env) requestId LoadStaged
-        loadPublishCommitted (loadStatusRef env) `shouldReturn` False
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` False
         queuedWorldCommands env `shouldReturn` 0
 
         commitLoadPublish env requestId
-        loadPublishCommitted (loadStatusRef env) `shouldReturn` True
+        staleLuaDiscardArmed (loadStatusRef env) `shouldReturn` True
         published ← Q.flushQueue (worldQueue env)
         map isLoadPublish published `shouldBe` [True]
-
-    it "commitLoadPublish is inert for a load that already ended, so a \
-       \stale commit cannot license the flush" $
-        withHeadlessEngineNoWorld $ \env → do
-        Right requestId ← beginLoad (loadStatusRef env) "owner_park_load"
-        failLoad (loadStatusRef env) requestId "failed applying Lua state"
-        commitLoadPublish env requestId
-        loadPublishCommitted (loadStatusRef env) `shouldReturn` False

@@ -26,7 +26,7 @@ import Engine.Core.Monad
 import Engine.Core.State
 import Engine.Core.Types (ecHeadless)
 import qualified Engine.Core.Queue as Q
-import Engine.Load.Status (loadPublishCommitted)
+import Engine.Load.Status (takeStaleLuaDiscard)
 import Engine.Scripting.Lua.Message.Scene ( handleSpawnText, handleSetText
                                            , handleSpawnSprite, handleSetPos
                                            , handleSetColor, handleSetSize
@@ -128,22 +128,31 @@ spanTextureLoads policy msgs =
 --   unlocked tick would let their scene/UI mutations land on the
 --   replacement session.
 --
---   The gate is 'loadPublishCommitted', NOT 'loadInProgress' and not the
---   capture boundary (#2221). Both of those open strictly earlier than
---   the publish is committed to, and this flush is irreversible: a load
---   that fails before 'World.Command.Types.WorldLoadPublish' is queued
---   — another owner times out, or
+--   The gate is 'Engine.Load.Status.takeStaleLuaDiscard' — the
+--   one-shot latch a load arms exactly when it COMMITS to publishing
+--   (#2221) — not 'loadInProgress', not the capture boundary, and not a
+--   phase test.
+--
+--   Not the earlier two, because this flush is irreversible while both
+--   of those open before anything is committed to: a load that fails
+--   before 'World.Command.Types.WorldLoadPublish' is queued — another
+--   owner times out, or
 --   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'\'s
 --   @applyLuaLoad@ raises — leaves the OLD session live and, by
 --   @docs/persistence_contract.md@, unchanged, so that session's queued
---   work must still be there to run. The render owner's own #2221 park
---   starts earlier still and is deliberately not this gate: parking
---   destroys nothing, so it is safe where the flush is not.
---   A normal save has no generation replacement, so it deliberately retains
---   its queued work.
+--   work must still be there to run.
+--
+--   Not a phase test either, because no scheduling guarantees this
+--   thread a tick while any such phase holds: see 'armStaleLuaDiscard'.
+--   The latch makes the discard exactly-once and independent of when
+--   this thread next runs, which is why the caller no longer needs to
+--   be inside any particular window to call it.
+--
+--   A normal save has no generation replacement, so it never arms the
+--   latch and deliberately retains its queued work.
 discardLuaMessagesForActiveLoad ∷ EngineEnv → IO Int
 discardLuaMessagesForActiveLoad env = do
-    loading ← loadPublishCommitted (loadStatusRef env)
+    loading ← takeStaleLuaDiscard (loadStatusRef env)
     if loading
         then length <$> Q.flushQueue (luaToEngineQueue env)
         else pure 0

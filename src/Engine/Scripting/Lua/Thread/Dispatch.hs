@@ -34,7 +34,8 @@ import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
-import Engine.Load.Status (advanceLoad, failLoad, finishLoad, failReconciliation
+import Engine.Load.Status (advanceLoad, armStaleLuaDiscard, failLoad
+                          , finishLoad, failReconciliation
                           , ReconciliationFailure(..), LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
@@ -571,29 +572,30 @@ handleLoadStaged env ls requestId = do
                     (requestSelectionChange True ([], []) mgr, ())
                 commitLoadPublish env requestId
 
--- | Commit this load to publication: announce 'LoadWaitingPublish' and
---   queue the world thread's 'WorldLoadPublish', as ONE action (#2221).
+-- | Commit this load to publication: announce 'LoadWaitingPublish',
+--   arm the render owner's stale-queue discard, and queue the world
+--   thread's 'WorldLoadPublish' — as ONE action (#2221).
 --
---   They are one action because the phase is what tells the rest of the
---   engine the publication is committed
---   ('Engine.Load.Status.loadPublishCommitted'), and the queued command
---   is what makes that true. Anything IRREVERSIBLE that a publication
---   justifies keys off the phase — above all the render owner's
---   'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad',
---   which destroys the old session's queued scene\/UI work.
+--   Three facts, one action: the phase says the publication is
+--   committed, 'Engine.Load.Status.armStaleLuaDiscard' hands the render
+--   owner the one irreversible act that commitment licenses — the
+--   'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad' that
+--   destroys the old session's queued scene\/UI work — and the queued
+--   command is what makes both true.
 --
---   So the phase must not be announced anywhere EARLIER than this. Not
---   at 'reachSnapshot': 'applyLuaLoad' runs after the boundary and can
+--   So neither may happen anywhere EARLIER than this. Not at
+--   'reachSnapshot': 'applyLuaLoad' runs after the boundary and can
 --   still fail, and that failure aborts with the OLD session live and,
 --   by @docs\/persistence_contract.md@, unchanged — its queued work
---   still has to run. Announcing it there (as this did before #2221)
---   licensed the flush during a window where nothing was committed to
---   at all. Keeping the two in one function is what stops that pairing
---   drifting apart again; the announcement precedes the write, so no
---   consumer can observe the queued command without the phase.
+--   still has to run. Arming there (as the phase was announced there
+--   before #2221) licenses the flush during a window where nothing is
+--   committed to at all. Keeping all three in one function is what
+--   stops that pairing drifting apart again; both precede the write, so
+--   no consumer can observe the queued command without them.
 commitLoadPublish ∷ EngineEnv → Int → IO ()
 commitLoadPublish env requestId = do
     advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
+    armStaleLuaDiscard (loadStatusRef env)
     Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.

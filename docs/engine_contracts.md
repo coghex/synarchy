@@ -2399,24 +2399,31 @@ snapshot that transaction captured), while a load publish DISCARDS it
 `World.Load.Publish.discardStaleQueues` for the rest) because it was
 queued against the session being replaced.
 
-**Parking is gated on the park; DISCARDING is gated on the publication
-being COMMITTED.** Parking an owner destroys nothing — whatever stays
-queued is still there however the transaction ends — but a discard is
-irreversible, and a load that fails anywhere before `WorldLoadPublish`
-is queued leaves the OLD session live and, by
+**Parking is not a licence to DISCARD.** Parking an owner destroys
+nothing — whatever stays queued is still there however the transaction
+ends — but a discard is irreversible, and a load that fails anywhere
+before `WorldLoadPublish` is queued leaves the OLD session live and, by
 `docs/persistence_contract.md`, unchanged, so its queued work must
 survive. Neither the park nor the capture boundary is late enough to
 license one: `applyLuaLoad` runs AFTER `reachSnapshot` and can still
-fail. So every irreversible flush waits for
-`Engine.Load.Status.loadPublishCommitted` — phase `LoadWaitingPublish`,
-non-terminal — which `Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish`
-establishes as ONE action with the enqueue of the publish command
-itself. `Engine.Loop.Mode.runGatedByCaptureLock` therefore parks the
-render owner's camera and Lua-message work from its own final
-acknowledgement while `discardLuaMessagesForActiveLoad` keeps that
-narrower gate, and the world owner's `processAuthorizedSave` discard
-likewise only ever triggers on a batch that actually contains the
-`WorldLoadPublish`.
+fail.
+
+Nor is any *phase test* a sound trigger, because no scheduling
+guarantees an owner a tick inside the window such a test would
+describe. The world thread processes `WorldLoadPublish`, publishes and
+calls `releaseCaptureLock` on its own schedule; a render tick landing
+only afterwards would see an unlocked gate and a terminal load, and
+would drain the old session's queue straight into the replacement. So
+the render owner's discard is a ONE-SHOT LATCH
+(`Engine.Load.Status.armStaleLuaDiscard` / `takeStaleLuaDiscard`) that
+`Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish` arms as ONE
+action with the phase announcement and the enqueue of the publish
+command. `Engine.Loop.Mode.runGatedByCaptureLock` consumes it FIRST and
+unconditionally, outside its own locked/unlocked split — a debt owed
+before any processing, exactly once, whenever that thread next runs.
+The world owner's `processAuthorizedSave` discard needs no latch: it
+only ever triggers on a batch that actually contains the
+`WorldLoadPublish` itself.
 
 Gates: hspec `--match "save snapshot barrier"` (the bare-barrier park
 protocol in `Test.Headless.Save.Barrier`, and the owner-loop
