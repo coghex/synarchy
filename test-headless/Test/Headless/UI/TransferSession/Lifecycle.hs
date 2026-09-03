@@ -742,7 +742,8 @@ spec =
         -- #1250 review round 1: at the envelope's FORMAL MINIMUM the
         -- pair's natural width (2x440 + gap = 904) exceeds the
         -- framebuffer, and clamping each panel on its own — all
-        -- measurePane and UI.placePopup can do — lands them on top of
+        -- measurePane (scripts/cargo_inventory_render.lua since #2155)
+        -- and UI.placePopup can do — lands them on top of
         -- each other. The PAIR is fitted first now.
         it "at the supported minimum 800x600 @ 1x the pair still flanks: \
            \fitted to width, in frame, source left, no overlap" $

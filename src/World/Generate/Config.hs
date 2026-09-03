@@ -7,6 +7,7 @@ module World.Generate.Config
     , ClimateYaml(..)
     , ResourcesYaml(..)
     , TimelineYaml(..)
+    , WorldGenConfigRaw(..)
     , defaultTimelineYaml
     , minimumWorldSize
     , normalizeWorldSize
@@ -17,9 +18,20 @@ module World.Generate.Config
     , loadWorldGenConfig
     , defaultWorldGenConfig
     , applyConfigToParams
+      -- * The floating-point domain (#2288)
+    , module World.Generate.Config.Domain
+    , FloatLeaf(..)
+    , configFloatLeaves
+    , paramsFloatLeaves
+    , worldGenConfigRejections
+    , worldGenParamsRejections
+    , repairWorldGenConfig
+    , repairWorldGenParams
+    , resolveWorldGenConfigRaw
     ) where
 
 import UPrelude
+import World.Generate.Config.Domain
 import World.Generate.Config.IO (loadWorldGenConfig)
 import World.Generate.Config.Normalize
     ( minimumWorldSize
@@ -29,6 +41,16 @@ import World.Generate.Config.Normalize
     , normalizeWorldGenConfig
     )
 import World.Generate.Config.Types
+import World.Generate.Config.Validate
+    ( FloatLeaf(..)
+    , configFloatLeaves
+    , paramsFloatLeaves
+    , worldGenConfigRejections
+    , worldGenParamsRejections
+    , repairWorldGenConfig
+    , repairWorldGenParams
+    , resolveWorldGenConfigRaw
+    )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Geology.Ore.Types (OreLevers(..))
 import World.Geology.Timeline.Types (TimelineParams(..))

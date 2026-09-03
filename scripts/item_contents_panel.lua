@@ -3,7 +3,9 @@
 --
 -- Since #1238 (D-13) this module no longer owns a window lifecycle. It
 -- owns the two item-container LEVEL KINDS the window manager
--- (scripts/cargo_inventory_panel.lua) draws, and nothing else: no
+-- (scripts/cargo_inventory_panel.lua) draws -- through the shared
+-- renderer scripts/cargo_inventory_render.lua since #2155 -- and
+-- nothing else: no
 -- page, no panel, no singleton, no Escape handling, no per-tick
 -- refresh. Opening, closing, modality, resize restore and the nesting
 -- path all belong to the manager, which is what makes the one-window
