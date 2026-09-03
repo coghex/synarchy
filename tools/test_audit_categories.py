@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""The emitted-category inventory of world_audit.py, and its two groups (#2070).
+"""The emitted-category inventory of the world audit, and its two groups (#2070).
 
 The authoritative set of categories the audit can emit is the `category`
-argument of every `Issue(...)` construction in world_audit.py. It is NOT
-ALL_CHECKS, whose keys are check-function labels: TERRAIN_SPIKES_PITS is a
-key but not a category, and six real categories (the river/lake-under-terrain
-pair and the four floating-fluid variants) are categories but not keys.
+argument of every `Issue(...)` construction in the audit's own source. It
+is NOT ALL_CHECKS, whose keys are check-function labels: TERRAIN_SPIKES_PITS
+is a key but not a category, and six real categories (the river/lake-under-
+terrain pair and the four floating-fluid variants) are categories but not
+keys.
 
 The inventory is therefore derived from the audit SOURCE by AST, so a
 category added to a check function but classified nowhere fails
@@ -14,9 +15,22 @@ Anything that cannot be resolved statically is reported as a failure — never
 skipped, since a skipped call site is exactly the fail-open hole this
 derivation exists to close.
 
+Which sources (#2224)
+---------------------
+The audit is no longer one file, so the scanned set is derived from LIVE
+module objects rather than named here: the module of every function in
+`world_audit.ALL_CHECKS`, plus the `world_audit` façade and the shared
+`world_audit_core`, which are the two modules an `Issue(...)` could reach
+that no registered check would name. A new check owner therefore joins the
+inventory by being registered, never by being listed. `audit_family_gap()`
+then closes the derivation over the rest of the family: a `world_audit*.py`
+module that constructs an `Issue` but backs no registered check is reported,
+not skipped, so an owner dropped out of the registry cannot take its
+categories out of the inventory with it.
+
 Extraction is pure AST over source text: nothing here executes a check
-function, builds a grid, or drives a tool's `main()`. `world_audit` is
-imported for two things only -- to locate its own source file, and for
+function, builds a grid, or drives a tool's `main()`. The audit modules are
+imported for two things only -- to locate their own source files, and for
 the classification sets and functions `test_severity_classification`
 holds the derived inventory against. Restating those sets here would
 reopen the hole the derivation closes.
@@ -28,11 +42,14 @@ Not a gate of its own. Run through the aggregate:
 from __future__ import annotations
 
 import ast
+import inspect
 import sys
 from pathlib import Path
+from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import world_audit  # type: ignore  # noqa: E402
+import world_audit_core  # type: ignore  # noqa: E402
 from world_audit import (  # type: ignore  # noqa: E402
     severity_of, classify_category,
     BUG_CATEGORIES, QUALITY_CATEGORIES, QUALITY_THRESHOLDS,
@@ -318,27 +335,112 @@ def extract_issue_categories(source: str, filename: str
     return categories, unresolved
 
 
+#: The audit family on disk. A discovery pattern, not an inventory: it is
+#: matched against `tools/` to find modules the derivation below has not
+#: already reached, and every match it finds is reported rather than
+#: adopted. Requirement 20 of #2224 bans a second maintained filename list,
+#: and this is not one -- nothing here decides what the audit contains.
+AUDIT_FAMILY_GLOB = "world_audit*.py"
+
+
+def audit_source_modules() -> tuple[list[ModuleType], list[str]]:
+    """The modules whose source backs the live audit, from live objects.
+
+    The check owners are read off `world_audit.ALL_CHECKS` itself, so a
+    new owner joins the scanned set by being registered rather than by
+    being named here. The façade and the shared core are added because
+    they are the two modules an `Issue(...)` could reach that no
+    registered check would name.
+
+    The second element lists registry entries whose defining module could
+    not be resolved. Those are reported, never dropped: a check whose
+    source we cannot find is a hole in the inventory exactly like a call
+    site we cannot read.
+    """
+    modules: dict[str, ModuleType] = {}
+    problems: list[str] = []
+    for key, check_fn in world_audit.ALL_CHECKS.items():
+        module = inspect.getmodule(check_fn)
+        if module is None or getattr(module, "__file__", None) is None:
+            problems.append(
+                f"ALL_CHECKS[{key!r}] = "
+                f"{getattr(check_fn, '__qualname__', check_fn)!r}: cannot "
+                f"locate the module that defines it, so its Issue(...) call "
+                f"sites cannot be scanned")
+            continue
+        modules[module.__name__] = module
+    for module in (world_audit, world_audit_core):
+        modules[module.__name__] = module
+    return [modules[name] for name in sorted(modules)], problems
+
+
+def audit_family_gap(scanned: list[ModuleType]) -> list[str]:
+    """Audit-family modules that build an `Issue` but back no scanned check.
+
+    The closure guard on the derivation above. `audit_source_modules()`
+    follows the registry, so a check owner that falls out of `ALL_CHECKS`
+    would take its categories out of the inventory silently; this reports
+    any `world_audit*.py` file that still constructs an `Issue` and is not
+    in the scanned set, which is the fail-open hole #1320 closed when the
+    audit was a single file.
+    """
+    covered = {Path(module.__file__).resolve() for module in scanned}
+    gap: list[str] = []
+    for path in sorted(Path(__file__).resolve().parent.glob(AUDIT_FAMILY_GLOB)):
+        if path.resolve() in covered:
+            continue
+        try:
+            tree = ast.parse(path.read_text(), str(path))
+        except (OSError, SyntaxError) as error:
+            gap.append(f"{path}: cannot be read for Issue(...) call sites "
+                       f"({error})")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            called = (func.id if isinstance(func, ast.Name)
+                      else func.attr if isinstance(func, ast.Attribute)
+                      else None)
+            if called != "Issue":
+                continue
+            gap.append(
+                f"{path}:{node.lineno}: an Issue(...) call site in a module "
+                f"that backs no registered check — the emitted-category "
+                f"inventory does not cover it")
+    return gap
+
+
 def emitted_categories() -> tuple[set[str], list[str]]:
-    """The audit's real emitted-category inventory, read from its source."""
-    path = Path(world_audit.__file__).resolve()
-    return extract_issue_categories(path.read_text(), str(path))
+    """The audit's real emitted-category inventory, read from its sources."""
+    modules, unresolved = audit_source_modules()
+    categories: set[str] = set()
+    for module in modules:
+        path = Path(module.__file__).resolve()
+        found, problems = extract_issue_categories(path.read_text(), str(path))
+        categories |= found
+        unresolved.extend(problems)
+    unresolved.extend(audit_family_gap(modules))
+    return categories, unresolved
 
 
 def test_severity_classification() -> None:
     """Every category the audit can emit — the `category` argument of every
-    `Issue(...)` call in world_audit.py, extracted from its source rather
-    than restated here — must be classified as a BUG or a QUALITY metric,
-    and every QUALITY category must carry an explicit threshold."""
+    `Issue(...)` call in the modules backing the live registry, extracted
+    from their source rather than restated here — must be classified as a
+    BUG or a QUALITY metric, and every QUALITY category must carry an
+    explicit threshold."""
     print("test_severity_classification")
     every_cat, unresolved = emitted_categories()
 
     # A call site we cannot read is a hole in the inventory, so it fails
     # rather than shrinking the set we go on to check.
     expect(not unresolved,
-           f"Issue(...) call sites whose category is not statically "
-           f"resolvable: {unresolved}")
+           f"the emitted-category inventory is not closed — unreadable "
+           f"Issue(...) call sites, unlocatable check modules, or audit "
+           f"modules the derivation does not cover: {unresolved}")
     expect(every_cat,
-           "no Issue(...) categories were extracted from world_audit.py — "
+           "no Issue(...) categories were extracted from the audit modules — "
            "the derivation is broken, not the audit")
 
     # The two dynamic dispatches must keep resolving; losing them would

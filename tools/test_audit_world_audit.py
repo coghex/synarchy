@@ -9,6 +9,11 @@ terrain spikes and pits; river gaps and mouth drops; islands, isolated
 fluid, minimum-bound leaks and surface consistency; inland versus
 ocean-connected below-sea terrain; and the wetland and desert slope checks.
 
+One group reads no grid at all: `test_registry_composition_fails_closed`
+drives `world_audit.compose_checks` over stand-in owners and pins the six
+ways the #2224 split could silently shorten the audit, plus that
+`audit_dump` runs every registered check exactly once.
+
 The grid builders (`tile`, `flat_grid`, `make_tiles`, `count_category`,
 `issue_coords`) live here because this is their only consumer.
 
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -839,6 +845,137 @@ def test_issue_ordering_is_canonical() -> None:
            "(category, x, y) issue sort is missing or weakened")
 
 
+
+def _owner(name: str, checks: dict[str, Any] | None) -> types.SimpleNamespace:
+    """A stand-in check owner: a module-shaped object with a CHECKS map.
+
+    `compose_checks` reads an owner through `getattr(module, "CHECKS")`
+    and names it by `__name__`, so a namespace is a faithful stand-in and
+    no real owner has to be mutated to drive a refusal.
+    """
+    owner = types.SimpleNamespace()
+    owner.__name__ = f"fake_{name}"
+    if checks is not None:
+        owner.CHECKS = checks
+    return owner
+
+
+def test_registry_composition_fails_closed() -> None:
+    """ALL_CHECKS is composed from the owners' inventories and refuses any
+    arrangement that would run a shortened audit (#2224).
+
+    The registry is production code, and every refusal below is a way the
+    audit could silently stop running a check while still reporting a
+    green run: an owner gone or emptied, a key two owners both claim, one
+    function reached under two keys, an ordered key nobody owns, an order
+    that repeats a key, and an owner-declared check the order drops."""
+    print("test_registry_composition_fails_closed")
+
+    def one(grid: Any, issues: Any) -> None:
+        pass
+
+    def two(grid: Any, issues: Any) -> None:
+        pass
+
+    def three(grid: Any, issues: Any) -> None:
+        pass
+
+    def four(grid: Any, issues: Any) -> None:
+        pass
+
+    healthy = {
+        "columns": _owner("columns", {"A": one}),
+        "boundaries": _owner("boundaries", {"B": two}),
+        "regions": _owner("regions", {"C": three}),
+        "soils": _owner("soils", {"D": four}),
+    }
+
+    def refuses(label: str, owners: dict[str, Any], order: tuple[str, ...],
+                names: str) -> None:
+        """Compose and require a RegistryError whose message names the cause."""
+        try:
+            world_audit.compose_checks(owners, order)
+        except world_audit.RegistryError as error:
+            expect(names in str(error),
+                   f"{label}: the refusal must name {names!r}, got "
+                   f"{str(error)!r}")
+        else:
+            expect(False,
+                   f"{label}: composed without refusing — a shortened audit "
+                   f"would report a green run")
+
+    order = ("A", "B", "C", "D")
+
+    # The healthy arrangement composes, in the order given rather than the
+    # order the owners are visited in.
+    composed = world_audit.compose_checks(healthy, ("D", "B", "C", "A"))
+    expect(list(composed) == ["D", "B", "C", "A"],
+           f"compose_checks must follow the given order, got {list(composed)}")
+    expect(composed == {"A": one, "B": two, "C": three, "D": four},
+           f"compose_checks must bind each key to its owner's check, got "
+           f"{composed}")
+
+    missing_owner = dict(healthy)
+    del missing_owner["soils"]
+    refuses("an absent owner", missing_owner, order, "'soils'")
+
+    no_inventory = dict(healthy, soils=_owner("soils", None))
+    refuses("an owner that declares no CHECKS", no_inventory, order,
+            "declares no CHECKS")
+
+    emptied = dict(healthy, soils=_owner("soils", {}))
+    refuses("an emptied owner", emptied, order, "empty CHECKS")
+
+    shared_key = dict(healthy, soils=_owner("soils", {"A": four}))
+    refuses("a key two owners declare", shared_key, order, "'A'")
+
+    shared_fn = dict(healthy, soils=_owner("soils", {"D": one}))
+    refuses("one function under two keys", shared_fn, order, "both register")
+
+    refuses("an ordered key no owner declares", healthy,
+            order + ("UNOWNED",), "'UNOWNED'")
+
+    refuses("an order that repeats a key", healthy, order + ("A",),
+            "more than once")
+
+    refuses("an owner-declared check the order drops", healthy, ("A", "B", "C"),
+            "soils:D")
+
+    # The live registry is that composition, not a hand-written dict.
+    expect(world_audit.ALL_CHECKS == world_audit.compose_checks(),
+           "ALL_CHECKS must be exactly what compose_checks() returns")
+    expect(list(world_audit.ALL_CHECKS) == list(world_audit.CHECK_ORDER),
+           f"ALL_CHECKS must run in CHECK_ORDER, got "
+           f"{list(world_audit.ALL_CHECKS)}")
+
+    # And audit_dump runs each registered check exactly once. Counting
+    # wrappers stand in for the registry for one call; the original dict
+    # object is restored and re-checked, because a self-test that leaves a
+    # production global swapped would corrupt every group after it.
+    original = world_audit.ALL_CHECKS
+    calls: dict[str, int] = {key: 0 for key in original}
+
+    def counter(key: str, check_fn: Any) -> Any:
+        def wrapped(grid: Any, issues: Any) -> None:
+            calls[key] += 1
+            check_fn(grid, issues)
+        return wrapped
+
+    try:
+        world_audit.ALL_CHECKS = {key: counter(key, fn)
+                                  for key, fn in original.items()}
+        audit_dump(make_tiles(flat_grid(3, 3)))
+    finally:
+        world_audit.ALL_CHECKS = original
+
+    expect(world_audit.ALL_CHECKS is original,
+           "the registry global must be restored after the counting run")
+    off = {key: n for key, n in calls.items() if n != 1}
+    expect(not off,
+           f"audit_dump must run every registered check exactly once, got "
+           f"{off}")
+
+
 #: This owner's inventory, in two fragments. The aggregate has always
 #: run the two emitted-category groups (owned by
 #: `test_audit_categories`) INSIDE the audit block, between these
@@ -876,6 +1013,7 @@ TESTS_LEADING = (
 TESTS_TRAILING = (
     test_wetland_on_slope,
     test_desert_soil_on_slope,
+    test_registry_composition_fails_closed,
 )
 
 TESTS = TESTS_LEADING + TESTS_TRAILING
