@@ -20,13 +20,13 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef)
 import Control.Concurrent (threadDelay)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
-    , startWorkerThread)
+    , startWorkerThread, workerCrashStderrSink)
 import Engine.Core.State
-    (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
+    (EngineEnv, lifecycleRef, loggerRef, saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated, saveInProgress)
 import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import qualified Engine.Core.Queue as Q
@@ -49,6 +49,8 @@ startCombatThread env = startWorkerThread WorkerSpec
     { wsName        = "Combat"
     , wsLoggerRef   = loggerRef env
     , wsCategory    = CatThread
+    , wsLifecycleRef = lifecycleRef env
+    , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting combat thread..."
     , wsStartedMsg  = Just "Combat thread started"
     , wsFailMsg     = "Failed starting combat thread: "
@@ -63,14 +65,15 @@ startCombatThread env = startWorkerThread WorkerSpec
         logger ← readIORef (loggerRef env)
         logError logger CatThread $ "Combat thread crashed: "
             <> tshow e
-        -- Fail-stop, like every other worker thread (world,
-        -- unit, input). Re-entering the loop here skipped the
-        -- threadDelay, so a persistent fault tight-looped at
-        -- 100% CPU flooding the log — and a combat thread
-        -- that silently retries forever is corrupted gameplay
-        -- with no signal anyway. The shared lifecycle owns the
-        -- stop half now; this callback only reports.
-        writeIORef (lifecycleRef env) CleaningUp
+      -- Fail-stop, like every other worker thread (world, unit,
+      -- input). Re-entering the loop here skipped the threadDelay, so
+      -- a persistent fault tight-looped at 100% CPU flooding the log —
+      -- and a combat thread that silently retries forever is corrupted
+      -- gameplay with no signal anyway. The shared lifecycle owns the
+      -- stop half, and since #2283 owns the lifecycle write too, made
+      -- BEFORE the line above so a throwing logger cannot swallow it;
+      -- this callback only reports.
+    , wsOnCrashCleanup = \_ _ → pure ()
     }
 
 -- | Counter modulo `woundsTickEvery` so we only run the wound
