@@ -166,6 +166,19 @@ requireLifespan what sp fi = case instanceLifespan sp fi of
         expectationFailure (what <> ": expected a lifespan, got Nothing")
         pure 0.0
 
+-- | A 'Float' @NaN@, written so no literal division survives constant
+--   folding into a different value.
+nanScale ∷ Float
+nanScale = 0 / 0
+
+-- | The next 'Float' strictly above a positive finite @x@ — the
+--   just-over-the-line value #2280's ceiling examples need, computed
+--   from 'maxTimeScale' itself rather than from a copied literal.
+nextUpFloat ∷ Float → Float
+nextUpFloat x =
+    let (mant, ex) = decodeFloat x
+    in encodeFloat (mant + 1) ex
+
 fruitingDay, dormantDay ∷ Int
 fruitingDay = 200   -- inside berry's fruiting window (180–269)
 dormantDay  = 30    -- deep in the dormant stage
@@ -196,6 +209,65 @@ spec = do
                     0.0 3600.0 (WorldTime 23 59) (WorldDate 1 12 30)
             t `shouldBe` WorldTime 23 59
             d `shouldBe` WorldDate 1 12 30
+            rolled `shouldBe` 0
+
+        -- #2280: the clock enforces the accepted scale domain itself, so
+        -- a producer that goes around the Lua boundary still cannot
+        -- corrupt it. Each of these hits a DIFFERENT guard, and every one
+        -- must give back the exact input plus zero rolled days -- never a
+        -- partially applied advance.
+        forM_ [ ("NaN", nanScale)
+              , ("+Infinity", 1 / 0)
+              , ("-Infinity", -1 / 0)
+              , ("a negative finite scale", -1.0)
+              , ("a scale one ulp above the derived ceiling",
+                 nextUpFloat maxTimeScale)
+              ] $ \(label, scale) ->
+            it ("refuses " ⧺ label ⧺ " and leaves the clock exactly alone") $ do
+                let (t, d, rolled) = advanceWorldClock defaultCalendarConfig
+                        scale 0.25 (WorldTime 23 59) (WorldDate 3 7 11)
+                t `shouldBe` WorldTime 23 59
+                d `shouldBe` WorldDate 3 7 11
+                rolled `shouldBe` 0
+
+        it "accepts the derived ceiling itself, and floors to exactly the \
+           \representable day count" $ do
+            -- The worst case the ceiling is derived FROM: the last minute
+            -- of a day plus one whole maxElapsedStep. Anything larger
+            -- would floor past 'maxClockDayCount'.
+            let (t, _, rolled) = advanceWorldClock defaultCalendarConfig
+                    maxTimeScale 0.25 (WorldTime 23 59) (WorldDate 1 1 1)
+            rolled `shouldBe` maxClockDayCount
+            wtHour t `shouldSatisfy` (\h -> h >= 0 && h <= 23)
+            wtMinute t `shouldSatisfy` (\m -> m >= 0 && m <= 59)
+
+        it "accepts the 50000 probe scale and carries its whole-day count" $ do
+            -- tools/farm_ai_probe.py and tools/crop_probe.py both drive
+            -- the world at this scale; requirement 5 keeps it accepted.
+            let (t, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    50000.0 1.0 (WorldTime 0 0) (WorldDate 1 1 1)
+            rolled `shouldBe` 34
+            t `shouldBe` WorldTime 17 20
+            d `shouldBe` WorldDate 1 2 5
+
+        it "refuses a carry whose calendar result would not fit wdYear" $ do
+            -- An accepted scale, an ordinary elapsed step, a representable
+            -- day count -- and a year that cannot absorb the carry. The
+            -- pre-#2280 clock wrapped straight into a negative year.
+            let (t, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    3000.0 180.0 (WorldTime 6 0) (WorldDate maxBound 1 1)
+            t `shouldBe` WorldTime 6 0
+            d `shouldBe` WorldDate maxBound 1 1
+            rolled `shouldBe` 0
+
+        it "refuses a non-finite elapsed step" $ do
+            -- The guard is over the values each floor actually receives,
+            -- so a producer handing the clock a NaN dt is refused even at
+            -- an accepted scale.
+            let (t, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1.0 nanScale (WorldTime 10 0) (WorldDate 1 1 1)
+            t `shouldBe` WorldTime 10 0
+            d `shouldBe` WorldDate 1 1 1
             rolled `shouldBe` 0
 
     describe "worldDateAddDays" $ do
