@@ -117,8 +117,12 @@ LINK_RE = re.compile(
 # A quasiquote opener. GHC lexes `[name|` as one with QuasiQuotes on --
 # which synarchy.cabal enables globally -- so this matches exactly what
 # the compiler treats as quasiquoted, list-comprehension lookalikes
-# included.
-QUASIQUOTE_OPEN_RE = re.compile(r"\[[a-z_][A-Za-z0-9_']*\|")
+# included. The quoter may be QUALIFIED (`[QQ.glsl| … |]`), which is
+# how a quoter imported qualified is spelled; leaving that form
+# unrecognised leaves its body unmasked, and a `--` line inside raw
+# quoted source is then read as a real Haskell comment.
+QUASIQUOTE_OPEN_RE = re.compile(
+    r"\[(?:[A-Z][A-Za-z0-9_']*\.)*[a-z_][A-Za-z0-9_']*\|")
 
 MODULE_HEADER_RE = re.compile(
     r"^module\s+([A-Z][A-Za-z0-9_'.]*)", re.MULTILINE)

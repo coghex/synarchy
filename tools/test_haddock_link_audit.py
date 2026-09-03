@@ -887,11 +887,27 @@ def test_quasiquote_is_permitted() -> None:
 module Beta ( shader, run ) where
 shader ∷ String
 shader = [glsl|
-  // 'Alpha.hidden' -- {- comment-like delimiters inside a quasiquote -}
+  -- 'Alpha.hidden' {- and comment-like delimiters -} inside the body
   |]
 run ∷ Int
 run = 0
 """, "a quasiquote containing a link and comment-like delimiters")
+
+
+def test_qualified_quasiquoter_is_permitted() -> None:
+    """A quoter imported qualified is spelled `[QQ.glsl| … |]`, and GHC
+    lexes that as a quasiquote just as readily. An opener rule that
+    accepted only unqualified quoters would leave the body unmasked and
+    read its `--` line as a real comment."""
+    _expect_clean("""\
+module Beta ( shader, run ) where
+shader ∷ String
+shader = [QQ.glsl|
+  -- 'Alpha.hidden' {- inside a qualified quasiquote -}
+  |]
+run ∷ Int
+run = 0
+""", "a qualified quasiquoter")
 
 
 def test_a_second_quasiquote_after_a_stray_block_opener_is_permitted() -> None:
@@ -1126,6 +1142,7 @@ TESTS = [
     test_string_literal_is_permitted,
     test_char_literal_is_permitted,
     test_quasiquote_is_permitted,
+    test_qualified_quasiquoter_is_permitted,
     test_a_second_quasiquote_after_a_stray_block_opener_is_permitted,
     test_a_second_quasiquote_after_a_stray_quote_is_permitted,
     test_constructor_link_is_permitted,
