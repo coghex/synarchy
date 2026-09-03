@@ -283,8 +283,16 @@ passWindow act = do
 --   interval the pre-#2205 scheduler added on top lands outside the
 --   window and fails here.
 storedByCallback ∷ Double → Double → Double → Double → Expectation
-storedByCallback t0 t1 rate deadline =
-    (deadline - rate) `shouldSatisfy` (\sample → sample ≥ t0 ∧ sample ≤ t1)
+storedByCallback t0 t1 rate deadline
+    | sample ≥ t0 ∧ sample ≤ t1 = pure ()
+    | otherwise = expectationFailure $
+        "stored deadline " ⧺ show deadline ⧺ " is one interval ("
+        ⧺ show rate ⧺ ") past " ⧺ show sample ⧺ ", which is outside the \
+          \pass's own clock window [" ⧺ show t0 ⧺ ", " ⧺ show t1
+        ⧺ "]: the scheduler wrote over the callback's decision instead \
+          \of leaving it alone"
+  where
+    sample = deadline - rate
 
 -- | The deadline stored after a pass IS the boundary: a pass just
 --   before it must not update, and a pass at it must update exactly
