@@ -413,9 +413,12 @@ local function constructExecute(uid, s, params)
         return
     end
 
-    -- Phase 3: pour work in. progress rides the designation (persisted;
-    -- it ramps a BUILDING blueprint — a structure site is already
-    -- invisible, #1846); the local copy avoids a read-back race.
+    -- Phase 3: pour work in. STRUCTURE jobs only -- a building job
+    -- returned above, having staked a real BuildingInstance that the
+    -- work then accumulates on. progress rides the designation
+    -- (persisted) and ramps nothing: a structure site is already
+    -- invisible by now (#1846) and a building ghost holds a fixed 60 %
+    -- (#1845). The local copy avoids a read-back race.
     if job.phase == "building" then
         -- Requirement 10: an unresolved-terrain site cannot be
         -- PROGRESSED either — its chunk evicting mid-build must stop the

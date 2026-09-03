@@ -203,11 +203,17 @@ data WorldCommand
         --   (gx, gy). Deltas are pre-normalised to the job's total
         --   work (1.0 = done) and the sum is clamped to [0, 1].
         --
-        --   A BUILDING blueprint's alpha ramps with it. A STRUCTURE
-        --   site's does not (#1846): it is already invisible by the
-        --   time any progress is poured, because D-15/D-16 make it
+        --   NEITHER ghost ramps with it, and only a STRUCTURE job
+        --   sends this at all. A structure site is already invisible by
+        --   the time any progress is poured (#1846): D-15/D-16 make it
         --   vanish when its materials are PAID for and show nothing
-        --   until the finished piece appears.
+        --   until the finished piece appears. A BUILDING designation
+        --   accrues no progress here whatsoever (#1845) — it is staked
+        --   into a real 'BuildingInstance' and the work accumulates on
+        --   THAT, so its ghost holds a fixed 60 % until the staked
+        --   building enters its own build-progress frames. The alpha
+        --   ramp this used to describe was a dead 0.45 + 0.55 * 0 and
+        --   is deleted.
         --
         --   Completion (placing the piece + removing the designation)
         --   stays Lua-side — the AI resolves art/materials, so it owns
