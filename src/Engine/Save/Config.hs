@@ -54,9 +54,8 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson
     (Object, Value(..), FromJSON(..), ToJSON(..), (.:?), (.=), object)
 import Data.Aeson.Types (Pair, Parser, parseMaybe)
-import Control.Exception (SomeException, try)
-import Engine.Core.ConfigWrite (writeConfigYaml)
-import System.Directory (doesFileExist, removeFile)
+import Engine.Core.ConfigWrite (removeConfigFile, writeConfigYaml)
+import System.Directory (doesFileExist)
 import Engine.Core.Log (LoggerState, LogCategory(..), logInfo, logWarn)
 
 -- | The effective autosave configuration.
@@ -238,22 +237,28 @@ writeSaveConfig logger defaultPath localPath desired0 = do
 --   override left to record. Removing the file (rather than writing an
 --   empty @save:@ block) is what lets a future template change reach
 --   this player.
+--
+--   The removal is DURABLE (#2202 review round 1). An unlink is a
+--   directory-entry change exactly like the write path's publish
+--   rename, so 'removeConfigFile' syncs @config/@ before this reports
+--   success: without that, a crash after the reported success could
+--   leave the old @config/save.local.yaml@ on disk and restore autosave
+--   settings the player had just reset back to the template.
 clearLocalFile ∷ LoggerState → FilePath → IO (Either Text ())
 clearLocalFile logger path = do
-    exists ← doesFileExist path
-    if not exists then pure (Right ()) else do
-        removed ← try (removeFile path)
-        case removed ∷ Either SomeException () of
-            Left e → do
-                let msg = "could not remove " <> T.pack path <> ": "
-                            <> tshow e
-                logWarn logger CatInit $ "save config: " <> msg
-                pure (Left msg)
-            Right () → do
-                logInfo logger CatInit $
-                    "Save config matches the tracked defaults; removed "
-                    <> T.pack path
-                pure (Right ())
+    removed ← removeConfigFile path
+    case removed of
+        Left msg → do
+            logWarn logger CatInit $ "save config: " <> msg
+            pure (Left msg)
+        -- Nothing was there to remove, so nothing changed and there is
+        -- no removal to announce.
+        Right False → pure (Right ())
+        Right True  → do
+            logInfo logger CatInit $
+                "Save config matches the tracked defaults; removed "
+                <> T.pack path
+            pure (Right ())
 
 -- | Publish the sparse override document. The write goes through
 --   'writeConfigYaml' (#2202), so a crash part way through can never

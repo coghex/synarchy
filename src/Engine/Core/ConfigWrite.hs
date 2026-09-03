@@ -71,6 +71,9 @@ module Engine.Core.ConfigWrite
     writeConfigBytes
   , writeConfigYaml
   , copyConfigFile
+    -- * Removing
+  , removeConfigFile
+  , removeConfigFileWith
     -- * Injection seam
   , ConfigWriteOps(..)
   , realConfigWriteOps
@@ -82,9 +85,10 @@ import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Control.Exception (SomeAsyncException, SomeException, fromException
-                         , throwIO, try)
+                         , onException, throwIO, try)
 import Data.Aeson (ToJSON)
-import System.Directory (createDirectoryIfMissing, renameFile)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile
+                        , renameFile)
 import System.FilePath (takeDirectory, takeFileName)
 import World.Save.Storage.Durable
   ( WriteStep(..), claimUniquePath, removeIfExists, syncDirectory
@@ -106,6 +110,15 @@ data ConfigWriteOps = ConfigWriteOps
       -- ^ Atomically publish the temporary onto the target.
     , cwoSyncDir ∷ FilePath → IO ()
       -- ^ @fsync@ the directory whose entry the rename just replaced.
+    , cwoDiscardTemp ∷ FilePath → IO [Text]
+      -- ^ Remove a temporary that will never be published, REPORTING a
+      --   failure rather than throwing. A leftover is not worth failing
+      --   an operation that has already failed for another reason, but
+      --   it is worth naming: silently swallowing it would let this
+      --   module return a 'Left' while a @tmp-…@ file it made sat in
+      --   the player's @config/@ for ever.
+    , cwoRemoveTarget ∷ FilePath → IO ()
+      -- ^ Unlink an existing target, for 'removeConfigFile'.
     }
 
 realConfigWriteOps ∷ ConfigWriteOps
@@ -114,6 +127,8 @@ realConfigWriteOps = ConfigWriteOps
     , cwoWrite     = writeBytesDurably
     , cwoRename    = renameFile
     , cwoSyncDir   = syncDirectory
+    , cwoDiscardTemp  = removeIfExists
+    , cwoRemoveTarget = removeFile
     }
 
 -- | Durably replace @path@ with @bytes@. The one write primitive every
@@ -154,7 +169,14 @@ writeConfigBytesWith ops path bytes = do
             claimed ← trySynchronous (cwoClaimTemp ops dir template)
             case claimed of
                 Left e    → pure (failed "could not stage a temporary for" e)
-                Right tmp → publish tmp
+                -- Cleanup ownership is held from the moment the name is
+                -- claimed until the rename consumes it. 'onException'
+                -- covers EVERY exception that escapes 'publish',
+                -- asynchronous ones included — those are rethrown rather
+                -- than returned, so without this a kill landing in the
+                -- rename would leave the temporary behind (#2202 review
+                -- round 1).
+                Right tmp → publish tmp `onException` bestEffortDiscard tmp
   where
     dir = takeDirectory path
 
@@ -171,19 +193,34 @@ writeConfigBytesWith ops path bytes = do
     failed what e = Left $ what <> " " <> T.pack path <> ": "
                              <> tshow e
 
+    -- A pre-rename failure, with its temporary removed FIRST so the
+    -- returned message can also name a leftover the removal could not
+    -- clear (#2202 review round 1: a swallowed cleanup failure let this
+    -- return 'Left' while its own temporary stayed in config/).
+    failedAfterDiscard ∷ FilePath → Text → SomeException
+                       → IO (Either Text ())
+    failedAfterDiscard tmp what e = do
+        leftovers ← cwoDiscardTemp ops tmp
+        pure $ case failed what e of
+            Left message → Left (message <> renderLeftovers leftovers)
+            Right ()     → Right ()
+
+    bestEffortDiscard tmp = void (cwoDiscardTemp ops tmp)
+
     publish tmp = do
         written ← cwoWrite ops tmp bytes
         case written of
             Left (step, e) → do
-                discard tmp
+                -- Discard BEFORE the rethrow, so an async exception
+                -- surfacing HERE (rather than escaping to the
+                -- 'onException' above) still leaves nothing behind.
+                outcome ← failedAfterDiscard tmp (describeStep step) e
                 rethrowIfAsync e
-                pure (failed (describeStep step) e)
+                pure outcome
             Right () → do
                 renamed ← trySynchronous (cwoRename ops tmp path)
                 case renamed of
-                    Left e → do
-                        discard tmp
-                        pure (failed "could not publish" e)
+                    Left e → failedAfterDiscard tmp "could not publish" e
                     -- Past the rename the temporary no longer exists:
                     -- rename(2) consumed the name. There is nothing left
                     -- to discard on the sync path.
@@ -198,11 +235,56 @@ writeConfigBytesWith ops path bytes = do
     describeStep StepWrite = "could not write"
     describeStep StepFlush = "could not flush"
 
--- | Remove this operation's temporary, best effort: a leftover is worth
---   nothing to report through, and the real failure is the one already
---   being returned.
-discard ∷ FilePath → IO ()
-discard tmp = void (removeIfExists tmp)
+-- | Append a cleanup failure to the message that is already being
+--   returned. Empty when the temporary went away, which is the case
+--   every real failure takes.
+renderLeftovers ∷ [Text] → Text
+renderLeftovers [] = ""
+renderLeftovers warnings = " (and " <> T.intercalate "; " warnings <> ")"
+
+-- | Durably remove @path@, for the one family whose \"no overrides
+--   left\" state is the ABSENCE of the file rather than an empty
+--   document ('Engine.Save.Config.clearLocalFile'). @Right True@ when a
+--   file was removed and the directory entry's disappearance was
+--   confirmed durable, @Right False@ when there was nothing to remove
+--   (so nothing changed and nothing needs syncing), @Left@ naming the
+--   path and cause otherwise.
+--
+--   The directory sync is the whole point (#2202 review round 1): an
+--   unlink is a directory-entry change exactly like the publish rename,
+--   so reporting success before it is confirmed would let a crash
+--   restore a stale @config/save.local.yaml@ — and with it autosave
+--   settings the player had just reset — over a state this already
+--   reported as saved.
+removeConfigFile ∷ FilePath → IO (Either Text Bool)
+removeConfigFile = removeConfigFileWith realConfigWriteOps
+
+-- | 'removeConfigFile' against injected operations. Exported for the
+--   gate; production calls 'removeConfigFile'.
+removeConfigFileWith ∷ ConfigWriteOps → FilePath → IO (Either Text Bool)
+removeConfigFileWith ops path = do
+    present ← trySynchronous (doesFileExist path)
+    case present of
+        Left e      → pure (failedTo "could not inspect" e)
+        Right False → pure (Right False)
+        Right True  → do
+            removed ← trySynchronous (cwoRemoveTarget ops path)
+            case removed of
+                Left e   → pure (failedTo "could not remove" e)
+                Right () → do
+                    synced ← trySynchronous
+                                 (cwoSyncDir ops (takeDirectory path))
+                    pure $ case synced of
+                        -- The unlink itself already happened and is
+                        -- visible; only its durability is unconfirmed,
+                        -- which is the same phase distinction the write
+                        -- path draws after its rename.
+                        Left e   → failedTo "could not confirm the removal \
+                                            \of" e
+                        Right () → Right True
+  where
+    failedTo ∷ Text → SomeException → Either Text Bool
+    failedTo what e = Left $ what <> " " <> T.pack path <> ": " <> tshow e
 
 -- | 'try' that lets an asynchronous exception through. 'writeBytesDurably'
 --   catches @SomeException@ (it has to, to name its own failing step), so

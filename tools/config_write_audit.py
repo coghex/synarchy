@@ -92,10 +92,16 @@ HELPER_REQUIRED_NAMES = (
     "syncDirectory",
     "claimUniquePath",
     "renameFile",
+    "removeFile",
 )
 
 IMPORTED_HELPER = "Engine.Core.ConfigWrite"
 
+# Removals are here too (#2202 review round 1): a config family whose
+# "no overrides left" state is the ABSENCE of the file publishes that
+# state by unlinking, which is a directory-entry change exactly like the
+# publish rename and needs the same directory sync before it is reported
+# as saved.
 RAW_WRITE_NAMES = (
     "encodeFile",
     "encodeFileWith",
@@ -103,6 +109,9 @@ RAW_WRITE_NAMES = (
     "copyFile",
     "copyFileWithMetadata",
     "renameFile",
+    "removeFile",
+    "removePathForcibly",
+    "removeDirectoryRecursive",
 )
 
 # Files that legitimately perform raw file I/O and are not config
@@ -243,11 +252,14 @@ HELPER_FIXTURE = """\
 module Engine.Core.ConfigWrite (writeConfigBytes) where
 import World.Save.Storage.Durable
   (claimUniquePath, syncDirectory, writeBytesDurably)
-import System.Directory (renameFile)
+import System.Directory (removeFile, renameFile)
 writeConfigBytes path bytes = do
     tmp <- claimUniquePath "d" "t"
     _ <- writeBytesDurably tmp bytes
     renameFile tmp path
+    syncDirectory "d"
+removeConfigFile path = do
+    removeFile path
     syncDirectory "d"
 """
 
@@ -319,6 +331,22 @@ def self_test() -> int:
                               "import Engine.Core.ConfigWrite (writeConfigBytes)\n"
                               "f p b = BS.writeFile p b\n"),
           expect_clean=False, needle="writeFile")
+
+    check("a raw removeFile in a config-persistence module",
+          lambda root: _plant(root, "src/Engine/Save/Config.hs",
+                              "module M where\n"
+                              "import Engine.Core.ConfigWrite (removeConfigFile)\n"
+                              "f p = removeFile p\n"),
+          expect_clean=False, needle="removeFile")
+
+    check("a helper that unlinks without syncing", lambda root: _plant(
+              root, HELPER_MODULE,
+              HELPER_FIXTURE.replace("import System.Directory (removeFile, renameFile)\n",
+                                     "import System.Directory (renameFile)\n")
+                            .replace("removeConfigFile path = do\n"
+                                     "    removeFile path\n"
+                                     "    syncDirectory \"d\"\n", "")),
+          expect_clean=False, needle="removeFile")
 
     check("a raw copyFile in a config-persistence module",
           lambda root: _plant(root, "src/Engine/Core/Init.hs",

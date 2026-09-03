@@ -44,8 +44,8 @@ import System.FilePath ((</>), takeDirectory)
 import Engine.Asset.YamlNotifications
   (loadNotificationCfg, writeNotificationOverrides)
 import Engine.Core.ConfigWrite
-  ( ConfigWriteOps(..), copyConfigFile, realConfigWriteOps, writeConfigBytes
-  , writeConfigBytesWith )
+  ( ConfigWriteOps(..), copyConfigFile, realConfigWriteOps, removeConfigFile
+  , removeConfigFileWith, writeConfigBytes, writeConfigBytesWith )
 import Engine.Core.Init
   (LegacyNeutralityCheck(..), migrateLegacyConfig, resolveConfigPath)
 import Engine.Core.Log
@@ -57,7 +57,7 @@ import Engine.Graphics.Config (VideoConfig, defaultVideoConfig, saveVideoConfig)
 import Engine.Input.Bindings (loadKeyBindings, saveKeyBindings)
 import Engine.PlayerEvent (CategoryCfg(..))
 import Engine.Save.Config
-  (SaveConfig(..), defaultSaveConfig, writeSaveConfig)
+  (SaveConfig(..), defaultSaveConfig, loadSaveConfig, writeSaveConfig)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
@@ -126,6 +126,9 @@ recordingOps = do
              , cwoSyncDir = \dir → do
                  note "sync" dir
                  cwoSyncDir realConfigWriteOps dir
+             , cwoRemoveTarget = \target → do
+                 note "remove" target
+                 cwoRemoveTarget realConfigWriteOps target
              }
          , reverse ⊚ readIORef seen )
 
@@ -287,6 +290,88 @@ helperSpec = describe "Engine.Core.ConfigWrite publish sequence" $ do
         BS.readFile target `shouldReturn` "previous\n"
         entriesOf dir `shouldReturn` ["video.local.yaml"]
 
+    it "still removes the temporary when an ASYNCHRONOUS exception \
+       \escapes from the publish rename" $ inTemp $ \dir → do
+        -- Round-1 review: the rename's async exception is rethrown
+        -- before the rename-failure branch can clean up, so cleanup
+        -- ownership has to be held from the moment the name is claimed.
+        let target = dir </> "video.local.yaml"
+            ops = realConfigWriteOps
+                { cwoRename = \_ _ →
+                    throwIO (SomeAsyncException (ErrorCall "killed")) }
+        BS.writeFile target "previous\n"
+        raised ← try (writeConfigBytesWith ops target "replacement\n")
+        case raised ∷ Either SomeException (Either Text ()) of
+            Left _  → pure ()
+            Right r → expectationFailure $
+                "expected the async exception to propagate, got " ⧺ show r
+        BS.readFile target `shouldReturn` "previous\n"
+        entriesOf dir `shouldReturn` ["video.local.yaml"]
+
+    it "names a temporary it could not remove in the Left, rather than \
+       \leaving one silently behind" $ inTemp $ \dir → do
+        let target = dir </> "video.local.yaml"
+            ops = realConfigWriteOps
+                { cwoWrite = failingWriteAfterCreating
+                    (toException (ErrorCall "disk full"))
+                , cwoDiscardTemp = \tmp →
+                    pure ["failed to remove stale artifact " <> T.pack tmp] }
+        BS.writeFile target "previous\n"
+        outcome ← writeConfigBytesWith ops target "replacement\n"
+        outcome `shouldSatisfy` isLeft
+        leftText outcome `shouldContainText` "disk full"
+        leftText outcome `shouldContainText` "failed to remove stale artifact"
+        BS.readFile target `shouldReturn` "previous\n"
+
+    it "removes a config file and syncs its directory, so the removal is \
+       \durable before it is reported" $ inTemp $ \dir → do
+        (ops, drain) ← recordingOps
+        let target = dir </> "save.local.yaml"
+        BS.writeFile target "save: {}\n"
+        removeConfigFileWith ops target `shouldReturn` Right True
+        doesFileExist target `shouldReturn` False
+        phases ← drain
+        map fst phases `shouldBe` ["remove", "sync"]
+        -- The directory whose entry vanished is the one that is synced.
+        [ p | ("sync", p) ← phases ] `shouldBe` [dir]
+        -- And the production entry point behaves the same way.
+        let other = dir </> "notifications.local.yaml"
+        BS.writeFile other "categories: {}\n"
+        removeConfigFile other `shouldReturn` Right True
+        doesFileExist other `shouldReturn` False
+
+    it "reports nothing removed, and syncs nothing, when the file is \
+       \already absent" $ inTemp $ \dir → do
+        (ops, drain) ← recordingOps
+        removeConfigFileWith ops (dir </> "save.local.yaml")
+            `shouldReturn` Right False
+        drain `shouldReturn` []
+
+    it "reports a failed unlink rather than claiming the file is gone" $
+        inTemp $ \dir → do
+            let target = dir </> "save.local.yaml"
+                ops = realConfigWriteOps
+                    { cwoRemoveTarget = \_ → throwIO (ErrorCall "unlink refused") }
+            BS.writeFile target "save: {}\n"
+            outcome ← removeConfigFileWith ops target
+            outcome `shouldSatisfy` isLeftBool
+            leftTextBool outcome `shouldContainText` T.pack target
+            leftTextBool outcome `shouldContainText` "unlink refused"
+            doesFileExist target `shouldReturn` True
+
+    it "reports an unconfirmed directory sync after an unlink that DID \
+       \happen" $ inTemp $ \dir → do
+        let target = dir </> "save.local.yaml"
+            ops = realConfigWriteOps
+                { cwoSyncDir = \_ → throwIO (ErrorCall "sync refused") }
+        BS.writeFile target "save: {}\n"
+        outcome ← removeConfigFileWith ops target
+        outcome `shouldSatisfy` isLeftBool
+        leftTextBool outcome `shouldContainText` "sync refused"
+        -- The unlink itself already happened and is visible; only its
+        -- durability is unconfirmed.
+        doesFileExist target `shouldReturn` False
+
     it "copies a config file durably, and reports an unreadable source \
        \without touching the destination" $ inTemp $ \dir → do
         let src = dir </> "legacy.yaml"
@@ -360,6 +445,27 @@ writerSpec = describe "config writers report a failed write" $ do
                 defaultSaveConfig { scEnabled = True }
             outcome `shouldSatisfy` isLeft
             saidAll drain [T.pack bad, "save config"]
+
+    it "writeSaveConfig's template-match path removes the local file \
+       \durably, and reports a failure instead of claiming success" $
+        inTemp $ \dir → do
+            (logger, drain) ← capturingLogger
+            let deflt = dir </> "save_default.yaml"
+                local = dir </> "save.local.yaml"
+            writeFile deflt "save:\n  enabled: false\n  interval_minutes: 10\n\
+                            \  rotation_depth: 3\n"
+            -- Establish an override, then ask for the template's own
+            -- values back: that is the branch that PUBLISHES by
+            -- removing the file rather than by writing one.
+            writeSaveConfig logger deflt local
+                defaultSaveConfig { scEnabled = True } `shouldReturn` Right ()
+            doesFileExist local `shouldReturn` True
+            writeSaveConfig logger deflt local defaultSaveConfig
+                `shouldReturn` Right ()
+            doesFileExist local `shouldReturn` False
+            loadSaveConfig logger deflt local
+                `shouldReturn` defaultSaveConfig
+            saidAll drain ["matches the tracked defaults; removed"]
 
     it "the notification materializer keeps the registry defaults, \
        \creates no partial file, and does not claim success" $
@@ -495,6 +601,12 @@ isLeft = either (const True) (const False)
 
 leftText ∷ Either Text () → Text
 leftText = either id (const "")
+
+isLeftBool ∷ Either Text Bool → Bool
+isLeftBool = either (const True) (const False)
+
+leftTextBool ∷ Either Text Bool → Text
+leftTextBool = either id (const "")
 
 shouldContainText ∷ HasCallStack ⇒ Text → Text → Expectation
 shouldContainText haystack needle =
