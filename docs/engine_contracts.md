@@ -1216,8 +1216,12 @@ cards); the F8 overlay hit-tests itself through a parallel
 `tryClaimClick`.
 
 Enforced by hspec `--match "container window stack"` /
-`"Container knowledge"` / `"Nested item contents"` / `"Item list widget"`,
-plus `tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
+`"Container knowledge"` / `"Nested item contents"` / `"Item list widget"` /
+`"Transfer context menu"` / `"cargo_inventory_panel"` (the last reaching
+`Test.Headless.UI.ResponsiveGameplay.Container`'s three describes — the
+framebuffer cap, tab shrink-to-fit, resize tab preservation, #1234
+endpoint agnosticism and the #1237 age indicator), plus
+`tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
 
 **The four level kinds.** `endpoint` (a storage building or a unit);
 `unitItem` (LIVE, `unit.getItemContents`, which searches loose inventory,
@@ -1241,6 +1245,48 @@ it; the row's transfer entries are Mode B's Retrieve 1 / Retrieve all.)
 no panel, no singleton, no `setup()`, no `update()`.
 `scripts/transfer_session_panels.lua` supplies the `escort` kind the same
 way and owns no lifecycle either.
+
+**Module ownership inside the manager (#2155).**
+`scripts/cargo_inventory_panel.lua` stays the public module, the
+`package.loaded["scripts.cargo_inventory_panel"]` singleton, the only
+engine-loaded script of the three, and the SOLE stack-lifecycle owner:
+the ordered `levels` array, base-versus-nested targeting, replacement and
+deeper-level removal, modal page creation and deletion, Escape
+dismissal, teardown reasons and `onClose` dispatch, resize
+snapshot/restore, the per-tick liveness/staleness/close decisions, and
+the public surface. Behind it:
+
+- `scripts/cargo_inventory_endpoints.lua` owns everything that knows an
+  endpoint is a BUILDING or a UNIT and everything that knows contents can
+  be REMEMBERED: the `ENDPOINTS` table, unit-title precedence, the live
+  unit read and the remembered building read, `knowledgeState` /
+  `formatAge` / `ageText` / `weightText` / `emptyText`, endpoint tab
+  policy and list params, exact-instance child identities, and the
+  `endpoint` level-kind descriptor. It creates no UI element.
+  Its presentation helpers branch on the view's own `knowledge`
+  sub-table and NEVER on an endpoint or level kind, which is what lets
+  `item_contents_panel.lua`'s `buildingItem` level get the "as of…" line
+  by supplying the same sub-table. `building.refreshContainerKnowledge`
+  is deliberately absent from all three modules: that absence is what
+  makes "opening never reveals" true.
+- `scripts/cargo_inventory_render.lua` owns the GENERIC pane: window and
+  row layout constants, header baselines and the title/subtitle/age
+  labels, item-list parameter completion, pane measurement and
+  placement, pane and level element teardown, the row context menu with
+  its appended "Contents" entry, and scroll capture. It is level-kind
+  agnostic — it never resolves a kind, reads a building or a unit, or
+  touches the stack, and reaches the façade only through a narrow
+  controller table of callbacks.
+
+Direction is one-way and acyclic: façade → {endpoints, render}, render →
+endpoints (for the single-owned `ageText`, because the height the
+renderer reserves for that line must key on the very string it draws),
+and nothing back. Endpoint policy may NOT import the renderer, so the
+shared tab spec and row-name colour — single-owned in the renderer — are
+composed by the façade and injected as values through
+`endpoints.setStyle`. The five `endpoint*` helpers and `formatAge`
+remain callable on the façade with unchanged signatures, which is where
+`transfer_session_panels.lua` and every probe still reach them.
 
 **Panes (#1250).** A level owns one or more PANES — a pane being one panel
 box, its header and one item list, with its own tab and scroll — and for

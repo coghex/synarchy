@@ -108,9 +108,22 @@ touching hit-testing, activation, clipping, or wheel handling. On sight:
   (`UI.InteractiveBounds.interactiveRect`); visible overflow never
   enlarges a target unless opted in via `UI.setInteractiveOverflow`.
 
-**Container window stack (#1238/#1250):** `scripts/cargo_inventory_panel.lua`
-is THE container window and owns an ordered STACK of levels, not one
-popup. Two windows never coexist at one level: opening container B where
+**Container window stack (#1238/#1250/#2155):**
+`scripts/cargo_inventory_panel.lua` is THE container window and the sole
+public singleton, and owns an ordered STACK of levels, not one popup.
+Since #2155 it is a FAÇADE over two focused owners:
+`scripts/cargo_inventory_endpoints.lua` (the building/unit ENDPOINTS
+table, the remembered-knowledge/age/weight/empty presentation, the five
+shared `endpoint*` helpers, the `endpoint` level kind) and
+`scripts/cargo_inventory_render.lua` (layout constants, header
+baselines and labels, item-list parameter completion, pane measurement
+and placement, element teardown, row menus, scroll capture — level-kind
+agnostic). Dependency direction is one-way: the façade imports both, the
+renderer imports the endpoint owner for the single-owned `ageText` it
+must measure against, and NEITHER extracted module imports the façade or
+lets endpoint policy import the renderer (the tab spec and row colour are
+injected as values). Only the façade is engine-loaded; the other two are
+`require`-only and define no `on*` function. Two windows never coexist at one level: opening container B where
 A is open REPLACES A and discards every deeper level, and an EXTERNAL
 request always targets the base. Only the DEEPEST level is interactive,
 and nothing enforces that by hand — a level past the base gets its own
@@ -122,7 +135,8 @@ kinds, descent, pane semantics, `paneWidgetName`, and the teardown
 REASONS (`"layout"` being the one that does not fire `onClose`):
 `docs/engine_contracts.md` §Container window stack. Gates: hspec
 `--match "container window stack"` / `"Container knowledge"` /
-`"Nested item contents"` / `"Item list widget"`, plus
+`"Nested item contents"` / `"Item list widget"` /
+`"Transfer context menu"` / `"cargo_inventory_panel"`, plus
 `tools/item_list_widget_probe.py` (manual-only, `needs-gpu`).
 
 **Responsive lifecycle (#748 menus / #750 gameplay):**
