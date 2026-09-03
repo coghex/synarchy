@@ -46,6 +46,8 @@ import System.Directory
 import System.FilePath ((</>))
 import Engine.Core.Init (EngineInitResult(..))
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
+import Test.Headless.Harness.Isolation
+    ( isInsideIsolatedResourceRoot, withIsolatedResourceRoot )
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogEntry(..) )
@@ -452,8 +454,12 @@ data Bindings = Bindings
     , bnLog ∷ IORef [LogEntry]
     }
 
-newBindings ∷ IO Bindings
-newBindings = do
+-- | Keep the scratch resource root alive for the entire binding group.
+--   The isolation must wrap engine initialization itself (#1357): init
+--   materializes local config overrides before any example receives the
+--   fixture, so isolating only the returned 'Bindings' would be too late.
+withBindings ∷ (Bindings → IO α) → IO α
+withBindings action = withIsolatedResourceRoot $ do
     EngineInitResult env ← initializeEngineHeadlessQuiet
     ref ← newIORef []
     logger ← initLogger defaultLogConfig
@@ -466,7 +472,7 @@ newBindings = do
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
-    pure (Bindings ls ref)
+    action (Bindings ls ref)
 
 luaEval ∷ Bindings → Text → IO Text
 luaEval b code = do
@@ -784,7 +790,11 @@ spec = describe "Startup readiness" $ do
 
     ------------------------------------------------------------------
     describe "every binding's result tells a broken file from an empty \
-             \one (requirement 1)" $ beforeAll newBindings $ do
+             \one (requirement 1)" $ aroundAll withBindings $ do
+
+        it "runs inside the scratch resource root, never the checkout \
+           \(#1357)" $ \_ →
+            isInsideIsolatedResourceRoot `shouldReturn` True
 
         forM_ normalFams $ \f →
             it (T.unpack (famVerb f) ⧺ " answers one number by default \
