@@ -88,9 +88,9 @@ Verified on master `5500e9771`.
   `findSpeciesByName` looks it up (`src/World/Flora/Types.hs:165,311-314`),
   and #1854 already treats the name as the stable species identity for
   instance ids. Nothing rejects two species sharing a `name`.
-- **Lua sees numeric ids.** `engine.registerFloraSpecies` (`API/Flora.hs:64-69`,
-  used by probes such as `flora_growth_probe`'s `probe_berry`) allocates the
-  next id at runtime, and the plant/flora verbs take and return numeric ids
+- **Lua sees numeric ids.** `flora.register` (`floraRegisterFn`,
+  `API/Flora.hs`; used by probes such as `flora_growth_probe`'s
+  `probe_berry`) allocates the next id at runtime, and the plant/flora verbs take and return numeric ids
   (`API/Plant.hs:115,265`). No Lua save module persists a species id
   (`scripts/lib/save_modules.lua`, `unit_ai_save_refs.lua` searched).
 - **Adjacent arcs.** #1854 (closed) owns instance identity and Chop keying by
@@ -154,8 +154,8 @@ use. It is assigned when the catalog is built and is never written to a save
 by new code. Its assignment becomes deterministic: `startup_loader` enumerates
 `data/flora` in `canonicalFileOrder` (the byte-wise order #1232 defined for
 items), and within a file definitions register in document order. Runtime
-registrations (`engine.registerFloraSpecies`) continue to take the next id
-after the shipped catalog and are session-local by construction.
+registrations (`flora.register`) continue to take the next id after the
+shipped catalog and are session-local by construction.
 
 ### Placement independence (FSI-1)
 
@@ -205,13 +205,28 @@ persistence boundary, so no script changes are required.
 
 Placement rolls and instance salts are keyed by species name rather than list
 position, and species are visited in canonical name order. Every existing seed
-therefore grows a different generated layout once, after which adding,
-removing, or reordering a species cannot move any other species' plants, and
-macOS and Linux agree. Consequences: existing saves see generated trees move
-on next chunk regeneration; Chop designations keyed to a `FloraInstanceId`
-that no longer exists are dropped at reconciliation; the save version is
-bumped per the worldgen-output convention (flora is outside `world_check`'s
-baselines, so no recapture). Signed off 2026-09-01 (Q-1). Affects FSI-1.
+therefore grows a different generated layout once, after which discovery
+order, registration order and hash-map traversal order cannot change generated
+flora at all, and macOS and Linux agree.
+
+The guarantee is ORDER-independence, not final-layout invariance. Adding or
+removing a species that ACTUALLY PLACES may still move another species'
+plants: flora share one occupancy map, and `markOccupied` lets a placement
+earlier in tile order suppress a later candidate
+(`src/World/Flora/Placement.hs`). That cross-species ecological competition is
+intended and is explicitly permitted here. What the decision does promise is
+that a species which never occupies a tile — one whose habitat window nothing
+in the world satisfies, say — changes nothing whatsoever, however it reorders
+the catalog. (Revised 2026-09-03 during FSI-1 implementation; the original
+wording promised that "adding, removing, or reordering a species cannot move
+any other species' plants", which the shared occupancy map has never made
+true.)
+
+Consequences: existing saves see generated trees move on next chunk
+regeneration; Chop designations keyed to a `FloraInstanceId` that no longer
+exists are dropped at reconciliation; the save version is bumped per the
+worldgen-output convention (flora is outside `world_check`'s baselines, so no
+recapture). Signed off 2026-09-01 (Q-1). Affects FSI-1.
 
 ### D-2. Legacy numeric species ids resolve against the loading build's catalog
 
@@ -223,14 +238,34 @@ limitation is documented rather than guarded, because the minting catalog was
 never persisted and refusing pre-name saves would strand every existing one.
 Signed off 2026-09-01 (Q-2). Affects FSI-2.
 
+FSI-1 makes that reinterpretation happen ONCE, deliberately and for every
+existing save rather than only for saves minted on another machine: canonical
+registration renumbers nearly the whole shipped catalog, so a persisted
+numeric `FloraId` in a `WorldEditDTO`, `CropPlotDTO` or `PlantDesignationDTO`
+generally names a different authored species afterwards. This is accepted, not
+mitigated — `currentSaveVersion` is a worldgen bookkeeping marker with no
+on-disk compatibility role (`src/World/Save/Types.hs`), so bumping it neither
+migrates nor rejects anything. The epic's never-silent-remap goal is therefore
+scoped to NAME-BASED saves, which is to say saves produced after FSI-2 (#2243)
+lands; pre-FSI-2 numeric references get exactly one reinterpretation and no
+guarantee. `Test.Headless.World.FloraOrder` pins the outcome against a
+checked-in pre-change fixture, so the transition is asserted rather than
+assumed. (Recorded 2026-09-03 during FSI-1 implementation.)
+
 ### D-3. A duplicate species name is refused at content load and at runtime registration
 
 A flora file that would register a `name` already in the catalog is refused
 whole, with the file and name logged, following `loadYamlList`'s
-all-or-nothing rule; `engine.registerFloraSpecies` refuses a colliding name
-the same way. This is what makes the authored name a key. Signed off
-2026-09-01 (Q-3). Affects FSI-1 (where the check lands) and FSI-2 (which
-relies on it).
+all-or-nothing rule; the runtime Lua verb `flora.register` refuses a colliding
+name the same way, returning `nil` and warning rather than failing the boot.
+This is what makes the authored name a key. Signed off 2026-09-01 (Q-3).
+Affects FSI-1 (where the check lands) and FSI-2 (which relies on it).
+
+(The verb was named `engine.registerFloraSpecies` here until 2026-09-03; no
+such Lua binding exists. `registerFloraSpecies` is the internal Haskell helper
+`loadFloraYamlFn` calls per definition,
+`src/Engine/Scripting/Lua/API/YamlTextures.hs`; the script-facing verb is
+`flora.register`, `src/Engine/Scripting/Lua/API/Flora.hs`.)
 
 ### D-4. FSI-1 lands before FSI-2
 
@@ -293,7 +328,7 @@ Resolved by D-3.
 - **Scope:** canonical `data/flora` enumeration in `startup_loader`;
   `worldGenSpecies` in canonical name order; placement rolls and instance
   salts keyed by species name instead of list index; duplicate-name refusal
-  at content load and at `engine.registerFloraSpecies`; the two-order
+  at content load and at `flora.register`; the two-order
   equivalence test and the golden layout test; save-version bump; Chop
   reconciliation drops designations whose instance no longer exists after a
   relayout.

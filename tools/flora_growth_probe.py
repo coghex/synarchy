@@ -454,16 +454,19 @@ def bootstrap(port, art):
                  + ", ".join(rejected))
     print(f"  [PASS] all {len(shipped)} shipped data/flora/*.yaml files "
           f"still register")
-    # The probe's own fruiting species — appended after the real flora
-    # so their placement hashes (indexed by registration order) are
-    # untouched. Max-tolerance worldGen: places on any seed.
+    # The probe's own fruiting species, registered after the shipped
+    # flora simply because worldgen reads the catalog when it generates
+    # a chunk. Placement is salted from each species' authored NAME
+    # since #2241, so this order no longer changes anyone else's rolls;
+    # what it still has to do is register before world.init.
+    # Max-tolerance worldGen: places on any seed.
     berry_path = art.fixture("probe_berry")
     with open(berry_path, "w") as f:
         f.write(PROBE_BERRY_YAML)
     load_fixture_yaml(port, "engine.loadFloraYaml", berry_path)
-    # The probe's own no-fruiting-stage species — appended AFTER
-    # probe_berry so both the real flora's indices and probe_berry's
-    # own index stay untouched. Max-tolerance worldGen: places on any
+    # The probe's own no-fruiting-stage species. Its name is distinct
+    # from probe_berry's, which since #2241 is all that keeps their
+    # placement rolls apart. Max-tolerance worldGen: places on any
     # seed, same as probe_berry.
     clover_path = art.fixture("probe_clover")
     with open(clover_path, "w") as f:

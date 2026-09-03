@@ -108,13 +108,17 @@ perFileCount = 3
 -- | How one scenario deviates from "every family has its two files and
 --   every one of them parses".
 data Scenario = Scenario
-    { scEmpty  ∷ [Text]  -- ^ family directories that enumerate NOTHING
-    , scBroken ∷ [Text]  -- ^ full file paths whose loader reports a
-                         --   failed parse
+    { scEmpty   ∷ [Text]  -- ^ family directories that enumerate NOTHING
+    , scBroken  ∷ [Text]  -- ^ full file paths whose loader reports a
+                          --   failed parse
+    , scRefused ∷ [(Text, Text)]
+      -- ^ full file paths whose loader DECODED the file and then refused
+      --   the whole of it on a duplicate authored name (#2241), each
+      --   paired with the colliding name it reports back
     } deriving (Show, Eq)
 
 healthy ∷ Scenario
-healthy = Scenario [] []
+healthy = Scenario [] [] []
 
 quoted ∷ Text → Text
 quoted t = "'" <> t <> "'"
@@ -126,6 +130,10 @@ luaSet ∷ [Text] → Text
 luaSet xs = "{ " <> T.intercalate ", "
     [ "[" <> quoted x <> "] = true" | x ← xs ] <> " }"
 
+luaTable ∷ [(Text, Text)] → Text
+luaTable kvs = "{ " <> T.intercalate ", "
+    [ "[" <> quoted k <> "] = " <> quoted v | (k, v) ← kvs ] <> " }"
+
 -- | The engine surface both scripts reach for. Every loader records the
 --   path it was handed and answers as production's bindings do: one Lua
 --   FLOAT by default, and the count plus a parse flag when the caller
@@ -135,6 +143,7 @@ enginePrelude sc =
     [ "infos, warns, errors, calls = {}, {}, {}, {}"
     , "local files  = " <> filesTable
     , "local broken = " <> luaSet (scBroken sc)
+    , "local refused = " <> luaTable (scRefused sc)
     , "engine = {}"
     , "engine.logInfo  = function(m) infos[#infos + 1] = m end"
     , "engine.logWarn  = function(m) warns[#warns + 1] = m end"
@@ -146,8 +155,13 @@ enginePrelude sc =
     , "engine.listFilesRecursive = function(dir) return files[dir] end"
     , "local function loader(p, wantOutcome)"
     , "  calls[#calls + 1] = p"
+    -- #2241's refusal: the file DECODED (so the second value stays
+    -- true), registered nothing, and reports the colliding name as an
+    -- extra third value that only a refusal ever pushes.
+    , "  if wantOutcome and refused[p] then return 0.0, true, refused[p] end"
     , "  if wantOutcome then return "
         <> tshow perFileCount <> ".0, not broken[p] end"
+    , "  if refused[p] then return 0.0 end"
     , "  return " <> tshow perFileCount <> ".0"
     , "end"
     ]
@@ -180,6 +194,7 @@ loaderPrelude sc = T.unlines $ enginePrelude sc ⧺
     , "      tostring(SL.isDone()), tostring(SL.isFailed()),"
     , "      f and f.family or '-', f and f.kind or '-',"
     , "      f and (f.path or f.dir) or '-',"
+    , "      f and (f.name or '-') or '-',"
     , "      f and tostring(f.failedCount) or '-',"
     , "      f and tostring(f.files) or '-',"
     , "      f and f.message or '-',"
@@ -197,6 +212,7 @@ data Run = Run
     , rFamily   ∷ Text  -- ^ @-@ when nothing failed
     , rKind     ∷ Text  -- ^ @empty@ | @parse@ | @-@
     , rWhere    ∷ Text  -- ^ the failing FILE, or the empty family's DIR
+    , rName     ∷ Text  -- ^ the colliding definition name, or @-@
     , rFailed'  ∷ Text  -- ^ how many of the family's files failed
     , rFiles    ∷ Text  -- ^ how many the family discovered
     , rMessage  ∷ Text
@@ -242,12 +258,13 @@ runProfile sc profile = runProfileWith sc profile []
 
 parseRun ∷ Text → Run
 parseRun out = case T.splitOn "\1" out of
-    (dn : fl : fam : knd : whr : fc : fs : msg : prog : errs : cls : rest) →
+    (dn : fl : fam : knd : whr : nm : fc : fs : msg : prog : errs : cls : rest) →
         Run { rDone     = dn ≡ "true"
             , rFailed   = fl ≡ "true"
             , rFamily   = fam
             , rKind     = knd
             , rWhere    = whr
+            , rName     = nm
             , rFailed'  = fc
             , rFiles    = fs
             , rMessage  = msg
@@ -258,7 +275,7 @@ parseRun out = case T.splitOn "\1" out of
                   (infos : _) → [ l | l ← T.splitOn "\2" infos, not (T.null l) ]
                   _           → []
             }
-    _ → Run False False "?" "?" out "?" "?" out "?" (-1) (-1) [out]
+    _ → Run False False "?" "?" out "?" "?" "?" out "?" (-1) (-1) [out]
   where
     readCount t | T.all isDigit t, not (T.null t) = read (T.unpack t)
                 | otherwise                       = -1
@@ -492,6 +509,25 @@ outcomeOf b verb path = do
                then -1 else read (T.unpack nTxt)
          , T.drop 1 rest ≡ "true" )
 
+-- | THREE real shipped files per family — one per call the
+--   arity/outcome example below makes, in call order.
+--
+--   Every family but one repeats a single file, which is what it has
+--   always done: registering the same materials or the same recipes
+--   three times into one shared catalog simply replaces them. Flora
+--   cannot: #2241 made a duplicate authored name a whole-file refusal,
+--   so loading @saguaro.yaml@ a second time into this group's shared
+--   engine would (correctly) refuse, and the example would be asserting
+--   the refusal path while claiming to assert the healthy one. Flora
+--   therefore gets three DIFFERENT shipped files, each still real
+--   shipped content through the real binding.
+shippedFiles ∷ Text → [Text]
+shippedFiles "loadFloraYaml" =
+    [ "data/flora/saguaro.yaml"
+    , "data/flora/wetlands.yaml"
+    , "data/flora/boreal_evergreen.yaml" ]
+shippedFiles verb = replicate 3 (shippedFile verb)
+
 -- | One real shipped file per family — real data through the real
 --   binding, so the assertion is about production's own behaviour.
 shippedFile ∷ Text → Text
@@ -565,7 +601,7 @@ spec = describe "Startup readiness" $ do
 
         it "fails on a family whose directory yields NO files, naming \
            \the family and the DIRECTORY it looked in" $ do
-            r ← runProfile (Scenario ["data/recipes"] []) "normal"
+            r ← runProfile (Scenario ["data/recipes"] [] []) "normal"
             (rDone r, rFailed r) `shouldBe` (False, True)
             (rFamily r, rKind r, rWhere r)
                 `shouldBe` ("recipe", "empty", "data/recipes")
@@ -576,7 +612,7 @@ spec = describe "Startup readiness" $ do
 
         it "emits that family's own zero aggregate BEFORE failing, and \
            \no later family's" $ do
-            r ← runProfile (Scenario ["data/recipes"] []) "normal"
+            r ← runProfile (Scenario ["data/recipes"] [] []) "normal"
             let upTo = takeWhile ((≢ "recipe") ∘ famId) normalFams
             aggregatesOf r `shouldBe`
                 [ aggregateLine f (perFileCount * length famFiles)
@@ -586,10 +622,51 @@ spec = describe "Startup readiness" $ do
             -- and nothing after it ran at all
             rCalls r `shouldBe` perFileCount' (length upTo)
 
+        it "fails on a shipped flora file the binding REFUSED whole for \
+           \a duplicate authored name, naming the file and the name \
+           \(#2241 requirement 4)" $ do
+            -- Distinct from a parse failure: the file decoded perfectly
+            -- well, so `parsed` is true and #2203's decode-only contract
+            -- is untouched. What makes it terminal is that it registered
+            -- NOTHING, and a boot that continues here reaches the main
+            -- menu over a flora catalog the author believes is loaded.
+            let sc = Scenario [] [] [("data/flora/b.yaml", "saguaro")]
+            r ← runProfile sc "normal"
+            (rDone r, rFailed r) `shouldBe` (False, True)
+            (rFamily r, rKind r, rWhere r)
+                `shouldBe` ("flora", "duplicate", "data/flora/b.yaml")
+            rName r `shouldBe` "saguaro"
+            (rFailed' r, rFiles r) `shouldBe` ("1", "2")
+            -- The boot-visible message names BOTH the file and the
+            -- colliding name: "something in data/flora is duplicated" is
+            -- not a diagnostic anyone can act on.
+            rMessage r `shouldBe`
+                "Startup failed: flora refused data/flora/b.yaml \
+                \(duplicate definition name 'saguaro'; 1 of 2 file(s) \
+                \refused)"
+            rErrors r `shouldBe` 1
+            -- Both files still ran and the family's own #1930 aggregate
+            -- still went out first, carrying only the healthy count.
+            let upTo = takeWhile ((≢ "flora") ∘ famId) normalFams
+            aggregatesOf r `shouldBe`
+                [ aggregateLine f (perFileCount * length famFiles)
+                                  (length famFiles)
+                | f ← upTo ]
+                ⧺ [ "Startup assets: flora loaded " <> tshow perFileCount
+                    <> " from 2 file(s)" ]
+            rCalls r `shouldBe` perFileCount' (length upTo) + 2
+
+        it "keeps a refusal out of the ELEVEN other families' way: the \
+           \same scenario against a family that refuses nothing runs to \
+           \the end" $ do
+            r ← runProfile healthy "normal"
+            (rDone r, rFailed r) `shouldBe` (True, False)
+            rKind r `shouldBe` "-"
+
         it "fails on a file that did not parse, naming the family and \
            \the FILE — after the family's aggregate carries its healthy \
            \count and its original discovered-file count" $ do
-            r ← runProfile (Scenario [] ["data/recipes/b.yaml"]) "normal"
+            r ← runProfile (Scenario [] ["data/recipes/b.yaml"] []) "normal"
             (rDone r, rFailed r) `shouldBe` (False, True)
             (rFamily r, rKind r, rWhere r)
                 `shouldBe` ("recipe", "parse", "data/recipes/b.yaml")
@@ -611,12 +688,12 @@ spec = describe "Startup readiness" $ do
         it "counts EVERY failing file in the family and reports the \
            \first in queue order" $ do
             r ← runProfile (Scenario []
-                    ["data/recipes/a.yaml", "data/recipes/b.yaml"]) "normal"
+                    ["data/recipes/a.yaml", "data/recipes/b.yaml"] []) "normal"
             (rWhere r, rFailed' r, rFiles r)
                 `shouldBe` ("data/recipes/a.yaml", "2", "2")
             paths ← inVM (loaderPrelude
                               (Scenario [] [ "data/recipes/a.yaml"
-                                           , "data/recipes/b.yaml" ]))
+                                           , "data/recipes/b.yaml" ] []))
                         "SL.build('normal') drain() \
                         \return table.concat(SL.getFailure().paths, ',')"
             paths `shouldBe` "data/recipes/a.yaml,data/recipes/b.yaml"
@@ -649,7 +726,7 @@ spec = describe "Startup readiness" $ do
 
         it "keeps isDone false and never advances progress or re-logs, \
            \however many more ticks arrive" $ do
-            let sc = Scenario [] ["data/recipes/b.yaml"]
+            let sc = Scenario [] ["data/recipes/b.yaml"] []
             -- 200 further ticks past the failure change nothing: not
             -- progress, not the loader calls made, not the one error.
             after ← inVM (loaderPrelude sc)
@@ -668,14 +745,14 @@ spec = describe "Startup readiness" $ do
 
         it "lets runAll RETURN on a failure instead of spinning on done \
            \(the arena profile's only exit)" $ do
-            out ← inVM (loaderPrelude (Scenario [] ["data/buildings/a.yaml"]))
+            out ← inVM (loaderPrelude (Scenario [] ["data/buildings/a.yaml"] []))
                 "SL.build('arena') SL.runAll() \
                 \return string.format('%s/%s/%s', tostring(SL.isDone()), \
                 \  tostring(SL.isFailed()), SL.getFailure().family)"
             out `shouldBe` "false/true/building"
 
         it "clears the failure on build and on reset" $ do
-            out ← inVM (loaderPrelude (Scenario [] ["data/recipes/b.yaml"]))
+            out ← inVM (loaderPrelude (Scenario [] ["data/recipes/b.yaml"] []))
                 "SL.build('normal') drain() \
                 \local afterFail = SL.isFailed() \
                 \SL.reset() \
@@ -687,7 +764,7 @@ spec = describe "Startup readiness" $ do
             out `shouldBe` "true/false/false"
 
         it "fails the arena profile on ITS own family inventory" $ do
-            r ← runProfile (Scenario ["data/units"] []) "arena"
+            r ← runProfile (Scenario ["data/units"] [] []) "arena"
             (rDone r, rFailed r, rFamily r) `shouldBe` (False, True, "unit")
             -- arena has no flora family, so its aggregates stop one
             -- family earlier than normal's would
@@ -710,7 +787,7 @@ spec = describe "Startup readiness" $ do
 
         it "normal boot: a parse failure stops at 'failed', logs no \
            \completion, runs no finishStartupBoot and shows no menu" $ do
-            b ← runBoot (Scenario [] ["data/recipes/b.yaml"]) "normal"
+            b ← runBoot (Scenario [] ["data/recipes/b.yaml"] []) "normal"
             bPhase b    `shouldBe` "failed"
             bMenus b    `shouldBe` []
             bBootDone b `shouldBe` False
@@ -727,7 +804,7 @@ spec = describe "Startup readiness" $ do
             bShown b    `shouldBe` "shown"
 
         it "normal boot: an empty family directory does the same" $ do
-            b ← runBoot (Scenario ["data/units"] []) "normal"
+            b ← runBoot (Scenario ["data/units"] [] []) "normal"
             (bPhase b, bMenus b, bBootDone b) `shouldBe` ("failed", [], False)
             bMessage b `shouldBe`
                 "Startup failed: unit discovered no YAML files in data/units"
@@ -740,7 +817,7 @@ spec = describe "Startup readiness" $ do
 
         it "arena boot: a failure in the SYNCHRONOUS drain shows the \
            \retained message and never runs finishArenaBoot" $ do
-            b ← runBoot (Scenario [] ["data/buildings/a.yaml"]) "arena"
+            b ← runBoot (Scenario [] ["data/buildings/a.yaml"] []) "arena"
             bPhase b    `shouldBe` "failed"
             bMenus b    `shouldBe` []
             bBootDone b `shouldBe` False
@@ -760,8 +837,8 @@ spec = describe "Startup readiness" $ do
         -- widgets carry statusText and an empty bar -- so a failed
         -- startup came back as a hidden page that, if shown, would have
         -- read like a boot still in progress.
-        forM_ [ ("normal", Scenario [] ["data/recipes/b.yaml"])
-              , ("arena",  Scenario [] ["data/buildings/a.yaml"]) ]
+        forM_ [ ("normal", Scenario [] ["data/recipes/b.yaml"] [])
+              , ("arena",  Scenario [] ["data/buildings/a.yaml"] []) ]
             $ \(profile, sc) →
             it (T.unpack profile ⧺ " boot: a resize after the failure \
                 \keeps the message, the frozen bar and the page on \
@@ -790,19 +867,25 @@ spec = describe "Startup readiness" $ do
             it (T.unpack (famVerb f) ⧺ " answers one number by default \
                 \and the parse outcome only when asked") $ \b → do
                 let verb = famVerb f
-                    path = shippedFile verb
                 forM_ (shippedPrereqs verb) $ \(v, dep) →
                     void (luaEval b ("return engine." <> v
                                      <> "('" <> dep <> "')"))
-                -- The legacy shape is load-bearing: executeDebugLua
-                -- tab-joins every returned value, so an unconditional
-                -- second result would rewrite what a bare
-                -- `return engine.load*Yaml(p)` reads back.
-                arityOf b verb (quoted path) `shouldReturn` "1"
-                arityOf b verb (quoted path <> ", true") `shouldReturn` "2"
-                (n, parsed) ← outcomeOf b verb path
-                n `shouldSatisfy` (> 0)
-                parsed `shouldBe` True
+                case shippedFiles verb of
+                  (p1 : p2 : p3 : _) → do
+                    -- The legacy shape is load-bearing: executeDebugLua
+                    -- tab-joins every returned value, so an unconditional
+                    -- second result would rewrite what a bare
+                    -- `return engine.load*Yaml(p)` reads back.
+                    arityOf b verb (quoted p1) `shouldReturn` "1"
+                    -- TWO, not three: #2241's refusal detail is pushed
+                    -- only when a file is actually refused, so a healthy
+                    -- call's arity is exactly what it was.
+                    arityOf b verb (quoted p2 <> ", true") `shouldReturn` "2"
+                    (n, parsed) ← outcomeOf b verb p3
+                    n `shouldSatisfy` (> 0)
+                    parsed `shouldBe` True
+                  _ → expectationFailure
+                        "shippedFiles must name three files per family"
 
         forM_ normalFams $ \f →
             it (T.unpack (famVerb f)

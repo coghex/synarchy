@@ -254,8 +254,15 @@ _QUEUE_NORMAL_PROFILE_RE = re.compile(
     r"^local function queueNormalProfile\(\)$(?P<body>.*?)^end$",
     re.MULTILINE | re.DOTALL)
 
+#: The three `addYaml...(dir, label, loader)` verbs `queueNormalProfile`
+#: enqueues a registry family with. `DirCanonical` (#2241) is a FLAT
+#: directory loaded in canonical byte order -- flora's, whose sequential
+#: FloraIds a save's numeric references name -- so it is a `Dir` as far
+#: as this probe's `recursive` flag is concerned; only `Tree` recurses.
+#: Longest alternative first, or `Dir` would match the prefix of
+#: `DirCanonical` and leave the rest of the pattern to fail.
 _ADD_YAML_CALL_RE = re.compile(
-    r"^[ \t]*addYaml(?P<kind>Dir|Tree)\(\s*"
+    r"^[ \t]*addYaml(?P<kind>DirCanonical|Dir|Tree)\(\s*"
     r"\"(?P<dir>[^\"]+)\"\s*,\s*\"[^\"]*\"\s*,\s*"
     r"(?P<loader>engine\.load[A-Za-z]+)\s*\)",
     re.MULTILINE)
@@ -270,7 +277,8 @@ def production_registry_sequence(source: str | None = None
 
     Reads only that one function's body, so `queueArenaProfile`'s much
     smaller dev-boot subset cannot leak in, and only its
-    `addYamlDir`/`addYamlTree` calls, so the tutorial directory load
+    `addYamlDir`/`addYamlDirCanonical`/`addYamlTree` calls, so the
+    tutorial directory load
     (an `addItem`, not a registry family -- and self-contained authored
     data that references no registry) and the texture-only phases are
     excluded. A commented-out call is excluded too: the pattern anchors
@@ -301,7 +309,8 @@ def production_registry_sequence(source: str | None = None
     if not found:
         raise BootstrapPlanError(
             f"`queueNormalProfile` in {STARTUP_LOADER_PATH} enqueues no "
-            f"addYamlDir/addYamlTree registry family; the parse found "
+            f"addYamlDir/addYamlDirCanonical/addYamlTree registry family; "
+            f"the parse found "
             f"nothing to compare against, which is a broken check rather "
             f"than a production that loads no registries")
     return found

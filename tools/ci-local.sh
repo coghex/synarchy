@@ -445,9 +445,9 @@ python3 tools/world_check.py --quick
 # is guarded the same way: quit_engine sends, waits and hard-kills, all
 # interruptible, so it runs inside a finally whose fallback kills the
 # engine outright. It also pins what the probe still proves:
-# the registration order placement hashes are indexed by (sorted real
-# flora, then probe_berry, then probe_clover), both fixture bodies by
-# sha256, and load_fixture_yaml still stopping the run at setup on a
+# the registration order the fixtures depend on (sorted real flora, then
+# probe_berry, then probe_clover, all before world.init), both fixture
+# bodies by sha256, and load_fixture_yaml still stopping the run at setup on a
 # fixture that registers nothing. That probe is manual-only and
 # worldgen-heavy; the companion boots nothing.
 # test_location_content_probe is #1884's: the artifact ownership of

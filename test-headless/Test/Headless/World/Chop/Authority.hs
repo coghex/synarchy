@@ -20,8 +20,12 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Map as Map
-import Data.IORef (readIORef, writeIORef, modifyIORef')
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Data.List (sort)
+import qualified Data.Text as T
+import Engine.Core.Log
+    ( LogBackend(..), LogConfig(..), LogEntry(..), LoggerState
+    , defaultLogConfig, initLogger )
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Capability.RenderView
@@ -34,7 +38,8 @@ import World.Render.Camera (cameraChanged)
 import World.Render.Camera.Types
     (WorldCameraSnapshot(..), WorldQuadCache(..))
 import Structure.Types (emptyChunkStructures)
-import World.Chop.Types (chopDesignationTile)
+import World.Chop.Types (ChopDesignation(..), chopDesignationTile)
+import World.Flora.Designation (admitChunkFlora)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Flora.Identity
@@ -123,6 +128,44 @@ fixtureTiles =
 -- | A well-formed PLANTED-namespace id that names no resident plant.
 strayId ∷ FloraInstanceId
 strayId = plantedFloraInstanceId 999999
+
+-- | The chunk admission is driven with: the fixture's own three
+--   plants, unchanged.
+admittedChunk ∷ LoadedChunk
+admittedChunk =
+    case HM.lookup fixtureChunk (wtdChunks fixtureTiles) of
+        Just lc → lc
+        Nothing → error "the fixture chunk is missing from fixtureTiles"
+
+-- | A generated id that names no plant in 'admittedChunk', standing on
+--   a tile that chunk DOES own.
+absentHereId ∷ FloraInstanceId
+absentHereId = generatedFloraInstanceId "chop_authority" 6 4 "oak" 0
+
+-- | Another absent one, on a tile the NEXT chunk east owns.
+absentAwayId ∷ FloraInstanceId
+absentAwayId = generatedFloraInstanceId "chop_authority" 20 4 "oak" 0
+
+-- | A page whose world size actually wraps, plus a capturing logger.
+--
+--   'resetPage' pins world size 0, which is all the commit examples
+--   need; reconciliation is about tile OWNERSHIP, so it needs a page
+--   with more than one chunk in it.
+reconcileFixture
+    ∷ EngineEnv → IO (WorldState, LoggerState, IORef [Text])
+reconcileFixture env = do
+    ws ← emptyWorldState
+    writeIORef (wsGenParamsRef ws)
+        (Just defaultWorldGenParams { wgpWorldSize = 64 })
+    writeIORef (wsTilesRef ws) fixtureTiles
+    writeIORef (floraCatalogRef env) catalog
+    writeIORef (worldManagerRef env) emptyWorldManager
+        { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
+    warns ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback
+            (\e → modifyIORef' warns (⧺ [leMessage e])) }
+    pure (ws, logger, warns)
 
 resetPage ∷ EngineEnv → IO WorldState
 resetPage env = do
@@ -284,6 +327,60 @@ spec = describe "Chop authority" $ beforeAll setup $ do
             writeIORef (wsQuadCacheRef ws) Nothing
             view ← floraHitView env ws
             (fhvPlaceCamX view, fhvPlaceCamY view) `shouldBe` liveCam
+
+    describe "chunk-admission reconciliation (#2241 requirement 7)" $ do
+
+        -- A durable designation outlives the chunk data it points into:
+        -- chunk flora is regenerated on every eviction, so a plant that
+        -- stops being placed leaves an entry naming nothing. Admission
+        -- is where that becomes decidable — and the cleanup is BOUNDED
+        -- by chunkOwnsTile, or it would degrade into "forget every
+        -- designation I cannot currently see".
+
+        it "removes an absent designation whose tile THIS chunk owns, \
+           \keeps a present one, and leaves another chunk's alone" $
+            \env → do
+            (ws, logger, warns) ← reconcileFixture env
+            writeIORef (wsChopDesignationsRef ws) $ HM.fromList
+                [ (plantId 1,     ChopDesignation zSlice 4 4)   -- present
+                , (absentHereId,  ChopDesignation zSlice 6 4)   -- absent, ours
+                , (absentAwayId,  ChopDesignation zSlice 20 4) ] -- absent, not
+            _ ← admitChunkFlora ws catalog logger admittedChunk
+            sort ∘ HM.keys <$> readIORef (wsChopDesignationsRef ws)
+                `shouldReturn` sort [plantId 1, absentAwayId]
+            -- and the removal is diagnosed, naming the tile it was on.
+            msgs ← readIORef warns
+            filter ("Discarding chop designation" `T.isInfixOf`) msgs
+                `shouldBe` ["Discarding chop designation at 6,4: the \
+                            \plant it names is absent from the chunk \
+                            \that owns its tile"]
+
+        it "diagnoses nothing when every designation it owns is present" $
+            \env → do
+            (ws, logger, warns) ← reconcileFixture env
+            writeIORef (wsChopDesignationsRef ws) $ HM.fromList
+                [ (plantId 1, ChopDesignation zSlice 4 4)
+                , (plantId 2, ChopDesignation zSlice 5 4) ]
+            _ ← admitChunkFlora ws catalog logger admittedChunk
+            sort ∘ HM.keys <$> readIORef (wsChopDesignationsRef ws)
+                `shouldReturn` sort [plantId 1, plantId 2]
+            filter ("Discarding chop designation" `T.isInfixOf`)
+                <$> readIORef warns `shouldReturn` []
+
+        it "hydrates the surviving mirror in the SAME admission" $ \env → do
+            -- The two authorities still move together (#1854 req 8):
+            -- reconciliation runs before hydration, so no consumer can
+            -- see a chunk whose flags were set from a map that still
+            -- held an orphan.
+            (ws, logger, _) ← reconcileFixture env
+            writeIORef (wsChopDesignationsRef ws) $ HM.fromList
+                [ (plantId 1,    ChopDesignation zSlice 4 4)
+                , (absentHereId, ChopDesignation zSlice 6 4) ]
+            lc ← admitChunkFlora ws catalog logger admittedChunk
+            sort [ (fiInstanceId fi, fiChopDesignated fi)
+                 | fi ← fcdInstances (lcFlora lc) ]
+                `shouldBe` sort [ (plantId 1, True), (plantId 2, False)
+                                , (plantId 3, False) ]
 
     describe "erase" $ do
 

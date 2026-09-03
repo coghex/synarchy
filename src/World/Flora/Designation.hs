@@ -156,8 +156,47 @@ admitChunkFlora
 admitChunkFlora ws cat logger lc = do
     resolveLegacyChop ws cat logger lc
     resolveLegacyHarvests ws cat logger lc
+    reconcileChunkChop ws logger lc
     desigs ← readIORef (wsChopDesignationsRef ws)
     pure (hydrateChunkChopFlags desigs lc)
+
+-- | Drop every durable chop designation whose canonical tile THIS chunk
+--   owns but whose plant this chunk does not hold (#2241 requirement 7).
+--
+--   Chunk data is regenerated on every eviction while the designation
+--   map is durable, so a plant that stops being placed — because the
+--   catalog it was generated against no longer maps the same numeric
+--   species to the same authored name, say — leaves an entry pointing
+--   at nothing. Admission is where that becomes decidable: the chunk in
+--   hand is the authority on which plants stand on its tiles.
+--
+--   BOUNDED by ownership, deliberately. Only designations on tiles
+--   'chunkOwnsTile' claims are examined, so an entry belonging to a
+--   chunk that is simply not resident survives untouched — the same
+--   boundary the two legacy drains above use, and the reason this
+--   cannot degrade into "forget every designation I cannot see".
+reconcileChunkChop
+    ∷ WorldState → LoggerState → LoadedChunk → IO ()
+reconcileChunkChop ws logger lc = do
+    desigs ← readIORef (wsChopDesignationsRef ws)
+    unless (HM.null desigs) $ do
+        worldSize ← pageWrapWorldSize ws
+        let present = HM.fromList
+                [ (fiInstanceId fi, ()) | fi ← fcdInstances (lcFlora lc) ]
+            orphans =
+                [ (iid, cd)
+                | (iid, cd) ← HM.toList desigs
+                , chunkOwnsTile worldSize lc (chopDesignationTile cd)
+                , not (HM.member iid present) ]
+        unless (null orphans) $ do
+            forM_ orphans $ \(_, cd) →
+                logWarn logger CatWorld $
+                    "Discarding chop designation at "
+                    <> tshow (chGX cd) <> "," <> tshow (chGY cd)
+                    <> ": the plant it names is absent from the chunk \
+                       \that owns its tile"
+            atomicModifyIORef' (wsChopDesignationsRef ws) $ \m →
+                (foldl' (flip HM.delete) m (map fst orphans), ())
 
 -- | 'admitChunkFlora' over a batch, in list order.
 admitChunkFloraBatch
