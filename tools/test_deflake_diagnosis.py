@@ -53,6 +53,11 @@ import ci_probes  # type: ignore
 import deflake_diagnosis as dd  # type: ignore
 import deflake_handoff  # type: ignore
 import deflake_issue as di  # type: ignore
+# The unfittable-body case below substitutes `MAX_BODY_CHARS`, and
+# `issue_body` reads it out of the DOCUMENT owner's globals (#2157), not
+# the facade's — so that is the object these cases name.
+import deflake_issue_document as did  # type: ignore
+import deflake_issue_evidence as die  # type: ignore
 import deflake_outcome as do  # type: ignore
 import probe_census  # type: ignore
 # The census write these cases intercept resolves `_atomic_replace` in
@@ -7472,7 +7477,7 @@ def test_the_quoted_evidence_is_bounded() -> None:
     with staged_evidence(document, engine=noisy), census_file() as path:
         _published, publication, _probe, _pr = file_defect(document, path)
         body = publication.creates[0]["body"]
-        expect(len(body) <= di.MAX_BODY_CHARS,
+        expect(len(body) <= did.MAX_BODY_CHARS,
                f"the body fits the tracker's limit; got {len(body)}")
         expect("[World] line 4999" in body and "[World] line 0\n" not in body,
                "and the TAIL of the log is what is quoted, which is where a "
@@ -7870,8 +7875,8 @@ def test_the_diagnosis_prose_is_bounded_at_the_gate() -> None:
     # And a body that still cannot fit refuses rather than publishing one
     # with its measurements or its log evidence sliced away.
     document = defect_handoff()
-    saved = di.MAX_BODY_CHARS
-    di.MAX_BODY_CHARS = 400
+    saved = did.MAX_BODY_CHARS
+    did.MAX_BODY_CHARS = 400
     try:
         with staged_evidence(document), census_file() as path:
             before = Path(path).read_bytes()
@@ -7883,7 +7888,65 @@ def test_the_diagnosis_prose_is_bounded_at_the_gate() -> None:
             expect_nothing_published(path, before, publication,
                                      "an unfittable body", searched=1)
     finally:
-        di.MAX_BODY_CHARS = saved
+        did.MAX_BODY_CHARS = saved
+
+
+def test_the_tail_read_is_whole_lines_and_tolerates_junk_bytes() -> None:
+    """The two properties of the bounded tail read (#1438, #2157).
+
+    Only `MAX_READ_BYTES` is read off the end of an engine log, so the
+    first line of that window is whatever straddled the boundary — a
+    FRAGMENT. Publishing it would quote half a line as this probe's
+    failure evidence, so it is dropped and every quoted line is a whole
+    one. And a macOS engine log carries GLFW's junk, so the window is
+    decoded with `errors="replace"` rather than raising: evidence that
+    exists must not be discarded because one byte is not UTF-8.
+
+    Driven through `run_excerpts` on a log LARGER than the read window,
+    because neither property is reachable otherwise. `MAX_EXCERPT_LINES`
+    and `MAX_EXCERPT_CHARS` bound the excerpt of a small log to the same
+    shape without the window ever moving off zero, so a fixture that
+    fits in one read proves nothing about either.
+    """
+    document = defect_handoff()
+    tail = "".join(f"[World] tail line {index}\n" for index in range(5))
+    # The straddling line ends in a token nothing else carries, and the
+    # bounds keep the END of a clipped excerpt — so the token survives
+    # `MAX_EXCERPT_CHARS` and its absence is the partial-line rule's
+    # doing rather than the character bound's.
+    giant = "G" * die.MAX_READ_BYTES + "FRAGMENT-END\n"
+    prefix = "[World] before the window\n" * 8
+    with staged_evidence(document, only=1) as staged:
+        run = staged[0]
+        root = str(run.parent.parent)
+        log = run / "engine" / "engine-9101.log"
+        log.write_text(prefix + giant + tail, encoding="utf-8")
+        size = log.stat().st_size
+        start = size - die.MAX_READ_BYTES
+        expect(len(prefix) < start < len(prefix) + len(giant),
+               f"the fixture must put the read window's start INSIDE the "
+               f"straddling line, or the partial-line rule is never "
+               f"reached; start {start} against prefix {len(prefix)} and "
+               f"line end {len(prefix) + len(giant)}")
+        engine = [item for item in die.run_excerpts(root, str(run))
+                  if item["path"].endswith("engine-9101.log")]
+        expect(len(engine) == 1, "the engine log yields one excerpt")
+        expect("[World] tail line 4" in engine[0]["text"],
+               "the end of the log is what is quoted")
+        expect("FRAGMENT-END" not in engine[0]["text"],
+               "and the line the read window cut in half is dropped, so "
+               "every quoted line is a whole one")
+
+        # A byte that is not UTF-8 must cost the excerpt nothing.
+        log.write_bytes(b"[World] chunk 3,4 published\n"
+                        b"[World] GLFW junk \xff\xfe on stdout\n"
+                        b"[World] the failing assertion is here\n")
+        engine = [item for item in die.run_excerpts(root, str(run))
+                  if item["path"].endswith("engine-9101.log")]
+        expect(len(engine) == 1,
+               "a log carrying a non-UTF-8 byte still yields an excerpt")
+        expect("[World] the failing assertion is here" in engine[0]["text"],
+               "and the readable evidence beside that byte is quoted")
 
 
 def test_quoted_content_cannot_forge_a_review_routing_marker() -> None:
@@ -8139,6 +8202,211 @@ def test_the_handoff_family_imports_as_repository_modules() -> None:
               "tools.deflake_handoff_producer",
               "tools.deflake_handoff_assembly",
               "tools.deflake_outcome", "tools.deflake_issue")
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    for module in family:
+        done = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            cwd=str(root), capture_output=True, text=True, timeout=120,
+            env=environment)
+        expect(done.returncode == 0,
+               f"`import {module}` from the repository root must resolve; "
+               f"exited {done.returncode}\n{done.stderr[-400:]}")
+
+
+def test_the_issue_facade_exports_the_canonical_objects() -> None:
+    """#2157: the façade binds its owners' objects, it does not copy them.
+
+    `tools/deflake_issue.py` is the route's public import façade over
+    four owners, so every name a consumer reads through it has to be the
+    ONE object its owner defines. Two of them are load-bearing by name:
+    `PublicationFailed` is caught with `except` against the façade
+    spelling while the tracker raises the owner's, so a second class
+    definition would silently stop matching; and `Publication` is
+    SUBCLASSED by this file's own `FakePublication`, so the façade name
+    must be the interface `GitHubPublication` implements.
+
+    `MAX_BODY_CHARS` is asserted ABSENT for the opposite reason. It is
+    the one constant of the family a caller substitutes, `issue_body`
+    reads it out of the document owner's globals, and a façade binding
+    would take the assignment and change nothing — leaving the
+    unfittable-body refusal unexercised while the case appeared to drive
+    it.
+    """
+    owners = ("deflake_issue_evidence", "deflake_issue_document",
+              "deflake_issue_tracker", "deflake_issue_record")
+    modules = {name: importlib.import_module(name) for name in owners}
+    expect(di.PublicationFailed is modules["deflake_issue_tracker"]
+           .PublicationFailed,
+           "deflake_issue.PublicationFailed must BE the tracker owner's "
+           "class, not a copy; `except` matches by identity")
+    expect(di.Publication is modules["deflake_issue_tracker"].Publication,
+           "deflake_issue.Publication must BE the tracker owner's "
+           "interface; FakePublication subclasses it")
+    expect(issubclass(modules["deflake_issue_tracker"].GitHubPublication,
+                      di.Publication),
+           "the gh-backed publisher must implement the interface the "
+           "façade exports")
+    defined_here = {"CHANGES_THE_PROBE", "Defect", "EXIT_NON_SUCCESS",
+                    "EXIT_OK", "EXIT_REJECTED", "HANDOFF_SCHEMA",
+                    "HandoffError", "NonSuccess", "OPENS_PULL_REQUEST",
+                    "OUTCOME_PRODUCTION_DEFECT", "OWNED", "OWNER_ISSUE",
+                    "ROLES", "ROLE_BASELINE", "ROLE_HANDOFF",
+                    "ROLE_VERIFICATION", "ROUTE", "accept",
+                    "forbidden_probe_change", "forbidden_pull_request",
+                    "main", "publish", "render", "require_defect_diagnosis",
+                    "require_handoff", "require_origin"}
+    for name in di.__all__:
+        expect(hasattr(di, name),
+               f"the façade declares {name} in __all__ but does not bind it")
+        if name in defined_here:
+            continue
+        bound = getattr(di, name)
+        defining = [owner for owner, module in modules.items()
+                    if getattr(module, name, None) is bound]
+        expect(defining,
+               f"{name} is re-exported by the façade but no owner defines "
+               f"that exact object; a compatibility export must be the "
+               f"canonical one")
+    expect(not hasattr(di, "MAX_BODY_CHARS"),
+           "MAX_BODY_CHARS must NOT be bound on the façade: it is the "
+           "substituted constant, and an inert alias would swallow the "
+           "assignment that exercises the unfittable-body refusal")
+    for name in sorted(defined_here):
+        expect(name in di.__all__,
+               f"{name} is the façade's own and belongs in __all__")
+
+
+def test_the_issue_owners_stay_one_way() -> None:
+    """#2157: the four owners are acyclic, with one permitted sibling edge.
+
+    The whole point of extracting them is that artifact traversal,
+    issue rendering, the tracker boundary and the durable record can
+    change independently. An owner that imported the façade would be
+    importing its own siblings through a module whose other job is to
+    orchestrate them, and an owner that imported either sibling
+    consumer would make the two consumers each other's prerequisite.
+
+    Exactly one edge between two extracted owners is permitted, and it
+    is required rather than tolerated: the tracker CALLS the document
+    owner's `carries_key` and `body_origin` instead of restating them,
+    because a second spelling of the standalone-marker rule would let a
+    search-index match be recorded as this attempt's publication.
+    """
+    family = {"deflake_issue_evidence", "deflake_issue_document",
+              "deflake_issue_tracker", "deflake_issue_record"}
+    permitted = {("deflake_issue_tracker", "deflake_issue_document")}
+    forbidden = {"deflake_issue", "deflake_outcome"}
+    directory = Path(dd.__file__).resolve().parent
+    for owner in sorted(family):
+        source = (directory / f"{owner}.py").read_text(encoding="utf-8")
+        imported = set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Import):
+                imported |= {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module or "")
+        for name in sorted(imported & forbidden):
+            expect(False,
+                   f"{owner} imports {name}; an extracted owner depends on "
+                   f"neither the façade nor the sibling consumer")
+        for name in sorted((imported & family) - {owner}):
+            expect((owner, name) in permitted,
+                   f"{owner} imports {name}; the only permitted edge "
+                   f"between two owners is tracker -> document")
+    tracker = importlib.import_module("deflake_issue_tracker")
+    document = importlib.import_module("deflake_issue_document")
+    for name in ("carries_key", "body_origin"):
+        expect(getattr(tracker, name) is getattr(document, name),
+               f"the tracker must CALL the document owner's {name}, not "
+               f"carry a second copy of the standalone-marker rule")
+
+
+def test_the_issue_facade_keeps_only_what_it_composes() -> None:
+    """#2157: the extracted implementations have one home each.
+
+    The façade keeps route admission, `render`'s composition across
+    three owners, `publish`'s exact statement order and the command
+    line. What it must NOT still carry is a second copy of anything
+    extracted — a walker, a body renderer, a `gh` adapter or a census
+    record builder left behind would be a definition free to drift from
+    the one its owner exports, and the compatibility bindings above
+    would go on resolving to the owner while the façade's own callers
+    used the stale twin.
+    """
+    directory = Path(dd.__file__).resolve().parent
+    facade = ast.parse((directory / "deflake_issue.py")
+                       .read_text(encoding="utf-8"))
+    defined = {node.name for node in facade.body
+               if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+    moved = {
+        "open_run_directory": "deflake_issue_evidence",
+        "run_excerpts": "deflake_issue_evidence",
+        "collect_evidence": "deflake_issue_evidence",
+        "failing_runs": "deflake_issue_evidence",
+        "excerpt": "deflake_issue_evidence",
+        "issue_body": "deflake_issue_document",
+        "issue_title": "deflake_issue_document",
+        "publication_key": "deflake_issue_document",
+        "neutralize": "deflake_issue_document",
+        "require_one_marker_each": "deflake_issue_document",
+        "carries_key": "deflake_issue_document",
+        "body_origin": "deflake_issue_document",
+        "prose_lines": "deflake_issue_document",
+        "GitHubPublication": "deflake_issue_tracker",
+        "Publication": "deflake_issue_tracker",
+        "PublicationFailed": "deflake_issue_tracker",
+        "require_issue_identity": "deflake_issue_tracker",
+        "require_reconciled_issue": "deflake_issue_tracker",
+        "outcome_record": "deflake_issue_record",
+        "stored_record": "deflake_issue_record",
+        "reuse_stored_publication": "deflake_issue_record",
+        "require_supported": "deflake_issue_record",
+        "Published": "deflake_issue_record",
+    }
+    for name, owner in sorted(moved.items()):
+        expect(name not in defined,
+               f"the façade still defines {name}; it belongs to {owner} and "
+               f"a second definition is free to drift from it")
+    for name in ("require_defect_diagnosis", "require_origin",
+                 "require_handoff", "accept", "render", "publish", "main",
+                 "forbidden_probe_change", "forbidden_pull_request"):
+        expect(name in defined,
+               f"the façade must still define {name}: route admission, "
+               f"composition, ordering and the CLI stay here")
+    # `subprocess` and `tempfile` are the `gh` adapter's, `stat` the
+    # walker's, and `hashlib` the publication key's. None of the four
+    # has a caller left on the façade, and an import of one is the first
+    # sign an implementation came back.
+    imported = set()
+    for node in ast.walk(facade):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+    for name in ("subprocess", "tempfile", "stat", "hashlib", "probe_flake",
+                 "probe_protocol", "probe_runner_registry"):
+        expect(name not in imported,
+               f"the façade imports {name}, which only an extracted "
+               f"implementation needs")
+
+
+def test_the_issue_family_imports_as_repository_modules() -> None:
+    """#2157: every owner resolves under the `tools.` package spelling too.
+
+    `tools/` carries no `__init__.py`, so it is an implicit namespace
+    package: `import tools.deflake_issue` from the repository root is a
+    supported spelling, and under it the directory holding these modules
+    is NOT on `sys.path`. Sibling imports by bare name resolve anyway
+    only because each module inserts its own directory first — which the
+    pre-split `deflake_issue.py` did, and which the façade must keep
+    doing before the first of its re-exports, since those run at import
+    time.
+    """
+    root = Path(dd.__file__).resolve().parent.parent
+    family = ("tools.deflake_issue", "tools.deflake_issue_evidence",
+              "tools.deflake_issue_document", "tools.deflake_issue_tracker",
+              "tools.deflake_issue_record")
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     for module in family:
