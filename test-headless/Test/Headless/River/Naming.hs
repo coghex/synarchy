@@ -21,6 +21,7 @@ import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), currentGeneratorVersion )
 import Language.Generated.Profile (generateProfile)
 import Language.Generated.Root (assignLanguageRoots)
+import Test.Headless.Language.Generated.Support (expectRoots)
 import Language.Generated.Bound (LanguageRoots(..))
 import Language.Naming (mkNamer)
 import World.Base (GeoFeatureId(..), GeoCoord(..))
@@ -225,9 +226,10 @@ spec = do
 
             it "draws every name from ONE language: each is built from that \
                \language's own root assignment" $ do
-                let roots = lrFree (assignLanguageRoots (profileOf provA)
-                                                        (catOrdinals cat)
-                                                        (conceptIds cat))
+                let roots = lrFree (expectRoots
+                                (assignLanguageRoots (profileOf provA)
+                                                      (catOrdinals cat)
+                                                      (conceptIds cat)))
                     anyRootIn nm = any (\r → T.toLower r `T.isInfixOf` T.toLower nm)
                                        (M.elems roots)
                 namesOf builtA `shouldSatisfy` all anyRootIn

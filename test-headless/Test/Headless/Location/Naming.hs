@@ -18,9 +18,10 @@ import Language.Semantic.Catalogue ( conceptCataloguePath
                                    , parseCatalogue )
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..)
-    , currentGeneratorVersion )
+    , currentGeneratorVersion, generatorErrorText )
 import Language.Generated.Profile (generateProfile)
 import Language.Generated.Root (assignLanguageRoots)
+import Test.Headless.Language.Generated.Support (expectRoots)
 import Language.Generated.Bound (LanguageRoots(..))
 import Location.Bounds (RelBounds(..))
 import Location.Instance
@@ -118,9 +119,10 @@ spec = describe "Location naming" $ do
 
         it "two locations in ONE world share the language: every root a \
            \name is built from comes from that language's own assignment" $ do
-            let roots = lrFree (assignLanguageRoots (profileOf provA)
-                                                    (catOrdinals cat)
-                                                    (conceptIds cat))
+            let roots = lrFree (expectRoots
+                            (assignLanguageRoots (profileOf provA)
+                                                  (catOrdinals cat)
+                                                  (conceptIds cat)))
                 -- Every rendered name is a compound of two of this
                 -- language's roots, so each name must contain at least
                 -- one of them as a substring (join style and boundary
@@ -275,6 +277,29 @@ spec = describe "Location naming" $ do
                 Left _  → pure ()
                 Right _ → expectationFailure
                     "expected an unsupported-version error"
+
+    -- #2206. A version this build CAN construct whose profile still has
+    -- no room for the catalogue's 151 concepts. The refusal is what
+    -- routes such a page onto the no-namer fallback the group above
+    -- pins — before the capacity gate, this call never returned.
+    describe "a language whose root space cannot name the catalogue" $ do
+        let shortProv = LanguageProvenance (LangSeed 1116)
+                                            currentGeneratorVersion
+        it "is refused, naming its shortfall" $
+            case mkLocationNamer cat shortProv of
+                Right _ → expectationFailure
+                    "built a location namer from a 144-root language"
+                Left err → generatorErrorText err
+                    `shouldSatisfy` T.isInfixOf "shortfall 7"
+
+        -- And the refusal really does land on the label fallback: the
+        -- caller's only two options are a namer or 'Nothing', and
+        -- 'Nothing' is what 'builtNone' above is built from.
+        it "leaves such a page on the definition-label fallback" $ do
+            namesOf builtNone `shouldBe` replicate 3 (ldLabel ruinDef)
+            glossesOf builtNone `shouldBe` replicate 3 Nothing
+            map liEtymology (instancesToList builtNone)
+                `shouldBe` replicate 3 Nothing
   where
     withNaming n = ruinDef { ldNaming = n }
 
