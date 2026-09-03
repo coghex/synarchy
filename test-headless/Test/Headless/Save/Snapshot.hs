@@ -29,7 +29,6 @@ import Item.Ground (emptyGroundItems)
 import Item.Types (ItemInstance(..))
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
-import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (WorldEdit, emptyWorldEdits)
 import World.Chunk.Types (ChunkCoord(..))
 import Craft.Bills (emptyCraftBills)
@@ -79,7 +78,7 @@ minimalPage pid = PageSnapshot
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
-    , pgsCropPlots    = emptyCropPlots
+    , pgsCropPlots    = HM.empty
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing

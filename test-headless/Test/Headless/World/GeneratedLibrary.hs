@@ -67,7 +67,6 @@ import Structure.Palette (emptyTexPalette)
 import Item.Ground (emptyGroundItems)
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
-import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits)
 import Craft.Bills (emptyCraftBills)
 import Unit.Transfer.Orders (emptyTransferOrders)
@@ -239,7 +238,7 @@ minimalPage pid gid = PageSnapshot
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
-    , pgsCropPlots    = emptyCropPlots
+    , pgsCropPlots    = HM.empty
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing

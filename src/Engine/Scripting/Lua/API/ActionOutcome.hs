@@ -16,6 +16,12 @@
 --   handlers, which know partial-drop counts the Lua call site can't
 --   see) push directly via 'Engine.ActionOutcome.pushActionOutcome'
 --   rather than round-tripping through recordOutcome.
+--
+--   recordOutcome appends through that SAME helper (#2284), so a Lua
+--   record is bounded by 'Engine.ActionOutcome.actionOutcomeCap' and
+--   drops the oldest on overflow exactly as an engine-side one does.
+--   drainActionOutcomes' swap-to-empty is not an append and stays a
+--   direct atomic mutation of the ref.
 module Engine.Scripting.Lua.API.ActionOutcome
     ( debugRecordOutcomeFn
     , debugDrainActionOutcomesFn
@@ -30,7 +36,7 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text.Encoding as TE
 import Data.IORef (atomicModifyIORef', readIORef)
 import qualified HsLua as Lua
-import Engine.ActionOutcome (ActionOutcome(..))
+import Engine.ActionOutcome (ActionOutcome(..), pushActionOutcome)
 import Engine.Core.State (EngineEnv)
 
 -- | debug.recordOutcome(table) → bool. False (no record pushed) if the
@@ -87,21 +93,21 @@ debugRecordOutcomeFn env = do
     case (mKind, mOutcome) of
         (Just kind, Just outcome) → do
             gt ← Lua.liftIO $ readIORef (wsGameTimeRef (toWorldSimCapability env))
-            Lua.liftIO $ atomicModifyIORef' (ucActionOutcomeRef (toUnitCombatCapability env)) $ \buf →
-                ( buf Seq.|> ActionOutcome
-                    { aoTs        = gt
-                    , aoKind      = kind
-                    , aoOutcome   = outcome
-                    , aoWhereX    = whereX
-                    , aoWhereY    = whereY
-                    , aoTarget    = fromIntegral <$> mTarget
-                    , aoRequested = requested
-                    , aoApplied   = applied
-                    , aoDropped   = dropped
-                    , aoReason    = reason
-                    , aoHandler   = handler
-                    }
-                , () )
+            Lua.liftIO $
+                pushActionOutcome (ucActionOutcomeRef (toUnitCombatCapability env))
+                    ActionOutcome
+                        { aoTs        = gt
+                        , aoKind      = kind
+                        , aoOutcome   = outcome
+                        , aoWhereX    = whereX
+                        , aoWhereY    = whereY
+                        , aoTarget    = fromIntegral <$> mTarget
+                        , aoRequested = requested
+                        , aoApplied   = applied
+                        , aoDropped   = dropped
+                        , aoReason    = reason
+                        , aoHandler   = handler
+                        }
             Lua.pushboolean True
             return 1
         _ → Lua.pushboolean False >> return 1

@@ -918,9 +918,11 @@ library
                      World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
+                     World.Time.Scale
                      World.Time.Local
                      World.Flora.Identity
                      World.Flora.Types
+                     World.Flora.Reference
                      World.Flora.Designation
                      World.Flora.HitTest
                      World.Flora.Growth
@@ -1181,6 +1183,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.Breakthrough
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
+                   Test.Headless.WorldGen.ConfigLoad
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.Hazard
                    Test.Headless.Unit.Pathing.MoveToApi
@@ -1245,6 +1248,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
+                   Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Compat.B1Fixture
                    Test.Headless.World.Save.Compat.Baselines

@@ -45,7 +45,10 @@ module World.Save.Types
     , missingMaterialReferences
     , MissingFloraRef(..)
     , renderMissingFloraRef
+    , renderUnnamedFloraRef
     , missingFloraReferences
+    , nameFloraReferences
+    , resolveFloraReferences
     , MissingLocationRef(..)
     , renderMissingLocationRef
     , missingLocationDefReferences
@@ -85,13 +88,18 @@ import Building.Knowledge (ContainerKnowledge(..), ContainerRecord(..))
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
-import World.Plant.Types (PlantDesignations)
+import World.Plant.Types
+    ( PlantDesignations, SavedPlantDesignations, PlantDesignationOf(..) )
 import World.Spoil.Types (SpoilPiles, SpoilPile(..))
 import World.Material (MaterialId(..), MaterialRegistry, isKnownMaterial)
 import World.Plate.Types (TectonicPlate(..))
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
-import World.Flora.CropPlot (CropPlots, CropPlot(..))
-import World.Flora.Types (FloraId(..), FloraCatalog, lookupSpecies)
+import World.Flora.CropPlot
+    ( CropPlots, SavedCropPlots, CropPlotOf(..) )
+import World.Flora.Types (FloraCatalog)
+import World.Flora.Identity (floraInstanceIdNone)
+import World.Flora.Reference
+    ( FloraRef(..), renderFloraRef, resolveFloraRef, floraRefForId )
 import World.Chunk.Types (ChunkCoord(..))
 import Infection.Types (InfectionManager, lookupInfection)
 import Item.Ground (GroundItems(..), GroundItem(..))
@@ -130,7 +138,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 98
+currentSaveVersion = 99
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -410,12 +418,21 @@ data WorldPageSave = WorldPageSave
         --   designation layers, restored straight into
         --   wsTillDesignationsRef; markers re-render from the stored z.
         --   Appended for save v76.
-    , wpsCropPlots ∷ !CropPlots
+    , wpsCropPlots ∷ !SavedCropPlots
         -- ^ Planted groundcover-crop tiles (#334): tile → (species,
-        --   planted day, health). Restored straight into
-        --   wsCropPlotsRef; render/harvest derive growth state from it
-        --   with no chunk loading needed. Appended for save v77.
-    , wpsPlantDesignations ∷ !PlantDesignations
+        --   planted day, health). Restored into wsCropPlotsRef by
+        --   'World.Load.Stage.stagePage', which resolves each species
+        --   reference against the loading build's flora catalog;
+        --   render/harvest then derive growth state from it with no
+        --   chunk loading needed. Appended for save v77.
+        --
+        --   #2243: the species is a durable
+        --   'World.Flora.Reference.FloraRef' — an authored name, or the
+        --   ordinal a pre-name payload carried — not the runtime handle
+        --   this field held through save v98. Same for
+        --   'wpsPlantDesignations' below and for the planting entries in
+        --   'wpsEdits'.
+    , wpsPlantDesignations ∷ !SavedPlantDesignations
         -- ^ Plant designations (#335): tile → (surface z, chosen crop).
         --   Like the other designation layers, restored straight into
         --   wsPlantDesignationsRef; markers re-render from the stored
@@ -1279,34 +1296,53 @@ missingMaterialReferences registry pages = concatMap pageRefs pages
     editMaterialRef (WeSetCell gx gy _z mat) = [(gx, gy, mat)]
     editMaterialRef _                        = []
 
--- Flora-id validation (issue #763) -----------------------------------
+-- Flora-species-reference validation (issues #763, #2243) ------------
 
--- | A saved 'FloraId' — from the edit log ('WePlaceFlora') or a crop
---   plot's species — that this build's 'World.Flora.Types.FloraCatalog'
---   does not resolve. Unlike 'MaterialId', a 'FloraId' genuinely CAN be
---   invalid ('lookupSpecies' returns 'Maybe', no always-total vector
---   slot to fall back on), so this is a direct existence check, no
---   special-cased sentinel id needed. Flora species drive crop/foraging
---   gameplay (growth stage, harvest yield, ...), so an unresolved one
---   is exactly the same class of load-blocking problem as a missing
---   unit/item/building/recipe/material definition.
+-- | A saved flora-species reference — from the edit log
+--   ('World.Edit.Types.WePlaceFloraRef'), a crop plot's species, or a
+--   plant designation's chosen crop — that this build's
+--   'World.Flora.Types.FloraCatalog' does not resolve. Flora species
+--   drive crop/foraging gameplay (growth stage, harvest yield, ...), so
+--   an unresolved one is exactly the same class of load-blocking
+--   problem as a missing unit/item/building/recipe/material definition.
+--
+--   #2243 changed WHAT is unresolved rather than what happens when it
+--   is. A save written by this build names its species, so the usual
+--   failure is a name this build no longer ships — the same shape as
+--   'MissingItemDefRef', and reported the same way, by name. A payload
+--   written before names carries an ordinal instead, and that stays
+--   reportable too: 'World.Flora.Reference.FloraRef' holds whichever
+--   the save actually recorded, so the diagnostic never has to invent
+--   a name for a reference that never had one.
 data MissingFloraRef = MissingFloraRef
-    { mfrSource ∷ !Text          -- ^ e.g. "edit log", "crop plot"
-    , mfrPage   ∷ !WorldPageId
-    , mfrCoord  ∷ !(Int, Int)
-    , mfrFloraId ∷ !Word16
+    { mfrSource  ∷ !Text          -- ^ e.g. "edit log", "crop plot"
+    , mfrPage    ∷ !WorldPageId
+    , mfrCoord   ∷ !(Int, Int)
+    , mfrSpecies ∷ !FloraRef
     } deriving (Show, Eq)
 
 renderMissingFloraRef ∷ MissingFloraRef → Text
 renderMissingFloraRef r =
     mfrSource r <> " at " <> tshow (mfrCoord r) <> " on page '"
-        <> unWorldPageId (mfrPage r) <> "' references unknown flora id "
-        <> tshow (mfrFloraId r)
+        <> unWorldPageId (mfrPage r) <> "' references unknown "
+        <> renderFloraRef (mfrSpecies r)
 
 -- | Every saved flora-species reference, across all pages, that does
---   not resolve against the currently-registered flora catalog. Covers
---   the edit log ('WePlaceFlora') and crop plots ('cpSpecies'). Empty
+--   not resolve against the currently-registered flora catalog. Empty
 --   ⇒ every reference resolves and the load may proceed.
+--
+--   Walks all THREE durable reference sites: the edit log, crop plots,
+--   and — since #2243 — plant designations, which were silently omitted
+--   before and could therefore restore a designation naming a species
+--   nothing could plant.
+--
+--   Every site is validated through the one
+--   'World.Flora.Reference.resolveFloraRef', so a name and a legacy
+--   ordinal are resolved by exactly the rule
+--   'World.Load.Stage.stagePage' will apply a moment later. That
+--   agreement is what makes staging total: this check refuses the whole
+--   load before anything is staged, so by the time staging resolves the
+--   same references, every one of them is known to resolve.
 missingFloraReferences
     ∷ FloraCatalog
     → [(WorldPageId, WorldPageSave)]
@@ -1314,24 +1350,175 @@ missingFloraReferences
 missingFloraReferences catalog pages = concatMap pageRefs pages
   where
     pageRefs (pid, w) =
-        [ MissingFloraRef "edit log" pid (gx, gy) (unFloraId fid)
+        [ MissingFloraRef "edit log" pid (gx, gy) ref
         | edits ← HM.elems (wpsEdits w)
         , edit ← edits
-        , (gx, gy, fid) ← editFloraRef edit
-        , unresolved fid ]
+        , (gx, gy, ref) ← editFloraRef edit
+        , unresolved ref ]
         ⧺
-        [ MissingFloraRef "crop plot" pid coord (unFloraId (cpSpecies cp))
+        [ MissingFloraRef "crop plot" pid coord (cpSpecies cp)
         | (coord, cp) ← HM.toList (wpsCropPlots w)
         , unresolved (cpSpecies cp) ]
-    -- #1854 added a second planting constructor carrying the plant's own
-    -- FloraInstanceId. That id is a plain durable value, not a reference
-    -- kind this check knows how to resolve, so both forms contribute the
-    -- SPECIES id and nothing else — exactly as before it existed.
-    editFloraRef (WePlaceFlora gx gy fid _day _grow) = [(gx, gy, fid)]
+        ⧺
+        [ MissingFloraRef "plant designation" pid coord (ptCrop pd)
+        | (coord, pd) ← HM.toList (wpsPlantDesignations w)
+        , unresolved (ptCrop pd) ]
+    -- Only the #2243 constructor can appear here: a decoded page's
+    -- planting edits are named, whatever version the payload was
+    -- written at ('World.Save.Component.Page.applyWorldEdits' rewrites
+    -- the two legacy numeric forms into it), and a captured page's are
+    -- named by 'World.Thread.Command.Save.WriteWorld'. The two legacy
+    -- constructors are matched anyway rather than falling into the
+    -- catch-all, so a payload that somehow still carried one would be
+    -- VALIDATED as the legacy ordinal it is instead of skipped
+    -- unchecked.
+    editFloraRef (WePlaceFloraRef gx gy ref _day _grow _iid) =
+        [(gx, gy, ref)]
+    editFloraRef (WePlaceFlora gx gy fid _day _grow) =
+        [(gx, gy, FloraByLegacyId fid)]
     editFloraRef (WePlaceFloraWithId gx gy fid _day _grow _iid) =
-        [(gx, gy, fid)]
-    editFloraRef _                                   = []
-    unresolved fid = maybe True (const False) (lookupSpecies fid catalog)
+        [(gx, gy, FloraByLegacyId fid)]
+    editFloraRef _ = []
+    unresolved ref = isNothing (resolveFloraRef catalog ref)
+
+-- | The save-side rendering of the same finding: a LIVE species handle
+--   the capturing build's own catalog could not name, so no durable
+--   reference could be written for it. Distinct wording from
+--   'renderMissingFloraRef' because the failure is the mirror image —
+--   the save is refused, nothing is published, and the reference that
+--   could not be named is always an ordinal (there is no name to quote).
+renderUnnamedFloraRef ∷ MissingFloraRef → Text
+renderUnnamedFloraRef r =
+    mfrSource r <> " at " <> tshow (mfrCoord r) <> " on page '"
+        <> unWorldPageId (mfrPage r) <> "' names " <> renderFloraRef
+               (mfrSpecies r) <> ", which this build's flora catalog \
+           \does not resolve"
+
+-- | Save side (#2243 requirement 4): turn one page's LIVE flora
+--   references into the durable ones a capture persists, or report every
+--   handle the catalog could not name.
+--
+--   This is where a save acquires its species names, and the only
+--   place: 'World.Save.Component.Page''s encoders see a
+--   'World.Save.Snapshot.SessionSnapshot' that already holds
+--   'World.Flora.Reference.FloraRef's and never consult live catalog
+--   state, so an encode cannot fail and cannot invent a name. A handle
+--   with no species behind it is refused HERE, before
+--   'World.Save.Storage.publishGeneration' is reached, so the slot on
+--   disk is never touched — the save-side counterpart of
+--   'missingFloraReferences' refusing a load.
+--
+--   An edit that is already named crosses unchanged. That is not a
+--   live-session case (a live log holds 'WePlaceFloraWithId'); it keeps
+--   the function total and idempotent, so re-capturing an already-named
+--   page is the identity rather than a failure.
+nameFloraReferences
+    ∷ FloraCatalog
+    → WorldPageId
+    → WorldEdits
+    → CropPlots
+    → PlantDesignations
+    → Either [MissingFloraRef]
+             (WorldEdits, SavedCropPlots, SavedPlantDesignations)
+nameFloraReferences catalog pid edits crops plants =
+    case (traverse (traverse nameEdit) edits
+         , traverse nameCrop crops
+         , traverse namePlant plants) of
+        (Just es, Just cs, Just ps) → Right (es, cs, ps)
+        _                           → Left problems
+  where
+    -- One lookup per reference, and the SAME lookup decides both
+    -- outcomes: a 'Nothing' anywhere is what makes the triple above
+    -- fail, and 'problems' re-walks the identical sites to say which.
+    -- Nothing here can fall back to a default reference, because there
+    -- is no total conversion to fall back to.
+    named = floraRefForId catalog
+    unnamed fid = isNothing (named fid)
+    nameEdit e = case e of
+        WePlaceFlora gx gy fid day w →
+            (\ref → WePlaceFloraRef gx gy ref day w floraInstanceIdNone)
+                <$> named fid
+        WePlaceFloraWithId gx gy fid day w iid →
+            (\ref → WePlaceFloraRef gx gy ref day w iid) <$> named fid
+        -- Already named. Not a live-session case (a live log holds
+        -- 'WePlaceFloraWithId'); it keeps this idempotent, so
+        -- re-capturing an already-named page is the identity rather
+        -- than a failure.
+        _ → Just e
+    nameCrop cp  = (\ref → cp { cpSpecies = ref }) <$> named (cpSpecies cp)
+    namePlant pd = (\ref → pd { ptCrop = ref }) <$> named (ptCrop pd)
+    problems =
+        [ MissingFloraRef "edit log" pid (gx, gy) (FloraByLegacyId fid)
+        | es ← HM.elems edits, e ← es, (gx, gy, fid) ← liveEditSpecies e
+        , unnamed fid ]
+        ⧺
+        [ MissingFloraRef "crop plot" pid coord
+              (FloraByLegacyId (cpSpecies cp))
+        | (coord, cp) ← HM.toList crops, unnamed (cpSpecies cp) ]
+        ⧺
+        [ MissingFloraRef "plant designation" pid coord
+              (FloraByLegacyId (ptCrop pd))
+        | (coord, pd) ← HM.toList plants, unnamed (ptCrop pd) ]
+    liveEditSpecies (WePlaceFlora gx gy fid _ _)         = [(gx, gy, fid)]
+    liveEditSpecies (WePlaceFloraWithId gx gy fid _ _ _) = [(gx, gy, fid)]
+    liveEditSpecies _                                    = []
+
+-- | Load side (#2243 requirement 2): turn one decoded page's durable
+--   flora references back into the runtime handles the live session
+--   uses, or report every reference the loading build's catalog does not
+--   resolve.
+--
+--   Called from 'World.Load.Stage.stagePage', the first point in the
+--   load transaction holding a catalog. It is total in practice —
+--   'missingFloraReferences' has already refused the whole load, against
+--   this same catalog and through this same
+--   'World.Flora.Reference.resolveFloraRef', if any reference did not
+--   resolve — but it still returns every unresolved reference rather
+--   than defaulting one, so a caller that skipped that gate fails
+--   loudly instead of planting an arbitrary species.
+--
+--   A legacy ordinal resolves to ITSELF where the loading catalog holds
+--   that number (D-2): the species it now names may not be the species
+--   that was planted, which is the documented, deliberately unguarded
+--   limitation of every pre-#2243 save.
+resolveFloraReferences
+    ∷ FloraCatalog
+    → WorldPageId
+    → WorldEdits
+    → SavedCropPlots
+    → SavedPlantDesignations
+    → Either [MissingFloraRef] (WorldEdits, CropPlots, PlantDesignations)
+resolveFloraReferences catalog pid edits crops plants =
+    case (traverse (traverse resolveEdit) edits
+         , traverse resolveCrop crops
+         , traverse resolvePlant plants) of
+        (Just es, Just cs, Just ps) → Right (es, cs, ps)
+        _                           → Left problems
+  where
+    resolve = resolveFloraRef catalog
+    unresolved ref = isNothing (resolve ref)
+    resolveEdit e = case e of
+        WePlaceFloraRef gx gy ref day w iid →
+            (\fid → WePlaceFloraWithId gx gy fid day w iid) <$> resolve ref
+        -- A decoded page carries no numeric planting edit —
+        -- 'World.Save.Component.Page.migrateWorldEditDTOv2' names both
+        -- legacy forms — so this crosses whatever a caller handed in
+        -- unchanged rather than re-deriving an id it already has.
+        _ → Just e
+    resolveCrop cp  = (\fid → cp { cpSpecies = fid }) <$> resolve (cpSpecies cp)
+    resolvePlant pd = (\fid → pd { ptCrop = fid }) <$> resolve (ptCrop pd)
+    problems =
+        [ MissingFloraRef "edit log" pid (gx, gy) ref
+        | es ← HM.elems edits, e ← es, (gx, gy, ref) ← savedEditSpecies e
+        , unresolved ref ]
+        ⧺
+        [ MissingFloraRef "crop plot" pid coord (cpSpecies cp)
+        | (coord, cp) ← HM.toList crops, unresolved (cpSpecies cp) ]
+        ⧺
+        [ MissingFloraRef "plant designation" pid coord (ptCrop pd)
+        | (coord, pd) ← HM.toList plants, unresolved (ptCrop pd) ]
+    savedEditSpecies (WePlaceFloraRef gx gy ref _ _ _) = [(gx, gy, ref)]
+    savedEditSpecies _                                 = []
 
 -- Location-overlay-id validation (issue #763) ------------------------
 

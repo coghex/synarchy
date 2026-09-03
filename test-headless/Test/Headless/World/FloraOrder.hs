@@ -374,11 +374,14 @@ postChangeExpectation =
 legacyEdit ∷ WorldEditDTO
 legacyEdit = WePlaceFloraD 12 34 (FloraId 14) 8 1.0
 
-legacyPlot ∷ CropPlotDTO
-legacyPlot = CropPlotDTO (FloraId 3) 120 0.75
+-- #2243 froze the numeric shapes as @…DTOv1@ and gave the CURRENT ones
+-- authored names; a pre-#2241 save is a pre-#2243 save too, so this
+-- fixture keeps naming the frozen numeric shapes it was written with.
+legacyPlot ∷ CropPlotDTOv1
+legacyPlot = CropPlotDTOv1 (FloraId 3) 120 0.75
 
-legacyDesignation ∷ PlantDesignationDTO
-legacyDesignation = PlantDesignationDTO 8 (FloraId 1)
+legacyDesignation ∷ PlantDesignationDTOv1
+legacyDesignation = PlantDesignationDTOv1 8 (FloraId 1)
 
 renderLegacy ∷ Text
 renderLegacy = T.unlines
@@ -532,8 +535,8 @@ spec = beforeAll loadShippedCatalog $ do
            , decodeLegacy body "designation" ) of
           (Right (WePlaceFloraD _ _ f1 _ _), Right p, Right d) → do
               named f1 `shouldBe` Just "coconut_palm"
-              named (cpiSpecies p) `shouldBe` Just "tomato_plant"
-              named (ptiCrop d) `shouldBe` Just "scots_pine"
+              named (cpi1Species p) `shouldBe` Just "tomato_plant"
+              named (pti1Crop d) `shouldBe` Just "scots_pine"
           other → expectationFailure
               ("fixture rows did not decode to the three references: "
                ⧺ show other)

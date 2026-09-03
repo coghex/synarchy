@@ -32,6 +32,8 @@ import World.Save.Envelope.Types
 import World.Save.Component
 import World.Save.Component.Types
 import World.Save.Component.Session
+import World.Flora.Reference (FloraRef(..))
+import World.Flora.Types (FloraId(..))
 import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Component.Knowledge
@@ -94,7 +96,6 @@ import Item.Ground (emptyGroundItems, GroundItems(..), GroundItem(..))
 import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
-import World.Flora.CropPlot (emptyCropPlots)
 import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
 import World.Chunk.Types (ChunkCoord(..))
 import World.Mine.Types (MineDesignation(..))
@@ -192,7 +193,7 @@ minimalPage pid = PageSnapshot
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
-    , pgsCropPlots    = emptyCropPlots
+    , pgsCropPlots    = HM.empty
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
@@ -701,7 +702,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsTransferOrders = emptyTransferOrders
     , wpsPowerNodes   = emptyPowerNodes
     , wpsTillDesignations = HM.empty
-    , wpsCropPlots    = emptyCropPlots
+    , wpsCropPlots    = HM.empty
     , wpsPlantDesignations = HM.empty
     , wpsContainerKnowledge = emptyContainerKnowledge
     , wpsIdentity     = Nothing
@@ -1684,7 +1685,7 @@ spec = do
                             (GroundItems 2 (HM.singleton 1
                                 (GroundItem richItem 3.5 4.5))) } ]
                 bytes = S.encode legacy
-            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5]
+            ccInputVers worldActivityCodec `shouldBe` [1, 2, 3, 4, 5, 6]
             forM_ [1, 2] $ \ver → do
                 mv ← expectDecode ("v" ⧺ show ver)
                           (ccDecode worldActivityCodec ver bytes)
@@ -3091,13 +3092,25 @@ spec = do
                 "edit log at (-3,4) on page 'page2' references unknown \
                 \material id 200"
 
-        it "renderMissingFloraRef is unchanged" $
+        it "renderMissingFloraRef names the AUTHORED SPECIES a save \
+           \recorded (#2243)" $
             renderMissingFloraRef MissingFloraRef
                 { mfrSource = "crop plot", mfrPage = page1
-                , mfrCoord = (5, -6), mfrFloraId = 77 }
+                , mfrCoord = (5, -6)
+                , mfrSpecies = FloraByName "moonpetal" }
                 `shouldBe`
                 "crop plot at (5,-6) on page 'page1' references unknown \
-                \flora id 77"
+                \species 'moonpetal'"
+
+        it "renderMissingFloraRef falls back to the ORDINAL for a \
+           \pre-name payload, never to an invented name (#2243, D-2)" $
+            renderMissingFloraRef MissingFloraRef
+                { mfrSource = "plant designation", mfrPage = page1
+                , mfrCoord = (5, -6)
+                , mfrSpecies = FloraByLegacyId (FloraId 77) }
+                `shouldBe`
+                "plant designation at (5,-6) on page 'page1' references \
+                \unknown legacy species id 77"
 
         it "renderMissingLocationRef is unchanged" $
             renderMissingLocationRef MissingLocationRef

@@ -44,7 +44,21 @@ import World.Save.Component.Entities
     , toCraftBillDTO )
 import World.Save.Types
     ( BuildingSnapshot(..), BuildingInstanceSnapshot(..)
-    , UnitSnapshot(..), UnitInstanceSnapshot(..) )
+    , UnitSnapshot(..), UnitInstanceSnapshot(..)
+    , WorldPageSave(..), SaveData(..), MissingFloraRef(..)
+    , missingFloraReferences, renderMissingFloraRef
+    , renderUnnamedFloraRef, nameFloraReferences
+    , resolveFloraReferences )
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
+import World.Edit.Types (WorldEdit(..), WorldEdits, emptyWorldEdits)
+import World.Flora.CropPlot (CropPlotOf(..), SavedCropPlots)
+import World.Plant.Types (PlantDesignationOf(..), SavedPlantDesignations)
+import World.Flora.Identity (plantedFloraInstanceId)
+import World.Flora.Reference (FloraRef(..))
+import World.Flora.Types
+    ( FloraCatalog, FloraId(..), emptyFloraCatalog, nextFloraId
+    , insertSpecies, newFloraSpecies, findSpeciesByName )
+import Engine.Asset.Handle (TextureHandle(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import Location.Bounds (AbsBounds(..))
 import Location.Instance
@@ -59,8 +73,6 @@ import Structure.Palette (emptyTexPalette)
 import Item.Ground (emptyGroundItems, spawnGroundItem)
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
-import World.Flora.CropPlot (emptyCropPlots)
-import World.Edit.Types (emptyWorldEdits)
 import Craft.Bills
     (emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..))
 import Unit.Transfer
@@ -114,12 +126,81 @@ minimalPage pid = PageSnapshot
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
-    , pgsCropPlots    = emptyCropPlots
+    , pgsCropPlots    = HM.empty
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing
     , pgsGeneratedId  = Just (fixtureGeneratedWorldIdForPage pid)
     }
+
+-- #2243 flora-species fixtures -----------------------------------------
+
+-- | A catalog holding exactly the two shipped crop species these
+--   examples name, built through the real allocator so the ids are the
+--   ones a registration in this order really hands out.
+--
+--   'reorderedCatalog' registers the SAME two names in the opposite
+--   order, so every id differs — which is the whole hazard #2236 exists
+--   to remove, and the only way to prove a reference followed its name
+--   rather than its number. 'reducedCatalog' drops one of them, which is
+--   what a build that stopped shipping a species looks like.
+catalogOf ∷ [Text] → FloraCatalog
+catalogOf = L.foldl' add emptyFloraCatalog
+  where
+    add cat name =
+        let (fid, cat') = nextFloraId cat
+        in insertSpecies fid (newFloraSpecies name (TextureHandle 0)) cat'
+
+shippedCatalog, reorderedCatalog, reducedCatalog ∷ FloraCatalog
+shippedCatalog   = catalogOf ["tomato_plant", "wheat"]
+reorderedCatalog = catalogOf ["wheat", "tomato_plant"]
+reducedCatalog   = catalogOf ["wheat"]
+
+-- | The two species' ids under each catalog. Read out of the catalog
+--   rather than written as literals, so a change to the allocator's
+--   floor cannot leave the fixtures asserting stale numbers.
+tomatoIdA, wheatIdA, tomatoIdB, wheatIdB ∷ FloraId
+tomatoIdA = speciesIdIn shippedCatalog "tomato_plant"
+wheatIdA  = speciesIdIn shippedCatalog "wheat"
+tomatoIdB = speciesIdIn reorderedCatalog "tomato_plant"
+wheatIdB  = speciesIdIn reorderedCatalog "wheat"
+
+speciesIdIn ∷ FloraCatalog → Text → FloraId
+speciesIdIn cat name = maybe (FloraId 0) fst (findSpeciesByName name cat)
+
+-- | A decoded page carrying the three durable species references, in
+--   the shape a decode really hands staging: named, and with the
+--   planting edit in its #2243 constructor.
+pageSaveWith ∷ WorldEdits → SavedCropPlots → SavedPlantDesignations
+             → WorldPageSave
+pageSaveWith edits crops plants =
+    let snap = buildSnap page1 [ (minimalPage page1)
+                   { pgsEdits = edits
+                   , pgsCropPlots = crops
+                   , pgsPlantDesignations = plants
+                   , pgsPlantedFloraCursor = 2 } ]
+        req = SaveRequestMeta { srmSlotName = "flora_refs"
+                              , srmTimestamp = "ts", srmAutosave = False }
+    in case sdWorlds (snapshotToSaveData req snap) of
+        (w : _) → w
+        []      → error "pageSaveWith: no page"
+
+namedPageSave, unknownCropPlotSave, unknownPlantDesignationSave
+    , legacyOrdinalSave ∷ WorldPageSave
+namedPageSave = pageSaveWith
+    (HM.singleton (ChunkCoord 0 0)
+        [ WePlaceFloraRef 11 12 (FloraByName "tomato_plant") 4 0.5
+              (plantedFloraInstanceId 1) ])
+    (HM.singleton (13, 14) (CropPlot (FloraByName "wheat") 5 0.9))
+    (HM.singleton (15, 16) (PlantDesignation 0 (FloraByName "wheat")))
+unknownCropPlotSave = pageSaveWith emptyWorldEdits
+    (HM.singleton (13, 14) (CropPlot (FloraByName "moonpetal") 5 0.9))
+    HM.empty
+unknownPlantDesignationSave = pageSaveWith emptyWorldEdits HM.empty
+    (HM.singleton (15, 16) (PlantDesignation 0 (FloraByName "moonpetal")))
+legacyOrdinalSave = pageSaveWith emptyWorldEdits
+    (HM.singleton (13, 14) (CropPlot (FloraByLegacyId (FloraId 99)) 5 0.9))
+    HM.empty
 
 minimalBuilding ∷ BuildingInstanceSnapshot
 minimalBuilding = BuildingInstanceSnapshot
@@ -1182,3 +1263,162 @@ spec = do
                 rendered = renderIntegrityError e
             T.isInfixOf "craft-bills" rendered `shouldBe` True
             T.isInfixOf "wrong-page" rendered `shouldBe` True
+
+    -- #2243. The load-side gate and the two conversions that flank it,
+    -- exercised through the SAME 'World.Save.Types' entry points
+    -- production uses: 'World.Thread.Command.Save.WriteWorld' names a
+    -- captured page's references, 'World.Save.Types.missingFloraReferences'
+    -- refuses a load that names a species this build lacks, and
+    -- 'World.Load.Stage.stageSession' resolves what the gate accepted.
+    describe "flora species references (#2243)" $ do
+        it "accepts a page whose three durable species references all \
+           \name species the loading catalog holds" $
+            missingFloraReferences shippedCatalog [(page1, namedPageSave)]
+                `shouldBe` []
+
+        it "refuses a PLANTED FLORA EDIT naming a species this build \
+           \lacks, reporting the site, page, coordinate and the NAME the \
+           \save recorded" $ do
+            let missing = missingFloraReferences reducedCatalog
+                              [(page1, namedPageSave)]
+            map mfrSource missing `shouldBe` ["edit log"]
+            map mfrCoord missing `shouldBe` [(11, 12)]
+            map mfrPage missing `shouldBe` [page1]
+            map mfrSpecies missing `shouldBe` [FloraByName "tomato_plant"]
+            map renderMissingFloraRef missing `shouldBe`
+                [ "edit log at (11,12) on page 'page1' references unknown \
+                  \species 'tomato_plant'" ]
+
+        it "refuses a CROP PLOT naming a species this build lacks" $ do
+            let missing = missingFloraReferences shippedCatalog
+                              [(page1, unknownCropPlotSave)]
+            map mfrSource missing `shouldBe` ["crop plot"]
+            map mfrCoord missing `shouldBe` [(13, 14)]
+            map mfrSpecies missing `shouldBe` [FloraByName "moonpetal"]
+
+        it "refuses a PLANT DESIGNATION naming a species this build \
+           \lacks -- the third reference site, which the pre-#2243 check \
+           \never walked at all, so a designation naming a species \
+           \nothing could plant used to load clean" $ do
+            let missing = missingFloraReferences shippedCatalog
+                              [(page1, unknownPlantDesignationSave)]
+            map mfrSource missing `shouldBe` ["plant designation"]
+            map mfrCoord missing `shouldBe` [(15, 16)]
+            map mfrSpecies missing `shouldBe` [FloraByName "moonpetal"]
+
+        it "refuses a LEGACY ORDINAL a pre-name payload carried when the \
+           \loading catalog has no species at that number, naming the \
+           \NUMBER rather than inventing a name for it (D-2)" $ do
+            let missing = missingFloraReferences shippedCatalog
+                              [(page1, legacyOrdinalSave)]
+            map mfrSource missing `shouldBe` ["crop plot"]
+            map mfrSpecies missing `shouldBe` [FloraByLegacyId (FloraId 99)]
+            map renderMissingFloraRef missing `shouldBe`
+                [ "crop plot at (13,14) on page 'page1' references unknown \
+                  \legacy species id 99" ]
+
+        it "accepts a LEGACY ORDINAL the loading catalog does hold, and \
+           \resolves it to whatever species THAT catalog numbers there \
+           \-- today's semantics applied one last time (D-2)" $ do
+            let save = pageSaveWith emptyWorldEdits
+                           (HM.singleton (13, 14)
+                               (CropPlot (FloraByLegacyId wheatIdA) 5 0.9))
+                           HM.empty
+            missingFloraReferences shippedCatalog [(page1, save)]
+                `shouldBe` []
+            fmap (\(_, cs, _) → map cpSpecies (HM.elems cs))
+                 (resolveFloraReferences shippedCatalog page1
+                      emptyWorldEdits
+                      (HM.singleton (13, 14)
+                          (CropPlot (FloraByLegacyId wheatIdA) 5 0.9))
+                      HM.empty)
+                `shouldBe` Right [wheatIdA]
+
+        -- The central claim of the whole slice, and the one a same-catalog
+        -- round trip cannot make: a save captured under ONE catalog
+        -- restores against a DIFFERENT one, and every reference follows
+        -- the NAME to that catalog's own id rather than keeping the
+        -- number it was captured with.
+        it "survives a catalog REORDER: all three sites captured against \
+           \a catalog that numbers 'wheat'/'tomato_plant' one way \
+           \restore, against a catalog that numbers them differently, to \
+           \the SECOND catalog's ids" $ do
+            let liveEdits = HM.singleton (ChunkCoord 0 0)
+                    [ WePlaceFloraWithId 11 12 tomatoIdA 4 0.5
+                          (plantedFloraInstanceId 1) ]
+                liveCrops = HM.singleton (13, 14) (CropPlot wheatIdA 5 0.9)
+                livePlants = HM.singleton (15, 16)
+                                 (PlantDesignation 0 wheatIdA)
+            case nameFloraReferences shippedCatalog page1
+                     liveEdits liveCrops livePlants of
+                Left errs → expectationFailure
+                    ("capture refused a resolvable page: " ⧺ show errs)
+                Right (savedEdits, savedCrops, savedPlants) → do
+                    -- Nothing numeric survived the capture.
+                    [ ref | es ← HM.elems savedEdits
+                          , WePlaceFloraRef _ _ ref _ _ _ ← es ]
+                        `shouldBe` [FloraByName "tomato_plant"]
+                    map cpSpecies (HM.elems savedCrops)
+                        `shouldBe` [FloraByName "wheat"]
+                    map ptCrop (HM.elems savedPlants)
+                        `shouldBe` [FloraByName "wheat"]
+                    -- And the SECOND catalog's numbering is what comes
+                    -- back, at every site.
+                    (tomatoIdA, wheatIdA) `shouldNotBe`
+                        (tomatoIdB, wheatIdB)
+                    case resolveFloraReferences reorderedCatalog page1
+                             savedEdits savedCrops savedPlants of
+                        Left errs → expectationFailure
+                            ("staging refused an accepted page: " ⧺ show errs)
+                        Right (backEdits, backCrops, backPlants) → do
+                            [ fid | es ← HM.elems backEdits
+                                  , WePlaceFloraWithId _ _ fid _ _ _ ← es ]
+                                `shouldBe` [tomatoIdB]
+                            map cpSpecies (HM.elems backCrops)
+                                `shouldBe` [wheatIdB]
+                            map ptCrop (HM.elems backPlants)
+                                `shouldBe` [wheatIdB]
+                            -- #1854's planted identity rides through
+                            -- untouched: the species moved, the plant did
+                            -- not become a different plant.
+                            [ iid | es ← HM.elems backEdits
+                                  , WePlaceFloraWithId _ _ _ _ _ iid ← es ]
+                                `shouldBe` [plantedFloraInstanceId 1]
+
+        -- Requirement 4's save-side half. A live handle the CAPTURING
+        -- build's own catalog cannot name yields no reference at all, so
+        -- the transaction fails before anything is encoded or published
+        -- rather than writing a save no build could resolve.
+        it "refuses a SAVE whose live species handle the capturing \
+           \catalog does not know, at each of the three sites, naming \
+           \the site, page, coordinate and the numeric handle" $ do
+            let unknownId = FloraId 99
+                atEdit = nameFloraReferences shippedCatalog page1
+                    (HM.singleton (ChunkCoord 0 0)
+                        [ WePlaceFloraWithId 11 12 unknownId 4 0.5
+                              (plantedFloraInstanceId 1) ])
+                    HM.empty HM.empty
+                atCrop = nameFloraReferences shippedCatalog page1
+                    emptyWorldEdits
+                    (HM.singleton (13, 14) (CropPlot unknownId 5 0.9))
+                    HM.empty
+                atPlant = nameFloraReferences shippedCatalog page1
+                    emptyWorldEdits HM.empty
+                    (HM.singleton (15, 16) (PlantDesignation 0 unknownId))
+                describeLeft r = case r of
+                    Left errs → map (\e → ( mfrSource e, mfrPage e
+                                          , mfrCoord e, mfrSpecies e )) errs
+                    Right _   → []
+            describeLeft atEdit `shouldBe`
+                [("edit log", page1, (11, 12), FloraByLegacyId unknownId)]
+            describeLeft atCrop `shouldBe`
+                [("crop plot", page1, (13, 14), FloraByLegacyId unknownId)]
+            describeLeft atPlant `shouldBe`
+                [("plant designation", page1, (15, 16)
+                 , FloraByLegacyId unknownId)]
+            case atCrop of
+                Left (e : _) → renderUnnamedFloraRef e `shouldBe`
+                    "crop plot at (13,14) on page 'page1' names legacy \
+                    \species id 99, which this build's flora catalog does \
+                    \not resolve"
+                _ → expectationFailure "expected a refusal"

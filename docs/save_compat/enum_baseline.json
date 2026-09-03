@@ -827,6 +827,56 @@
             "Float",
             "FloraInstanceId"
           ]
+        },
+        {
+          "name": "WePlaceFloraRef",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraRef",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
+        }
+      ]
+    },
+    "World.Flora.Reference.FloraRef": {
+      "source": "src/World/Flora/Reference.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-activity",
+        "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "via": "PageActivityDTO → CropPlotDTO → FloraRef"
+        },
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "via": "PageEditsDTO → WorldEditDTO → FloraRef"
+        },
+        {
+          "carrier": "World.Save.Types — the transitional in-memory load bridge and the `metadata` component's payload",
+          "via": "MissingFloraRef → FloraRef"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "FloraByName",
+          "arity": 1,
+          "payload": [
+            "Text"
+          ]
+        },
+        {
+          "name": "FloraByLegacyId",
+          "arity": 1,
+          "payload": [
+            "FloraId"
+          ]
         }
       ]
     },
@@ -1875,6 +1925,18 @@
             "Float",
             "FloraInstanceId"
           ]
+        },
+        {
+          "name": "WePlaceFloraRefD",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraRef",
+            "Int",
+            "Float",
+            "FloraInstanceId"
+          ]
         }
       ]
     },
@@ -1999,6 +2061,139 @@
           "payload": [
             "Int",
             "Int"
+          ]
+        }
+      ]
+    },
+    "World.Save.Component.Page.WorldEditDTOv2": {
+      "source": "src/World/Save/Component/Page.hs",
+      "onSaveWire": true,
+      "components": [
+        "world-edits"
+      ],
+      "carriers": [
+        {
+          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "via": "WorldEditsDTOv2 → PageEditsDTOv2 → WorldEditDTOv2"
+        }
+      ],
+      "constructors": [
+        {
+          "name": "WeDeleteTileDv2",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeSetFluidTileDv2",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType"
+          ]
+        },
+        {
+          "name": "WeAddTileDv2",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetSlopeDv2",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetCellDv2",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "MaterialId"
+          ]
+        },
+        {
+          "name": "WeSetStructureDv2",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8",
+            "Int",
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearStructureDv2",
+          "arity": 3,
+          "payload": [
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WeSetVegDv2",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "Int",
+            "Word8"
+          ]
+        },
+        {
+          "name": "WePlaceFloraDv2",
+          "arity": 5,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float"
+          ]
+        },
+        {
+          "name": "WeSetFluidSnapshotDv2",
+          "arity": 4,
+          "payload": [
+            "Int",
+            "Int",
+            "FluidType",
+            "Int"
+          ]
+        },
+        {
+          "name": "WeClearFluidSnapshotDv2",
+          "arity": 2,
+          "payload": [
+            "Int",
+            "Int"
+          ]
+        },
+        {
+          "name": "WePlaceFloraWithIdDv2",
+          "arity": 6,
+          "payload": [
+            "Int",
+            "Int",
+            "FloraId",
+            "Int",
+            "Float",
+            "FloraInstanceId"
           ]
         }
       ]

@@ -841,6 +841,14 @@ saveSpec = describe "crop plant invalidation" $
       ws ← waitForWorldInit env pid 300
       logger ← readIORef (loggerRef env)
 
+      -- #2243: a save records its species by AUTHORED NAME, so the
+      -- catalog has to know 'probeCrop' before the save runs or the
+      -- whole transaction is refused (which is the point of that
+      -- guard). The same 'cropCatalog' every other example in this
+      -- module installs — the designations below already name its one
+      -- species.
+      writeIORef (floraCatalogRef env) cropCatalog
+
       -- Two dry, flora-free tiles in one resident chunk, tilled by two
       -- DIFFERENT means. 'persistTile' goes through the real setVeg
       -- command, so its WeSetVeg edit rides into the save and replays

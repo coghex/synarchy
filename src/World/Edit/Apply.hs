@@ -214,6 +214,19 @@ applyEdit (WeSetVeg gx gy z vegId) lc
 applyEdit (WePlaceFlora gx gy fid plantedDay baseWidth) lc =
     applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth
                    floraInstanceIdNone) lc
+-- | The PERSISTED named form (#2243). Never reaches a live page either:
+--   'World.Load.Stage.stagePage' resolves every one against the loading
+--   build's flora catalog — the only place that has one — before the
+--   page is staged, and 'World.Save.Types.missingFloraReferences' has
+--   already refused the whole load if any reference did not resolve. A
+--   replay therefore cannot be handed one, and this clause exists to
+--   keep the function total rather than to do work: there is no catalog
+--   here to turn a name into the 'World.Flora.Types.FloraId' the
+--   instance needs, and guessing one would plant the wrong species. It
+--   drops the edit, which is the only honest answer and matches
+--   'applyEdit''s existing "an edit that does not belong here changes
+--   nothing" contract.
+applyEdit (WePlaceFloraRef _ _ _ _ _ _) lc = lc
 applyEdit (WePlaceFloraWithId gx gy fid plantedDay baseWidth instanceId) lc
     | not (edgeBelongsTo gx gy lc) = lc
     | otherwise =

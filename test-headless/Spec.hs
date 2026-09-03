@@ -21,6 +21,7 @@ import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
+import qualified Test.Headless.WorldGen.ConfigLoad as WorldGenConfigLoad
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
 import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
@@ -125,6 +126,7 @@ import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
+import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
@@ -579,6 +581,12 @@ main = hspec $ do
     -- worker skips them -- but the worker has to be RUNNING, because one
     -- example needs the queued world.setTimeScale drained.
     aroundAll withHeadlessEngine PauseSpeed.spec
+    -- Own engine, world-thread-FREE (#2280): the time-scale domain gate
+    -- proves that a REFUSED world.setTimeScale enqueues nothing, which is
+    -- only observable while no world worker is draining worldQueue. It
+    -- installs its own single-page manager and finishes each accepted
+    -- call by invoking the production command handler directly.
+    aroundAll withHeadlessEngineNoWorld TimeScaleDomain.spec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
@@ -620,6 +628,9 @@ main = hspec $ do
     describe "WorldGen.Breakthrough" Breakthrough.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
+    -- #2286: filesystem + logger only. Deliberately OUTSIDE the shared
+    -- worldgen engine above -- the loader never generates a world.
+    describe "world-generation config loading" WorldGenConfigLoad.spec
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
