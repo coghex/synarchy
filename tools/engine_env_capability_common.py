@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
-"""The substrate BOTH halves of the EngineEnv capability audit read
-(issue #2036).
+"""The substrate every owner of the EngineEnv capability audit reads
+(issue #2036; widened by issue #2064).
 
-`tools/engine_env_capability_audit.py` is the aggregate CI gate: the
-capability-inventory row check, the SS1 field-total contract, the SS6
-full-access ratchet and SS6.1 permanent-boundary comparison, the SS3/
-SS7.3 thread boundaries and the E8 save-load projection check.
-`tools/engine_env_capability_writers.py` is the SS5 writing-module
-scanner issue #1892 (CMA-1) added to that gate. The two share a small
-set of inputs and helpers, and #2036 moved every one of them HERE so
-each exists exactly once and neither half needs to import the other:
+`tools/engine_env_capability_audit.py` is the aggregate CI gate. It
+holds no contract implementation of its own: since #2064 each contract
+has its own owner, and the gate loads the repository inputs once,
+composes the owners in a fixed order and reports.
+
+  `engine_env_capability_inventory.py`   the SS5 inventory-row contract
+      (issue #876);
+  `engine_env_capability_field_total.py` the SS1 audited field-total
+      and field-span prose (issue #1669);
+  `engine_env_capability_access.py`      the SS6 full-access ratchet
+      and the SS6.1 permanent-boundary comparison (issues #889, #899);
+  `engine_env_capability_boundaries.py`  the SS3 main-render and SS7.3
+      LuaThread structural boundaries (issues #891, #892);
+  `engine_env_capability_saveload.py`    the E8 save-load projection
+      correspondence (issue #899);
+  `engine_env_capability_writers.py`     the SS5 writing-module scanner
+      (issue #1892, extracted by #2036).
+
+Those owners share a small set of inputs and helpers, and #2036 moved
+every one of them HERE -- #2064 adding the ones a second owner started
+needing when the aggregate was split -- so each exists exactly once and
+no owner needs to import another:
 
   * the repository anchors -- `REPO_ROOT`, the inventory doc, the
     `EngineEnv` declaration file and pattern -- and the live-field
@@ -25,18 +39,24 @@ each exists exactly once and neither half needs to import the other:
     compare against the live importers and the writer scan exempts
     (design decision D-4);
   * the Haskell source helpers -- comment stripping, top-level import
-    chunking, path-to-module naming -- that every source-level check
-    is built on;
+    chunking, import-head resolution (`imports_module`), path-to-module
+    naming -- that every source-level check is built on;
+  * the policy-free inventory-document primitives -- `_is_placeholder`,
+    `BACKTICK_RE`, `SEPARATOR_ROW_RE` and SS6.2's heading -- that more
+    than one document-reading owner would otherwise duplicate;
   * the projection canonicalizer (`canonical_projection_accessor`,
     `parse_projection_binding_expressions`, `parse_projection_bindings`
     and `ALIAS_PRESERVING_WRAPPERS`), which the E8 save-load check and
     the writer scan's capability-accessor map both read.
 
 The import direction is one way only: the aggregate imports this
-module and the writer module; the writer module imports this module;
-nothing here imports either of them. Adding a symbol here is
-justified only when both halves need it -- a helper one half owns
-belongs in that half.
+module and every owner; every owner imports this module; nothing here
+imports any of them, and no owner imports another. Adding a symbol
+here is justified only when two or more owners need it -- a helper one
+owner owns belongs in that owner. Nothing here may carry inventory,
+boundary, projection or writer POLICY (#2064 requirement 12): these are
+mechanics, and the decisions they are applied to live with the owner
+that makes them.
 
 This module is not a gate and has no `main`; the two commands CI and
 `tools/ci-local.sh` run are unchanged (`python3
@@ -57,13 +77,46 @@ INVENTORY_PATH = REPO_ROOT / "docs" / "engineenv_capability_inventory.md"
 ENGINE_ENV_FILE = "src/Engine/Core/State.hs"
 ENGINE_ENV_PATTERN = r"^data EngineEnv = EngineEnv\b"
 
+# ===========================================================================
+# Inventory-document primitives (issue #876; widened by issue #2064)
+# ===========================================================================
+#
+# Policy-free MARKDOWN mechanics: how a cell is read, not what any cell
+# is allowed to say. Every rule about which capabilities, roles,
+# lifecycles, modules or fields a cell may name belongs to the owner
+# that enforces it -- none of that lives here. What is here is what
+# more than one owner would otherwise write out a second time, which
+# #2064 requirement 21 forbids.
+
 # A free-text cell (Sync/Init/Shutdown/Notes) that is present but
 # carries no real content -- name-presence without an actual decision.
+# Read by the inventory owner (SS5's Sync/Init/Shutdown cells), the
+# access owner (SS6.1's Category/Reason cells) and the writer scanner's
+# shadow-exemption check.
 _PLACEHOLDER_CELLS = {"", "-", "--", "—", "?", "tbd", "n/a", "na"}
 
 
 def _is_placeholder(cell: str) -> bool:
     return cell.strip().lower() in _PLACEHOLDER_CELLS
+
+
+# The inventory doc names every field, module, role and capability in a
+# backtick code span, so pulling the names out of a table cell is the
+# one operation all three document-reading owners share: the inventory
+# owner (SS5's field names and role tokens), the field-total owner (SS1's
+# marked span) and the access owner (SS6.1/SS6.2's module and capability
+# cells).
+BACKTICK_RE = re.compile(r"`([^`]+)`")
+# A Markdown table's `|---|:--:|` separator row cell. Skipped by every
+# table parser here -- SS5's rows, SS6.1's and SS6.2's -- so it is written
+# once rather than once per parser.
+SEPARATOR_ROW_RE = re.compile(r":?-{2,}:?")
+# SS6.2's heading. It anchors the access owner's temporary-boundary
+# table AND the field-total owner's procedure-item rule (SS6.2's item 1
+# is the sentence that used to repeat SS1's total), so the two cannot
+# hold separate copies of the literal and drift apart. SS1's and SS6.1's
+# headings have one owner each and stay with it.
+SECTION_6_2_HEADING = "### 6.2 Temporary compatibility boundary (production)"
 
 
 # ===========================================================================
@@ -202,6 +255,27 @@ def _import_chunks(text: str) -> list[str]:
                 break
         chunks.append("\n".join(lines[start:end]))
     return chunks
+
+
+_IMPORT_HEAD_RE = re.compile(r"^import\s+(?:qualified\s+)?([A-Za-z][A-Za-z0-9_.']*)")
+
+
+def imports_module(source_text: str, module: str) -> bool:
+    """True iff `source_text` imports `module` (comments stripped, so a
+    Haddock reference to a module name never counts as an import).
+
+    `_IMPORT_HEAD_RE` -- the module name at the head of one chunk -- is
+    the completion of `_import_chunks` above, and issue #2064 moved
+    both here because the access owner's `Engine.Core.State`
+    classification and the structural-boundary owner's capability-import
+    check read the same head. The predicate travels with its regex
+    rather than leaving a bare pattern exported on its own.
+    """
+    for chunk in _import_chunks(_strip_haskell_comments(source_text)):
+        head = _IMPORT_HEAD_RE.match(chunk)
+        if head and head.group(1) == module:
+            return True
+    return False
 
 
 def module_identifier(relpath: str) -> str:

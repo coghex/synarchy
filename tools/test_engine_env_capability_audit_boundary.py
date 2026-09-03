@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The unrestricted-access and permanent-boundary contracts of
-engine_env_capability_audit.py (issues #889 and #899; extracted from
+engine_env_capability_access.py (issues #889 and #899; extracted from
 tools/test_engine_env_capability_audit.py by issue #2062).
 
 Three blocks, in run order:
@@ -41,13 +41,21 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from engine_env_capability_audit import (  # type: ignore  # noqa: E402
-    CAPABILITIES, PERMANENT_IMPORTERS, REPO_ROOT, SAVE_LOAD_CAPABILITY_MODULE,
-    SAVE_LOAD_FIELD_MAP, TEMPORARY_CEILING, _import_chunks,
-    _strip_haskell_comments, audit_permanent_boundary, audit_ratchet,
-    audit_save_load_projection, classify_state_import, parse_inventory,
-    parse_permanent_boundary, parse_temporary_boundary,
-    scan_production_sources, scan_production_unrestricted_importers,
+from engine_env_capability_common import (  # type: ignore  # noqa: E402
+    PERMANENT_IMPORTERS, REPO_ROOT, _import_chunks, _strip_haskell_comments,
+    scan_production_sources,
+)
+from engine_env_capability_access import (  # type: ignore  # noqa: E402
+    TEMPORARY_CEILING, audit_permanent_boundary, audit_ratchet,
+    classify_state_import, parse_permanent_boundary, parse_temporary_boundary,
+    scan_production_unrestricted_importers,
+)
+from engine_env_capability_inventory import (  # type: ignore  # noqa: E402
+    CAPABILITIES, parse_inventory,
+)
+from engine_env_capability_saveload import (  # type: ignore  # noqa: E402
+    SAVE_LOAD_CAPABILITY_MODULE, SAVE_LOAD_FIELD_MAP,
+    audit_save_load_projection,
 )
 from test_engine_env_capability_audit_support import (  # noqa: E402
     expect, real_inventory_text,

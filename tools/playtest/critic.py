@@ -66,7 +66,9 @@ def main() -> int:
     ap.add_argument("--manual", default=None,
                     help="player manual path (default: the trace's, then C1)")
     ap.add_argument("--out", default=None,
-                    help="output dir (default: the trace dir itself)")
+                    help="output dir (default: the trace dir itself); the "
+                         "report's screenshot links are rebased to resolve "
+                         "from it, and the trace is left untouched")
     ap.add_argument("--selftest", action="store_true",
                     help="offline pipeline check (no API key)")
     ap.add_argument("--eval", action="store_true",
