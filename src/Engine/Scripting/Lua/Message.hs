@@ -124,11 +124,13 @@ spanTextureLoads policy msgs =
     isTextureLoadUnder _                             = False
 
 -- | Drop work produced by the old Lua/UI session while a whole-session load
---   holds its publication boundary.  The render consumers call this only on a
---   GATED tick ('Engine.Save.Barrier.ownerGated' for 'SaveRender' — since
---   #2221 that begins at the render owner's own final-pass acknowledgement,
---   not at the boundary): preserving these messages until the next unlocked
+--   holds its publication boundary.  The render consumers call this only
+--   while 'captureLocked': preserving these messages until the next unlocked
 --   tick would let their scene/UI mutations land on the replacement session.
+--   The boundary specifically, NOT the render owner's own #2221 park, which
+--   starts earlier — the park is reversible and this flush is not, and a
+--   load that fails before the publish must leave the old session's queued
+--   work intact (see @Engine.Loop.Mode.runGatedByCaptureLock@).
 --   A normal save has no generation replacement, so it deliberately retains
 --   its queued work.
 discardLuaMessagesForActiveLoad ∷ EngineEnv → IO Int

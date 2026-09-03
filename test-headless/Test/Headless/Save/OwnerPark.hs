@@ -32,10 +32,17 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Engine.Core.Queue as Q
-import Engine.Core.State (EngineEnv, loggerRef, saveBarrierRef, unitManagerRef)
+import Engine.Core.Monad (EngineM', runEngineM)
+import Engine.Core.State
+    ( EngineEnv, loadStatusRef, loggerRef, luaToEngineQueue, saveBarrierRef
+    , unitManagerRef )
+import Engine.Load.Status (beginLoad, loadInProgress)
+import Engine.Loop.Headless (headlessMode)
+import Engine.Loop.Mode (runGatedByCaptureLock)
 import Engine.Save.Barrier
     ( SaveOwner(..), acknowledgeSave, beginSave, captureLocked, failSave
     , ownersGated, ownerGated, reachSnapshot, releaseCaptureLock )
+import Engine.Scripting.Lua.Types (LuaLogLevel(..), LuaToEngineMsg(..))
 import Test.Headless.Harness (withHeadlessEngineNoWorld)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Direction (Direction(..))
@@ -90,16 +97,40 @@ parkOwners = [SaveLua, SaveWorld, SaveUnit, SaveBuilding, SaveCombat, SaveSimula
 --   Every owner NOT in @acked@ is still outstanding, so the boundary is
 --   deliberately unreachable and the global capture lock stays open —
 --   which is the entire window this issue is about.
-armFinalPass ∷ EngineEnv → [SaveOwner] → IO Int
-armFinalPass env acked = do
+armFinalPassOf ∷ EngineEnv → [SaveOwner] → [SaveOwner] → IO Int
+armFinalPassOf env owners acked = do
     let barrier = saveBarrierRef env
-    Right n ← beginSave barrier (Set.fromList parkOwners)
+    Right n ← beginSave barrier (Set.fromList owners)
     -- Two complete passes: acknowledgeSave resets the acknowledgement
     -- set at each pass boundary, so this leaves the transaction at
     -- @requiredQuiescencePasses - 1@ with nobody parked.
-    replicateM_ 2 $ mapM_ (acknowledgeSave barrier n) parkOwners
+    mapM_ (acknowledgeSave barrier n) (owners <> owners)
     mapM_ (acknowledgeSave barrier n) acked
     pure n
+
+armFinalPass ∷ EngineEnv → [SaveOwner] → IO Int
+armFinalPass env = armFinalPassOf env parkOwners
+
+-- | The owner set a real LOAD registers
+--   ('Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'): every
+--   save owner plus 'SaveRender', which a plain save never lists.
+loadOwners ∷ [SaveOwner]
+loadOwners = SaveRender : parkOwners
+
+-- | One render/headless-loop gated tick — the single shared save-barrier
+--   handshake all three main loops run.
+runRenderTick ∷ EngineEnv → IO ()
+runRenderTick env = do
+    let action ∷ EngineM' ()
+        action = runGatedByCaptureLock headlessMode env
+    _ ← runEngineM action env pure
+    pure ()
+
+queuedLuaToEngine ∷ EngineEnv → IO Int
+queuedLuaToEngine env = do
+    pending ← Q.flushQueue (luaToEngineQueue env)
+    mapM_ (Q.writeQueue (luaToEngineQueue env)) pending
+    pure (length pending)
 
 -- | A unit tick with no real clock, movement or sleep: this module
 --   asserts what the tick's GATE let through, never its timing.
@@ -268,3 +299,60 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         ownerGated (saveBarrierRef env) SaveWorld `shouldReturn` False
         _ ← worldTickWith scripted env lastRef
         readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 59
+
+    -- Round-1 review: the render owner's park and its DISCARD are gated
+    -- on different things on purpose. Parking is reversible — whatever
+    -- stays in 'luaToEngineQueue' is still there however the
+    -- transaction ends — but the flush is not, and a load that fails
+    -- anywhere before the publish leaves the OLD session live and
+    -- unchanged by contract. Flushing from the render owner's own final
+    -- acknowledgement would have destroyed that session's queued
+    -- scene/UI work on every aborted load.
+    it "the render owner's park does NOT discard the old session's \
+       \queued Lua-to-engine work: an aborted load leaves it intact" $
+        withHeadlessEngineNoWorld $ \env → do
+        Right _ ← beginLoad (loadStatusRef env) "owner_park_load"
+        loadInProgress (loadStatusRef env) `shouldReturn` True
+        Q.writeQueue (luaToEngineQueue env) (LuaLog LuaLogInfo "pre-load work")
+
+        n ← armFinalPassOf env loadOwners [SaveRender]
+        ownerGated (saveBarrierRef env) SaveRender `shouldReturn` True
+        captureLocked (saveBarrierRef env) `shouldReturn` False
+        runRenderTick env
+        queuedLuaToEngine env `shouldReturn` 1
+
+        -- The abort this protects: another owner never answers, so the
+        -- transaction fails with the old session still live.
+        failSave (saveBarrierRef env) n "an owner did not respond"
+        queuedLuaToEngine env `shouldReturn` 1
+
+    it "the render owner discards the old session's queued work once the \
+       \publication boundary is actually reached" $
+        withHeadlessEngineNoWorld $ \env → do
+        Right _ ← beginLoad (loadStatusRef env) "owner_park_load"
+        Q.writeQueue (luaToEngineQueue env) (LuaLog LuaLogInfo "pre-load work")
+
+        n ← armFinalPassOf env loadOwners [SaveRender]
+        runRenderTick env
+        queuedLuaToEngine env `shouldReturn` 1
+
+        -- Every remaining owner answers and the initiator declares the
+        -- boundary: the publish is now committed to, so the stale work
+        -- must not survive into the replacement session.
+        mapM_ (acknowledgeSave (saveBarrierRef env) n) parkOwners
+        reachSnapshot (saveBarrierRef env) n
+        captureLocked (saveBarrierRef env) `shouldReturn` True
+        runRenderTick env
+        queuedLuaToEngine env `shouldReturn` 0
+
+    it "a parked render owner discards nothing when no load is in \
+       \flight, so a save never loses queued Lua-to-engine work" $
+        withHeadlessEngineNoWorld $ \env → do
+        loadInProgress (loadStatusRef env) `shouldReturn` False
+        Q.writeQueue (luaToEngineQueue env) (LuaLog LuaLogInfo "save-time work")
+        n ← armFinalPassOf env loadOwners [SaveRender]
+        runRenderTick env
+        mapM_ (acknowledgeSave (saveBarrierRef env) n) parkOwners
+        reachSnapshot (saveBarrierRef env) n
+        runRenderTick env
+        queuedLuaToEngine env `shouldReturn` 1

@@ -2399,6 +2399,18 @@ snapshot that transaction captured), while a load publish DISCARDS it
 `World.Load.Publish.discardStaleQueues` for the rest) because it was
 queued against the session being replaced.
 
+**Parking is gated on the park; DISCARDING is gated on the boundary.**
+Parking an owner destroys nothing — whatever stays queued is still
+there however the transaction ends — but a discard is irreversible, and
+a load that fails anywhere before the publish leaves the OLD session
+live and unchanged by contract, so its queued work must survive. So
+every irreversible flush waits for `captureLocked`, never for the
+earlier park: `Engine.Loop.Mode.runGatedByCaptureLock` parks the render
+owner's camera and Lua-message work from its own final acknowledgement
+but calls `discardLuaMessagesForActiveLoad` only at the boundary, and
+the world owner's `processAuthorizedSave` discard likewise only ever
+triggers on a batch that actually contains the `WorldLoadPublish`.
+
 Gates: hspec `--match "save snapshot barrier"` (the bare-barrier park
 protocol in `Test.Headless.Save.Barrier`, and the owner-loop
 consequences driven through the real tick entry points in

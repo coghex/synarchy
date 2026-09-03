@@ -15,6 +15,8 @@ module Engine.Loop.Mode
   , runLoopMode
   , runStartupHandshake
   , frameBudgetMicros
+    -- * The save-barrier handshake, exported for its gate
+  , runGatedByCaptureLock
   ) where
 
 import UPrelude
@@ -27,7 +29,8 @@ import Engine.Core.State (EngineEnv, EngineLifecycle(..), lifecycleRef
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM)
 import Engine.Loop.Timing (primeFrameTiming)
-import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
+import Engine.Save.Barrier
+    (SaveOwner(..), acknowledgeCurrent, captureLocked, ownerGated)
 import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
 
 -- | Everything that genuinely differs between the three main loops.
@@ -241,6 +244,18 @@ promoteToRunning env =
 --   current transaction's owner set excludes 'SaveRender' — so this
 --   call is safe unconditionally, every tick, in every mode.
 --
+--   The park and the DISCARD are deliberately gated on different
+--   things. Parking this thread's own work is safe at any point,
+--   because nothing is destroyed by it: whatever stays in
+--   'luaToEngineQueue' is still there afterwards, whichever way the
+--   transaction ends. Flushing that queue is NOT safe that early — it
+--   is irreversible, and a load that fails at ANY point before the
+--   publish (another owner times out, 'applyLuaLoad' raises) leaves the
+--   OLD session live and unchanged by contract, so its queued scene/UI
+--   work must still be there to run. The boundary is the first moment
+--   the publish is actually committed to, so the flush waits for
+--   'captureLocked' while the park does not.
+--
 --   'lmEndOfTick' still runs every tick regardless (called by
 --   'runLoopTick' after this), so a rendering mode keeps presenting
 --   throughout.
@@ -249,10 +264,12 @@ runGatedByCaptureLock mode env = do
     locked ← liftIO $ ownerGated (saveBarrierRef env) SaveRender
     if locked
         then do
-            discarded ← liftIO $ discardLuaMessagesForActiveLoad env
-            when (discarded > 0) $
-                logWarnM CatLua $ "Load publication discarded "
-                    <> tshow discarded <> " stale Lua-to-engine message(s)"
+            atBoundary ← liftIO $ captureLocked (saveBarrierRef env)
+            when atBoundary $ do
+                discarded ← liftIO $ discardLuaMessagesForActiveLoad env
+                when (discarded > 0) $
+                    logWarnM CatLua $ "Load publication discarded "
+                        <> tshow discarded <> " stale Lua-to-engine message(s)"
         else do
             lmCameraUpdates mode
             processLuaMessages
