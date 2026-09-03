@@ -494,7 +494,7 @@ destination does not discard historical rows.
 
 `critic.py` is the analysis half: it consumes a session trace
 **offline** (never drives the game) and emits `report.md` +
-`findings.json` into the trace directory.
+`findings.json` into the trace directory, or into `--out DIR`.
 
 ```bash
 python3 tools/playtest/critic.py tools/playtest/sessions/<dir>
@@ -502,7 +502,21 @@ python3 tools/playtest/critic.py <dir> --model claude-opus-5 --effort high
 python3 tools/playtest/critic.py --selftest   # offline, no API key
 python3 tools/playtest/critic.py --eval       # REAL model vs the canned
                                               # planted-issue trace (needs a key)
+python3 tools/playtest/critic.py <dir> --out DIR   # both artifacts elsewhere
 ```
+
+`--out DIR` writes both artifacts into `DIR` instead of the trace
+directory, and the trace stays the sole owner of its frames — nothing
+under it is written, copied out, or removed. `findings.json` keeps
+every screenshot path exactly as the trace records it (`frames/...`,
+relative to the trace root), because its readers join those paths back
+onto the trace they came from. `report.md`'s Markdown image links are
+the one location-sensitive part, so they are rebased onto the report's
+own directory (#2220): a report beside the trace links
+`../<trace>/frames/...`, one nested inside it links `../frames/...`,
+and the default in-trace report keeps the plain `frames/...` spelling
+byte-for-byte. Every rebase is relative, so the report directory can be
+moved or shared as long as it keeps its position relative to the trace.
 
 Mechanism: a deterministic pre-analysis derives per-turn signals and
 the canonical cross-source joins (action-outcome `rejected`/`noop`/
