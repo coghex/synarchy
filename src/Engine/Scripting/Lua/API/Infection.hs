@@ -27,6 +27,7 @@ import Engine.Core.Capability.ContentRegistries
 import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlInfection
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Infection.Types
 
 -- | engine.loadInfectionYaml(path) — parse a YAML file of infection defs,
@@ -37,12 +38,13 @@ loadInfectionYamlFn ∷ CoreCapability → ContentRegistriesCapability
 loadInfectionYamlFn core regs = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → Lua.pushnumber 0 >> return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
-                defs ← loadInfectionYaml logger filePath
+                mDefs ← loadInfectionYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
                 total ← foldM (\acc d → do
                     let inf = InfectionDef
                             { infId             = iyId d
@@ -73,9 +75,8 @@ loadInfectionYamlFn core regs = do
                 logDebug logger CatAsset $
                     "loadInfectionYaml: loaded " <> tshow total
                     <> " infections from " <> T.pack filePath
-                return total
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+                return (isJust mDefs, total)
+            pushYamlResult parsed count
 
 -- | infection.get(id) → table | nil. Read-only access to one def.
 infectionGetFn ∷ ContentRegistriesCapability

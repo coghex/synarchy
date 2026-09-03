@@ -43,6 +43,7 @@ import Engine.Core.Log (LogCategory(..), LoggerState, logDebug, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg)
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Scripting.Lua.API.YamlTextures (loadAndRegisterWithPool,
                                               isTextureNameRegistered,
                                               resolveTexturePath)
@@ -94,25 +95,23 @@ loadItemYamlFn ∷ CoreCapability → ContentRegistriesCapability → EngineEnv
 loadItemYamlFn core regs env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
                 (lteq, _) = lbsMsgQueues backendState
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
-                defs ← loadItemYaml logger filePath
+                mDefs ← loadItemYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
                 total ← registerItemDefs env logger
                             (lbsAssetPool backendState) lteq
                             (crItemManagerRef regs) filePath defs
                 logDebug logger CatAsset $
                     "loadItemYaml: loaded " <> tshow total
                     <> " item definitions from " <> T.pack filePath
-                return total
+                return (isJust mDefs, total)
 
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+            pushYamlResult parsed count
 
 -- | #1232 requirement 7's collision diagnostic, in one place so both
 --   the emitter and its gate spell it the same way.

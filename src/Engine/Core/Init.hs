@@ -166,10 +166,24 @@ data LegacyNeutralityCheck = LegacyNeutralityCheck
 --   would otherwise report, AND permanently block any future migration
 --   attempt (the existence gate above would see the copied-but-unusable
 --   local file and never look at legacy again). A legacy file that
---   fails this check (malformed, partial, schema-incomplete, or
---   unreadable) is left untouched and logged rather than copied, so it
---   falls back to the versioned default/registry exactly like a missing
---   legacy file.
+--   fails this check is left untouched and logged rather than copied.
+--
+--   Those SOURCE-SIDE failures (malformed, partial, schema-incomplete,
+--   or unreadable — the last an access failure around the decode rather
+--   than a property of the content) are not the only way a migration
+--   fails, so they are diagnosed apart from the other class (#2210).
+--   Once the check has PASSED, the copy to @localPath@ can still fail
+--   on the DESTINATION — a read-only @config@ directory, a full disk,
+--   the wrong permissions — which says nothing at all about the legacy
+--   file, and gets its own warning naming the local path instead of
+--   accusing a file that is fine.
+--
+--   Both classes reach the same outcome: the legacy file is untouched
+--   ('copyFile' never writes its source), no local file appears (that
+--   copy is atomic, so a failed one leaves nothing behind to poison the
+--   existence gate above), the boot falls back to the versioned
+--   default/registry exactly like a missing legacy file, and the
+--   migration is re-attempted on the next boot.
 migrateLegacyConfig ∷ ∀ a. (FromJSON a, Eq a)
                     ⇒ Proxy a → LoggerState → Maybe LegacyNeutralityCheck
                     → FilePath → FilePath → IO ()
@@ -178,22 +192,40 @@ migrateLegacyConfig _ logger mCheck legacyPath localPath = do
   unless hasLocal $ do
     hasLegacy ← doesFileExist legacyPath
     when hasLegacy $ do
+      -- SOURCE-SIDE only: reading the legacy file, decoding it as the
+      -- subsystem's own type, and (when a check is supplied) judging it
+      -- against the template. Every failure this spans is a property of
+      -- the legacy file or of reading it, which is exactly what the
+      -- warning below diagnoses. 'True' means "copy it"; the copy is
+      -- deliberately NOT inside this 'try' (#2210), because a
+      -- destination write failure is not a bad legacy file.
       outcome ← try $ do
         eVal ← Yaml.decodeFileEither legacyPath
         case (eVal ∷ Either Yaml.ParseException a) of
           Left err → ioError $ userError $ show err
           Right val → case mCheck of
-            Nothing → True <$ copyFile legacyPath localPath
+            Nothing → return True
             Just check → do
               neutral ← legacyIsNeutral check val
               if neutral
                 then False <$ recordNeutralLegacy logger legacyPath
                                                   (lncRecordPath check)
-                else True  <$ copyFile legacyPath localPath
+                else return True
       case (outcome ∷ Either SomeException Bool) of
-        Right True → logInfo logger CatInit $
-          "Migrated legacy config " <> T.pack legacyPath
-            <> " -> " <> T.pack localPath
+        Right True → do
+          copied ← try (copyFile legacyPath localPath)
+          case (copied ∷ Either SomeException ()) of
+            Right () → logInfo logger CatInit $
+              "Migrated legacy config " <> T.pack legacyPath
+                <> " -> " <> T.pack localPath
+            Left e → logWarn logger CatInit $
+              "Legacy config " <> T.pack legacyPath
+                <> " is valid, but writing it to " <> T.pack localPath
+                <> " failed; the destination could not be written. The "
+                <> "legacy file is untouched and the boot falls back to "
+                <> "the versioned default, so the migration is retried "
+                <> "on the next boot once the destination is writable: "
+                <> T.pack (displayException e)
         Right False → logInfo logger CatInit $
           "Legacy config " <> T.pack legacyPath
             <> " carries no player state (it resolves to the same "

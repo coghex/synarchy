@@ -9,6 +9,7 @@ module Engine.Asset.YamlFlora
     , FloraYamlYield(..)
     , FloraYamlWorldGen(..)
     , loadFloraYaml
+    , loadFloraYamlOutcome
     , parsePhaseTag
     , parseCycleTag
     ) where
@@ -22,7 +23,7 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as Aeson (Parser)
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 import World.Flora.Types (LifePhaseTag(..), AnnualStageTag(..))
 
 -- * YAML sub-structures
@@ -277,9 +278,16 @@ instance FromJSON FloraYamlFile where
 
 -- * YAML parsing
 
+-- | 'loadFloraYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadFloraYaml'.
+loadFloraYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [FloraYamlDef])
+loadFloraYamlOutcome logger =
+    loadYamlListOutcome logger "flora" "flora species" fyfFlora
+
 loadFloraYaml ∷ LoggerState → FilePath → IO [FloraYamlDef]
-loadFloraYaml logger =
-    loadYamlList logger "flora" "flora species" fyfFlora
+loadFloraYaml logger path = fromMaybe [] ⊚ loadFloraYamlOutcome logger path
 
 -- * Tag parsers
 

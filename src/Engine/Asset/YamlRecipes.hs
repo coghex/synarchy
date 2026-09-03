@@ -8,6 +8,7 @@ module Engine.Asset.YamlRecipes
     , RecipeYamlDef(..)
     , RecipeYamlFile(..)
     , loadRecipeYaml
+    , loadRecipeYamlOutcome
     ) where
 
 import UPrelude
@@ -16,7 +17,7 @@ import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Data.Aeson.Types (Parser)
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 
 -- | One `{ item, count }` line (an input, the fuel, or an output).
 --   `count` defaults to 1 so a terse `- item: steel_bar` still loads,
@@ -115,5 +116,13 @@ instance FromJSON RecipeYamlFile where
     parseJSON = withObject "RecipeYamlFile" $ \v → RecipeYamlFile
         ⊚ v .: "recipes"
 
+-- | 'loadRecipeYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadRecipeYaml'.
+loadRecipeYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [RecipeYamlDef])
+loadRecipeYamlOutcome logger =
+    loadYamlListOutcome logger "recipe" "recipes" ryfRecipes
+
 loadRecipeYaml ∷ LoggerState → FilePath → IO [RecipeYamlDef]
-loadRecipeYaml logger = loadYamlList logger "recipe" "recipes" ryfRecipes
+loadRecipeYaml logger path = fromMaybe [] ⊚ loadRecipeYamlOutcome logger path

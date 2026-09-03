@@ -46,6 +46,7 @@ exactly why the detail could move out of the always-loaded file.
 **Scripting**
 
 - [Lua random streams (#1330)](#lua-random-streams-1330)
+- [Startup readiness: the YAML fail-fast rule (#2203)](#startup-readiness-the-yaml-fail-fast-rule-2203)
 
 **World and naming**
 
@@ -1314,6 +1315,56 @@ exactly that, and also spent eight gameplay draws per suggested world
 seed, so clicking randomize shifted every later simulation decision.
 `scripts/ui/random.lua` (SplitMix64, seeded from the same time+address
 recipe Lua's own auto-seed uses) is the UI widget kit's own stream.
+
+---
+
+## Startup readiness: the YAML fail-fast rule (#2203)
+
+`scripts/startup_loader.lua` measures READINESS, not dispatch. A registry
+family the active profile queued that **discovered no YAML files**, or
+that had **any file fail to parse**, is a TERMINAL startup failure on
+both the normal and the arena profile: `startupLoader.isDone()` stays
+false forever, `isFailed()` becomes true, `getFailure()` retains the
+payload, and exactly one error-level line names the family — plus the
+failing FILE for a parse failure, or the DIRECTORY it looked in when
+there was no file to name. A family whose files all parse and all
+return zero is NOT a failure and boots as it always has.
+
+**The family boundary is the fail-fast boundary.** Every discovered file
+in the current family runs, all parse outcomes are retained, that
+family's #1930 aggregate goes out exactly once — unchanged in spelling,
+carrying the healthy counts and the original discovered-file count — and
+only then does the queue stop, before any later family, the tutorial
+tree, or a texture preload. A zero-file family emits its zero aggregate
+the same way before failing. The failure latches: a further `tick`
+advances no progress and re-logs nothing, `runAll` RETURNS rather than
+spinning on `done` (the arena profile's only exit), and only `build` or
+`reset` clears it.
+
+**The bindings' outcome is opt-in.** `engine.load*Yaml(path)` still
+answers exactly ONE number, zero included, for a parse failure and for a
+successfully parsed empty file alike — `executeDebugLua` tab-joins every
+returned value, so a second result appended unconditionally would
+silently rewrite what a bare `return engine.loadRecipeYaml(p)` reads
+back (`tools/craft_probe.py`). The loader is the one caller that passes
+a truthy SECOND argument and gets `(count, parsed)`; `parsed` is about
+the DECODE alone, so a file rejected afterwards by a family's own schema
+validation reports `true` with whatever count that rejection left. A
+queued binding that answers no outcome at all is treated as a failure,
+not as success. The loot-table family bypasses
+`Engine.Asset.YamlList.loadYamlList` entirely and follows the same rule
+through `Engine.Asset.YamlLootTables`.
+
+`scripts/loading_screen.lua` shows the retained message in place of
+"Complete!", freezes the bar, and settles in phase `"failed"` — never
+`"done"`, which is what `scripts/ui_manager_boot.lua` keys its
+`finishStartupBoot` transition on, so the main menu is never shown.
+Arena boot drains synchronously before anything is on screen, so
+`loadingScreen.runArenaStartup()` owns that profile's visible-failure
+path and returns false instead of running `finishArenaBoot`.
+
+Gates: hspec `--match "Startup readiness"` and `--match "Startup asset
+logging"`.
 
 ---
 

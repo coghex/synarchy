@@ -30,6 +30,7 @@ import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Scripting.Lua.API.YamlTextures
     (isTextureNameRegistered, loadAndRegister, resolveTexturePath)
 import Engine.Asset.YamlLocations
@@ -62,14 +63,13 @@ loadLocationYamlFn ∷ CoreCapability → ContentRegistriesCapability
 loadLocationYamlFn core regs env backendState = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → do
-            Lua.pushnumber 0
-            return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
-                defs ← loadLocationYaml logger filePath
+                mDefs ← loadLocationYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
                 -- #1101: every definition's authored naming scheme is
                 -- checked against the concept catalogue BEFORE anything
                 -- is registered, so a bad scheme rejects the whole file
@@ -113,7 +113,10 @@ loadLocationYamlFn core regs env backendState = do
                         logWarn logger CatAsset $
                             "loadLocationYaml: rejected " <> T.pack filePath
                             <> ": " <> e
-                    return (0 ∷ Int)
+                    -- A file rejected HERE decoded fine; #2203's parse
+                    -- outcome is about the decode alone, so this stays
+                    -- the zero-count success it has always been.
+                    return (isJust mDefs, 0 ∷ Int)
                   [] → do
                     let (lteq, _) = lbsMsgQueues backendState
                     -- The ONE shared unknown-location marker (#1230),
@@ -152,9 +155,8 @@ loadLocationYamlFn core regs env backendState = do
                     logDebug logger CatAsset $
                         "loadLocationYaml: loaded " <> tshow total
                         <> " locations from " <> T.pack filePath
-                    return total
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+                    return (isJust mDefs, total)
+            pushYamlResult parsed count
   where
     toDef d = LocationDef
         { ldId         = lydId d
