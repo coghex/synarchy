@@ -29,8 +29,10 @@
 --   mutable runtime record. NONE of the evolving live gameplay records
 --   is embedded directly here; each is mirrored by a component-owned
 --   DTO with an explicit, reviewable field-by-field conversion
---   ('to…'/'from…'), exactly the discipline "World.Save.Component.Entities"
---   applies to the unit-sim / craft-bill / power-node records:
+--   ('to…'/'from…'), exactly the discipline
+--   "World.Save.Component.EntitySimulation" and
+--   "World.Save.Component.EntitySystems" apply to the unit-sim /
+--   craft-bill / power-node records:
 --
 --   - 'WorldGenParams'      → 'WorldGenParamsDTO' (with its nested live
 --                             config/state records frozen recursively —

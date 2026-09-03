@@ -60,6 +60,28 @@ Checks for: dry-below-sea tiles, ocean-on-land (cascade bug), fluid-under-
 terrain, floating fluid, terrain spikes/pits, river chunk gaps, river mouth
 drops, isolated islands/fluids, minBound leaks, surface inconsistencies.
 
+Since #2224 the file is a façade over six internal owners, which have no
+command line of their own: `world_audit_core.py` (the constants,
+`Issue`/`AuditResult` and the tile helpers), `world_audit_policy.py`
+(BUG/QUALITY classification and the calibrated quality thresholds), and
+one module per check family — `world_audit_checks_columns.py` (5 per-tile
+column checks), `world_audit_checks_boundaries.py` (9 neighbour-pair
+checks), `world_audit_checks_regions.py` (7 connectivity checks) and
+`world_audit_checks_soils.py` (2 material-placement checks). The façade
+composes their inventories into `ALL_CHECKS` in the historical key order
+and refuses, at import, an owner that has gone absent or empty, a key two
+owners both claim, one function reached under two keys, or a check the
+order drops.
+
+`world_check.py`, `world_stress.py`, `world_baseline.py` and the
+self-tests take every audit VALUE from `world_audit`, and the façade
+re-exports the whole pre-split public surface so they did not change.
+There is one deliberate exception, and it reads no value:
+`test_audit_categories.py` imports `world_audit_core` by name to locate
+its source file, because an `Issue(...)` in the core or the façade
+belongs to no check and would otherwise escape the emitted-category
+inventory. The commands above are unchanged.
+
 ### `world_determinism.py`
 Runs the dump multiple times for the same seed and verifies the output is
 content-identical across runs. Reports which tiles differ if the pipeline is
@@ -127,7 +149,8 @@ it must. Sub-second, engine-free, and it never writes under
 
 Since #2070 the file is a façade: it composes and runs the ordered group
 inventories of six owner modules — `test_audit_categories.py` (the
-emitted-category inventory derived from `world_audit.py`'s source),
+emitted-category inventory derived from the source of every module
+backing the live `ALL_CHECKS` registry, #2224),
 `test_audit_world_audit.py`, `test_audit_world_check.py`,
 `test_audit_content_hash.py`, `test_audit_strict_capture.py` and
 `test_audit_missing_baseline.py` — over the shared fixtures and assertion
@@ -3412,7 +3435,13 @@ rebuild is the human eyeball this check exists to prompt.
 ```
 tools/
 ├── README.md               (this file)
-├── world_audit.py          (audit a single dump)
+├── world_audit.py          (audit a single dump — the façade)
+├── world_audit_core.py             (its constants, result types, tile helpers)
+├── world_audit_policy.py           (its BUG/QUALITY classification and thresholds)
+├── world_audit_checks_columns.py       (its per-tile column-integrity checks)
+├── world_audit_checks_boundaries.py    (its neighbour-pair boundary checks)
+├── world_audit_checks_regions.py       (its connectivity/topology checks)
+├── world_audit_checks_soils.py         (its material-placement checks)
 ├── world_determinism.py    (detect race conditions)
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)

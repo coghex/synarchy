@@ -864,6 +864,7 @@ library
                      World.State.Types
                      World.Save.Types
                      World.Save.Snapshot
+                     World.Save.PageOrder
                      World.Save.Snapshot.Adapter
                      World.Save.Envelope.Types
                      World.Save.Envelope.Codec
@@ -877,6 +878,9 @@ library
                      World.Save.Component.Session
                      World.Save.Component.Page
                      World.Save.Component.Entities
+                     World.Save.Component.EntitySnapshots
+                     World.Save.Component.EntitySimulation
+                     World.Save.Component.EntitySystems
                      World.Save.Component.Knowledge
                      World.Save.Component.Transfer
                      World.Save.Component
@@ -1283,6 +1287,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
+                   Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames

@@ -158,7 +158,8 @@ data MoveTarget = MoveTarget
 --   so inserting or reordering constructors silently shifts every saved
 --   unit's `usPose`. The `unit-sim` component stores it
 --   (`UnitSimStateDTO.simPose`/`simPostTransition`, and nested inside
---   `simState`'s `TransitioningTo`) in `World.Save.Component.Entities`.
+--   `simState`'s `TransitioningTo`) in
+--   `World.Save.Component.EntitySimulation`.
 --
 --   If the pose set legitimately needs to change, migrate that
 --   component; `currentSaveVersion` is a bookkeeping marker and does
@@ -211,7 +212,8 @@ poseDepth Sleeping  = 3
 --   movement gating. APPEND-ONLY for the same reason as `Pose` and
 --   `Direction` — `Generic Serialize` is positional. New activities go
 --   at the end. The `unit-sim` component stores it
---   (`UnitSimStateDTO.simState`) in `World.Save.Component.Entities`;
+--   (`UnitSimStateDTO.simState`) in
+--   `World.Save.Component.EntitySimulation`;
 --   replacing or reordering a constructor — or changing the `Pose`
 --   payload `TransitioningTo` carries — needs that component migrated
 --   exactly as `Pose` above describes: raise `unitSimCodec`'s

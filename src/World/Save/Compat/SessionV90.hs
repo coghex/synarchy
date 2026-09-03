@@ -17,8 +17,11 @@
 --   gate) in "Test.Headless.World.Save.Compat".
 --
 --   Field-for-field, every non-global-allocator field composes EXISTING
---   frozen leaf/component DTOs from "World.Save.Component.Page"/
---   "World.Save.Component.Entities" rather than re-freezing them: those
+--   frozen leaf/component DTOs from "World.Save.Component.Page" and the
+--   three entity owners behind the "World.Save.Component.Entities"
+--   façade ('World.Save.Component.EntitySnapshots',
+--   '.EntitySimulation', '.EntitySystems') rather than re-freezing them:
+--   those
 --   DTOs were themselves built to be byte-identical to the live types'
 --   shape at the point #760 split persistence — and per the persistence
 --   changelog ('World.Save.Types.currentSaveVersion'), none of

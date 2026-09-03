@@ -10,7 +10,8 @@
 --   === What lives here vs. what stays where it is
 --
 --   This module does NOT re-implement every check "World.Save.Snapshot"
---   and "World.Save.Component.Entities" already run (duplicate page ids,
+--   and "World.Save.Component.EntitySystems" already run (duplicate page
+--   ids,
 --   item/building/unit allocator bounds, orphaned unit-sim state,
 --   page-set/active/visible consistency, per-page bill/power-node
 --   allocator + map-key/embedded-id agreement) — those are already
