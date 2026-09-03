@@ -201,11 +201,14 @@ distinct.
   `construction.setDesignateTexture` are gone; a planned floor, ceiling, wall
   edge, post or wire now previews and designates as the piece the placer will
   build, at the placer's own grid z.
-- **#1845 (DTV-10)** owns the building half. Until it lands,
-  `construct_designate_building.png` is the one remaining category marker and
-  the only one this finding still describes; when it lands, the mechanism —
-  and the "three semantically distinct markers" this entry is about — is fully
-  retired.
+- **#1845 (DTV-10)** did the same for buildings.
+  `construct_designate_building.png`, its handle, its `scripts/hud.lua` wiring
+  and the whole of `construction.setDesignateTexture` are gone; a planned
+  building previews and designates as the building's own sprite, at its own
+  size and sprite anchor. With that, the mechanism — and the "three
+  semantically distinct markers" this entry is about — is fully retired.
+  Neither construction marker is in the tree any more; the SHA-256 line in the
+  evidence above is a record of what they were when this finding was written.
 - `mine_designate.png` is untouched by either and remains the legitimate
   original the two construction copies were made from.
 

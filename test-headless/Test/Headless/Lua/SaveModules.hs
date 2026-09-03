@@ -2399,7 +2399,7 @@ spec = do
             , "local liveBuild = { materials = { wood = 2 }, build_work = 3 }"
             , "local fakeAiState = { [1] = { constructJob = {"
             , "  category = 'structure', pack = 'known_pack', kind = 'wall',"
-            , "  build = liveBuild, need = { wood = 2 } } } }"
+            , "  build = liveBuild, need = { wood = 2 }, staking = 12.5 } } }"
             , "unitAiSave.register(fakeAiState)"
             , "local function prepareWith(state)"
             , "  return saveModules.prepareLoad({"
@@ -2482,6 +2482,45 @@ spec = do
             , "local payload = codec.encode(snap)"
             , "assert(payload:find('build_work') == nil,"
             , "  'no trace of the live build-cost content may reach the encoded payload')"
+            -- #1845: the building-stake hand-off's clock is stripped by
+            -- the SAME shallow copy, and for a reason the reference
+            -- schema makes non-negotiable — a wait that outlives its
+            -- session would be resumed against a building queue the
+            -- load discarded. Its absence is what lets the resumed job
+            -- re-derive the answer from the world instead of carrying
+            -- an unreconcilable BuildingId.
+            , "assert(snap[1].constructJob.staking == nil,"
+            , "  'constructJob.staking must be stripped from the snapshot')"
+            , "assert(fakeAiState[1].constructJob.staking == 12.5,"
+            , "  'stripping staking must not mutate the live constructJob table')"
+            , "assert(payload:find('staking') == nil,"
+            , "  'no trace of the stake hand-off clock may reach the encoded payload')"
+            -- …while the spawned id BESIDE it survives: it is a DECLARED
+            -- building reference (unit_ai_ref_schema.lua), and it is the
+            -- only thing that tells a resumed job whether its OWN stake
+            -- landed rather than whether something that merely looks like
+            -- it is standing at the tile.
+            , "fakeAiState[1].constructJob.stakedBid = 42"
+            , "local snapRef = saveModules.registry.unit_ai.snapshot()"
+            , "local st = snapRef[1].constructJob.stakedBid"
+            , "assert(type(st) == 'table' and st.__ref == 'building'"
+            , "       and st.id == 42,"
+            , "  'the staked id survives as a TYPED building reference')"
+            , "fakeAiState[1].constructJob.stakedBid = nil"
+            -- …and a job carrying ONLY the stake clock (no .build, which
+            -- a building-category job never has) must still be stripped:
+            -- the two are independent reasons on one shallow copy, and a
+            -- guard that fired on .build alone would carry the clock
+            -- straight through for exactly the jobs that own one.
+            , "fakeAiState[1].constructJob = { category = 'building',"
+            , "  building = 'workbench', x = 1, y = 1, staking = 4.0 }"
+            , "local snap2 = saveModules.registry.unit_ai.snapshot()"
+            , "assert(snap2[1].constructJob.staking == nil,"
+            , "  'a building job with no .build must still lose its staking clock')"
+            , "assert(snap2[1].constructJob.building == 'workbench',"
+            , "  'sibling fields must survive that strip too')"
+            , "assert(fakeAiState[1].constructJob.staking == 4.0,"
+            , "  'that strip must not mutate the live job either')"
             ]
 
         it "includes the OUTER per-unit key itself as a unit reference \
@@ -2924,8 +2963,8 @@ spec = do
             , "-- shape taught to payloadFor, which no derived loop can"
             , "-- infer, so adding one must be a conscious act here."
             , "local accepted = saveModules.registry.unit_ai.inputVersions"
-            , "assert(table.concat(accepted, ',') == '1,2,3,4,5,6,7,8',"
-            , "  'expected inputVersions {1..8} (1-7 legacy, 8 current), got {'"
+            , "assert(table.concat(accepted, ',') == '1,2,3,4,5,6,7,8,9',"
+            , "  'expected inputVersions {1..9} (1-8 legacy, 9 current), got {'"
             , "  .. table.concat(accepted, ',') .. '}')"
             , "-- The tracked b3-lua-versioned-session-v1 fixture's own v1"
             , "-- row, verbatim: sparse, one reference field, none of the"
@@ -2935,8 +2974,10 @@ spec = do
             , "-- helpers rather than hand-rolled: v1 is bare, v2 is wrapped"
             , "-- without __owner, v3+ carries __owner too. #1844's v8 is a"
             , "-- SEMANTIC bump on v7's layout (a constructJob gained the"
-            , "-- attempt it claimed), and a sparse row carries no"
-            , "-- constructJob, so the two share one wire shape here."
+            , "-- attempt it claimed) and #1845's v9 another on v8's (that"
+            , "-- job gained the building it staked, as a typed reference),"
+            , "-- and a sparse row carries no constructJob at all, so all"
+            , "-- three share one wire shape here."
             , "local function payloadFor(version)"
             , "  local rows = { [1] = sparseRow() }"
             , "  if version == 1 then return codec.encode(rows) end"

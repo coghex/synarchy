@@ -209,6 +209,37 @@ M.DROP_HOOKS = {
         end
         require("scripts.unit_ai_repair").abort(uid, s, info)
     end,
+
+    -- A construct job dropped because its STAKE no longer resolves
+    -- (#1845): the queued spawn was captured by the save and discarded
+    -- by the load, so nothing was built. The engine-side designation is
+    -- still `claimed` by this unit, and a bare field assignment would
+    -- leave it that way -- adopted as an orphan by the next scan and
+    -- unavailable to anybody for a whole claim timeout, for a job that
+    -- is already gone. Released to `pending` here instead, on the
+    -- JOB's own page and for the exact attempt it observed, so the
+    -- designation is reclaimable on the very next tick and a successor
+    -- at the same tile is untouched.
+    --
+    -- Required lazily for the same bootstrap reason as repairJob above.
+    constructJob = function(uid, s, ctx)
+        local job = s.constructJob
+        -- The unit's page comes from the RESTORED session's own map,
+        -- not from a live `unit.getInfo`: a reconcile runs before any
+        -- thought tick, and the actor may not be on the active page.
+        -- With no page there is nothing safe to release -- a
+        -- page-blind status write would hand a stranger's designation
+        -- at the matching coordinate back to `pending`.
+        local wid = job and ctx.unitPage[uid]
+        if wid then
+            require("scripts.unit_ai_construct")
+                .abandonClaim(wid, job.x, job.y, job.attempt)
+            construction.setJobStatus(wid, job.x, job.y, "pending",
+                                      job.attempt)
+        end
+        s.constructJob = nil
+        s.constructCandidate = nil
+    end,
 }
 
 -- Build the resolution context handed to scrubStaleRefs from the two

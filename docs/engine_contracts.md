@@ -670,7 +670,7 @@ remain separately pinned to nearest and linear respectively.
 (D-4). No directory rule survives the tree as it stands:
 `assets/textures/icons/location/*` are drawn on the world's zoom map
 while the rest of `icons/` is toolbar chrome;
-`assets/textures/ui/hud/utility/{zoom,world}_*` and the six
+`assets/textures/ui/hud/utility/{zoom,world}_*` and the four
 `*_designate` markers are loaded in `hud.init` beside real chrome but
 handed to `world.set*CursorTexture` / `<tool>.setDesignateTexture` and
 drawn in the world; and `assets/textures/utility/white.png` is drawn by

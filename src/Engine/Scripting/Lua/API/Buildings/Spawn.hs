@@ -24,10 +24,10 @@ import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import World.Command.Types (WorldCommand(..))
 import Building.Placement
-    ( canPlaceAt, PlacementResult(..), RemoteCheck(..), remoteCheck, isRemote
+    ( buildingAnchorZ, canPlaceAt, PlacementResult(..), RemoteCheck(..)
+    , remoteCheck, isRemote
     )
 import Location.Bounds (remotePortalThresholdTiles)
-import Unit.Pathing.Cost (lookupTerrainZ)
 import World.Types
     ( WorldManager(..), WorldState(..), WorldGenParams(..) )
 import Engine.Scripting.Lua.API.PageBinding
@@ -396,9 +396,9 @@ boundPageMoved (Just pid) wm = case wmVisible wm of
 -- | Terrain Z at the anchor tile. Falls back to 0 if the chunk isn't
 --   loaded — shouldn't happen since canPlaceAt already verified, but
 --   defensive.
+--
+--   'Building.Placement.buildingAnchorZ' is the read itself, shared with
+--   the committed-designation ghost since #1845 so a planned building is
+--   never drawn at a z its stake will not land on.
 floorZAt ∷ Int → WorldTileData → Int → Int → Int
-floorZAt worldSize wtd gx gy =
-    let (cgx, cgy) = canonicalTile worldSize gx gy
-    in case lookupTerrainZ wtd cgx cgy of
-    Just z  → z
-    Nothing → 0
+floorZAt worldSize wtd gx gy = fromMaybe 0 (buildingAnchorZ worldSize wtd gx gy)

@@ -278,6 +278,7 @@ import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
 import qualified Test.Headless.Building.CameraFacing as BuildingCameraFacing
 import qualified Test.Headless.Building.DestructionPresentation as BuildingDestruction
+import qualified Test.Headless.Building.Ghost as BuildingGhost
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
@@ -746,6 +747,10 @@ main = hspec $ do
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
+
+    -- #1845: the pure half needs nothing; the render half boots its own
+    -- headless engine over one synthetic page, like SceneStats above.
+    BuildingGhost.spec
     ConstructPlan.spec
     StructureGhost.spec
     FrameAssembly.spec
