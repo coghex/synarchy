@@ -846,6 +846,38 @@ def test_issue_ordering_is_canonical() -> None:
 
 
 
+#: The order `world_audit.ALL_CHECKS` has always run its checks in, held
+#: here as a literal. Requirement 16 of #2224 pins it because the tracked
+#: baselines and the real-output fixture were captured against runs in
+#: this order; reading it back from `world_audit.CHECK_ORDER` would make
+#: the assertion below tautological.
+HISTORICAL_CHECK_ORDER = [
+    "DRY_BELOW_SEA",
+    "OCEAN_ON_LAND",
+    "RIVER_UNDER_TERRAIN",
+    "FLOATING_FLUID",
+    "LAVA_RIM_CONTAINMENT",
+    "TERRAIN_SPIKES_PITS",
+    "RIVER_CHUNK_GAP",
+    "RIVER_MOUTH_DROP",
+    "ISLAND_1TILE",
+    "LAKE_HOLE",
+    "SUBMERGED_BUMP",
+    "WATER_ABOVE_LAND",
+    "WATER_CLIFF",
+    "WATER_WATER_CLIFF",
+    "MID_RIVER_CLIFF",
+    "FLOATING_WATER",
+    "MULTI_ISLAND",
+    "FLAT_ISOLATED_WATER",
+    "ISOLATED_FLUID",
+    "MINBOUND_LEAK",
+    "SURFACE_INCONSISTENT",
+    "WETLAND_ON_SLOPE",
+    "DESERT_SOIL_ON_SLOPE",
+]
+
+
 def _owner(name: str, checks: dict[str, Any] | None) -> types.SimpleNamespace:
     """A stand-in check owner: a module-shaped object with a CHECKS map.
 
@@ -944,9 +976,17 @@ def test_registry_composition_fails_closed() -> None:
     # The live registry is that composition, not a hand-written dict.
     expect(world_audit.ALL_CHECKS == world_audit.compose_checks(),
            "ALL_CHECKS must be exactly what compose_checks() returns")
-    expect(list(world_audit.ALL_CHECKS) == list(world_audit.CHECK_ORDER),
-           f"ALL_CHECKS must run in CHECK_ORDER, got "
-           f"{list(world_audit.ALL_CHECKS)}")
+
+    # The historical run order, restated here rather than read from
+    # CHECK_ORDER: baselines and the tracked real-output fixture were
+    # captured against it, so holding the registry against the production
+    # constant that defines it would pin nothing.
+    expect(list(world_audit.ALL_CHECKS) == HISTORICAL_CHECK_ORDER,
+           f"ALL_CHECKS no longer runs in the order the tracked baselines "
+           f"were captured in: {list(world_audit.ALL_CHECKS)}")
+    expect(len(set(world_audit.ALL_CHECKS.values())) == 23,
+           f"the 23 registry keys must reach 23 distinct check functions, "
+           f"got {len(set(world_audit.ALL_CHECKS.values()))}")
 
     # And audit_dump runs each registered check exactly once. Counting
     # wrappers stand in for the registry for one call; the original dict

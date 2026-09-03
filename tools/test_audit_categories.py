@@ -46,6 +46,7 @@ import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import world_audit  # type: ignore  # noqa: E402
@@ -343,23 +344,28 @@ def extract_issue_categories(source: str, filename: str
 AUDIT_FAMILY_GLOB = "world_audit*.py"
 
 
-def audit_source_modules() -> tuple[list[ModuleType], list[str]]:
+def audit_source_modules(
+        registry: dict[str, Any] | None = None
+) -> tuple[list[ModuleType], list[str]]:
     """The modules whose source backs the live audit, from live objects.
 
     The check owners are read off `world_audit.ALL_CHECKS` itself, so a
     new owner joins the scanned set by being registered rather than by
     being named here. The façade and the shared core are added because
     they are the two modules an `Issue(...)` could reach that no
-    registered check would name.
+    registered check would name. `registry` overrides that source for the
+    self-test alone, so the unresolvable case below can be driven without
+    swapping a production global.
 
     The second element lists registry entries whose defining module could
     not be resolved. Those are reported, never dropped: a check whose
     source we cannot find is a hole in the inventory exactly like a call
     site we cannot read.
     """
+    registry = world_audit.ALL_CHECKS if registry is None else registry
     modules: dict[str, ModuleType] = {}
     problems: list[str] = []
-    for key, check_fn in world_audit.ALL_CHECKS.items():
+    for key, check_fn in registry.items():
         module = inspect.getmodule(check_fn)
         if module is None or getattr(module, "__file__", None) is None:
             problems.append(
@@ -660,6 +666,69 @@ def test_category_extraction_resolves_and_fails_loudly() -> None:
            f"got {cats} / {unresolved}")
 
 
+def test_inventory_derivation_is_closed() -> None:
+    """The scanned set follows the live registry and stays closed over the
+    audit family: every registered check's module is reached, an entry
+    whose module cannot be located is reported rather than dropped, and a
+    family module holding `Issue(...)` call sites that backs no registered
+    check is reported rather than skipped (#2224)."""
+    print("test_inventory_derivation_is_closed")
+
+    modules, problems = audit_source_modules()
+    expect(not problems,
+           f"every registered check's module must be locatable, got "
+           f"{problems}")
+
+    scanned = {module.__name__ for module in modules}
+    expect({"world_audit", "world_audit_core"} <= scanned,
+           f"the façade and the shared core must always be scanned — an "
+           f"Issue(...) there belongs to no check — got {sorted(scanned)}")
+
+    owners = {inspect.getmodule(check_fn).__name__  # type: ignore[union-attr]
+              for check_fn in world_audit.ALL_CHECKS.values()}
+    expect(owners <= scanned,
+           f"every module backing a registered check must be scanned, "
+           f"missing {sorted(owners - scanned)}")
+    expect(len(owners) >= 2,
+           f"the registry must span several owner modules, or dropping one "
+           f"from the scan would prove nothing: {sorted(owners)}")
+
+    # The real scan covers the whole family: nothing outside it builds an
+    # Issue. This is the assertion the guard below is the teeth for.
+    expect(not audit_family_gap(modules),
+           f"the derived scan leaves audit-family Issue(...) call sites "
+           f"uncovered: {audit_family_gap(modules)}")
+
+    # Drop each check owner from the scan in turn. Its Issue(...) sites are
+    # then uncovered, and the guard must name it — this is what stops an
+    # owner falling out of ALL_CHECKS from silently shrinking the inventory.
+    for dropped in sorted(owners):
+        partial = [module for module in modules if module.__name__ != dropped]
+        gap = audit_family_gap(partial)
+        expect(any(dropped in entry for entry in gap),
+               f"dropping {dropped} from the scanned set must be reported by "
+               f"audit_family_gap, got {gap}")
+
+    # A registry entry whose defining module cannot be located is reported,
+    # not silently skipped over.
+    def orphan(grid: Any, issues: Any) -> None:
+        pass
+
+    orphan.__module__ = "no_such_module_for_test_audit_categories"
+    _, orphan_problems = audit_source_modules({"ORPHAN": orphan})
+    expect(len(orphan_problems) == 1
+           and "ORPHAN" in orphan_problems[0],
+           f"a check whose module cannot be located must be reported, got "
+           f"{orphan_problems}")
+
+    # And that report reaches the inventory, so test_severity_classification
+    # fails on it rather than checking a quietly shortened set.
+    every_cat, unresolved = emitted_categories()
+    expect(every_cat and not unresolved,
+           f"the live derivation must be both non-empty and closed, got "
+           f"{len(every_cat)} categories / {unresolved}")
+
+
 #: This owner's inventory, in the relative order these groups hold
 #: within the aggregate's run sequence. `tools/test_audit.py` composes
 #: that sequence from every owner's inventory; nothing here decides
@@ -667,4 +736,5 @@ def test_category_extraction_resolves_and_fails_loudly() -> None:
 TESTS = (
     test_severity_classification,
     test_category_extraction_resolves_and_fails_loudly,
+    test_inventory_derivation_is_closed,
 )

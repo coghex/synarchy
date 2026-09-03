@@ -9,13 +9,14 @@ on a warm checkout.
 Composition (#2070)
 -------------------
 This module is composition, dispatch and reporting only -- it holds no
-test body. The 63 test groups live with six owners, each of which keeps
+test body. The 64 test groups live with six owners, each of which keeps
 its own ordered inventory in `TESTS`:
 
   `test_audit_categories`        the emitted-category inventory derived
                                  by AST from the source of every module
-                                 backing the live ALL_CHECKS registry
-                                 (#2224), and its two mutation groups (2);
+                                 backing the live ALL_CHECKS registry,
+                                 its two mutation groups, and the #2224
+                                 closure of that derivation (3);
   `test_audit_world_audit`       world_audit's checks over synthetic
                                  grids, the tracked real lava dump, and
                                  the #2224 registry composition (27);
@@ -90,11 +91,12 @@ OWNERS = {
 #: 16): 28 audit/category groups as 26 + 2, then 14, 4, 9 and 7 -- 62 in
 #: all. A floor, not an exact count, so a legitimately added group joins
 #: without an edit here; an owner declaring FEWER is a truncation. The
-#: world_audit floor rose to 27 with #2224, which added the registry
-#: composition group to that owner.
+#: world_audit floor rose to 27 and the categories floor to 3 with
+#: #2224, which added the registry composition group to the first and
+#: the inventory-closure group to the second.
 MINIMUM_GROUPS = {
     "world_audit": 27,
-    "categories": 2,
+    "categories": 3,
     "world_check": 14,
     "content_hash": 4,
     "strict_capture": 9,
