@@ -217,8 +217,10 @@ _IDENT_CONTINUE = re.compile(r"[A-Za-z0-9_']")
 _CHAR_LITERAL = re.compile(r"'(?:\\(?:[A-Za-z0-9^]+|.)|[^'\\\n])'")
 
 
-def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """`(code spans, char-literal spans)`.
+def _scan_code(
+    text: str,
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]], list[tuple[int, int]]]:
+    """`(code spans, char-literal spans, comment spans)`.
 
     Code spans are the parts of `text` that are plain Haskell code:
     outside `--` line comments, nestable `{- -}` block comments, and
@@ -233,11 +235,20 @@ def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]
     span intact avoids splitting a run mid-expression). A single
     code-point search cannot rely on that, so the literals' spans are
     reported separately for `find_violations` to exclude -- otherwise
-    `'≠'`, a legitimate character value, would read as an operator."""
+    `'≠'`, a legitimate character value, would read as an operator.
+
+    Comment spans are the `--` line comments and the nestable `{- -}`
+    block comments, reported as a THIRD list rather than inferred by
+    subtracting the code spans from the file: the complement of the code
+    spans also holds string literals, which are not comments (#2292).
+    Each span covers the comment's delimiters and body -- for a line
+    comment, up to but not including its terminating newline."""
     i, n = 0, len(text)
     runs: list[tuple[int, int]] = []
     char_literals: list[tuple[int, int]] = []
+    comments: list[tuple[int, int]] = []
     run_start: int | None = None
+    comment_start: int | None = None
     state = "CODE"
     depth = 0
     while i < n:
@@ -247,12 +258,14 @@ def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]
                 if run_start is not None:
                     runs.append((run_start, i))
                     run_start = None
+                comment_start = i
                 state, depth, i = "BLOCK", 1, i + 2
                 continue
             if text.startswith("--", i):
                 if run_start is not None:
                     runs.append((run_start, i))
                     run_start = None
+                comment_start = i
                 state, i = "LINE", i + 2
                 continue
             # A `'` is only a CANDIDATE char-literal start when it can't
@@ -277,9 +290,14 @@ def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]
                 run_start = i
             i += 1
         elif state == "LINE":
-            i += 1
             if c == "\n":
+                # The newline terminates the comment but is not part of
+                # it, so a caller slicing the span never picks up the
+                # line break between one comment and the next.
+                comments.append((comment_start, i))
+                comment_start = None
                 state = "CODE"
+            i += 1
         elif state == "BLOCK":
             if text.startswith("{-", i):
                 depth += 1
@@ -288,6 +306,8 @@ def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]
                 depth -= 1
                 i += 2
                 if depth == 0:
+                    comments.append((comment_start, i))
+                    comment_start = None
                     state = "CODE"
             else:
                 i += 1
@@ -300,7 +320,12 @@ def _scan_code(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]
                 i += 1
     if run_start is not None:
         runs.append((run_start, n))
-    return runs, char_literals
+    # An unterminated comment (a `--` on the last line with no trailing
+    # newline, or an unclosed `{-`) still ran to end of file, so it is
+    # still comment text.
+    if comment_start is not None:
+        comments.append((comment_start, n))
+    return runs, char_literals, comments
 
 
 def _code_runs(text: str) -> list[tuple[int, int]]:
@@ -321,6 +346,20 @@ def haskell_code_spans(text: str) -> list[tuple[int, int]]:
     atomically skipped char literals so a `'"'` cannot open a phantom
     string -- are exactly the ones a copy would get wrong."""
     return _code_runs(text)
+
+
+def haskell_comment_spans(text: str) -> list[tuple[int, int]]:
+    """The `[start, end)` spans of `text` that are Haskell COMMENTS --
+    `--` line comments and nestable `{- -}` block comments, delimiters
+    included.
+
+    The counterpart of `haskell_code_spans` for a guard that reads
+    comment prose rather than code (tools/haddock_link_audit.py). It is
+    a separate report rather than the complement of the code spans
+    because string literals and quasiquotes are non-code too, and a
+    guard that treated them as comments would read a link out of a
+    string it is required to ignore (#2292)."""
+    return _scan_code(text)[2]
 
 
 def haskell_code_only(text: str) -> str:
@@ -381,7 +420,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     if rel_path == MONAD_INSTANCE_FILE:
         exempt_spans.update(m.span(1) for m in _MONAD_BIND_METHOD_TOKEN.finditer(_code_only(text)))
 
-    code_spans, char_literal_spans = _scan_code(scan_text)
+    code_spans, char_literal_spans, _ = _scan_code(scan_text)
     # The whole-file exemption covers the ASCII definition sites only,
     # so it suppresses that pass rather than the whole scan.
     ascii_exempt = rel_path in WHOLE_FILE_EXEMPT
