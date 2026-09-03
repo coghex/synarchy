@@ -22,7 +22,8 @@ import datetime
 import json
 
 from .support import (
-    COMMIT_A, _alpha, attempt_record, cli, cli_repo, expect, expect_refusal,
+    _alpha, attempt_record, census_contract, census_records, census_storage,
+    census_summary, cli, cli_repo, COMMIT_A, expect, expect_refusal,
     probe_census, registry, result_document, rich_census, scratch, seeded,
     stored_v3_document, stored_v4_document, unchanged,
 )
@@ -92,19 +93,19 @@ def test_outcome_log() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, result_document())
-        probe_census.record_claim(path, "alpha", {
+        census_storage.record_result(path, result_document())
+        census_storage.record_claim(path, "alpha", {
             "token": "claim-1", "timestamp_utc": "2026-08-27T09:00:00Z",
             "commit_sha": COMMIT_A, "owner": "deflake", "host": "here",
             "pid": 4711, "lease_seconds": 3600.0, "requested_runs": 10})
         before = json.loads(path.read_text(encoding="utf-8"))
 
-        probe_census.record_outcome(path, "alpha", outcome_record("a-1"))
+        census_storage.record_outcome(path, "alpha", outcome_record("a-1"))
         after = json.loads(path.read_text(encoding="utf-8"))
-        row = probe_census.find_entry(after, "alpha")["census"]
+        row = census_records.find_entry(after, "alpha")["census"]
         expect([entry["attempt"] for entry in row["outcomes"]] == ["a-1"],
                "an outcome append lands in the row's own outcome log")
-        was = probe_census.find_entry(before, "alpha")["census"]
+        was = census_records.find_entry(before, "alpha")["census"]
         expect(all(was[field] == row[field] for field in
                    ("current", "history", "attempts", "claims",
                     "acceptable_failures",
@@ -117,19 +118,19 @@ def test_outcome_log() -> None:
                "...nor any unrelated row")
 
         stored = path.read_bytes()
-        probe_census.record_outcome(path, "alpha", outcome_record("a-1"))
+        census_storage.record_outcome(path, "alpha", outcome_record("a-1"))
         unchanged(path, stored,
                   "resuming the same attempt installs the identical bytes")
         expect_refusal(
-            lambda: probe_census.record_outcome(
+            lambda: census_storage.record_outcome(
                 path, "alpha", {**outcome_record("a-1"),
                                 "summary": "a different account"}),
             "one attempt identity carrying different evidence is refused",
             "already recorded with different evidence")
         unchanged(path, stored, "...and changes no bytes")
 
-        probe_census.record_outcome(path, "alpha", outcome_record("a-2"))
-        expect([entry["attempt"] for entry in probe_census.find_entry(
+        census_storage.record_outcome(path, "alpha", outcome_record("a-2"))
+        expect([entry["attempt"] for entry in census_records.find_entry(
             json.loads(path.read_text(encoding="utf-8")),
             "alpha")["census"]["outcomes"]] == ["a-1", "a-2"],
             "a second attempt appends after the first, in order")
@@ -137,16 +138,16 @@ def test_outcome_log() -> None:
         # The record names its own probe, because it is handed BETWEEN
         # workflows; the two must agree rather than one being trusted.
         expect_refusal(
-            lambda: probe_census.record_outcome(
+            lambda: census_storage.record_outcome(
                 path, "beta", outcome_record("b-1")),
             "an outcome naming another probe is refused",
             "so it is not this row's outcome")
         expect_refusal(
-            lambda: probe_census.record_outcome(path, "alpha", ["not", "it"]),
+            lambda: census_storage.record_outcome(path, "alpha", ["not", "it"]),
             "a non-object outcome record is refused",
             "must be a JSON object")
         expect_refusal(
-            lambda: probe_census.record_outcome(
+            lambda: census_storage.record_outcome(
                 path, "alpha", {**outcome_record("a-3"), "attempt": ""}),
             "an outcome with no attempt identity is refused",
             "`attempt` identity")
@@ -161,7 +162,7 @@ def test_outcome_log() -> None:
             row["census"]["attempts"].append(attempt_record("forged"))
             return candidate, {"alpha": {"outcomes"}}
         expect_refusal(
-            lambda: probe_census.update(path, outcome_touching_measurements),
+            lambda: census_storage.update(path, outcome_touching_measurements),
             "an outcome append that also logs an attempt is refused",
             "which a diagnosis outcome may not touch")
         unchanged(path, current, "...and changes no bytes")
@@ -172,7 +173,7 @@ def test_outcome_log() -> None:
             row["census"]["outcomes"].append(outcome_record("a-9"))
             return candidate, {"alpha": {"measurements"}}
         expect_refusal(
-            lambda: probe_census.update(path, measurement_touching_outcomes),
+            lambda: census_storage.update(path, measurement_touching_outcomes),
             "a measurement ingestion appending an outcome is refused",
             "which a measurement ingestion may not touch")
         unchanged(path, current, "...and changes no bytes")
@@ -183,7 +184,7 @@ def test_outcome_log() -> None:
             row["census"]["outcomes"] = []
             return candidate, {"alpha": {"policy"}}
         expect_refusal(
-            lambda: probe_census.update(path, policy_touching_outcomes),
+            lambda: census_storage.update(path, policy_touching_outcomes),
             "a policy update clearing the outcome log is refused",
             "which a policy update may not touch")
         unchanged(path, current, "...and changes no bytes")
@@ -202,7 +203,7 @@ def test_outcome_log() -> None:
                        if r["key"] == "alpha"][0]
                 apply(row["census"]["outcomes"])
                 return candidate, {"alpha": {"outcomes"}}
-            expect_refusal(lambda: probe_census.update(path, rewrite),
+            expect_refusal(lambda: census_storage.update(path, rewrite),
                            f"{why} is refused", "append-only")
             unchanged(path, current, f"...and changes no bytes ({why})")
 
@@ -211,10 +212,10 @@ def test_outcome_log() -> None:
         path = root / "legacy.json"
         stored = stored_v3_document()
         path.write_text(json.dumps(stored), encoding="utf-8")
-        migrated = probe_census.ensure_document(path)
-        expect(migrated["schema"] == probe_census.CENSUS_SCHEMA,
+        migrated = census_storage.ensure_document(path)
+        expect(migrated["schema"] == census_contract.CENSUS_SCHEMA,
                "seeding a v3 census migrates it to the current schema")
-        record = probe_census.find_entry(migrated, "alpha")["census"]
+        record = census_records.find_entry(migrated, "alpha")["census"]
         expect(record == {**stored["probes"][0]["census"], "outcomes": [],
                           "deferred": None},
                "...adding only the empty outcome log and null deferral")
@@ -224,8 +225,8 @@ def test_outcome_log() -> None:
         path = root / "legacy-v4.json"
         stored = stored_v4_document()
         path.write_text(json.dumps(stored), encoding="utf-8")
-        migrated = probe_census.ensure_document(path)
-        record = probe_census.find_entry(migrated, "alpha")["census"]
+        migrated = census_storage.ensure_document(path)
+        record = census_records.find_entry(migrated, "alpha")["census"]
         expect(record == {**stored["probes"][0]["census"],
                           "deferred": None},
                "a v4 census gains only the null deferral on migration")
@@ -243,7 +244,7 @@ def test_deferral_gate() -> None:
         before = json.loads(path.read_text(encoding="utf-8"))
         before_alpha = copy.deepcopy(_alpha(before))
 
-        probe_census.record_deferral(
+        census_storage.record_deferral(
             path, "alpha", reason=reason, resume_when=resume_when)
         deferred_document = json.loads(path.read_text(encoding="utf-8"))
         deferred = _alpha(deferred_document)
@@ -259,10 +260,10 @@ def test_deferral_gate() -> None:
         expect(deferred_document["probes"][1:] == before["probes"][1:],
                "deferring one probe changes no unrelated row")
 
-        summaries = probe_census.census_summary(
+        summaries = census_summary.census_summary(
             deferred_document,
             now=datetime.datetime(2026, 8, 30, tzinfo=datetime.timezone.utc),
-            stale_after_seconds=probe_census.DEFAULT_STALE_AFTER_SECONDS)
+            stale_after_seconds=census_contract.DEFAULT_STALE_AFTER_SECONDS)
         alpha = summaries[0]
         expect(alpha["deferred"] == deferred["deferred"],
                "the selection-facing summary exposes the complete deferral")
@@ -270,7 +271,7 @@ def test_deferral_gate() -> None:
                "the human summary names the probe's deferred state")
 
         stable = path.read_bytes()
-        probe_census.record_deferral(
+        census_storage.record_deferral(
             path, "alpha", reason=reason, resume_when=resume_when)
         unchanged(path, stable, "repeating the same deferral is a byte no-op")
 
@@ -281,7 +282,7 @@ def test_deferral_gate() -> None:
             return candidate, {"alpha": {"deferral"}}
 
         expect_refusal(
-            lambda: probe_census.update(path, deferral_touching_attempts),
+            lambda: census_storage.update(path, deferral_touching_attempts),
             "a deferral update cannot forge a measurement attempt",
             "which a deferral update may not touch")
         unchanged(path, stable, "the mixed-aspect deferral wrote nothing")
@@ -292,7 +293,7 @@ def test_deferral_gate() -> None:
             return candidate, {"alpha": {"measurements"}}
 
         expect_refusal(
-            lambda: probe_census.update(path, measurement_touching_deferral),
+            lambda: census_storage.update(path, measurement_touching_deferral),
             "measurement ingestion cannot silently resume a deferred probe",
             "which a measurement ingestion may not touch")
         unchanged(path, stable, "the mixed-aspect measurement wrote nothing")
@@ -300,30 +301,30 @@ def test_deferral_gate() -> None:
         def reconciliation_touching_deferral(document):
             candidate = copy.deepcopy(document)
             _alpha(candidate)["deferred"] = None
-            return candidate, probe_census.TOUCH_ANY
+            return candidate, census_storage.TOUCH_ANY
 
         expect_refusal(
-            lambda: probe_census.update(path, reconciliation_touching_deferral),
+            lambda: census_storage.update(path, reconciliation_touching_deferral),
             "inventory reconciliation cannot silently resume a deferred probe",
             "reconciliation changed deferral field")
         unchanged(path, stable, "the mixed reconciliation wrote nothing")
 
         for bad, label in (("", "empty"), ("   ", "whitespace-only")):
             expect_refusal(
-                lambda value=bad: probe_census.record_deferral(
+                lambda value=bad: census_storage.record_deferral(
                     path, "alpha", reason=value, resume_when=resume_when),
                 f"an {label} deferral reason is refused", "non-blank")
             expect_refusal(
-                lambda value=bad: probe_census.record_deferral(
+                lambda value=bad: census_storage.record_deferral(
                     path, "alpha", reason=reason, resume_when=value),
                 f"an {label} resume condition is refused", "non-blank")
         expect_refusal(
-            lambda: probe_census.record_deferral(
+            lambda: census_storage.record_deferral(
                 path, "nosuch", reason=reason, resume_when=resume_when),
             "deferring an unknown probe is refused", "nosuch", "no census row")
         unchanged(path, stable, "no refused deferral changed the census")
 
-        probe_census.record_deferral(path, "alpha", resume=True)
+        census_storage.record_deferral(path, "alpha", resume=True)
         resumed_document = json.loads(path.read_text(encoding="utf-8"))
         resumed = _alpha(resumed_document)
         expect(resumed["deferred"] is None,
@@ -334,7 +335,7 @@ def test_deferral_gate() -> None:
                    if key != "deferred"},
                "resuming retains all accumulated evidence and policy")
         stable = path.read_bytes()
-        probe_census.record_deferral(path, "alpha", resume=True)
+        census_storage.record_deferral(path, "alpha", resume=True)
         unchanged(path, stable, "resuming an active probe is a byte no-op")
 
     with registry(), cli_repo() as (_, path):

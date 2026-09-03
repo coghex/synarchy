@@ -20,13 +20,16 @@ Nothing here edits `tools/ci_probes.py` either -- see the comment on
 `PROMOTION_SCHEMA` below for which half of a promotion this reports on
 and which half stays a person's.
 
-The dependency runs ONE WAY -- promotion -> census -- exactly as
-`tools/probe_census_page.py` (#1431) does. This module imports
-`probe_census` at module scope for the fifteen storage-core symbols it
-reads; `probe_census.main`'s `--promotion-candidates` dispatch imports
-THIS module at its point of use instead, following that file's own
-`import jsonschema  # noqa: PLC0415` convention, so no cycle exists at
-import time.
+The dependency runs ONE WAY, and since #2131 it runs to the census
+OWNERS rather than to their facade: this module imports
+`probe_census_contract`, `probe_census_records` and
+`probe_census_summary` at module scope for the symbols it reads, and
+imports `tools/probe_census.py` not at all. That is what keeps the split
+acyclic -- the facade imports every owner, so an owner importing the
+facade would close the loop. `probe_census.main`'s
+`--promotion-candidates` dispatch imports THIS module at its point of
+use, following that file's own `import jsonschema  # noqa: PLC0415`
+convention.
 
 `probe_census.promotion_report` and `probe_census.render_promotion_report`
 therefore no longer exist. Both in-repo callers -- that CLI dispatch and
@@ -47,9 +50,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
-import probe_census  # noqa: E402
+import probe_census_contract as census_contract  # noqa: E402
+import probe_census_records as census_records  # noqa: E402
+import probe_census_summary as census_summary  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
+# The one contract scalar this module names bare rather than through
+# `census_contract.`: it reads as a local requirement at both call
+# sites, and #2131 moved the definition down beside `require_count`
+# rather than leaving a second scalar requirement up here.
+from probe_census_contract import require_seconds  # noqa: E402
 
 # Promotion has two halves, and this reports on exactly one of them.
 # RELIABILITY is measurable, and measuring it is what the census is for.
@@ -83,23 +93,6 @@ BUCKET_BLOCKED = "mechanically-blocked"
 READY_REASON_CATEGORIES = frozenset({ci_probes.FLAKY, ci_probes.UNCLASSIFIED})
 
 
-def require_seconds(value, what: str) -> float:
-    """A usable finite nonnegative duration, or a controlled refusal.
-
-    `bool` is excluded for the same reason `require_count` excludes it:
-    `True` is an `int`, and a one-second worst case is not what a
-    boolean in that field means.
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise probe_census.CensusError(
-            f"{what} must be a number of seconds, got {type(value).__name__}")
-    if not math.isfinite(value) or value < 0:
-        raise probe_census.CensusError(
-            f"{what} must be a finite nonnegative number of seconds, got "
-            f"{value!r}")
-    return float(value)
-
-
 def declared_reasons(probe: str, what: str) -> tuple:
     """The probe's manual-only reason records, read LIVE.
 
@@ -119,7 +112,7 @@ def declared_reasons(probe: str, what: str) -> tuple:
         return ()
     if (isinstance(reasons, (str, bytes))
             or not isinstance(reasons, (list, tuple))):
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             f"{what} must be an ordered collection of reason records, got "
             f"{type(reasons).__name__}")
     return tuple(reasons)
@@ -138,7 +131,7 @@ def reason_rows(reasons, what: str) -> list[dict]:
     for position, record in enumerate(reasons):
         category = getattr(record, "category", None)
         if not isinstance(category, str) or not category:
-            raise probe_census.CensusError(
+            raise census_contract.CensusError(
                 f"{what}[{position}] has no category string, so the report "
                 f"cannot say what it blocks on")
         explanation = getattr(record, "explanation", None)
@@ -190,22 +183,22 @@ def cohort_evidence(cohort, what: str) -> tuple:
     Everything `cohort_statistic` refuses, this refuses first: it is
     called for its validation as much as for its counts.
     """
-    statistic, anchor = probe_census.cohort_statistic(cohort, what)
+    statistic, anchor = census_contract.cohort_statistic(cohort, what)
     completed = 0
     timeouts = 0
     worst = None
     earliest = None
     for position, sample in enumerate(cohort["samples"]):
         where = f"{what} sample {position}"
-        completed += probe_census.require_count(
+        completed += census_contract.require_count(
             sample.get("completed_runs"), f"{where} `completed_runs`")
-        timeouts += probe_census.require_count(
+        timeouts += census_contract.require_count(
             sample.get("timeout_count"), f"{where} `timeout_count`")
         observed = require_seconds(sample.get("worst_elapsed_seconds"),
                                    f"{where} `worst_elapsed_seconds`")
         if worst is None or observed > worst:
             worst = observed
-        stamp = probe_census.parse_timestamp(
+        stamp = census_contract.parse_timestamp(
             sample.get("timestamp_utc"), f"{where} `timestamp_utc`")
         if earliest is None or stamp < earliest:
             earliest = stamp
@@ -214,7 +207,7 @@ def cohort_evidence(cohort, what: str) -> tuple:
         "completed_runs": completed,
         "timeout_count": timeouts,
         "observed_worst_elapsed_seconds": worst,
-        "opened_at": earliest.strftime(probe_census.TIMESTAMP_FORMAT),
+        "opened_at": earliest.strftime(census_contract.TIMESTAMP_FORMAT),
     })
     return evidence, anchor, earliest
 
@@ -235,20 +228,20 @@ def incomplete_samples(cohort, what: str) -> list[int]:
     against the other — so it disqualifies exactly as a shortfall does.
     """
     if not isinstance(cohort, dict):
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             f"{what} must be an object, got {type(cohort).__name__}")
     samples = cohort.get("samples")
     if not isinstance(samples, list):
-        raise probe_census.CensusError(f"{what} `samples` must be a list")
+        raise census_contract.CensusError(f"{what} `samples` must be a list")
     positions: list[int] = []
     for position, sample in enumerate(samples):
         where = f"{what} sample {position}"
         if not isinstance(sample, dict):
-            raise probe_census.CensusError(
+            raise census_contract.CensusError(
                 f"{where} is not an object, got {type(sample).__name__}")
-        requested = probe_census.require_count(
+        requested = census_contract.require_count(
             sample.get("requested_runs"), f"{where} `requested_runs`")
-        completed = probe_census.require_count(
+        completed = census_contract.require_count(
             sample.get("completed_runs"), f"{where} `completed_runs`")
         if completed != requested:
             positions.append(position)
@@ -277,7 +270,7 @@ def unresolved_attempts(census, probe: str, cohort_commit: str,
     if attempts is None:
         attempts = []
     if not isinstance(attempts, list):
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             f"probe {probe!r}: `attempts` must be a list to read, got "
             f"{type(attempts).__name__}")
     counted = 0
@@ -290,16 +283,16 @@ def unresolved_attempts(census, probe: str, cohort_commit: str,
         if attempt.get("accepted") is True:
             continue
         try:
-            commit = probe_census.require_commit_identity(
+            commit = census_contract.require_commit_identity(
                 attempt.get("commit_sha"), "attempt `commit_sha`")
-        except probe_census.CensusError:
+        except census_contract.CensusError:
             commit = None
         if commit is not None and commit != cohort_commit:
             continue
         try:
-            stamp = probe_census.parse_timestamp(
+            stamp = census_contract.parse_timestamp(
                 attempt.get("timestamp_utc"), "attempt `timestamp_utc`")
-        except probe_census.CensusError:
+        except census_contract.CensusError:
             stamp = None
         if stamp is not None and stamp < opened_at:
             continue
@@ -339,27 +332,27 @@ def promotion_row(entry, *, now, stale_after_seconds) -> dict | None:
     row with nothing measured is not an answer to it.
     """
     if not isinstance(entry, dict):
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             f"census entry must be an object, got {type(entry).__name__}")
     probe = entry.get("key")
     if not isinstance(probe, str):
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             f"census entry has no string `key` ({entry.get('key')!r})")
-    if probe not in probe_census._registered_keys():
+    if probe not in census_records._registered_keys():
         return None
-    live = probe_census.classification(probe)
-    if live != probe_census.MANUAL_ONLY:
+    live = census_records.classification(probe)
+    if live != census_contract.MANUAL_ONLY:
         return None
     protocol = probe_flake.protocol_status(probe)
     if protocol != probe_protocol.PROTOCOL_VERSION:
         return None
     census = entry.get("census")
     if not isinstance(census, dict):
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             f"probe {probe!r} has no census record to report on")
     acceptable = census.get("acceptable_failures")
-    if (not probe_census._is_x(acceptable)
-            or acceptable != probe_census.MIN_ACCEPTABLE_FAILURES):
+    if (not census_records._is_x(acceptable)
+            or acceptable != census_contract.MIN_ACCEPTABLE_FAILURES):
         return None
     cohort = census.get("current")
     if cohort is None:
@@ -369,9 +362,9 @@ def promotion_row(entry, *, now, stale_after_seconds) -> dict | None:
     # Clamped at zero for `summarize_entry`'s reason: a cohort anchored
     # in the future is the freshest thing there is, never negatively old.
     age = max(0.0, (now - anchor).total_seconds())
-    if age >= probe_census.require_horizon(stale_after_seconds):
+    if age >= census_summary.require_horizon(stale_after_seconds):
         return None
-    if evidence["requested_runs"] < probe_census.POLICY_RUN_COUNT:
+    if evidence["requested_runs"] < census_contract.POLICY_RUN_COUNT:
         return None
     # PER SAMPLE, never the pooled totals: a 9-of-10 beside an 11-of-10
     # pools to a flawless 20 of 20 while holding a measurement that lost
@@ -430,17 +423,17 @@ def promotion_report(document, *, now, stale_after_seconds) -> dict:
     for the same reason `census_summary` requires one.
     """
     if not isinstance(now, datetime.datetime) or now.tzinfo is None:
-        raise probe_census.CensusError(
+        raise census_contract.CensusError(
             "the evaluation time must be a timezone-aware datetime")
-    horizon = probe_census.require_horizon(stale_after_seconds)
+    horizon = census_summary.require_horizon(stale_after_seconds)
     rows = [promotion_row(entry, now=now, stale_after_seconds=horizon)
-            for entry in probe_census._rows(document, "census")]
+            for entry in census_records._rows(document, "census")]
     qualified = [row for row in rows if row is not None]
-    registered = probe_census._registered_keys()
+    registered = census_records._registered_keys()
     eligible = sorted(registered & set(ci_probes.CI_ELIGIBLE))
     return {
         "schema": PROMOTION_SCHEMA,
-        "evaluated_at": now.strftime(probe_census.TIMESTAMP_FORMAT),
+        "evaluated_at": now.strftime(census_contract.TIMESTAMP_FORMAT),
         "stale_after_seconds": horizon,
         "registered_probes": len(registered),
         "ci_eligible": len(eligible),
@@ -485,7 +478,7 @@ def _promotion_lines(rows: list[dict]) -> list[str]:
             f"{row['key']:<34}{row['requested_runs']:>6}"
             f"{row['failure_count']:>6}{row['timeout_count']:>5}{rate:>8}"
             f"{row['acceptable_failures']:>4}"
-            f"{row['age_seconds'] / probe_census.SECONDS_PER_DAY:>7.1f}d"
+            f"{row['age_seconds'] / census_contract.SECONDS_PER_DAY:>7.1f}d"
             f"{observed:>11}{estimate:>11}  {row['commit_sha']}")
         for reason in row["reasons"] or [{"category": "none declared",
                                           "explanation": None}]:
@@ -502,13 +495,13 @@ def render_promotion_report(report: dict) -> str:
     needs to see, and a section that vanishes reads as a report that
     did not run.
     """
-    horizon = report["stale_after_seconds"] / probe_census.SECONDS_PER_DAY
+    horizon = report["stale_after_seconds"] / census_contract.SECONDS_PER_DAY
     lines = [
         f"CI-promotion candidates as of {report['evaluated_at']} "
         f"(fresh within {horizon:.1f}d)",
         f"{report['registered_probes']} registered probes: "
-        f"{report['ci_eligible']} {probe_census.CI_ELIGIBLE}, "
-        f"{report['manual_only']} {probe_census.MANUAL_ONLY}; "
+        f"{report['ci_eligible']} {census_contract.CI_ELIGIBLE}, "
+        f"{report['manual_only']} {census_contract.MANUAL_ONLY}; "
         f"{report['reliability_qualified']} reliability-qualified.",
         "",
         f"ready for breadth/cost review ({len(report['candidates'])}) — "

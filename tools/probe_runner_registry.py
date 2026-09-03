@@ -209,10 +209,14 @@ PROBES = [
      "power.isBuildingPowered stay the hypothetical always-on non-crafting "
      "device path, not what this exercises (#361, #590, #796)"),
     ("preview", "preview_probe.py",
-     "--preview real-boot browser: simple-category list/focused-item "
-     "discovery+selection+scroll+trimmed-loading via previewManager.dump() (#886), "
-     "units animation viewer (#887), buildings viewer + flora/structures dispatch "
-     "into the shared simple browser + the every-category no-placeholder sweep (#888)"),
+     "--preview real-boot browser, five independently runnable families behind "
+     "one aggregate gate (--only simple|units|buildings|dispatch|zoom, #2089): "
+     "simple-category list/focused-item discovery+selection+scroll+trimmed-loading "
+     "via previewManager.dump() (#886), units animation viewer + promoted "
+     "declaration + the shipped roster (#887/#1261), buildings viewer + "
+     "flora/structures dispatch into the shared simple browser + the "
+     "every-category no-placeholder sweep (#888), and centered bounded zoom "
+     "over every display kind (#1907)"),
     ("preview_cli", "preview_cli_probe.py",
      "argv-to-dispatch CLI contract, no boot: canonical --preview category classification "
      "(unexposed names, grouped-no-item guidance), pre-boot item-path rejection "

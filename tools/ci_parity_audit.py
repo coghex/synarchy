@@ -14,13 +14,22 @@ whether a change is safe to push — was not.
 
 What this compares
 ------------------
-The set of `python3 tools/*.py` invocations run by the workflow's
-`test-and-audits` worker against the set run by `tools/ci-local.sh`, in both
+The set of `python3 tools/*.py` invocations run by the workflow's two
+audited workers -- `test-and-audits`, which owns everything needing a
+Cabal build product, and `static-audits`, which owns every engine-free
+gate (#2272) -- against the set run by `tools/ci-local.sh`, in both
 directions, minus a hard-coded exemption list. An invocation is compared
 at COMMAND granularity INCLUDING ARGUMENTS, so
 `ci_expensive_gates.py --self-test` and
 `ci_expensive_gates.py --stdin --gate worldgen` are two different checks,
 and retuning an existing check's flags on one side alone is drift.
+
+The two CI jobs are collected SEPARATELY and their intersection is
+rejected before the union is compared. `make ci` is one script, so the
+union is the only thing it can mirror -- but a gate run by both CI jobs
+is work CI pays for twice, and the union alone cannot see it. Each job
+must also yield at least one invocation, so an emptied job fails rather
+than quietly shrinking the comparison.
 
 What this deliberately does NOT compare
 ---------------------------------------
@@ -38,12 +47,15 @@ What this deliberately does NOT compare
   by the YAML parser, shell comments by `ci_parity_shell.py`'s lexer.
   A
   commented-out check does not run, so it must not count as running.
-* **Other jobs.** Gate-set parity inspects only `test-and-audits`.
-  `resolve-image` builds the CI image and has no local counterpart by
-  construction; `behavior-probes` runs the opt-in, real-engine tier that
-  `make ci` deliberately excludes; `build-test` is the stable aggregate
-  context consumed by branch protection and the PR drainer. This audit
-  separately pins that three-job wiring and the two probe-runner commands.
+* **Other jobs.** Gate-set parity inspects `test-and-audits` and
+  `static-audits`. `resolve-image` builds the CI image and has no local
+  counterpart by construction; `behavior-probes` runs the opt-in,
+  real-engine tier that `make ci` deliberately excludes; `build-test` is
+  the stable aggregate context consumed by branch protection and the PR
+  drainer. This audit separately pins that four-job wiring, the
+  static-audit worker's topology (image-only `needs`, no job-level
+  condition), the unit-asset gate's selection, and the two probe-runner
+  commands.
 
 Failing loudly rather than silently
 -----------------------------------
@@ -52,9 +64,9 @@ recognise: a missed invocation reads as parity that is not there. So the
 extractor refuses rather than shrugs. A `python` interpreter appearing
 anywhere other than as the head of a command (`xargs python3 ...`), a
 `tools/*.py` script executed directly instead of through an interpreter,
-an unterminated quote or `$(`/`${`, a missing audited worker, and an
-empty invocation set on either side are each an error naming the offending
-text — never a quietly smaller comparison.
+an unterminated quote or `$(`/`${`, either missing audited worker, and an
+empty invocation set on either audited job or locally are each an error
+naming the offending text — never a quietly smaller comparison.
 
 Usage:
   python3 tools/ci_parity_audit.py
@@ -73,14 +85,16 @@ nothing below imports this file.
                                  extractor, and `AuditError`. A leaf: no
                                  repository paths, no YAML, no policy.
   tools/ci_parity_config.py      the production constants above --
-                                 paths, job names, labels, the probe
-                                 contract and EXEMPT_COMMANDS. A leaf
-                                 both this facade and the workflow owner
-                                 import, which is what single-sources
-                                 them without a cycle.
+                                 paths, job names, labels, the probe and
+                                 unit-asset contracts and
+                                 EXEMPT_COMMANDS. A leaf both this facade
+                                 and the workflow owner import, which is
+                                 what single-sources them without a
+                                 cycle.
   tools/ci_parity_workflow.py    workflow YAML parsing, the two-way
-                                 gate-set comparison, and the aggregate
-                                 and probe job topology.
+                                 gate-set comparison over the audited
+                                 jobs' union, and the aggregate, static-
+                                 audit, probe and unit-asset topology.
   tools/ci_parity_save_compat.py the save-compat reproducibility wiring
                                  (#1360): the executable local block and
                                  the pinned CI guards.
@@ -103,15 +117,25 @@ from ci_parity_config import (
     AGGREGATE_JOB,
     AGGREGATE_NEEDS,
     AUDITED_JOB,
+    AUDITED_JOBS,
     EXEMPT_COMMANDS,
+    IMAGE_JOB,
     LOCAL_GATE_LABEL,
     LOCAL_GATE_PATH,
     PROBE_JOB,
     PROBE_JOB_IF,
     PROBE_REQUIRED_COMMANDS,
     REPO_ROOT,
+    STATIC_AUDIT_JOB,
+    STATIC_AUDIT_LABEL,
+    UNIT_ASSET_CI_IF,
+    UNIT_ASSET_COMMAND,
+    UNIT_ASSET_GATE,
+    UNIT_ASSET_SELECTOR_COMMAND,
     WORKFLOW_LABEL,
     WORKFLOW_PATH,
+    WORKFLOW_UNION_LABEL,
+    workflow_label,
 )
 from ci_parity_save_compat import audit_save_compat_reproducibility_wiring
 from ci_parity_shell import (
@@ -122,8 +146,10 @@ from ci_parity_shell import (
 from ci_parity_workflow import (
     audit_gate_sets,
     audit_parallel_gate_wiring,
+    audit_unit_asset_gate_wiring,
     local_gate_invocations,
     workflow_invocations,
+    workflow_job_invocations,
     workflow_run_blocks,
     workflow_steps,
 )
@@ -139,18 +165,28 @@ __all__ = [
     "AGGREGATE_JOB",
     "AGGREGATE_NEEDS",
     "AUDITED_JOB",
+    "AUDITED_JOBS",
     "EXEMPT_COMMANDS",
+    "IMAGE_JOB",
     "LOCAL_GATE_LABEL",
     "LOCAL_GATE_PATH",
     "PROBE_JOB",
     "PROBE_JOB_IF",
     "PROBE_REQUIRED_COMMANDS",
     "REPO_ROOT",
+    "STATIC_AUDIT_JOB",
+    "STATIC_AUDIT_LABEL",
+    "UNIT_ASSET_CI_IF",
+    "UNIT_ASSET_COMMAND",
+    "UNIT_ASSET_GATE",
+    "UNIT_ASSET_SELECTOR_COMMAND",
     "WORKFLOW_LABEL",
     "WORKFLOW_PATH",
+    "WORKFLOW_UNION_LABEL",
     "audit_gate_sets",
     "audit_parallel_gate_wiring",
     "audit_save_compat_reproducibility_wiring",
+    "audit_unit_asset_gate_wiring",
     "extract_invocations",
     "local_gate_invocations",
     "main",
@@ -158,6 +194,8 @@ __all__ = [
     "run_repository_audit",
     "split_shell_commands",
     "workflow_invocations",
+    "workflow_job_invocations",
+    "workflow_label",
     "workflow_run_blocks",
     "workflow_steps",
 ]
@@ -167,14 +205,20 @@ def run_repository_audit() -> int:
     try:
         yaml_text = WORKFLOW_PATH.read_text(encoding="utf-8")
         shell_text = LOCAL_GATE_PATH.read_text(encoding="utf-8")
-        ci_commands = workflow_invocations(yaml_text)
+        ci_job_commands = workflow_job_invocations(yaml_text)
         local_commands = local_gate_invocations(shell_text)
-        problems = audit_gate_sets(ci_commands, local_commands)
+        problems = audit_gate_sets(ci_job_commands, local_commands)
         # The gate SET agreeing is not enough for a check both files run
         # conditionally (#1360): they must also agree on the condition.
         problems.extend(
             audit_save_compat_reproducibility_wiring(yaml_text, shell_text))
+        # Nor for CI's own conditional gate, whose selector and guard now
+        # live in the split-out worker (#2272).
+        problems.extend(audit_unit_asset_gate_wiring(yaml_text))
         problems.extend(audit_parallel_gate_wiring(yaml_text))
+        ci_commands: set[str] = set()
+        for commands in ci_job_commands.values():
+            ci_commands |= commands
     except OSError as error:
         print(f"ci_parity_audit.py: {error}")
         return 1
@@ -189,16 +233,20 @@ def run_repository_audit() -> int:
             print(f"  {problem}")
         print()
         print("Every `python3 tools/*.py` check the workflow's "
-              f"`{AUDITED_JOB}` job runs must also run in "
-              f"{LOCAL_GATE_LABEL}, and vice versa, unless it is on this "
-              "audit's hard-coded EXEMPT_COMMANDS list, where every entry "
-              "carries its reason.")
+              f"`{AUDITED_JOB}` or `{STATIC_AUDIT_JOB}` job runs must also "
+              f"run in {LOCAL_GATE_LABEL}, and vice versa, and no check may "
+              "run in both CI jobs -- unless it is on this audit's "
+              "hard-coded EXEMPT_COMMANDS list, where every entry carries "
+              "its reason.")
         return 1
 
     shared = len(ci_commands & local_commands)
     exempted = len(ci_commands | local_commands) - shared
+    per_job = ", ".join(f"{job} {len(commands)}"
+                        for job, commands in ci_job_commands.items())
     print(f"ci_parity_audit.py: {shared} check(s) run identically in "
-          f"{WORKFLOW_LABEL} and {LOCAL_GATE_LABEL}; {exempted} exempt.")
+          f"{WORKFLOW_UNION_LABEL} and {LOCAL_GATE_LABEL}; {exempted} "
+          f"exempt. CI-side split: {per_job}.")
     return 0
 
 
@@ -227,7 +275,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Audit that tools/ci-local.sh runs the same "
                     "`python3 tools/*.py` gate set as .github/workflows/"
-                    f"ci.yml's `{AUDITED_JOB}` job.")
+                    f"ci.yml's `{AUDITED_JOB}` and `{STATIC_AUDIT_JOB}` "
+                    "jobs together.")
     parser.add_argument("--self-test", action="store_true",
                         help="run the audit's own fixture checks instead of "
                              "auditing the repository")

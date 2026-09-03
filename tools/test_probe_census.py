@@ -78,6 +78,16 @@ modules are structurally checked too, because
 therefore cannot see them: no owner may define an assertion helper, keep
 its own failure accumulator, or narrate a passing assertion.
 
+`compose()` then checks the PRODUCTION owners #2131 split the census
+into, for the same reason and in the same place: no behavioural case can
+see any of it. Every owner could import the facade, or two owners could
+each define `parse_timestamp`, or an implementation body could stay
+behind in `probe_census.py`, and all 44 groups would still pass over a
+module family that was one circular tangle again. So before anything
+runs: no owner imports the facade or an owner below it in the dependency
+order, no two owners define the same top-level name, and the facade
+defines exactly its CLI surface and re-exports the rest.
+
 Usage:
   python3 tools/test_probe_census.py
   python3 tools/test_probe_census.py -v
@@ -110,6 +120,30 @@ from probe_census_tests import (  # noqa: E402
 import test_probe_census_promotion as promotion  # type: ignore  # noqa: E402
 
 PACKAGE_DIR = Path(__file__).resolve().parent / "probe_census_tests"
+TOOLS_DIR = Path(__file__).resolve().parent
+
+#: The census owners in DEPENDENCY ORDER (#2131), and the facade last.
+#: An owner may import an owner ABOVE it and nothing below, and none of
+#: them may import the facade -- which imports all five, so an owner
+#: importing it back would close a cycle at import time. Written as an
+#: order rather than a set of allowed pairs because the order is the
+#: contract: contract, then records, then summary, then storage, then
+#: promotion, all under the facade.
+OWNER_ORDER = ("probe_census_contract", "probe_census_records",
+               "probe_census_summary", "probe_census_storage",
+               "probe_census_promotion")
+FACADE_MODULE = "probe_census"
+
+#: What the facade is allowed to define ITSELF (#2131 requirement 15):
+#: argument validation, presentation and dispatch. Every other name it
+#: exposes must arrive by import from exactly one owner. A FLOOR is
+#: wrong here -- this is an exact set, because the failure being
+#: prevented is an implementation body staying behind or coming back.
+FACADE_DEFINITIONS = {
+    "_acceptable_failures_argument", "_companion_arguments",
+    "_deferral_arguments", "_optional_number", "_rate_text",
+    "_summary_arguments", "main", "render_summary",
+}
 
 #: The six families by the name `--family` accepts, each mapped to the
 #: module that owns its groups and the attribute naming that owner's
@@ -232,6 +266,101 @@ def _check_package_structure() -> None:
                 f"assertion -- only selftestlib does that, under --verbose")
 
 
+
+def _module_source(name: str) -> str:
+    return (TOOLS_DIR / f"{name}.py").read_text(encoding="utf-8")
+
+
+def _defined_names(tree: ast.Module) -> set[str]:
+    """Top-level names a module DEFINES, as opposed to imports."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(target.id for target in node.targets
+                         if isinstance(target, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target,
+                                                            ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def _imported_modules(tree: ast.Module) -> set[str]:
+    """Every module name imported ANYWHERE in the file, nesting included.
+
+    Walked rather than read off `tree.body` on purpose: a point-of-use
+    import inside a function is exactly how a cycle would be smuggled
+    back in, and it is invisible to a top-level scan.
+    """
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            modules.add(node.module.split(".")[0])
+    return modules
+
+
+def _check_owner_structure() -> None:
+    """The three properties #2131 split the census to get, re-checked.
+
+    None of them is visible to a behavioural case: every owner could
+    import the facade, or two owners could each define `parse_timestamp`,
+    and the 44 groups would still pass -- the census would simply be one
+    circular module family again, one edit from the tangle the split
+    removed. So they are checked HERE, before anything runs, over the
+    files on disk:
+
+      1. no owner imports the facade, and no owner imports an owner
+         BELOW it in `OWNER_ORDER` -- together, that the graph is
+         acyclic and flows the one direction the split declared;
+      2. no two owners define the same top-level name, so a contract,
+         parser, transformation or serializer has ONE implementation and
+         a compatibility re-export cannot quietly become a second;
+      3. the facade defines exactly `FACADE_DEFINITIONS` and re-exports
+         everything else, so no owner-specific body survives in it.
+    """
+    trees = {name: ast.parse(_module_source(name))
+             for name in (*OWNER_ORDER, FACADE_MODULE)}
+
+    for position, owner in enumerate(OWNER_ORDER):
+        imported = _imported_modules(trees[owner])
+        if FACADE_MODULE in imported:
+            raise CompositionError(
+                f"{owner}.py imports {FACADE_MODULE} -- the facade imports "
+                f"every owner, so an owner importing it back is a cycle")
+        below = set(OWNER_ORDER[position + 1:]) & imported
+        if below:
+            raise CompositionError(
+                f"{owner}.py imports {sorted(below)}, which come AFTER it in "
+                f"the census dependency order {list(OWNER_ORDER)}")
+
+    owners_by_name: dict[str, str] = {}
+    for owner in OWNER_ORDER:
+        for name in _defined_names(trees[owner]):
+            if name in owners_by_name:
+                raise CompositionError(
+                    f"{name!r} is defined by both {owners_by_name[name]}.py "
+                    f"and {owner}.py -- every census contract and "
+                    f"transformation has exactly one implementation")
+            owners_by_name[name] = owner
+
+    facade_defines = _defined_names(trees[FACADE_MODULE])
+    extra = facade_defines - FACADE_DEFINITIONS
+    if extra:
+        raise CompositionError(
+            f"{FACADE_MODULE}.py defines {sorted(extra)} itself -- the facade "
+            f"is imports, re-exports, argument validation, dispatch and "
+            f"presentation, and holds no owner's implementation body")
+    absent = FACADE_DEFINITIONS - facade_defines
+    if absent:
+        raise CompositionError(
+            f"{FACADE_MODULE}.py no longer defines {sorted(absent)} -- the "
+            f"CLI surface moved out from under this check")
+
+
 def inventories() -> dict[str, list]:
     """Every family's declared inventory, each at least its historical size.
 
@@ -291,6 +420,7 @@ def compose(family: str | None = None) -> list[tuple[str, tuple]]:
     """
     by_family = inventories()
     _check_package_structure()
+    _check_owner_structure()
 
     plan: list[tuple[str, tuple]] = []
     fragments_seen: dict[str, list] = {name: [] for name in FAMILIES}

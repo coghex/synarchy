@@ -55,6 +55,10 @@ import deflake_handoff  # type: ignore
 import deflake_issue as di  # type: ignore
 import deflake_outcome as do  # type: ignore
 import probe_census  # type: ignore
+# The census write these cases intercept resolves `_atomic_replace` in
+# the STORAGE owner's globals, not the facade's (#2131), so that is
+# the object they patch.
+import probe_census_storage as census_storage  # type: ignore
 import deflake  # type: ignore
 import probe_flake  # type: ignore
 import probe_protocol  # type: ignore
@@ -2060,6 +2064,10 @@ def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
         "tools/probe_flake.py",
         "tools/probe_protocol.py",
         "tools/probe_census.py",
+        "tools/probe_census_contract.py",
+        "tools/probe_census_records.py",
+        "tools/probe_census_summary.py",
+        "tools/probe_census_storage.py",
         "tools/probe_claim.py",
         "tools/probe_resource_lock.py",
         "tools/probe_select.py",
@@ -5932,12 +5940,12 @@ def test_a_census_write_failure_leaves_the_attempt_resumable() -> None:
     with census_file() as path:
         before = path.read_bytes()
         publisher = Publisher()
-        original = probe_census._atomic_replace
+        original = census_storage._atomic_replace
 
         def refuse(*args, **kwargs):
             raise probe_census.CensusError("injected: the disk is full")
 
-        probe_census._atomic_replace = refuse
+        census_storage._atomic_replace = refuse
         try:
             expect_non_success(
                 lambda: record_outcome(outcome_handoff(), path,
@@ -5945,7 +5953,7 @@ def test_a_census_write_failure_leaves_the_attempt_resumable() -> None:
                 "the census refused",
                 "a census write failure recorded an outcome anyway")
         finally:
-            probe_census._atomic_replace = original
+            census_storage._atomic_replace = original
         expect_nothing_recorded(path, before, publisher,
                                 "a refused census write")
 
@@ -6011,7 +6019,7 @@ def test_a_durability_warning_is_not_a_refusal() -> None:
     exists to prevent.
     """
     with census_file() as path:
-        original = probe_census._atomic_replace
+        original = census_storage._atomic_replace
 
         def unconfirmed(target, payload, **kwargs):
             original(target, payload, **kwargs)
@@ -6019,11 +6027,11 @@ def test_a_durability_warning_is_not_a_refusal() -> None:
                 "injected: the directory fsync failed", target=target,
                 error=OSError("injected"))
 
-        probe_census._atomic_replace = unconfirmed
+        census_storage._atomic_replace = unconfirmed
         try:
             recorded, publisher = record_outcome(outcome_handoff(), path)
         finally:
-            probe_census._atomic_replace = original
+            census_storage._atomic_replace = original
         expect(recorded.record["outcome"] == do.OUTCOME_CANNOT_REPRODUCE
                and not recorded.durable,
                "an unconfirmed durability is reported, not raised as a "

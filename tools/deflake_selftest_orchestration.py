@@ -36,6 +36,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deflake  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
+# The recorder seams these cases inject at -- `tempfile.mkstemp` and
+# `os.fsync` -- are reached through the STORAGE owner, which is the
+# module that stages and fsyncs a census write since #2131.
+import probe_census_storage as census_storage  # type: ignore  # noqa: E402
 import probe_claim  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
@@ -717,7 +721,7 @@ def test_a_pre_replacement_failure_leaves_the_census_bytes_unchanged() -> None:
     print("\n-- a recorder failure BEFORE the atomic replacement is "
           "record-failed, with the authoritative bytes untouched")
     scratch = Scratch()
-    saved = probe_census.tempfile.mkstemp
+    saved = census_storage.tempfile.mkstemp
     try:
         before = scratch.bytes_now()
         claim = FakeClaim()
@@ -725,11 +729,11 @@ def test_a_pre_replacement_failure_leaves_the_census_bytes_unchanged() -> None:
         def refuse(*_a, **_kw):
             raise OSError(errno.EIO, "synthetic staging-write failure")
 
-        probe_census.tempfile.mkstemp = refuse
+        census_storage.tempfile.mkstemp = refuse
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
                      record_result=probe_census.record_result_installed)
-        probe_census.tempfile.mkstemp = saved
+        census_storage.tempfile.mkstemp = saved
         expect(result.outcome == deflake.OUTCOME_RECORD_FAILED,
                f"the outcome is record-failed ({result.outcome}: "
                f"{result.detail})")
@@ -746,7 +750,7 @@ def test_a_pre_replacement_failure_leaves_the_census_bytes_unchanged() -> None:
         expect("--record" in result.detail,
                f"and the diagnostic names the recovery ({result.detail})")
     finally:
-        probe_census.tempfile.mkstemp = saved
+        census_storage.tempfile.mkstemp = saved
         scratch.cleanup()
 
 
@@ -755,7 +759,7 @@ def test_a_post_replacement_failure_is_indeterminate_and_keeps_the_claim() -> No
           "record-indeterminate: no retry, no compensating record, claim "
           "left for TTL recovery")
     scratch = Scratch()
-    saved = probe_census.os.fsync
+    saved = census_storage.os.fsync
     try:
         before = scratch.bytes_now()
         claim = FakeClaim()
@@ -769,11 +773,11 @@ def test_a_post_replacement_failure_is_indeterminate_and_keeps_the_claim() -> No
                 raise OSError(errno.EIO, "synthetic durability failure")
             return saved(fd)
 
-        probe_census.os.fsync = files_only
+        census_storage.os.fsync = files_only
         result = run(scratch, acquire_claim=lambda probe, **kw: claim,
                      measure=Recorder(measurement(scratch)),
                      record_result=probe_census.record_result_installed)
-        probe_census.os.fsync = saved
+        census_storage.os.fsync = saved
         expect(result.outcome == deflake.OUTCOME_RECORD_INDETERMINATE,
                f"the outcome is record-indeterminate ({result.outcome}: "
                f"{result.detail})")
@@ -798,7 +802,7 @@ def test_a_post_replacement_failure_is_indeterminate_and_keeps_the_claim() -> No
                f"so exactly one sample exists, never a duplicate "
                f"({len(samples)})")
     finally:
-        probe_census.os.fsync = saved
+        census_storage.os.fsync = saved
         scratch.cleanup()
 
 

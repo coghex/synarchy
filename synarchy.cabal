@@ -1470,6 +1470,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents
                    Test.Headless.Building.PageBinding
+                   Test.Headless.Building.PageBinding.ApplyTime
+                   Test.Headless.Building.PageBinding.PendingProjection
+                   Test.Headless.Building.PageBinding.Resolution
+                   Test.Headless.Building.PageBinding.Support
+                   Test.Headless.Building.PageBinding.SynchronousStaleness
                    Test.Headless.Building.PortalSpawnBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
