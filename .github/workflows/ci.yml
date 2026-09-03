@@ -2,6 +2,30 @@
 # test tiers on Linux — the first automated validation of the Linux
 # build (development is on macOS).
 #
+# Job layout (four jobs, three of them workers):
+#   - resolve-image   resolves/publishes the immutable, content-addressed CI
+#                     image every worker below runs in (#784).
+#   - test-and-audits everything that needs a Cabal build product: the
+#                     library + executable + test suites, the headless hspec
+#                     suite, both save-compatibility steps (each spawns its
+#                     own `cabal repl`) and world_check --quick. It is also
+#                     the workflow's sole build-cache writer, so the
+#                     cache-outcome report lives here too.
+#   - static-audits   every engine-free `python3 tools/*.py` gate — the
+#                     audits, the module budgets, the probe-runner
+#                     self-tests, the unit-asset gate (#2272). Split out
+#                     because none of it reads a build product, so none of it
+#                     needed to queue behind ~11.6 minutes of Cabal work; it
+#                     needs only resolve-image and carries no job-level
+#                     condition, docs-only changes included.
+#   - behavior-probes the PR-only, path-selective real-engine probe tier.
+#   - build-test      the stable aggregate status context branch protection
+#                     and the PR drainer consume; it requires all three
+#                     workers.
+# tools/ci_parity_audit.py mirrors the UNION of test-and-audits' and
+# static-audits' gate sets against tools/ci-local.sh, in both directions,
+# and rejects a command run by both jobs before taking that union.
+#
 # Coverage vs CLAUDE.md testing tiers:
 #   - tier 2 hspec:   cabal test synarchy-test-headless
 #   - tier 2 audit:   python3 tools/test_audit.py
@@ -167,10 +191,12 @@ jobs:
       contents: read
       packages: write
 
-  # Heavy build, hspec and engine-free audit worker. The stable `build-test`
-  # context is the aggregate job below; keeping the worker separate lets it
-  # overlap the real-engine behavior probes without weakening the drainer's
-  # single-check merge gate.
+  # The Cabal-backed worker: the build, hspec, the two save-compatibility
+  # steps and world_check. Every gate here needs a build product; the
+  # engine-free ones live in static-audits below (#2272). The stable
+  # `build-test` context is the aggregate job at the end; keeping the workers
+  # separate lets them overlap each other and the real-engine behavior probes
+  # without weakening the drainer's single-check merge gate.
   test-and-audits:
     needs: resolve-image
     runs-on: ubuntu-latest
@@ -224,16 +250,17 @@ jobs:
       # target compiles a doc, and docs/save_compat/* is excluded because
       # its machine-readable contracts require the real-codec audit below.
       # Such a change therefore skips the cabal build, the test
-      # suites, the headless hspec suite and world_check, and still runs
-      # every engine-free Python audit below.
+      # suites, the headless hspec suite and world_check.
       #
       # Skipping every audit too would have been the natural reading of
       # "docs-only", and it would have been wrong: #1490's whole cause was
       # a docs-only push breaking test_findings_report_audit.py, whose
       # self-test reads docs/code_health_findings.md. Filtering docs out
-      # of CI would have hidden that outright. Engine-free audits remain;
-      # only the Cabal-backed save audit is skipped when its complete,
-      # conservative input family is absent.
+      # of CI would have hidden that outright. Since #2272 the engine-free
+      # audits are a separate job with no condition at all, so this fast
+      # path cannot reach them; the only audit it skips is the Cabal-backed
+      # save audit, and only when its complete, conservative input family
+      # is absent.
       #
       # PRs use base..HEAD; pushes use the COMPLETE pushed span
       # (before..after), so a batch push of several commits is judged as
@@ -272,7 +299,8 @@ jobs:
       # Pull requests consume the epoch already established by their base;
       # only a post-merge master build is allowed to advance and publish it.
       # The history-derived selection is CI orchestration and has no local
-      # cache counterpart; its self-test runs with the engine-free audits.
+      # cache counterpart; its self-test runs in static-audits, with the
+      # rest of the engine-free gates.
       - name: Select project build cache epoch
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         id: cache-epoch
@@ -316,6 +344,11 @@ jobs:
       # backstop. A docs-only push reuses the exact range already resolved
       # above, allowing Cabal-backed gates to stay off without classifying
       # every tracked source file as changed.
+      #
+      # The unit-asset gate's selector left with the gate it feeds (#2272);
+      # it now runs in the static-audits worker, which is where that gate
+      # runs. Every member remaining here decides a Cabal-backed step of
+      # this job.
       - name: Select expensive path-relevant gates
         id: expensive-gates
         run: |
@@ -333,8 +366,6 @@ jobs:
               sed 's/^/worldgen=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate graphical | \
               sed 's/^/graphical=/'
-            printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \
-              sed 's/^/unit-assets=/'
             printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate save-compat | \
               sed 's/^/save-compat=/'
           } >> "$GITHUB_OUTPUT"
@@ -404,6 +435,13 @@ jobs:
       # either to the combined action would leave `cache-matched-key`
       # permanently empty and silently turn every prefix hit into a
       # reported full miss.
+      #
+      # This step is the bare REPORT, and it is the reason the report
+      # stayed here when the static gates left (#2272): it reads the
+      # `cache-*` outputs the two restore steps above published into THIS
+      # runner's environment, so it cannot run in a job that restores no
+      # cache. Its `--self-test`, and those of the cache-key selector and
+      # the retention tool, are engine-free and moved to static-audits.
       - name: Report cache restore outcomes
         env:
           CI_CACHE_DOCS_ONLY: ${{ steps.docs-fast-path.outputs.docs_only }}
@@ -414,11 +452,7 @@ jobs:
           CI_CACHE_DIST_HIT: ${{ steps.dist-cache.outputs.cache-hit }}
           CI_CACHE_DIST_PRIMARY_KEY: ${{ steps.dist-cache.outputs.cache-primary-key }}
           CI_CACHE_DIST_MATCHED_KEY: ${{ steps.dist-cache.outputs.cache-matched-key }}
-        run: |
-          python3 tools/ci_cache_epoch.py --self-test
-          python3 tools/ci_cache_cleanup.py --self-test
-          python3 tools/ci_cache_report.py --self-test
-          python3 tools/ci_cache_report.py
+        run: python3 tools/ci_cache_report.py
 
       - name: Build dependencies
         if: steps.docs-fast-path.outputs.docs_only != 'true'
@@ -482,6 +516,203 @@ jobs:
             echo "worldgen gate did not fire: full-tier examples stay pending."
             cabal test synarchy-test-headless --test-show-details=direct
           fi
+
+      # Guard (issue #766, save-overhaul C4 requirement 14): fails if a
+      # tracked save-compatibility fixture drifts, goes missing, or the
+      # frozen-DTO/envelope-framing fingerprints recorded in
+      # docs/save_compat/manifest.json disagree with the current source.
+      # See tools/save_compat_audit.py's module docstring for exactly
+      # what this does and does not guarantee.
+      #
+      # Both commands here stay blocking on every non-docs-only change,
+      # and on every save-compat input change. --without-reproducibility
+      # (#1360) removes exactly ONE
+      # member of the self-test module -- the one that spawns its own
+      # `cabal repl` to build two timestamp variants -- which the next
+      # step runs path-selectively instead. Every other member still
+      # runs, and so does the whole real audit.
+      #
+      # Note this step is NOT cabal-free even so, and was never meant to
+      # become so: save_compat_audit.py's real-manifest run decodes the
+      # tracked fixtures' envelope descriptors through a `cabal repl` of
+      # its own (verify_fixture_descriptors -> dump_fixture_descriptors),
+      # and test_real_manifest_passes_the_audit runs that same audit. The
+      # saving here is one ADDITIONAL repl, not all of them.
+      - name: Save compatibility audit
+        if: >-
+          steps.docs-fast-path.outputs.docs_only != 'true'
+          || steps.expensive-gates.outputs.save-compat == 'true'
+        run: |
+          python3 tools/test_save_compat_audit.py --without-reproducibility
+          python3 tools/save_compat_audit.py
+
+      # The one cabal-repl member of that module, split out and selected
+      # by changed paths (#1360). It proves --generate-session's output
+      # is independent of when the command ran, by encoding two envelopes
+      # differing only in smTimestamp and showing normalize_fixture_
+      # timestamp collapses them to identical bytes. That exercises
+      # fixture GENERATION, which only a save-format, fixture,
+      # save-tooling or Cabal change can move -- so an unrelated pull
+      # request no longer pays its ~26 s.
+      #
+      # Path-selective on PRs and docs-only master pushes. Every other
+      # master push feeds the selector all tracked files, retaining the
+      # post-merge backstop. The gate's own --self-test pins both
+      # directions, and
+      # tools/ci_parity_audit.py pins that `make ci` selects it from the
+      # same decision.
+      - name: Save compatibility fixture reproducibility
+        if: steps.expensive-gates.outputs.save-compat == 'true'
+        run: python3 tools/test_save_compat_audit.py --only-reproducibility
+
+      # Worldgen regression gate — see the header comment. Baselines
+      # are tracked in tools/baselines/ (#421), captured on the primary
+      # dev machine (macOS/aarch64); Linux output matches them exactly.
+      - name: world_check --quick
+        if: >-
+          steps.expensive-gates.outputs.worldgen == 'true'
+          && steps.docs-fast-path.outputs.docs_only != 'true'
+        run: python3 tools/world_check.py --quick
+
+      # The other half of the #1358 restore/save split above. It has to
+      # reproduce the combined `actions/cache` action's post step, and it
+      # does so term for term:
+      #   * `post-if: success()` — a step `if:` naming no status function
+      #     has `success()` applied implicitly, so this is skipped
+      #     whenever an earlier step failed or the job was cancelled,
+      #     exactly as that post step was.
+      #   * LAST step in the job, so dist-newstyle is captured in the
+      #     same final state a post step would have seen.
+      #   * Save only on successful MASTER pushes when the EXACT key missed.
+      #     Pull requests are intentionally restore-only so every reusable
+      #     project snapshot lives in default-branch scope. The combined action's
+      #     save half compares its primary key against the key it
+      #     restored and skips on an exact match — that is what keeps one
+      #     immutable snapshot per plan/epoch. `actions/cache/save` has no
+      #     such check of its own, so the cache-hit term is load-bearing
+      #     here exactly as it is on the dependency save above.
+      #   * `key:` is the restore step's OWN `cache-primary-key` output,
+      #     not a second `hashFiles(...)` evaluation. The combined action
+      #     saves under the key its restore half evaluated, carried in
+      #     step state; re-hashing plan.json here would save under
+      #     whatever the file hashes to after the whole build instead —
+      #     a different key from the one the cache-hit term above was
+      #     decided against. That output is empty in exactly the case
+      #     where the combined action's save half logged "Error
+      #     retrieving key from state" and returned, so the emptiness
+      #     term keeps that a no-op rather than an invalid-input failure.
+      # The docs-only term is load-bearing for the same reason it is on
+      # the dependency save: a skipped restore step leaves cache-hit
+      # EMPTY, which satisfies `!= 'true'`.
+      - name: Save project build cache (dist-newstyle)
+        if: >-
+          github.event_name == 'push'
+          && github.ref == 'refs/heads/master'
+          && steps.dist-cache.outputs.cache-hit != 'true'
+          && steps.dist-cache.outputs.cache-primary-key != ''
+          && steps.docs-fast-path.outputs.docs_only != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist-newstyle
+          key: ${{ steps.dist-cache.outputs.cache-primary-key }}
+
+  # Engine-free static-audit worker (#2272), split out of test-and-audits so
+  # every `python3 tools/*.py` gate that needs no Cabal build product starts
+  # as soon as resolve-image completes instead of queueing behind the build,
+  # the test-suite compile and the headless suite. That was about 4.5-5.5
+  # minutes of tree-reading Python sitting behind ~11.6 minutes of Cabal work
+  # for no reason other than sharing a job with it.
+  #
+  # It carries NO job-level `if:` on purpose. It runs on every event
+  # test-and-audits runs on, docs-only pull requests and docs-only master
+  # pushes included: #1490's whole cause was a docs-only push breaking
+  # test_findings_report_audit.py, whose self-test reads
+  # docs/code_health_findings.md, so filtering docs out of the audits would
+  # hide exactly the failure the fast path was written around. The docs-only
+  # fast path lives in test-and-audits, where it gates that job's Cabal
+  # steps; there is nothing here for it to skip.
+  #
+  # It runs in the SAME resolved CI image as test-and-audits, which is what
+  # guarantees the identical Python toolchain (.github/ci/Dockerfile's pinned
+  # PyYAML, Pillow and jsonschema) rather than whatever a hosted runner
+  # happens to ship. No toolchain export, no `cabal`, no dependency store and
+  # no dist-newstyle: nothing here compiles or reads a build product, so it
+  # restores no cache and saves none. test-and-audits remains the workflow's
+  # sole cache writer.
+  #
+  # What deliberately did NOT move: the headless hspec suite, both
+  # save-compatibility steps (each spawns its own `cabal repl`) and
+  # world_check --quick (it drives the built executable).
+  #
+  # tools/ci_parity_audit.py audits the UNION of this job's gate set and
+  # test-and-audits', rejecting any command run by both BEFORE taking that
+  # union, and compares the union with tools/ci-local.sh in both directions.
+  # So a gate cannot be dropped from both jobs, duplicated across them, or
+  # added on one side only. That audit also pins this job's topology --
+  # `needs: resolve-image` alone, no job-level condition -- and requires the
+  # build-test aggregate below to fail when this job does not succeed.
+  static-audits:
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    container:
+      # The same expression test-and-audits uses, so both workers audit the
+      # tree under one immutable, content-addressed image (#784).
+      image: ${{ needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # fetch-depth: 0 so the unit-asset selector below can diff a pull
+      # request against its base to see which files changed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The checkout is mounted from the hosted runner into this job's
+      # container, so it can be owned by a different UID than the shell
+      # running later steps. Trust this exact workspace before the
+      # selector's direct Git invocations.
+      - name: Trust checked-out workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The unit-asset gate's selector, moved here with the gate it feeds
+      # (#2272). Pull requests diff against their base exactly as before;
+      # every other event feeds the selector all tracked files, and the
+      # gate itself stays unconditional off pull requests, so a path the
+      # selector does not list can never leave the inventory unchecked on
+      # master. No docs-only branch, because there is no docs-only range in
+      # this job to reuse -- and none is needed: a docs-only pull request
+      # changes no unit-asset path, so the selector says false and the gate
+      # skips, which is the behavior requirement 4 preserves.
+      - name: Select path-relevant unit-asset gate
+        id: expensive-gates
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            BASE='${{ github.event.pull_request.base.sha }}'
+            git fetch --no-tags origin "$BASE"
+            CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          else
+            CHANGED="$(git ls-files)"
+          fi
+          printf '%s\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \
+            sed 's/^/unit-assets=/' >> "$GITHUB_OUTPUT"
+
+      # The engine-free self-tests of CI's cache-key selection (#1354's
+      # epoch), its retention tool and its cache-outcome report (#1358).
+      # They read no cache and no build product, so they moved here with
+      # the rest of the static gates (#2272); the report ITSELF stays in
+      # test-and-audits, which is the only job with cache outputs to
+      # classify. tools/ci-local.sh runs these same three under its own
+      # "CI cache policy and report self-tests" step.
+      - name: CI cache policy and report self-tests
+        run: |
+          python3 tools/ci_cache_epoch.py --self-test
+          python3 tools/ci_cache_cleanup.py --self-test
+          python3 tools/ci_cache_report.py --self-test
 
       - name: Test audit
         run: python3 tools/test_audit.py
@@ -620,61 +851,13 @@ jobs:
       # from EngineEnv without a matching capability/thread/lifecycle
       # classification landing in
       # docs/engineenv_capability_inventory.md. This is a separate axis
-      # from the persistence-inventory audit above (capability/thread/
+      # from the persistence-inventory audit above it (capability/thread/
       # lifecycle ownership, not save/load classification) -- see that
       # document's own introduction for how the two relate.
       - name: EngineEnv capability inventory audit
         run: |
           python3 tools/test_engine_env_capability_audit.py
           python3 tools/engine_env_capability_audit.py
-
-      # Guard (issue #766, save-overhaul C4 requirement 14): fails if a
-      # tracked save-compatibility fixture drifts, goes missing, or the
-      # frozen-DTO/envelope-framing fingerprints recorded in
-      # docs/save_compat/manifest.json disagree with the current source.
-      # See tools/save_compat_audit.py's module docstring for exactly
-      # what this does and does not guarantee.
-      #
-      # Both commands here stay blocking on every non-docs-only change,
-      # and on every save-compat input change. --without-reproducibility
-      # (#1360) removes exactly ONE
-      # member of the self-test module -- the one that spawns its own
-      # `cabal repl` to build two timestamp variants -- which the next
-      # step runs path-selectively instead. Every other member still
-      # runs, and so does the whole real audit.
-      #
-      # Note this step is NOT cabal-free even so, and was never meant to
-      # become so: save_compat_audit.py's real-manifest run decodes the
-      # tracked fixtures' envelope descriptors through a `cabal repl` of
-      # its own (verify_fixture_descriptors -> dump_fixture_descriptors),
-      # and test_real_manifest_passes_the_audit runs that same audit. The
-      # saving here is one ADDITIONAL repl, not all of them.
-      - name: Save compatibility audit
-        if: >-
-          steps.docs-fast-path.outputs.docs_only != 'true'
-          || steps.expensive-gates.outputs.save-compat == 'true'
-        run: |
-          python3 tools/test_save_compat_audit.py --without-reproducibility
-          python3 tools/save_compat_audit.py
-
-      # The one cabal-repl member of that module, split out and selected
-      # by changed paths (#1360). It proves --generate-session's output
-      # is independent of when the command ran, by encoding two envelopes
-      # differing only in smTimestamp and showing normalize_fixture_
-      # timestamp collapses them to identical bytes. That exercises
-      # fixture GENERATION, which only a save-format, fixture,
-      # save-tooling or Cabal change can move -- so an unrelated pull
-      # request no longer pays its ~26 s.
-      #
-      # Path-selective on PRs and docs-only master pushes. Every other
-      # master push feeds the selector all tracked files, retaining the
-      # post-merge backstop. The gate's own --self-test pins both
-      # directions, and
-      # tools/ci_parity_audit.py pins that `make ci` selects it from the
-      # same decision.
-      - name: Save compatibility fixture reproducibility
-        if: steps.expensive-gates.outputs.save-compat == 'true'
-        run: python3 tools/test_save_compat_audit.py --only-reproducibility
 
       # Cheap, no-engine guard (issue #1145): fails if a
       # positionally-serialized (`Generic`-derived `Serialize`) sum type's
@@ -683,7 +866,7 @@ jobs:
       # reinterprets every already-saved value with nothing failing to
       # compile -- and so does reordering or retyping ONE constructor's
       # fields, which are positional too and move no tag at all (#1270).
-      # The compat fixtures above only prove the handful of
+      # The compat fixtures in test-and-audits only prove the handful of
       # constructors they happen to carry. Deliberately unconditional
       # rather than path-selective: the guarded set is discovered from
       # every `src/`/`app/` module, and the baseline it compares against
@@ -845,15 +1028,6 @@ jobs:
         run: |
           python3 tools/test_check_texture_paths.py
           python3 tools/check_texture_paths.py
-
-      # Worldgen regression gate — see the header comment. Baselines
-      # are tracked in tools/baselines/ (#421), captured on the primary
-      # dev machine (macOS/aarch64); Linux output matches them exactly.
-      - name: world_check --quick
-        if: >-
-          steps.expensive-gates.outputs.worldgen == 'true'
-          && steps.docs-fast-path.outputs.docs_only != 'true'
-        run: python3 tools/world_check.py --quick
 
       # Validate the probe-runner harness itself on every run (cheap, no
       # engine, no GPU). ci_probes/ci_expensive_gates cover the
@@ -1157,66 +1331,28 @@ jobs:
         run: |
           python3 tools/review_gate_label_policy.py --self-test
 
-      # Cheap, no-engine guard (#1355): fails if a `python3 tools/*.py`
-      # check runs in this job and not in tools/ci-local.sh, or the other
-      # way round, outside the audit's hard-coded exemption list (CI's
-      # path selectors, which `make ci` has nothing to select for).
-      # CLAUDE.md promises `make ci` predicts
-      # this job's result; nothing enforced that and it had already
+      # Cheap, no-engine guard (#1355, generalized to two jobs in #2272):
+      # fails if a `python3 tools/*.py` check runs in this job or in
+      # test-and-audits and not in tools/ci-local.sh, or the other way
+      # round, or in BOTH CI jobs at once -- outside the audit's
+      # hard-coded exemption list (CI's path selectors, which `make ci`
+      # has nothing to select for). CLAUDE.md promises `make ci` predicts
+      # those two jobs' result; nothing enforced that and it had already
       # drifted -- the original five of the probe-runner self-tests above
-      # ran only here.
+      # ran only here. It also pins this job's topology and the
+      # build-test aggregate's dependency on it, so the split cannot be
+      # undone into a job the stable context stops requiring.
       - name: CI/local gate parity audit
         run: |
           python3 tools/ci_parity_audit.py --self-test
           python3 tools/ci_parity_audit.py
 
-      # The other half of the #1358 restore/save split above. It has to
-      # reproduce the combined `actions/cache` action's post step, and it
-      # does so term for term:
-      #   * `post-if: success()` — a step `if:` naming no status function
-      #     has `success()` applied implicitly, so this is skipped
-      #     whenever an earlier step failed or the job was cancelled,
-      #     exactly as that post step was.
-      #   * LAST step in the job, so dist-newstyle is captured in the
-      #     same final state a post step would have seen.
-      #   * Save only on successful MASTER pushes when the EXACT key missed.
-      #     Pull requests are intentionally restore-only so every reusable
-      #     project snapshot lives in default-branch scope. The combined action's
-      #     save half compares its primary key against the key it
-      #     restored and skips on an exact match — that is what keeps one
-      #     immutable snapshot per plan/epoch. `actions/cache/save` has no
-      #     such check of its own, so the cache-hit term is load-bearing
-      #     here exactly as it is on the dependency save above.
-      #   * `key:` is the restore step's OWN `cache-primary-key` output,
-      #     not a second `hashFiles(...)` evaluation. The combined action
-      #     saves under the key its restore half evaluated, carried in
-      #     step state; re-hashing plan.json here would save under
-      #     whatever the file hashes to after the whole build instead —
-      #     a different key from the one the cache-hit term above was
-      #     decided against. That output is empty in exactly the case
-      #     where the combined action's save half logged "Error
-      #     retrieving key from state" and returned, so the emptiness
-      #     term keeps that a no-op rather than an invalid-input failure.
-      # The docs-only term is load-bearing for the same reason it is on
-      # the dependency save: a skipped restore step leaves cache-hit
-      # EMPTY, which satisfies `!= 'true'`.
-      - name: Save project build cache (dist-newstyle)
-        if: >-
-          github.event_name == 'push'
-          && github.ref == 'refs/heads/master'
-          && steps.dist-cache.outputs.cache-hit != 'true'
-          && steps.dist-cache.outputs.cache-primary-key != ''
-          && steps.docs-fast-path.outputs.docs_only != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: dist-newstyle
-          key: ${{ steps.dist-cache.outputs.cache-primary-key }}
-
   # Path-selective, BLOCKING behavior-probe gate (#530), split from
-  # test-and-audits so real-engine probes run in parallel with hspec and the
-  # engine-free audits. It is PR-only, preserving the existing policy;
-  # master pushes keep test-and-audits as their complete post-merge backstop,
-  # with the stable build-test aggregate reporting its verdict.
+  # test-and-audits so real-engine probes run in parallel with hspec and
+  # the static audits. It is PR-only, preserving the existing policy; master
+  # pushes keep test-and-audits and static-audits as their complete
+  # post-merge backstop, with the stable build-test aggregate reporting the
+  # verdict.
   behavior-probes:
     if: github.event_name == 'pull_request'
     needs: resolve-image
@@ -1333,13 +1469,18 @@ jobs:
 
   # Stable aggregate context consumed by branch protection and the PR
   # drainer. The drainer gates its --admin merge on exactly `build-test`, so
-  # this job must fail when either parallel PR worker fails. On master pushes
-  # behavior-probes is intentionally skipped and test-and-audits remains the
+  # this job must fail when any parallel PR worker fails. `static-audits`
+  # carries no job-level condition, so `= success` is the right assertion for
+  # it on pull requests AND master pushes alike -- a failure, a cancellation
+  # and a skip are all non-success, which is what keeps the engine-free gates
+  # blocking after the #2272 split. On master pushes behavior-probes is
+  # intentionally skipped and test-and-audits + static-audits remain the
   # complete post-merge backstop.
   build-test:
     if: always()
     needs:
       - test-and-audits
+      - static-audits
       - behavior-probes
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1348,9 +1489,11 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
+          AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probes.result }}
         run: |
           test "$TESTS_RESULT" = success
+          test "$AUDITS_RESULT" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$PROBES_RESULT" = success
           else
