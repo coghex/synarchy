@@ -1,0 +1,4 @@
+behavior-probes	Select behavior probes	2026-09-02T21:00:43.0000000Z Selected probes: craft,expedition_loop,repair
+behavior-probes	Behavior probes (path-selective)	2026-09-02T21:04:10.0000000Z #probe-progress# 21:04:10 +0.0s | begin | craft (craft_probe.py) attempt 1/2 | dispatched
+behavior-probes	Behavior probes (path-selective)	2026-09-02T21:05:35.0000000Z #probe-progress# 21:05:35 +85.0s | end | craft (craft_probe.py) attempt 1/2 | PASS (85.0s)
+behavior-probes	Behavior probes (path-selective)	2026-09-02T21:05:35.1000000Z #probe-progress# 21:05:35 +85.1s | begin | expedition_loop (expedition_loop_probe.py) attempt 1/2 | dispatched

@@ -247,8 +247,12 @@ numberSourceOf x = NumberSource (realToFrac x) (tshow x)
 
 -- NOTE: optional fields must use (.:?) with (.!=). With (.:), a
 -- single missing key fails the WHOLE parse and loadWorldGenConfig
--- silently falls back to ALL defaults — every present setting in the
--- file gets discarded. See [[gotcha_aeson_optional_fields]].
+-- falls back to ALL defaults — every present setting in the file gets
+-- discarded. Since #2286 the loss is still total but no longer silent:
+-- the loader warns once (LevelWarn / CatInit) naming the file and the
+-- decoder's own error before returning the defaults. That warning is a
+-- diagnostic, not a licence — a (.:) here still throws away the whole
+-- authored document. See [[gotcha_aeson_optional_fields]].
 
 instance FromJSON CalendarYaml where
     parseJSON (Yaml.Object v) = CalendarYaml

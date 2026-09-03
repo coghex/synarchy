@@ -25,6 +25,7 @@ import qualified Data.HashMap.Strict as HM
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..))
 import World.Flora.Identity (FloraInstanceId)
+import World.Flora.Reference (FloraRef)
 import World.Flora.Types (FloraId)
 import World.Material.Id (MaterialId(..))
 
@@ -153,6 +154,34 @@ data WorldEdit
                                            --   is the only change that leaves
                                            --   every shipped log's existing
                                            --   tags meaning what they meant.
+    | WePlaceFloraRef !Int !Int !FloraRef !Int !Float !FloraInstanceId
+                                           -- ^ #2243: 'WePlaceFloraWithId' with
+                                           --   the species named
+                                           --   ('World.Flora.Reference.FloraRef')
+                                           --   instead of numbered — the
+                                           --   PERSISTED spelling of a planted
+                                           --   row crop, and the only planting
+                                           --   edit anything writes to a save
+                                           --   from now on.
+                                           --
+                                           --   Like the legacy 'WePlaceFlora'
+                                           --   above it never reaches a live
+                                           --   page: it exists between the save
+                                           --   boundary and the session, and
+                                           --   nowhere else.
+                                           --   'World.Thread.Command.Save.WriteWorld'
+                                           --   makes one per planted edit at
+                                           --   capture, a decode of
+                                           --   @world-edits@ v3 produces one
+                                           --   directly, an older payload's
+                                           --   migration produces one carrying
+                                           --   'World.Flora.Reference.FloraByLegacyId',
+                                           --   and 'World.Load.Stage' resolves
+                                           --   every one of them back into
+                                           --   'WePlaceFloraWithId' against the
+                                           --   loading build's catalog. Appended
+                                           --   at the END for the same reason
+                                           --   'WePlaceFloraWithId' was.
     deriving (Show, Eq, Generic, Serialize)
 
 -- | All edits in a world, keyed by the chunk that contains them.
@@ -190,6 +219,8 @@ shiftWorldEdit dgx dgy edit = case edit of
     WePlaceFlora gx gy fid d w    → WePlaceFlora (gx + dgx) (gy + dgy) fid d w
     WePlaceFloraWithId gx gy fid d w i →
         WePlaceFloraWithId (gx + dgx) (gy + dgy) fid d w i
+    WePlaceFloraRef gx gy ref d w i →
+        WePlaceFloraRef (gx + dgx) (gy + dgy) ref d w i
     WeSetFluidSnapshot gx gy ft z →
         WeSetFluidSnapshot (gx + dgx) (gy + dgy) ft z
     WeClearFluidSnapshot gx gy    → WeClearFluidSnapshot (gx + dgx) (gy + dgy)

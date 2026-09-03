@@ -506,15 +506,23 @@ jobs:
       # the expensive case on every PR. The disabled branch has to leave
       # the variable genuinely ABSENT from the test process's
       # environment, which the bare invocation below does.
+      #
+      # Both branches pass Hspec's --print-slow-items=20 through cabal's
+      # --test-options (#2277), so this step's log ends with the twenty
+      # slowest spec items and their durations, just before cabal's own
+      # footer. About four of this step's five minutes are a handful of
+      # world generations; that list is what names them without diffing
+      # log timestamps by hand. It is a DIAGNOSTIC, not a gate: no
+      # threshold here fails a run.
       - name: Headless test suite
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
           if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
             echo "worldgen gate fired: running the full tier (SYNARCHY_FULL_TESTS=1)."
-            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
+            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
           else
             echo "worldgen gate did not fire: full-tier examples stay pending."
-            cabal test synarchy-test-headless --test-show-details=direct
+            cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
           fi
 
       # Guard (issue #766, save-overhaul C4 requirement 14): fails if a

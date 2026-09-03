@@ -66,7 +66,9 @@ import World.Map.ImagePlan
     , MapImageSource(..), admitMapImage, mapImageRefusalText )
 import Engine.Map.ImageAdmission (readMapImageCeiling)
 import World.Edit.Apply (replayEdits)
-import World.Edit.Types (canonicalizeWorldEdits)
+import World.Edit.Types (canonicalizeWorldEdits, WorldEdits)
+import World.Flora.CropPlot (CropPlots)
+import World.Plant.Types (PlantDesignations)
 import World.Mine.Apply (applyDigSlopes)
 import World.Construct.Apply (applyConstructSlopes)
 import World.Construct.Reconcile
@@ -195,15 +197,51 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                         (ZoomAtlasSource
                             (wgpWorldSize (wpsGenParams wps))) ]
                 ]
-        case planRefusals of
-         ((refusedPid, refusal) : _) → pure $ Left $ StageError $
-            "cannot stage page " <> unWorldPageId refusedPid <> ": "
-            <> mapImageRefusalText refusal
+        -- #2243: every page's durable flora references become runtime
+        -- handles here, against the catalog read above — the first point
+        -- in the load transaction that has one, which is why a pure
+        -- component migration could only carry a pre-name payload's
+        -- ordinals forward rather than resolve them
+        -- ("World.Save.Component.Page"'s @migrateWorldEditDTOv2@).
+        --
+        -- Resolved for the WHOLE session up here rather than per page
+        -- inside 'stagePage', on exactly the terms the map-image plans
+        -- above are admitted: a load publishes a complete session or
+        -- publishes nothing, so a page whose species cannot be resolved
+        -- must fail the transaction before any page's live refs are
+        -- written.
+        --
+        -- Reaching the refusal below means
+        -- 'World.Save.Types.missingFloraReferences' did not run, or ran
+        -- against a different catalog: load acceptance already refuses
+        -- exactly these references, through this same resolution rule,
+        -- before staging is ever queued.
+        let resolvedFlora =
+                [ (wpsPageId wps
+                  , resolveFloraReferences catalog (wpsPageId wps)
+                        (wpsEdits wps) (wpsCropPlots wps)
+                        (wpsPlantDesignations wps))
+                | wps ← orderedPages ]
+            -- Both pre-stage refusals in ONE list, in the order they are
+            -- checked, so either fails the transaction identically and
+            -- neither can shadow the other into a partial stage.
+            stageRefusals =
+                [ "cannot stage page " <> unWorldPageId pid <> ": "
+                  <> T.intercalate "; " (map renderMissingFloraRef errs)
+                | (pid, Left errs) ← resolvedFlora ]
+                ⧺
+                [ "cannot stage page " <> unWorldPageId refusedPid <> ": "
+                  <> mapImageRefusalText refusal
+                | (refusedPid, refusal) ← planRefusals ]
+        case stageRefusals of
+         (msg : _) → pure $ Left $ StageError msg
          [] → do
-          results ← forM orderedPages $
-            stagePage logger registry palette catalog
-                      buildingDefs unitDefs artCatalog refundDeps
-                      mapCeiling activeWpsId
+          results ← forM (zip orderedPages
+                              [ flora | (_, Right flora) ← resolvedFlora ]) $
+            \(wps, flora) →
+              stagePage logger registry palette catalog
+                        buildingDefs unitDefs artCatalog refundDeps
+                        mapCeiling activeWpsId flora wps
 
           let buildingOrphans = concatMap psrBuildingOrphans results
               unitOrphans     = concatMap psrUnitOrphans results
@@ -319,9 +357,19 @@ stagePage
     ∷ LoggerState → MaterialRegistry → ZoomColorPalette
     → FloraCatalog → HM.HashMap Text BuildingDef → HM.HashMap Text UnitDef
     → StructureArtCatalog → ConstructRefundDeps
-    → MapImageCeiling → WorldPageId → WorldPageSave → IO PageStageResult
+    → MapImageCeiling → WorldPageId
+    → (WorldEdits, CropPlots, PlantDesignations)
+      -- ^ #2243: this page's edit log, crop plots and plant designations
+      --   with every species reference already resolved to a runtime
+      --   handle by 'stageSession'. Handed in rather than read off
+      --   @wps@, because the saved values name their species and only
+      --   the catalog can turn a name into a handle — resolving it here
+      --   would put a per-page failure inside a function whose contract
+      --   is that a page always stages.
+    → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
-          artCatalog refundDeps mapCeiling activeWpsId wps = do
+          artCatalog refundDeps mapCeiling activeWpsId
+          (liveEdits, liveCropPlots, livePlantDesignations) wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
         -- #2288 requirement 4: a save's STORED floating-point generation
@@ -387,7 +435,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- Identity for every save whose keys are already canonical, which is
     -- every page away from the seam.
     writeIORef (wsEditsRef worldState)
-        (canonicalizeWorldEdits (canonicalChunkCoord params) (wpsEdits wps))
+        (canonicalizeWorldEdits (canonicalChunkCoord params) liveEdits)
     writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
     writeIORef (wsConstructDesignationsRef worldState)
         (wpsConstructDesignations wps)
@@ -422,8 +470,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     writeIORef (wsPlantedFloraCursorRef worldState)
         (wpsPlantedFloraCursor wps)
     writeIORef (wsTillDesignationsRef worldState) (wpsTillDesignations wps)
-    writeIORef (wsCropPlotsRef worldState) (wpsCropPlots wps)
-    writeIORef (wsPlantDesignationsRef worldState) (wpsPlantDesignations wps)
+    writeIORef (wsCropPlotsRef worldState) liveCropPlots
+    writeIORef (wsPlantDesignationsRef worldState) livePlantDesignations
     -- Issue #763: craft bills / power nodes are restored VERBATIM,
     -- never filtered against the save's own building snapshot. A
     -- bill/node whose station/building instance is absent (demolished

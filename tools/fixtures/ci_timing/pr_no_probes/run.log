@@ -1,0 +1,2 @@
+behavior-probes	Select behavior probes	2026-09-02T22:00:47.0000000Z No behavior probes selected for this change — skipping.
+test-and-audits	Report cache restore outcomes	2026-09-02T22:00:40.0000000Z CI_CACHE_REPORT skipped=docs-only-fast-path

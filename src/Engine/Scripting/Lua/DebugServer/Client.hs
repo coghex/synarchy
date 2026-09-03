@@ -17,10 +17,17 @@
 --     under that cap, so the peak per-connection buffer is the cap plus
 --     two bytes rather than the cap plus a whole read.
 --
---   The 'commandResponseTimeoutMicros' wait for the Lua thread is
---   deliberately OUTSIDE the idle bound and deliberately unchanged: a
---   queued command is a command in flight, and so is a built-in that
---   blocks for minutes ('world.waitForInit').
+--   The 'dslCommandResponseMicros' wait for the Lua thread is
+--   deliberately OUTSIDE the idle bound and its production value is
+--   deliberately unchanged: a queued command is a command in flight,
+--   and so is a built-in that blocks for minutes
+--   ('world.waitForInit').
+--
+--   What #2282 changed is what the EXPIRY of that wait means. It used
+--   to mean nothing at all — the command stayed queued and a later
+--   drain ran it against a session whose client had already been told
+--   it had not. Now the expiry races the Lua thread's claim through
+--   'cancelDebugCommand', and the client reports which side won.
 module Engine.Scripting.Lua.DebugServer.Client
     ( serveClient
     , refuseClient
@@ -32,7 +39,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
+import Control.Concurrent.MVar (takeMVar)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TQueue (TQueue, writeTQueue)
 import Control.Exception (SomeException, try)
@@ -120,24 +127,55 @@ processLines cfg cmdQueue conn buf =
 -- | Answer one command line. Built-ins (the long-blocking waits) run
 --   HERE, on the client thread, so they never freeze the Lua thread;
 --   everything else goes on the queue and waits
---   'commandResponseTimeoutMicros' for the Lua thread's reply.
+--   'dslCommandResponseMicros' for the Lua thread's reply.
 --
---   The timeout guards against deadlock: if the Lua thread crashes
---   after dequeuing the command but before filling the MVar, an
---   unbounded 'takeMVar' would block forever (the crash handler only
---   drains the TQueue, not already-dequeued commands).
+--   Built-ins never reach the queue at all, so they have no lifecycle
+--   and no cancellation: 'dscBuiltin' answering @Just@ returns before a
+--   'DebugCommand' is ever constructed, which is why @engine.quit@,
+--   @world.waitForInit@ and @world.waitForChunks@ are untouched by all
+--   of this.
+--
+--   On expiry the command is not simply abandoned (#2282). The wait
+--   races the Lua thread's 'claimDebugCommand' through the command's
+--   one lifecycle cell, and 'cancelDebugCommand' reports which of three
+--   things happened:
+--
+--   * the cancellation WON — the command was still queued, is now
+--     permanently unclaimable, and will be discarded unrun by whichever
+--     drain dequeues it. The session is untouched, so the client is
+--     told 'commandCancelledMessage' and may safely re-send.
+--   * the command was ALREADY CANCELLED by someone else — a load
+--     handoff (#763) or a teardown drain got there while this wait was
+--     running out. It did not execute either, so the honest reply is
+--     that canceller's own, which is what 'cancelDebugCommand' hands
+--     back. Reporting an unknown outcome here would be wrong twice
+--     over: it would claim the session might have been touched when it
+--     was not, and it would discard a rejection the client is entitled
+--     to see.
+--   * the cancellation LOST to a claim — the Lua thread is running the
+--     command. Its answer will be published into a response channel
+--     nobody is reading any more, so the client is told
+--     'commandUnknownOutcomeMessage' and must NOT re-send.
+--
+--   In every case the reply is this command's own and the connection
+--   moves on: a late answer cannot surface as a stray line on it,
+--   because the response channel is per-command and this loop never
+--   looks at that one again.
 runCommand ∷ DebugServerConfig → TQueue DebugCommand → Text → IO Text
 runCommand cfg cmdQueue cmdText = do
     mBuiltin ← dscBuiltin cfg cmdText
     case mBuiltin of
         Just r  → return r
         Nothing → do
-            responseMVar ← newEmptyMVar
-            atomically $ writeTQueue cmdQueue (DebugCommand cmdText responseMVar)
-            mResult ← timeout commandResponseTimeoutMicros (takeMVar responseMVar)
-            return $ fromMaybe
-              "ERROR: command timed out (Lua thread may have crashed)"
-              mResult
+            cmd ← newDebugCommand cmdText
+            atomically $ writeTQueue cmdQueue cmd
+            mResult ← timeout (dslCommandResponseMicros (dscLimits cfg))
+                              (takeMVar (dcResponse cmd))
+            case mResult of
+                Just r  → return r
+                Nothing → do
+                    cancelled ← cancelDebugCommand cmd commandCancelledMessage
+                    return (fromMaybe commandUnknownOutcomeMessage cancelled)
 
 -- | Say why, then stop serving. The send is best-effort — the reason
 --   the connection is being dropped is frequently the reason it can no

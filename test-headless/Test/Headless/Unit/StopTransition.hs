@@ -55,7 +55,6 @@ import Unit.Thread.Movement.Types (defaultMoveStats)
 import Unit.Pathing.Config (defaultPathingConfig)
 import Unit.Types (UnitId(..))
 import World.Edit.Types (emptyWorldEdits)
-import World.Flora.CropPlot (emptyCropPlots)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Generate.Types (WorldGenParams, defaultWorldGenParams)
 import World.Material (emptyMaterialRegistry)
@@ -290,7 +289,7 @@ pageWithSim ss = PageSnapshot
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
-    , pgsCropPlots    = emptyCropPlots
+    , pgsCropPlots    = HM.empty
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = Nothing

@@ -1,10 +1,21 @@
-module Engine.Core.State where
+-- | The engine's central state records.
+--
+--   The export list re-exports "Engine.Core.Lifecycle" alongside this
+--   module's own definitions, so 'EngineLifecycle' and
+--   'requestEngineCleanup' — moved there by #2283 so the shared worker
+--   lifecycle can own the fail-stop transition without importing this
+--   module — stay importable from here exactly as before.
+module Engine.Core.State
+  ( module Engine.Core.State
+  , module Engine.Core.Lifecycle
+  ) where
 import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
+import Engine.Core.Lifecycle
 import Data.Time.Clock (UTCTime)
 import Data.Sequence (Seq)
 import Control.Concurrent.MVar (MVar)
@@ -576,42 +587,6 @@ data EngineState = EngineState
   , graphicsState    ∷ GraphicsState
   , sceneManager     ∷ SceneManager
   }
-
-data EngineLifecycle
-  = EngineStarting
-  | EngineRunning
-  | CleaningUp
-  | EngineStopped
-  deriving (Eq, Show)
-
--- | Ask a running engine to shut down, monotonically:
---
---   > EngineStarting → CleaningUp
---   > EngineRunning  → CleaningUp
---   > CleaningUp     → CleaningUp
---   > EngineStopped  → EngineStopped
---
---   The counterpart to 'Engine.Loop.Mode.promoteToRunning', which
---   preserves an already-advanced lifecycle for the same reason and by
---   the same single atomic step: the read and the write must not be
---   separable, because the thread racing this one is precisely the
---   thread whose transition must not be lost.
---
---   Answers whether THIS call performed the transition, so a caller
---   that must report or act exactly once (the debug console's
---   at-most-once listener-loss shutdown, #2170) does not have to
---   re-read the lifecycle afterwards and reintroduce the race in the
---   report.
---
---   'EngineStopped' is deliberately NOT rewound to 'CleaningUp': a
---   worker discovering a failure after the engine already finished
---   stopping has nothing left to ask for.
-requestEngineCleanup ∷ IORef EngineLifecycle → IO Bool
-requestEngineCleanup ref = atomicModifyIORef' ref $ \cur → case cur of
-    EngineStarting → (CleaningUp, True)
-    EngineRunning  → (CleaningUp, True)
-    CleaningUp     → (CleaningUp, False)
-    EngineStopped  → (EngineStopped, False)
 
 -- | Per-frame timing measurement, stepped once per frame by
 --   'Engine.Loop.Timing.updateFrameTiming' on the main render thread.

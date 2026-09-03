@@ -1,0 +1,17 @@
+{
+  "attempt": 1,
+  "conclusion": "failure",
+  "createdAt": "2026-09-02T21:00:00Z",
+  "databaseId": 33690000003,
+  "displayTitle": "A probe that never finished",
+  "event": "pull_request",
+  "headBranch": "issue-9999-timeout",
+  "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "number": 3849,
+  "startedAt": "2026-09-02T21:00:04Z",
+  "status": "completed",
+  "updatedAt": "2026-09-02T21:20:04Z",
+  "url": "https://github.com/coghex/synarchy/actions/runs/33690000003",
+  "workflowDatabaseId": 305639254,
+  "workflowName": "CI"
+}

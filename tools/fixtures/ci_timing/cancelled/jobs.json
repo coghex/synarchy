@@ -1,0 +1,40 @@
+[
+  {
+    "completedAt": "2026-09-02T20:03:00Z",
+    "conclusion": "cancelled",
+    "databaseId": 0,
+    "name": "test-and-audits",
+    "startedAt": "2026-09-02T20:00:30Z",
+    "status": "completed",
+    "steps": [
+      {
+        "completedAt": "2026-09-02T20:03:00Z",
+        "conclusion": "cancelled",
+        "name": "Build (library + executable)",
+        "number": 1,
+        "startedAt": "2026-09-02T20:01:00Z",
+        "status": "completed"
+      }
+    ],
+    "url": ""
+  },
+  {
+    "completedAt": null,
+    "conclusion": "",
+    "databaseId": 0,
+    "name": "behavior-probes",
+    "startedAt": "2026-09-02T20:00:30Z",
+    "status": "in_progress",
+    "steps": [
+      {
+        "completedAt": null,
+        "conclusion": "",
+        "name": "Select behavior probes",
+        "number": 1,
+        "startedAt": "2026-09-02T20:00:35Z",
+        "status": "completed"
+      }
+    ],
+    "url": ""
+  }
+]
