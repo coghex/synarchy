@@ -2,6 +2,8 @@
 module World.Thread.ChunkLoading
     ( updateChunkLoading
     , drainInitQueues
+    , admitChunksToSim
+    , simChunkSeeds
     , dispatchLocationStamps
     , locationStampsFor
     ) where
@@ -236,13 +238,7 @@ updateChunkLoading env logger = do
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
-                                forM_ newChunks' $ \lc →
-                                    Q.writeQueue (wsSimQueue (toWorldSimCapability env)) $
-                                        SimChunkLoaded pageId
-                                            (simTopologyForParams params)
-                                            (lcCoord lc)
-                                            (lcFluidMap lc)
-                                            (lcTerrainSurfaceMap lc)
+                                admitChunksToSim env params pageId newChunks'
                                 -- Stamp any placed locations on the loaded
                                 -- chunks (#89).
                                 dispatchLocationStamps env params pageId newChunks'
@@ -305,6 +301,40 @@ dispatchLocationStamps env params pageId chunks =
     forM_ (locationStampsFor params chunks) $ \(lid, gx, gy) →
         Q.writeQueue (luaQueue env)
             (LuaStampLocation (unWorldPageId pageId) lid gx gy)
+
+-- | Admit newly resident chunks to the fluid simulation: one
+--   'SimChunkLoaded' per chunk, in the order given.
+--
+--   'SimChunkLoaded' and 'SimChunkEdited' are the ONLY two ways a chunk
+--   enters sim state (#59/#60), and every loader below skips a coord
+--   already in @wsTilesRef@ by design — so a chunk that becomes
+--   resident without passing through one of them is never simulated,
+--   and nothing later repairs it: 'Sim.Command.Types.SimActivateWorld'
+--   only flips the active flag, and an edit in a neighbour wakes only
+--   chunks already present ('Sim.Chunk.applyChunkEdit' adjusts, which
+--   is a no-op for an absent key). Fresh-world init's synchronously
+--   generated centre and every arena chunk were exactly that gap
+--   (#2232).
+--
+--   Every seed goes through this one builder rather than a per-call-site
+--   copy, so "the same message the init-queue consumer sends" is true by
+--   construction for the init paths in "World.Thread.Command.Init" too.
+--   Call it AFTER the chunks are admitted to residency, so the payload
+--   is the post-admission fluid map the tile map actually holds.
+admitChunksToSim ∷ EngineEnv → WorldGenParams → WorldPageId
+                 → [LoadedChunk] → IO ()
+admitChunksToSim env params pageId chunks =
+    forM_ (simChunkSeeds params pageId chunks) $
+        Q.writeQueue (wsSimQueue (toWorldSimCapability env))
+
+-- | The pure seed list 'admitChunksToSim' enqueues: page id, the page's
+--   seam topology (#2044), coord, fluid map and terrain surface map, one
+--   entry per chunk in input order.
+simChunkSeeds ∷ WorldGenParams → WorldPageId → [LoadedChunk] → [SimCommand]
+simChunkSeeds params pageId chunks =
+    [ SimChunkLoaded pageId (simTopologyForParams params)
+                     (lcCoord lc) (lcFluidMap lc) (lcTerrainSurfaceMap lc)
+    | lc ← chunks ]
 
 -- | The pure lookup 'dispatchLocationStamps' drives: every (location id,
 --   global tile x, global tile y) triple among @chunks@ that carries a
@@ -489,13 +519,7 @@ drainInitQueues env logger = do
                         -- these SimChunkLoaded messages must be enqueued
                         -- first — otherwise the final batch can race the
                         -- settle and never be simulated. (post-replay)
-                        forM_ newChunks' $ \lc →
-                            Q.writeQueue (wsSimQueue (toWorldSimCapability env)) $
-                                SimChunkLoaded pageId
-                                    (simTopologyForParams params)
-                                    (lcCoord lc)
-                                    (lcFluidMap lc)
-                                    (lcTerrainSurfaceMap lc)
+                        admitChunksToSim env params pageId newChunks'
                         -- Stamp any placed locations on the loaded chunks (#89).
                         dispatchLocationStamps env params pageId newChunks'
 
