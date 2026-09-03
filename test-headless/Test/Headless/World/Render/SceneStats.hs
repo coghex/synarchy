@@ -347,9 +347,12 @@ fixtureUnit page = UnitInstance
     , uiClimbDest = Nothing, uiTrailState = Nothing
     }
 
--- | A 2x3 building def, so a single anchor-only construction
---   designation expands to a footprint of SIX marker candidates — a
---   number no other quantity in this fixture could be mistaken for.
+-- | A MULTI-tile (2x3) building def, so the example below is asserting
+--   something: since #1845 a committed designation contributes exactly
+--   ONE candidate however large its def's footprint is, and a 1x1 def
+--   would make that indistinguishable from a per-footprint-tile count.
+--   The footprint's own size is what the example guards against
+--   returning.
 footprintDef ∷ BuildingDef
 footprintDef = BuildingDef
     { bdName = "scene_stats_building", bdDisplayName = "Scene Stats Hall"
