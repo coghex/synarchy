@@ -9,11 +9,23 @@ nothing about save-compat policy or the self-test.
 What it owns
 ------------
 Declared-shell validation, YAML job and step lookup, extraction of a
-job's executable `run:` bodies, the workflow-side and local-side
-invocation collections, the two-way gate-set comparison with its
-stale-exemption detection, aggregate-job dependency validation, the
-behavior-probe job's condition and required commands, and the
-expression normalization those checks need.
+job's executable `run:` bodies, the per-job and local-side invocation
+collections, the two-way gate-set comparison over the audited jobs'
+union with its cross-job duplicate rejection and stale-exemption
+detection, aggregate-job dependency validation, the static-audit job's
+topology, the behavior-probe job's condition and required commands, the
+unit-asset gate's pinned selection, and the expression normalization
+those checks need.
+
+Two audited jobs, one union (#2272)
+-----------------------------------
+`make ci` mirrors the gate sets of BOTH `test-and-audits` and
+`static-audits`. Each job's set is collected separately and their
+intersection is rejected before the union is taken: a command run by two
+CI jobs is work CI pays for twice, and a union taken first would hide it
+behind a set that still matches `tools/ci-local.sh` exactly. Each job is
+also required to yield at least one invocation, so a job emptied by an
+edit fails here rather than shrinking the comparison.
 
 What it deliberately does NOT do
 --------------------------------
@@ -52,13 +64,22 @@ from ci_parity_config import (
     AGGREGATE_JOB,
     AGGREGATE_NEEDS,
     AUDITED_JOB,
+    AUDITED_JOBS,
     EXEMPT_COMMANDS,
+    IMAGE_JOB,
     LOCAL_GATE_LABEL,
     PROBE_JOB,
     PROBE_JOB_IF,
     PROBE_REQUIRED_COMMANDS,
+    STATIC_AUDIT_JOB,
+    UNIT_ASSET_CI_IF,
+    UNIT_ASSET_COMMAND,
+    UNIT_ASSET_GATE,
+    UNIT_ASSET_SELECTOR_COMMAND,
     WORKFLOW_LABEL,
     WORKFLOW_PATH,
+    WORKFLOW_UNION_LABEL,
+    workflow_label,
 )
 from ci_parity_shell import AuditError, extract_invocations
 
@@ -107,8 +128,9 @@ def workflow_run_blocks(yaml_text: str, job: str, where: str) -> list[str]:
         raise AuditError(f"{where}: no `jobs:` mapping.")
     if job not in jobs:
         raise AuditError(
-            f"{where}: no `{job}` job. This audit mirrors exactly that job's "
-            "gate set; if it was renamed, update AUDITED_JOB deliberately.")
+            f"{where}: no `{job}` job. This audit mirrors the gate sets of "
+            f"exactly {list(AUDITED_JOBS)}; if one was renamed, update "
+            "AUDITED_JOBS in tools/ci_parity_config.py deliberately.")
     definition = jobs[job]
     if not isinstance(definition, dict):
         raise AuditError(f"{where}: the `{job}` job is not a mapping.")
@@ -145,26 +167,67 @@ def local_gate_invocations(shell_text: str,
     return set(extract_invocations(shell_text, where))
 
 
+def workflow_job_invocations(
+        yaml_text: str,
+        jobs: tuple[str, ...] = AUDITED_JOBS) -> dict[str, set[str]]:
+    """Each audited job's own invocation set, kept SEPARATE.
+
+    Separate rather than pre-merged because the audit has to reject a
+    command run by two audited jobs before it may take their union
+    (#2272): the union of a duplicated set is indistinguishable from the
+    union of a correctly split one, so merging first would make that
+    check impossible to write.
+    """
+    return {job: workflow_invocations(yaml_text, job, workflow_label(job))
+            for job in jobs}
+
+
 def audit_gate_sets(
-    ci_commands: set[str],
+    ci_job_commands: dict[str, set[str]],
     local_commands: set[str],
     exempt_commands: tuple[tuple[str, str], ...] = EXEMPT_COMMANDS,
 ) -> list[str]:
-    """Compare two gate sets. Returns a list of human-readable problems."""
+    """Compare the audited jobs' union with the local gate set.
+
+    `ci_job_commands` maps each audited job to its OWN invocation set.
+    Returns a list of human-readable problems.
+    """
     problems: list[str] = []
 
     for command, reason in exempt_commands:
         if not reason.strip():
             problems.append(
                 f"exemption {command!r} carries no stated reason.")
-    if not ci_commands:
+    if not ci_job_commands:
         problems.append(
-            f"{WORKFLOW_LABEL} yielded no `python3 tools/*.py` invocations; "
-            "an empty gate set cannot certify parity.")
+            "no audited workflow job was collected at all; an empty job set "
+            "cannot certify parity.")
+    for job, commands in ci_job_commands.items():
+        if not commands:
+            problems.append(
+                f"{workflow_label(job)} yielded no `python3 tools/*.py` "
+                "invocations; an empty gate set cannot certify parity.")
     if not local_commands:
         problems.append(
             f"{LOCAL_GATE_LABEL} yielded no `python3 tools/*.py` invocations; "
             "an empty gate set cannot certify parity.")
+
+    # Duplicates BEFORE the union. A gate run by two audited jobs is work
+    # CI pays for twice, and every check below would still pass: the union
+    # is the same set either way.
+    audited = list(ci_job_commands)
+    for index, left in enumerate(audited):
+        for right in audited[index + 1:]:
+            shared_by_both = ci_job_commands[left] & ci_job_commands[right]
+            for command in sorted(shared_by_both):
+                problems.append(
+                    f"run by BOTH {workflow_label(left)} and "
+                    f"{workflow_label(right)}: {command}. Each audited job "
+                    "runs a gate at most once; pick the job that owns it.")
+
+    ci_commands: set[str] = set()
+    for commands in ci_job_commands.values():
+        ci_commands |= commands
 
     exempt_command_set = {command for command, _ in exempt_commands}
     def exempt(command: str) -> bool:
@@ -174,12 +237,14 @@ def audit_gate_sets(
     local_only = sorted(c for c in local_commands - ci_commands if not exempt(c))
 
     for command in ci_only:
+        owners = ", ".join(job for job in audited
+                           if command in ci_job_commands[job])
         problems.append(
-            f"run by {WORKFLOW_LABEL} but not by {LOCAL_GATE_LABEL}: "
-            f"{command}")
+            f"run by .github/workflows/ci.yml (job: {owners}) but not by "
+            f"{LOCAL_GATE_LABEL}: {command}")
     for command in local_only:
         problems.append(
-            f"run by {LOCAL_GATE_LABEL} but not by {WORKFLOW_LABEL}: "
+            f"run by {LOCAL_GATE_LABEL} but not by {WORKFLOW_UNION_LABEL}: "
             f"{command}")
 
     everything = ci_commands | local_commands
@@ -250,7 +315,7 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         return [f"{WORKFLOW_PATH}: no `jobs:` mapping."]
 
     problems: list[str] = []
-    for job in (AUDITED_JOB, PROBE_JOB, AGGREGATE_JOB):
+    for job in (AUDITED_JOB, STATIC_AUDIT_JOB, PROBE_JOB, AGGREGATE_JOB):
         if not isinstance(jobs.get(job), dict):
             problems.append(f"{WORKFLOW_PATH}: no `{job}` job.")
     if problems:
@@ -284,6 +349,7 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         expected_env = {
             "EVENT_NAME": "${{ github.event_name }}",
             "TESTS_RESULT": "${{ needs.test-and-audits.result }}",
+            "AUDITS_RESULT": "${{ needs.static-audits.result }}",
             "PROBES_RESULT": "${{ needs.behavior-probes.result }}",
         }
         if env != expected_env:
@@ -294,12 +360,53 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         str(step.get("run") or "") for step in steps)
     for token in ("pull_request",
                   'test "$TESTS_RESULT" = success',
+                  # Unconditional on purpose: STATIC_AUDIT_JOB carries no
+                  # job-level `if:`, so a failure, a cancellation and a skip
+                  # are all non-success on every event this workflow runs on.
+                  'test "$AUDITS_RESULT" = success',
                   'test "$PROBES_RESULT" = success',
                   'test "$PROBES_RESULT" = skipped'):
         if token not in aggregate_text and token not in str(aggregate_steps):
             problems.append(
                 f"{WORKFLOW_PATH}: `{AGGREGATE_JOB}` does not enforce "
                 f"{token!r} in its worker-result verdict.")
+
+    # The static-audit worker's whole reason to exist is that it waits on
+    # nothing but the image and skips on nothing (#2272). Both halves are
+    # one edit away from being undone, and neither would fail any other
+    # check here: a `needs: test-and-audits` would put it right back behind
+    # the build, and a docs-only or event condition would take the audits
+    # off exactly the changes #1490 proved need them.
+    static = jobs[STATIC_AUDIT_JOB]
+    if str(static.get("if") or "").strip():
+        problems.append(
+            f"{WORKFLOW_PATH}: `{STATIC_AUDIT_JOB}` must carry no job-level "
+            "`if:`. It runs on every event the workflow runs on -- docs-only "
+            "pull requests and docs-only master pushes included -- because "
+            "#1490's cause was a docs-only push breaking an engine-free "
+            "audit.")
+    raw_static_needs = static.get("needs")
+    static_needs = ({raw_static_needs} if isinstance(raw_static_needs, str)
+                    else set(raw_static_needs)
+                    if isinstance(raw_static_needs, list) else set())
+    if static_needs != {IMAGE_JOB}:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{STATIC_AUDIT_JOB}` must need exactly "
+            f"['{IMAGE_JOB}'], got {sorted(static_needs)}. Anything else "
+            "makes the engine-free gates wait for a build again, which is "
+            "the whole cost this split removed.")
+    static_image = ((static.get("container") or {}).get("image")
+                    if isinstance(static.get("container"), dict) else None)
+    audited_image = ((jobs[AUDITED_JOB].get("container") or {}).get("image")
+                     if isinstance(jobs[AUDITED_JOB].get("container"), dict)
+                     else None)
+    if static_image != audited_image:
+        problems.append(
+            f"{WORKFLOW_PATH}: `{STATIC_AUDIT_JOB}` runs in "
+            f"{static_image!r} but `{AUDITED_JOB}` runs in "
+            f"{audited_image!r}. Both must resolve the SAME CI image, which "
+            "is what guarantees the moved gates keep the Python toolchain "
+            ".github/ci/Dockerfile pins for them.")
 
     probe = jobs[PROBE_JOB]
     if normalise_expression(str(probe.get("if") or "")) != PROBE_JOB_IF:
@@ -313,4 +420,70 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         problems.append(
             f"{WORKFLOW_PATH}: `{PROBE_JOB}` no longer runs required "
             f"command `{command}`.")
+    return problems
+
+
+def audit_unit_asset_gate_wiring(yaml_text: str) -> list[str]:
+    """Pin the unit-asset gate's selection where the gate now lives.
+
+    Requirement 4 of #2272: the path-selective unit-asset gate keeps its
+    pull-request base-diff selection and its unconditional behavior on
+    every other event, wherever it ends up. It ended up in
+    STATIC_AUDIT_JOB, and its selector moved with it -- so the two halves
+    can now drift apart in a way the gate-set comparison cannot see: that
+    comparison proves both commands exist somewhere, never that the guard
+    reads the output the selector writes. A guard left naming
+    `test-and-audits`' selector id would read an always-empty value and
+    silently stop running the gate on every pull request, exactly the
+    false green the save-compat wiring check exists to prevent for its own
+    conditional member.
+    """
+    where = workflow_label(STATIC_AUDIT_JOB)
+    problems: list[str] = []
+    steps = workflow_steps(yaml_text, STATIC_AUDIT_JOB, where)
+
+    gate_steps = [step for step in steps
+                  if UNIT_ASSET_COMMAND in str(step.get("run") or "")]
+    if len(gate_steps) != 1:
+        problems.append(
+            f"{where}: expected exactly one step running "
+            f"`{UNIT_ASSET_COMMAND}`, found {len(gate_steps)}.")
+    else:
+        condition = normalise_expression(str(gate_steps[0].get("if") or ""))
+        if condition != normalise_expression(UNIT_ASSET_CI_IF):
+            problems.append(
+                f"{where}: the step running `{UNIT_ASSET_COMMAND}` is "
+                f"guarded by {condition!r}, not by the pinned "
+                f"{normalise_expression(UNIT_ASSET_CI_IF)!r}. That guard is "
+                "path-selective on pull requests and unconditional on every "
+                "other event, so a path the selector does not list can never "
+                "leave the inventory unchecked on master.")
+
+    selector_steps = [step for step in steps
+                      if UNIT_ASSET_SELECTOR_COMMAND
+                      in str(step.get("run") or "")]
+    if len(selector_steps) != 1:
+        problems.append(
+            f"{where}: expected exactly one step running "
+            f"`{UNIT_ASSET_SELECTOR_COMMAND}`, found {len(selector_steps)}. "
+            "The selector belongs in the same job as the gate it decides.")
+        return problems
+
+    step_id = str(selector_steps[0].get("id") or "")
+    reference = f"steps.{step_id}.outputs.{UNIT_ASSET_GATE}"
+    if not step_id:
+        problems.append(
+            f"{where}: the step running `{UNIT_ASSET_SELECTOR_COMMAND}` has "
+            "no `id:`, so no guard can name its output.")
+    elif reference not in normalise_expression(UNIT_ASSET_CI_IF):
+        problems.append(
+            f"{where}: the pinned guard does not read `{reference}`, so the "
+            "step that decides the gate and the step that consumes the "
+            "decision are not connected.")
+    if f"{UNIT_ASSET_GATE}=" not in str(selector_steps[0].get("run")):
+        problems.append(
+            f"{where}: the selector step never writes a "
+            f"`{UNIT_ASSET_GATE}=` output, so its guard reads an "
+            "always-empty value and the gate silently stops running on "
+            "pull requests.")
     return problems
