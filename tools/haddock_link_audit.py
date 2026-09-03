@@ -191,20 +191,19 @@ class ImportSpec:
     #: The explicit import list flattened to names, or `None` when the
     #: import carries no list at all.
     names: frozenset[str] | None
+    #: The types the list names as `T(..)`, whose subordinates it covers
+    #: without spelling any of them.
+    open_types: frozenset[str]
 
-    def supplies(self, symbol: str) -> bool:
-        """Does this import bring `symbol` into scope UNQUALIFIED, as
-        far as this declaration alone decides?
+    @property
+    def export_name(self) -> str:
+        """The name a `module …` export entry must use to mean this
+        import.
 
-        Whether the imported module actually exports it is the caller's
-        half of the question; this half is the restriction the import
-        list or `hiding` clause applies on top."""
-        if self.qualified:
-            return False
-        if self.names is None:
-            return True
-        return (symbol not in self.names) if self.hiding else (
-            symbol in self.names)
+        `import Alpha as A` puts names in scope as `e` and `A.e`, never
+        `Alpha.e`, so it is `module A` that re-exports them (Haskell
+        2010 §5.2)."""
+        return self.alias or self.module
 
 
 @dataclass
@@ -387,6 +386,7 @@ def _parse_import(block: str, head: re.Match[str]) -> ImportSpec:
     exports."""
     rest = block[head.end():].lstrip()
     names: frozenset[str] | None = None
+    open_types: set[str] = set()
     if rest.startswith("("):
         depth = 0
         for i, char in enumerate(rest):
@@ -400,19 +400,23 @@ def _parse_import(block: str, head: re.Match[str]) -> ImportSpec:
                         name, subordinates, is_open = _parse_name_entry(entry)
                         if name:
                             flat.add(name)
-                        # `T(..)` names every subordinate of T; the
-                        # import cannot enumerate them, so the type's
-                        # own field set is what resolves them later.
                         flat.update(subordinates)
-                        if is_open:
-                            flat.add(name)
+                        if is_open and name:
+                            # `T(..)` covers every field of T without
+                            # naming one. Recorded as the TYPE, so
+                            # `import_supplies` can expand it against
+                            # the type's real fields -- and so `hiding
+                            # (T(..))` hides them too, which a flattened
+                            # `{T}` could express neither way round.
+                            open_types.add(name)
                     names = frozenset(flat)
                     break
     return ImportSpec(module=head.group(2),
                       qualified=bool(head.group(1) or head.group(3)),
                       alias=head.group(4),
                       hiding=bool(head.group(5)),
-                      names=names)
+                      names=names,
+                      open_types=frozenset(open_types))
 
 
 def parse_module(rel_path: str, text: str) -> ModuleFacts | None:
@@ -549,6 +553,24 @@ def open_type_fields(index: Index, module: str, type_name: str,
     return fields
 
 
+def import_supplies(index: Index, spec: ImportSpec, symbol: str) -> bool:
+    """Does `spec` bring `symbol` into scope UNQUALIFIED?
+
+    This is the restriction the import declaration applies; whether the
+    imported module exports the name at all is the caller's half. A
+    `T(..)` entry is expanded against T's REAL fields, so a selected
+    import of a type carries its selectors and a `hiding (T(..))`
+    withholds them."""
+    if spec.qualified:
+        return False
+    if spec.names is None:
+        return True
+    listed = symbol in spec.names or any(
+        symbol in open_type_fields(index, spec.module, type_name)
+        for type_name in spec.open_types)
+    return (not listed) if spec.hiding else listed
+
+
 def exports_symbol(index: Index, module: str, symbol: str,
                    seen: frozenset[str] = frozenset()) -> bool:
     """Does `module` export `symbol`?
@@ -590,18 +612,26 @@ def exports_symbol(index: Index, module: str, symbol: str,
         # brought into scope. `import Alpha (other)` beside
         # `module Alpha` re-exports `other` and nothing else, so
         # following Alpha's whole export surface here would launder a
-        # dead link clean. An import that names N but restricts it, or
-        # imports it qualified, supplies nothing.
-        supplied_by_an_import = False
-        for spec in facts.imports:
-            if spec.module != reexported or not spec.supplies(symbol):
-                continue
-            supplied_by_an_import = True
-            break
-        if not supplied_by_an_import and any(
-                spec.module == reexported for spec in facts.imports):
+        # dead link clean. The entry is matched on the name the IMPORT
+        # made available -- its alias when it has one, since
+        # `import Alpha as A` is re-exported by `module A`, not by
+        # `module Alpha`.
+        specs = [spec for spec in facts.imports
+                 if spec.export_name == reexported]
+        if specs:
+            if any(import_supplies(index, spec, symbol)
+                   and exports_symbol(index, spec.module, symbol,
+                                      seen | {module})
+                   for spec in specs):
+                return True
             continue
-        if exports_symbol(index, reexported, symbol, seen | {module}):
+        # No import made that name available. A bare alias is then not a
+        # module at all, and must not be mistaken for an unknown
+        # external one that could supply anything; only a real module of
+        # this tree is followed. No re-export in this tree takes this
+        # branch.
+        if reexported in modules and exports_symbol(
+                index, reexported, symbol, seen | {module}):
             return True
     return False
 

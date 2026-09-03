@@ -561,6 +561,113 @@ import Alpha
 """)
 
 
+def test_selected_open_type_import_supplies_its_fields() -> None:
+    """`import Alpha (Widget(..))` carries Widget's selectors even
+    though the list names none of them. Flattening the entry to the bare
+    type would report this live link dead."""
+    _expect_clean("""\
+module Beta ( run ) where
+-- | 'Gamma.widgetLabel' came in with Widget(..).
+run ∷ Int
+run = 0
+""", "a selected `T(..)` import feeding a `module X` re-export",
+        Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha (Widget(..))
+""")
+
+
+def test_hiding_an_open_type_withholds_its_fields() -> None:
+    """The same expansion in the `hiding` direction: `hiding
+    (Widget(..))` withholds the selectors too, so a link to one is
+    dead. A flattened `{Widget}` gets this backwards -- `widgetLabel` is
+    not literally in it, so the link would audit clean."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.widgetLabel' — Gamma hid Widget and its fields.
+run ∷ Int
+run = 0
+""", "a hidden `T(..)` import feeding a `module X` re-export",
+        needle="'Gamma.widgetLabel'", Gamma="""\
+module Gamma
+    ( module Alpha
+    ) where
+import Alpha hiding (Widget(..))
+""")
+
+
+def test_alias_reexport_applies_the_alias_restriction() -> None:
+    """The false negative this pins: `module A` is matched against the
+    ALIAS. Matched against the module name only, no import is found,
+    and a bare `A` then looks like an unknown external module -- which
+    the audit treats as able to supply anything, so the dead link
+    passes."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.hidden' — Gamma imported only `visible` from Alpha.
+run ∷ Int
+run = 0
+""", "a `module <alias>` re-export restricted by its import",
+        needle="'Gamma.hidden'", Gamma="""\
+module Gamma
+    ( module A
+    ) where
+import Alpha as A (visible)
+""")
+
+
+def test_alias_reexport_supplies_what_the_alias_imported() -> None:
+    _expect_clean("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' is exactly what the alias imported.
+run ∷ Int
+run = 0
+""", "a `module <alias>` re-export supplying its selected name",
+        Gamma="""\
+module Gamma
+    ( module A
+    ) where
+import Alpha as A (visible)
+""")
+
+
+def test_qualified_alias_reexport_supplies_nothing() -> None:
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.visible' — the alias is qualified, so nothing is unqualified.
+run ∷ Int
+run = 0
+""", "a qualified alias re-export",
+        needle="'Gamma.visible'", Gamma="""\
+module Gamma
+    ( module A
+    ) where
+import qualified Alpha as A
+""")
+
+
+def test_unimported_reexport_name_supplies_nothing() -> None:
+    """A `module …` entry naming something the file never imports is not
+    a module of this tree either, and must not be mistaken for an
+    unknown EXTERNAL module — which the audit treats as able to supply
+    anything, so every link through it would pass. No re-export in the
+    shipped tree reaches this branch; the guard is what keeps a
+    mistyped or stale alias from disabling the check silently."""
+    _expect_reported("""\
+module Beta ( run ) where
+-- | 'Gamma.hidden' — Gamma re-exports a name it never imported.
+run ∷ Int
+run = 0
+""", "a `module X` entry with no import behind it",
+        needle="'Gamma.hidden'", Gamma="""\
+module Gamma
+    ( module A
+    ) where
+""")
+
+
 def test_hiding_import_restricts_a_module_reexport() -> None:
     _expect_reported("""\
 module Beta ( run ) where
@@ -955,6 +1062,12 @@ TESTS = [
     test_selected_import_restricts_a_module_reexport,
     test_selected_import_supplies_what_it_names,
     test_multi_line_import_list_still_restricts,
+    test_selected_open_type_import_supplies_its_fields,
+    test_hiding_an_open_type_withholds_its_fields,
+    test_alias_reexport_applies_the_alias_restriction,
+    test_alias_reexport_supplies_what_the_alias_imported,
+    test_qualified_alias_reexport_supplies_nothing,
+    test_unimported_reexport_name_supplies_nothing,
     test_hiding_import_restricts_a_module_reexport,
     test_qualified_import_cannot_feed_a_module_reexport,
     test_post_qualified_import_cannot_feed_a_module_reexport,
