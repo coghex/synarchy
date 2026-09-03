@@ -315,7 +315,7 @@ newtype TransferOrdersDTO =
 -- | Component-local invariants — everything about the store's own
 --   identity discipline that a decoded-from-disk payload has no
 --   structural guarantee of (mirrors
---   'World.Save.Component.Entities.validateCraftBills', which enforces
+--   'World.Save.Component.EntitySystems.validateCraftBills', which enforces
 --   the identical rules for the per-page bill allocator):
 --
 --     * the allocator is at least 1, so 'Unit.Transfer.Orders' can never

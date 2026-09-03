@@ -20,6 +20,9 @@ in agreement:
     agreeing duplicates publish with a warning, conflicting verdicts are
     withdrawn candidate-scoped;
   * `assign_ids` — stable finding ids by verdict, severity, first turn;
+  * `screenshot_target` — one trace-relative screenshot reference,
+    spelled so it resolves from the directory the report is written
+    into (#2220);
   * `render_report` — the Markdown report with its defect and intended
     sections, screenshot references and critic warnings.
 
@@ -345,8 +348,29 @@ def assign_ids(findings: list[dict]) -> None:
         f["id"] = f"F{i:02d}"
 
 
+def screenshot_target(ref: str, trace_dir: str | None,
+                      report_dir: str | None) -> str:
+    """Spell a trace-relative screenshot reference so it resolves from
+    the directory the report is written into (#2220).
+
+    `trace.py` records every screenshot relative to the trace root, so
+    a report written elsewhere (`critic.py --out DIR`) needs the link
+    rebased onto that directory. The rebase is RELATIVE, so the report
+    stays portable, and it points back INTO the trace, which remains
+    the sole owner of its frames — nothing is copied out. When the
+    report lands in the trace root itself (the default) the reference
+    is emitted verbatim, byte-for-byte as before.
+    """
+    if not trace_dir or not report_dir:
+        return ref
+    if os.path.abspath(trace_dir) == os.path.abspath(report_dir):
+        return ref
+    return os.path.relpath(os.path.join(trace_dir, ref), report_dir)
+
+
 def render_report(meta: dict, data: dict, warnings: list[str],
-                  turns: list[dict]) -> str:
+                  turns: list[dict], trace_dir: str | None = None,
+                  report_dir: str | None = None) -> str:
     persona = meta.get("persona") or {}
     turns_by_n = {t.get("turn"): t for t in turns}
     defects = [f for f in data["findings"] if f["verdict"] == "defect"]
@@ -364,7 +388,8 @@ def render_report(meta: dict, data: dict, warnings: list[str],
         if f.get("root_cause_hypothesis"):
             out.append(f"- **root-cause hypothesis:** {f['root_cause_hypothesis']}")
         for ref in f.get("screenshots", []):
-            out.append(f"\n![turn screenshot]({ref})")
+            target = screenshot_target(ref, trace_dir, report_dir)
+            out.append(f"\n![turn screenshot]({target})")
         return "\n".join(out)
 
     lines = [

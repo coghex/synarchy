@@ -3,10 +3,13 @@
 --   @construction.*@ namespace. Mirrors the mine-designation API on
 --   @world.*@: the tool drives setAnchor / clearAnchor / designate, the
 --   build AI (#96) drives getPendingJobs / nearestDesignation /
---   setJobStatus, the HUD sets the one remaining ghost texture (the
---   BUILDING category blueprint — a structure draws its own art since
---   #1846), and the build tool states the structure piece it has armed
---   so the pre-anchor hover has something to preview.
+--   setJobStatus, and the build tool states the structure piece it has
+--   armed so the pre-anchor hover has something to preview.
+--
+--   The HUD sets no ghost texture at all any more: a structure ghost is
+--   the piece's own art (#1846) and a building ghost is the building's
+--   own sprite (#1845), so neither category has a placeholder, and
+--   @setDesignateTexture@ went with the last of them.
 module Engine.Scripting.Lua.API.Construct
     ( constructSetAnchorFn
     , constructClearAnchorFn
@@ -22,7 +25,6 @@ module Engine.Scripting.Lua.API.Construct
     , constructBeginPlacementFn
     , constructAbortPlacementFn
     , constructResolvePlanFn
-    , constructSetDesignateTextureFn
     , constructSetLineModeFn
     , constructSetStructureTargetFn
     , constructClearStructureTargetFn
@@ -47,7 +49,6 @@ import Engine.Core.State
 import World.Construct.Plan
     ( PlanOp(..), PlanResult(..), PlanWorld(..), planOutcomeName
     , resolveStructurePlan )
-import Engine.Asset.Handle (TextureHandle(..))
 import World.Construct.Attempt (ConstructAttemptId(..))
 import Structure.Types (StructureCommitWindow(..), StructureStageToken(..))
 import World.Construct.Receipt (receiptEntries)
@@ -277,13 +278,29 @@ cancelAttempt AttemptInvalid   = Nothing
 --   status when looking for fresh work (so a second worker still can't
 --   re-claim an owned tile) and uses the claimed entries to release
 --   stale claims (dead/vanished claimant) back to "pending" on timeout.
+--   #1845: an optional trailing @pageId@ names the page to scan. The
+--   build AI supplies it, because its lifecycle spans many ticks and the
+--   ACTIVE page can move between any two of them: a scan answered for
+--   whatever page happened to be selected, then claimed and completed
+--   against the actor's own, would mutate one world's designations with
+--   another world's coordinates. Omitted keeps the historical
+--   active-page behaviour, which is what the console and the seam specs
+--   want. A named page that is not registered answers with NO jobs
+--   rather than falling back to the active one — the fallback is the
+--   bug.
 constructGetPendingJobsFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 constructGetPendingJobsFn wsc = do
     cx1Arg ← Lua.tonumber 1
     cy1Arg ← Lua.tonumber 2
     cx2Arg ← Lua.tonumber 3
     cy2Arg ← Lua.tonumber 4
-    mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef wsc)
+    pageArg ← Lua.tostring 5
+    mWs ← Lua.liftIO $ case pageArg of
+        Nothing → activeWorldStateFrom (wsWorldManagerRef wsc)
+        Just pidBS → do
+            wm ← readIORef (wsWorldManagerRef wsc)
+            pure (lookup (WorldPageId (TE.decodeUtf8Lenient pidBS))
+                         (wmWorlds wm))
     case (mWs, cx1Arg, cy1Arg, cx2Arg, cy2Arg) of
         (Just ws, Just cx1, Just cy1, Just cx2, Just cy2) → do
             m ← Lua.liftIO $ readIORef (wsConstructDesignationsRef ws)
@@ -657,25 +674,6 @@ constructBeginPlacementFn wsc = do
         _ → pure False
     Lua.pushboolean ok
     return 1
-
--- | construction.setDesignateTexture(pageId, category, texHandle) — ghost
---   texture for committed BUILDING designations. Structures draw their
---   own art since #1846, so \"building\" is the only category the world
---   thread still accepts; anything else warns there.
-constructSetDesignateTextureFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-constructSetDesignateTextureFn wsc = do
-    pageIdArg ← Lua.tostring 1
-    catArg ← Lua.tostring 2
-    handleArg ← Lua.tointeger 3
-    case (pageIdArg, catArg, handleArg) of
-        (Just pageIdBS, Just catBS, Just handle) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                texHandle = TextureHandle (fromIntegral handle)
-            Q.writeQueue (wsWorldQueue wsc) $
-                WorldSetConstructDesignateTexture pageId
-                    (TE.decodeUtf8Lenient catBS) texHandle
-        _ → pure ()
-    return 0
 
 -- | construction.setLineMode(pageId, enabled) — wire path tool (#359):
 --   while enabled, the anchor→hover preview
