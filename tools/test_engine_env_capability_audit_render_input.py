@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The SS3 main-render and SS7.3 LuaThread input structural boundaries
-of engine_env_capability_audit.py (issues #891 and #892, capability
+of engine_env_capability_boundaries.py (issues #891 and #892, capability
 split E3/E4; extracted from tools/test_engine_env_capability_audit.py
 by issue #2062).
 
@@ -28,10 +28,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from engine_env_capability_audit import (  # type: ignore  # noqa: E402
+from engine_env_capability_common import (  # type: ignore  # noqa: E402
+    REPO_ROOT, scan_production_sources,
+)
+from engine_env_capability_boundaries import (  # type: ignore  # noqa: E402
     INPUT_CAPABILITY_MODULE, INPUT_VIEW_MODULE, RENDER_CAPABILITY_MODULE,
-    RENDER_VIEW_MODULE, REPO_ROOT, audit_input_boundary,
-    audit_render_boundary, scan_production_sources,
+    RENDER_VIEW_MODULE, audit_input_boundary, audit_render_boundary,
 )
 from test_engine_env_capability_audit_support import expect  # noqa: E402
 

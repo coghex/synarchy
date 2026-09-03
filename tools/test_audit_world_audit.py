@@ -9,6 +9,11 @@ terrain spikes and pits; river gaps and mouth drops; islands, isolated
 fluid, minimum-bound leaks and surface consistency; inland versus
 ocean-connected below-sea terrain; and the wetland and desert slope checks.
 
+One group reads no grid at all: `test_registry_composition_fails_closed`
+drives `world_audit.compose_checks` over stand-in owners and pins the six
+ways the #2224 split could silently shorten the audit, plus that
+`audit_dump` runs every registered check exactly once.
+
 The grid builders (`tile`, `flat_grid`, `make_tiles`, `count_category`,
 `issue_coords`) live here because this is their only consumer.
 
@@ -25,6 +30,7 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 from typing import Any
 
@@ -839,6 +845,280 @@ def test_issue_ordering_is_canonical() -> None:
            "(category, x, y) issue sort is missing or weakened")
 
 
+
+#: The order `world_audit.ALL_CHECKS` has always run its checks in, held
+#: here as a literal. Requirement 16 of #2224 pins it because the tracked
+#: baselines and the real-output fixture were captured against runs in
+#: this order; reading it back from `world_audit.CHECK_ORDER` would make
+#: the assertion below tautological.
+HISTORICAL_CHECK_ORDER = [
+    "DRY_BELOW_SEA",
+    "OCEAN_ON_LAND",
+    "RIVER_UNDER_TERRAIN",
+    "FLOATING_FLUID",
+    "LAVA_RIM_CONTAINMENT",
+    "TERRAIN_SPIKES_PITS",
+    "RIVER_CHUNK_GAP",
+    "RIVER_MOUTH_DROP",
+    "ISLAND_1TILE",
+    "LAKE_HOLE",
+    "SUBMERGED_BUMP",
+    "WATER_ABOVE_LAND",
+    "WATER_CLIFF",
+    "WATER_WATER_CLIFF",
+    "MID_RIVER_CLIFF",
+    "FLOATING_WATER",
+    "MULTI_ISLAND",
+    "FLAT_ISOLATED_WATER",
+    "ISOLATED_FLUID",
+    "MINBOUND_LEAK",
+    "SURFACE_INCONSISTENT",
+    "WETLAND_ON_SLOPE",
+    "DESERT_SOIL_ON_SLOPE",
+]
+
+
+def _owner(name: str, checks: dict[str, Any] | None) -> types.SimpleNamespace:
+    """A stand-in check owner: a module-shaped object with a CHECKS map.
+
+    `compose_checks` reads an owner through `getattr(module, "CHECKS")`
+    and names it by `__name__`, so a namespace is a faithful stand-in and
+    no real owner has to be mutated to drive a refusal.
+    """
+    owner = types.SimpleNamespace()
+    owner.__name__ = f"fake_{name}"
+    if checks is not None:
+        owner.CHECKS = checks
+    return owner
+
+
+def test_registry_composition_fails_closed() -> None:
+    """ALL_CHECKS is composed from the owners' inventories and refuses any
+    arrangement that would run a shortened audit (#2224).
+
+    The registry is production code, and every refusal below is a way the
+    audit could silently stop running a check while still reporting a
+    green run: an owner gone or emptied, a key two owners both claim, one
+    function reached under two keys, an ordered key nobody owns, an order
+    that repeats a key, and an owner-declared check the order drops."""
+    print("test_registry_composition_fails_closed")
+
+    def one(grid: Any, issues: Any) -> None:
+        pass
+
+    def two(grid: Any, issues: Any) -> None:
+        pass
+
+    def three(grid: Any, issues: Any) -> None:
+        pass
+
+    def four(grid: Any, issues: Any) -> None:
+        pass
+
+    healthy = {
+        "columns": _owner("columns", {"A": one}),
+        "boundaries": _owner("boundaries", {"B": two}),
+        "regions": _owner("regions", {"C": three}),
+        "soils": _owner("soils", {"D": four}),
+    }
+
+    def refuses(label: str, owners: dict[str, Any], order: tuple[str, ...],
+                names: str) -> None:
+        """Compose and require a RegistryError whose message names the cause."""
+        try:
+            world_audit.compose_checks(owners, order)
+        except world_audit.RegistryError as error:
+            expect(names in str(error),
+                   f"{label}: the refusal must name {names!r}, got "
+                   f"{str(error)!r}")
+        else:
+            expect(False,
+                   f"{label}: composed without refusing — a shortened audit "
+                   f"would report a green run")
+
+    order = ("A", "B", "C", "D")
+
+    # The healthy arrangement composes, in the order given rather than the
+    # order the owners are visited in.
+    composed = world_audit.compose_checks(healthy, ("D", "B", "C", "A"))
+    expect(list(composed) == ["D", "B", "C", "A"],
+           f"compose_checks must follow the given order, got {list(composed)}")
+    expect(composed == {"A": one, "B": two, "C": three, "D": four},
+           f"compose_checks must bind each key to its owner's check, got "
+           f"{composed}")
+
+    missing_owner = dict(healthy)
+    del missing_owner["soils"]
+    refuses("an absent owner", missing_owner, order, "'soils'")
+
+    no_inventory = dict(healthy, soils=_owner("soils", None))
+    refuses("an owner that declares no CHECKS", no_inventory, order,
+            "declares no CHECKS")
+
+    emptied = dict(healthy, soils=_owner("soils", {}))
+    refuses("an emptied owner", emptied, order, "empty CHECKS")
+
+    shared_key = dict(healthy, soils=_owner("soils", {"A": four}))
+    refuses("a key two owners declare", shared_key, order, "'A'")
+
+    shared_fn = dict(healthy, soils=_owner("soils", {"D": one}))
+    refuses("one function under two keys", shared_fn, order, "both register")
+
+    refuses("an ordered key no owner declares", healthy,
+            order + ("UNOWNED",), "'UNOWNED'")
+
+    refuses("an order that repeats a key", healthy, order + ("A",),
+            "more than once")
+
+    refuses("an owner-declared check the order drops", healthy, ("A", "B", "C"),
+            "soils:D")
+
+    # The live registry is that composition, not a hand-written dict.
+    expect(world_audit.ALL_CHECKS == world_audit.compose_checks(),
+           "ALL_CHECKS must be exactly what compose_checks() returns")
+
+    # The historical run order, restated here rather than read from
+    # CHECK_ORDER: baselines and the tracked real-output fixture were
+    # captured against it, so holding the registry against the production
+    # constant that defines it would pin nothing.
+    expect(list(world_audit.ALL_CHECKS) == HISTORICAL_CHECK_ORDER,
+           f"ALL_CHECKS no longer runs in the order the tracked baselines "
+           f"were captured in: {list(world_audit.ALL_CHECKS)}")
+    expect(len(set(world_audit.ALL_CHECKS.values())) == 23,
+           f"the 23 registry keys must reach 23 distinct check functions, "
+           f"got {len(set(world_audit.ALL_CHECKS.values()))}")
+
+    # And audit_dump runs each registered check exactly once. Counting
+    # wrappers stand in for the registry for one call; the original dict
+    # object is restored and re-checked, because a self-test that leaves a
+    # production global swapped would corrupt every group after it.
+    original = world_audit.ALL_CHECKS
+    calls: dict[str, int] = {key: 0 for key in original}
+
+    def counter(key: str, check_fn: Any) -> Any:
+        def wrapped(grid: Any, issues: Any) -> None:
+            calls[key] += 1
+            check_fn(grid, issues)
+        return wrapped
+
+    try:
+        world_audit.ALL_CHECKS = {key: counter(key, fn)
+                                  for key, fn in original.items()}
+        audit_dump(make_tiles(flat_grid(3, 3)))
+    finally:
+        world_audit.ALL_CHECKS = original
+
+    expect(world_audit.ALL_CHECKS is original,
+           "the registry global must be restored after the counting run")
+    off = {key: n for key, n in calls.items() if n != 1}
+    expect(not off,
+           f"audit_dump must run every registered check exactly once, got "
+           f"{off}")
+
+
+#: Every public (non-underscore) module-level name `world_audit` exposed
+#: at the revision before the #2224 split, read off that revision's module
+#: object and pinned here as a literal. The split promised the whole
+#: surface, not just the audit's own names, so the incidental stdlib
+#: re-exports (`math`, `dataclass`, `field`, and the modules the façade
+#: still uses itself) are in the list too.
+PRE_SPLIT_PUBLIC_SURFACE = [
+    "ALL_CHECKS",
+    "Any",
+    "AuditResult",
+    "BUG_CATEGORIES",
+    "CHUNK_SIZE",
+    "Counter",
+    "DESERT_MATS",
+    "FLOATING_FLUID_DEPTH",
+    "INT64_MIN",
+    "Issue",
+    "OCEAN_ON_LAND_THRESHOLD",
+    "Path",
+    "QUALITY_CATEGORIES",
+    "QUALITY_THRESHOLDS",
+    "RIVER_MOUTH_DROP_THRESHOLD",
+    "SEA_LEVEL",
+    "SPIKE_THRESHOLD",
+    "WETLAND_MATS",
+    "annotations",
+    "argparse",
+    "audit_dump",
+    "check_desert_soil_on_slope",
+    "check_dry_below_sea",
+    "check_flat_isolated_water",
+    "check_floating_fluid",
+    "check_floating_water",
+    "check_fluid_under_terrain",
+    "check_island_1tile",
+    "check_isolated_fluid",
+    "check_lake_hole",
+    "check_lava_rim_containment",
+    "check_mid_river_cliff",
+    "check_minbound_leak",
+    "check_multi_island",
+    "check_ocean_on_land",
+    "check_river_chunk_gaps",
+    "check_river_mouth_drop",
+    "check_submerged_bump",
+    "check_surface_inconsistent",
+    "check_terrain_spikes_pits",
+    "check_water_above_land",
+    "check_water_cliff",
+    "check_water_water_cliff",
+    "check_wetland_on_slope",
+    "chunk_of",
+    "classify_category",
+    "compute_stats",
+    "crosses_chunk_boundary",
+    "dataclass",
+    "field",
+    "format_text",
+    "json",
+    "load_dump_file",
+    "main",
+    "math",
+    "neighbors4",
+    "parse_region",
+    "run_dump",
+    "severity_of",
+    "statistics",
+    "subprocess",
+    "sys",
+]
+
+
+def test_facade_public_surface_is_complete() -> None:
+    """`world_audit` still exposes every public name it exposed before the
+    #2224 split, and the check functions it exposes are the same objects
+    the registry runs (#2224).
+
+    Consumers import the façade and nothing below it, so a name that
+    stopped being reachable through `world_audit` is a broken import for
+    someone even when every owner module is healthy."""
+    print("test_facade_public_surface_is_complete")
+
+    now = {name for name in dir(world_audit) if not name.startswith("_")}
+    lost = [name for name in PRE_SPLIT_PUBLIC_SURFACE if name not in now]
+    expect(not lost,
+           f"names that were importable from world_audit before the split "
+           f"and no longer are: {lost}")
+
+    # Guard the pin itself: a truncated list would pass vacuously.
+    expect(len(PRE_SPLIT_PUBLIC_SURFACE) >= 62,
+           f"the pinned pre-split surface has shrunk to "
+           f"{len(PRE_SPLIT_PUBLIC_SURFACE)} names — it is a record of what "
+           f"the split promised, not a list to prune")
+
+    # The re-exported check functions are the registry's own objects, not
+    # copies that could drift from what audit_dump actually runs.
+    for key, check_fn in world_audit.ALL_CHECKS.items():
+        name = check_fn.__name__
+        expect(getattr(world_audit, name, None) is check_fn,
+               f"world_audit.{name} must be the same object ALL_CHECKS"
+               f"[{key!r}] runs")
+
+
 #: This owner's inventory, in two fragments. The aggregate has always
 #: run the two emitted-category groups (owned by
 #: `test_audit_categories`) INSIDE the audit block, between these
@@ -876,6 +1156,8 @@ TESTS_LEADING = (
 TESTS_TRAILING = (
     test_wetland_on_slope,
     test_desert_soil_on_slope,
+    test_registry_composition_fails_closed,
+    test_facade_public_surface_is_complete,
 )
 
 TESTS = TESTS_LEADING + TESTS_TRAILING
