@@ -145,7 +145,10 @@ import `Engine.Core.ConfigWrite`, requires any OTHER file under
 unless it carries an exemption reason, and requires the helper itself to
 still CALL the durable primitives it is built from (import lines are
 excluded from that check, so deleting a call cannot hide behind an
-import). The shape is deliberate: the issue's own
+import). Its raw-write vocabulary includes `removeFile` and friends,
+because a config family that publishes by DELETING owes the same
+directory sync as one that publishes by renaming. The shape is
+deliberate: the issue's own
 `rg 'encodeFile|writeFile' src app | rg 'config/'` acceptance returned
 no matches on the defective snapshot, because the raw write and the
 `config/` literal sat on different lines and three of the six writers
@@ -2416,16 +2419,36 @@ matters most: migration is gated on the local file's mere EXISTENCE, so
 one interrupted partial copy used to suppress every later migration
 attempt permanently.
 
+**Deleting is a publication too.** The autosave family's "no overrides
+left" state is the ABSENCE of `config/save.local.yaml`, not an empty
+document, so `removeConfigFile` unlinks and then `fsync`s the parent
+directory before reporting success — an unlink is a directory-entry
+change exactly like the publish rename. Without that sync a crash after
+the reported success could leave the old file on disk and restore
+autosave settings the player had just reset. It distinguishes "removed"
+from "nothing was there" (nothing changed, so nothing is synced),
+reports a failed unlink without claiming the file is gone, and reports
+an unconfirmed post-unlink sync as `Left` while the unlink itself
+stands.
+
 **Failure is stated by phase.** Every pre-rename failure leaves the
 previous target byte-identical. A directory-sync failure happens AFTER
 the rename, so it returns `Left` — durability is unconfirmed — while
-the visible target is the COMPLETE new file, never a partial one. In
-every returned outcome this operation's own temporary is gone.
+the visible target is the COMPLETE new file, never a partial one.
 Synchronous filesystem failures become a descriptive `Left` naming the
 path and the cause; ASYNCHRONOUS exceptions clean up the temporary and
 are rethrown, because
 `Engine.Scripting.Lua.API.Internal.registerLuaFunction` re-throws them
 on purpose so shutdown's `killThread` still reaches the Lua thread.
+
+**Cleanup ownership spans every pre-rename phase, and a cleanup failure
+is never swallowed.** The temporary is owned from the moment its name is
+claimed until the rename consumes it, under an `onException` that covers
+every escaping exception whatever its source — a rethrown asynchronous
+one included, which is exactly the path a per-branch discard misses. If
+the removal itself fails, its warning is appended to the `Left` already
+being returned: "every returned outcome leaves no temporary" is either
+true or said out loud, never quietly false.
 
 **Outcome vocabulary.** Every Haskell writer returns `Either Text ()`.
 `engine.saveVideoConfig`, `engine.saveKeybinds`,
@@ -2455,7 +2478,10 @@ the writers never name a config path at all. It reasons about modules
 instead — the config-persistence set must contain no raw
 write/copy/rename and must import the helper; any other file naming a
 `config/` literal must contain no raw write; and the helper must still
-call the durable primitives it is built from.
+call the durable primitives it is built from. `removeFile`,
+`removePathForcibly` and `removeDirectoryRecursive` count as raw writes
+inside the config-persistence set, so the deletion side cannot regress
+past the durability contract either.
 
 ---
 
