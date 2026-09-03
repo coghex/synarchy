@@ -30,7 +30,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logDebugM)
 import Engine.Loop.Timing (primeFrameTiming)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
-import Engine.Scripting.Lua.Message (processLuaMessages, discardLuaMessagesForActiveLoad)
+import Engine.Scripting.Lua.Message (processLuaMessages)
 
 -- | Everything that genuinely differs between the three main loops.
 --   Everything ELSE — the lifecycle dispatch, the startup handshake
@@ -243,42 +243,23 @@ promoteToRunning env =
 --   current transaction's owner set excludes 'SaveRender' — so this
 --   call is safe unconditionally, every tick, in every mode.
 --
---   The park and the DISCARD are deliberately separate, and neither
---   is a gate on the other. Parking this thread's own work is safe at
---   any point, because nothing is destroyed by it: whatever stays in
---   'luaToEngineQueue' is still there afterwards, whichever way the
---   transaction ends. Flushing that queue is irreversible, and a load
---   that fails at ANY point before the publish (another owner times
---   out, 'applyLuaLoad' raises) leaves the OLD session live and
---   unchanged by contract, so its queued scene/UI work must still be
---   there to run. That is why the park widens from 'captureLocked' to
---   'ownerGated' here while the flush keeps its own, strictly narrower
---   trigger: the one-shot latch
---   'Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish' arms as it
---   queues the publish command.
---
---   That flush therefore runs FIRST and UNCONDITIONALLY, outside the
---   locked/unlocked split — it is not "work this tick may do", it is a
---   debt this thread owes before it may process anything at all.
---   Gating it on the lock would make it depend on this thread getting a
---   tick inside a window nothing guarantees: the world thread
---   processes @WorldLoadPublish@, publishes and calls
---   'Engine.Save.Barrier.releaseCaptureLock' on its own schedule, so a
---   render tick that lands only afterwards would see an unlocked gate
---   and drain the OLD session's queue straight into the replacement.
---   The latch answers regardless of when this thread next runs, and
---   answers exactly once ('Engine.Load.Status.takeStaleLuaDiscard'
---   consumes it).
+--   Parking is all this gate does. It never DISCARDS: the load
+--   publication's cutover on 'luaToEngineQueue' happens once, on the
+--   Lua thread, inside
+--   'Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish' — which is
+--   the only moment at which "everything queued" and "the replaced
+--   session's work" are the same set, and at which this thread is
+--   provably not draining. Trying to do it here instead cannot be made
+--   correct: too early and it destroys work an aborted load must keep;
+--   too late and the replacement session has already queued work of its
+--   own for it to destroy along with the backlog. So this thread simply
+--   stops consuming while parked, and resumes consuming afterwards.
 --
 --   'lmEndOfTick' still runs every tick regardless (called by
 --   'runLoopTick' after this), so a rendering mode keeps presenting
 --   throughout.
 runGatedByCaptureLock ∷ LoopMode σ → EngineEnv → EngineM σ ()
 runGatedByCaptureLock mode env = do
-    discarded ← liftIO $ discardLuaMessagesForActiveLoad env
-    when (discarded > 0) $
-        logWarnM CatLua $ "Load publication discarded "
-            <> tshow discarded <> " stale Lua-to-engine message(s)"
     locked ← liftIO $ ownerGated (saveBarrierRef env) SaveRender
     unless locked $ do
         lmCameraUpdates mode

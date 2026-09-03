@@ -34,10 +34,11 @@ import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
-import Engine.Load.Status (advanceLoad, armStaleLuaDiscard, failLoad
-                          , finishLoad, failReconciliation
+import Engine.Load.Status (advanceLoad, failLoad, finishLoad
+                          , failReconciliation
                           , ReconciliationFailure(..), LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
+import Engine.Scripting.Lua.Message (discardStaleLuaToEngineWork)
 import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
 import World.Command.Types (WorldCommand(..))
 import World.Save.Payload (LoadReconcileContext(..))
@@ -572,30 +573,44 @@ handleLoadStaged env ls requestId = do
                     (requestSelectionChange True ([], []) mgr, ())
                 commitLoadPublish env requestId
 
--- | Commit this load to publication: announce 'LoadWaitingPublish',
---   arm the render owner's stale-queue discard, and queue the world
---   thread's 'WorldLoadPublish' — as ONE action (#2221).
+-- | Commit this load to publication, as ONE action (#2221): cut the
+--   replaced session's queued Lua-to-engine work over, announce
+--   'LoadWaitingPublish', and queue the world thread's
+--   'WorldLoadPublish'.
 --
---   Three facts, one action: the phase says the publication is
---   committed, 'Engine.Load.Status.armStaleLuaDiscard' hands the render
---   owner the one irreversible act that commitment licenses — the
---   'Engine.Scripting.Lua.Message.discardLuaMessagesForActiveLoad' that
---   destroys the old session's queued scene\/UI work — and the queued
---   command is what makes both true.
+--   One action because this instant is the only one at which all three
+--   are simultaneously true and safe, and each of the others is what
+--   makes the cutover sound. 'applyLuaLoad' has already succeeded, so
+--   the load can no longer abort back onto the OLD session — which
+--   would have survived unchanged, with that queued work still owed a
+--   run. And 'WorldLoadPublish' has not been queued yet, so
+--   'World.Load.Publish.publishStagedSession' has not run and the
+--   @LuaSaveLoaded@ reconciliation it queues has not produced any
+--   NEW-session work for the cutover to destroy by mistake. Split them
+--   apart and the flush lands either where nothing is committed to, or
+--   where the replacement session is already producing.
 --
---   So neither may happen anywhere EARLIER than this. Not at
---   'reachSnapshot': 'applyLuaLoad' runs after the boundary and can
---   still fail, and that failure aborts with the OLD session live and,
---   by @docs\/persistence_contract.md@, unchanged — its queued work
---   still has to run. Arming there (as the phase was announced there
---   before #2221) licenses the flush during a window where nothing is
---   committed to at all. Keeping all three in one function is what
---   stops that pairing drifting apart again; both precede the write, so
---   no consumer can observe the queued command without them.
+--   Nothing here may move earlier. In particular the phase must not be
+--   announced at 'reachSnapshot', where it sat before #2221: the phase
+--   is the engine's statement that publication is committed, and
+--   between the boundary and this point it is not.
+--
+--   'Engine.Scripting.Lua.Message.discardStaleLuaToEngineWork' carries
+--   the full argument for why the flush belongs HERE — on the producer
+--   thread, against a parked consumer — rather than on the render owner
+--   that drains that queue.
 commitLoadPublish ∷ EngineEnv → Int → IO ()
 commitLoadPublish env requestId = do
+    logger ← readIORef (loggerRef env)
+    -- The sibling of the 'luaQueue' flush the caller just performed:
+    -- the two directions of Lua traffic are cut over together, both on
+    -- the Lua thread, both before the publish command exists.
+    discarded ← discardStaleLuaToEngineWork env
+    when (discarded > 0) $
+        logWarn logger CatWorld $
+            "Load publish discarded " <> tshow discarded
+            <> " stale Lua-to-engine message(s) queued by the replaced session"
     advanceLoad (loadStatusRef env) requestId LoadWaitingPublish
-    armStaleLuaDiscard (loadStatusRef env)
     Q.writeQueue (worldQueue env) (WorldLoadPublish requestId)
 
 -- | Build a Lua array @{ id1, id2, ... }@ from a list of integer ids.

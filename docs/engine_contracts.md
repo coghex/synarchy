@@ -2401,29 +2401,38 @@ queued against the session being replaced.
 
 **Parking is not a licence to DISCARD.** Parking an owner destroys
 nothing — whatever stays queued is still there however the transaction
-ends — but a discard is irreversible, and a load that fails anywhere
-before `WorldLoadPublish` is queued leaves the OLD session live and, by
-`docs/persistence_contract.md`, unchanged, so its queued work must
-survive. Neither the park nor the capture boundary is late enough to
-license one: `applyLuaLoad` runs AFTER `reachSnapshot` and can still
-fail.
+ends — so it is safe from that owner's own final acknowledgement. A
+discard is irreversible, and there is NO moment on an owner's own
+timeline that is a correct one for it:
 
-Nor is any *phase test* a sound trigger, because no scheduling
-guarantees an owner a tick inside the window such a test would
-describe. The world thread processes `WorldLoadPublish`, publishes and
-calls `releaseCaptureLock` on its own schedule; a render tick landing
-only afterwards would see an unlocked gate and a terminal load, and
-would drain the old session's queue straight into the replacement. So
-the render owner's discard is a ONE-SHOT LATCH
-(`Engine.Load.Status.armStaleLuaDiscard` / `takeStaleLuaDiscard`) that
-`Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish` arms as ONE
-action with the phase announcement and the enqueue of the publish
-command. `Engine.Loop.Mode.runGatedByCaptureLock` consumes it FIRST and
-unconditionally, outside its own locked/unlocked split — a debt owed
-before any processing, exactly once, whenever that thread next runs.
-The world owner's `processAuthorizedSave` discard needs no latch: it
-only ever triggers on a batch that actually contains the
-`WorldLoadPublish` itself.
+- Before the publication commits, a load can still fail —
+  `applyLuaLoad` runs AFTER `reachSnapshot` and can raise — and that
+  failure leaves the OLD session live and, by
+  `docs/persistence_contract.md`, unchanged, with its queued work still
+  owed a run. Neither the park nor the capture boundary is late enough.
+- After it commits, the REPLACEMENT session is already producing:
+  `publishStagedSession` queues `LuaSaveLoaded`, whose `onSaveLoaded`
+  handlers legitimately enqueue new-session work. A flush keyed off any
+  load state would destroy that along with the backlog, because the
+  world thread publishes and releases on its own schedule and an owner
+  is not guaranteed a tick in between.
+
+So the Lua-to-engine discard is a CUTOVER, taken exactly once at the
+one instant where "everything queued" and "the replaced session's work"
+are the same set: inside
+`Engine.Scripting.Lua.Thread.Dispatch.commitLoadPublish`, which cuts
+over (`Engine.Scripting.Lua.Message.discardStaleLuaToEngineWork`),
+announces `LoadWaitingPublish`, and queues `WorldLoadPublish` as one
+action. It runs on the PRODUCER thread — `luaToEngineQueue` is written
+by the Lua API, on the Lua thread executing this call — against a
+consumer that is provably parked, since the render owner is a
+registered owner of this transaction and the boundary was reached only
+after its final acknowledgement had already landed. The render owner
+therefore never discards at all: it stops consuming while parked and
+resumes afterwards. The world owner's `processAuthorizedSave` discard
+needs no cutover of its own: it only ever triggers on a batch that
+actually contains the `WorldLoadPublish`, and `discardStaleQueues`
+likewise runs inside the publish itself.
 
 Gates: hspec `--match "save snapshot barrier"` (the bare-barrier park
 protocol in `Test.Headless.Save.Barrier`, and the owner-loop
