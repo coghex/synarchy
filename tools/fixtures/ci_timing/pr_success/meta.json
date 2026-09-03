@@ -1,0 +1,17 @@
+{
+  "attempt": 1,
+  "conclusion": "success",
+  "createdAt": "2026-09-02T18:19:11Z",
+  "databaseId": 33666483367,
+  "displayTitle": "Add a non-looping building destruction lifecycle (#2091)",
+  "event": "pull_request",
+  "headBranch": "issue-2091-building-destruction-presentation",
+  "headSha": "d7e5fd6f4c5f1c45589b404a9647c7841fff41bd",
+  "number": 3846,
+  "startedAt": "2026-09-02T18:19:21Z",
+  "status": "completed",
+  "updatedAt": "2026-09-02T18:40:16Z",
+  "url": "https://github.com/coghex/synarchy/actions/runs/33666483367",
+  "workflowDatabaseId": 305639254,
+  "workflowName": "CI"
+}

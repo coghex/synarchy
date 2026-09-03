@@ -1,0 +1,17 @@
+{
+  "attempt": 1,
+  "conclusion": "success",
+  "createdAt": "2026-09-02T22:00:00Z",
+  "databaseId": 33700000004,
+  "displayTitle": "A docs-only change",
+  "event": "pull_request",
+  "headBranch": "issue-1111-docs",
+  "headSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "number": 3850,
+  "startedAt": "2026-09-02T22:00:03Z",
+  "status": "completed",
+  "updatedAt": "2026-09-02T22:04:03Z",
+  "url": "https://github.com/coghex/synarchy/actions/runs/33700000004",
+  "workflowDatabaseId": 305639254,
+  "workflowName": "CI"
+}

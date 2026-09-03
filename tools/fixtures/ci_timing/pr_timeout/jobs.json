@@ -1,0 +1,29 @@
+[
+  {
+    "completedAt": "2026-09-02T21:19:50Z",
+    "conclusion": "failure",
+    "databaseId": 0,
+    "name": "behavior-probes",
+    "startedAt": "2026-09-02T21:00:30Z",
+    "status": "completed",
+    "steps": [
+      {
+        "completedAt": "2026-09-02T21:00:44Z",
+        "conclusion": "success",
+        "name": "Select behavior probes",
+        "number": 1,
+        "startedAt": "2026-09-02T21:00:35Z",
+        "status": "completed"
+      },
+      {
+        "completedAt": "2026-09-02T21:19:45Z",
+        "conclusion": "failure",
+        "name": "Behavior probes (path-selective)",
+        "number": 2,
+        "startedAt": "2026-09-02T21:04:00Z",
+        "status": "completed"
+      }
+    ],
+    "url": ""
+  }
+]

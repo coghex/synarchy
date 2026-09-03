@@ -137,7 +137,11 @@ step "headless hspec suite (full tier)"
 # on the `cabal test` process itself, and it must be `1` rather than ''
 # -- the test's guard treats ANY present value, empty string included, as
 # enabled.
-SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct
+#
+# --test-options carries Hspec's --print-slow-items=20 (#2277), matching
+# both of CI's branches, so this step ends with the twenty slowest spec
+# items locally too. It is a diagnostic: no threshold here fails the gate.
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
 
 step "test audit"
 python3 tools/test_audit.py
