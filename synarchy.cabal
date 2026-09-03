@@ -419,6 +419,7 @@ library
                      Engine.Core.Queue
                      Engine.Core.Clock
                      Engine.Core.SessionEpoch
+                     Engine.Core.Yaml.Scalar
                      Engine.Scene.Base
                      Engine.Scene.Batch
                      Engine.Scene.Batch.Sprite
@@ -755,6 +756,8 @@ library
                      World.Generate.Types
                      World.Generate.Config
                      World.Generate.Config.Types
+                     World.Generate.Config.Domain
+                     World.Generate.Config.Validate
                      World.Generate.Config.Normalize
                      World.Generate.Config.IO
                      World.Geology
@@ -1252,6 +1255,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.SessionEpoch
                    Test.Headless.World.TimeScaleDomain
+                   Test.Headless.World.GenConfigDomain
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Compat.B1Fixture
                    Test.Headless.World.Save.Compat.Baselines

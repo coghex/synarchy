@@ -802,6 +802,29 @@ jobs:
           python3 tools/test_unicode_operator_audit.py
           python3 tools/unicode_operator_audit.py
 
+      # Cheap, no-engine guard (#2292, HLR-1 of
+      # docs/haddock_link_resolution_design.md): fails if a QUALIFIED
+      # haddock link `'Module.function'` in a src/ or app/ comment names
+      # a function the module does not export -- such a link renders as
+      # plain text and sends a reader to a module that hides the name.
+      # `-haddock` validates comment SYNTAX only; link TARGETS are
+      # resolved by the `haddock` tool, which no gate runs. It lands as
+      # a RATCHET: tools/haddock_link_baseline.json is a generated,
+      # never-hand-edited record of the dead links present when the
+      # audit landed, and the run fails on any link not in it AND on any
+      # entry no longer found, so the file can only shrink. That
+      # baseline is temporary, not an exemption list -- HLR-5 deletes it
+      # together with --update-baseline. The fixture suite runs first
+      # and pins the false-greens the success path shares with a real
+      # clean run: an ASCII-`::`-only or same-line-only definition rule
+      # (this tree is UnicodeSyntax throughout, and the one same-module
+      # case declares its `∷` on a continuation line) would find no
+      # dead links at all and generate an EMPTY baseline.
+      - name: Haddock link audit
+        run: |
+          python3 tools/test_haddock_link_audit.py
+          python3 tools/haddock_link_audit.py
+
       # Cheap, no-engine guard (#1605, restoring #665's sweep): fails
       # if a QUALIFIED reference to Data.Text.Encoding.decodeUtf8 --
       # under any alias, and with `qualified` written either side of the

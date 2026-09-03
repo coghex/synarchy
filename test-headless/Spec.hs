@@ -128,6 +128,7 @@ import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.World.SessionEpoch as SessionEpoch
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
+import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
@@ -588,6 +589,20 @@ main = hspec $ do
     -- installs its own single-page manager and finishes each accepted
     -- call by invoking the production command handler directly.
     aroundAll withHeadlessEngineNoWorld TimeScaleDomain.spec
+    -- #2288: the world-generation float domain. The pure half -- the
+    -- shared leaf tables, the YAML resolution and the save-side repair --
+    -- needs no engine at all. The Lua half gets its OWN engine, and is
+    -- world-thread-FREE: it rewrites worldGenConfigRef under every
+    -- example and never inits a world, so a running worker would only be
+    -- a source of interference.
+    GenConfigDomain.pureSpec
+    aroundAll withHeadlessEngineNoWorld GenConfigDomain.spec
+    -- The staging half needs a WORLD-thread-free engine too, but a
+    -- different one: it drives World.Load.Stage.stageSession against a
+    -- forged one-page save, so it must not gain (or disturb) the shared
+    -- worlds engine's pages. Its page is an arena page, so staging
+    -- rebuilds flat chunks instead of generating a world.
+    aroundAll withHeadlessEngineNoWorld GenConfigDomain.stagingSpec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
