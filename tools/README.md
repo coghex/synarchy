@@ -1316,7 +1316,7 @@ pre-execution rejections (2), port exhaustion (3) and harness errors (4) — a
 malformed, truncated, duplicate, out-of-order or unclassifiable protocol
 event, which is never reported as a probe pass.
 
-### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439, #1438)
+### `probe_census.py` — the probe census (#1425, #1428, #1430, #1492, #1434, #1441, #1439, #1438, #2131)
 
 Builds, validates and updates `docs/probe_census.json`, now
 `probe-census/v5`: every registered probe exactly once, with its script, its
@@ -1463,16 +1463,39 @@ writes nothing. A harness error is deliberately NOT gated: it reads no cohort
 and contributes to none, and unmeasurable provenance is exactly what the
 attempt log retains. The CROSS-FIELD invariants remain #1493's.
 
+**How the census is composed (#2034, #2131).** `probe_census.py` is the
+command and the compatibility facade — argument validation, dispatch,
+presentation and exit mapping — over five owners that hold every
+implementation body. `probe_census_contract.py` says what a document IS: the
+schema identifiers and shared constants, `CensusError`, the declared JSON
+Schema, the non-finite rejection, the cross-field invariants, the scalar
+requirements and one cohort's combined statistic. `probe_census_records.py`
+holds every PURE transformation of a document — the empty record and the
+manifest, the acceptable-failure policy as data, migration and reconciliation,
+target lookup, and the ingestion, policy and deferral mutations.
+`probe_census_summary.py` is the read-only summariser: which cohort is
+authoritative, how old it is against a supplied horizon, and the per-entry and
+whole-census summaries. `probe_census_storage.py` is the only impure owner —
+the docs worktree, the cross-process lock, path-substitution refusal, the
+preservation and append-only guards, the atomic replacement, and the one
+`update()` transaction every stored mutation passes through.
+`probe_census_promotion.py` is the read-only promotion report. Dependencies
+run ONE WAY and have no cycle: contract, then records, then summary; contract
+and records under storage; the three pure owners under promotion; and every
+owner under the facade, which no owner imports. The five commands, their
+arguments, their output, their diagnostics, their exit codes and the Python
+names every sibling tool imports from `probe_census` are unchanged — the
+facade re-exports each from one implementation.
+
 **Where the promotion report lives (#2034).** The assessment and the rendering
-are `tools/probe_census_promotion.py`'s, not `probe_census.py`'s: they are
-read-only over a census the CLI has already loaded and validated, so keeping
-them out of the file that owns the schema, the lock and the atomic write is
-what makes "reporting writes no census bytes" structural rather than
-disciplined. The command, its arguments and incompatibilities, its exit codes,
-the human table and the `--json` document are unchanged by the move. That
-module has no CLI of its own, and the dependency runs one way (promotion ->
-census), with `--promotion-candidates`' dispatch importing it at its point of
-use so no cycle exists.
+are `tools/probe_census_promotion.py`'s, not the facade's: they are read-only
+over a census the CLI has already loaded and validated, so keeping them out of
+the owners that hold the schema, the lock and the atomic write is what makes
+"reporting writes no census bytes" structural rather than disciplined. The
+command, its arguments and incompatibilities, its exit codes, the human table
+and the `--json` document are unchanged by the move. That module has no CLI of
+its own, and `--promotion-candidates`' dispatch imports it at its point of use
+so no cycle exists.
 
 **CI-promotion candidates (#1441).** `--promotion-candidates` reports what a
 person needs in front of them before editing `tools/ci_probes.py`, and it edits
@@ -2110,7 +2133,9 @@ pinned to live membership would redden on unrelated registry work. Purity is
 proved mechanically: subprocesses, sockets, `open`, `os.replace`, `time.time`
 and `datetime.datetime.now`/`utcnow` are tripwires for the whole run, the last
 pair installed by swapping the `datetime` module inside `probe_select` and
-`probe_census` for one that refuses a clock read while still delegating
+inside every census module that has one — the facade and all four #2131
+owners, so the tripwire still reaches the summariser the selection path
+actually calls — for one that refuses a clock read while still delegating
 `isinstance`. Like #1431's, #1432's and #1433's self-tests, it is not wired
 into `make ci` or GitHub CI.
 

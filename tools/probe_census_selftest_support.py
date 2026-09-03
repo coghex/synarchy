@@ -49,6 +49,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_probes  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
+import probe_census_contract as census_contract  # type: ignore  # noqa: E402
+import probe_census_storage as census_storage  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
@@ -68,20 +70,20 @@ COMMIT_B = "b" * 40
 # staleness is a function of an injected `now`, so a boundary case is a
 # boundary case on every machine and at every hour.
 NOW = datetime.datetime(2026, 8, 21, 12, 0, 0, tzinfo=datetime.timezone.utc)
-DAY = probe_census.SECONDS_PER_DAY
+DAY = census_contract.SECONDS_PER_DAY
 
 
 def at(offset_days: float) -> str:
     """A census timestamp `offset_days` BEFORE the evaluation moment."""
     moment = NOW - datetime.timedelta(days=offset_days)
-    return moment.strftime(probe_census.TIMESTAMP_FORMAT)
+    return moment.strftime(census_contract.TIMESTAMP_FORMAT)
 
 
 def expect_refusal(call, msg: str, *fragments: str) -> None:
     """`call` refuses with a `CensusError` naming each fragment."""
     try:
         call()
-    except probe_census.CensusError as error:
+    except census_contract.CensusError as error:
         text = str(error)
         missing = [f for f in fragments if f not in text]
         if missing:
@@ -152,7 +154,7 @@ def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
     the producer cannot write.
     """
     document = {
-        "schema": probe_census.RESULT_SCHEMA,
+        "schema": census_contract.RESULT_SCHEMA,
         "probe": probe,
         "status": status,
         "error": None if status == "ok" else "run 2 emitted a duplicate event",
@@ -209,7 +211,7 @@ def result_document(probe="alpha", status="ok", commit=COMMIT_A, **overrides):
 
 def seeded(path: Path) -> dict:
     """A fresh v2 census on disk, from the synthetic registry."""
-    return probe_census.ensure_document(path)
+    return census_storage.ensure_document(path)
 
 
 def unchanged(path: Path, before: bytes, msg: str) -> None:
@@ -239,7 +241,7 @@ def cli_repo():
         saved = probe_engine.REPO_ROOT
         probe_engine.REPO_ROOT = str(main_wt)
         try:
-            yield main_wt, docs_wt / probe_census.MANIFEST_RELPATH
+            yield main_wt, docs_wt / census_storage.MANIFEST_RELPATH
         finally:
             probe_engine.REPO_ROOT = saved
 

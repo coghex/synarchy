@@ -81,11 +81,17 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ci_probes  # noqa: E402
 import probe_census  # noqa: E402
+# The two storage internals `write_page` reuses are named at their OWNER
+# rather than through the facade's compatibility re-export: #2131 made
+# `tools/probe_census_storage.py` the module whose globals they resolve
+# in, and a test that has to intercept this generator's replacement
+# patches the same object the census writer's own does.
+import probe_census_storage as census_storage  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_runner_registry  # noqa: E402
 
 PAGE_RELPATH = "docs/probe_census.md"
-# Deliberately NOT a `probe_census.STAGING_PREFIX` extension: the census
+# Deliberately NOT a `census_storage.STAGING_PREFIX` extension: the census
 # writer sweeps every sibling carrying that prefix under its own lock,
 # which would let it unlink this generator's live staging file.
 PAGE_STAGING_PREFIX = ".probe_page."
@@ -553,10 +559,10 @@ def write_page(path: Path, text: str) -> None:
     complete page or the other.
     """
     target = Path(path)
-    probe_census._refuse_substituted(target, "census page")
-    probe_census._atomic_replace(target, text.encode("utf-8"),
-                                 what="census page",
-                                 prefix=PAGE_STAGING_PREFIX)
+    census_storage._refuse_substituted(target, "census page")
+    census_storage._atomic_replace(target, text.encode("utf-8"),
+                                   what="census page",
+                                   prefix=PAGE_STAGING_PREFIX)
 
 
 def read_page(path: Path) -> str:

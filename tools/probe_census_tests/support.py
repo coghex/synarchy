@@ -60,6 +60,10 @@ if str(TOOLS_DIR) not in sys.path:
 
 # Both need TOOLS_DIR on sys.path, which is why they follow it.
 import probe_census  # type: ignore  # noqa: E402
+import probe_census_contract as census_contract  # type: ignore  # noqa: E402
+import probe_census_records as census_records  # type: ignore  # noqa: E402
+import probe_census_storage as census_storage  # type: ignore  # noqa: E402
+import probe_census_summary as census_summary  # type: ignore  # noqa: E402
 from probe_census_selftest_support import (  # noqa: E402
     COMMIT_A, COMMIT_B, DAY, NOW, SYNTHETIC, at, cli, cli_repo, expect,
     expect_refusal, registry, result_document, scratch, seeded, unchanged,
@@ -67,7 +71,9 @@ from probe_census_selftest_support import (  # noqa: E402
 
 __all__ = [
     "COMMIT_A", "COMMIT_B", "DAY", "NOW", "SYNTHETIC", "TOOLS_DIR", "_alpha",
-    "at", "attempt_record", "cli", "cli_repo", "expect", "expect_refusal",
+    "at", "attempt_record", "census_contract", "census_records",
+    "census_storage", "census_summary", "cli", "cli_repo", "expect",
+    "expect_refusal",
     "measurement", "probe_census", "registry", "result_document",
     "rich_census", "sample_record", "scratch", "seeded", "stored_v3_document",
     "stored_v4_document", "summary_of", "unchanged", "v1_document",
@@ -95,14 +101,14 @@ def sample_record(mark: str, commit: str = COMMIT_A) -> dict:
     these come from the real summarizer and carry one distinguishing
     value each.
     """
-    record = probe_census.summarize_sample(result_document(commit=commit))
+    record = census_records.summarize_sample(result_document(commit=commit))
     record["retained_artifacts"] = [f"/tmp/artifacts/{mark}"]
     return record
 
 
 def attempt_record(mark: str, commit: str = COMMIT_A) -> dict:
     """A schema-valid durable attempt, tagged by its error text."""
-    record = probe_census.summarize_attempt(
+    record = census_records.summarize_attempt(
         result_document(commit=commit), True)
     record["error"] = mark
     return record
@@ -143,7 +149,7 @@ def stored_v4_document() -> dict:
     current record shape.
     """
     document = stored_v3_document()
-    document["schema"] = probe_census.OUTCOME_SCHEMA
+    document["schema"] = census_contract.OUTCOME_SCHEMA
     document["probes"][0]["census"]["outcomes"] = []
     return document
 
@@ -159,10 +165,10 @@ def rich_census() -> dict:
     one per commit, in the order they were ingested — and the archived
     cohort's sample really is from that cohort's commit.
     """
-    sample = probe_census.summarize_sample(result_document())
-    attempt = probe_census.summarize_attempt(result_document(), True)
-    archived = probe_census.summarize_sample(result_document(commit=COMMIT_B))
-    archived_attempt = probe_census.summarize_attempt(
+    sample = census_records.summarize_sample(result_document())
+    attempt = census_records.summarize_attempt(result_document(), True)
+    archived = census_records.summarize_sample(result_document(commit=COMMIT_B))
+    archived_attempt = census_records.summarize_attempt(
         result_document(commit=COMMIT_B), True)
 
     def row(key, census):
@@ -171,7 +177,7 @@ def rich_census() -> dict:
                 "census": census}
 
     return {
-        "schema": probe_census.CENSUS_SCHEMA,
+        "schema": census_contract.CENSUS_SCHEMA,
         "probes": [
             row("alpha", {"acceptable_failures": 2,
                           "acceptable_failures_justification": "two races",
@@ -185,8 +191,8 @@ def rich_census() -> dict:
                           "claims": [],
                           "outcomes": [],
                           "deferred": None}),
-            row("beta", probe_census.empty_census()),
-            row("gamma", probe_census.empty_census()),
+            row("beta", census_records.empty_census()),
+            row("gamma", census_records.empty_census()),
         ],
     }
 
@@ -209,6 +215,6 @@ def measurement(commit=COMMIT_A, *, runs=2, failures=1, age_days=0.0,
 def summary_of(path: Path, probe="alpha", *, now=NOW,
                stale_after_seconds=14 * DAY) -> dict:
     document = json.loads(path.read_text(encoding="utf-8"))
-    return probe_census.census_summary(
+    return census_summary.census_summary(
         document, now=now, stale_after_seconds=stale_after_seconds,
         probe=probe)[0]
