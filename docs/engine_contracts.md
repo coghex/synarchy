@@ -2450,6 +2450,15 @@ the removal itself fails, its warning is appended to the `Left` already
 being returned: "every returned outcome leaves no temporary" is either
 true or said out loud, never quietly false.
 
+Ownership starts one step earlier than that, inside
+`World.Save.Storage.Durable.claimUniquePath` itself: it opens a real
+file and only then removes it, so the caller cannot own the placeholder
+before the claim returns its name. The claim therefore runs under
+`mask_` with an `onException` covering `hClose`'s one interruptible
+point, and the exception always propagates — this closes a leak, never
+a shutdown path. Every caller of the primitive gains that, the save
+transaction and the generated-world library included.
+
 **Outcome vocabulary.** Every Haskell writer returns `Either Text ()`.
 `engine.saveVideoConfig`, `engine.saveKeybinds`,
 `engine.setNotificationOverrides` and `engine.setSaveConfig` each
@@ -2460,6 +2469,14 @@ settings were persisted. Higher-level boot workflows (`loadOverrides`,
 `migrateLegacyConfig`, `recordNeutralLegacy`) keep their own return
 types but consume the outcome explicitly, and never log a success line
 after a `Left`.
+
+**A failed write must not move a baseline either.** `data.save()`
+refreshes Settings Back's persisted video baseline
+(`data.captureSavedVideo`) only when `engine.saveVideoConfig()` returned
+true. Adopting values that reached the live ref but never reached disk
+would leave Back with no way back to the configuration that is
+genuinely saved — the same class of loss the durable write exists to
+prevent, one layer up.
 
 **Live state on a failed write is unchanged, per family, by design.**
 Video and keybinds keep the already-applied live ref; notifications
