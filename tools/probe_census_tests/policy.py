@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -33,7 +34,7 @@ from .support import (
     attempt_record, census_contract, census_records, census_storage, cli,
     cli_repo, COMMIT_A, COMMIT_B, expect, expect_refusal, measurement,
     probe_census, registry, result_document, sample_record, scratch, seeded,
-    summary_of, SYNTHETIC, unchanged, v1_document,
+    summary_of, SYNTHETIC, TOOLS_DIR, unchanged, v1_document,
 )
 
 import probe_engine  # type: ignore  # noqa: E402 -- `.support` installs tools/
@@ -939,6 +940,44 @@ def test_cli_justification() -> None:
 
 def test_cli() -> None:
     print("\n-- the CLI contract --")
+
+    # The SCRIPT, run the way every caller and every doc runs it. Every
+    # other case here drives `probe_census.main()` in process through
+    # `cli`, which is faster and lets a fixture patch the registry -- and
+    # which is exactly why it cannot see whether the module still HAS an
+    # entry point. A `probe_census.py` whose `if __name__ ...` block went
+    # missing imports cleanly, exits 0 and writes nothing, so every
+    # in-process case stays green while the command does nothing at all.
+    # Asserting on stdout rather than the status is the whole point: the
+    # status was already 0.
+    #
+    # Outside the synthetic `registry()` below on purpose: a subprocess
+    # gets the real one, and what is under test is the entry point, not
+    # the inventory.
+    script = str(TOOLS_DIR / "probe_census.py")
+    printed = subprocess.run([sys.executable, script, "--print"],
+                             capture_output=True, text=True)
+    expect(printed.returncode == 0 and printed.stdout.strip() != "",
+           f"`python3 tools/probe_census.py --print` writes the manifest to "
+           f"stdout (exit {printed.returncode}, "
+           f"{len(printed.stdout)} byte(s))")
+    manifest = json.loads(printed.stdout) if printed.stdout.strip() else {}
+    expect(manifest.get("schema") == census_contract.CENSUS_SCHEMA
+           and isinstance(manifest.get("probes"), list)
+           and manifest["probes"],
+           "and what it writes is the live v5 manifest")
+
+    # `--help` is built from module constants and `description=__doc__`,
+    # so the facade has to keep importing those names and keep a usable
+    # docstring. Nothing else asserts on it.
+    helped = subprocess.run([sys.executable, script, "--help"],
+                            capture_output=True, text=True)
+    expect(helped.returncode == 0
+           and census_storage.MANIFEST_RELPATH in helped.stdout
+           and str(census_contract.POLICY_RUN_COUNT) in helped.stdout,
+           f"`--help` renders from the module docstring and constants "
+           f"(exit {helped.returncode})")
+
     with registry(ci_eligible={"beta"}):
         # `--print` must not require, read or create the docs worktree.
         saved = probe_census.manifest_path

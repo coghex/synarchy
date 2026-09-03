@@ -723,3 +723,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{path}: {len(probe_runner_registry.PROBES)} probes, inventory agrees with "
           f"probe_runner_registry.PROBES and tools/ci_probes.py")
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
