@@ -42,6 +42,7 @@ import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
+import World.Material (mergeMaterialRegistry)
 import Language.Generated.Types (generatorErrorText)
 import Language.Semantic.Catalogue ( conceptCataloguePath
                                    , conceptOrdinalPath, loadCatalogue )
@@ -143,16 +144,44 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- The registry was initialized empty at engine startup; without this
     -- pass every material would use defaultMaterialProps (uniform
     -- hardness/density/drainage), making per-material differentiation
-    -- in erosion / water-table / etc. a no-op. Idempotent — reloading on
-    -- successive world inits just rewrites the same data.
+    -- in erosion / water-table / etc. a no-op.
     -- Shared with the whole-session LOAD path (issue #763) via
     -- 'Engine.Asset.YamlMaterials.loadPopulatedMaterialRegistry' — a
     -- headless boot that goes straight to engine.loadSave with no prior
     -- world.init in the same process needs this SAME population before
     -- it can validate a save's material references.
+    --
+    -- MERGES rather than replaces (issue #2278). The freshly-loaded
+    -- data/materials base is the floor; whatever the LIVE session has
+    -- already registered is overlaid ON TOP of it, live registrations
+    -- winning on any id collision. That is the ONE collision policy
+    -- 'World.Material.mergeMaterialRegistry' documents and the load path
+    -- (Engine.Scripting.Lua.API.Save's loadSave, #763) already applies,
+    -- so a fresh world and a loaded world interpret the same session's
+    -- registrations identically. A wholesale rewrite instead dropped
+    -- every 'engine.loadMaterialYaml' registration of an id NOT defined
+    -- under data/materials — those live ONLY in this ref, never on disk
+    -- — leaving their tiles on defaultMaterialProps and getting a save
+    -- that references the id refused later as an unknown material. It
+    -- also made initializing a SECOND page silently reinterpret
+    -- materials for a page already live, since this is one
+    -- process-global ref every page reads.
+    --
+    -- Published as ONE atomic update against whatever value is live at
+    -- publication time: 'materialRegistryRef' is a documented
+    -- multi-writer ref and the Lua thread's own
+    -- 'Engine.Scripting.Lua.API.YamlTextures.loadMaterialYamlFn' writes
+    -- it with 'atomicModifyIORef''. A separate read-then-write would
+    -- erase a registration that completed while data/materials was
+    -- loading. The merged value it returns is what every
+    -- material-dependent step below uses, so ONE registry snapshot
+    -- drives generation, logging, the zoom cache/artifact, and the
+    -- center chunk.
     sendGenLog env "Loading material registry from data/materials..."
-    populatedReg ← loadPopulatedMaterialRegistry logger "data/materials"
-    writeIORef (wsMaterialRegistryRef worldSim) populatedReg
+    baseReg ← loadPopulatedMaterialRegistry logger "data/materials"
+    mergedReg ← atomicModifyIORef' (wsMaterialRegistryRef worldSim) $ \liveReg →
+        let merged = mergeMaterialRegistry baseReg liveReg
+        in (merged, merged)
 
     -- Step 1: Timeline (now co-evolves climate)
     writeIORef phaseRef (LoadPhase1 1 totalSteps)
@@ -169,12 +198,14 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             , olIron   = ryIronAbundance resourcesCfg
             , olCopper = ryCopperAbundance resourcesCfg
             }
-    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline populatedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers (timelineParamsOf worldGenCfg0)
+    let (timeline, timelineClimate, borderedCache, oceanMap, oceanDist) = buildTimeline mergedReg seed worldSize placeCount erosionIntensity volcanicActivity lavaPoolDepth lavaPoolRadius waterfallQuantum oreLevers (timelineParamsOf worldGenCfg0)
     _ ← evaluate (force timeline)
     _ ← evaluate (force timelineClimate)
     _ ← evaluate (force borderedCache)
-    registry ← readIORef (wsMaterialRegistryRef worldSim)
-    let !_ = registry `seq` ()  -- ensure registry is read before logging timeline info
+    -- The SAME merged snapshot published in step 0.5, not a re-read of
+    -- the live ref: every material-dependent step in this initialization
+    -- resolves ids against one value (#2278).
+    let registry = mergedReg
     let plateLines = formatPlatesSummary seed worldSize placeCount registry
     forM_ plateLines $ \line → do
         logInfo logger CatWorld line

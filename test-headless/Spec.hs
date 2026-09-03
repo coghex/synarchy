@@ -90,6 +90,7 @@ import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
 import qualified Test.Headless.World.GeneratedLibrary as GeneratedLibrary
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
+import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.FluidWritebackStaleness as FluidWritebackStaleness
 import qualified Test.Headless.World.CursorInfo as CursorInfo
@@ -461,6 +462,10 @@ main = hspec $ do
     -- for the same reason "World identity" is isolated.
     MapImagePlan.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
+    -- #2278. Own engine: it registers an out-of-tree material into the
+    -- ONE process-global material registry and creates two private w8
+    -- pages, neither of which the shared-worlds engine above may gain.
+    aroundAll withHeadlessEngine MaterialRegistryMerge.spec
     -- Own engine (#1718): creates an arena page, which the shared-worlds
     -- engine above must not gain. Its describe names "Arena" so the
     -- issue's `--match "Arena"` acceptance command selects it alongside
