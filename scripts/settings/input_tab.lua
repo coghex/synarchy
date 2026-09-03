@@ -32,6 +32,17 @@ local responsive = require("scripts.ui.responsive")
 
 local inputTab = {}
 
+-- Persist the write-through keybinding edit that just happened. #2202:
+-- the engine verb returns false rather than raising when
+-- config/keybinds.local.yaml could not be written, so every one of this
+-- tab's three write-through edits names the family in the log instead of
+-- losing the rebind silently at the next boot.
+local function persistKeybinds()
+    if not engine.saveKeybinds() then
+        engine.logWarn("Could not persist keybindings")
+    end
+end
+
 -----------------------------------------------------------
 -- Curated action list (display order + friendly names)
 -----------------------------------------------------------
@@ -309,7 +320,7 @@ local function showConflictPopup(action, key, oldAction)
             engine.removeActionKeysMatching(oldAction, key)
             engine.addActionKey(action, key)
             coalesceModifierSides(action)
-            engine.saveKeybinds()
+            persistKeybinds()
             finishAndRebuild()
         end,
     })
@@ -386,7 +397,7 @@ function inputTab.onKeyCapture(key)
     -- Free key → bind and persist (the exact key pressed).
     engine.addActionKey(action, bindKey)
     coalesceModifierSides(action)
-    engine.saveKeybinds()
+    persistKeybinds()
     finishAndRebuild()
 end
 
@@ -406,7 +417,7 @@ end
 local function removeKey(action, key)
     if inputTab.captureActive() then return end
     engine.removeActionKey(action, key)
-    engine.saveKeybinds()
+    persistKeybinds()
     if inputTab.ctx and inputTab.ctx.rebuild then inputTab.ctx.rebuild() end
 end
 

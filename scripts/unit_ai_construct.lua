@@ -151,13 +151,15 @@ end
 -- Buildings are always viable (staking needs no materials); structure
 -- jobs need a costed pack, a floor under a post, and sourceable materials.
 local function findConstructJob(uid, fromX, fromY, params)
-    local wid = world.getActiveWorldId()
+    -- #1673: the ACTOR's page, not the active one — see site.jobPage.
+    local wid = site.jobPage(uid)
     if not wid then return nil end
     local ccx = math.floor(fromX / 16)   -- chunkSize
     local ccy = math.floor(fromY / 16)
     local r = params.construct_scan_chunks
-    local jobs = construction.getPendingJobs(ccx - r, ccy - r,
-                                             ccx + r, ccy + r)
+    -- #1845: scanned on the ACTOR's page — see site.pendingJobsOn.
+    local jobs = site.pendingJobsOn(wid, ccx - r, ccy - r,
+                                    ccx + r, ccy + r)
     if not jobs or #jobs == 0 then return nil end
     local now = engine.gameTime()
     site.sweepClaims(constructClaims, constructKey, wid, jobs, now,
@@ -199,7 +201,7 @@ local function findConstructJob(uid, fromX, fromY, params)
 end
 
 local function constructUtility(uid, s, params)
-    local wid = world.getActiveWorldId()
+    local wid = site.jobPage(uid)
     if not wid then return -math.huge end
 
     -- Active job: finite lock-in (dire needs still preempt; the claim
@@ -231,7 +233,7 @@ local function constructUtility(uid, s, params)
 end
 
 local function constructExecute(uid, s, params)
-    local wid = world.getActiveWorldId()
+    local wid = site.jobPage(uid)
     if not wid then return end
     local info = unit.getInfo(uid)
     if not info then return end
@@ -296,25 +298,11 @@ local function constructExecute(uid, s, params)
     -- Keep the claim fresh, carrying the attempt it is a claim ON.
     constructClaims[key] = { uid = uid, at = now, attempt = job.attempt }
 
-    -- Building blueprint: walk up and stake it, then hand off to the
-    -- delivery + build_nearby machinery.
+    -- Building blueprint: walk up, stake it, and hold the designation
+    -- until the staked building is really there (site.stakeBuilding,
+    -- #1845). Then hand off to the delivery + build_nearby machinery.
     if job.category == "building" then
-        local d = distance(info.gridX, info.gridY, job.x + 0.5, job.y + 0.5)
-        if d > 2.2 then
-            unit.moveTo(uid, job.x + 0.5, job.y + 1.5, mv.comfort(uid))
-            return
-        end
-        unit.stop(uid)
-        local bid = building.spawn(job.building, job.x, job.y)
-        if bid then
-            construction.setJobStatus(wid, job.x, job.y, "complete",
-                                      job.attempt)
-            releaseConstructJob(wid, s, uid)
-        else
-            -- Placement invalid (terrain changed, overlap) — retrying
-            -- can't succeed, so cancel the blueprint and say so.
-            reportFailure(uid, "Can't build here — blueprint cancelled")
-            construction.cancelDesignation(job.x, job.y, job.attempt)
+        if site.stakeBuilding(wid, job, uid, info, now, params) ~= "working" then
             releaseConstructJob(wid, s, uid)
         end
         return
@@ -369,7 +357,13 @@ local function constructExecute(uid, s, params)
                         reason = "resolver refused the site before material "
                                  .. "payment: " .. tostring(plan),
                     }
-                    construction.cancelDesignation(job.x, job.y, job.attempt)
+                    -- #1845: page-scoped, exact-attempt, and it hands
+                    -- back any receipt a predecessor had already paid.
+                    -- The page-blind form would erase whatever sits at
+                    -- this coordinate on whichever page happens to be
+                    -- SELECTED, and leave this job's designation
+                    -- standing while its claim was released.
+                    site.cancelJob(wid, job)
                     releaseConstructJob(wid, s, uid)
                     return
                 end
@@ -419,9 +413,12 @@ local function constructExecute(uid, s, params)
         return
     end
 
-    -- Phase 3: pour work in. progress rides the designation (persisted;
-    -- it ramps a BUILDING blueprint — a structure site is already
-    -- invisible, #1846); the local copy avoids a read-back race.
+    -- Phase 3: pour work in. STRUCTURE jobs only -- a building job
+    -- returned above, having staked a real BuildingInstance that the
+    -- work then accumulates on. progress rides the designation
+    -- (persisted) and ramps nothing: a structure site is already
+    -- invisible by now (#1846) and a building ghost holds a fixed 60 %
+    -- (#1845). The local copy avoids a read-back race.
     if job.phase == "building" then
         -- Requirement 10: an unresolved-terrain site cannot be
         -- PROGRESSED either — its chunk evicting mid-build must stop the

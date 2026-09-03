@@ -544,17 +544,26 @@ yamlSpec = describe "YAML loading" $ do
         , ("syntax error", "video: [\n  resolution: {\n")
         ]
 
+-- | Did 'saveVideoConfig' write? #2202 retyped it from 'Bool' to
+--   @Either Text ()@ so a FILESYSTEM failure can carry its cause
+--   alongside the pre-existing domain refusal; these examples are about
+--   the domain refusal, and read the outcome's shape. The cause text
+--   itself is asserted through the captured warnings below, exactly as
+--   before.
+wrote ∷ IO (Either Text ()) → IO Bool
+wrote = fmap (either (const False) (const True))
+
 -- | 'saveVideoConfig' against a temporary path.
 saveSpec ∷ Spec
 saveSpec = describe "saveVideoConfig" $ do
     it "writes a valid config that the loader reads back identically, without fallback or warning" $ inTemp $ \dir → do
         (logger, drain) ← newDrainingLogger
         let path = dir </> "video.local.yaml"
-        saveVideoConfig logger path baseConfig `shouldReturn` True
+        wrote (saveVideoConfig logger path baseConfig) `shouldReturn` True
         loadVideoConfig logger path `shouldReturn` baseConfig
         -- Unlimited survives write→read too: null on disk, Nothing in memory.
         let unlimited = baseConfig { vcFrameLimit = Nothing }
-        saveVideoConfig logger path unlimited `shouldReturn` True
+        wrote (saveVideoConfig logger path unlimited) `shouldReturn` True
         loadVideoConfig logger path `shouldReturn` unlimited
         (warningsOf ⊚ drain) `shouldReturn` []
 
@@ -563,7 +572,7 @@ saveSpec = describe "saveVideoConfig" $ do
         let path = dir </> "video.local.yaml"
             sentinel = "video: {resolution: {width: 1, height: 1}}\n# untouched\n"
         BS.writeFile path sentinel
-        saveVideoConfig logger path baseConfig { vcWidth = 0, vcBrightness = 999 }
+        wrote (saveVideoConfig logger path baseConfig { vcWidth = 0, vcBrightness = 999 })
             `shouldReturn` False
         BS.readFile path `shouldReturn` sentinel
         entries ← drain
@@ -576,7 +585,8 @@ saveSpec = describe "saveVideoConfig" $ do
     it "refuses an invalid config and leaves an absent destination absent" $ inTemp $ \dir → do
         (logger, drain) ← newDrainingLogger
         let path = dir </> "video.local.yaml"
-        saveVideoConfig logger path baseConfig { vcUIScale = 0 / 0 } `shouldReturn` False
+        wrote (saveVideoConfig logger path baseConfig { vcUIScale = 0 / 0 })
+            `shouldReturn` False
         doesFileExist path `shouldReturn` False
         warnings ← warningsOf ⊚ drain
         length warnings `shouldBe` 1
@@ -585,9 +595,9 @@ saveSpec = describe "saveVideoConfig" $ do
     it "logs every rejected field rather than substituting a default for any of them" $ inTemp $ \dir → do
         (logger, drain) ← newDrainingLogger
         let path = dir </> "video.local.yaml"
-        saveVideoConfig logger path baseConfig
-            { vcHeight = -1, vcFrameLimit = Just 5, vcMSAA = 3
-            , vcTooltipHintDelayMs = 1001 }
+        wrote (saveVideoConfig logger path baseConfig
+                 { vcHeight = -1, vcFrameLimit = Just 5, vcMSAA = 3
+                 , vcTooltipHintDelayMs = 1001 })
             `shouldReturn` False
         doesFileExist path `shouldReturn` False
         warnings ← warningsOf ⊚ drain

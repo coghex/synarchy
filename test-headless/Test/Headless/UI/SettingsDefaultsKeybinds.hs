@@ -122,6 +122,7 @@ spec = describe "Settings Defaults keybind persistence (#1357)" $ do
             logger ← testLogger
             saveKeyBindings logger keybindsLocalPath
                 (Map.fromList [("toggleEventLog", ["F9"])])
+                `shouldReturn` Right ()
             wrote ← doesFileExist keybindsLocalPath
             here  ← getCurrentDirectory
             pure (wrote, here)

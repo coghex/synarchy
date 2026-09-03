@@ -5,13 +5,14 @@ module Engine.Asset.YamlInfection
     ( InfectionYamlDef(..)
     , InfectionYamlFile(..)
     , loadInfectionYaml
+    , loadInfectionYamlOutcome
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 
 -- | YAML shape for one infection entry. Only `id` + `name` + `category`
 --   are required; everything else has a sensible default so a terse entry
@@ -87,6 +88,15 @@ instance FromJSON InfectionYamlFile where
     parseJSON = withObject "InfectionYamlFile" $ \v → InfectionYamlFile
         ⊚ v .: "infections"
 
+-- | 'loadInfectionYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadInfectionYaml'.
+loadInfectionYamlOutcome
+    ∷ LoggerState → FilePath → IO (Maybe [InfectionYamlDef])
+loadInfectionYamlOutcome logger =
+    loadYamlListOutcome logger "infection" "infections" iyfInfections
+
 loadInfectionYaml ∷ LoggerState → FilePath → IO [InfectionYamlDef]
-loadInfectionYaml logger =
-    loadYamlList logger "infection" "infections" iyfInfections
+loadInfectionYaml logger path =
+    fromMaybe [] ⊚ loadInfectionYamlOutcome logger path

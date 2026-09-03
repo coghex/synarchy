@@ -619,15 +619,28 @@ end
 function data.save(widgetValues)
     engine.logInfo("Saving settings...")
     local result = data.apply(widgetValues)
-    engine.saveVideoConfig()
+    -- #2202: engine.saveVideoConfig() returns false (never raises) when
+    -- config/video.local.yaml could not be written, so name the family
+    -- the way saveSaveConfig already names autosave. Without this the
+    -- only trace of a lost video save was "Saving settings..." followed
+    -- by "Settings saved.".
+    local videoSaved = engine.saveVideoConfig()
+    if not videoSaved then
+        engine.logWarn("Could not persist video settings")
+    end
     -- #913: persist the just-applied autosave settings to
     -- config/save.local.yaml.
     data.saveSaveConfig()
     -- Refresh the baseline so a later revert restores these saved values,
-    -- not the pre-save ones. #2194: this now covers all eleven fields,
-    -- and it runs AFTER persistence so the snapshot is of what actually
-    -- reached disk.
-    data.captureSavedVideo()
+    -- not the pre-save ones. #2194: this covers all eleven fields, and it
+    -- runs AFTER persistence so the snapshot is of what actually reached
+    -- disk. #2202: which is exactly why a FAILED write must not advance
+    -- it — the values only ever reached the live ref, so adopting them as
+    -- the baseline would leave Back with no way back to the configuration
+    -- that is genuinely saved on disk.
+    if videoSaved then
+        data.captureSavedVideo()
+    end
     engine.logInfo("Settings saved.")
     return result
 end

@@ -27,6 +27,7 @@ import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), (.=), (.:?), FromJSON(..), ToJSON(..)
                    , Value(..), withText)
 import Data.Aeson.Types (typeMismatch)
+import Engine.Core.ConfigWrite (writeConfigYaml)
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
 import Engine.Graphics.Config.Domain
 import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..), Filter(..))
@@ -448,8 +449,9 @@ validateVideoConfig c = catMaybes
     , checkTooltipMs fieldTooltipHintDelayMs (vcTooltipHintDelayMs c)
     ]
 
--- | Save video configuration to a YAML file. 'True' when the file was
---   written.
+-- | Save video configuration to a YAML file. @Right ()@ when the file
+--   was durably replaced; @Left@ naming the path and the cause when it
+--   was not.
 --
 --   The whole config is validated first (#2198): if any field is out of
 --   the domain the write is refused entirely — an existing destination
@@ -457,19 +459,39 @@ validateVideoConfig c = catMaybes
 --   every rejected field is logged. Nothing is silently replaced by a
 --   default. This holds independently of what the setters admit,
 --   because 'VideoConfig(..)' and this function are both exported.
-saveVideoConfig ∷ LoggerState → FilePath → VideoConfig → IO Bool
+--
+--   __Live state on a failed write (#2202).__ The video family applies
+--   every value LIVE before it is ever persisted (the settings sliders
+--   preview through @engine.setUIScale@ and friends, and
+--   @engine.saveVideoConfig@ writes whatever the live ref already
+--   holds). A refused or failed write therefore leaves the live ref
+--   exactly as the player set it and changes nothing on screen; only
+--   the next session's starting values are lost, which is what the
+--   warning says. Rolling the live ref back would DISCARD an applied
+--   setting to report a disk failure, which is strictly worse.
+--
+--   The write itself goes through 'writeConfigYaml', so a crash part way
+--   through can never leave a truncated @config/video.local.yaml@.
+saveVideoConfig ∷ LoggerState → FilePath → VideoConfig → IO (Either Text ())
 saveVideoConfig logger path config =
     case validateVideoConfig config of
         [] → do
-            Yaml.encodeFile path videoFile
-            logInfo logger CatInit $ "Video config saved to " <> T.pack path
-            return True
+            written ← writeConfigYaml path videoFile
+            case written of
+                Right () → do
+                    logInfo logger CatInit $
+                        "Video config saved to " <> T.pack path
+                    return (Right ())
+                Left err → do
+                    logWarn logger CatInit $ "Video config not saved: " <> err
+                    return (Left err)
         rejections → do
             forM_ rejections $ \r →
                 logWarn logger CatInit $
                     "Video config not saved to " <> T.pack path <> ": "
                       <> describeRejection r
-            return False
+            return $ Left $ "Video config not saved to " <> T.pack path
+                <> ": " <> T.intercalate "; " (map describeRejection rejections)
   where
     videoFile = VideoConfigFile
           { vfResolution = Resolution

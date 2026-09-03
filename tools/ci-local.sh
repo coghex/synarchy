@@ -173,6 +173,10 @@ step "lua strict-decode audit"
 python3 tools/lua_strict_decode_audit.py --self-test
 python3 tools/lua_strict_decode_audit.py
 
+step "config write audit"
+python3 tools/config_write_audit.py --self-test
+python3 tools/config_write_audit.py
+
 step "persistence inventory audit"
 python3 tools/test_persistence_inventory_audit.py
 python3 tools/persistence_inventory_audit.py

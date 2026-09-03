@@ -396,9 +396,17 @@ materialsSatisfied inst def =
 -- | The tile rectangle an anchor + tile_size footprint covers:
 --   @[ax..ax+w-1] x [ay..ay+h-1]@. The single anchor/tile_size
 --   convention shared by placement validation ('Building.Placement.
---   checkFlatGround'), 'building.spawn', and — since #807 — the
---   committed-blueprint render pass ('World.Construct.Types.
---   constructDesignationFootprint'), so none of them can drift apart.
+--   checkFlatGround') and 'building.spawn', so the two cannot drift
+--   apart.
+--
+--   #807's committed-blueprint render pass borrowed it too, through a
+--   'World.Construct.Types' helper that expanded one designation into
+--   this rectangle so a category marker could be stamped on every tile
+--   of it. #1845 retired that: a planned building is ONE sprite at its
+--   anchor, sized by 'Building.Visual.buildingQuadRect', and the helper
+--   went with its only consumer. This function is untouched — the
+--   designation still OCCUPIES exactly this rectangle, which is why the
+--   ghost is anchored where it is.
 footprintTiles ∷ Int → Int → Int → Int → [(Int, Int)]
 footprintTiles ax ay w h =
     [(x, y) | x ← [ax .. ax + w - 1], y ← [ay .. ay + h - 1]]

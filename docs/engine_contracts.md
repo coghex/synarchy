@@ -46,6 +46,7 @@ exactly why the detail could move out of the always-loaded file.
 **Scripting**
 
 - [Lua random streams (#1330)](#lua-random-streams-1330)
+- [Startup readiness: the YAML fail-fast rule (#2203)](#startup-readiness-the-yaml-fail-fast-rule-2203)
 
 **World and naming**
 
@@ -78,6 +79,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Autosave: staging, rotation order, and the intent mutex](#autosave-staging-rotation-order-and-the-intent-mutex)
 - [Save/load transaction: phases and failure semantics](#saveload-transaction-phases-and-failure-semantics)
 - [Enum append-only audit: baseline and payload normalization](#enum-append-only-audit-baseline-and-payload-normalization)
+- [Local-config writes: one atomic-replace helper (#2202)](#local-config-writes-one-atomic-replace-helper-2202)
 - [Config-writing tests: the isolation fixture (#1357)](#config-writing-tests-the-isolation-fixture-1357)
 - [Config state and legacy migration (#638/#786/#1937)](#config-state-and-legacy-migration-6387861937)
 
@@ -111,7 +113,8 @@ duplicate-function audit, the Unicode-operator audit, the Lua
 strict-decoder audit
 (`lua_strict_decode_audit.py --self-test` then the bare audit, #1605 —
 no direct `Data.Text.Encoding.decodeUtf8` under
-`src/Engine/Scripting/Lua/`), the persistence-inventory / EngineEnv-capability
+`src/Engine/Scripting/Lua/`), the config-write / persistence-inventory /
+EngineEnv-capability
 / save-compat / enum-append-only / cabal-library-module-inventory /
 material-id / bare-name-icon / concept-id-inventory /
 findings-report-status audits (each
@@ -134,7 +137,28 @@ reads), the project-cache epoch and cleanup policy self-tests
 (`ci_cache_epoch.py --self-test`, `ci_cache_cleanup.py --self-test`), and the
 parity audit itself.
 
-**The bare-name-icon check (#1740)** is the newest member.
+**The config-write audit (#2202)** is the newest member.
+`tools/config_write_audit.py` is structural, not a text filter: it
+requires every module in its checked-in config-persistence set to
+contain no raw `encodeFile`/`writeFile`/`copyFile`/`renameFile` and to
+import `Engine.Core.ConfigWrite`, requires any OTHER file under
+`src/`/`app/` that names a `config/` literal to contain no raw write
+unless it carries an exemption reason, and requires the helper itself to
+still CALL the durable primitives it is built from (import lines are
+excluded from that check, so deleting a call cannot hide behind an
+import). Its raw-write vocabulary includes `removeFile` and friends,
+because a config family that publishes by DELETING owes the same
+directory sync as one that publishes by renaming. The shape is
+deliberate: the issue's own
+`rg 'encodeFile|writeFile' src app | rg 'config/'` acceptance returned
+no matches on the defective snapshot, because the raw write and the
+`config/` literal sat on different lines and three of the six writers
+never name a config path at all. Comment and string-literal awareness
+comes from `unicode_operator_audit.py`'s lexer, so a haddock naming
+`encodeFile` — which several of these modules now do, describing what
+they replaced — is never a hit. See §Local-config writes.
+
+**The bare-name-icon check (#1740)** was the previous newest member.
 `tools/bare_name_icon_asset_check.py` resolves every authoritative
 bare-name icon reference — `scripts/injuries.lua`'s `KIND_ICON`,
 `INJURY_ICON` and its four icon-carrying functions,
@@ -169,8 +193,8 @@ error naming `file:line`. Per-FAMILY fallback-asset presence stays
 `assets/textures/icons/location/` is outside `ICON_SUBDIRS` and owned by
 `tools/location_map_icon_asset_check.py`.
 
-**The world-determinism content-identity self-test (#1724)** was the
-previous newest member. `tools/test_determinism.py` is the executable
+**The world-determinism content-identity self-test (#1724)** is an
+earlier member. `tools/test_determinism.py` is the executable
 specification of what `tools/world_determinism.py` means by
 "content-identical" — a reversed tile array and a reordered-key tile
 must hash EQUAL, while a changed field, a missing tile and an unstable
@@ -646,7 +670,7 @@ remain separately pinned to nearest and linear respectively.
 (D-4). No directory rule survives the tree as it stands:
 `assets/textures/icons/location/*` are drawn on the world's zoom map
 while the rest of `icons/` is toolbar chrome;
-`assets/textures/ui/hud/utility/{zoom,world}_*` and the six
+`assets/textures/ui/hud/utility/{zoom,world}_*` and the four
 `*_designate` markers are loaded in `hud.init` beside real chrome but
 handed to `world.set*CursorTexture` / `<tool>.setDesignateTexture` and
 drawn in the world; and `assets/textures/utility/white.png` is drawn by
@@ -1314,6 +1338,56 @@ exactly that, and also spent eight gameplay draws per suggested world
 seed, so clicking randomize shifted every later simulation decision.
 `scripts/ui/random.lua` (SplitMix64, seeded from the same time+address
 recipe Lua's own auto-seed uses) is the UI widget kit's own stream.
+
+---
+
+## Startup readiness: the YAML fail-fast rule (#2203)
+
+`scripts/startup_loader.lua` measures READINESS, not dispatch. A registry
+family the active profile queued that **discovered no YAML files**, or
+that had **any file fail to parse**, is a TERMINAL startup failure on
+both the normal and the arena profile: `startupLoader.isDone()` stays
+false forever, `isFailed()` becomes true, `getFailure()` retains the
+payload, and exactly one error-level line names the family — plus the
+failing FILE for a parse failure, or the DIRECTORY it looked in when
+there was no file to name. A family whose files all parse and all
+return zero is NOT a failure and boots as it always has.
+
+**The family boundary is the fail-fast boundary.** Every discovered file
+in the current family runs, all parse outcomes are retained, that
+family's #1930 aggregate goes out exactly once — unchanged in spelling,
+carrying the healthy counts and the original discovered-file count — and
+only then does the queue stop, before any later family, the tutorial
+tree, or a texture preload. A zero-file family emits its zero aggregate
+the same way before failing. The failure latches: a further `tick`
+advances no progress and re-logs nothing, `runAll` RETURNS rather than
+spinning on `done` (the arena profile's only exit), and only `build` or
+`reset` clears it.
+
+**The bindings' outcome is opt-in.** `engine.load*Yaml(path)` still
+answers exactly ONE number, zero included, for a parse failure and for a
+successfully parsed empty file alike — `executeDebugLua` tab-joins every
+returned value, so a second result appended unconditionally would
+silently rewrite what a bare `return engine.loadRecipeYaml(p)` reads
+back (`tools/craft_probe.py`). The loader is the one caller that passes
+a truthy SECOND argument and gets `(count, parsed)`; `parsed` is about
+the DECODE alone, so a file rejected afterwards by a family's own schema
+validation reports `true` with whatever count that rejection left. A
+queued binding that answers no outcome at all is treated as a failure,
+not as success. The loot-table family bypasses
+`Engine.Asset.YamlList.loadYamlList` entirely and follows the same rule
+through `Engine.Asset.YamlLootTables`.
+
+`scripts/loading_screen.lua` shows the retained message in place of
+"Complete!", freezes the bar, and settles in phase `"failed"` — never
+`"done"`, which is what `scripts/ui_manager_boot.lua` keys its
+`finishStartupBoot` transition on, so the main menu is never shown.
+Arena boot drains synchronously before anything is on screen, so
+`loadingScreen.runArenaStartup()` owns that profile's visible-failure
+path and returns false instead of running `finishArenaBoot`.
+
+Gates: hspec `--match "Startup readiness"` and `--match "Startup asset
+logging"`.
 
 ---
 
@@ -2366,6 +2440,116 @@ legacy payload against the new order anyway. `unitSimCodec`'s v1/v2
 entries are the exemplar for version dispatch and explicit migration
 only — no codec has needed a frozen enum yet, so they do not
 demonstrate that half.
+
+---
+
+## Local-config writes: one atomic-replace helper (#2202)
+
+Enforced by hspec `--match "Core.ConfigWrite"` and
+`tools/config_write_audit.py` (CI + `make ci`).
+
+**Every write under `config/` goes through
+`Engine.Core.ConfigWrite`.** It writes a fresh, uniquely named
+temporary in the TARGET'S OWN directory, `fsync`s it, `rename(2)`s it
+onto the target, and then `fsync`s the target's DIRECTORY — a file's
+own `fsync` says nothing about the directory entry naming it. The
+primitives are `World.Save.Storage.Durable`'s, reused rather than
+reimplemented; the save transaction itself
+(`World.Save.Storage.publishGeneration`) is not reused, because it is
+bound to the save-slot envelope and its `.prev` rotation. The
+durability stance is the one `World.Save.Storage` already documented —
+plain POSIX `fsync`, never macOS's `F_FULLFSYNC` — and is not reopened
+here.
+
+Six writers route through it: video (`Engine.Graphics.Config`),
+keybinds (`Engine.Input.Bindings`), notification overrides and their
+boot-time materializer (`Engine.Asset.YamlNotifications`), autosave
+(`Engine.Save.Config`), and both of `Engine.Core.Init`'s legacy paths —
+the migration copy and the #1937 neutrality record. The migration copy
+matters most: migration is gated on the local file's mere EXISTENCE, so
+one interrupted partial copy used to suppress every later migration
+attempt permanently.
+
+**Deleting is a publication too.** The autosave family's "no overrides
+left" state is the ABSENCE of `config/save.local.yaml`, not an empty
+document, so `removeConfigFile` unlinks and then `fsync`s the parent
+directory before reporting success — an unlink is a directory-entry
+change exactly like the publish rename. Without that sync a crash after
+the reported success could leave the old file on disk and restore
+autosave settings the player had just reset. It distinguishes "removed"
+from "nothing was there" (nothing changed, so nothing is synced),
+reports a failed unlink without claiming the file is gone, and reports
+an unconfirmed post-unlink sync as `Left` while the unlink itself
+stands.
+
+**Failure is stated by phase.** Every pre-rename failure leaves the
+previous target byte-identical. A directory-sync failure happens AFTER
+the rename, so it returns `Left` — durability is unconfirmed — while
+the visible target is the COMPLETE new file, never a partial one.
+Synchronous filesystem failures become a descriptive `Left` naming the
+path and the cause; ASYNCHRONOUS exceptions clean up the temporary and
+are rethrown, because
+`Engine.Scripting.Lua.API.Internal.registerLuaFunction` re-throws them
+on purpose so shutdown's `killThread` still reaches the Lua thread.
+
+**Cleanup ownership spans every pre-rename phase, and a cleanup failure
+is never swallowed.** The temporary is owned from the moment its name is
+claimed until the rename consumes it, under an `onException` that covers
+every escaping exception whatever its source — a rethrown asynchronous
+one included, which is exactly the path a per-branch discard misses. If
+the removal itself fails, its warning is appended to the `Left` already
+being returned: "every returned outcome leaves no temporary" is either
+true or said out loud, never quietly false.
+
+Ownership starts one step earlier than that, inside
+`World.Save.Storage.Durable.claimUniquePath` itself: it opens a real
+file and only then removes it, so the caller cannot own the placeholder
+before the claim returns its name. The claim therefore runs under
+`mask_` with an `onException` covering `hClose`'s one interruptible
+point, and the exception always propagates — this closes a leak, never
+a shutdown path. Every caller of the primitive gains that, the save
+transaction and the generated-world library included.
+
+**Outcome vocabulary.** Every Haskell writer returns `Either Text ()`.
+`engine.saveVideoConfig`, `engine.saveKeybinds`,
+`engine.setNotificationOverrides` and `engine.setSaveConfig` each
+return `true` on success and `false` on failure, log the path and the
+cause at warning level, and NEVER raise a Lua error for a filesystem
+failure — a raised one used to abort `data.save()` before autosave
+settings were persisted. Higher-level boot workflows (`loadOverrides`,
+`migrateLegacyConfig`, `recordNeutralLegacy`) keep their own return
+types but consume the outcome explicitly, and never log a success line
+after a `Left`.
+
+**A failed write must not move a baseline either.** `data.save()`
+refreshes Settings Back's persisted video baseline
+(`data.captureSavedVideo`) only when `engine.saveVideoConfig()` returned
+true. Adopting values that reached the live ref but never reached disk
+would leave Back with no way back to the configuration that is
+genuinely saved — the same class of loss the durable write exists to
+prevent, one layer up.
+
+**Live state on a failed write is unchanged, per family, by design.**
+Video and keybinds keep the already-applied live ref; notifications
+keep the live merge (the YAML is the next-session record, the in-memory
+config routes the next emit); autosave keeps its existing semantics —
+it has no live ref, and the Lua scheduler was already notified
+independently. Rolling any of them back would take an applied setting
+away from the player in order to report a disk failure, which is
+strictly worse than losing it at the next boot with a warning.
+
+The audit is STRUCTURAL rather than a text filter for a reason: the
+issue's own `rg 'encodeFile|writeFile' src app | rg 'config/'`
+acceptance returned NO MATCHES on the defective snapshot, because the
+raw write and the `config/` literal sat on different lines and three of
+the writers never name a config path at all. It reasons about modules
+instead — the config-persistence set must contain no raw
+write/copy/rename and must import the helper; any other file naming a
+`config/` literal must contain no raw write; and the helper must still
+call the durable primitives it is built from. `removeFile`,
+`removePathForcibly` and `removeDirectoryRecursive` count as raw writes
+inside the config-persistence set, so the deletion side cannot regress
+past the durability contract either.
 
 ---
 

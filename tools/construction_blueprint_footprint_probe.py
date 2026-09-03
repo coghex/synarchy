@@ -1,30 +1,54 @@
 #!/usr/bin/env python3
-"""Committed building blueprint footprint — visual gate (#807).
+"""Committed building blueprint ghost — visual gate (#807, re-pointed by #1845).
 
-The automated CI gate for #807 is the pure headless spec
-(``Test.Headless.Construct.Footprint``, run via ``cabal test
-synarchy-test-headless --test-options='--match "Construction blueprint
-footprint"'``): it proves ``World.Construct.Types.
-constructDesignationFootprint`` — the exact pure function the render
-pass calls — expands one committed ``CtBuilding`` designation into its
-def's full footprint while the designation map still holds exactly one
-entry. That's a data-flow proof, not a pixel one.
+#807 made a committed ``CtBuilding`` designation draw one generic
+category marker on every tile of its def's footprint, and this probe
+graded that by proving a 2x3 blueprint changed at least three times the
+screen area a 1x1 one did. DTV-10 reverses that decision on purpose: a
+planned building is now ONE sprite of the building's OWN art, sized from
+its own texture and dropped by its own ``sprite_anchor``, at the same
+60 % the staked pre-delivery instance draws with.
 
-This script is the manual, GPU-bound visual half: it boots the engine
-with ``--offscreen`` (real Vulkan render, real UI flow, no window) so
-the actual committed-blueprint quads described in the issue
-(``World.Render.CursorQuads``) draw to a real framebuffer, then proves
-via screenshot diffing that a multi-tile building's ghost visibly
-covers MORE than one tile, while ``construction.getDesignationCount``
-proves the underlying job stayed a single entry throughout — i.e. the
-render expanded, the data model didn't (#807 requirement 2).
+So the graded claim moved with it. The area RATIO is gone — it was
+satisfied by six copies of one marker and would be satisfied again by
+any six-tile smear — and what replaces it is a direct comparison against
+the thing the ghost is a ghost OF:
+
+  * the designated ghost's changed-pixel BOUNDING BOX equals the box the
+    same building occupies once it is really staked there, which is the
+    "same dimensions and anchor offset as that building's placed sprite"
+    acceptance criterion;
+  * staking the building over its own live designation changes almost
+    nothing on screen, which is the "no jump at staking" one; and
+  * a control def whose sprite is a different SIZE draws a
+    correspondingly different box, so the geometry demonstrably follows
+    the definition rather than a fixed 96x64 marker.
+
+The fixtures had to move too. Both of #807's used the same 96x96
+``workbench/default.png``, so an implementation that still drew one
+fixed-size quad would pass every equality above; the 2x3 fixture now
+carries a ``tile_bottom`` sprite anchor (a real, observable vertical
+drop) and the 1x1 control a 32x32 sprite, and the 2x3 declares
+``build_work`` and a material bill so that a staked instance of it is
+the PRE-DELIVERY ghost the designation must be indistinguishable from.
+
+The automated CI gate remains the pure headless spec
+(``Test.Headless.Construct.Footprint`` and ``Test.Headless.Building.Ghost``,
+via ``cabal test synarchy-test-headless --test-options='--match
+"building ghost"'``). This script is the manual, GPU-bound visual half:
+it boots with ``--offscreen`` (real Vulkan render, real UI flow, no
+window) so the actual quads draw to a real framebuffer, while
+``construction.getDesignationCount`` proves the underlying job stayed a
+single anchor-only entry throughout — the one half of #807 that #1845
+deliberately keeps.
 
 The fixture world (#1587)
 -------------------------
 This probe reaches its world the way a player does — "Create World",
-then "Generate World" — because that flow is what wires
-``construction.setDesignateTexture`` (hud.lua). Left alone, that screen
-rolls a FRESH random seed every run
+then "Generate World" — because that flow is what brings up the real
+in-game HUD, camera and world the ghosts are graded against, which a raw
+debug-console ``world.initArena`` bypass would skip. Left alone, that
+screen rolls a FRESH random seed every run
 (``scripts/create_world/settings_tab.lua`` replaces an empty pending
 seed with ``randbox.newHexSeed()``), so the terrain this probe had to
 find a building site on was a different world each time — and a world
@@ -95,7 +119,11 @@ SPROOT = "/tmp"
 TEST_BUILDING_YAML = f"{SPROOT}/construction_blueprint_footprint_probe_buildings.yaml"
 DEF_2X3 = "probe_footprint_building_2x3"
 DEF_1X1 = "probe_footprint_building_1x1"
-SPRITE = "assets/textures/buildings/workbench/default.png"
+# Two DIFFERENT canvases on purpose (#1845): a ghost that still drew one
+# fixed-size marker would pass every geometry comparison below if both
+# fixtures shared a sprite, as #807's two did.
+SPRITE_BIG = "assets/textures/buildings/workbench/default.png"      # 96x96
+SPRITE_SMALL = "assets/textures/buildings/dungeon_1/post.png"       # 32x32
 
 # Exit codes. Keeping the two failure modes DISTINCT is #1587
 # requirement 4 (same convention as tools/combat_anim_probe.py): 1 means
@@ -118,23 +146,48 @@ DEFAULT_SEED_HEX = "0000002A"
 BASIS_EPS = 1e-3
 LANDING_EPS = 0.05
 
+# How far the designated ghost's diff box may sit from the staked
+# building's (#1845). They are the SAME rectangle by construction, so the
+# only slack this needs to absorb is the outermost row or two of nearly
+# transparent sprite edge, which can blend to the background under one
+# opacity and not the other. Two pixels is far below the drop
+# `sprite_anchor: tile_bottom` applies (16 px on the standard tile) and
+# far below the difference between the two fixture canvases, so a wrong
+# anchor or a wrong size cannot hide inside it.
+GHOST_BOX_TOL = 2
+
+# The 1x1 control's sprite is a third of the 2x3's on each axis, so its
+# box must come back visibly smaller. Stated as a loose bound (half),
+# not the exact 3x, because the two boxes are of DIFFERENT art and this
+# is a "the geometry follows the definition" claim, not a ratio claim of
+# the kind #807's area check turned out to be.
+CONTROL_BOX_MAX_FRACTION = 0.5
+
+# The 2x3 target declares `sprite_anchor: tile_bottom` and a material
+# bill it will never be given, so a staked instance of it renders as the
+# PRE-DELIVERY ghost — the exact state the committed designation must be
+# indistinguishable from. The 1x1 control keeps the default anchor and a
+# third of the canvas, so its box is a genuinely different shape.
 TEST_BUILDINGS = f"""\
 buildings:
   - name: "{DEF_2X3}"
     display_name: "Probe Footprint 2x3"
     category: "Test"
-    description: "Throwaway #807 test fixture — not shipped content."
-    sprite: "{SPRITE}"
+    description: "Throwaway #1845 test fixture — not shipped content."
+    sprite: "{SPRITE_BIG}"
     visual_class: "freestanding_installation"
     tile_size: {{ x: 2, y: 3 }}
     placement: "flat_ground"
     race: "acolyte_cult"
-    build_work: 0.0
+    sprite_anchor: "tile_bottom"
+    build_work: 240.0
+    materials:
+      steel_plate: 10
   - name: "{DEF_1X1}"
     display_name: "Probe Footprint 1x1 control"
     category: "Test"
-    description: "Throwaway #807 test fixture — not shipped content."
-    sprite: "{SPRITE}"
+    description: "Throwaway #1845 test fixture — not shipped content."
+    sprite: "{SPRITE_SMALL}"
     visual_class: "freestanding_installation"
     tile_size: {{ x: 1, y: 1 }}
     placement: "flat_ground"
@@ -299,6 +352,40 @@ def png_stats(path: str):
         return None
 
 
+def png_diff_bbox(path_a: str, path_b: str):
+    """Bounding box (x0, y0, x1, y1) of the pixels that differ, or None.
+
+    #1845 grades SHAPE, not just magnitude: the box a designated ghost
+    changes has to be the box the staked building occupies. A pixel
+    COUNT cannot tell a correctly sized sprite from a same-area smear of
+    tiles, which is exactly the difference this slice is about.
+
+    Deliberately not getbbox() on the RGBA difference: on Pillow 10+
+    that defaults to alpha_only=True, and two fully-opaque frames always
+    bbox to None (the same gotcha png_diff_count works around).
+    """
+    from PIL import Image, ImageChops
+    with Image.open(path_a) as a, Image.open(path_b) as b:
+        if a.size != b.size:
+            return None
+        diff = ImageChops.difference(a.convert("RGBA"), b.convert("RGBA"))
+        return diff.convert("L").getbbox()
+
+
+def bbox_size(box):
+    """(w, h) of a diff bounding box, or (0, 0) when nothing changed."""
+    if not box:
+        return (0, 0)
+    return (box[2] - box[0], box[3] - box[1])
+
+
+def boxes_agree(box_a, box_b, tol: int) -> bool:
+    """Same rectangle to within `tol` pixels on every edge."""
+    if not box_a or not box_b:
+        return False
+    return all(abs(u - v) <= tol for u, v in zip(box_a, box_b))
+
+
 def png_diff_count(path_a: str, path_b: str) -> int:
     """# of pixels that differ between two same-size screenshots.
 
@@ -378,21 +465,35 @@ def tile_surface(port: int, x: int, y: int):
     return z, parts[2] in ("null", "nil")
 
 
-def find_dry_anchor(port: int, w: int, h: int, candidates):
+def placeable_at(port: int, def_name: str, x: int, y: int) -> bool:
+    """Would `building.spawn(def_name, x, y)` be accepted right now?
+
+    The engine's own answer, not a restatement of its rules — the same
+    call the build tool makes every ghost frame.
+    """
+    raw = send(port, f"return building.canPlaceAt('{def_name}', {x}, {y})")
+    return raw.split()[0].strip().lower() == "true" if raw.split() else False
+
+
+def find_dry_anchor(port: int, w: int, h: int, candidates,
+                    def_name: str | None = None):
     """First candidate whose full w x h footprint is entirely dry.
 
-    Doesn't require FLAT terrain: the fix under test stores the
-    designation's z once at the anchor and renders the whole footprint on
-    that single plane regardless of the real terrain underneath (the
-    issue's "single Z-plane, no per-tile column lookups" requirement) —
-    uneven ground is a fine visual candidate for it, unlike open water,
-    where the ghost would render half-submerged and be hard to see
-    reliably in a screenshot diff. Caller is expected to have already
-    loaded a region wide enough to cover every candidate (getSurfaceAt
-    reports None on an unloaded chunk, which this treats as a non-match
-    rather than a reason to load on demand — candidate lists span dozens
-    of tiles, so a per-candidate load/wait round trip would make the
-    search slow).
+    Open water is excluded because a ghost there renders half-submerged
+    and is hard to see reliably in a screenshot diff. Caller is expected
+    to have already loaded a region wide enough to cover every candidate
+    (getSurfaceAt reports None on an unloaded chunk, which this treats as
+    a non-match rather than a reason to load on demand — candidate lists
+    span dozens of tiles, so a per-candidate load/wait round trip would
+    make the search slow).
+
+    With `def_name`, the site must ALSO be one the engine would really
+    accept a spawn of that definition on (#1845). A designation is
+    admitted on ground `Building.Placement.canPlaceAt` would refuse — it
+    marks its anchor and nothing else — so without this the 2x3 target
+    could be planned on a slope, the stake would come back "ground is
+    uneven", and the two comparisons that stake exists to support would
+    both pass by comparing a screenshot to itself.
 
     An empty candidate list therefore yields None, which is what
     ``--force-no-site`` uses to drive the real setup-failure path
@@ -403,9 +504,12 @@ def find_dry_anchor(port: int, w: int, h: int, candidates):
         infos = [tile_surface(port, x, y) for x, y in tiles]
         if any(info is None for info in infos):
             continue
-        if all(dry for _, dry in infos):
-            anchor_z = infos[0][0]
-            return cx, cy, anchor_z
+        if not all(dry for _, dry in infos):
+            continue
+        if def_name is not None and not placeable_at(port, def_name, cx, cy):
+            continue
+        anchor_z = infos[0][0]
+        return cx, cy, anchor_z
     return None
 
 
@@ -526,8 +630,9 @@ def main() -> int:
 
 def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     # -- Real UI flow to the in-game HUD (same path as tools/offscreen_probe.py):
-    # this is what actually wires up construction.setDesignateTexture (hud.lua),
-    # which a raw debug-console world.initArena bypass would skip.
+    # this is what actually brings up the gameplay camera and HUD the
+    # ghosts are graded against, which a raw debug-console
+    # world.initArena bypass would skip.
     menu_up = poll_until(60.0, lambda: find_widget(port, "Create World"))
     require_setup("loading screen -> main menu", bool(menu_up),
                   "the main menu never appeared, so the real UI flow to the "
@@ -568,8 +673,8 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
                   "the 'Continue' button could not be clicked.")
     hud_up = poll_until(60.0, lambda: not find_widget(port, "Continue"))
     require_setup("in-game HUD reached", bool(hud_up),
-                  "the in-game HUD never came up, so "
-                  "construction.setDesignateTexture was never wired.")
+                  "the in-game HUD never came up, so nothing was ever "
+                  "framed or graded.")
     time.sleep(2.0)  # let the first in-game frames render
 
     pageid = wid(port)
@@ -616,7 +721,9 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     if force_no_site:
         print("  (--force-no-site: searching no candidate anchors at all)")
     anchor_1x1 = find_dry_anchor(port, 1, 1, cands_1x1)
-    anchor_2x3 = find_dry_anchor(port, 2, 3, cands_2x3)
+    # The 2x3 target is STAKED later, so its site has to be one the
+    # engine would really build on — see find_dry_anchor.
+    anchor_2x3 = find_dry_anchor(port, 2, 3, cands_2x3, DEF_2X3)
     cause = site_cause(anchor_1x1, anchor_2x3, seed_hex)
     require_setup("found dry sites for both the control and the blueprint",
                   cause is None, cause or "")
@@ -685,10 +792,10 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     shot_after_2x3 = os.path.join(shots, "after_2x3.png")
     check("post-2x3 screenshot answers", screenshot(port, shot_after_2x3))
 
-    # -- The designation MAP holds only the anchor (#807 req 2): an
-    # off-anchor footprint tile (well inside the 2x3 rectangle) reports
-    # no designation of its own, even though the render pass (checked
-    # below via the screenshot diff) draws a ghost over it too.
+    # -- The designation MAP holds only the anchor (#807 req 2, the half
+    # #1845 keeps): an off-anchor footprint tile reports no designation
+    # of its own, and the ONE quad the render pass draws is anchored on
+    # the entry that does exist.
     interior = designation_at(port, pageid, ax2 + 1, ay2 + 1)
     check("an off-anchor footprint tile has no designation entry of its own",
           interior is None, f"got {interior!r}")
@@ -696,10 +803,6 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     check("the anchor tile itself IS the (only) designation entry",
           isinstance(anchor_entry, dict), f"got {anchor_entry!r}")
 
-    # -- The visual claim: the 2x3 blueprint must change visibly MORE
-    # screen area than the 1x1 control did — proof the render pass
-    # actually draws all 6 footprint tiles, not just the anchor (which
-    # would make the two diffs the same size, footprint size be damned).
     st_before = png_stats(shot_before_1x1)
     check("screenshots are valid non-trivial PNGs",
           bool(st_before) and st_before[2] >= 3, f"got {st_before}")
@@ -707,10 +810,77 @@ def _run(port: int, shots: str, seed_hex: str, force_no_site: bool) -> int:
     diff_2x3 = png_diff_count(shot_before_2x3, shot_after_2x3)
     check("1x1 control ghost is visible at all", diff_1x1 > 0, f"diff={diff_1x1}")
     check("2x3 blueprint ghost is visible at all", diff_2x3 > 0, f"diff={diff_2x3}")
-    check("2x3 blueprint visibly covers MORE area than the 1x1 control "
-          "(>= 3x its pixel diff -- the full footprint, not just the anchor)",
-          diff_2x3 >= diff_1x1 * 3,
-          f"1x1 diff={diff_1x1}, 2x3 diff={diff_2x3}")
+
+    box_1x1 = png_diff_bbox(shot_before_1x1, shot_after_1x1)
+    box_2x3 = png_diff_bbox(shot_before_2x3, shot_after_2x3)
+    w1, h1 = bbox_size(box_1x1)
+    w2, h2 = bbox_size(box_2x3)
+    print(f"GHOST BOXES 1x1={box_1x1} ({w1}x{h1})  2x3={box_2x3} ({w2}x{h2})")
+
+    # -- STAKE the 2x3 building over its own live designation. The
+    # designation ghost and the staked pre-delivery ghost are the same
+    # 60 % picture of the same definition at the same anchor (#1845
+    # requirement 3), so this must change essentially nothing on screen
+    # — and the render pass must not stack a second 60 % quad on the
+    # first while both records exist.
+    staked = send_json(port, f"return building.spawn('{DEF_2X3}', {ax2}, {ay2})",
+                       timeout=10.0)
+    # A refused spawn means NOTHING was staked, and both comparisons below
+    # would then compare a screenshot to itself and pass. That is a
+    # fixture failure, not a rendering regression, so it exits SETUP.
+    require_setup("the 2x3 fixture stakes at its own designation anchor",
+                  isinstance(staked, (int, float)) and staked,
+                  f"building.spawn('{DEF_2X3}', {ax2}, {ay2}) was refused "
+                  f"({staked!r}), so no staked building exists to compare the "
+                  f"designated ghost against and this run graded neither the "
+                  f"box equality nor the no-jump claim.")
+    time.sleep(0.5)
+    live = send_json(port, f"return building.getInfo({int(staked)})", timeout=10.0)
+    require_setup("the staked building is really on the page",
+                  isinstance(live, dict),
+                  f"building.getInfo({int(staked)}) answered {live!r} after a "
+                  f"spawn that reported success, so there is no instance for "
+                  f"the ghost comparison to be about.")
+    shot_staked = os.path.join(shots, "after_stake_2x3.png")
+    check("post-stake screenshot answers", screenshot(port, shot_staked))
+    box_staked = png_diff_bbox(shot_before_2x3, shot_staked)
+    ws_, hs_ = bbox_size(box_staked)
+    print(f"STAKED BOX {box_staked} ({ws_}x{hs_})")
+    # …and the staked building really is DRAWN, so the box equality below
+    # is a comparison of two visible things.
+    check("the staked building is visible at all", ws_ > 0 and hs_ > 0,
+          f"staked box={box_staked}")
+
+    # THE claim this probe exists for since #1845: the planned ghost
+    # occupies exactly the rectangle the real building occupies. #807's
+    # marker could not have satisfied this — six 96x64 diamonds tile a
+    # different shape than one 96x96 sprite dropped by tile_bottom.
+    check("the designated ghost's box IS the staked building's box "
+          "(same dimensions and anchor offset as the placed sprite)",
+          boxes_agree(box_2x3, box_staked, GHOST_BOX_TOL),
+          f"designated={box_2x3}, staked={box_staked} "
+          f"(tolerance {GHOST_BOX_TOL}px per edge)")
+
+    # …and the transition between them is invisible: staking changes far
+    # less than designating did. Not "zero": the two records coexist for
+    # a frame and the engine re-sorts, so a handful of edge pixels may
+    # move.
+    diff_stake_step = png_diff_count(shot_after_2x3, shot_staked)
+    check("staking causes no visible jump (changes far less than the "
+          "designation itself did)",
+          diff_stake_step * 10 < diff_2x3,
+          f"designate diff={diff_2x3}, stake-step diff={diff_stake_step}")
+
+    # -- The size control: a def with a different sprite draws a
+    # different box. This is what makes the equality above a statement
+    # about the DEFINITION rather than about one fixed quad size that
+    # every ghost happens to share.
+    check("the 1x1 control's ghost is visibly a different, smaller shape "
+          "(its sprite is a third of the 2x3's on each axis)",
+          w1 > 0 and h1 > 0
+          and w1 <= w2 * CONTROL_BOX_MAX_FRACTION
+          and h1 <= h2 * CONTROL_BOX_MAX_FRACTION,
+          f"1x1 box={w1}x{h1}, 2x3 box={w2}x{h2}")
 
     print(f"\nscreenshots kept in {shots}")
     if failures:
@@ -789,6 +959,33 @@ def self_test() -> int:
     expect_named("an unreadable landing is refused",
                  unclamped_landing_cause("1x1 control", 0, 0, o, ux, uy, None),
                  "did not report")
+
+    # --- the #1845 geometry comparators --------------------------------
+    # The graded claim is now a SHAPE comparison, so the comparators it
+    # rests on get the same treatment as the camera proof above: driven
+    # directly, with synthetic boxes, including the cases that must FAIL.
+    expect("an identical box agrees",
+           boxes_agree((10, 20, 110, 140), (10, 20, 110, 140), GHOST_BOX_TOL),
+           True)
+    expect("a box off by the tolerance still agrees",
+           boxes_agree((10, 20, 110, 140),
+                       (10 + GHOST_BOX_TOL, 20, 110, 140 - GHOST_BOX_TOL),
+                       GHOST_BOX_TOL),
+           True)
+    expect("a box shifted by a tile_bottom drop does NOT agree",
+           boxes_agree((10, 20, 110, 140), (10, 36, 110, 156), GHOST_BOX_TOL),
+           False)
+    expect("a box of a different size does NOT agree",
+           boxes_agree((10, 20, 110, 140), (10, 20, 210, 140), GHOST_BOX_TOL),
+           False)
+    expect("a missing box never agrees",
+           boxes_agree(None, (10, 20, 110, 140), GHOST_BOX_TOL), False)
+    expect("an invisible ghost never agrees with a visible one",
+           boxes_agree((10, 20, 110, 140), None, GHOST_BOX_TOL), False)
+    expect("bbox_size measures a box", bbox_size((10, 20, 110, 140)),
+           (100, 120))
+    expect("bbox_size reads an absent box as nothing",
+           bbox_size(None), (0, 0))
 
     # --- the exit-code mapping itself ---------------------------------
     # This is the live run's own mapping, called directly. Its diagnostic

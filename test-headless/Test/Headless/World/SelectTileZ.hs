@@ -190,7 +190,8 @@ spec = do
                             -- the tile render pass really does retarget
                             -- the selection to the hover result.
                             writeIORef (wsCursorRef ws) armedCursor
-                            _ ← renderWorldCursorQuads env ws 1.0
+                            bmS ← readIORef (buildingManagerRef env)
+                            _ ← renderWorldCursorQuads env bmS pid ws 1.0
                             ctrlTile ← readIORef (wsCursorRef ws)
                             fmap (\(gx', gy', _) → (gx', gy')) (worldSelectedTile ctrlTile)
                                 `shouldBe` Just (hgx, hgy)
@@ -227,7 +228,8 @@ spec = do
                             -- A later tile render pass must NOT resolve
                             -- the now-cleared arm and retarget the fresh
                             -- selection to the hover tile.
-                            _ ← renderWorldCursorQuads env ws 1.0
+                            bmS ← readIORef (buildingManagerRef env)
+                            _ ← renderWorldCursorQuads env bmS pid ws 1.0
                             afterTileRender ← readIORef (wsCursorRef ws)
                             worldSelectedTile afterTileRender `shouldBe` Just (dgx, dgy, directZ)
 

@@ -11,7 +11,7 @@ import qualified Data.Map as Map
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, resolveActiveWorld)
+import Engine.Core.State (EngineEnv, buildingManagerRef, resolveActiveWorld)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Scene.Types (LayeredQuads(..), SortableQuad, mergeSortedQuads
@@ -134,6 +134,18 @@ updateWorldTiles env = do
             return ( sum (map fst pages)
                    , Map.unionsWith mergeSortedQuads (map snd pages) )
 
+    -- ONE building-manager snapshot for the whole frame (#1845). The
+    -- cursor pass yields a committed designation to the building staked
+    -- from it, and the building pass draws that instance — two decisions
+    -- about the SAME hand-off, made in two passes. Reading the ref
+    -- separately let the unit thread apply a queued 'BuildingSpawn'
+    -- between them: the cursor pass saw no stake and drew the
+    -- designation, the building pass saw the new instance and drew its
+    -- own 60 % ghost, and the published frame carried both. Against one
+    -- snapshot exactly one of them can draw, whatever the unit thread
+    -- does mid-frame.
+    frameBuildings ← readIORef (buildingManagerRef env)
+
     -- Cursor quads are generated every frame (cheap: just 1-2 quads)
     -- so they respond instantly to mouse movement
     (cursorStat, worldCursorQuads) ← measureCategory ScCursor forcedQuadCount $
@@ -141,7 +153,8 @@ updateWorldTiles env = do
         then return (0, V.empty)
         else perVisiblePage worldManager $ \pageId worldState →
                 stampPageQuads (solarSlotOf pageId) ⊚
-                    renderWorldCursorQuadsScanned env worldState tileAlpha
+                    renderWorldCursorQuadsScanned env frameBuildings
+                        pageId worldState tileAlpha
 
     -- Ground-item quads, also per-frame: resting height derives from
     -- the CURRENT terrain each frame, so items drop with dug tiles
@@ -195,7 +208,8 @@ updateWorldTiles env = do
         else do
             let facing = camFacing camera
                 zSlice = camZSlice camera
-            renderBuildingQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha
+            renderBuildingQuadsScanned env frameBuildings solarSlotOf facing
+                                       zSlice effDepth tileAlpha
 
     -- Structures (walls / floors / ceilings) — same iso-sorted quad path
     -- as buildings, with each piece's own facemap slot.
@@ -220,7 +234,8 @@ updateWorldTiles env = do
                 -- it is lit by that page (#1869).
                 activeSolarSlot = maybe solarPageNone (solarSlotOf . fst)
                                         (resolveActiveWorld worldManager)
-            renderGhostQuadScanned env activeSolarSlot facing zSlice
+            renderGhostQuadScanned env frameBuildings activeSolarSlot facing
+                                   zSlice effDepth tileAlpha
 
     (zoomStat, zoomQuads) ← measureCategory ScZoomMap forcedQuadCount $
         generateZoomMapQuadsScanned env solarSlotOf camera fbW fbH
