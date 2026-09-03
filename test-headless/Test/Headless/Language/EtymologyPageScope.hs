@@ -58,6 +58,7 @@ import Language.Etymology.Source (EtymologySource(..))
 import Language.Generated.Profile (generateProfile)
 import Language.Generated.Render (renderNative)
 import Language.Generated.Root (assignLanguageRoots)
+import Test.Headless.Language.Generated.Support (expectRoots)
 import Language.Generated.Types
     ( LangSeed(..), LanguageProvenance(..), Profile, currentGeneratorVersion )
 import Language.Semantic.Catalogue ( conceptCataloguePath
@@ -255,7 +256,8 @@ nameOf cat prov expr =
            (renderNative profile roots expr)
   where
     profile = profileFor prov
-    roots   = assignLanguageRoots profile (catOrdinals cat) (conceptIds cat)
+    roots   = expectRoots
+        (assignLanguageRoots profile (catOrdinals cat) (conceptIds cat))
 
 glossOf ∷ Catalogue → NameExpr → Maybe Text
 glossOf cat expr =

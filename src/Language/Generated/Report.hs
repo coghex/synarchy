@@ -144,13 +144,15 @@ data SeedReport = SeedReport
 --   single version's builder here while the JSON header reported
 --   'currentGeneratorVersion' would mislabel every profile the moment
 --   the current version advanced. An unsupported version fails
---   descriptively rather than silently falling back.
+--   descriptively rather than silently falling back, and so does a seed
+--   whose profile has too small a root space to name the catalogue
+--   (#2206).
 buildSeedReport ∷ Catalogue → GeneratorVersion → Word64
                 → Either GeneratorError SeedReport
 buildSeedReport cat ver rawSeed = do
     prof ← generateProfile ver (LangSeed rawSeed)
-    let roots = assignLanguageRoots prof (catOrdinals cat) (conceptIds cat)
-        free  = lrFree roots
+    roots ← assignLanguageRoots prof (catOrdinals cat) (conceptIds cat)
+    let free  = lrFree roots
         bound = lrBound roots
         -- The same assignment with bound morphology suppressed: the
         -- reference every "did this actually shorten the output?"

@@ -12,7 +12,9 @@
 --   (#1417) the non-FILES a supported extension can name — a
 --   @.png@-suffixed directory, through both the YAML-matched and the
 --   numbered-name branches, a symlink pointing at a real frame, and a
---   FIFO, the special file @doesFileExist@ accepts.
+--   FIFO, the special file @doesFileExist@ accepts — the last of those
+--   reached through the ANIMATION branch and, since #2199, through the
+--   STATIC branch as well.
 --   No engine needed — everything here is pure or filesystem-only.
 module Test.Headless.Preview.Building (spec) where
 
@@ -145,6 +147,16 @@ withSymlinkFixture action = do
 --                     -- a special file is not a directory, so
 --                        doesFileExist ACCEPTS it; only a real type
 --                        check rejects it
+--   <root>/{loose.png (a real file), pipe.png (a FIFO)}
+--                     -- #2199: directly under the building root, so
+--                        the STATIC producer is the only thing that
+--                        sees them — no animation directory, and
+--                        therefore no classifyDir, is involved
+--   <root>/plain/{wall.png (a real file), pipe.png (a FIFO)}
+--                     -- the same pair one level down, in a subfolder
+--                        classifyDir declines (wall.png is no frame
+--                        name), so the walk descends and the static
+--                        producer sees both children there too
 withNonFileFixture ∷ (FilePath → IO ()) → IO ()
 withNonFileFixture action = do
     tmp ← getTemporaryDirectory
@@ -166,6 +178,11 @@ withNonFileFixture action = do
     dir  "special"
     file ("special" </> "frame_001.png")
     createNamedPipe (item </> "special" </> "frame_002.png") stdFileMode
+    file "loose.png"
+    createNamedPipe (item </> "pipe.png") stdFileMode
+    dir  "plain"
+    file ("plain" </> "wall.png")
+    createNamedPipe (item </> "plain" </> "pipe.png") stdFileMode
     (`finally` removeDirectoryRecursive root) (action root)
 
 spec ∷ Spec
@@ -357,6 +374,38 @@ spec = do
                 fmap pbeAnimated special `shouldBe` Just True
                 fmap pbeFrames special `shouldBe`
                     Just [T.pack (item </> "special" </> "frame_001.png")]
+
+        -- #2199: the same claim through the OTHER producer. The case
+        -- above puts its FIFO inside special/, where classifyDir's
+        -- regular-file filter is what excludes it; nothing there ever
+        -- reaches the static branch, which guarded a loose texture by
+        -- its NAME alone.
+        it "never makes a STATIC frame of a SPECIAL file carrying a \
+           \supported extension, at the building root or in a \
+           \non-animation subfolder" $
+            withNonFileFixture $ \root → do
+                let item = root </> "fixture_building"
+                entries ← discoverBuildingEntries Map.empty item
+                -- The real files beside each FIFO still surface, as
+                -- ordinary statics: this is the static producer, not an
+                -- animation, so nothing here may be animated.
+                let loose = entryNamed "loose.png" entries
+                    nested = entryNamed "plain/wall.png" entries
+                fmap pbeAnimated loose `shouldBe` Just False
+                fmap pbeFrames loose
+                    `shouldBe` Just [T.pack (item </> "loose.png")]
+                fmap pbeAnimated nested `shouldBe` Just False
+                fmap pbeFrames nested
+                    `shouldBe` Just [T.pack (item </> "plain" </> "wall.png")]
+                -- And the FIFOs are gone entirely — not merely absent
+                -- as labels, but named by no frame path of any entry.
+                entryNamed "pipe.png" entries `shouldBe` Nothing
+                entryNamed "plain/pipe.png" entries `shouldBe` Nothing
+                entryNamed "plain" entries `shouldBe` Nothing
+                let fifos = [ item </> "pipe.png"
+                            , item </> "plain" </> "pipe.png" ]
+                    frames = map T.unpack (concatMap pbeFrames entries)
+                filter (`elem` fifos) frames `shouldBe` []
 
     describe "preview metadata reads BOTH declaration forms (#2080)" $ do
         let decodeMeta bytes = case Yaml.decodeEither' bytes of

@@ -59,9 +59,10 @@ combatLog.tabButtons = combatLog.tabButtons or {}
 combatLog.tabClickBoxes = combatLog.tabClickBoxes or {}
 
 -- "All" tab: in-RAM ring buffer, capped at ALL_RING_CAP. Never
--- persisted. Battle tabs: one entry per (open or recently-closed)
--- battle in the order they opened. The All tab is always rendered
--- first and is not part of the battles table.
+-- persisted. Battle tabs: one entry per RETAINED (open or recently-closed)
+-- battle in the order they opened -- #2189 caps that list too, so the
+-- oldest entries are evicted rather than kept forever. The All tab is
+-- always rendered first and is not part of the battles table.
 local ALL_RING_CAP = 200
 -- Battle quiescence: if a battle hasn't seen an event for this many
 -- seconds, mark it inactive (red → grey).
@@ -74,6 +75,13 @@ local BATTLE_QUIESCENCE_SEC = 15
 -- beyond any real combat lull so a paused-then-resumed fight still
 -- rejoins; only stale-id collisions fall past it.
 local BATTLE_REJOIN_MAX_SEC = 120
+-- #2189: the GROUPED history is bounded too, not just the All ring. The
+-- battle list used to be append-only with an uncapped event list per battle,
+-- so a long session grew without limit: every ingest scanned, and every
+-- render measured a tab for, every battle ever seen. These two caps are the
+-- same numbers in injury_log_panel.lua.
+local MAX_GROUPS       = 64
+local MAX_GROUP_EVENTS = 200
 combatLog.allEvents = combatLog.allEvents or {}   -- {ev, ev, ...}
 -- Each battle: { id, name, active, participants={[uid]=true,...},
 --                events={ev,...}, lastEventAt }
@@ -438,7 +446,70 @@ local function tabUnitName(uid)
     return def:sub(1, 1):upper() .. def:sub(2)
 end
 
+-- #2189: drop one retained battle so a new one can be admitted.
+--
+-- Preference order, straight from the contract: a battle already outside the
+-- rejoin window first (it can never absorb another event, so losing it costs
+-- nothing a player could reach), then the least-recently-active one, then --
+-- on an exact lastEventAt tie -- the smallest id, which IS the oldest
+-- creation order because nextBattleId only ever counts up and an evicted id
+-- is never reissued. (Only clearSession rewinds it, and that empties the
+-- list in the same breath, so no id is ever live twice.)
+--
+-- "Now" is engine.gameTime() -- the clock findBattle reads -- while
+-- lastEventAt is the event's own ts, so the two are independent sources.
+-- With a single `now` the staleness term can never disagree with
+-- earliest-lastEventAt (stale means lastEventAt < now - window, so the
+-- global minimum is in the stale set whenever that set is non-empty); it is
+-- written out because it is the rule the contract states, and it keeps the
+-- eviction honest if the window rule ever stops being a plain cutoff.
+local function evictOneBattle()
+    local now = engine.gameTime()
+    local pickIdx, pickStale, pickLast, pickId
+    for i, b in ipairs(combatLog.battles) do
+        local last  = b.lastEventAt or 0
+        local stale = (now - last) > BATTLE_REJOIN_MAX_SEC
+        local better
+        if pickIdx == nil          then better = true
+        elseif stale ~= pickStale  then better = stale
+        elseif last  ~= pickLast   then better = last < pickLast
+        else                            better = b.id < pickId end
+        if better then
+            pickIdx, pickStale, pickLast, pickId = i, stale, last, b.id
+        end
+    end
+    if pickIdx == nil then return end
+    local gone = table.remove(combatLog.battles, pickIdx)
+
+    -- The tab strip is now wrong, so ask for a rebuild. processEvent's own
+    -- tail only marks dirty when the ACTIVE tab is affected, which is false
+    -- whenever a non-active battle is the one evicted -- and without the
+    -- rebuild the departed tab's label, button and tabClickBoxes entry stay
+    -- on screen and clickable, selecting a battle activeTabEvents() can no
+    -- longer find. State is written directly here: no tab-click handler is
+    -- invoked and no render is forced, exactly as clearSession does it.
+    combatLog.dirty = true
+    if combatLog.activeTabId == gone.id then
+        combatLog.activeTabId   = "all"
+        combatLog.contentScroll = 0
+    end
+    -- tabMaxScroll is only recomputed inside renderContent, so it is stale
+    -- (too high) whenever the panel is hidden. Clamp both to what the
+    -- shorter list can support: an offset can never exceed (tabs - 1).
+    local maxOff = math.max(0, #combatLog.battles - 1)
+    combatLog.tabMaxScroll = math.min(combatLog.tabMaxScroll or 0, maxOff)
+    combatLog.scrollOffset =
+        math.max(0, math.min(combatLog.scrollOffset or 0, maxOff))
+end
+
 local function newBattle(atk, tgt, gameTime)
+    -- #2189: make room BEFORE allocating, so the battle being created is
+    -- never a candidate for its own eviction. `>=` because one is about to
+    -- be appended; the loop always removes from a non-empty list, so it
+    -- terminates.
+    while #combatLog.battles >= MAX_GROUPS do
+        evictOneBattle()
+    end
     local id = combatLog.nextBattleId
     combatLog.nextBattleId = id + 1
     -- "HH:MM Attacker v Target" (or just one name if a solo event).
@@ -495,6 +566,10 @@ local function processEvent(ev)
         b = newBattle(atk, tgt, ev.ts or 0)
     end
     table.insert(b.events, 1, ev)
+    -- #2189: newest-first, so trimming the tail drops the oldest event.
+    while #b.events > MAX_GROUP_EVENTS do
+        table.remove(b.events)
+    end
     b.lastEventAt = ev.ts or 0
 
     -- Active tab affected? Repaint, and snap the history scroll to the

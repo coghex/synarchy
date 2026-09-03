@@ -137,9 +137,9 @@ spec Ctx{..} = do
                     `shouldBe` boundSelectionOrder p (reverse ids)
                 boundSelectionOrder p ids
                     `shouldBe` boundSelectionOrder p shuffled
-                lrBound (assignLanguageRoots p prodOrds ids)
-                    `shouldBe` lrBound (assignLanguageRoots p prodOrds
-                                                            (reverse ids))
+                lrBound (expectRoots (assignLanguageRoots p prodOrds ids))
+                    `shouldBe` lrBound (expectRoots
+                        (assignLanguageRoots p prodOrds (reverse ids)))
 
         it "visits every concept exactly once, in a total order" $ do
             -- The (rank, ConceptId) tie-break is what makes the order
@@ -266,7 +266,8 @@ spec Ctx{..} = do
             let offenders =
                     [ profSeed p
                     | (p, lr) ← take 64 v4Assignments
-                    , lrFree lr ≢ assignRoots p prodOrds (conceptIds prodCat) ]
+                    , lrFree lr ≢ expectRoots
+                        (assignRoots p prodOrds (conceptIds prodCat)) ]
             offenders `shouldBe` []
 
         it "ranks by a value domain-separated from root generation" $ do

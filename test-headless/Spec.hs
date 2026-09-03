@@ -195,6 +195,7 @@ import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
 import qualified Test.Headless.Lua.ChopGesture as LuaChopGesture
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
+import qualified Test.Headless.Lua.GroupedLogRetention as LuaGroupedLogRetention
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
 import qualified Test.Headless.Lua.WidthTruncation as LuaWidthTruncation
 import qualified Test.Headless.Lua.ShellInput as LuaShellInput
@@ -253,6 +254,7 @@ import qualified Test.Headless.Core.LogMonad as LogMonad
 import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
+import qualified Test.Headless.Core.MonotonicClock as MonotonicClock
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
@@ -273,6 +275,7 @@ import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
 import qualified Test.Headless.Building.CameraFacing as BuildingCameraFacing
+import qualified Test.Headless.Building.DestructionPresentation as BuildingDestruction
 import qualified Test.Headless.Building.Ghost as BuildingGhost
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
@@ -612,6 +615,7 @@ main = hspec $ do
     describe "building asset schema and lifecycle roles"
         BuildingAssetSchema.spec
     BuildingCameraFacing.spec
+    BuildingDestruction.spec
     describe "Machine Shop construction animation" MachineShopConstruction.spec
     describe "Preview.KeyboardNavigation" PreviewKeyboardNavigation.spec
     describe "Workbench construction animation" WorkbenchConstruction.spec
@@ -803,6 +807,7 @@ main = hspec $ do
     describe "UI.UnicodeTextEditing" UIUnicodeTextEditing.spec
     LuaDragSelectDeferred.spec
     describe "Lua.TextWrapping" LuaTextWrapping.spec
+    describe "Lua.GroupedLogRetention" LuaGroupedLogRetention.spec
     describe "Lua.TextTruncation" LuaTextTruncation.spec
     describe "Lua.WidthTruncation" LuaWidthTruncation.spec
     describe "Lua.ShellInput" LuaShellInput.spec
@@ -882,6 +887,7 @@ main = hspec $ do
     LogParity.spec
     LogThresholdEnv.spec
     LoopStartup.spec
+    MonotonicClock.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
     DebugListener.spec

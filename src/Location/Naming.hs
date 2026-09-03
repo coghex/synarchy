@@ -59,11 +59,13 @@ import Location.Types (LocationDef(..), LocationNaming(..))
 --   the name every location call site already uses.
 type LocationNamer = Namer
 
--- | Build a namer for a world's recorded language. Fails only when the
---   provenance names a generator version this build cannot construct —
---   which is #710 requirement 15's error, reported rather than silently
---   substituted with the current version (that would render names in a
---   DIFFERENT language than the one that named the world).
+-- | Build a namer for a world's recorded language. Fails when the
+--   provenance names a generator version this build cannot construct
+--   (#710 requirement 15's error) or when that version's profile has
+--   too small a root space to name the catalogue (#2206) — reported
+--   rather than silently substituted with the current version, which
+--   would render names in a DIFFERENT language than the one that named
+--   the world.
 mkLocationNamer
     ∷ Catalogue → LanguageProvenance → Either GeneratorError LocationNamer
 mkLocationNamer = mkNamer

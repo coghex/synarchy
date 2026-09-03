@@ -30,6 +30,7 @@ import Language.Generated.Types
     , PossessiveMarking(..), currentGeneratorVersion, generatorVersionInt )
 import Language.Generated.Profile (generateProfile)
 import Language.Generated.Root (assignLanguageRoots)
+import Test.Headless.Language.Generated.Support (expectRoots)
 import Language.Generated.Bound (LanguageRoots(..), assignBoundForms)
 import Language.Generated.Render (renderNative)
 import Language.Etymology
@@ -63,14 +64,20 @@ provA    = LanguageProvenance (LangSeed 0x5EED0000000000A1) currentGeneratorVers
 provB    = LanguageProvenance (LangSeed 0x0FF1CE0000000B2C) currentGeneratorVersion
 provAOld = LanguageProvenance (LangSeed 0x5EED0000000000A1) (GeneratorVersion 1)
 
+-- | A language whose profile BUILDS but whose root space holds only 144
+--   distinct roots against the catalogue's 151 concepts (#2206), so no
+--   assignment exists to rebuild a name against.
+provShort ∷ LanguageProvenance
+provShort = LanguageProvenance (LangSeed 1116) currentGeneratorVersion
+
 profileFor ∷ LanguageProvenance → Profile
 profileFor prov = case generateProfile (lpVersion prov) (lpSeed prov) of
     Right p → p
     Left e  → error ("test setup: profile: " <> show e)
 
 rootsFor ∷ Catalogue → LanguageProvenance → LanguageRoots
-rootsFor cat prov = assignLanguageRoots (profileFor prov) (catOrdinals cat)
-                                        (conceptIds cat)
+rootsFor cat prov = expectRoots
+    (assignLanguageRoots (profileFor prov) (catOrdinals cat) (conceptIds cat))
 
 -- | The name a language really renders for an expression, and the gloss
 --   the catalogue really renders for it — i.e. exactly what the engine
@@ -309,8 +316,8 @@ spec = beforeAll loadRealCatalogue $ do
             it ("covers profCompoundOrder = " <> show o
                 <> " for BOTH compound forms") $ \cat → do
                 let prof  = withCompoundOrder o (profileFor provA)
-                    roots = assignLanguageRoots prof (catOrdinals cat)
-                                                (conceptIds cat)
+                    roots = expectRoots (assignLanguageRoots prof
+                                            (catOrdinals cat) (conceptIds cat))
                     surfaceOf expr = case renderNative prof roots expr of
                         Right t → t
                         Left e  → error (show e)
@@ -325,8 +332,8 @@ spec = beforeAll loadRealCatalogue $ do
             it ("covers the INDEPENDENT genitive pmOrder = " <> show o) $
                 \cat → do
                 let prof  = withGenitiveOrder o (profileFor provA)
-                    roots = assignLanguageRoots prof (catOrdinals cat)
-                                                (conceptIds cat)
+                    roots = expectRoots (assignLanguageRoots prof
+                                            (catOrdinals cat) (conceptIds cat))
                     surface = case renderNative prof roots possE of
                         Right t → t
                         Left e  → error (show e)
@@ -430,6 +437,40 @@ spec = beforeAll loadRealCatalogue $ do
             unavailableOf (decomposeName cat "Whatever" Nothing
                               (Just (sourceFor ghostVer bareE)))
                 `shouldBe` Just (EtyUnsupportedVersion 99)
+
+        -- #2206. Profile generation SUCCEEDS for this seed; root
+        -- assignment is what fails. The result is the existing
+        -- @reconstruction_failed@ wire reason carrying the generator's
+        -- own text, not a new reason the Lua/API boundary would have to
+        -- learn.
+        it "a language whose root space cannot name the catalogue \
+           \reports reconstruction_failed, carrying the generator's \
+           \own text" $ \cat → do
+            -- The page provenance MATCHES the source's, so
+            -- decomposeEntityName's foreignness check cannot answer
+            -- first and make this pass without ever reaching the
+            -- assignment.
+            let src = sourceFor provShort bareE
+            case decomposeEntityName cat (Just provShort)
+                     "Whatever" Nothing (Just src) of
+                EtyUnavailable u@(EtyReconstructionFailed why) → do
+                    etyUnavailableReason u `shouldBe` "reconstruction_failed"
+                    forM_ ["version 5", "144", "151", "shortfall 7"] $
+                        \needle → why `shouldSatisfy` T.isInfixOf needle
+                other → expectationFailure
+                    ("expected reconstruction_failed, got " <> show other)
+
+        -- Not vacuous: the same fixture under a language that CAN name
+        -- the catalogue reaches a different outcome entirely, so the
+        -- case above is measuring the root space rather than the
+        -- placeholder name.
+        it "reaches a different outcome for a language that can name the \
+           \catalogue" $ \cat →
+            unavailableOf (decomposeEntityName cat (Just provA)
+                              "Whatever" Nothing (Just (sourceFor provA bareE)))
+                `shouldSatisfy` (\u → u ≢ Nothing
+                                     ∧ fmap etyUnavailableReason u
+                                         ≢ Just "reconstruction_failed")
 
         it "a referenced concept the catalogue no longer carries reports \
            \itself, naming the concept" $ \cat →

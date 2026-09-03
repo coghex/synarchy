@@ -1158,9 +1158,14 @@ spec = aroundAll withSharedFixture $ do
                 -- The last two are DEGENERATE-but-positive sizes: a
                 -- readable-width floor that ignored the framebuffer
                 -- would push the toggle straight off the right edge
-                -- there (review round 1).
+                -- there (review round 1). The 4K combo's scale is
+                -- OUT OF BAND for its height (band 1601+ starts at
+                -- 1.5) but IN the engine's 0.5–4.0 domain: a scale
+                -- below 0.5 is refused by engine.setUIScale (#2198)
+                -- and would silently leave the previous scale in
+                -- place, making the case vacuous.
                 , "local combos = { {320, 240, 4.0}, {800, 600, 4.0},"
-                , "                 {3840, 2160, 0.25}, {640, 480, 0.5},"
+                , "                 {3840, 2160, 0.5}, {640, 480, 0.5},"
                 , "                 {12, 9, 1.0}, {1, 1, 4.0} };"
                 , "local ok = true;"
                 , "for _, c in ipairs(combos) do"
@@ -1194,6 +1199,14 @@ spec = aroundAll withSharedFixture $ do
             probe ← decodeOr r ∷ IO DegradeProbe
             dgOk probe `shouldBe` "true"
             dgMinimizeIgnored probe `shouldBe` True
+
+        it "cannot be driven below the engine's minimum UI scale: engine.setUIScale(0.25) is refused and the stored scale is unchanged (#2198)" $ \(env, ls) → do
+            resetFixture env ls
+            before ← vcUIScale ⊚ readIORef (videoConfigRef env)
+            r ← evalOk ls "return engine.setUIScale(0.25)"
+            r `shouldBe` "false"
+            after ← vcUIScale ⊚ readIORef (videoConfigRef env)
+            after `shouldBe` before
 
     -- #1419: the toggle's caption used to paint past its own box AND
     -- past the right edge of a 1280x720 frame ("> Objecti"), because

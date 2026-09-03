@@ -193,6 +193,7 @@ library
                      Engine.Graphics.Viewport
                      Engine.Graphics.Types
                      Engine.Graphics.Config
+                     Engine.Graphics.Config.Domain
                      Engine.Graphics.Vulkan.Base
                      Engine.Graphics.Vulkan.Buffer
                      Engine.Graphics.Vulkan.BufferUtils
@@ -413,6 +414,7 @@ library
                      Engine.Core.Error.Exception
                      Engine.Core.Resource
                      Engine.Core.Queue
+                     Engine.Core.Clock
                      Engine.Scene.Base
                      Engine.Scene.Batch
                      Engine.Scene.Batch.Sprite
@@ -517,6 +519,7 @@ library
                      Building.Knowledge
                      Building.Knowledge.Live
                      Building.Command.Types
+                     Building.Destruction
                      Building.Thread.Command
                      Building.Render
                      Building.Visual
@@ -1411,6 +1414,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogParity
                    Test.Headless.Core.LogThresholdEnv
                    Test.Headless.Core.LoopStartup
+                   Test.Headless.Core.MonotonicClock
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.GotoClamp
@@ -1434,6 +1438,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Tutorial.Definitions
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
+                   Test.Headless.Building.DestructionPresentation
                    Test.Headless.Building.Ghost
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
@@ -1482,6 +1487,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.TickInterval
                    Test.Headless.Lua.DragSelectDeferred
                    Test.Headless.Lua.TextWrapping
+                   Test.Headless.Lua.GroupedLogRetention
                    Test.Headless.Lua.TextTruncation
                    Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput

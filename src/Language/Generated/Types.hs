@@ -303,11 +303,37 @@ data Profile = Profile
     , profBoundary       ∷ !BoundaryPolicy
     } deriving (Show, Eq)
 
--- | Why a profile could not be generated for a requested version.
-data GeneratorError = UnsupportedGeneratorVersion Int
+-- | Why a generated language could not be produced for a requested
+--   (version, seed).
+--
+--   Two failures, and they fail at different moments. A version this
+--   build never defined is rejected by
+--   'Language.Generated.Profile.generateProfile' before a profile
+--   exists at all. A profile that DOES build can still be unusable:
+--   'Language.Generated.Root.assignRoots' needs one distinct root per
+--   catalogue concept, and a small enough phonology simply cannot
+--   render that many (#2206), which is rejected before assignment
+--   begins rather than discovered as an endless collision reroll.
+--
+--   No 'Generic'\/'Serialize' instance, deliberately: this type never
+--   rides into a save, so adding a constructor is outside
+--   @tools/enum_append_only_audit.py@'s append-only rule.
+data GeneratorError
+    = UnsupportedGeneratorVersion Int
+    | InsufficientRootSpace !GeneratorVersion !LangSeed !Int !Int
+      -- ^ The version and seed of the offending profile, the EXACT
+      --   number of distinct case-insensitive roots its own production
+      --   rules can render, and the number of concepts needing one.
     deriving (Show, Eq)
 
 generatorErrorText ∷ GeneratorError → Text
+generatorErrorText (InsufficientRootSpace ver seed capacity required) =
+    "language-generator version " <> tshow (generatorVersionInt ver)
+    <> " seed " <> langSeedText seed
+    <> " cannot name the concept catalogue: its root space holds "
+    <> tshow capacity <> " distinct roots for "
+    <> tshow required <> " concepts (shortfall "
+    <> tshow (required - capacity) <> ")"
 generatorErrorText (UnsupportedGeneratorVersion v) =
     "unsupported language-generator version " <> tshow v
     <> " (supported: " <> supported <> ")"

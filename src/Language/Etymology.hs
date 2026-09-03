@@ -71,7 +71,7 @@ import qualified Data.Text as T
 import Language.Semantic.Types
 import Language.Generated.Types
     ( GeneratorError(..), LanguageProvenance(..), Profile
-    , generatorVersionInt, langSeedText )
+    , generatorErrorText, generatorVersionInt, langSeedText )
 import Language.Generated.Profile (generateProfile)
 import Language.Generated.Root (assignLanguageRoots)
 import Language.Generated.Bound (LanguageRoots(..))
@@ -300,6 +300,13 @@ decomposeName cat storedName storedGloss (Just src) =
     case generateProfile (lpVersion prov) (lpSeed prov) of
         Left (UnsupportedGeneratorVersion v) →
             EtyUnavailable (EtyUnsupportedVersion v)
+        -- 'generateProfile' produces no other 'GeneratorError' — root
+        -- capacity is decided later, by 'explain' — but the type admits
+        -- one, so this branch exists rather than an incomplete match or
+        -- an 'error'. It reports the same way a failed reconstruction
+        -- does, keeping the wire reason set closed (#2206).
+        Left err →
+            EtyUnavailable (EtyReconstructionFailed (generatorErrorText err))
         Right prof → explain cat storedName storedGloss prov prof (esExpr src)
   where
     prov = esLanguage src
@@ -354,24 +361,32 @@ explain cat storedName storedGloss prov prof expr
     -- case a content change can cause and a player-facing message can
     -- name.
     | (bad : _) ← missingConcepts = EtyUnavailable (EtyInvalidConcept bad)
-    | otherwise = case renderNativeTrace prof roots expr of
-        Left err → EtyUnavailable
-            (EtyReconstructionFailed (nativeRenderErrorText err))
-        Right pieces
-            | rebuilt ≢ storedName →
-                EtyUnavailable (EtySurfaceMismatch storedName rebuilt)
-            | otherwise → EtyAvailable Etymology
-                { etyName      = storedName
-                , etyGloss     = storedGloss
-                , etyLanguage  = prov
-                , etyForm      = formOfExpr expr
-                , etyMorphemes = morphemesOf pieces
-                , etyTokens    = map toToken pieces
-                }
-          where rebuilt = traceSurface pieces
+    | otherwise = case assignLanguageRoots prof (catOrdinals cat)
+                                            (conceptIds cat) of
+        -- A profile whose root space cannot name the catalogue (#2206)
+        -- has no assignment to rebuild against, so the etymology is
+        -- unavailable — reported through the EXISTING
+        -- @reconstruction_failed@ reason carrying the generator's own
+        -- text, rather than through a new wire reason every consumer
+        -- would have to learn.
+        Left gErr → EtyUnavailable
+            (EtyReconstructionFailed (generatorErrorText gErr))
+        Right roots → case renderNativeTrace prof roots expr of
+            Left err → EtyUnavailable
+                (EtyReconstructionFailed (nativeRenderErrorText err))
+            Right pieces
+                | rebuilt ≢ storedName →
+                    EtyUnavailable (EtySurfaceMismatch storedName rebuilt)
+                | otherwise → EtyAvailable Etymology
+                    { etyName      = storedName
+                    , etyGloss     = storedGloss
+                    , etyLanguage  = prov
+                    , etyForm      = formOfExpr expr
+                    , etyMorphemes = morphemesOf roots pieces
+                    , etyTokens    = map toToken pieces
+                    }
+              where rebuilt = traceSurface pieces
   where
-    roots = assignLanguageRoots prof (catOrdinals cat) (conceptIds cat)
-
     -- Every (concept, lexical form) pair this expression's own gloss
     -- rendering demands, checked against the catalogue up front. The
     -- native side needs only a root, which the assignment above covers
@@ -397,13 +412,13 @@ explain cat storedName storedGloss prov prof expr
     -- can put a link between a stem and its affix, and #1104
     -- requirement 6 keeps roles attached to concepts under either
     -- ordering, so role is the only association that stays correct.
-    morphemesOf pieces =
+    morphemesOf roots pieces =
         [ EtyMorpheme
             { emIdentity    = MorphemeIdentity prov cid
             , emConcept     = cid
             , emRole        = toRole role
             , emSurface     = surface
-            , emFree        = freeForm cid
+            , emFree        = freeForm roots cid
             , emBound       = bound
             , emLemma       = lemmaFor cid (slotFormKind expr role)
             , emMark        = fst <$> markFor role pieces
@@ -417,7 +432,7 @@ explain cat storedName storedGloss prov prof expr
     -- The concept's own free root in THIS language. Total for every
     -- concept that reached a rendered piece: the trace could only have
     -- produced one by looking the concept up in exactly this map.
-    freeForm cid = fromMaybe "" (M.lookup cid (lrFree roots))
+    freeForm roots cid = fromMaybe "" (M.lookup cid (lrFree roots))
 
     lemmaFor cid kind = case lookupConcept cid cat of
         Nothing → ""

@@ -1,7 +1,8 @@
 {-# LANGUAGE Strict #-}
 -- | Building quads for the scene: placed instances (solid, or the
---   translucent pre-delivery ghost) and the build tool's placement
---   preview.
+--   translucent pre-delivery ghost), the transient destruction
+--   presentations of demolished ones (#2091), and the build tool's
+--   placement preview.
 --
 --   WHICH asset is drawn, and WHERE, both come from 'Building.Visual'
 --   (#2088): the facing's own declared view — south, west, north, east,
@@ -12,10 +13,18 @@
 --   second copy of the arithmetic. Camera rotation changes only the
 --   selected canvas and the projection; footprint, grid position, z,
 --   sort ownership and lifecycle progress are untouched by it.
+--
+--   A destruction effect goes through the SAME geometry boundary
+--   ('Building.Visual.buildingQuadRect') from the anchor, z and
+--   sprite-anchor drop it captured at demolition, with its frame from
+--   'Building.Destruction'. It is drawn and nothing more: no selection
+--   outline, no ghost opacity, and 'Building.HitTest' never sees it.
 module Building.Render
     ( renderBuildingQuads
     , renderBuildingQuadsScanned
     , buildingToQuad
+    , destructionToQuad
+    , placedBuildingSortKey
     , renderGhostQuad
     , renderGhostQuadScanned
     , ghostToQuad
@@ -46,6 +55,7 @@ import World.State.Types (wmVisible)
 import World.Page.Types (WorldPageId(..))
 import Building.Types
 import Building.Visual
+import Building.Destruction (destructionFrame, destructionsOnPages)
 
 -- | Like 'Unit.Render.renderUnitQuads', one sweep over every visible
 --   page's buildings, so each instance's quad takes ITS OWN page's
@@ -59,31 +69,41 @@ renderBuildingQuads env bm solarSlotOf facing zSlice effDepth tileAlpha =
 
 -- | 'renderBuildingQuads' with the scene-assembly telemetry (#1921)
 --   this pass contributes: the entries examined in the GLOBAL
---   building-manager map, paired with the quads it produced.
+--   building-manager state — every live instance in 'bmInstances' PLUS
+--   every stored destruction effect in 'bmDestructions' (#2091) —
+--   paired with the quads it produced.
 --
 --   Counted before visible-page, texture-system and Z filtering, for
 --   the same reason as 'Unit.Render.renderUnitQuadsScanned': the global
---   map is what the pass walks. It stays non-zero under GPU-free
---   headless execution, where emitted is legitimately zero.
+--   maps are what the pass walks. It stays non-zero under GPU-free
+--   headless execution, where emitted is legitimately zero, and a frame
+--   holding only effects — the moments after the last building on a
+--   page is demolished — is still measured rather than reported as an
+--   empty pass.
 renderBuildingQuadsScanned
     ∷ EngineEnv → BuildingManager → (WorldPageId → Word32) → CameraFacing
     → Int → Int → Float → IO (Int, V.Vector SortableQuad)
 renderBuildingQuadsScanned env bm solarSlotOf facing zSlice effDepth tileAlpha = do
     -- Render only the visible worlds' buildings — buildings are
-    -- world-scoped so a hidden world's must not draw here (#76).
+    -- world-scoped so a hidden world's must not draw here (#76). The
+    -- same scoping holds for a destruction effect: a hidden page's
+    -- effect emits no quad, and if the page is shown again before the
+    -- clip runs out it resumes at the phase the clock dictates.
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let visiblePages = HS.fromList (wmVisible mgr)
         instances = buildingsOnPages visiblePages (bmInstances bm)
+        effects   = destructionsOnPages visiblePages (bmDestructions bm)
         defs      = bmDefs bm
         selected  = bmSelected bm
-        scanned   = HM.size (bmInstances bm)
-    if HM.null instances
+        scanned   = HM.size (bmInstances bm) + HM.size (bmDestructions bm)
+    if HM.null instances ∧ HM.null effects
         then return (scanned, V.empty)
         else do
             -- Game-clock matches biSpawnedAt's clock, so the
             -- Appearing→Built transition a zero-work def derives
             -- from elapsed time
-            -- doesn't run while paused.
+            -- doesn't run while paused. A destruction effect's
+            -- start is the same clock, so pause freezes its phase too.
             now ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             texSizes ← readIORef (rvTextureSizeRef (toRenderViewCapability env))
             mBts ← readIORef (rvTextureSystemRef (toRenderViewCapability env))
@@ -94,6 +114,15 @@ renderBuildingQuadsScanned env bm solarSlotOf facing zSlice effDepth tileAlpha =
                     -- buildings carry no directional face map (#1696).
                     let lookupSlot h = fromIntegral (toInt h) ∷ Word32
                         defFmSlot = noFaceMapVertexId
+                        withEffects = HM.foldl' (\acc eff →
+                                case destructionToQuad lookupSlot defFmSlot facing
+                                            zSlice effDepth tileAlpha eff now
+                                            texSizes of
+                                    Just sq →
+                                        setQuadSolarPage
+                                            (solarSlotOf (dePage eff)) sq : acc
+                                    Nothing → acc
+                              ) [] effects
                         quads = V.fromList
                             $ HM.foldlWithKey' (\acc bid inst →
                                 let mDef  = HM.lookup (biDefName inst) defs
@@ -105,7 +134,7 @@ renderBuildingQuadsScanned env bm solarSlotOf facing zSlice effDepth tileAlpha =
                                         setQuadSolarPage
                                             (solarSlotOf (biPage inst)) sq : acc
                                     Nothing → acc
-                              ) [] instances
+                              ) withEffects instances
                     return (scanned, quads)
 
 -- | One placed instance's quad, or 'Nothing' when the camera band
@@ -147,21 +176,7 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
                 { bqX = drawX, bqY = drawY, bqW = quadW, bqH = quadH
                 , bqIsoDepth = isoDepth } = rect
 
-            -- Sort by the iso depth of the GROUND TILE, not the sprite
-            -- top. Adding spriteRowSpan (the sprite's vertical extent)
-            -- to the sort key as units do made tall buildings — e.g.
-            -- a 96×96 cargo hold has spriteRowSpan ≈ 2.0 — outrank
-            -- units at the same tile, drawing the building on top of
-            -- a unit standing in front of it. Keeping just the iso
-            -- bottom plus the +0.0005 tiebreaker means a unit at the
-            -- same row sorts in front (their key has +0.0006), and
-            -- units north of the building still get obscured because
-            -- their key is lower (north = smaller faF + fbF). Texture-
-            -- independent, so a facing whose canvas differs cannot
-            -- move a placed building in the sort.
-            sortKey = isoDepth
-                    + fromIntegral relativeZ * 0.001
-                    + 0.0005
+            sortKey = placedBuildingSortKey isoDepth relativeZ
 
             actualSlot = lookupSlot texHandle
             -- Pre-delivery ghost: D-19's committed 60 %, the SAME
@@ -196,6 +211,88 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
             , sqTexture = texHandle
             , sqLayer   = worldLayer
             }
+
+-- | The sort key a PLACED building's quad carries, and — so a
+--   demolition changes nothing about where its footprint sorts — the
+--   one its destruction effect carries too (#2091).
+--
+--   Sort by the iso depth of the GROUND TILE, not the sprite top.
+--   Adding spriteRowSpan (the sprite's vertical extent) to the sort
+--   key as units do made tall buildings — e.g. a 96×96 cargo hold has
+--   spriteRowSpan ≈ 2.0 — outrank units at the same tile, drawing the
+--   building on top of a unit standing in front of it. Keeping just
+--   the iso bottom plus the +0.0005 tiebreaker means a unit at the
+--   same row sorts in front (their key has +0.0006), and units north
+--   of the building still get obscured because their key is lower
+--   (north = smaller faF + fbF). Texture-independent, so a facing
+--   whose canvas differs cannot move a placed building in the sort.
+placedBuildingSortKey ∷ Float → Int → Float
+placedBuildingSortKey isoDepth relativeZ =
+    isoDepth + fromIntegral relativeZ * 0.001 + 0.0005
+
+-- | One destruction effect's quad at game time @now@, or 'Nothing'
+--   when the camera band culls it, the clip has expired, or the facing
+--   declares no frame (#2091). Pure — exported so the timing, facing
+--   and geometry contracts are assertable without a texture system,
+--   exactly as 'buildingToQuad' is.
+--
+--   Geometry is the placed building's: 'buildingQuadRect' from the
+--   captured anchor, grid z and sprite-anchor drop, sized from the
+--   selected frame's own canvas, the same ground contact, world UV,
+--   layer and 'placedBuildingSortKey'. What is deliberately NOT the
+--   placed building's: no selection outline (the effect is never
+--   selected and never hit-tested) and no pre-delivery ghost opacity —
+--   the tint is exactly the scene's @tileAlpha@ whatever the building
+--   looked like when it was demolished.
+destructionToQuad
+    ∷ (TextureHandle → Word32)
+    → Float
+    → CameraFacing
+    → Int
+    → Int                                   -- ^ effDepth (terrain view depth)
+    → Float                                 -- ^ scene tileAlpha
+    → DestructionEffect
+    → Double                                -- ^ game time now
+    → HM.HashMap TextureHandle (Int, Int)
+    → Maybe SortableQuad
+destructionToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha eff now texSizes =
+    let gridZ = deGridZ eff
+        relativeZ = gridZ - zSlice
+    in if gridZ > zSlice ∨ gridZ < (zSlice - effDepth)
+       then Nothing
+       else case destructionFrame facing now eff of
+        Nothing → Nothing
+        Just texHandle →
+            let BuildingQuadRect
+                    { bqX = drawX, bqY = drawY, bqW = quadW, bqH = quadH
+                    , bqIsoDepth = isoDepth } =
+                    buildingQuadRect facing zSlice texSizes
+                                     (deAnchorOffset eff)
+                                     (deAnchorX eff) (deAnchorY eff) gridZ
+                                     texHandle
+                sortKey = placedBuildingSortKey isoDepth relativeZ
+                actualSlot = lookupSlot texHandle
+                tint = Vec4 1.0 1.0 1.0 tileAlpha
+                wuv = tileWorldUV (deAnchorX eff) (deAnchorY eff)
+                (v0, v1, v2, v3) =
+                    quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))
+                                 fullQuadUV
+                                 QuadPayload
+                                     { qpTint      = tint
+                                     , qpAtlasSlot = fromIntegral actualSlot
+                                     , qpFaceMap   = defFmSlot
+                                     , qpFlags     = 0
+                                     , qpWorldUV   = wuv
+                                     }
+            in Just SortableQuad
+                { sqSortKey = sortKey
+                , sqV0      = v0
+                , sqV1      = v1
+                , sqV2      = v2
+                , sqV3      = v3
+                , sqTexture = texHandle
+                , sqLayer   = worldLayer
+                }
 
 -- | Render the ghost preview if one is set. Returns at most one quad,
 --   in a vector for caller convenience. Tinted via 'ghostTint'.
@@ -303,10 +400,11 @@ buildingGhostQuad lookupSlot defFmSlot facing zSlice effDepth texSizes
             , bqIsoDepth = isoDepth } =
             buildingQuadRect facing zSlice texSizes
                              (spriteAnchorOffset (Just def)) gx gy gz texHandle
-        -- 'buildingToQuad's key, term for term.
-        sortKey = isoDepth
-                + fromIntegral (gz - zSlice) * 0.001
-                + 0.0005
+        -- The PLACED key itself (#2091's 'placedBuildingSortKey'), not a
+        -- restatement of it: a plan, the building staked from it and
+        -- that building's own destruction effect all sort by one
+        -- function.
+        sortKey = placedBuildingSortKey isoDepth (gz - zSlice)
         tint = ghostPieceTint tileAlpha factor valid
         actualSlot = lookupSlot texHandle
         wuv = tileWorldUV gx gy

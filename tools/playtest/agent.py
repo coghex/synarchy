@@ -156,6 +156,7 @@ look). You choose exactly ONE action, in screenshot pixel \
 coordinates — aim by eye at what you see; there are no coordinate \
 aids, so being slightly off is normal:
 - click: {{"do":"click","x":N,"y":N}} (optional "button":"left|right|middle", "mods":["shift"])
+- hover: {{"do":"hover","x":N,"y":N}} (just rest the pointer there without clicking — a little label often appears explaining whatever is under it)
 - drag: {{"do":"drag","x1":N,"y1":N,"x2":N,"y2":N}}
 {scroll_action}
 - key: {{"do":"key","name":"Space"}} (names like the manual uses: W A S D, Q, E, L, Enter, Escape, Backspace, Tab, Up/Down/Left/Right, Home)
