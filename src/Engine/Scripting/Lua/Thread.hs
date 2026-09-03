@@ -410,8 +410,8 @@ luaTick env lls = do
                   runDueScripts ls currentSecs'
                   pure (Just lls)
 
--- | One scheduler pass over the loaded scripts: call @update@ on every
---   script that is DUE and reschedule it.
+-- | One scheduler pass over the loaded scripts: reschedule every script
+--   that is DUE, then call @update@ on each of them.
 --
 --   Which scripts those are is 'scriptIsDue''s answer and nothing else,
 --   so a paused or event-only script (interval @0@, #1695) is skipped
@@ -419,14 +419,48 @@ luaTick env lls = do
 --   computed — the two can't drift. The @dt@ handed to @update@ is the
 --   script's own accepted interval, unchanged.
 --
+--   __The reentrancy rule (#2205).__ The rescheduling happens FIRST, in
+--   one transaction, BEFORE any callback of the pass runs — not after
+--   each @update@ returns, which is what used to make a callback's own
+--   scheduling decision get advanced a second time on top. Because the
+--   scheduler never writes a deadline again once a callback has started,
+--   a callback that reschedules — @engine.setTickInterval@,
+--   @engine.pauseScript@ or @engine.resumeScript@, on ITSELF or on ANY
+--   OTHER script, whether or not that other script has already had its
+--   turn this pass — is always the last writer, and the scheduler
+--   neither overwrites its decision nor adds an interval to it. When
+--   several successful calls target one script, the last one wins.
+--
+--   So after a pass every script's stored schedule is exactly one of:
+--
+--   * 'advanceTick' applied to the deadline and rate the pass found it
+--     with, when no callback touched it — which is also what a REFUSED
+--     'Engine.Scripting.Lua.API.Core.setTickIntervalFn' leaves standing,
+--     since #1695 makes a refusal store nothing at all; or
+--   * whatever the last successful scheduling call of the pass stored —
+--     including @engine.pauseScript@ deliberately leaving the rate and
+--     the deadline exactly where they were and flipping only the pause
+--     flag.
+--
+--   The pass SNAPSHOT is unchanged by any of this: eligibility,
+--   iteration order and each @dt@ all come from the map as it was read,
+--   so rescheduling a script mid-pass never adds, cancels or retimes a
+--   callback this pass was already going to make — it only decides the
+--   target's stored schedule afterwards. @engine.killScript@ deletes the
+--   entry and no later write puts it back; @engine.loadScript@ inserts
+--   one that cannot be in the already-captured snapshot, so it first
+--   becomes due on a later pass.
+--
 --   Exported so "Test.Headless.Lua.TickInterval" can drive the real
 --   pass against a bare backend rather than reproducing it.
 runDueScripts ∷ LuaBackendState → Double → IO ()
 runDueScripts ls now = do
     scriptsMap ← readTVarIO (lbsScripts ls)
-    forM_ (Map.toList scriptsMap) $ \(sid, script) →
-      when (scriptIsDue now script) $ do
-        when (isValidRef (scriptModuleRef script)) $
-          void $ callModuleFunction ls (scriptModuleRef script) "update"
-                     [ScriptNumber (scriptTickRate script)]
-        atomically $ modifyTVar' (lbsScripts ls) $ Map.adjust (advanceTick now) sid
+    let due = filter (scriptIsDue now ∘ snd) (Map.toList scriptsMap)
+    unless (null due) $
+      atomically $ modifyTVar' (lbsScripts ls) $ \m →
+        foldr (Map.adjust (advanceTick now) ∘ fst) m due
+    forM_ due $ \(_, script) →
+      when (isValidRef (scriptModuleRef script)) $
+        void $ callModuleFunction ls (scriptModuleRef script) "update"
+                   [ScriptNumber (scriptTickRate script)]

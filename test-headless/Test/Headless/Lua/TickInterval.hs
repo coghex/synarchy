@@ -19,6 +19,14 @@
 --   the wait it takes and 'runDueScripts' for the pass it makes — so a
 --   change to the loop cannot pass here by leaving a copy behind.
 --
+--   The second group pins the scheduler's REENTRANCY rule (#2205): what
+--   'runDueScripts' stores for a script whose schedule was changed from
+--   inside a callback of the same pass. The scheduler used to reschedule
+--   each script AFTER its @update@ returned, on top of whatever that
+--   callback had just stored, so a script that set its own interval next
+--   ran at about @now + 2·rate@ — and so did any other script whose
+--   interval a callback changed before its own turn came round.
+--
 --   Bare Lua backend, no world, no script pre-loaded — same technique
 --   as "Test.Headless.Lua.ScriptState", whose sibling this is.
 module Test.Headless.Lua.TickInterval (spec) where
@@ -53,6 +61,12 @@ import Engine.Scripting.Lua.Util (broadcastToModulesReportingErrors, nowSeconds)
 --   the resource root, which the test suite already runs from.
 fixturePath ∷ BS.ByteString
 fixturePath = "scripts/lua_tick_interval_fixture.lua"
+
+-- | The #2205 fixture: a module whose @update@ runs whatever engine
+--   calls the example installed on it, so a reschedule can be driven
+--   from INSIDE a real 'runDueScripts' pass rather than around one.
+reentrantPath ∷ BS.ByteString
+reentrantPath = "scripts/lua_tick_reentrancy_fixture.lua"
 
 -- | A bare Lua backend with the full API registered, no script loaded,
 --   and its OWN message queues rather than the shared 'EngineEnv' ones,
@@ -192,8 +206,136 @@ warnings ∷ [LogEntry] → [Text]
 warnings = map leMessage
          ∘ filter (\e → leLevel e ≡ LevelWarn ∧ leCategory e ≡ CatLua)
 
+------------------------------------------------------------------------
+-- #2205 helpers: driving a reschedule from inside a real pass
+------------------------------------------------------------------------
+
+-- | Read one script back by id, failing the example when it is gone.
+scriptById ∷ LuaBackendState → Word32 → IO LuaScript
+scriptById ls sid = do
+    scripts ← readTVarIO (lbsScripts ls)
+    case Map.lookup sid scripts of
+        Just s  → pure s
+        Nothing → do
+            expectationFailure $ "script " ⧺ show sid ⧺ " is no longer loaded"
+            pure (scriptAt sid 0 0 False)
+
+-- | The id a @engine.loadScript@ chunk stashed on the shared probe
+--   table, as the 'Word32' the backend keys scripts by.
+probeId ∷ LuaBackendState → BS.ByteString → IO Word32
+probeId ls field = do
+    mSid ← readInt ls "reentrantProbe" field
+    case mSid of
+        Just sid → pure (fromIntegral sid)
+        Nothing  → do
+            expectationFailure $ "reentrantProbe." ⧺ BS.unpack field
+                               ⧺ " is not a script id — the load failed"
+            pure 0
+
+-- | Load the reentrancy fixture at @rate@ and tell it its own id: the
+--   module is never handed one, and every reentrant body below needs it
+--   to name itself to @engine.setTickInterval@ and friends.
+loadReentrant ∷ LuaBackendState → BS.ByteString → IO Word32
+loadReentrant ls rate = do
+    runLua_ ls $ "reentrantProbe = reentrantProbe or {}\n\
+                 \reentrantProbe.sid = engine.loadScript('" <> reentrantPath
+                 <> "', " <> rate <> ")\n\
+                 \luaTickReentrancyFixture.sid = reentrantProbe.sid"
+    probeId ls "sid"
+
+-- | Load the plain #1695 fixture alongside it as the cross-script
+--   TARGET: it counts its own updates and dt and reschedules nothing,
+--   so it shows what a pass did TO a script rather than what one did.
+loadPeer ∷ LuaBackendState → BS.ByteString → IO Word32
+loadPeer ls rate = do
+    runLua_ ls $ "reentrantProbe = reentrantProbe or {}\n\
+                 \reentrantProbe.peer = engine.loadScript('" <> fixturePath
+                 <> "', " <> rate <> ")"
+    probeId ls "peer"
+
+-- | Install the reentrant body the fixture's @update@ will run, as a
+--   Lua function of @(sid, dt)@ where @sid@ is the fixture's own id.
+installAction ∷ LuaBackendState → BS.ByteString → IO ()
+installAction ls body = runLua_ ls $
+    "luaTickReentrancyFixture.action = function(sid, dt) " <> body <> " end"
+
+-- | Take the body back off, so a follow-up pass is an ordinary tick.
+clearAction ∷ LuaBackendState → IO ()
+clearAction ls = runLua_ ls "luaTickReentrancyFixture.action = nil"
+
+-- | Run a pass and report the real-clock window it ran in.
+--
+--   @engine.setTickInterval@ and @engine.resumeScript@ each sample the
+--   clock INSIDE the call ("Engine.Scripting.Lua.API.Core"), not from
+--   the @now@ the scheduler was handed, so a deadline one of them stored
+--   can be bounded but never predicted — and the tests hand
+--   'runDueScripts' a synthetic @now@ that is deliberately not the real
+--   clock at all.
+passWindow ∷ IO α → IO (α, Double, Double)
+passWindow act = do
+    t0 ← nowSeconds
+    r  ← act
+    t1 ← nowSeconds
+    pure (r, t0, t1)
+
+-- | This deadline is a callback's own decision and nothing more: it is
+--   one @rate@ past a clock sample taken during the pass. The extra
+--   interval the pre-#2205 scheduler added on top lands outside the
+--   window and fails here.
+storedByCallback ∷ Double → Double → Double → Double → Expectation
+storedByCallback t0 t1 rate deadline =
+    (deadline - rate) `shouldSatisfy` (\sample → sample ≥ t0 ∧ sample ≤ t1)
+
+-- | The deadline stored after a pass IS the boundary: a pass just
+--   before it must not update, and a pass at it must update exactly
+--   once more. Comparing against the stored deadline rather than a
+--   predicted one keeps the API's own clock sample out of the
+--   arithmetic while still catching an unwanted extra interval.
+deadlineIsBoundary ∷ LuaBackendState → BS.ByteString → Double → Lua.Integer → IO ()
+deadlineIsBoundary ls table deadline updatesSoFar = do
+    runDueScripts ls (deadline - 1e-6)
+    readInt ls table "updates" ⌦ (`shouldBe` Just updatesSoFar)
+    runDueScripts ls deadline
+    readInt ls table "updates" ⌦ (`shouldBe` Just (updatesSoFar + 1))
+
+-- | One self-@setTickInterval@ example: the fixture changes its OWN
+--   interval from inside @update@, and the pass must store exactly what
+--   the callback asked for — one interval past the callback's own clock
+--   sample, not two.
+selfSetInterval ∷ EngineEnv → BS.ByteString → Double → IO ()
+selfSetInterval env newRateSrc newRate = do
+    ls ← newBareBackend env
+    sid ← loadReentrant ls "0.25"
+    before ← scriptById ls sid
+    scriptTickRate before `shouldBe` 0.25
+    installAction ls $ "engine.setTickInterval(sid, " <> newRateSrc <> ")"
+
+    ((), t0, t1) ← passWindow $ runDueScripts ls (scriptNextTick before + 0.01)
+
+    -- The pass still made exactly the callback it was going to make,
+    -- with the PRE-PASS interval as its dt.
+    readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+    readNumber ls "luaTickReentrancyFixture" "lastDt" ⌦ (`shouldBe` Just 0.25)
+
+    after ← scriptById ls sid
+    scriptTickRate after `shouldBe` newRate
+    storedByCallback t0 t1 newRate (scriptNextTick after)
+
+    -- … and the NEXT update really does arrive one interval later.
+    clearAction ls
+    deadlineIsBoundary ls "luaTickReentrancyFixture" (scriptNextTick after) 1
+
 spec ∷ SpecWith EngineEnv
-spec = describe "Lua tick-interval policy (#1695)" $ do
+spec = do
+    policySpec
+    reentrancySpec
+
+-- | #1695's interval policy: what each entry point stores, what it
+--   refuses, and the scheduling that follows. Kept a group of its own so
+--   @--match "Lua tick-interval policy"@ still selects exactly these
+--   examples, unchanged, after #2205 added its own beside them.
+policySpec ∷ SpecWith EngineEnv
+policySpec = describe "Lua tick-interval policy (#1695)" $ do
 
     ------------------------------------------------------------------
     -- Classification
@@ -460,3 +602,250 @@ spec = describe "Lua tick-interval policy (#1695)" $ do
         -- Far below the 16.6 ms budget: the wait returns on the message,
         -- not on the timeout.
         elapsed `shouldSatisfy` (< 0.25)
+
+-- | The scheduler's reentrancy rule (#2205): a callback's own
+--   scheduling decision is the LAST word on the script it targeted, and
+--   'runDueScripts' never overwrites it or adds an interval on top.
+--
+--   The pass used to reschedule each script after its @update@
+--   returned, applied to whatever was stored under that id by then — so
+--   a callback's accepted 'engine.setTickInterval' write was advanced a
+--   second time and the script next ran at about @now + 2·rate@. Every
+--   example here drives the REAL 'runDueScripts'.
+reentrancySpec ∷ SpecWith EngineEnv
+reentrancySpec = describe "Lua scheduler reentrancy (#2205)" $ do
+
+    ------------------------------------------------------------------
+    -- A script rescheduling ITSELF
+    ------------------------------------------------------------------
+    it "a script that raises its own interval from inside update next \
+       \runs one interval later, not two" $ \env →
+        selfSetInterval env "1.0" 1.0
+
+    it "a script that lowers its own interval from inside update next \
+       \runs one interval later, not two" $ \env →
+        selfSetInterval env "0.01" 0.01
+
+    it "the last successful setTickInterval of a pass is the one that \
+       \stands" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        before ← scriptById ls sid
+        installAction ls "engine.setTickInterval(sid, 1.0) \
+                         \engine.setTickInterval(sid, 0.5)"
+
+        ((), t0, t1) ← passWindow $ runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+        after ← scriptById ls sid
+        scriptTickRate after `shouldBe` 0.5
+        storedByCallback t0 t1 0.5 (scriptNextTick after)
+
+    it "a REFUSED setTickInterval stores nothing and therefore leaves \
+       \the ordinary advance standing" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        before ← scriptById ls sid
+        installAction ls "engine.setTickInterval(sid, -1.0)"
+
+        (_, entries) ← withCapturedLog env $
+            runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+        -- #1695: a refusal leaves BOTH fields alone, so this script's
+        -- schedule was never touched by a callback and gets exactly the
+        -- advance it would have got with no callback at all.
+        after ← scriptById ls sid
+        scriptTickRate after `shouldBe` 0.25
+        scriptNextTick after `shouldBe` scriptNextTick before + 0.25
+        case warnings entries of
+            [msg] → do
+                msg `shouldSatisfy` ("setTickInterval refused" `T.isInfixOf`)
+                msg `shouldSatisfy` (tshow (-1.0 ∷ Double) `T.isInfixOf`)
+            other → expectationFailure $
+                "expected one refusal warning, got " ⧺ show other
+
+    it "a script that turns ITSELF event-only from inside update stores \
+       \the zero and is never timed again" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        before ← scriptById ls sid
+        installAction ls "engine.setTickInterval(sid, 0)"
+
+        ((), t0, t1) ← passWindow $ runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+        readNumber ls "luaTickReentrancyFixture" "lastDt" ⌦ (`shouldBe` Just 0.25)
+
+        after ← scriptById ls sid
+        scriptTickRate after `shouldBe` 0
+        -- Event-only makes the deadline inert, but it is still the
+        -- callback's own: the scheduler wrote nothing after it.
+        storedByCallback t0 t1 0 (scriptNextTick after)
+        scriptIsTimed after `shouldBe` False
+        nextTimerWake [after] `shouldBe` Nothing
+
+        clearAction ls
+        runDueScripts ls (scriptNextTick after + 3600)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+    it "a script that pauses ITSELF from inside update keeps its rate \
+       \and its ordinary next deadline, and never ticks again while \
+       \paused" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        before ← scriptById ls sid
+        installAction ls "engine.pauseScript(sid)"
+
+        runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+        -- engine.pauseScript changes ONLY scriptPaused: it stores no
+        -- rate and no deadline, so the ordinary advance is what stands.
+        -- Either way the deadline is inert while paused — a resume
+        -- overwrites it — and the pause flag is the load-bearing part.
+        after ← scriptById ls sid
+        scriptPaused   after `shouldBe` True
+        scriptTickRate after `shouldBe` 0.25
+        scriptNextTick after `shouldBe` scriptNextTick before + 0.25
+        scriptIsTimed  after `shouldBe` False
+
+        clearAction ls
+        runDueScripts ls (scriptNextTick after + 3600)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+    it "a script that pauses and then resumes ITSELF from inside update \
+       \is left due at the resume's own sample, with no interval added" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        before ← scriptById ls sid
+        installAction ls "engine.pauseScript(sid) engine.resumeScript(sid)"
+
+        ((), t0, t1) ← passWindow $ runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+        -- The resume is the last successful call, so its own write —
+        -- scriptNextTick = its clock sample, no interval — stands.
+        after ← scriptById ls sid
+        scriptPaused   after `shouldBe` False
+        scriptTickRate after `shouldBe` 0.25
+        storedByCallback t0 t1 0 (scriptNextTick after)
+
+        clearAction ls
+        deadlineIsBoundary ls "luaTickReentrancyFixture" (scriptNextTick after) 1
+
+    ------------------------------------------------------------------
+    -- A script rescheduling ANOTHER script, in both pass orders
+    ------------------------------------------------------------------
+    it "an interval change aimed at a script that has not had its turn \
+       \yet neither retimes that turn nor gets advanced on top of" $ \env → do
+        ls ← newBareBackend env
+        -- Scripts are keyed by an ascending id, so loading the mutator
+        -- FIRST puts its callback before the target's in the pass.
+        mutator ← loadReentrant ls "0.25"
+        peer    ← loadPeer ls "0.25"
+        mutator `shouldSatisfy` (< peer)
+
+        mBefore ← scriptById ls mutator
+        pBefore ← scriptById ls peer
+        installAction ls "engine.setTickInterval(reentrantProbe.peer, 1.0)"
+
+        let now = max (scriptNextTick mBefore) (scriptNextTick pBefore) + 0.01
+        ((), t0, t1) ← passWindow $ runDueScripts ls now
+
+        -- Exactly one callback each, and the target's dt is still the
+        -- interval the pass snapshot selected it with.
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+        readInt ls "luaTickIntervalFixture"   "updates" ⌦ (`shouldBe` Just 1)
+        readNumber ls "luaTickIntervalFixture" "lastDt" ⌦ (`shouldBe` Just 0.25)
+
+        pAfter ← scriptById ls peer
+        scriptTickRate pAfter `shouldBe` 1.0
+        storedByCallback t0 t1 1.0 (scriptNextTick pAfter)
+
+        -- The mutator touched nobody's schedule but the peer's, so its
+        -- own is the ordinary advance.
+        mAfter ← scriptById ls mutator
+        scriptTickRate mAfter `shouldBe` 0.25
+        scriptNextTick mAfter `shouldBe` scriptNextTick mBefore + 0.25
+
+    it "an interval change aimed at a script that has ALREADY had its \
+       \turn replaces the deadline the pass gave it" $ \env → do
+        ls ← newBareBackend env
+        -- The other order: the target is loaded first, so it runs and is
+        -- rescheduled before the mutator's callback reaches it.
+        peer    ← loadPeer ls "0.25"
+        mutator ← loadReentrant ls "0.25"
+        peer `shouldSatisfy` (< mutator)
+
+        mBefore ← scriptById ls mutator
+        pBefore ← scriptById ls peer
+        installAction ls "engine.setTickInterval(reentrantProbe.peer, 1.0)"
+
+        let now = max (scriptNextTick mBefore) (scriptNextTick pBefore) + 0.01
+        ((), t0, t1) ← passWindow $ runDueScripts ls now
+
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+        readInt ls "luaTickIntervalFixture"   "updates" ⌦ (`shouldBe` Just 1)
+        readNumber ls "luaTickIntervalFixture" "lastDt" ⌦ (`shouldBe` Just 0.25)
+
+        pAfter ← scriptById ls peer
+        scriptTickRate pAfter `shouldBe` 1.0
+        storedByCallback t0 t1 1.0 (scriptNextTick pAfter)
+
+        mAfter ← scriptById ls mutator
+        scriptTickRate mAfter `shouldBe` 0.25
+        scriptNextTick mAfter `shouldBe` scriptNextTick mBefore + 0.25
+
+    ------------------------------------------------------------------
+    -- The two lifecycle verbs, which change the SET rather than a
+    -- schedule
+    ------------------------------------------------------------------
+    it "a script that kills ITSELF from inside update is gone, quietly, \
+       \and never ticks again" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        -- A survivor alongside it, so "removed" means this one and not
+        -- simply an empty map.
+        peer ← loadPeer ls "0.25"
+        before ← scriptById ls sid
+        installAction ls "engine.killScript(sid)"
+
+        (_, entries) ← withCapturedLog env $
+            runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+        -- No Lua error and no refusal: a callback that raised would
+        -- have logged one here.
+        warnings entries `shouldBe` []
+
+        scripts ← readTVarIO (lbsScripts ls)
+        Map.member sid  scripts `shouldBe` False
+        Map.member peer scripts `shouldBe` True
+
+        runDueScripts ls (scriptNextTick before + 3600)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+    it "a script loaded from inside update is initialised at once but \
+       \takes no part in the pass that loaded it" $ \env → do
+        ls ← newBareBackend env
+        sid ← loadReentrant ls "0.25"
+        before ← scriptById ls sid
+        installAction ls $ "reentrantProbe.peer = engine.loadScript('"
+                           <> fixturePath <> "', 0.05)"
+
+        runDueScripts ls (scriptNextTick before + 0.01)
+        readInt ls "luaTickReentrancyFixture" "updates" ⌦ (`shouldBe` Just 1)
+
+        -- Loaded and initialised …
+        loaded ← probeId ls "peer"
+        readInt ls "luaTickIntervalFixture" "inits" ⌦ (`shouldBe` Just 1)
+        scripts ← readTVarIO (lbsScripts ls)
+        Map.size scripts `shouldBe` 2
+        -- … but it cannot be in the snapshot the pass was already
+        -- iterating, so it was not updated by it.
+        readInt ls "luaTickIntervalFixture" "updates" ⌦ (`shouldBe` Just 0)
+
+        -- It first becomes due on a LATER pass, at its own deadline.
+        clearAction ls
+        newScript ← scriptById ls loaded
+        scriptTickRate newScript `shouldBe` 0.05
+        deadlineIsBoundary ls "luaTickIntervalFixture" (scriptNextTick newScript) 0
