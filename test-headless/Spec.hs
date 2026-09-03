@@ -24,6 +24,7 @@ import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.WorldGen.ConfigLoad as WorldGenConfigLoad
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.Pathing.MotionArgs as PathingMotionArgs
 import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
 import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
@@ -523,6 +524,12 @@ main = hspec $ do
     -- engine's logger to capture the warning it emits and drains the
     -- unit command queue, so it cannot share the worldgen engine.
     aroundAll withHeadlessEngine PathingMoveToApi.spec
+    -- Own engine for the same reasons (#2290): the motion-argument
+    -- domain gate swaps the logger, drains and refills the unit command
+    -- queue, and REWRITES the unit manager to install its own def and
+    -- instance, so it can share neither the worldgen engine nor
+    -- another spec's managers.
+    aroundAll withHeadlessEngine PathingMotionArgs.spec
     -- Own engine for the same reason (#1247): the order executor writes
     -- the unit/building manager refs AND installs its own two-page world
     -- manager so each page brings its own live wsTransferOrdersRef.

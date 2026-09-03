@@ -25,8 +25,11 @@ import UPrelude
 import GHC.Generics (Generic)
 import qualified Data.Map.Strict as Map
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
+import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.Aeson.Types as Aeson (Parser)
+import qualified Data.Text as T
 import Data.List (intercalate)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList, loadYamlListOutcome)
@@ -413,7 +416,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "display_name"
         ⊛ v .:  "sprite"
         ⊛ v .:? "base_width"          .!= 0.0
-        ⊛ v .:? "max_speed"           .!= 3.0
+        ⊛ requireMaxSpeed v
         ⊛ v .:? "run_threshold"       .!= 0.6
         ⊛ v .:? "directional_sprites" .!= Map.empty
         ⊛ v .:? "portrait"
@@ -432,6 +435,62 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "natural_resistance"  .!= defaultUnitYamlNaturalResistance
         ⊛ v .:? "natural_weapon"
         ⊛ v .:? "modifiers"           .!= []
+
+-- | Read a unit def's optional @max_speed@ as a FINITE, STRICTLY
+--   POSITIVE number of tiles per second, diagnosing every rejection by
+--   the unit's own name (#2290) — the shape
+--   'Engine.Asset.YamlLootTables.requireLootWeight' and
+--   'Engine.Asset.YamlFlora.requireRegrowthTime' already use.
+--
+--   Naming the unit is why this is a named parser rather than a
+--   @.:? "max_speed" .!= 3.0@ plus a check: 'loadUnitYaml' supplies the
+--   failing FILE path, but an ordinary Aeson field error only reaches
+--   for a JSON path like @$.units[3].max_speed@ — an index nobody can
+--   map back to a unit without counting entries.
+--
+--   The domain has to be enforced HERE because @max_speed@ is not a
+--   speed the simulation ever clamps. It is the run-gait threshold
+--   (@maxSpeed * runThreshold@ in "Unit.Thread.Command.Motion"), so a
+--   zero makes every commanded speed \"running\" and a negative one
+--   inverts the test; and it is the base every AI speed derives from
+--   via @unit.getMaxSpeed@, so a NaN silently poisons every gait
+--   'scripts\/movement_speed.lua' computes. None of those fail loudly
+--   anywhere downstream.
+--
+--   An ABSENT key keeps the documented 3.0 default — the field is
+--   optional and every shipped def that omits it means \"typical\".
+--   Only a value the author actually wrote is judged.
+--
+--   Taking the whole 'Aeson.Value' rather than decoding to 'Float'
+--   first is deliberate, for the reason the two sibling parsers give:
+--   YAML's @.nan@\/@.inf@ resolve to STRINGS (the yaml package's scalar
+--   resolver only recognizes ordinary numeric syntax), so decoding
+--   first would surface those as a type error naming neither the unit
+--   nor what was wrong. Both checks still run AFTER narrowing to the
+--   stored 32-bit 'Float': an ordinary @1.0e+100@ is a valid
+--   'Scientific' that becomes 'Infinity' there, and an equally
+--   ordinary @1.0e-60@ becomes @0.0@ — the value the runtime actually
+--   uses is the only one worth checking.
+requireMaxSpeed ∷ Aeson.Object → Aeson.Parser Float
+requireMaxSpeed v = do
+    unitName ← v .:? "name" .!= ("<unnamed>" ∷ Text)
+    mval ← v .:? "max_speed"
+    case mval of
+        Nothing  → pure 3.0
+        Just val → case val of
+            Aeson.Number s →
+                let f = realToFrac s ∷ Float
+                in if isNaN f ∨ isInfinite f
+                     then bad unitName ("must be finite, got " <> tshow val)
+                     else if f ≤ 0
+                       then bad unitName
+                              ("must be strictly positive, got " <> tshow f)
+                       else pure f
+            _ → bad unitName
+                    ("must be a number of tiles per second, got " <> tshow val)
+  where
+    bad unitName why = fail ∘ T.unpack $
+        "unit '" <> unitName <> "': 'max_speed' " <> why
 
 -- | An ASSET-ONLY unit declaration (#1257): the authoritative inventory
 --   entry for a shipped @assets\/textures\/units\/\<name\>\/@ tree that

@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict #-}
 module Unit.Command.Types
     ( UnitCommand(..)
+    , motionCoordinateInDomain
+    , motionSpeedInDomain
     ) where
 
 import UPrelude
@@ -109,3 +111,44 @@ data UnitCommand
         --   manager from the world thread instead would race those spawns,
         --   which would re-insert orphans right after teardown (#58).
     deriving (Show)
+
+-- | The domain a motion command's COORDINATE must already be in: a
+--   finite 'Float' (#2290).
+--
+--   It lives beside the constructors it constrains, rather than at
+--   either boundary, because BOTH boundaries have to agree on it: the
+--   scripting verbs in "Engine.Scripting.Lua.API.Units.MotionArgs"
+--   refuse an out-of-domain argument before enqueueing anything, and
+--   the handlers in "Unit.Thread.Command.Lifecycle" \/
+--   "Unit.Thread.Command.Motion" drop an out-of-domain command
+--   defensively if one reaches them anyway. Two independently written
+--   predicates could disagree about which values the pair lets
+--   through; one shared predicate cannot.
+--
+--   Why 'Float' and not something wider: the command field IS a
+--   'Float', so a caller narrows before asking. That is deliberate —
+--   an ordinary finite @1.0e300@ 'Double' is 'Infinity' once narrowed,
+--   and the narrowed value is the only one the simulation ever sees.
+--
+--   What an out-of-domain coordinate does if it gets through: 'floor'
+--   does not throw in GHC and 'World.Generate.globalToChunk' maps any
+--   'Int' somewhere, so nothing crashes. A NaN target instead makes
+--   every step NaN, the arrival test never becomes true, and the unit
+--   is stuck "moving" at a position no tile lookup can map — a state
+--   that is then persisted verbatim.
+motionCoordinateInDomain ∷ Float → Bool
+motionCoordinateInDomain v = not (isNaN v ∨ isInfinite v)
+
+-- | The domain a motion command's SPEED must already be in: finite AND
+--   non-negative (#2290). Shared by the same two boundaries as
+--   'motionCoordinateInDomain', for the same reason.
+--
+--   Zero is IN domain — a legitimately stalled unit (an exhausted or
+--   fully encumbered one whose band multipliers collapse its gait, or
+--   a @unit.getMaxSpeed@ that found no def) commands zero, and
+--   refusing it would turn a survivable state into a refused order.
+--   Negative is not: 'Unit.Thread.Movement.PathAdvance' steps along the
+--   goal direction scaled by speed, so a negative one walks the unit
+--   AWAY from its target for as long as the order stands.
+motionSpeedInDomain ∷ Float → Bool
+motionSpeedInDomain v = motionCoordinateInDomain v ∧ v ≥ 0
