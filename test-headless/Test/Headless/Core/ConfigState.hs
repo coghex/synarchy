@@ -16,15 +16,17 @@ module Test.Headless.Core.ConfigState (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
+import Control.Exception (finally, try, SomeException, displayException)
 import Data.IORef (newIORef, readIORef, modifyIORef')
 import System.Directory
   ( getTemporaryDirectory, createDirectoryIfMissing
-  , removeDirectoryRecursive, doesDirectoryExist, doesFileExist )
+  , removeDirectoryRecursive, doesDirectoryExist, doesFileExist
+  , copyFile )
 import System.FilePath ((</>))
 import System.IO (stderr)
 import Data.Aeson (FromJSON(..), withObject, (.:))
 import Data.Proxy (Proxy(..))
+import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
 import Engine.Core.Init
@@ -32,7 +34,7 @@ import Engine.Core.Init
   , LegacyNeutralityCheck(..) )
 import Engine.Core.Log
   ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
-  , LoggerState, LogEntry(..) )
+  , LoggerState, LogEntry(..), LogLevel(..) )
 import Engine.Asset.YamlNotifications
   ( loadNotificationCfg, writeNotificationOverrides, OverridesFile )
 import Engine.PlayerEvent (CategoryCfg(..))
@@ -57,9 +59,19 @@ probeCfg = Proxy
 --   migration, which is only observable through the log).
 capturingLogger ∷ IO (LoggerState, IO [Text])
 capturingLogger = do
-    seen ← newIORef ([] ∷ [Text])
+    (logger, dumpLog) ← capturingLoggerLeveled
+    return (logger, map snd ⊚ dumpLog)
+
+-- | As 'capturingLogger', but keeping each entry's LEVEL alongside its
+--   text. #2210's split is only meaningful if the destination-failure
+--   line is a WARNING rather than one of the two info lines, so the
+--   examples that pin it need more than the message.
+capturingLoggerLeveled ∷ IO (LoggerState, IO [(LogLevel, Text)])
+capturingLoggerLeveled = do
+    seen ← newIORef ([] ∷ [(LogLevel, Text)])
     logger ← initLogger defaultLogConfig
-        { lcBackend = LogToCallback (\e → modifyIORef' seen (leMessage e :)) }
+        { lcBackend = LogToCallback
+            (\e → modifyIORef' seen ((leLevel e, leMessage e) :)) }
     return (logger, reverse ⊚ readIORef seen)
 
 -- | Does any captured line contain this fragment?
@@ -70,6 +82,68 @@ logged msgs frag = any (T.isInfixOf frag) msgs
 migratedLine ∷ FilePath → FilePath → Text
 migratedLine legacy local =
     "Migrated legacy config " <> T.pack legacy <> " -> " <> T.pack local
+
+-- | The SOURCE-SIDE classification 'migrateLegacyConfig' keeps for a
+--   legacy file that fails to decode. #2210 splits the destination
+--   write out of that diagnosis, so this exact text is what must
+--   SURVIVE the split — requirement 2 — and what the destination
+--   warning must not borrow.
+sourceFailureLine ∷ Text
+sourceFailureLine =
+    "could not be migrated (malformed, partial, schema-incomplete, or \
+    \unreadable); falling back to the versioned default"
+
+-- | The four faults 'sourceFailureLine' names. Every one is a property
+--   of reading or decoding the LEGACY file, so a destination write
+--   failure may not mention any of them (#2210 requirement 1).
+sourceSideFaults ∷ [Text]
+sourceSideFaults = ["malformed", "partial", "schema-incomplete", "unreadable"]
+
+-- | Every captured warning that 'migrateLegacyConfig' emitted about a
+--   legacy config, in order.
+legacyWarnings ∷ [(LogLevel, Text)] → [Text]
+legacyWarnings entries =
+    [m | (LevelWarn, m) ← entries, "Legacy config " `T.isInfixOf` m]
+
+-- | The exception 'copyFile' itself raises for a fixture, rendered
+--   exactly as 'migrateLegacyConfig' renders it. DERIVED by attempting
+--   the same copy rather than hard-coded, so the assertion pins "the
+--   warning carries the real cause" without pinning one @directory@
+--   release's wording. Fails loudly if the fixture is not actually a
+--   destination failure.
+copyFailureText ∷ FilePath → FilePath → IO Text
+copyFailureText legacy local = do
+    attempt ← try (copyFile legacy local)
+    case (attempt ∷ Either SomeException ()) of
+        Right () → "" <$ expectationFailure
+            "fixture is not a destination failure: the copy succeeded"
+        Left e   → return (T.pack (displayException e))
+
+-- | #2210 requirement 1: the destination failure is a WARNING, it names
+--   the local path it could not write and carries the real exception,
+--   and it accuses the legacy file of none of the source-side faults.
+shouldBeWriteFailureWarning ∷ [(LogLevel, Text)] → FilePath → Text
+                            → Expectation
+shouldBeWriteFailureWarning entries local expected =
+    case legacyWarnings entries of
+        [msg] → do
+            (T.pack local `T.isInfixOf` msg) `shouldBe` True
+            (expected `T.isInfixOf` msg) `shouldBe` True
+            mapM_ (\fault → (fault, fault `T.isInfixOf` msg)
+                              `shouldBe` (fault, False))
+                  sourceSideFaults
+        other → expectationFailure $
+            "expected exactly one legacy-config warning, got: " <> show other
+
+-- | #2210 requirement 3: a failed migration leaves the world exactly as
+--   a missing legacy file would — the source byte-for-byte untouched, no
+--   local file, and the boot still resolving the versioned default.
+shouldHaveLeftNoTrace ∷ FilePath → BS.ByteString → FilePath → FilePath
+                      → Expectation
+shouldHaveLeftNoTrace legacy legacyBytes local deflt = do
+    BS.readFile legacy `shouldReturn` legacyBytes
+    doesFileExist local `shouldReturn` False
+    resolveConfigPath local deflt `shouldReturn` deflt
 
 -- | The #1937 reference points for a subsystem that HAS a tracked
 --   @_default.yaml@ template to be neutral against.
@@ -375,9 +449,9 @@ spec = do
                 doesFileExist record `shouldReturn` False
 
         it "leaves a malformed legacy file unmigrated and unrecorded, \
-           \warning exactly as before" $
+           \warning with the unchanged source-side classification" $
             withTempDir $ \dir → do
-                (logger, dumpLog) ← capturingLogger
+                (logger, dumpLog) ← capturingLoggerLeveled
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
                     deflt  = dir </> "default.yaml"
@@ -388,8 +462,18 @@ spec = do
                     (Just (neutralityCheck deflt record)) legacy local
                 doesFileExist local  `shouldReturn` False
                 doesFileExist record `shouldReturn` False
-                msgs ← dumpLog
-                logged msgs "could not be migrated" `shouldBe` True
+                -- #2210 requirement 2: splitting the destination write
+                -- out of the diagnosis must leave this text alone, so
+                -- the whole classification is pinned, not the broad
+                -- "could not be migrated" fragment it shares with a
+                -- hypothetical successor line.
+                entries ← dumpLog
+                case legacyWarnings entries of
+                    [msg] → (sourceFailureLine `T.isInfixOf` msg)
+                                `shouldBe` True
+                    other → expectationFailure $
+                        "expected exactly one legacy-config warning, got: "
+                          <> show other
 
         it "migrates when the versioned default itself is missing or \
            \undecodable — neutrality is never assumed, only proven" $
@@ -403,6 +487,69 @@ spec = do
                 migrateLegacyConfig probeCfg logger
                     (Just (neutralityCheck deflt record)) legacy local
                 readFile local `shouldReturn` "required: 5\n"
+
+    describe "Engine.Core.Init.migrateLegacyConfig destination write \
+             \failure (#2210)" $ do
+        -- A directory occupying the local path is the portable way to
+        -- make the destination unwritable: the 'doesFileExist' gate
+        -- still reports no local file, so migration runs to the copy,
+        -- but 'copyFile' cannot install a regular file there. No
+        -- permission bit is touched, so this behaves the same for a
+        -- root-privileged runner.
+        let unwritableFixture legacyBody dir = do
+                let legacy = dir </> "legacy.yaml"
+                    local  = dir </> "local.yaml"
+                    deflt  = dir </> "default.yaml"
+                writeFile deflt  "required: 5\n"
+                writeFile legacy legacyBody
+                createDirectoryIfMissing True local
+                bytes    ← BS.readFile legacy
+                expected ← copyFailureText legacy local
+                return (legacy, local, deflt, bytes, expected)
+
+        it "blames the destination write, not the legacy file, when an \
+           \UNCHECKED migration cannot write the local path" $
+            withTempDir $ \dir → do
+                (legacy, local, deflt, bytes, expected)
+                    ← unwritableFixture "required: 42\n" dir
+                (logger, dumpLog) ← capturingLoggerLeveled
+                migrateLegacyConfig probeCfg logger Nothing legacy local
+                entries ← dumpLog
+                shouldBeWriteFailureWarning entries local expected
+                logged (map snd entries) (migratedLine legacy local)
+                    `shouldBe` False
+                shouldHaveLeftNoTrace legacy bytes local deflt
+
+        it "blames the destination write for a CHECKED migration whose \
+           \legacy file is not a neutral placeholder" $
+            withTempDir $ \dir → do
+                (legacy, local, deflt, bytes, expected)
+                    ← unwritableFixture "required: 42\n" dir
+                let record = dir </> "legacy-neutral.local.yaml"
+                (logger, dumpLog) ← capturingLoggerLeveled
+                migrateLegacyConfig probeCfg logger
+                    (Just (neutralityCheck deflt record)) legacy local
+                entries ← dumpLog
+                shouldBeWriteFailureWarning entries local expected
+                logged (map snd entries) "carries no player state"
+                    `shouldBe` False
+                -- The copy was reached, so no neutrality record was
+                -- written on the way past.
+                doesFileExist record `shouldReturn` False
+                shouldHaveLeftNoTrace legacy bytes local deflt
+
+        it "re-attempts the migration on the next boot, warning again, \
+           \because the failed copy left the existence gate open" $
+            withTempDir $ \dir → do
+                (legacy, local, deflt, bytes, expected)
+                    ← unwritableFixture "required: 42\n" dir
+                (logger0, _) ← capturingLoggerLeveled
+                migrateLegacyConfig probeCfg logger0 Nothing legacy local
+                (logger1, dumpLog1) ← capturingLoggerLeveled
+                migrateLegacyConfig probeCfg logger1 Nothing legacy local
+                entries ← dumpLog1
+                shouldBeWriteFailureWarning entries local expected
+                shouldHaveLeftNoTrace legacy bytes local deflt
 
     describe "Engine.Asset.YamlNotifications config load/save contract (#638)" $ do
         it "materializes the overrides file from registry defaults when absent" $
