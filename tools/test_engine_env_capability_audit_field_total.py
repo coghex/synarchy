@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The SS1 audited field-total prose contract of
-engine_env_capability_audit.py (issue #1669; extracted from
+engine_env_capability_field_total.py (issue #1669; extracted from
 tools/test_engine_env_capability_audit.py by issue #2062).
 
 Every rule `audit_field_total` adds is mutation-tested here in BOTH
@@ -34,11 +34,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from engine_env_capability_audit import (  # type: ignore  # noqa: E402
-    ENGINE_ENV_PATTERN, FIELD_TOTAL_CLOSE, FIELD_TOTAL_OPEN, ONE_ROW_PHRASE,
-    PROCEDURE_ITEM_ANCHOR, SECTION_1_HEADING, SECTION_6_2_HEADING, audit,
-    audit_field_total, extract_marked_spans, section_bounds,
+from engine_env_capability_common import (  # type: ignore  # noqa: E402
+    ENGINE_ENV_PATTERN, SECTION_6_2_HEADING,
 )
+from engine_env_capability_field_total import (  # type: ignore  # noqa: E402
+    FIELD_TOTAL_CLOSE, FIELD_TOTAL_OPEN, ONE_ROW_PHRASE,
+    PROCEDURE_ITEM_ANCHOR, SECTION_1_HEADING, audit_field_total,
+    extract_marked_spans, section_bounds,
+)
+from engine_env_capability_inventory import audit_source  # type: ignore  # noqa: E402
 from test_engine_env_capability_audit_support import (  # noqa: E402
     FIELD_THREE_ROW, FIELD_TWO_ROW, SYNTHETIC_ENGINE_ENV, expect,
     extract_record_fields, inventory_doc, real_engine_env_source,
@@ -133,7 +137,7 @@ def test_field_total_synchronized_rows_alone_do_not_save_a_stale_block():
         "| `src/Fake/Init.hs:8` | None | — |\n")
     rows_doc = inventory_doc(render_rows=FIELD_TWO_ROW + FIELD_THREE_ROW
                     + field_four_row)
-    expect(audit(grown_env, rows_doc) == [],
+    expect(audit_source(grown_env, rows_doc) == [],
            "the row audit must accept a new field whose SS5 row was added "
            "-- that is the case whose SS1 prose then goes stale unnoticed")
     live = extract_record_fields(grown_env, ENGINE_ENV_PATTERN)
