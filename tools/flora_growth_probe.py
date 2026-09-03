@@ -22,9 +22,11 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
      fruiting stage — mirrors the real white_clover's phases/annual
      cycle rather than depending on natural white_clover placement,
      which isn't guaranteed inside the probe's fixed scan region). Both
-     are appended AFTER the data/flora species, in that order, so the
-     real species' placement rolls AND probe_berry's own index stay
-     untouched.
+     register AFTER the data/flora species and BEFORE world.init, which
+     is what makes them visible to worldgen; since #2241 a placement
+     roll is salted from the species' own authored NAME rather than its
+     catalog position, so registering them cannot move a shipped
+     species' roll whatever order it happens in.
   4. Aging + reseed: jumping the date years ahead grows ages; far
      enough out a perennial has wrapped to generation >= 1 (the old
      plant died through the dead window and reseeded).

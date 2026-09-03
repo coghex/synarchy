@@ -101,15 +101,25 @@ Verified on master `5500e9771`.
 
 ## Desired experience
 
-- A player who creates a world on macOS and continues it on Linux (or after a
-  flora species is added upstream) sees the same trees where they were and the
-  same crops in their plots.
+- A player who creates a world on macOS and continues it on Linux sees the same
+  trees where they were and the same crops in their plots. Cross-platform
+  agreement is unconditional; what follows is not.
 - A maintainer adds `data/flora/new_species.yaml` or renames a file, runs the
-  game, and nothing about existing worlds or saves changes except that the new
-  species can now appear where its placement rules say.
+  game, and nothing about existing worlds changes *because of discovery,
+  registration or catalog order*. Two carve-outs, both deliberate and both
+  narrowed here during FSI-1 (see D-1 and D-2):
+  - a species that ACTUALLY PLACES competes for tiles. Flora share one
+    occupancy map and `markOccupied` lets an earlier placement suppress a
+    later candidate, so adding or removing one may move another species'
+    plants. A species that never occupies a tile changes nothing at all.
+  - a save minted BEFORE FSI-1 carries numeric `FloraId`s, and canonical
+    registration reinterprets them once: a number may name a different
+    authored species afterwards. Accepted, not guarded. Saves produced after
+    FSI-2 (#2243) carry names and are not exposed to this.
 - A save that references a species this build no longer ships fails to load
   with a message naming the species and where it was referenced, exactly as a
-  missing unit or item definition does today.
+  missing unit or item definition does today. (FSI-2's concern: it needs the
+  name to report, which is what #2243 persists.)
 - Probes and tests that register species at runtime keep working; their ids
   remain session-local.
 
@@ -164,9 +174,15 @@ instance salt take a stable per-species value derived from the name (the same
 `hashText` the identity module uses), and `worldGenSpecies` yields species in
 canonical name order so per-tile ordinals `j` and instance counts are
 reproducible regardless of HashMap traversal. Consequence: generated flora for
-every existing seed changes once (D-1). After that, adding, removing, or
-reordering a species cannot move any other species' plants, which is stronger
-than today even on one platform.
+every existing seed changes once (D-1). After that, discovery order,
+registration order and catalog position cannot move any species' plants —
+stronger than today even on one platform.
+
+Reordering is therefore free, and so is adding or removing a species that
+never occupies a tile. Adding or removing one that ACTUALLY PLACES is not:
+flora share an occupancy map and `markOccupied` lets a placement earlier in
+tile order suppress a later candidate, so it may still move another species'
+plants. That competition is deliberate and permitted (see D-1).
 
 ### Persistence (FSI-2)
 
@@ -301,7 +317,12 @@ Resolved by D-3.
 
 - **Order independence:** a headless spec builds the shipped catalog twice in
   different registration orders and asserts identical `placeTileFlora` output
-  (species per tile, instance counts, `FloraInstanceId`s) for a fixed chunk.
+  — name-normalized, since `fiSpecies` is the session-local numeric id and
+  legitimately differs — over the COMPLETE instance record: tile, count, list
+  order, `FloraInstanceId`, offsets, variant and age. A same-species-set order
+  swap cannot see a residual positional salt once `worldGenSpecies` is sorted,
+  so it is joined by an impossible-fit species that sorts lexically first,
+  shifts every catalog position and never occupies a tile.
 - **Cross-platform determinism:** the golden species-layout test (D-5) runs in
   the headless suite on every CI run; `tools/world_check.py` keeps excluding
   flora, so no baseline recapture is involved, but the save version is bumped

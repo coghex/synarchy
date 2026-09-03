@@ -18,7 +18,7 @@ import Data.List (nub, sort)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.IORef (newIORef, readIORef)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import System.Directory (doesFileExist, listDirectory)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Asset.TextureNameRegistry (lookupTextureName)
@@ -43,7 +43,8 @@ import Engine.Asset.YamlItems
     ( ItemYamlDef(..), ItemYamlFood(..), ItemYamlWeight(..), loadItemYaml )
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.Log
-    (LoggerState, LogBackend(..), LogConfig(..), defaultLogConfig, initLogger)
+    ( LoggerState, LogBackend(..), LogConfig(..), LogEntry(..)
+    , LogLevel(..), defaultLogConfig, initLogger )
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Flora.Growth (instanceLifespan)
 import World.Flora.Placement (computeChunkFlora, speciesFitnessDetail)
@@ -130,6 +131,13 @@ spec = do
                 findSpeciesByName "probe_2241_unique" cat `shouldBe` Nothing
                 nameRegistered eng "flora_base_probe_2241_unique"
                     `shouldReturn` False
+                -- And the boot-visible diagnostic names BOTH the file
+                -- and the colliding name; "something in data/flora is
+                -- duplicated" is not a diagnostic anyone can act on.
+                errs ← loggedAt eng LevelError "duplicate flora name"
+                length errs `shouldBe` 1
+                errs `shouldSatisfy` all (T.isInfixOf "'saguaro'")
+                errs `shouldSatisfy` all (T.isInfixOf path)
 
         it "refuses a file that duplicates a name WITHIN itself, with \
            \nothing already in the catalog to collide with" $
@@ -163,6 +171,12 @@ spec = do
                 "return tostring(flora.register('probe_2241_runtime', 0))"
             again `shouldBe` "nil"
             snapshotFlora eng `shouldReturn` before
+            -- The warning is half the contract: a silent nil leaves a
+            -- script author with a registration that vanished and no
+            -- way to find out why. It names the collision.
+            warned ← loggedAt eng LevelWarn "probe_2241_runtime"
+            length warned `shouldBe` 1
+            warned `shouldSatisfy` all ("flora.register refused" `T.isInfixOf`)
 
 -- * The private flora engine
 
@@ -181,17 +195,35 @@ spec = do
 data FloraEngine = FloraEngine
     { feEnv ∷ EngineEnv
     , feLua ∷ LuaBackendState
+    , feLog ∷ IORef [LogEntry]
+      -- ^ Every entry the engine logged, newest last. Installed because
+      --   #2241's two refusals are only half observable without it: the
+      --   file refusal has to NAME the file and the colliding name, and
+      --   the runtime refusal's whole nonfatal contract is \"nil plus a
+      --   warning\" — a test that checks only the nil would pass against
+      --   a silent refusal.
     }
 
 withFloraEngine ∷ (FloraEngine → Expectation) → Expectation
 withFloraEngine action = withIsolatedResourceRoot $ do
     EngineInitResult env ← initializeEngineHeadlessQuiet
+    entries ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' entries (⧺ [e])) }
+    writeIORef (loggerRef env) logger
     ls ← createLuaBackendState (luaToEngineQueue env) (luaQueue env)
                                (assetPoolRef env) (nextObjectIdRef env)
                                (inputStateRef env) (loggerRef env)
     stateRef ← newIORef ThreadRunning
     registerLuaAPI (lbsLuaState ls) env ls stateRef
-    action (FloraEngine env ls)
+    action (FloraEngine env ls entries)
+
+-- | Entries at one level whose message mentions @needle@, newest last.
+loggedAt ∷ FloraEngine → LogLevel → Text → IO [Text]
+loggedAt eng lvl needle =
+    map leMessage ∘ filter (\e → leLevel e ≡ lvl
+                                 ∧ needle `T.isInfixOf` leMessage e)
+        <$> readIORef (feLog eng)
 
 evalLua ∷ FloraEngine → Text → IO Text
 evalLua eng src =
