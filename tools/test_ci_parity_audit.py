@@ -51,9 +51,13 @@ import ci_parity_shell  # noqa: E402
 import ci_parity_workflow  # noqa: E402
 import ci_expensive_gates  # noqa: E402
 from ci_parity_config import (  # noqa: E402
+    AUDITED_JOB,
     EXEMPT_COMMANDS,
     LOCAL_GATE_LABEL,
+    STATIC_AUDIT_JOB,
+    STATIC_AUDIT_LABEL,
     WORKFLOW_LABEL,
+    WORKFLOW_UNION_LABEL,
 )
 from ci_parity_save_compat import (  # noqa: E402
     LOCAL_BLOCK_BEGIN,
@@ -64,8 +68,10 @@ from ci_parity_shell import AuditError, extract_invocations  # noqa: E402
 from ci_parity_workflow import (  # noqa: E402
     audit_gate_sets,
     audit_parallel_gate_wiring,
+    audit_unit_asset_gate_wiring,
     local_gate_invocations,
     workflow_invocations,
+    workflow_job_invocations,
 )
 
 
@@ -156,33 +162,38 @@ def _self_test() -> list[str]:
             f"fixture shell extraction: expected {sorted(_FIXTURE_EXPECTED)}, "
             f"got {sorted(local)}")
 
-    # 2. Parity passes with nothing exempted.
-    _expect(failures, audit_gate_sets(ci, local, ()) == [],
+    # 2. Parity passes with nothing exempted. The CI side is a MAPPING of
+    #    audited job to that job's own set; a single-job mapping is the
+    #    degenerate case these mutations only need one job for.
+    one_job = {AUDITED_JOB: ci}
+    _expect(failures, audit_gate_sets(one_job, local, ()) == [],
             "matched gate sets should report no problems, got "
-            f"{audit_gate_sets(ci, local, ())}")
+            f"{audit_gate_sets(one_job, local, ())}")
 
     # 3. A non-exempt CI-only invocation fails and names the command.
     dropped = local - {"python3 tools/block_two.py --flag value"}
-    problems = audit_gate_sets(ci, dropped, ())
+    problems = audit_gate_sets(one_job, dropped, ())
     _expect(failures,
             any("python3 tools/block_two.py --flag value" in p
                 and "not by" in p and LOCAL_GATE_LABEL in p for p in problems),
             "a CI-only invocation should be reported as missing locally, got "
             f"{problems}")
 
-    # 4. A non-exempt local-only invocation fails and names the command.
+    # 4. A non-exempt local-only invocation fails and names the command,
+    #    pointing at the two-job UNION rather than at one job: it is
+    #    missing from both, so naming either would name the wrong place.
     added = local | {"python3 tools/local_extra.py"}
-    problems = audit_gate_sets(ci, added, ())
+    problems = audit_gate_sets(one_job, added, ())
     _expect(failures,
-            any("python3 tools/local_extra.py" in p and WORKFLOW_LABEL in p
-                for p in problems),
+            any("python3 tools/local_extra.py" in p
+                and WORKFLOW_UNION_LABEL in p for p in problems),
             "a local-only invocation should be reported as missing in CI, got "
             f"{problems}")
 
     # 5. Changing an invocation's ARGUMENTS is drift in both directions.
     retuned = (local - {"python3 tools/block_two.py --flag value"}) | {
         "python3 tools/block_two.py --flag other"}
-    problems = audit_gate_sets(ci, retuned, ())
+    problems = audit_gate_sets(one_job, retuned, ())
     _expect(failures,
             any("--flag value" in p for p in problems)
             and any("--flag other" in p for p in problems),
@@ -194,18 +205,18 @@ def _self_test() -> list[str]:
     exempt_side = set(shared)
     for command, _reason in EXEMPT_COMMANDS:
         exempt_side.add(command)
-    problems = audit_gate_sets(exempt_side, shared)
+    problems = audit_gate_sets({AUDITED_JOB: exempt_side}, shared)
     _expect(failures, problems == [],
             f"the real exemptions should be accepted, got {problems}")
 
     # 6b. …and each is load-bearing: without the list, each one is drift.
-    problems = audit_gate_sets(exempt_side, shared, ())
+    problems = audit_gate_sets({AUDITED_JOB: exempt_side}, shared, ())
     for command, _reason in EXEMPT_COMMANDS:
         _expect(failures, any(command in p for p in problems),
                 f"exemption {command!r} is not load-bearing: it was not "
                 "reported as drift with the list emptied")
     # 7. A stale exemption fails, naming what nothing runs.
-    problems = audit_gate_sets(shared, shared)
+    problems = audit_gate_sets({AUDITED_JOB: shared}, shared)
     for command, _reason in EXEMPT_COMMANDS:
         _expect(failures,
                 any("stale exemption" in p and command in p for p in problems),
@@ -216,18 +227,18 @@ def _self_test() -> list[str]:
         _expect(failures, bool(reason.strip()),
                 f"exemption {command!r} has no reason")
     _expect(failures,
-            audit_gate_sets(shared | {"python3 tools/x.py"}, shared,
+            audit_gate_sets({AUDITED_JOB: shared | {"python3 tools/x.py"}},
+                            shared,
                             (("python3 tools/x.py", "   "),)) != [],
             "a blank exemption reason should be reported")
 
     # 9. Vacuity on either side is a failure, not a pass. Checked with BOTH
     #    sides empty, so drift cannot report the failure on vacuity's
     #    behalf and hide the fact that nothing checks for it.
-    problems = audit_gate_sets(set(), set(), ())
+    problems = audit_gate_sets({}, set(), ())
     _expect(failures,
-            any("empty gate set" in p and WORKFLOW_LABEL in p
-                for p in problems),
-            f"an empty CI gate set should fail on its own, got {problems}")
+            any("no audited workflow job" in p for p in problems),
+            f"collecting no audited job at all should fail, got {problems}")
     _expect(failures,
             any("empty gate set" in p and LOCAL_GATE_LABEL in p
                 for p in problems),
@@ -250,6 +261,10 @@ def _self_test() -> list[str]:
             lambda: workflow_invocations(_FIXTURE_WORKFLOW, "no-such-job",
                                          "fixture"),
             "no-such-job")
+
+    # 9b. The two-job union (#2272): every way the split itself can go
+    #     wrong, each a mutation of one known-good two-job pair.
+    failures.extend(_union_gate_set_self_test())
 
     # 10b. A `run:` body that is not shell is refused, not parsed as shell.
     for variant, label in (
@@ -308,9 +323,117 @@ def _self_test() -> list[str]:
     #     is observed rather than asserted about its text.
     failures.extend(_save_compat_wiring_self_test())
 
-    # 14. The stable build-test context must aggregate both parallel workers.
+    # 14. The stable build-test context must aggregate every parallel
+    #     worker, and the split-out audit worker must keep its topology.
     failures.extend(_parallel_gate_wiring_self_test())
 
+    # 14b. The unit-asset gate's selector and guard travelled together.
+    failures.extend(_unit_asset_wiring_self_test())
+
+    return failures
+
+
+# --------------------------------------------------------------------------
+# The two-job union (#2272)
+# --------------------------------------------------------------------------
+# `make ci` is one script, so the union of the two audited jobs is the only
+# thing it can mirror -- which is exactly why the union alone is not enough
+# to audit against. Three distinct mutations of one known-good pair pin the
+# three ways the split can go wrong, and two more pin per-job vacuity.
+
+_UNION_WORKFLOW = """\
+name: fixture
+on: [push, pull_request]
+jobs:
+  test-and-audits:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python3 tools/cabal_backed.py
+  static-audits:
+    runs-on: ubuntu-latest
+    steps:
+      - run: python3 tools/engine_free.py
+      - run: echo not-a-gate
+"""
+
+_UNION_LOCAL = """\
+#!/usr/bin/env bash
+set -euo pipefail
+python3 tools/cabal_backed.py
+python3 tools/engine_free.py
+"""
+
+
+def _union_gate_set_self_test() -> list[str]:
+    failures: list[str] = []
+    jobs = workflow_job_invocations(_UNION_WORKFLOW)
+    local = local_gate_invocations(_UNION_LOCAL, "fixture-local")
+
+    # (a) The known-good pair passes: each job owns one gate, `make ci`
+    #     runs both, nothing is shared. Every mutation below starts here,
+    #     so a check that never fires shows up as a mutation that passes.
+    _expect(failures, set(jobs) == {AUDITED_JOB, STATIC_AUDIT_JOB},
+            f"the union fixture should yield both audited jobs, got "
+            f"{sorted(jobs)}")
+    _expect(failures, audit_gate_sets(jobs, local, ()) == [],
+            "the known-good two-job fixture should pass, got "
+            f"{audit_gate_sets(jobs, local, ())}")
+
+    # (b) A LOCAL command absent from BOTH CI jobs. The union is what it
+    #     is missing from, so the diagnostic must name the union rather
+    #     than send the reader to one arbitrary job.
+    local_only = local | {"python3 tools/local_only.py"}
+    problems = audit_gate_sets(jobs, local_only, ())
+    _expect(failures,
+            any("python3 tools/local_only.py" in problem
+                and WORKFLOW_UNION_LABEL in problem for problem in problems),
+            "a local command absent from both CI jobs should be reported "
+            f"against the union, got {problems}")
+
+    # (c) A CI-union command absent locally, from EACH job in turn -- so a
+    #     comparison that had quietly narrowed back to one job would fail
+    #     one of these two rather than both passing.
+    for job, command in ((AUDITED_JOB, "python3 tools/cabal_backed.py"),
+                         (STATIC_AUDIT_JOB, "python3 tools/engine_free.py")):
+        problems = audit_gate_sets(jobs, local - {command}, ())
+        _expect(failures,
+                any(command in problem and f"job: {job}" in problem
+                    and LOCAL_GATE_LABEL in problem for problem in problems),
+                f"{command!r} running only in {job} should be reported as "
+                f"missing locally and named to that job, got {problems}")
+
+    # (d) One command run by BOTH CI jobs. The union is unchanged, so it
+    #     still matches the local side exactly: only a check that looks at
+    #     the two sets BEFORE merging them can see this at all.
+    duplicated = {AUDITED_JOB: set(jobs[AUDITED_JOB]),
+                  STATIC_AUDIT_JOB: set(jobs[STATIC_AUDIT_JOB])}
+    duplicated[STATIC_AUDIT_JOB].add("python3 tools/cabal_backed.py")
+    _expect(failures,
+            audit_gate_sets(duplicated, local, ()) != []
+            and any("run by BOTH" in problem and "cabal_backed" in problem
+                    for problem in audit_gate_sets(duplicated, local, ())),
+            "a command run by both audited jobs should be reported, got "
+            f"{audit_gate_sets(duplicated, local, ())}")
+
+    # (e) Either audited job MISSING from the workflow refuses, naming it.
+    for job in (AUDITED_JOB, STATIC_AUDIT_JOB):
+        renamed = _UNION_WORKFLOW.replace(f"  {job}:\n", "  renamed-away:\n")
+        _raises(failures, f"missing audited job {job}",
+                lambda text=renamed: workflow_job_invocations(text),
+                job)
+
+    # (f) Either audited job PRESENT but yielding no auditable command
+    #     fails on its own account, rather than shrinking the comparison
+    #     to whatever the other job happens to run.
+    for job, label in ((AUDITED_JOB, WORKFLOW_LABEL),
+                       (STATIC_AUDIT_JOB, STATIC_AUDIT_LABEL)):
+        emptied = {name: (set() if name == job else set(commands))
+                   for name, commands in jobs.items()}
+        problems = audit_gate_sets(emptied, local, ())
+        _expect(failures,
+                any("empty gate set" in problem and label in problem
+                    for problem in problems),
+                f"an emptied {job} should fail on its own, got {problems}")
     return failures
 
 
@@ -319,9 +442,19 @@ name: fixture
 on: [push, pull_request]
 jobs:
   test-and-audits:
+    needs: resolve-image
     runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
     steps:
       - run: python3 tools/audit.py
+  static-audits:
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.resolve-image.outputs.image }}
+    steps:
+      - run: python3 tools/static_audit.py
   behavior-probes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -333,15 +466,17 @@ jobs:
           --exact --retries 1 --jobs 2
   build-test:
     if: always()
-    needs: [test-and-audits, behavior-probes]
+    needs: [test-and-audits, static-audits, behavior-probes]
     runs-on: ubuntu-latest
     steps:
       - env:
           EVENT_NAME: ${{ github.event_name }}
           TESTS_RESULT: ${{ needs.test-and-audits.result }}
+          AUDITS_RESULT: ${{ needs.static-audits.result }}
           PROBES_RESULT: ${{ needs.behavior-probes.result }}
         run: |
           test "$TESTS_RESULT" = success
+          test "$AUDITS_RESULT" = success
           if [ "$EVENT_NAME" = pull_request ]; then
             test "$PROBES_RESULT" = success
           else
@@ -362,8 +497,55 @@ def _parallel_gate_wiring_self_test() -> list[str]:
     mutations = (
         ("drop aggregate probe dependency",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
-             "needs: [test-and-audits, behavior-probes]",
-             "needs: [test-and-audits]"), "must need exactly"),
+             "needs: [test-and-audits, static-audits, behavior-probes]",
+             "needs: [test-and-audits, static-audits]"), "must need exactly"),
+        # The #2272 aggregate wiring, from both halves: the stable context
+        # has to DEPEND on the split-out worker and has to ASSERT its
+        # result. Dropping either one alone leaves the other looking fine.
+        ("drop aggregate static-audit dependency",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "needs: [test-and-audits, static-audits, behavior-probes]",
+             "needs: [test-and-audits, behavior-probes]"),
+         "must need exactly"),
+        ("drop static-audit verdict assertion",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             '          test "$AUDITS_RESULT" = success\n', ""),
+         'test "$AUDITS_RESULT" = success'),
+        ("drop static-audit verdict env",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "          AUDITS_RESULT: ${{ needs.static-audits.result }}\n",
+             ""),
+         "worker-result env must be exactly"),
+        # ...and the worker's own topology, which is the whole point of the
+        # split: image-only `needs`, and no condition at all.
+        ("static audits waiting for the build job",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  static-audits:\n    needs: resolve-image\n",
+             "  static-audits:\n    needs: [resolve-image, test-and-audits]\n"),
+         "must need exactly ['resolve-image']"),
+        ("static audits given a job-level condition",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  static-audits:\n    needs: resolve-image\n",
+             "  static-audits:\n    if: github.event_name == 'pull_request'\n"
+             "    needs: resolve-image\n"),
+         "must carry no job-level"),
+        ("static audits on a different image",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  static-audits:\n    needs: resolve-image\n"
+             "    runs-on: ubuntu-latest\n"
+             "    container:\n"
+             "      image: ${{ needs.resolve-image.outputs.image }}\n",
+             "  static-audits:\n    needs: resolve-image\n"
+             "    runs-on: ubuntu-latest\n"),
+         "must resolve the SAME CI image"),
+        ("drop the static-audit job outright",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "  static-audits:\n    needs: resolve-image\n"
+             "    runs-on: ubuntu-latest\n"
+             "    container:\n"
+             "      image: ${{ needs.resolve-image.outputs.image }}\n"
+             "    steps:\n      - run: python3 tools/static_audit.py\n", ""),
+         "no `static-audits` job"),
         ("drop always",
          _PARALLEL_GATE_WORKFLOW_GOOD.replace("    if: always()\n", ""),
          "must use `if: always()`"),
@@ -378,6 +560,100 @@ def _parallel_gate_wiring_self_test() -> list[str]:
              'test "$PROBES_RESULT" = success',
              'test "$PROBES_RESULT" = failure'),
          'test "$PROBES_RESULT" = success'),
+    )
+    for label, mutated, needle in mutations:
+        got = problems(mutated)
+        _expect(failures, any(needle in problem for problem in got),
+                f"{label} should fail with {needle!r}, got {got}")
+    return failures
+
+
+_UNIT_ASSET_WORKFLOW_GOOD = """\
+name: fixture
+on: [push, pull_request]
+jobs:
+  static-audits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select path-relevant unit-asset gate
+        id: expensive-gates
+        run: |
+          printf '%s\\n' "$CHANGED" | python3 tools/ci_expensive_gates.py --stdin --gate unit-assets | \\
+            sed 's/^/unit-assets=/' >> "$GITHUB_OUTPUT"
+      - name: Unit asset inventory, freshness and budget
+        if: >-
+          github.event_name != 'pull_request'
+          || steps.expensive-gates.outputs.unit-assets == 'true'
+        run: |
+          python3 tools/test_pack_atlas.py
+          python3 tools/pack_atlas.py --validate-only --strict
+"""
+
+
+def _unit_asset_wiring_self_test() -> list[str]:
+    """The gate and its selector must have travelled together (#2272).
+
+    The gate-set comparison proves both commands exist somewhere in the
+    two-job union; it can say nothing about whether the guard reads the
+    output the selector writes. A guard still naming `test-and-audits`'
+    selector step would read an always-empty value here and stop running
+    the gate on every pull request, with the union still matching
+    `tools/ci-local.sh` exactly.
+    """
+    failures: list[str] = []
+
+    def problems(text: str = _UNIT_ASSET_WORKFLOW_GOOD) -> list[str]:
+        return audit_unit_asset_gate_wiring(text)
+
+    _expect(failures, problems() == [],
+            f"the known-good unit-asset fixture should pass, got {problems()}")
+
+    mutations = (
+        # The regression the move makes possible: the gate is here, its
+        # selector is not, so its guard reads a value nothing writes.
+        ("selector left behind in the other job",
+         _UNIT_ASSET_WORKFLOW_GOOD.replace(
+             "      - name: Select path-relevant unit-asset gate\n"
+             "        id: expensive-gates\n"
+             "        run: |\n"
+             "          printf '%s\\n' \"$CHANGED\" | python3 "
+             "tools/ci_expensive_gates.py --stdin --gate unit-assets | \\\n"
+             "            sed 's/^/unit-assets=/' >> \"$GITHUB_OUTPUT\"\n",
+             ""),
+         "expected exactly one step running"),
+        # Losing the master half of the guard: a path the selector does
+        # not list would then leave the inventory unchecked on master.
+        ("gate made pull-request-selective on every event",
+         _UNIT_ASSET_WORKFLOW_GOOD.replace(
+             "          github.event_name != 'pull_request'\n"
+             "          || steps.expensive-gates.outputs.unit-assets == "
+             "'true'\n",
+             "          steps.expensive-gates.outputs.unit-assets == "
+             "'true'\n"),
+         "not by the pinned"),
+        # Losing the pull-request half: the gate would run on every PR.
+        ("gate made unconditional",
+         _UNIT_ASSET_WORKFLOW_GOOD.replace(
+             "        if: >-\n"
+             "          github.event_name != 'pull_request'\n"
+             "          || steps.expensive-gates.outputs.unit-assets == "
+             "'true'\n",
+             ""),
+         "guarded by"),
+        # The selector runs but publishes nothing the guard can read.
+        ("selector output never published",
+         _UNIT_ASSET_WORKFLOW_GOOD.replace("sed 's/^/unit-assets=/'",
+                                           "sed 's/^/unrelated=/'"),
+         "never writes"),
+        # ...or publishes under a step id no guard names.
+        ("selector step renamed out from under the guard",
+         _UNIT_ASSET_WORKFLOW_GOOD.replace("        id: expensive-gates\n",
+                                           "        id: other-gates\n"),
+         "does not read"),
+        ("selector step with no id at all",
+         _UNIT_ASSET_WORKFLOW_GOOD.replace("        id: expensive-gates\n",
+                                           ""),
+         "has no `id:`"),
     )
     for label, mutated, needle in mutations:
         got = problems(mutated)

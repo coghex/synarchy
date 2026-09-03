@@ -124,6 +124,7 @@ import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
+import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
@@ -574,6 +575,12 @@ main = hspec $ do
     -- worker skips them -- but the worker has to be RUNNING, because one
     -- example needs the queued world.setTimeScale drained.
     aroundAll withHeadlessEngine PauseSpeed.spec
+    -- Own engine, world-thread-FREE (#2280): the time-scale domain gate
+    -- proves that a REFUSED world.setTimeScale enqueues nothing, which is
+    -- only observable while no world worker is draining worldQueue. It
+    -- installs its own single-page manager and finishes each accepted
+    -- call by invoking the production command handler directly.
+    aroundAll withHeadlessEngineNoWorld TimeScaleDomain.spec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE

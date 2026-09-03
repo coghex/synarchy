@@ -23,6 +23,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probe_census  # type: ignore  # noqa: E402
+# `_deep_copy` is named at its owner rather than through the facade's
+# compatibility re-export: #2131 made `tools/probe_census_records.py`
+# the module that defines it.
+import probe_census_records as census_records  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
@@ -101,13 +105,13 @@ def test_claims_are_not_measurements() -> None:
         # The preservation guard is what makes those promises real, so
         # drive it directly from both directions.
         def claim_touching_measurements(before):
-            candidate = probe_census._deep_copy(before)
+            candidate = census_records._deep_copy(before)
             target = probe_census.find_entry(candidate, "alpha")["census"]
             target["attempts"] = target["attempts"] + [dict(target["attempts"][0])]
             return candidate, {"alpha": {"claims"}}
 
         def measurement_touching_claims(before):
-            candidate = probe_census._deep_copy(before)
+            candidate = census_records._deep_copy(before)
             target = probe_census.find_entry(candidate, "alpha")["census"]
             target["claims"] = target["claims"] + [dict(record, token="tok-9")]
             return candidate, {"alpha": {"measurements"}}
@@ -122,7 +126,7 @@ def test_claims_are_not_measurements() -> None:
                           msg, fragment)
 
         def drops_a_claim(before):
-            candidate = probe_census._deep_copy(before)
+            candidate = census_records._deep_copy(before)
             probe_census.find_entry(candidate, "alpha")["census"]["claims"] = []
             return candidate, {"alpha": {"claims"}}
 
@@ -203,7 +207,7 @@ def test_schema_migration_is_lossless() -> None:
         expect(again == migrated,
                "re-migrating an already-migrated census is a no-op")
 
-        with_claims = probe_census._deep_copy(migrated)
+        with_claims = census_records._deep_copy(migrated)
         kept = {"token": "tok-1", "timestamp_utc": "2026-08-21T05:00:00Z",
                 "commit_sha": COMMIT_A, "owner": "dev@host:1", "host": "host",
                 "pid": 1, "lease_seconds": 60.0, "requested_runs": 2}

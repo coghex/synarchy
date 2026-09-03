@@ -41,9 +41,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .support import (
-    COMMIT_A, COMMIT_B, _alpha, cli, cli_repo, expect, expect_refusal,
-    probe_census, registry, result_document, rich_census, scratch, seeded,
-    stored_v3_document, stored_v4_document, v1_document,
+    _alpha, census_contract, census_records, census_storage, cli, cli_repo,
+    COMMIT_A, COMMIT_B, expect, expect_refusal, probe_census, registry,
+    result_document, rich_census, scratch, seeded, stored_v3_document,
+    stored_v4_document, v1_document,
 )
 
 import probe_flake  # type: ignore  # noqa: E402 -- `.support` installs tools/
@@ -144,15 +145,15 @@ def test_adversarial_malformed_input() -> None:
         target = root / "probe_census.json"
 
         operations = (
-            ("--seed", lambda p: probe_census.ensure_document(p)),
-            ("--record", lambda p: probe_census.record_result(
+            ("--seed", lambda p: census_storage.ensure_document(p)),
+            ("--record", lambda p: census_storage.record_result(
                 p, result_document(commit=COMMIT_B))),
-            ("--set-acceptable-failures", lambda p: probe_census.record_policy(
+            ("--set-acceptable-failures", lambda p: census_storage.record_policy(
                 p, "alpha", acceptable_failures=1, justification="j")),
-            ("--set-estimate", lambda p: probe_census.record_policy(
+            ("--set-estimate", lambda p: census_storage.record_policy(
                 p, "alpha", estimate=9)),
-            ("--validate", lambda p: probe_census.validate_manifest(
-                probe_census.load(p))),
+            ("--validate", lambda p: census_records.validate_manifest(
+                census_storage.load(p))),
         )
 
         uncontrolled: list[str] = []
@@ -174,8 +175,8 @@ def test_adversarial_malformed_input() -> None:
                 runs += 1
                 try:
                     operation(target)
-                except (probe_census.CensusError,
-                        probe_census.DocsWorktreeMissing):
+                except (census_contract.CensusError,
+                        census_storage.DocsWorktreeMissing):
                     refused += 1
                     if target.read_bytes() != stored:
                         disturbed.append(f"{name} on {where}={value!r}")
@@ -204,7 +205,7 @@ def test_adversarial_malformed_input() -> None:
         # the declared schema will not reconcile that into a fresh one;
         # the second sweep starts from a newly seeded census.
         target.unlink()
-        probe_census.ensure_document(target)
+        census_storage.ensure_document(target)
         clean = target.read_bytes()
         uncontrolled, disturbed, leaked = [], [], []
         runs = refused = accepted = 0
@@ -221,9 +222,9 @@ def test_adversarial_malformed_input() -> None:
             target.write_bytes(clean)
             runs += 1
             try:
-                probe_census.record_result(target, document)
-            except (probe_census.CensusError,
-                    probe_census.DocsWorktreeMissing):
+                census_storage.record_result(target, document)
+            except (census_contract.CensusError,
+                    census_storage.DocsWorktreeMissing):
                 refused += 1
                 if target.read_bytes() != clean:
                     disturbed.append(f"{where}={value!r}")
@@ -299,25 +300,25 @@ def test_declared_schema() -> None:
     authoritative bytes are not touched by the refusal.
     """
     print("\n-- the declared JSON Schema --")
-    schema = probe_census.load_schema()
+    schema = census_contract.load_schema()
     expect(schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema",
            "the checked-in schema identifies a supported draft")
     # `load_schema` runs that draft's own meta-schema check, so reaching
     # here at all is the self-check passing.
-    expect(set(probe_census.SCHEMA_DEFINITIONS)
-           == {probe_census.SEED_SCHEMA, probe_census.RECORD_SCHEMA,
-               probe_census.CLAIM_SCHEMA, probe_census.OUTCOME_SCHEMA,
-               probe_census.CENSUS_SCHEMA,
-               probe_census.RESULT_SCHEMA},
+    expect(set(census_contract.SCHEMA_DEFINITIONS)
+           == {census_contract.SEED_SCHEMA, census_contract.RECORD_SCHEMA,
+               census_contract.CLAIM_SCHEMA, census_contract.OUTCOME_SCHEMA,
+               census_contract.CENSUS_SCHEMA,
+               census_contract.RESULT_SCHEMA},
            "every document kind the tool reads has a declared schema")
     expect(all(name in (schema.get("$defs") or {})
-               for name in probe_census.SCHEMA_DEFINITIONS.values()),
+               for name in census_contract.SCHEMA_DEFINITIONS.values()),
            "each declared schema names a definition the file really has")
     expect(all("/" not in name
-               for name in probe_census.SCHEMA_DEFINITIONS.values()),
+               for name in census_contract.SCHEMA_DEFINITIONS.values()),
            "no definition name contains a JSON Pointer separator")
     expect_refusal(
-        lambda: probe_census.validate_document({}, "probe-census/v9", "x"),
+        lambda: census_contract.validate_document({}, "probe-census/v9", "x"),
         "asking for an undeclared schema is a controlled refusal",
         "probe-census/v9")
 
@@ -325,37 +326,37 @@ def test_declared_schema() -> None:
         # Applying every declared schema to a document that satisfies it
         # is what proves the file's internal `$ref`s all resolve — a
         # schema that self-checks can still be unusable.
-        expect_valid(lambda: probe_census.validate_document(
-            v1_document(), probe_census.SEED_SCHEMA, "a v1 seed"),
+        expect_valid(lambda: census_contract.validate_document(
+            v1_document(), census_contract.SEED_SCHEMA, "a v1 seed"),
             "the v1 seed schema accepts a real v1 seed")
-        expect_valid(lambda: probe_census.validate_document(
-            rich_census(), probe_census.CENSUS_SCHEMA, "a v5 census"),
+        expect_valid(lambda: census_contract.validate_document(
+            rich_census(), census_contract.CENSUS_SCHEMA, "a v5 census"),
             "the v5 census schema accepts a real measured census")
-        expect_valid(lambda: probe_census.validate_document(
-            stored_v2_document(), probe_census.RECORD_SCHEMA, "a v2 census"),
+        expect_valid(lambda: census_contract.validate_document(
+            stored_v2_document(), census_contract.RECORD_SCHEMA, "a v2 census"),
             "the FROZEN v2 schema still accepts a real stored v2 census, "
             "which is what --seed migrates from")
-        expect_valid(lambda: probe_census.validate_document(
-            stored_v3_document(), probe_census.CLAIM_SCHEMA, "a v3 census"),
+        expect_valid(lambda: census_contract.validate_document(
+            stored_v3_document(), census_contract.CLAIM_SCHEMA, "a v3 census"),
             "the FROZEN v3 schema still accepts a real stored v3 census, "
             "which --seed also migrates from")
-        expect_valid(lambda: probe_census.validate_document(
-            stored_v4_document(), probe_census.OUTCOME_SCHEMA, "a v4 census"),
+        expect_valid(lambda: census_contract.validate_document(
+            stored_v4_document(), census_contract.OUTCOME_SCHEMA, "a v4 census"),
             "the FROZEN v4 schema still accepts a real stored v4 census, "
             "which --seed also migrates from")
-        expect_valid(lambda: probe_census.validate_document(
-            probe_census.build_manifest(), probe_census.CENSUS_SCHEMA,
+        expect_valid(lambda: census_contract.validate_document(
+            census_records.build_manifest(), census_contract.CENSUS_SCHEMA,
             "a fresh manifest"),
             "...and the manifest this tool generates for itself")
-        expect_valid(lambda: probe_census.validate_result(result_document()),
+        expect_valid(lambda: census_contract.validate_result(result_document()),
                      "the result schema accepts a real ok measurement")
         expect_valid(
-            lambda: probe_census.validate_result(harness_error_result()),
+            lambda: census_contract.validate_result(harness_error_result()),
             "...and a harness error carrying its HARNESS_ERROR run")
 
         target = root / "probe_census.json"
         clean = root / "clean.json"
-        probe_census.ensure_document(clean)
+        census_storage.ensure_document(clean)
         clean_bytes = clean.read_bytes()
 
         def refuses_census(mutate, fragment, why) -> None:
@@ -365,7 +366,7 @@ def test_declared_schema() -> None:
             target.write_text(json.dumps(document), encoding="utf-8")
             stored = target.read_bytes()
             expect_refusal(
-                lambda: probe_census.record_result(target, result_document()),
+                lambda: census_storage.record_result(target, result_document()),
                 f"a census with {why} is refused", fragment)
             expect(target.read_bytes() == stored,
                    f"...and the refusal changed no bytes ({why})")
@@ -375,7 +376,7 @@ def test_declared_schema() -> None:
             document = result_document()
             mutate(document)
             expect_refusal(
-                lambda: probe_census.record_result(clean, document),
+                lambda: census_storage.record_result(clean, document),
                 f"a result with {why} is refused", fragment)
             expect(clean.read_bytes() == clean_bytes,
                    f"...and the refusal wrote nothing ({why})")
@@ -385,7 +386,7 @@ def test_declared_schema() -> None:
         # removing one is a violation rather than an absence. That is
         # the whole difference between `additionalProperties`/`required`
         # and reading fields with `.get()`.
-        for field in probe_census.empty_census():
+        for field in census_records.empty_census():
             refuses_census(
                 lambda d, f=field: d["probes"][0]["census"].pop(f),
                 f"'{field}' is a required property",
@@ -531,7 +532,7 @@ def test_declared_schema() -> None:
                 lambda d, v=value: d.__setitem__("total_elapsed_seconds", v),
                 "$.total_elapsed_seconds", f"an incoming {why}")
         expect_refusal(
-            lambda: probe_census.record_policy(
+            lambda: census_storage.record_policy(
                 clean, "alpha", estimate=float("nan")),
             "a policy update may not store a NaN either",
             "non-finite")
@@ -544,7 +545,7 @@ def test_declared_schema() -> None:
                           encoding="utf-8")
         stored = target.read_bytes()
         expect_refusal(
-            lambda: probe_census.record_result(target, result_document()),
+            lambda: census_storage.record_result(target, result_document()),
             "a census declaring an unreadable schema is refused",
             "probe-census/v9")
         expect(target.read_bytes() == stored, "...and changes no bytes")
@@ -572,7 +573,7 @@ def test_declared_schema() -> None:
             {"first": "PASS", "second": "FAIL"},
             Path("/tmp/artifacts/alpha-1/run-002")))
         expect_valid(
-            lambda: probe_census.validate_result(measurement.to_document()),
+            lambda: census_contract.validate_result(measurement.to_document()),
             "the producer's own serialization satisfies the declared "
             "intake schema")
         expect(set(measurement.to_document()) == set(result_document()),
@@ -588,19 +589,19 @@ def test_declared_schema() -> None:
             3, 9102, probe_flake.RUN_HARNESS_ERROR, 0.5, {},
             Path("/tmp/artifacts/alpha-1/run-003"))
         expect_valid(
-            lambda: probe_census.validate_result(measurement.to_document()),
+            lambda: census_contract.validate_result(measurement.to_document()),
             "...and so does one carrying a real HARNESS_ERROR run")
 
         # -- and a valid document still goes all the way through -------
-        expect_valid(lambda: probe_census.record_result(clean,
+        expect_valid(lambda: census_storage.record_result(clean,
                                                         result_document()),
                      "a valid measurement is still accepted end to end")
-        expect_valid(lambda: probe_census.record_result(clean,
+        expect_valid(lambda: census_storage.record_result(clean,
                                                         harness_error_result()),
                      "...and so is a valid harness error")
-        expect_valid(lambda: probe_census.validate_document(
+        expect_valid(lambda: census_contract.validate_document(
             json.loads(clean.read_text(encoding="utf-8")),
-            probe_census.CENSUS_SCHEMA, "the written census"),
+            census_contract.CENSUS_SCHEMA, "the written census"),
             "and what the writer produced validates against its own schema")
 
 
@@ -610,28 +611,28 @@ DRAFT = "https://json-schema.org/draft/2020-12/schema"
 
 @contextmanager
 def schema_file(text: str | None, root: Path):
-    """`probe_census.SCHEMA_PATH` pointed at `text` (None = absent)."""
+    """`census_contract.SCHEMA_PATH` pointed at `text` (None = absent)."""
     target = root / f"schema-{abs(hash(text)) % 10 ** 8}.json"
     if text is not None:
         target.write_text(text, encoding="utf-8")
-    saved = probe_census.SCHEMA_PATH
-    cache = dict(probe_census._SCHEMA_CACHE)
-    probe_census.SCHEMA_PATH = target
-    probe_census._SCHEMA_CACHE.clear()
+    saved = census_contract.SCHEMA_PATH
+    cache = dict(census_contract._SCHEMA_CACHE)
+    census_contract.SCHEMA_PATH = target
+    census_contract._SCHEMA_CACHE.clear()
     try:
         yield target
     finally:
-        probe_census.SCHEMA_PATH = saved
-        probe_census._SCHEMA_CACHE.clear()
-        probe_census._SCHEMA_CACHE.update(cache)
+        census_contract.SCHEMA_PATH = saved
+        census_contract._SCHEMA_CACHE.clear()
+        census_contract._SCHEMA_CACHE.update(cache)
 
 
 def _refuses_every_operation(census, before, good, fragment, why) -> None:
     """Every writing operation refuses `fragment`, and writes nothing."""
     for name, operation in (
-        ("--record", lambda: probe_census.record_result(census, good)),
-        ("--seed", lambda: probe_census.ensure_document(census)),
-        ("a policy update", lambda: probe_census.record_policy(
+        ("--record", lambda: census_storage.record_result(census, good)),
+        ("--seed", lambda: census_storage.ensure_document(census)),
+        ("a policy update", lambda: census_storage.record_policy(
             census, "alpha", acceptable_failures=1)),
     ):
         expect_refusal(operation, f"...and {name} refuses ({why})", fragment)
@@ -688,7 +689,7 @@ def test_malformed_schema_file() -> None:
         # whichever document an operation validates first.
         dangling = {"$schema": DRAFT,
                     "$defs": {name: {"$ref": "#/$defs/gone"}
-                              for name in probe_census.SCHEMA_DEFINITIONS
+                              for name in census_contract.SCHEMA_DEFINITIONS
                               .values()}}
         unusable = [
             (json.dumps({"$schema": DRAFT, "$defs": {"nothing": True}}),
@@ -699,20 +700,20 @@ def test_malformed_schema_file() -> None:
 
         for text, fragment, why in unloadable:
             with schema_file(text, root):
-                expect_refusal(probe_census.load_schema,
+                expect_refusal(census_contract.load_schema,
                                f"loading the schema refuses {why}", fragment)
                 _refuses_every_operation(census, before, good, fragment, why)
         for text, fragment, why in unusable:
             with schema_file(text, root):
-                expect_valid(probe_census.load_schema,
+                expect_valid(census_contract.load_schema,
                              f"the schema itself loads with {why}")
                 _refuses_every_operation(census, before, good, fragment, why)
 
         # And the shipped schema still loads, so no case above leaked
         # global state into the rest of the suite.
-        expect_valid(probe_census.load_schema,
+        expect_valid(census_contract.load_schema,
                      "the shipped schema still loads afterwards")
-        expect_valid(lambda: probe_census.record_result(census, good),
+        expect_valid(lambda: census_storage.record_result(census, good),
                      "...and a real measurement still records")
 
 
@@ -770,29 +771,29 @@ def test_missing_dependency() -> None:
         # schema and validator caches are consulted precisely so a
         # previously working environment cannot satisfy a later
         # validation, and priming here is what proves it.
-        probe_census.validate_result(good)
-        probe_census.load_schema()
+        census_contract.validate_result(good)
+        census_contract.load_schema()
 
         with without_jsonschema():
-            expect_refusal(lambda: probe_census.validate_result(good),
+            expect_refusal(lambda: census_contract.validate_result(good),
                            "validation refuses when the library is absent",
-                           "jsonschema is required", probe_census.INSTALL_HINT)
-            expect_refusal(lambda: probe_census.load_schema(),
+                           "jsonschema is required", census_contract.INSTALL_HINT)
+            expect_refusal(lambda: census_contract.load_schema(),
                            "a primed schema cache does not satisfy it either",
-                           probe_census.INSTALL_HINT)
+                           census_contract.INSTALL_HINT)
             for name, operation in (
-                ("--record", lambda: probe_census.record_result(path, good)),
-                ("--seed", lambda: probe_census.ensure_document(path)),
-                ("a policy update", lambda: probe_census.record_policy(
+                ("--record", lambda: census_storage.record_result(path, good)),
+                ("--seed", lambda: census_storage.ensure_document(path)),
+                ("a policy update", lambda: census_storage.record_policy(
                     path, "alpha", acceptable_failures=1)),
             ):
                 expect_refusal(operation,
                                f"{name} refuses without the library",
-                               probe_census.INSTALL_HINT)
+                               census_contract.INSTALL_HINT)
                 expect(path.read_bytes() == before,
                        f"...and {name} wrote nothing")
 
-        expect_valid(lambda: probe_census.validate_result(good),
+        expect_valid(lambda: census_contract.validate_result(good),
                      "and validation works again once the library is back")
 
     # Through the CLI, where the exit code and the streams are the
@@ -810,14 +811,14 @@ def test_missing_dependency() -> None:
                 code, out, err = cli("--record", str(result_file))
                 expect(code == 1,
                        "--record exits non-zero with no jsonschema")
-                expect(err.count(probe_census.INSTALL_HINT) == 1,
+                expect(err.count(census_contract.INSTALL_HINT) == 1,
                        "...naming the install command exactly once")
                 expect("Traceback" not in err, "...with no traceback")
                 expect(out == "", "...and printing no success line")
                 expect(path.read_bytes() == before,
                        "...and leaving the census byte-for-byte alone")
                 code, _, err = cli("--validate")
-                expect(code == 1 and probe_census.INSTALL_HINT in err,
+                expect(code == 1 and census_contract.INSTALL_HINT in err,
                        "--validate refuses rather than validating nothing")
                 expect(path.read_bytes() == before, "...and changes no bytes")
                 # `--print` reads and writes nothing and validates
@@ -840,7 +841,7 @@ def test_missing_dependency() -> None:
 
 def _harness_attempt(accepted: bool, **overrides) -> dict:
     """One well-formed harness-error attempt, from the real summarizer."""
-    record = probe_census.summarize_attempt(
+    record = census_records.summarize_attempt(
         result_document(status="harness-error"), accepted)
     record.update(overrides)
     return record
@@ -883,31 +884,31 @@ def _blank_deferral_resume_condition(document: dict) -> None:
 # Each stored case breaks exactly ONE relationship while staying
 # schema-valid, and names the rule that must be the one rejecting it.
 CENSUS_CASES = (
-    (probe_census._rule_attempts_reconcile_with_samples,
+    (census_contract._rule_attempts_reconcile_with_samples,
      "accepted attempts left behind by cleared cohorts",
      "logs 2 accepted attempt(s) but retains 0 sample(s)",
      _lose_the_samples),
-    (probe_census._rule_attempts_reconcile_with_samples,
+    (census_contract._rule_attempts_reconcile_with_samples,
      "a sample with no accepted attempt to log it",
      "logs 1 accepted attempt(s) but retains 2 sample(s)",
      _drop_attempt),
-    (probe_census._rule_accepted_derives_from_status,
+    (census_contract._rule_accepted_derives_from_status,
      "`accepted` false beside an accepted status",
      "`accepted` is derived from `status`",
      _forge_accepted_flag),
-    (probe_census._rule_accepted_derives_from_status,
+    (census_contract._rule_accepted_derives_from_status,
      "`accepted` true beside a harness error",
      "`accepted` is derived from `status`",
      _forge_harness_accepted),
-    (probe_census._rule_attempt_leaves_a_run_uncompleted,
+    (census_contract._rule_attempt_leaves_a_run_uncompleted,
      "a logged harness error that completed every run",
      "reports completing 2 of 2 requested run(s)",
      _finished_harness_error),
-    (probe_census._rule_cohort_holds_one_commit,
+    (census_contract._rule_cohort_holds_one_commit,
      "a sample filed under another commit's cohort",
      "a cohort holds one commit's samples",
      _misfiled_sample),
-    (probe_census._rule_deferral_is_actionable,
+    (census_contract._rule_deferral_is_actionable,
      "a deferral with a blank resume condition",
      "has no non-blank deferral resume when",
      _blank_deferral_resume_condition),
@@ -968,27 +969,27 @@ def _finished_harness_result(result: dict) -> None:
 
 
 RESULT_CASES = (
-    (probe_census._rule_pass_run_has_no_failed_check,
+    (census_contract._rule_pass_run_has_no_failed_check,
      "a PASS run carrying a FAIL check",
      "a failed check makes its run fail",
      _pass_run_fails_a_check),
-    (probe_census._rule_check_counts_tally_runs,
+    (census_contract._rule_check_counts_tally_runs,
      "a tally that is not what the runs show",
      "is not the PASS=2 FAIL=0 MISSING=0 `runs` shows",
      _wrong_tally),
-    (probe_census._rule_check_counts_tally_runs,
+    (census_contract._rule_check_counts_tally_runs,
      "a check tallied in the runs with no entry",
      "but has no entry",
      _untallied_check),
-    (probe_census._rule_check_counts_cover_the_descriptor,
+    (census_contract._rule_check_counts_cover_the_descriptor,
      "an all-zero tally for a check the descriptor never declared",
      "the probe's own descriptor does not declare it",
      _undeclared_tally),
-    (probe_census._rule_check_counts_cover_the_descriptor,
+    (census_contract._rule_check_counts_cover_the_descriptor,
      "a declared check with no tally at all",
      "declared check 'second' has no tally",
      _untallied_declared_check),
-    (probe_census._rule_result_leaves_a_run_uncompleted,
+    (census_contract._rule_result_leaves_a_run_uncompleted,
      "a harness error that completed every requested run",
      "reports completing 2 of 2 requested run(s)",
      _finished_harness_result),
@@ -1005,15 +1006,15 @@ def without_rule(rule):
     isolates a single relationship. A neighbouring rule catching the
     same fixture would keep refusing it here and fail the case.
     """
-    saved = (probe_census.CENSUS_RULES, probe_census.RESULT_RULES)
-    probe_census.CENSUS_RULES = tuple(
-        r for r in probe_census.CENSUS_RULES if r is not rule)
-    probe_census.RESULT_RULES = tuple(
-        r for r in probe_census.RESULT_RULES if r is not rule)
+    saved = (census_contract.CENSUS_RULES, census_contract.RESULT_RULES)
+    census_contract.CENSUS_RULES = tuple(
+        r for r in census_contract.CENSUS_RULES if r is not rule)
+    census_contract.RESULT_RULES = tuple(
+        r for r in census_contract.RESULT_RULES if r is not rule)
     try:
         yield
     finally:
-        probe_census.CENSUS_RULES, probe_census.RESULT_RULES = saved
+        census_contract.CENSUS_RULES, census_contract.RESULT_RULES = saved
 
 
 def test_cross_field_invariants() -> None:
@@ -1028,17 +1029,17 @@ def test_cross_field_invariants() -> None:
     its own case to be accepted again.
     """
     print("\n-- the cross-field invariants --")
-    expect(len(probe_census.CENSUS_RULES) == len(
+    expect(len(census_contract.CENSUS_RULES) == len(
         {rule for rule, _why, _fragment, _mutate in CENSUS_CASES}),
         "every stored rule has a case of its own")
-    expect(len(probe_census.RESULT_RULES) == len(
+    expect(len(census_contract.RESULT_RULES) == len(
         {rule for rule, _why, _fragment, _mutate in RESULT_CASES}),
         "every intake rule has a case of its own")
 
     with registry(), scratch() as root:
         target = root / "probe_census.json"
         clean = root / "clean.json"
-        probe_census.ensure_document(clean)
+        census_storage.ensure_document(clean)
         clean_bytes = clean.read_bytes()
 
         # -- stored state: refused by every operation, and unchanged ---
@@ -1047,13 +1048,13 @@ def test_cross_field_invariants() -> None:
         # #1493 was filed for is that they each rewrote the file and so
         # made the inconsistency durable.
         operations = (
-            ("--record", lambda p: probe_census.record_result(
+            ("--record", lambda p: census_storage.record_result(
                 p, result_document(commit=COMMIT_B))),
-            ("--set-acceptable-failures", lambda p: probe_census.record_policy(
+            ("--set-acceptable-failures", lambda p: census_storage.record_policy(
                 p, "alpha", acceptable_failures=1)),
-            ("--seed", probe_census.ensure_document),
-            ("--validate", lambda p: probe_census.validate_census(
-                probe_census.load(p), f"census {p}")),
+            ("--seed", census_storage.ensure_document),
+            ("--validate", lambda p: census_contract.validate_census(
+                census_storage.load(p), f"census {p}")),
         )
         for rule, why, fragment, mutate in CENSUS_CASES:
             document = rich_census()
@@ -1061,8 +1062,8 @@ def test_cross_field_invariants() -> None:
             target.write_text(json.dumps(document), encoding="utf-8")
             stored = target.read_bytes()
             expect_valid(
-                lambda d=document: probe_census.validate_document(
-                    d, probe_census.CENSUS_SCHEMA, "the case"),
+                lambda d=document: census_contract.validate_document(
+                    d, census_contract.CENSUS_SCHEMA, "the case"),
                 f"a census with {why} is still SCHEMA-valid, so only the "
                 f"cross-field rule can reject it")
             for name, operation in operations:
@@ -1072,7 +1073,7 @@ def test_cross_field_invariants() -> None:
                        f"...and rewrote nothing ({name}, {why})")
             with without_rule(rule):
                 expect_valid(
-                    lambda d=document: probe_census.validate_census(
+                    lambda d=document: census_contract.validate_census(
                         d, "the case"),
                     f"mutation check: without {rule.__name__}, {why} is "
                     f"accepted — that rule is what rejects it")
@@ -1082,17 +1083,17 @@ def test_cross_field_invariants() -> None:
             document = result_document()
             mutate(document)
             expect_valid(
-                lambda d=document: probe_census.validate_document(
-                    d, probe_census.RESULT_SCHEMA, "the case"),
+                lambda d=document: census_contract.validate_document(
+                    d, census_contract.RESULT_SCHEMA, "the case"),
                 f"a result with {why} is still SCHEMA-valid")
             expect_refusal(
-                lambda d=document: probe_census.record_result(clean, d),
+                lambda d=document: census_storage.record_result(clean, d),
                 f"--record refuses a result with {why}", fragment)
             expect(clean.read_bytes() == clean_bytes,
                    f"...and wrote nothing ({why})")
             with without_rule(rule):
                 expect_valid(
-                    lambda d=document: probe_census.validate_result(d),
+                    lambda d=document: census_contract.validate_result(d),
                     f"mutation check: without {rule.__name__}, {why} is "
                     f"accepted — that rule is what rejects it")
 
@@ -1104,9 +1105,9 @@ def test_cross_field_invariants() -> None:
         # hiding inside a mutation check that dodges it.
         finished = result_document()
         _finished_harness_result(finished)
-        with without_rule(probe_census._rule_result_leaves_a_run_uncompleted):
+        with without_rule(census_contract._rule_result_leaves_a_run_uncompleted):
             expect_refusal(
-                lambda: probe_census.record_result(clean, finished),
+                lambda: census_storage.record_result(clean, finished),
                 "the stored rule still catches a finished harness error "
                 "the intake rule was not there to refuse",
                 "reports completing 2 of 2 requested run(s)")
@@ -1121,10 +1122,10 @@ def test_cross_field_invariants() -> None:
     # both drifted from what probe_flake.py writes.
     with registry(), scratch() as root:
         path = root / "probe_census.json"
-        expect(probe_census.census_invariants(probe_census.build_manifest())
+        expect(census_contract.census_invariants(census_records.build_manifest())
                == [], "an empty census reconciles 0 accepted against 0 "
                       "retained")
-        probe_census.ensure_document(path)
+        census_storage.ensure_document(path)
 
         descriptor = probe_flake.probe_protocol.build_descriptor(
             "alpha", [("first", "the first check"),
@@ -1145,7 +1146,7 @@ def test_cross_field_invariants() -> None:
             {"first": "PASS", "second": "FAIL"},
             Path("/tmp/artifacts/alpha-1/run-001")))
         expect_valid(
-            lambda: probe_census.record_result(path, timed_out.to_document()),
+            lambda: census_storage.record_result(path, timed_out.to_document()),
             "a TIMEOUT run carrying a FAIL check is accepted")
 
         # A harness error on the very FIRST run completes nothing, so
@@ -1160,7 +1161,7 @@ def test_cross_field_invariants() -> None:
             Path("/tmp/artifacts/alpha-1/run-001"))
         produced = nothing_ran.to_document()
         expect_valid(
-            lambda: probe_census.record_result(path, produced),
+            lambda: census_storage.record_result(path, produced),
             "a harness error that completed no run at all is accepted")
         expect(set(produced["check_counts"])
                == {check["id"] for check in produced["checks"]}
@@ -1171,7 +1172,7 @@ def test_cross_field_invariants() -> None:
         expect(set(_no_runs_result()["check_counts"])
                == set(produced["check_counts"]),
                "...and this file's no-runs fixture is keyed the same way")
-        expect_valid(lambda: probe_census.validate_result(_no_runs_result()),
+        expect_valid(lambda: census_contract.validate_result(_no_runs_result()),
                      "...so the fixture the keying case builds on is itself "
                      "consistent")
 
@@ -1188,13 +1189,13 @@ def test_cross_field_invariants() -> None:
         # own — which is exactly the multi-cohort state the equality is
         # summed across.)
         for index in (1, 2):
-            expect_valid(lambda: probe_census.record_result(path,
+            expect_valid(lambda: census_storage.record_result(path,
                                                             result_document()),
                          f"accepted measurement {index} of one commit is "
                          f"accepted")
         rollover = result_document(commit=COMMIT_B)
         expect_valid(
-            lambda: probe_census.record_result(path, rollover),
+            lambda: census_storage.record_result(path, rollover),
             "and one naming a new commit, which rolls the cohort over")
         stored = json.loads(path.read_text(encoding="utf-8"))
         census = stored["probes"][0]["census"]
@@ -1209,7 +1210,7 @@ def test_cross_field_invariants() -> None:
                and sum(1 for a in census["attempts"]
                        if a["status"] == "ok") == 4,
                "and the harness error is logged without a sample")
-        expect(probe_census.census_invariants(stored) == [],
+        expect(census_contract.census_invariants(stored) == [],
                "accepted attempts still reconcile against retained samples "
                "across current AND history")
 
@@ -1217,13 +1218,13 @@ def test_cross_field_invariants() -> None:
         # rows. Neither may disturb the equality.
         cohorts = len(census["history"])
         with registry(ci_eligible={"alpha"}):
-            promoted = probe_census.ensure_document(path)
+            promoted = census_storage.ensure_document(path)
         expect(promoted["probes"][0]["census"]["current"] is None
                and len(promoted["probes"][0]["census"]["history"])
                == cohorts + 1,
                "promotion archived the current cohort rather than dropping it")
         expect_valid(
-            lambda: probe_census.validate_census(promoted, "the promoted "
+            lambda: census_contract.validate_census(promoted, "the promoted "
                                                            "census"),
             "a promoted, reconciled census still satisfies every invariant")
 

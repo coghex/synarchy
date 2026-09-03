@@ -41,7 +41,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_probes  # type: ignore  # noqa: E402
-import probe_census  # type: ignore  # noqa: E402
+import probe_census_contract as census_contract  # type: ignore  # noqa: E402
+import probe_census_storage as census_storage  # type: ignore  # noqa: E402
 import probe_census_promotion  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
@@ -86,7 +87,7 @@ CLEAN_COUNTS = {"first": {"PASS": 2, "FAIL": 0, "MISSING": 0},
 
 
 def clean_result(commit=COMMIT_A, *, probe="alpha",
-                 runs=probe_census.POLICY_RUN_COUNT, completed=None,
+                 runs=census_contract.POLICY_RUN_COUNT, completed=None,
                  failures=0, timeouts=0, worst=12.5, age_days=1.0):
     """One accepted measurement with nothing wrong with it by default."""
     return result_document(
@@ -120,7 +121,7 @@ def buckets(report: dict) -> tuple[list, list]:
 
 def qualified_census(path: Path, *, probe="alpha", **kwargs) -> None:
     """Record one complete, clean ten-run cohort for `probe`."""
-    probe_census.record_result(path, clean_result(probe=probe, **kwargs))
+    census_storage.record_result(path, clean_result(probe=probe, **kwargs))
 
 
 def test_promotion_candidate() -> None:
@@ -159,7 +160,7 @@ def test_promotion_candidate() -> None:
                "candidacy is only meaningful against one")
         expect(row["acceptable_failures"] == 0
                and row["protocol"] == probe_protocol.PROTOCOL_VERSION
-               and row["classification"] == probe_census.MANUAL_ONLY,
+               and row["classification"] == census_contract.MANUAL_ONLY,
                "X, the protocol status and the live classification are "
                "reported beside the numbers")
 
@@ -171,7 +172,7 @@ def test_promotion_candidate() -> None:
         expect(row["estimated_worst_case_seconds"] is None,
                "an unset estimate stays unset rather than borrowing the "
                "observed duration")
-        probe_census.record_policy(path, "alpha", estimate=480)
+        census_storage.record_policy(path, "alpha", estimate=480)
         stored = promotion_of(path)["candidates"][0]
         expect(stored["estimated_worst_case_seconds"] == 480
                and stored["observed_worst_elapsed_seconds"] == 21.25,
@@ -272,21 +273,21 @@ def test_promotion_disqualifications() -> None:
            "and an overrun alone disqualifies too: more completions than "
            "were requested is a count nothing could have produced")
 
-    expect(qualifies(extra=lambda path: probe_census.record_result(
+    expect(qualifies(extra=lambda path: census_storage.record_result(
         path, result_document(status="harness-error", commit=COMMIT_A,
                               timestamp_utc=at(0.5)))) is False,
            "a harness error at the cohort's own commit makes it incomplete: "
            "a scheduled measurement reported nothing, and the cohort's "
            "counts cannot show that")
-    expect(qualifies(extra=lambda path: probe_census.record_result(
+    expect(qualifies(extra=lambda path: census_storage.record_result(
         path, result_document(status="harness-error", commit=COMMIT_A,
                               timestamp_utc=at(0.5),
-                              commit_sha=probe_census.PLACEHOLDER_COMMIT))
+                              commit_sha=census_contract.PLACEHOLDER_COMMIT))
     ) is False,
            "and so does one whose provenance git could not report: "
            "attribution fails CLOSED, because `we cannot tell which cohort "
            "lost a run` is not evidence that this one did not")
-    expect(qualifies(extra=lambda path: probe_census.record_result(
+    expect(qualifies(extra=lambda path: census_storage.record_result(
         path, result_document(status="harness-error", commit=COMMIT_B,
                               timestamp_utc=at(0.5)))) is True,
            "a harness error at ANOTHER commit is not charged to this "
@@ -406,14 +407,14 @@ def test_promotion_preserves_the_manifest() -> None:
         # report never does, so the case performs the edit by hand.
         ci_probes.CI_ELIGIBLE = {"alpha"}
         ci_probes.MANUAL_ONLY_REASONS = {}
-        probe_census.ensure_document(path)
+        census_storage.ensure_document(path)
         document = json.loads(path.read_text(encoding="utf-8"))
         row = next(entry for entry in document["probes"]
                    if entry["key"] == "alpha")
         census = row["census"]
 
         expect(len(document["probes"]) == len(SYNTHETIC)
-               and row["classification"] == probe_census.CI_ELIGIBLE,
+               and row["classification"] == census_contract.CI_ELIGIBLE,
                "the promoted probe keeps its row in the global manifest, "
                "reclassified")
         expect(census["current"] is None
@@ -437,7 +438,7 @@ def test_promotion_preserves_the_manifest() -> None:
         # not a partial write.
         before = path.read_bytes()
         expect_refusal(
-            lambda: probe_census.record_result(path, clean_result()),
+            lambda: census_storage.record_result(path, clean_result()),
             "a promoted probe's census refuses a later measurement",
             "alpha", "CI-eligible", "no further samples")
         unchanged(path, before,
@@ -450,8 +451,8 @@ def test_promotion_cli() -> None:
                   reasons={"alpha": (FLAKY,), "beta": (GPU,)}), \
             cli_repo() as (_main_wt, census_path):
         cli("--seed")
-        probe_census.record_result(census_path, clean_result(age_days=1))
-        probe_census.record_result(
+        census_storage.record_result(census_path, clean_result(age_days=1))
+        census_storage.record_result(
             census_path, clean_result(probe="beta", age_days=1, worst=300.0))
         before = census_path.read_bytes()
 

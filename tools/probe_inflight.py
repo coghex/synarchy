@@ -151,20 +151,20 @@ The four sources
    neither alone is sufficient.
 
    The `docs-wip` worktree is resolved BY BRANCH with the idiom already
-   shipped in `tools/probe_census.py` (`_worktree_records` over `git
-   worktree list --porcelain`, then `resolve_docs_worktree`), never a
-   hard-coded path and never the primary checkout. This DIVERGES from
-   that helper in exactly one way: `probe_census.py` treats a missing
-   docs worktree as an actionable stop, whereas here an absent or
-   unresolvable `docs-wip` worktree is a NORMAL no-evidence state — the
-   checked-out reports are the required source and are always read. A
-   resolved `docs-wip` worktree that simply does not contain one of the
-   four reports is likewise no-evidence for that path. Only a `docs-wip`
-   report that is truly ABSENT is no-evidence: one that exists on the
-   filesystem but is not a readable, parseable regular file — a
-   directory, a broken symlink, an unstattable path — is a
-   `source-error`, because a broken source must never be read as an
-   absent one.
+   shipped in `tools/probe_census_storage.py` (`_worktree_records` over
+   `git worktree list --porcelain`, then `resolve_docs_worktree`, both
+   still reachable as `probe_census.<name>`), never a hard-coded path
+   and never the primary checkout. This DIVERGES from that helper in
+   exactly one way: the census treats a missing docs worktree as an
+   actionable stop, whereas here an absent or unresolvable `docs-wip`
+   worktree is a NORMAL no-evidence state — the checked-out reports are
+   the required source and are always read. A resolved `docs-wip`
+   worktree that simply does not contain one of the four reports is
+   likewise no-evidence for that path. Only a `docs-wip` report that is
+   truly ABSENT is no-evidence: one that exists on the filesystem but is
+   not a readable, parseable regular file — a directory, a broken
+   symlink, an unstattable path — is a `source-error`, because a broken
+   source must never be read as an absent one.
 
    Each report is parsed with its OWN native finding-key family — `NCT-`
    in `non_ci_test_audit_findings.md`, `CIT-` in

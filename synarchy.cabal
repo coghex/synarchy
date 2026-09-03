@@ -918,6 +918,7 @@ library
                      World.Tool.Types
                      World.Tile.Types
                      World.Time.Types
+                     World.Time.Scale
                      World.Time.Local
                      World.Flora.Identity
                      World.Flora.Types
@@ -1246,6 +1247,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
+                   Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.Save.Compat
                    Test.Headless.World.Save.Compat.B1Fixture
                    Test.Headless.World.Save.Compat.Baselines
@@ -1469,6 +1471,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents
                    Test.Headless.Building.PageBinding
+                   Test.Headless.Building.PageBinding.ApplyTime
+                   Test.Headless.Building.PageBinding.PendingProjection
+                   Test.Headless.Building.PageBinding.Resolution
+                   Test.Headless.Building.PageBinding.Support
+                   Test.Headless.Building.PageBinding.SynchronousStaleness
                    Test.Headless.Building.PortalSpawnBinding
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning

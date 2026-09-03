@@ -26,13 +26,15 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from .support import (
-    COMMIT_A, COMMIT_B, SYNTHETIC, attempt_record, cli, cli_repo, expect,
-    expect_refusal, measurement, probe_census, registry, result_document,
-    sample_record, scratch, seeded, summary_of, unchanged, v1_document,
+    attempt_record, census_contract, census_records, census_storage, cli,
+    cli_repo, COMMIT_A, COMMIT_B, expect, expect_refusal, measurement,
+    probe_census, registry, result_document, sample_record, scratch, seeded,
+    summary_of, SYNTHETIC, TOOLS_DIR, unchanged, v1_document,
 )
 
 import probe_engine  # type: ignore  # noqa: E402 -- `.support` installs tools/
@@ -43,14 +45,14 @@ def test_policy() -> None:
     with registry(), scratch() as root:
         path = root / "probe_census.json"
         seeded(path)
-        probe_census.record_result(path, result_document())
+        census_storage.record_result(path, result_document())
         measured = json.loads(path.read_text(encoding="utf-8"))["probes"][0]["census"]
 
         def census_of(key="alpha"):
             rows = json.loads(path.read_text(encoding="utf-8"))["probes"]
             return {row["key"]: row["census"] for row in rows}[key]
 
-        probe_census.record_policy(path, "alpha", acceptable_failures=2,
+        census_storage.record_policy(path, "alpha", acceptable_failures=2,
                                    justification="two engine-side races")
         record = census_of()
         expect(record["acceptable_failures"] == 2
@@ -63,51 +65,51 @@ def test_policy() -> None:
                and record["attempts"] == measured["attempts"],
                "a policy update leaves every measurement alone")
 
-        probe_census.record_policy(path, "alpha", acceptable_failures=5)
+        census_storage.record_policy(path, "alpha", acceptable_failures=5)
         record = census_of()
         expect(record["acceptable_failures"] == 5
                and record["acceptable_failures_justification"]
                == "two engine-side races",
                "omitting --justification LEAVES the existing one unchanged")
 
-        probe_census.record_policy(path, "alpha", justification=None,
+        census_storage.record_policy(path, "alpha", justification=None,
                                    acceptable_failures=0)
         expect(census_of()["acceptable_failures_justification"] is None
                and census_of()["acceptable_failures"] == 0,
                "an explicit clear removes the justification only")
 
-        probe_census.record_policy(path, "alpha", estimate=480)
+        census_storage.record_policy(path, "alpha", estimate=480)
         record = census_of()
         expect(record["estimated_worst_case_seconds"] == 480
                and record["acceptable_failures"] == 0,
                "--set-estimate stores the estimate and keeps X")
 
-        probe_census.record_policy(path, "alpha",
+        census_storage.record_policy(path, "alpha",
                                    justification="restored", acceptable_failures=5)
-        probe_census.record_policy(path, "alpha", acceptable_failures=1)
+        census_storage.record_policy(path, "alpha", acceptable_failures=1)
         record = census_of()
         expect(record["acceptable_failures"] == 1
                and record["acceptable_failures_justification"] == "restored",
                "lowering X leaves its justification alone (#1479)")
         expect(record["estimated_worst_case_seconds"] == 480,
                "lowering X leaves the estimate alone")
-        probe_census.record_policy(path, "alpha", acceptable_failures=0)
+        census_storage.record_policy(path, "alpha", acceptable_failures=0)
         expect(census_of()["acceptable_failures_justification"] == "restored",
                "and X=0 may keep a justification: only an explicit clear "
                "removes one")
 
-        probe_census.record_policy(path, "alpha", estimate=None)
+        census_storage.record_policy(path, "alpha", estimate=None)
         expect(census_of()["estimated_worst_case_seconds"] is None,
                "--set-estimate none clears the estimate")
         expect(census_of()["acceptable_failures"] == 0,
                "clearing the estimate leaves X alone")
         expect(census_of()["current"] == measured["current"],
                "no policy command ever disturbed the measurements")
-        expect(census_of("beta") == probe_census.empty_census(),
+        expect(census_of("beta") == census_records.empty_census(),
                "no policy command ever disturbed an unrelated row")
 
         before = path.read_bytes()
-        expect_refusal(lambda: probe_census.record_policy(
+        expect_refusal(lambda: census_storage.record_policy(
             path, "nosuch", acceptable_failures=1),
             "a --probe naming no census row is refused",
             "nosuch", "no census row")
@@ -116,7 +118,7 @@ def test_policy() -> None:
         # #1430 closed the nullable X #1428 staged. The library refuses
         # it through the same `update` funnel the CLI does, so the
         # authoritative bytes survive either route.
-        expect_refusal(lambda: probe_census.record_policy(
+        expect_refusal(lambda: census_storage.record_policy(
             path, "alpha", acceptable_failures=None),
             "storing a null X is refused, naming --seed as the repair",
             "no acceptable-failure policy", "--seed")
@@ -141,7 +143,7 @@ def _legacy_policy_census() -> dict:
                            if field not in ("claims", "outcomes", "deferred")}}
 
     return {
-        "schema": probe_census.RECORD_SCHEMA,
+        "schema": census_contract.RECORD_SCHEMA,
         "probes": [
             row("alpha", {"acceptable_failures": None,
                           "acceptable_failures_justification": "kept text",
@@ -153,10 +155,10 @@ def _legacy_policy_census() -> dict:
                                                                  COMMIT_B)]}],
                           "attempts": [attempt_record("a-1", COMMIT_B),
                                        attempt_record("a-2")]}),
-            row("beta", {**probe_census.empty_census(),
+            row("beta", {**census_records.empty_census(),
                          "acceptable_failures": 3,
                          "acceptable_failures_justification": "three races"}),
-            row("retired", {**probe_census.empty_census(),
+            row("retired", {**census_records.empty_census(),
                             "acceptable_failures": None}),
         ],
     }
@@ -180,7 +182,7 @@ def test_acceptable_failure_policy_defaults() -> None:
         # appended with the same default.
         legacy = root / "legacy.json"
         legacy.write_text(json.dumps(v1_document()), encoding="utf-8")
-        migrated = probe_census.ensure_document(legacy)
+        migrated = census_storage.ensure_document(legacy)
         expect([row["key"] for row in migrated["probes"]]
                == [key for key, _s, _p in SYNTHETIC],
                "a v1 migration covers exactly the live registry")
@@ -190,7 +192,7 @@ def test_acceptable_failure_policy_defaults() -> None:
 
         extra = list(SYNTHETIC) + [("delta", "delta_probe.py", "a new probe")]
         with registry(probes=extra):
-            grown = probe_census.ensure_document(path)
+            grown = census_storage.ensure_document(path)
         expect({row["key"] for row in grown["probes"]}
                == {key for key, _s, _p in extra},
                "a probe registered later is appended by --seed")
@@ -204,7 +206,7 @@ def test_acceptable_failure_policy_defaults() -> None:
         path = root / "probe_census.json"
         stored = _legacy_policy_census()
         path.write_text(json.dumps(stored), encoding="utf-8")
-        result = probe_census.ensure_document(path)
+        result = census_storage.ensure_document(path)
         rows = {row["key"]: row["census"] for row in result["probes"]}
 
         expect(rows["alpha"]["acceptable_failures"] == 0,
@@ -231,7 +233,7 @@ def test_acceptable_failure_policy_defaults() -> None:
 
         # Idempotent, and a second seed is a genuine no-op.
         before = path.read_bytes()
-        probe_census.ensure_document(path)
+        census_storage.ensure_document(path)
         unchanged(path, before, "a second --seed initializes nothing further")
 
 
@@ -242,7 +244,7 @@ def test_acceptable_failure_policy_rules() -> None:
         path = root / "probe_census.json"
         seeded(path)
 
-        probe_census.record_policy(path, "alpha", acceptable_failures=2,
+        census_storage.record_policy(path, "alpha", acceptable_failures=2,
                                    justification="two engine-side races")
         stored = json.loads(path.read_text(encoding="utf-8"))
         rows = {row["key"]: row["census"] for row in stored["probes"]}
@@ -252,7 +254,7 @@ def test_acceptable_failure_policy_rules() -> None:
 
         # (1) the range, at both ends and just past the top.
         for value in (0, 9):
-            probe_census.record_policy(path, "alpha",
+            census_storage.record_policy(path, "alpha",
                                        acceptable_failures=value,
                                        justification="stated")
             expect(json.loads(path.read_text(encoding="utf-8"))["probes"][0][
@@ -267,31 +269,31 @@ def test_acceptable_failure_policy_rules() -> None:
                 ("3", "a string X", "'3'"),
                 (None, "a null X", "no acceptable-failure policy")):
             expect_refusal(
-                lambda v=value: probe_census.record_policy(
+                lambda v=value: census_storage.record_policy(
                     path, "alpha", acceptable_failures=v),
                 f"storing {value!r} as X is refused ({why})", fragment)
             unchanged(path, before, f"...and wrote nothing ({value!r})")
 
         # (2) X>0 needs a reason, and whitespace is not one.
-        probe_census.record_policy(path, "alpha", acceptable_failures=0,
+        census_storage.record_policy(path, "alpha", acceptable_failures=0,
                                    justification=None)
         before = path.read_bytes()
         for text, why in ((None, "a cleared justification"),
                           ("", "an empty justification"),
                           ("   \t\n ", "a whitespace-only justification")):
             expect_refusal(
-                lambda t=text: probe_census.record_policy(
+                lambda t=text: census_storage.record_policy(
                     path, "alpha", acceptable_failures=1, justification=t),
                 f"X=1 with {why} is refused",
                 "no stated reason", "--justification")
             unchanged(path, before, f"...and wrote nothing ({why})")
-        expect(probe_census.record_policy(
+        expect(census_storage.record_policy(
             path, "alpha", acceptable_failures=1,
             justification="one known race") == "alpha",
             "the same X with a real reason is accepted")
 
         # A stored reason satisfies it: a later X change need not resupply.
-        probe_census.record_policy(path, "alpha", acceptable_failures=4)
+        census_storage.record_policy(path, "alpha", acceptable_failures=4)
         expect(json.loads(path.read_text(encoding="utf-8"))["probes"][0][
                    "census"]["acceptable_failures_justification"]
                == "one known race",
@@ -301,12 +303,12 @@ def test_acceptable_failure_policy_rules() -> None:
         # (3) tolerance is a manual-only concept.
         before = path.read_bytes()
         expect_refusal(
-            lambda: probe_census.record_policy(
+            lambda: census_storage.record_policy(
                 path, "beta", acceptable_failures=1, justification="a race"),
             "a tolerance on a CI-eligible probe is refused",
             "ci-eligible", "manual-only concept")
         unchanged(path, before, "...and wrote nothing")
-        probe_census.record_policy(path, "beta", acceptable_failures=0)
+        census_storage.record_policy(path, "beta", acceptable_failures=0)
         expect(json.loads(path.read_text(encoding="utf-8"))["probes"][1][
                    "census"]["acceptable_failures"] == 0,
                "X=0 on a CI-eligible probe is exactly what it must be")
@@ -319,14 +321,14 @@ def test_acceptable_failure_policy_promotion() -> None:
         path = root / "probe_census.json"
         with registry():
             seeded(path)
-            probe_census.record_policy(path, "beta", acceptable_failures=3,
+            census_storage.record_policy(path, "beta", acceptable_failures=3,
                                        justification="three races")
-            probe_census.record_result(path, result_document(probe="beta"))
+            census_storage.record_result(path, result_document(probe="beta"))
         before = path.read_bytes()
 
         with registry(ci_eligible={"beta"}):
             expect_refusal(
-                lambda: probe_census.ensure_document(path),
+                lambda: census_storage.ensure_document(path),
                 "--seed refuses to promote a row that still holds a "
                 "tolerance", "beta", "ci-eligible", "manual-only concept")
             unchanged(path, before,
@@ -338,15 +340,15 @@ def test_acceptable_failure_policy_promotion() -> None:
             # A row that is policy-invalid blocks every mutation, which
             # is what keeps it VISIBLE instead of quietly repaired.
             expect_refusal(
-                lambda: probe_census.record_policy(
+                lambda: census_storage.record_policy(
                     path, "alpha", acceptable_failures=0),
                 "an unrelated policy update is blocked while it stands",
                 "beta")
 
             # Resetting X is the one move that unblocks it, and the
             # promotion then archives the cohort as it always did.
-            probe_census.record_policy(path, "beta", acceptable_failures=0)
-            result = probe_census.ensure_document(path)
+            census_storage.record_policy(path, "beta", acceptable_failures=0)
+            result = census_storage.ensure_document(path)
         beta = {row["key"]: row for row in result["probes"]}["beta"]
         expect(beta["classification"] == "ci-eligible"
                and beta["census"]["current"] is None
@@ -360,44 +362,44 @@ def test_acceptable_failure_policy_promotion() -> None:
 def test_acceptable_failure_threshold() -> None:
     """Failures <= X is acceptable; failures > X is over tolerance."""
     print("\n-- the threshold, at X and at X+1 --")
-    N = probe_census.POLICY_RUN_COUNT
-    for x in range(probe_census.MIN_ACCEPTABLE_FAILURES,
-                   probe_census.MAX_ACCEPTABLE_FAILURES + 1):
-        expect(probe_census.tolerance_state(x, N, N, x)
-               == probe_census.TOLERANCE_ACCEPTABLE,
+    N = census_contract.POLICY_RUN_COUNT
+    for x in range(census_contract.MIN_ACCEPTABLE_FAILURES,
+                   census_contract.MAX_ACCEPTABLE_FAILURES + 1):
+        expect(census_records.tolerance_state(x, N, N, x)
+               == census_contract.TOLERANCE_ACCEPTABLE,
                f"X={x}: exactly {x} failure(s) in {N} runs is acceptable")
-        expect(probe_census.tolerance_state(x, N, N, x + 1)
-               == probe_census.TOLERANCE_OVER,
+        expect(census_records.tolerance_state(x, N, N, x + 1)
+               == census_contract.TOLERANCE_OVER,
                f"X={x}: {x + 1} failure(s) in {N} runs is over tolerance")
-    expect(probe_census.tolerance_state(0, N, N, 0)
-           == probe_census.TOLERANCE_ACCEPTABLE
-           and probe_census.tolerance_state(0, N, N, 1)
-           == probe_census.TOLERANCE_OVER,
+    expect(census_records.tolerance_state(0, N, N, 0)
+           == census_contract.TOLERANCE_ACCEPTABLE
+           and census_records.tolerance_state(0, N, N, 1)
+           == census_contract.TOLERANCE_OVER,
            "X=0 means a clean sweep, and one failure breaches it")
-    expect(probe_census.tolerance_state(1, N, N, 0)
-           == probe_census.TOLERANCE_ACCEPTABLE
-           and probe_census.tolerance_state(1, N, N, 1)
-           == probe_census.TOLERANCE_ACCEPTABLE,
+    expect(census_records.tolerance_state(1, N, N, 0)
+           == census_contract.TOLERANCE_ACCEPTABLE
+           and census_records.tolerance_state(1, N, N, 1)
+           == census_contract.TOLERANCE_ACCEPTABLE,
            "X=1 accepts both 10/10 and 9/10")
 
     # The basis is a COMPLETE fixed-N measurement, and nothing else.
     for runs, why in ((N - 1, "a shorter run"), (N + 1, "a longer run"),
                       (0, "no runs at all")):
-        expect(probe_census.tolerance_state(0, runs, runs, 0)
-               == probe_census.TOLERANCE_NOT_COMPARABLE,
+        expect(census_records.tolerance_state(0, runs, runs, 0)
+               == census_contract.TOLERANCE_NOT_COMPARABLE,
                f"{why} is not classified against a policy stated out of {N}")
-    expect(probe_census.tolerance_state(0, N, N - 1, 0)
-           == probe_census.TOLERANCE_NOT_COMPARABLE,
+    expect(census_records.tolerance_state(0, N, N - 1, 0)
+           == census_contract.TOLERANCE_NOT_COMPARABLE,
            "and an INCOMPLETE ten-run measurement is not one either")
     for value, why in ((None, "a null X"), (True, "a boolean X"),
                        (2.5, "a fractional X"), (10, "an out-of-range X")):
-        expect(probe_census.tolerance_state(value, N, N, 0)
-               == probe_census.TOLERANCE_NOT_COMPARABLE,
+        expect(census_records.tolerance_state(value, N, N, 0)
+               == census_contract.TOLERANCE_NOT_COMPARABLE,
                f"{why} classifies nothing")
-    expect(probe_census.tolerance_state(1, N, N, None)
-           == probe_census.TOLERANCE_NOT_COMPARABLE
-           and probe_census.tolerance_state(1, N, N, -1)
-           == probe_census.TOLERANCE_NOT_COMPARABLE,
+    expect(census_records.tolerance_state(1, N, N, None)
+           == census_contract.TOLERANCE_NOT_COMPARABLE
+           and census_records.tolerance_state(1, N, N, -1)
+           == census_contract.TOLERANCE_NOT_COMPARABLE,
            "an unusable failure count classifies nothing either")
 
     # The measurement it is asked about is ONE sample, never a cohort's
@@ -407,27 +409,27 @@ def test_acceptable_failure_threshold() -> None:
         return {"requested_runs": runs, "completed_runs": runs,
                 "failure_count": failures, "retained_artifacts": [mark]}
 
-    expect(probe_census.policy_sample({"samples": []}) is None
-           and probe_census.policy_sample({}) is None
-           and probe_census.policy_sample(None) is None,
+    expect(census_records.policy_sample({"samples": []}) is None
+           and census_records.policy_sample({}) is None
+           and census_records.policy_sample(None) is None,
            "a cohort with no samples has no policy measurement")
-    expect(probe_census.policy_sample(
+    expect(census_records.policy_sample(
         {"samples": [sized(5, 0, "a"), sized(5, 3, "b")]}) is None,
         "two five-run samples do NOT add up to a ten-run measurement")
-    picked = probe_census.policy_sample(
+    picked = census_records.policy_sample(
         {"samples": [sized(N, 0, "first"), sized(N, 4, "second")]})
     expect(picked is not None and picked["retained_artifacts"] == ["second"],
            "two ten-run samples stay comparable, and the LAST appended one "
            "is the current measurement")
-    picked = probe_census.policy_sample(
+    picked = census_records.policy_sample(
         {"samples": [sized(N, 0, "ten"), sized(3, 0, "three")]})
     expect(picked is not None and picked["retained_artifacts"] == ["ten"],
            "a later odd-sized run does not hide the newest ten-run one")
-    expect(probe_census.policy_sample(
+    expect(census_records.policy_sample(
         {"samples": [{"requested_runs": N, "completed_runs": N - 1,
                       "failure_count": 0}]}) is None,
         "an incomplete ten-run sample is not a policy measurement")
-    expect(probe_census.policy_sample({"samples": [7, None]}) is None,
+    expect(census_records.policy_sample({"samples": [7, None]}) is None,
            "and a malformed sample is skipped rather than raised on")
 
 
@@ -482,7 +484,7 @@ def test_acceptable_failure_policy_cli() -> None:
 
     # End to end, through real ingested measurements: the classification
     # is ONE sample's, never the cohort's pooled totals.
-    N = probe_census.POLICY_RUN_COUNT
+    N = census_contract.POLICY_RUN_COUNT
     with registry(), scratch() as root:
         def tolerance(path):
             return summary_of(path)["tolerance"]
@@ -491,9 +493,9 @@ def test_acceptable_failure_policy_cli() -> None:
         for failures, expected in ((1, "acceptable"), (2, "over-tolerance")):
             path = root / f"one-{failures}.json"
             seeded(path)
-            probe_census.record_policy(path, "alpha", acceptable_failures=1,
+            census_storage.record_policy(path, "alpha", acceptable_failures=1,
                                        justification="one known race")
-            probe_census.record_result(
+            census_storage.record_result(
                 path, measurement(runs=N, failures=failures, age_days=1))
             expect(tolerance(path) == expected,
                    f"a single {N}-run measurement with {failures} failure(s) "
@@ -503,11 +505,11 @@ def test_acceptable_failure_policy_cli() -> None:
         # runs, and must NOT be read as a ten-run result.
         path = root / "split.json"
         seeded(path)
-        probe_census.record_policy(path, "alpha", acceptable_failures=1,
+        census_storage.record_policy(path, "alpha", acceptable_failures=1,
                                    justification="one known race")
-        probe_census.record_result(path, measurement(runs=5, failures=0,
+        census_storage.record_result(path, measurement(runs=5, failures=0,
                                                      age_days=2))
-        probe_census.record_result(path, measurement(runs=5, failures=3,
+        census_storage.record_result(path, measurement(runs=5, failures=3,
                                                      age_days=1))
         expect(summary_of(path)["requested_runs"] == 2 * 5,
                "the cohort really does pool to ten runs")
@@ -519,11 +521,11 @@ def test_acceptable_failure_policy_cli() -> None:
         # to twenty, which must not stop them being comparable.
         path = root / "repeated.json"
         seeded(path)
-        probe_census.record_policy(path, "alpha", acceptable_failures=1,
+        census_storage.record_policy(path, "alpha", acceptable_failures=1,
                                    justification="one known race")
-        probe_census.record_result(path, measurement(runs=N, failures=0,
+        census_storage.record_result(path, measurement(runs=N, failures=0,
                                                      age_days=2))
-        probe_census.record_result(path, measurement(runs=N, failures=5,
+        census_storage.record_result(path, measurement(runs=N, failures=5,
                                                      age_days=1))
         expect(summary_of(path)["requested_runs"] == 2 * N,
                "the cohort pools to twenty runs")
@@ -532,7 +534,7 @@ def test_acceptable_failure_policy_cli() -> None:
                "rather than the pooled total falling out of the policy")
 
         # An odd-sized run afterwards does not erase the last real one.
-        probe_census.record_result(path, measurement(runs=3, failures=0,
+        census_storage.record_result(path, measurement(runs=3, failures=0,
                                                      age_days=0))
         expect(tolerance(path) == "over-tolerance",
                "a later three-run measurement leaves the newest ten-run "
@@ -551,7 +553,7 @@ def test_refusals() -> None:
         broken = root / "broken.json"
         broken.write_text("{not json", encoding="utf-8")
         broken_bytes = broken.read_bytes()
-        expect_refusal(lambda: probe_census.record_result(broken,
+        expect_refusal(lambda: census_storage.record_result(broken,
                                                           result_document()),
                        "a census that is not valid JSON is refused",
                        "not valid JSON")
@@ -560,7 +562,7 @@ def test_refusals() -> None:
 
         # An absent or unmigrated census names --seed and never migrates.
         absent = root / "absent.json"
-        expect_refusal(lambda: probe_census.record_result(absent,
+        expect_refusal(lambda: census_storage.record_result(absent,
                                                           result_document()),
                        "recording into an absent census names --seed", "--seed")
         expect(not absent.exists(),
@@ -568,11 +570,11 @@ def test_refusals() -> None:
         legacy = root / "legacy.json"
         legacy.write_text(json.dumps(v1_document()) + "\n", encoding="utf-8")
         legacy_bytes = legacy.read_bytes()
-        expect_refusal(lambda: probe_census.record_result(legacy,
+        expect_refusal(lambda: census_storage.record_result(legacy,
                                                           result_document()),
                        "recording into a v1 census names --seed",
                        "probe-census/v1", "--seed")
-        expect_refusal(lambda: probe_census.record_policy(
+        expect_refusal(lambda: census_storage.record_policy(
             legacy, "alpha", acceptable_failures=1),
             "a policy update on a v1 census names --seed", "--seed")
         unchanged(legacy, legacy_bytes,
@@ -588,10 +590,10 @@ def test_refusals() -> None:
             ({"status": "weird"}, "weird", "an unrecognized status"),
         ):
             expect_refusal(
-                lambda m=mutation: probe_census.record_result(
+                lambda m=mutation: census_storage.record_result(
                     path, result_document(**m)),
                 f"{why} is refused", fragment)
-        expect_refusal(lambda: probe_census.record_result(path, [1, 2]),
+        expect_refusal(lambda: census_storage.record_result(path, [1, 2]),
                        "a result that is not an object is refused",
                        "is not of type 'object'")
         after = json.loads(path.read_text(encoding="utf-8"))
@@ -600,7 +602,7 @@ def test_refusals() -> None:
                "an unrecognized status is NOT logged as a failed attempt")
 
         # A result naming a probe with no row.
-        expect_refusal(lambda: probe_census.record_result(
+        expect_refusal(lambda: census_storage.record_result(
             path, result_document(probe="ghost")),
             "a result naming no census row is refused", "ghost", "--seed")
 
@@ -617,12 +619,12 @@ def test_refusals() -> None:
              "a non-list `retained_artifacts`"),
         ):
             expect_refusal(
-                lambda m=mutation: probe_census.record_result(
+                lambda m=mutation: census_storage.record_result(
                     path, result_document(**m)),
                 f"{why} is refused", fragment)
         missing = result_document()
         del missing["worst_elapsed_seconds"]
-        expect_refusal(lambda: probe_census.record_result(path, missing),
+        expect_refusal(lambda: census_storage.record_result(path, missing),
                        "a result missing a summarized field is refused",
                        "worst_elapsed_seconds")
         unchanged(path, before, "not one refusal changed the census bytes")
@@ -657,12 +659,12 @@ def test_malformed_rows_refuse_cleanly() -> None:
     print("\n-- structurally malformed census state --")
 
     def census_with(rows):
-        return {"schema": probe_census.CENSUS_SCHEMA, "probes": rows}
+        return {"schema": census_contract.CENSUS_SCHEMA, "probes": rows}
 
     def row(key="alpha", census=None):
         return {"key": key, "script": "alpha_probe.py",
                 "classification": "manual-only", "protocol": "legacy",
-                "census": probe_census.empty_census() if census is None
+                "census": census_records.empty_census() if census is None
                 else census}
 
     with registry(), scratch() as root:
@@ -675,20 +677,20 @@ def test_malformed_rows_refuse_cleanly() -> None:
              "a row whose key is a number"),
             (census_with([{"script": "x.py"}]), "'key' is a required property",
              "a row with no key at all"),
-            ({"schema": probe_census.CENSUS_SCHEMA,
+            ({"schema": census_contract.CENSUS_SCHEMA,
               "probes": {"alpha": {}}},
              "$.probes", "a `probes` mapping instead of a list"),
             (census_with(["alpha"]), "$.probes[0]",
              "a row that is a bare string"),
-            (census_with([row(census={**probe_census.empty_census(),
+            (census_with([row(census={**census_records.empty_census(),
                                       "attempts": 5})]),
              "$.probes[0].census.attempts", "a non-list attempt log"),
-            (census_with([row(census={**probe_census.empty_census(),
+            (census_with([row(census={**census_records.empty_census(),
                                       "history": "old",
                                       "current": {"commit_sha": COMMIT_B,
                                                   "samples": []}})]),
              "$.probes[0].census.history", "a non-list history"),
-            (census_with([row(census={**probe_census.empty_census(),
+            (census_with([row(census={**census_records.empty_census(),
                                       "current": {"commit_sha": COMMIT_A,
                                                   "samples": 3}})]),
              "$.probes[0].census.current.samples", "a non-list sample list"),
@@ -700,7 +702,7 @@ def test_malformed_rows_refuse_cleanly() -> None:
             path.write_text(json.dumps(document), encoding="utf-8")
             before = path.read_bytes()
             expect_refusal(
-                lambda p=path: probe_census.record_result(p, result_document()),
+                lambda p=path: census_storage.record_result(p, result_document()),
                 f"--record refuses {why}", fragment)
             unchanged(path, before, f"...and changes no bytes ({why})")
 
@@ -709,7 +711,7 @@ def test_malformed_rows_refuse_cleanly() -> None:
             path = root / f"seed-{index}.json"
             path.write_text(json.dumps(document), encoding="utf-8")
             before = path.read_bytes()
-            expect_refusal(lambda p=path: probe_census.ensure_document(p),
+            expect_refusal(lambda p=path: census_storage.ensure_document(p),
                            f"--seed refuses {why}", fragment)
             unchanged(path, before, f"...and changes no bytes ({why})")
 
@@ -717,7 +719,7 @@ def test_malformed_rows_refuse_cleanly() -> None:
         path = root / "policy.json"
         path.write_text(json.dumps(census_with([row(key=[])])), encoding="utf-8")
         before = path.read_bytes()
-        expect_refusal(lambda: probe_census.record_policy(
+        expect_refusal(lambda: census_storage.record_policy(
             path, "alpha", acceptable_failures=1),
             "a policy update refuses an unusable row key", "$.probes[0].key")
         unchanged(path, before, "...and changes no bytes")
@@ -729,15 +731,15 @@ def test_malformed_rows_refuse_cleanly() -> None:
         for field in ("history", "attempts"):
             path = root / f"seedcmp-{field}.json"
             path.write_text(json.dumps(census_with([
-                row(census={**probe_census.empty_census(), field: 5})])),
+                row(census={**census_records.empty_census(), field: 5})])),
                 encoding="utf-8")
             before = path.read_bytes()
-            expect_refusal(lambda p=path: probe_census.ensure_document(p),
+            expect_refusal(lambda p=path: census_storage.ensure_document(p),
                            f"--seed refuses a stored non-list `{field}`",
                            f"$.probes[0].census.{field}")
             unchanged(path, before, f"...and changes no bytes (`{field}`)")
             expect_refusal(
-                lambda p=path: probe_census.record_result(p, result_document()),
+                lambda p=path: census_storage.record_result(p, result_document()),
                 f"--record refuses the same stored non-list `{field}`",
                 f"$.probes[0].census.{field}")
             unchanged(path, before, f"...and changes no bytes (`{field}`)")
@@ -749,11 +751,11 @@ def test_malformed_rows_refuse_cleanly() -> None:
         # #1492's to report" meant, and this is #1492 reporting it.
         path = root / "seedcmp-samples.json"
         path.write_text(json.dumps(census_with([
-            row(census={**probe_census.empty_census(),
+            row(census={**census_records.empty_census(),
                         "history": [{"commit_sha": COMMIT_A, "samples": 4}]})])),
             encoding="utf-8")
         before = path.read_bytes()
-        expect_refusal(lambda: probe_census.ensure_document(path),
+        expect_refusal(lambda: census_storage.ensure_document(path),
                        "--seed refuses an archived cohort whose `samples` is "
                        "not a list, which #1428 could only tolerate",
                        "$.probes[0].census.history[0].samples")
@@ -768,7 +770,7 @@ def test_malformed_rows_refuse_cleanly() -> None:
         def exploding(_before):
             raise TypeError("unhashable type: 'list'")
 
-        expect_refusal(lambda: probe_census.update(good, exploding),
+        expect_refusal(lambda: census_storage.update(good, exploding),
                        "a structural/type error inside the transaction is a "
                        "controlled refusal, not a traceback",
                        "structurally malformed", "TypeError")
@@ -777,9 +779,9 @@ def test_malformed_rows_refuse_cleanly() -> None:
         # A CensusError from the mutation is NOT rewrapped: its own
         # actionable message survives.
         def refusing(_before):
-            raise probe_census.CensusError("seed it first with --seed")
+            raise census_contract.CensusError("seed it first with --seed")
 
-        expect_refusal(lambda: probe_census.update(good, refusing),
+        expect_refusal(lambda: census_storage.update(good, refusing),
                        "a deliberate refusal keeps its own message",
                        "seed it first with --seed")
 
@@ -792,22 +794,22 @@ def test_duplicate_target_rows() -> None:
     def row(key, census=None):
         return {"key": key, "script": f"{key}_probe.py",
                 "classification": "manual-only", "protocol": "legacy",
-                "census": probe_census.empty_census() if census is None
+                "census": census_records.empty_census() if census is None
                 else census}
 
     with registry(), scratch() as root:
         duped = root / "duplicate-target.json"
         duped.write_text(json.dumps({
-            "schema": probe_census.CENSUS_SCHEMA,
+            "schema": census_contract.CENSUS_SCHEMA,
             "probes": [row("alpha"), row("beta"), row("alpha")]}),
             encoding="utf-8")
         before = duped.read_bytes()
-        expect_refusal(lambda: probe_census.record_result(duped,
+        expect_refusal(lambda: census_storage.record_result(duped,
                                                           result_document()),
                        "--record refuses a probe with two census rows",
                        "2 census rows", "--record")
         unchanged(duped, before, "...and changes no bytes")
-        expect_refusal(lambda: probe_census.record_policy(
+        expect_refusal(lambda: census_storage.record_policy(
             duped, "alpha", acceptable_failures=1),
             "a policy update refuses a probe with two census rows",
             "2 census rows", "a policy update")
@@ -823,17 +825,17 @@ def test_duplicate_target_rows() -> None:
         # discard a finished measurement.
         elsewhere = root / "unrelated-duplicate.json"
         elsewhere.write_text(json.dumps({
-            "schema": probe_census.CENSUS_SCHEMA,
+            "schema": census_contract.CENSUS_SCHEMA,
             "probes": [row("alpha"), row("beta"), row("beta")]}),
             encoding="utf-8")
-        probe_census.record_result(elsewhere, result_document())
+        census_storage.record_result(elsewhere, result_document())
         stored = json.loads(elsewhere.read_text(encoding="utf-8"))
         expect(len(stored["probes"][0]["census"]["current"]["samples"]) == 1,
                "an unrelated duplicate row does not refuse the measurement")
         expect([r["key"] for r in stored["probes"]]
                == ["alpha", "beta", "beta"],
                "and the duplicate rows are preserved verbatim for a person")
-        expect(all(r["census"] == probe_census.empty_census()
+        expect(all(r["census"] == census_records.empty_census()
                    for r in stored["probes"][1:]),
                "neither unrelated row was touched")
 
@@ -915,7 +917,7 @@ def test_cli_justification() -> None:
                    and stored()["acceptable_failures_justification"] == text,
                    f"--justification {text!r} round-trips as stored text")
         expect(stored()["acceptable_failures"] == 4
-               and stored("beta") == probe_census.empty_census(),
+               and stored("beta") == census_records.empty_census(),
                "and no justification command disturbed X or another row")
 
         # #1430: the staging spelling #1428 accepted is now refused,
@@ -938,6 +940,44 @@ def test_cli_justification() -> None:
 
 def test_cli() -> None:
     print("\n-- the CLI contract --")
+
+    # The SCRIPT, run the way every caller and every doc runs it. Every
+    # other case here drives `probe_census.main()` in process through
+    # `cli`, which is faster and lets a fixture patch the registry -- and
+    # which is exactly why it cannot see whether the module still HAS an
+    # entry point. A `probe_census.py` whose `if __name__ ...` block went
+    # missing imports cleanly, exits 0 and writes nothing, so every
+    # in-process case stays green while the command does nothing at all.
+    # Asserting on stdout rather than the status is the whole point: the
+    # status was already 0.
+    #
+    # Outside the synthetic `registry()` below on purpose: a subprocess
+    # gets the real one, and what is under test is the entry point, not
+    # the inventory.
+    script = str(TOOLS_DIR / "probe_census.py")
+    printed = subprocess.run([sys.executable, script, "--print"],
+                             capture_output=True, text=True)
+    expect(printed.returncode == 0 and printed.stdout.strip() != "",
+           f"`python3 tools/probe_census.py --print` writes the manifest to "
+           f"stdout (exit {printed.returncode}, "
+           f"{len(printed.stdout)} byte(s))")
+    manifest = json.loads(printed.stdout) if printed.stdout.strip() else {}
+    expect(manifest.get("schema") == census_contract.CENSUS_SCHEMA
+           and isinstance(manifest.get("probes"), list)
+           and manifest["probes"],
+           "and what it writes is the live v5 manifest")
+
+    # `--help` is built from module constants and `description=__doc__`,
+    # so the facade has to keep importing those names and keep a usable
+    # docstring. Nothing else asserts on it.
+    helped = subprocess.run([sys.executable, script, "--help"],
+                            capture_output=True, text=True)
+    expect(helped.returncode == 0
+           and census_storage.MANIFEST_RELPATH in helped.stdout
+           and str(census_contract.POLICY_RUN_COUNT) in helped.stdout,
+           f"`--help` renders from the module docstring and constants "
+           f"(exit {helped.returncode})")
+
     with registry(ci_eligible={"beta"}):
         # `--print` must not require, read or create the docs worktree.
         saved = probe_census.manifest_path
@@ -948,7 +988,7 @@ def test_cli() -> None:
             document = json.loads(out)
             expect(code == 0 and document["schema"] == "probe-census/v5",
                    "--print emits the v5 census the live registry implies")
-            expect(all(row["census"] == probe_census.empty_census()
+            expect(all(row["census"] == census_records.empty_census()
                        for row in document["probes"]),
                    "--print gives every row an empty census record")
             # Returning early must not be a hole in the companion-flag

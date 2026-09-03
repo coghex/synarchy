@@ -61,6 +61,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deflake  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
+# The recorder seams these cases inject at -- `tempfile.mkstemp` and
+# `os.fsync` -- are reached through the STORAGE owner, which is the
+# module that stages and fsyncs a census write since #2131.
+import probe_census_storage as census_storage  # type: ignore  # noqa: E402
 import probe_claim  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
@@ -313,7 +317,7 @@ class seams_restored:
     `finally`: `probe_runner_resources.ENGINE_EXECUTABLE` (installed by
     `deflake` under every `run`, and assigned by the preparation cases),
     `PATH` (prepended by the real-preparation case),
-    `probe_census.tempfile.mkstemp` and `probe_census.os.fsync` (the two
+    `census_storage.tempfile.mkstemp` and `census_storage.os.fsync` (the two
     recorder-failure cases) and `argparse.ArgumentParser.parse_args` (the
     CLI case). A case that restores its own seam is the rule; this is
     the check that the rule held, run by every entry point around the
@@ -322,7 +326,7 @@ class seams_restored:
     """
 
     SEAMS = ("probe_runner_resources.ENGINE_EXECUTABLE", "PATH",
-             "probe_census.tempfile.mkstemp", "probe_census.os.fsync",
+             "census_storage.tempfile.mkstemp", "census_storage.os.fsync",
              "argparse.ArgumentParser.parse_args")
 
     @staticmethod
@@ -331,8 +335,8 @@ class seams_restored:
             "probe_runner_resources.ENGINE_EXECUTABLE":
                 probe_runner_resources.ENGINE_EXECUTABLE,
             "PATH": os.environ.get("PATH"),
-            "probe_census.tempfile.mkstemp": probe_census.tempfile.mkstemp,
-            "probe_census.os.fsync": probe_census.os.fsync,
+            "census_storage.tempfile.mkstemp": census_storage.tempfile.mkstemp,
+            "census_storage.os.fsync": census_storage.os.fsync,
             "argparse.ArgumentParser.parse_args":
                 argparse.ArgumentParser.parse_args,
         }
