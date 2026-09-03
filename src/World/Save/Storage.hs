@@ -69,8 +69,25 @@
 --   === Documented durability boundary (requirement 4)
 --
 --   \"Durable\" here means: the candidate's data + the directory entries
---   for every rename above have been handed to 'fileSynchronise' (@fsync@)
---   and that call returned without error. On Linux (ext4/xfs/btrfs) this
+--   for every rename above + — when this publication had to CREATE the
+--   slot directory — the entries in the directories that OWN it have
+--   been handed to 'fileSynchronise' (@fsync@) and that call returned
+--   without error.
+--
+--   That last clause is issue #2229. Syncing @saves\/\<slot\>@ persists
+--   the entries INSIDE it; it says nothing about the entry in
+--   @saves\/@ that NAMES it, which is exactly the distinction
+--   'World.Save.Storage.Durable.syncDirectory' exists to state. So a
+--   publication that created the slot directory also syncs
+--   'slotOwnerDirectories' — @saves\/@, then @saves\/@'s own owner (the
+--   resolved resource root) — before it reports success, failing as
+--   'PhaseOwnerDirectorySync' naming the directory that failed if it
+--   cannot. Both owners, every time the slot is not an ESTABLISHED
+--   published one ('isEstablishedSlot'): @saves\/@ is routinely created
+--   by 'World.Save.Serialize.listSaves' without any sync at all, so its
+--   mere existence never proves its own naming entry is durable. An
+--   established slot's owning entry is already durable from the
+--   publication that established it and adds no sync here. On Linux (ext4/xfs/btrfs) this
 --   is a real durability guarantee against a subsequent crash or power
 --   loss. On macOS, the kernel's plain @fsync(2)@ does NOT guarantee the
 --   drive's own write cache has been flushed to physical media — only
@@ -164,7 +181,7 @@ import Control.Exception (IOException, SomeException, try, finally)
 import System.Directory
     ( createDirectoryIfMissing, doesFileExist, removeFile, listDirectory
     , renameFile )
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 import System.IO (Handle, openBinaryTempFile)
 import System.IO.Error (isDoesNotExistError)
 import World.Save.Storage.Durable
@@ -300,6 +317,17 @@ data StoragePhase
         --   publish is refused before any candidate is even written —
         --   see 'foreignOptionalDataCheck'.
     | PhaseDirectoryCreate
+    | PhaseOwnerDirectorySync
+        -- ^ Issue #2229: the directories that OWN a slot directory this
+        --   publication had to create — @saves\/@ itself, and in turn
+        --   @saves\/@'s own owner (the resolved resource root) — could
+        --   not be made durable. Deliberately its OWN phase, distinct
+        --   from 'PhaseDirectorySync' below (which reports the syncs of
+        --   the slot directory's own entries, after each rename inside
+        --   it): a failure here means the entry NAMING the slot, not any
+        --   entry within it, is the part that may not survive a crash,
+        --   and 'pfPath' names the owner directory that actually failed
+        --   rather than the slot. See 'slotOwnerDirectories'.
     | PhaseCandidateCreate
     | PhaseCandidateWrite
     | PhaseCandidateFlush
@@ -349,7 +377,7 @@ publishGeneration
     → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
 publishGeneration =
-    publishGenerationWithSeams openBinaryTempFile BS.readFile
+    publishGenerationWithSeams openBinaryTempFile BS.readFile syncDirectory
 
 -- | The storage transaction with the candidate-file creation operation
 -- supplied by the caller. Production uses 'publishGeneration'; this
@@ -357,8 +385,10 @@ publishGeneration =
 -- failure classification deterministically, including in CI containers
 -- that run as root and therefore bypass ordinary directory mode bits.
 --
--- Reads existing generations with the production 'BS.readFile'; to
--- inject a read failure as well, use 'publishGenerationWithSeams'.
+-- Reads existing generations with the production 'BS.readFile' and
+-- syncs with the production 'World.Save.Storage.Durable.syncDirectory';
+-- to inject a read or sync failure as well, use
+-- 'publishGenerationWithSeams'.
 publishGenerationWithCandidateCreator
     ∷ (FilePath → String → IO (FilePath, Handle))
     → FilePath        -- ^ slot directory
@@ -369,23 +399,36 @@ publishGenerationWithCandidateCreator
     → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
 publishGenerationWithCandidateCreator createCandidate =
-    publishGenerationWithSeams createCandidate BS.readFile
+    publishGenerationWithSeams createCandidate BS.readFile syncDirectory
 
--- | The storage transaction with BOTH injectable I\/O seams supplied by
--- the caller: the candidate-file creation operation, and the read of an
--- EXISTING generation file during the pre-publication inspection
--- ('existingGenerationPreflight'). Production uses 'publishGeneration',
--- which passes 'openBinaryTempFile' and 'BS.readFile' — the reader seam
--- exists so the headless gate can fail one exact generation path at a
--- time (issue #2227) without depending on filesystem mode bits, which
--- CI's root containers ignore. The reader is handed the full path of
--- the generation being inspected and is expected to throw an
--- 'IOException' the way 'BS.readFile' does; it is never used for the
--- candidate's own re-read (that stays 'BS.readFile' under
+-- | The storage transaction with ALL THREE of its injectable I\/O seams
+-- supplied by the caller: the candidate-file creation operation, the
+-- read of an EXISTING generation file during the pre-publication
+-- inspection ('existingGenerationPreflight'), and the directory sync
+-- every durability step goes through. Production uses
+-- 'publishGeneration', which passes 'openBinaryTempFile', 'BS.readFile'
+-- and 'World.Save.Storage.Durable.syncDirectory'.
+--
+-- The reader seam exists so the headless gate can fail one exact
+-- generation path at a time (issue #2227) without depending on
+-- filesystem mode bits, which CI's root containers ignore. The reader is
+-- handed the full path of the generation being inspected and is expected
+-- to throw an 'IOException' the way 'BS.readFile' does; it is never used
+-- for the candidate's own re-read (that stays 'BS.readFile' under
 -- 'PhaseCandidateReread').
+--
+-- The sync seam exists so the gate can prove each sync this transaction
+-- performs is actually REACHED and that its failure is reported as a
+-- publish failure before success, without depending on a real @fsync@
+-- ever failing on the machine running the suite (issue #2229
+-- requirement 4). It receives the directory being synced, so a test can
+-- fail exactly one of them: the owner directories
+-- ('slotOwnerDirectories', reported as 'PhaseOwnerDirectorySync') or the
+-- slot's own ('PhaseDirectorySync').
 publishGenerationWithSeams
     ∷ (FilePath → String → IO (FilePath, Handle))
     → (FilePath → IO BS.ByteString)
+    → (FilePath → IO ())
     → FilePath        -- ^ slot directory
     → Text             -- ^ slot name (diagnostics only)
     → SaveMetadata      -- ^ metadata this candidate must decode back to
@@ -393,7 +436,7 @@ publishGenerationWithSeams
     → HS.HashSet Text    -- ^ every Lua component NAME this encode included
     → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
-publishGenerationWithSeams createCandidate readGeneration dir slotName
+publishGenerationWithSeams createCandidate readGeneration syncDir dir slotName
     expectedMeta encoded luaKnownNames luaRequiredNames = do
     safety ← rejectSymlinkedSlotDir dir
     case safety of
@@ -409,22 +452,81 @@ publishGenerationWithSeams createCandidate readGeneration dir slotName
                 Left (PreflightForeignData reason) →
                     pure (Left (failure PhaseForeignOptionalData (Just dir) reason))
                 Right () → do
+                    established ← isEstablishedSlot dir
                     dirResult ← try (createDirectoryIfMissing True dir)
                     case dirResult of
                         Left (e ∷ IOException) →
                             pure (Left (failure PhaseDirectoryCreate (Just dir) (showT e)))
                         Right () → do
-                            created ← try (createCandidate dir candidateTemplate)
-                            case created of
-                                Left (e ∷ IOException) →
-                                    pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
-                                Right (tempPath, h) →
-                                    writeValidateAndPublish dir slotName expectedMeta
-                                        encoded luaKnownNames luaRequiredNames
-                                        tempPath h
-                                        `finally` cleanupLeftoverTemp tempPath
+                            owned ← syncSlotOwners established
+                            case owned of
+                                Left f → pure (Left f)
+                                Right () → do
+                                    created ← try (createCandidate dir candidateTemplate)
+                                    case created of
+                                        Left (e ∷ IOException) →
+                                            pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
+                                        Right (tempPath, h) →
+                                            writeValidateAndPublish syncDir dir slotName
+                                                expectedMeta
+                                                encoded luaKnownNames luaRequiredNames
+                                                tempPath h
+                                                `finally` cleanupLeftoverTemp tempPath
   where
     failure = publishFailureFor slotName
+    -- Issue #2229. An ESTABLISHED slot's owning entry was already made
+    -- durable by whichever publication first established it, so the
+    -- ordinary overwrite path adds no sync at all here. Everything else
+    -- -- a brand-new slot, and equally a slot directory left behind by
+    -- an EARLIER attempt that failed at exactly this step -- syncs.
+    syncSlotOwners True  = pure (Right ())
+    syncSlotOwners False = go (slotOwnerDirectories dir)
+      where
+        go []            = pure (Right ())
+        go (owner : more) = do
+            result ← try (syncDir owner)
+            case result of
+                Left (e ∷ SomeException) → pure
+                    (Left (failure PhaseOwnerDirectorySync (Just owner) (showT e)))
+                Right () → go more
+
+-- | Whether this slot is an ESTABLISHED published slot: one that
+--   already holds a generation a previous publication put there (issue
+--   #2229). Deliberately NOT \"the slot directory exists\": a publish
+--   that failed at 'PhaseOwnerDirectorySync' leaves the empty directory
+--   behind, and treating that leftover as an ordinary overwrite would
+--   let the very next attempt report success while the entry naming the
+--   slot was still only in the page cache -- the exact durability hole
+--   this all exists to close. An empty (or artifact-only) slot
+--   directory therefore syncs its owners again.
+isEstablishedSlot ∷ FilePath → IO Bool
+isEstablishedSlot dir = do
+    auth ← doesFileExist (dir </> authoritativeFileName)
+    if auth
+        then pure True
+        else doesFileExist (dir </> previousGenerationFileName)
+
+-- | Every directory whose OWN entry list has to be durable before a
+--   publication that created @dir@ may report success (issue #2229), in
+--   the order they are synced: the slot's immediate owner (in
+--   production @saves\/@) first, then that directory's own owner (the
+--   resolved resource root).
+--
+--   Both, unconditionally, and NOT \"only when this publication created
+--   @saves\/@ too\": 'World.Save.Serialize.listSaves' creates
+--   @saves\/@ with 'createDirectoryIfMissing' and never syncs the root,
+--   so an existing @saves\/@ proves nothing about whether the entry
+--   naming it would survive a crash. A first-ever save on a fresh
+--   install routinely goes through exactly that path, which is the case
+--   where losing the whole tree costs the most.
+--
+--   Deduplicated because 'takeDirectory' is idempotent at a filesystem
+--   root (@\"\/\"@) and at a bare relative name (@\".\"@), where the two
+--   owners collapse to one directory that must not be synced twice.
+slotOwnerDirectories ∷ FilePath → [FilePath]
+slotOwnerDirectories dir = L.nub [owner, takeDirectory owner]
+  where
+    owner = takeDirectory dir
 
 -- | Build a 'PublishFailure' for a given slot. A plain top-level
 --   constructor application — kept as a named helper (rather than a
@@ -535,10 +637,10 @@ existingGenerationPreflight readGeneration dir luaKnownNames = do
                     pure (Right (foreignOptionalComponentIds luaKnownNames bytes))
 
 writeValidateAndPublish
-    ∷ FilePath → Text → SaveMetadata → BS.ByteString
+    ∷ (FilePath → IO ()) → FilePath → Text → SaveMetadata → BS.ByteString
     → HS.HashSet Text → HS.HashSet Text → FilePath → Handle
     → IO (Either PublishFailure [Text])
-writeValidateAndPublish dir slotName expectedMeta encoded
+writeValidateAndPublish syncDir dir slotName expectedMeta encoded
     luaKnownNames luaRequiredNames tempPath h = do
     writeResult ← try (BS.hPut h encoded)
     case writeResult of
@@ -562,7 +664,7 @@ writeValidateAndPublish dir slotName expectedMeta encoded
                                     pure (Left (fail' PhaseCandidateValidate
                                                     (Just tempPath) reason))
                                 Right () →
-                                    publishValidated dir slotName
+                                    publishValidated syncDir dir slotName
                                         luaKnownNames luaRequiredNames tempPath
   where
     fail' = publishFailureFor slotName
@@ -659,9 +761,9 @@ validateCandidate expectedMeta luaKnownNames luaRequiredNames bytes = do
 --   candidate publishes — no explicit rotation needed, since it was
 --   never moved out of that slot at all.
 publishValidated
-    ∷ FilePath → Text → HS.HashSet Text → HS.HashSet Text → FilePath
-    → IO (Either PublishFailure [Text])
-publishValidated dir slotName luaKnownNames luaRequiredNames tempPath = do
+    ∷ (FilePath → IO ()) → FilePath → Text → HS.HashSet Text → HS.HashSet Text
+    → FilePath → IO (Either PublishFailure [Text])
+publishValidated syncDir dir slotName luaKnownNames luaRequiredNames tempPath = do
     let authPath = dir </> authoritativeFileName
         prevPath = dir </> previousGenerationFileName
     topology ← classifyAuthoritative luaKnownNames luaRequiredNames authPath
@@ -679,7 +781,7 @@ publishValidated dir slotName luaKnownNames luaRequiredNames tempPath = do
     -- Sync the directory, then run @next@ only on success — every
     -- rename below is followed by this before the transaction proceeds.
     afterSync next = do
-        syncResult ← try (syncDirectory dir)
+        syncResult ← try (syncDir dir)
         case syncResult of
             Left (e ∷ SomeException) →
                 pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
