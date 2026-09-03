@@ -138,7 +138,7 @@ class RegistryError(Exception):
     """The check-owner inventories no longer compose into the full audit."""
 
 
-def check_inventories(
+def owner_inventories(
         owners: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     """Every owner's declared `CHECKS`, refusing an absent or empty one.
 
@@ -176,7 +176,7 @@ def compose_checks(owners: dict[str, Any] | None = None,
     repeats, and an owner-declared check the order never runs all fail
     here. Every check belongs to exactly one owner and runs exactly once.
     """
-    by_owner = check_inventories(owners)
+    by_owner = owner_inventories(owners)
 
     declared: dict[str, str] = {}
     registered: dict[Any, str] = {}
