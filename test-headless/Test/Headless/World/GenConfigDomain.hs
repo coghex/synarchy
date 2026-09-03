@@ -410,6 +410,29 @@ pureSpec = describe "world-generation setting domains" $ do
             rejections `shouldBe` []
             cfg `shouldBe` defaultWorldGenConfig { wgcWorldSize = 64 }
 
+    describe "the config-side repair" $ do
+        -- What 'World.Thread.Command.Init' relies on: whatever it reads
+        -- from worldGenConfigRef, the configuration it hands to
+        -- buildTimeline is in domain. Neither producer can write an
+        -- out-of-domain value any more, so this is the guard that makes
+        -- the guarantee independent of them.
+        let poisonedConfig = foldl' poison distinctConfig
+                                    (zip configFloatLeaves (cycle badValues))
+            poison cfg (leaf, bad) = flSet leaf (bvFloat bad) cfg
+
+        it "leaves nothing out of domain, whatever it was handed" $ do
+            worldGenConfigRejections poisonedConfig
+                `shouldSatisfy` \rs → length rs ≡ length configFloatLeaves
+            worldGenConfigRejections (fst (repairWorldGenConfig poisonedConfig))
+                `shouldBe` []
+
+        it "reports every leaf it repaired, once each, in table order" $
+            map (wgrField . fst) (snd (repairWorldGenConfig poisonedConfig))
+                `shouldBe` map flField configFloatLeaves
+
+        it "returns a valid config untouched and reports nothing" $
+            repairWorldGenConfig distinctConfig `shouldBe` (distinctConfig, [])
+
     describe "the save-side repair" $ do
         let distinctParams = foldl' step defaultWorldGenParams paramsFloatLeaves
             step p l = flSet l (distinctValue (flDomain l)) p
