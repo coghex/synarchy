@@ -6,6 +6,7 @@ module Engine.Asset.YamlBuildings
     , BuildingYamlFile(..)
     , parseBuildingAnim
     , loadBuildingYaml
+    , loadBuildingYamlOutcome
     ) where
 
 import UPrelude
@@ -20,7 +21,7 @@ import qualified Data.Aeson.Types as Aeson (Parser)
 import Building.Schema
 import Engine.Core.Log (LoggerState)
 import Engine.Graphics.Camera (CameraFacing(..))
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 import Power.Base (PowerNodeSpec, powerNodeSpecFromYaml)
 
 -- | One building animation as DECLARED: four ordered frame lists, one
@@ -417,6 +418,14 @@ instance FromJSON BuildingYamlFile where
     parseJSON = withObject "BuildingYamlFile" $ \v → BuildingYamlFile
         ⊚ v .: "buildings"
 
+-- | 'loadBuildingYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadBuildingYaml'.
+loadBuildingYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [BuildingYamlDef])
+loadBuildingYamlOutcome logger =
+    loadYamlListOutcome logger "building" "building definitions" byfBuildings
+
 loadBuildingYaml ∷ LoggerState → FilePath → IO [BuildingYamlDef]
-loadBuildingYaml logger =
-    loadYamlList logger "building" "building definitions" byfBuildings
+loadBuildingYaml logger path =
+    fromMaybe [] ⊚ loadBuildingYamlOutcome logger path

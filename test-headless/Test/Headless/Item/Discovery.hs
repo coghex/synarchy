@@ -99,20 +99,36 @@ itemYaml defs = unlines $ "items:" : concat
 -----------------------------------------------------------------------
 
 -- | Everything @scripts/startup_loader.lua@ reaches for outside its own
---   module, with @listFilesRecursive@ the ONLY enumeration that answers.
---   Every other family's @engine.listFiles@ returns nil — the loader's
---   own "no such directory" answer — so the queue under test holds
---   nothing but the item tree and the handful of unconditional entries.
+--   module, with @listFilesRecursive@ the ONLY enumeration whose order
+--   matters. Every flat YAML family gets one healthy placeholder: since
+--   #2203 an absent family is a terminal startup failure, so the item-order
+--   fixture must satisfy those unrelated readiness preconditions before
+--   the queue can reach the item tree it is testing.
 luaPrelude ∷ [Text] → Text
 luaPrelude enumeration = T.unlines
     [ "local recorded = {}"
+    , "local function healthyYaml() return 0, true end"
     , "engine = {"
     , "  logInfo = function() end, logWarn = function() end,"
-    , "  listFiles = function() return nil end,"
+    , "  logError = function() end,"
+    , "  listFiles = function(_, ext)"
+    , "      if ext == '.yaml' then return { 'fixture.yaml' } end"
+    , "      return nil end,"
     , "  loadTexture = function() end,"
     , "  loadTutorialDir = function() end,"
+    , "  loadMaterialYaml = healthyYaml,"
+    , "  loadVegetationYaml = healthyYaml,"
+    , "  loadFloraYaml = healthyYaml,"
+    , "  loadSubstanceYaml = healthyYaml,"
+    , "  loadInfectionYaml = healthyYaml,"
+    , "  loadRecipeYaml = healthyYaml,"
+    , "  loadEquipmentYaml = healthyYaml,"
+    , "  loadBuildingYaml = healthyYaml,"
+    , "  loadUnitYaml = healthyYaml,"
+    , "  loadLootTableYaml = healthyYaml,"
+    , "  loadLocationYaml = healthyYaml,"
     , "  loadItemYaml = function(p)"
-    , "      recorded[#recorded + 1] = p; return 1 end,"
+    , "      recorded[#recorded + 1] = p; return 1, true end,"
     , "}"
     , "local enumerations = { " <> luaList enumeration <> " }"
     , "local order = 1"
@@ -131,6 +147,8 @@ luaPrelude enumeration = T.unlines
     , "  local guard = 0"
     , "  while not SL.isDone() do"
     , "    SL.tick(0)"
+    , "    local failure = SL.getFailure()"
+    , "    assert(not failure, failure and failure.message)"
     , "    guard = guard + 1"
     , "    assert(guard < 100000, 'the startup queue never drained')"
     , "  end"

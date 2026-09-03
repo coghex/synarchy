@@ -15,6 +15,9 @@ startupLoader.built         = false
 startupLoader.done          = false
 startupLoader.profile       = "normal"
 startupLoader.itemsPerTick  = 4
+-- #2203: the retained TERMINAL failure, or nil. Set by exactly one
+-- family aggregate (the first to fail) and cleared only by build/reset.
+startupLoader.failure       = nil
 
 local function addItem(label, fn)
     startupLoader.items[#startupLoader.items + 1] = {label = label, fn = fn}
@@ -93,14 +96,39 @@ end
 local function addYamlFamily(dir, label, loaderFn, paths)
     local family = yamlFamilies[dir] or dir
     local total, seen = 0, 0
+    local failed = {}
     for _, path in ipairs(paths) do
         addItem(label, function()
-            total = total + asCount(loaderFn(path))
+            -- #2203: the SECOND argument opts this ONE call site in to
+            -- the binding's parse outcome. Every other caller passes
+            -- the path alone and still gets exactly one number back.
+            local n, parsed = loaderFn(path, true)
+            total = total + asCount(n)
             seen  = seen + 1
+            -- `~= true`, not `== false`: a queued YAML binding that
+            -- answers no outcome at all has not reported that its file
+            -- parsed, and this loader's whole job is to stop guessing.
+            if parsed ~= true then failed[#failed + 1] = path end
         end)
     end
     addItem(label, function()
+        -- The family boundary is the fail-fast boundary (#2203): every
+        -- discovered file has already run, so the aggregate goes out
+        -- FIRST, unchanged in spelling and in what it counts -- with
+        -- the healthy totals and the original discovered-file count --
+        -- and only then does the queue stop. A zero-file family emits
+        -- its zero aggregate the same way before failing.
         engine.logInfo(startupLoader.aggregateMessage(family, total, seen))
+        if #failed > 0 then
+            startupLoader.fail({ family = family, dir = dir,
+                                 kind = "parse", paths = failed,
+                                 path = failed[1], failedCount = #failed,
+                                 files = seen })
+        elseif seen == 0 then
+            startupLoader.fail({ family = family, dir = dir,
+                                 kind = "empty", failedCount = 0,
+                                 files = 0 })
+        end
     end)
 end
 
@@ -370,6 +398,7 @@ function startupLoader.build(profile)
     startupLoader.items     = {}
     startupLoader.processed = 0
     startupLoader.done      = false
+    startupLoader.failure   = nil
     startupLoader.profile   = profile or "normal"
 
     if startupLoader.profile == "arena" then
@@ -389,6 +418,11 @@ end
 -----------------------------------------------------------
 
 function startupLoader.tick(dt)
+    -- #2203: a failed startup is TERMINAL. Returning here is what keeps
+    -- a repeated tick -- the loading screen calls one every frame --
+    -- from advancing progress past the family that failed or logging
+    -- its error a second time.
+    if startupLoader.failure then return end
     if startupLoader.done then return end
     if not startupLoader.built then return end
 
@@ -403,6 +437,13 @@ function startupLoader.tick(dt)
         startupLoader.currentLabel = item.label
         item.fn()
         startupLoader.processed = idx
+        -- Checked per ITEM, not per tick: nothing queued after the
+        -- failing family -- another family's files, the tutorial tree,
+        -- a texture preload -- may run, and itemsPerTick is 4.
+        if startupLoader.failure then
+            startupLoader.currentLabel = startupLoader.failure.message
+            return
+        end
     end
 end
 
@@ -420,9 +461,51 @@ function startupLoader.isDone()
     return startupLoader.done
 end
 
+-- THE spelling of the terminal failure line (#2203), exposed for the
+-- same reason aggregateMessage is: a test or probe reads it from here
+-- rather than restating it. Both shapes name the FAMILY; a parse
+-- failure names the file that failed, and a family that discovered
+-- nothing names the directory it looked in, because there is no file.
+function startupLoader.failureMessage(info)
+    if info.kind == "empty" then
+        return string.format(
+            "Startup failed: %s discovered no YAML files in %s",
+            info.family, info.dir)
+    end
+    return string.format(
+        "Startup failed: %s could not parse %s (%d of %d file(s) failed)",
+        info.family, info.path, info.failedCount, info.files)
+end
+
+-- Enter the terminal failed state. Idempotent by design: the FIRST
+-- family to fail is the one reported, and its one error-level line is
+-- logged exactly once.
+function startupLoader.fail(info)
+    if startupLoader.failure then return end
+    info.message = startupLoader.failureMessage(info)
+    startupLoader.failure = info
+    startupLoader.currentLabel = info.message
+    engine.logError(info.message)
+end
+
+function startupLoader.isFailed()
+    return startupLoader.failure ~= nil
+end
+
+-- The retained failure, or nil. Fields: `family`, `dir`, `kind`
+-- ("empty" | "parse"), `files` (how many were discovered),
+-- `failedCount`, `message`, and for a parse failure `path` (the first
+-- failure in the family's own queue order) and `paths` (all of them).
+function startupLoader.getFailure()
+    return startupLoader.failure
+end
+
+-- Drain the whole queue synchronously (the arena profile's boot). The
+-- failure test is what makes this terminate rather than spin: `done`
+-- deliberately never becomes true once a family has failed.
 function startupLoader.runAll()
     if startupLoader.done or not startupLoader.built then return end
-    while not startupLoader.done do
+    while not startupLoader.done and not startupLoader.failure do
         startupLoader.tick(0)
     end
 end
@@ -433,6 +516,7 @@ function startupLoader.reset()
     startupLoader.currentLabel = "Initializing..."
     startupLoader.built        = false
     startupLoader.done         = false
+    startupLoader.failure      = nil
     startupLoader.profile      = "normal"
 end
 

@@ -175,7 +175,15 @@ SAVE_COMPAT_GLOBS = [
     # `tools/save_compat*`: that would newly capture the unrelated
     # tools/save_compat_migration_probe.py, whose negative case sits
     # beside save_storage_probe.py's below.
-    "tools/save_compat_audit.py", "tools/test_save_compat_audit.py",
+    #
+    # The self-test side is a PREFIX pattern instead, because issue
+    # #2073 split it into a façade plus seven sibling modules and a
+    # future owner must not be able to escape this gate by being left
+    # off a list. `tools/test_save_compat_audit*.py` matches the façade
+    # (`*` matches empty) and every sibling, and nothing else under
+    # tools/ carries that prefix -- the production modules are named
+    # `save_compat_audit_*`, without the `test_`.
+    "tools/save_compat_audit.py", "tools/test_save_compat_audit*.py",
     "tools/save_compat_audit_common.py",
     "tools/save_compat_audit_components.py",
     "tools/save_compat_audit_fingerprint.py",
@@ -614,6 +622,20 @@ def self_test() -> int:
         # trigger-path table, so narrowing any entry fails here.
         ("save-compat", ["tools/save_compat_audit.py"], True),
         ("save-compat", ["tools/test_save_compat_audit.py"], True),
+        # Issue #2073's self-test owner modules, each reached through the
+        # `tools/test_save_compat_audit*.py` prefix rather than a literal
+        # of its own. A case per module all the same: the prefix is what
+        # makes them select, and a case per module is what proves the
+        # prefix still spans the family after one is renamed or another
+        # is added.
+        ("save-compat", ["tools/test_save_compat_audit_support.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_manifest.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_envelope.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_register.py"], True),
+        ("save-compat",
+         ["tools/test_save_compat_audit_reproducibility.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_discovery.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_coverage.py"], True),
         # Issue #2049's owner modules. Each is named individually, so a
         # PR touching only one of them still pays for the repl coverage
         # that exercises it -- the codec bridge in particular owns
@@ -705,8 +727,11 @@ def self_test() -> int:
         # A path selecting one gate must not drag in the others, in
         # either direction.
         ("worldgen", ["tools/test_save_compat_audit.py"], False),
+        ("worldgen", ["tools/test_save_compat_audit_coverage.py"], False),
         ("worldgen", ["tools/save_compat_audit_codec.py"], False),
         ("unit-assets", ["tools/save_compat_audit_manifest.py"], False),
+        ("unit-assets",
+         ["tools/test_save_compat_audit_discovery.py"], False),
         ("worldgen", ["src/World/Save/Envelope/Codec.hs"], False),
         ("unit-assets", ["src/World/Save/Envelope/Codec.hs"], False),
         ("unit-assets", ["docs/save_compat/manifest.json"], False),

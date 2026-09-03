@@ -9,6 +9,7 @@ module Engine.Asset.YamlLocations
     , LocationYamlDef(..)
     , LocationYamlFile(..)
     , loadLocationYaml
+    , loadLocationYamlOutcome
     , significantItemErrors
     ) where
 
@@ -20,7 +21,7 @@ import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject, Value(..), Obje
 import Data.Aeson.Types (parseEither, Parser)
 import qualified Data.Aeson.Key as Key
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 import Location.Anchor
     ( LocationAnchor, locationAnchorTags, parseLocationAnchor )
 
@@ -463,9 +464,17 @@ instance FromJSON LocationYamlFile where
     parseJSON = withObject "LocationYamlFile" $ \v → LocationYamlFile
         ⊚ v .: "locations"
 
+-- | 'loadLocationYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadLocationYaml'.
+loadLocationYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [LocationYamlDef])
+loadLocationYamlOutcome logger =
+    loadYamlListOutcome logger "location" "location definitions" lyfLocations
+
 loadLocationYaml ∷ LoggerState → FilePath → IO [LocationYamlDef]
-loadLocationYaml logger =
-    loadYamlList logger "location" "location definitions" lyfLocations
+loadLocationYaml logger path =
+    fromMaybe [] ⊚ loadLocationYamlOutcome logger path
 
 -- | Every GUARANTEED SIGNIFICANT content entry (#917) naming an item id
 --   that is not in @registered@, one message per offending entry.
