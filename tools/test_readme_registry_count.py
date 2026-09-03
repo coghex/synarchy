@@ -1086,6 +1086,16 @@ def test_the_readme_states_no_registry_total() -> None:
                f"(fired {sorted(fired)})")
 
 
+#: This module's ordered inventory of test groups, in the shape every
+#: owner under `tools/probe_runner_tests/` declares (#2130). The
+#: `tools/test_run_probes.py` facade places these in its aggregate order
+#: and serves `--family readme` from them, so the audit keeps exactly one
+#: owner and no caller names its group a second time.
+TEST_GROUPS = (
+    test_the_readme_states_no_registry_total,
+)
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_the_readme_states_no_registry_total()
