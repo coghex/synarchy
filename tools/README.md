@@ -60,6 +60,28 @@ Checks for: dry-below-sea tiles, ocean-on-land (cascade bug), fluid-under-
 terrain, floating fluid, terrain spikes/pits, river chunk gaps, river mouth
 drops, isolated islands/fluids, minBound leaks, surface inconsistencies.
 
+Since #2224 the file is a façade over six internal owners, which have no
+command line of their own: `world_audit_core.py` (the constants,
+`Issue`/`AuditResult` and the tile helpers), `world_audit_policy.py`
+(BUG/QUALITY classification and the calibrated quality thresholds), and
+one module per check family — `world_audit_checks_columns.py` (5 per-tile
+column checks), `world_audit_checks_boundaries.py` (9 neighbour-pair
+checks), `world_audit_checks_regions.py` (7 connectivity checks) and
+`world_audit_checks_soils.py` (2 material-placement checks). The façade
+composes their inventories into `ALL_CHECKS` in the historical key order
+and refuses, at import, an owner that has gone absent or empty, a key two
+owners both claim, one function reached under two keys, or a check the
+order drops.
+
+`world_check.py`, `world_stress.py`, `world_baseline.py` and the
+self-tests take every audit VALUE from `world_audit`, and the façade
+re-exports the whole pre-split public surface so they did not change.
+There is one deliberate exception, and it reads no value:
+`test_audit_categories.py` imports `world_audit_core` by name to locate
+its source file, because an `Issue(...)` in the core or the façade
+belongs to no check and would otherwise escape the emitted-category
+inventory. The commands above are unchanged.
+
 ### `world_determinism.py`
 Runs the dump multiple times for the same seed and verifies the output is
 content-identical across runs. Reports which tiles differ if the pipeline is
@@ -127,7 +149,8 @@ it must. Sub-second, engine-free, and it never writes under
 
 Since #2070 the file is a façade: it composes and runs the ordered group
 inventories of six owner modules — `test_audit_categories.py` (the
-emitted-category inventory derived from `world_audit.py`'s source),
+emitted-category inventory derived from the source of every module
+backing the live `ALL_CHECKS` registry, #2224),
 `test_audit_world_audit.py`, `test_audit_world_check.py`,
 `test_audit_content_hash.py`, `test_audit_strict_capture.py` and
 `test_audit_missing_baseline.py` — over the shared fixtures and assertion
@@ -1573,18 +1596,48 @@ Nothing at runtime reads it: `probe_flake.py` takes protocol status from its
 own in-repo `PROTOCOL_PROBES` and check identity from each probe's descriptor,
 so a checkout with no docs worktree behaves identically.
 
-Since #2034 that gate is composed of two case owners: its own, and
-`tools/test_probe_census_promotion.py`, whose five promotion cases it runs
-from that module's `CASES` inventory into the same `selftestlib.FAILURES`
-list — so a promotion regression still fails it, and a case added there joins
-it without being listed twice. `tools/probe_census_selftest_support.py` is the
-ONE source of the synthetic world both owners drive: the registries and the
-fixture that installs them, the scratch tree and scratch repository, the
-in-process CLI driver, the realistic result document, the fixed evaluation
-moment and `expect_refusal`. Like `tools/test_probe_census_page.py`, the
-promotion owner is separately runnable for iteration (`python3
-tools/test_probe_census_promotion.py`) and is a step in NEITHER `make ci` nor
-GitHub CI — `test_probe_census.py` is the registered one.
+Since #2034 and #2129 that gate is a facade over six case owners, and holds no
+test body itself. Five live in `tools/probe_census_tests/` — `storage` (12
+groups), `policy` (11), `validation` (5), `cohort` (9) and `outcomes` (2) — and
+the sixth is `tools/test_probe_census_promotion.py`, whose five promotion cases
+the facade runs from that module's own `CASES` inventory through its
+`run_cases()`, into the same `selftestlib.FAILURES` list. So a promotion
+regression still fails the gate, and a case added to any owner joins it without
+being listed twice. `tools/probe_census_selftest_support.py` is the ONE source
+of the synthetic world all six drive: the registries and the fixture that
+installs them, the scratch tree and scratch repository, the in-process CLI
+driver, the realistic result document, the fixed evaluation moment and
+`expect_refusal`; `tools/probe_census_tests/support.py` re-exports it and adds
+the fixtures more than one family inside that package reads. Like
+`tools/test_probe_census_page.py`, the promotion owner is separately runnable
+for iteration (`python3 tools/test_probe_census_promotion.py`) and is a step in
+NEITHER `make ci` nor GitHub CI — `test_probe_census.py` is the registered one.
+
+```bash
+python3 tools/test_probe_census.py                     # the gate, unchanged
+python3 tools/test_probe_census.py --family cohort     # one owner only
+python3 tools/test_probe_census.py --family policy -v  # with the #1922 detail
+```
+
+`--family` takes exactly `storage`, `policy`, `validation`, `cohort`,
+`promotion` or `outcomes`; any other value exits 2 and lists all six. A focused
+run is the aggregate's own groups for that family, in the aggregate's order,
+and it is most of the iteration cost gone for five of them: `validation` drives
+the exhaustive schema surface and dominates the runtime, while each of the
+other five finishes in well under a second. The bare command stays what CI and
+`tools/ci-local.sh` invoke, and its order is INTERLEAVED — the two outcomes
+groups run third, the storage family's five persistence groups run after the
+whole validation family, and the two policy CLI groups run after those. Before
+any group runs, the facade refuses a composition that could report a shortened
+green run: `selftestlib.concluded`'s vacuity guard only catches a run that
+asserted nothing at all, so the facade separately cross-checks the family
+roster against the modules on disk, requires each family to declare at least
+the groups it carried at the split, requires each family's fragments to
+reconstruct its own inventory, and requires the order to run every declared
+group exactly once. It also re-checks the three static properties
+`tools/test_selftestlib.py` cannot see there — that gate globs `tools/*.py`
+non-recursively, so no module in the package may define its own assertion
+helper, register a failure behind the tally, or narrate a passing assertion.
 
 `python3 tools/test_probe_census.py` is its deterministic, engine-free
 self-test, and since #1429 it runs unconditionally in CI's probe-runner
@@ -2631,7 +2684,7 @@ engine-booting measurement: a diagnosis consumes twenty ten-run batches' worth
 of wall clock and is supplemental manual pull-request evidence, never a merge
 gate.
 
-### `deflake_handoff.py` — the handoff contract both consumers read (#2097)
+### `deflake_handoff.py` — the handoff contract both consumers read (#2097, #2180)
 
 The `deflake-outcome-handoff/v1` envelope, and every rule the two consumers
 below share. No CLI: it records nothing, publishes nothing, and imports
@@ -2646,6 +2699,27 @@ invocation, path, worktree, descriptor, artifact and producer-binding rule,
 `require_reproduced` — #1437's two-part reproduction qualification, which
 every route past the `cannot-reproduce` fork rests on — and the `utc_now` /
 `reuse_stored_timestamp` pair a durable record is stamped and replayed with.
+
+Since #2180 `deflake_handoff.py` is the stable public import FAÇADE for all of
+that — the contract narrative and the re-export surface, and no rule's
+implementation — over four internal owners in one acyclic, one-way order.
+Nothing below imports the façade or either consumer, so an owner can change
+without either workflow being rebuilt around it:
+
+| Owner | What it defines |
+|---|---|
+| `deflake_handoff_grammar.py` | The envelope vocabulary: the schemas, the roles, `ROUTE_ENDING`, `RouteOwnership`, `EXIT_CONTRACT`, the limits, `HandoffError` and `NonSuccess`, the object/text/identity/list/NUL/usable-path grammar, `delegate_census_grammar`, and the artifact-reference, configuration, input-identity and invocation-identity validators. A leaf WITHIN this family only — the upstream `deflake_diagnosis` and `probe_census` rules it applies are called, never copied. |
+| `deflake_handoff_measurement.py` | `Measurement`, `require_measurement` and `require_reproduced`: trustworthiness from the harness exit and the document's own status, the run and aggregate reconciliation, the per-check and target-hit reading, and the durable per-measurement summary. Consumes the grammar owner and #1437's result validators. |
+| `deflake_handoff_producer.py` | `require_diagnosis_outcome`, `REFERENCE_FIELDS` and the per-batch reference parsing, the measurement-to-producer binding, `require_worktree_boundary`, `declared_worktrees`, the artifact-list rebuild, and BOTH descriptor rules. Consumes the grammar and measurement owners. |
+| `deflake_handoff_assembly.py` | `Handoff`, `require_handoff`, `utc_now` and `reuse_stored_timestamp`: the whole-document assembly, the per-route role inventory, the cross-role checks, and the retry reconciler. Consumes all three, and INVOKES the producer owner's descriptor rules rather than defining a second copy. |
+
+`require_reproduced` stays with the measurement owner even though it takes a
+`Handoff`: it reads only that object's `targets` and `acceptable_failures`, so
+the reference is a deferred annotation behind a `TYPE_CHECKING` guard and the
+runtime graph stays one-way. `test_the_handoff_owners_stay_one_way` pins that
+as the single permitted reverse reference, and
+`test_the_handoff_facade_exports_the_canonical_objects` executes the identity
+rule the consumers' compatibility bindings rest on.
 
 `require_diagnosis_outcome` and `require_handoff` take `owned` EXPLICITLY: a
 shared contract that defaulted to one consumer's routes would answer for that
@@ -3383,7 +3457,13 @@ rebuild is the human eyeball this check exists to prompt.
 ```
 tools/
 ├── README.md               (this file)
-├── world_audit.py          (audit a single dump)
+├── world_audit.py          (audit a single dump — the façade)
+├── world_audit_core.py             (its constants, result types, tile helpers)
+├── world_audit_policy.py           (its BUG/QUALITY classification and thresholds)
+├── world_audit_checks_columns.py       (its per-tile column-integrity checks)
+├── world_audit_checks_boundaries.py    (its neighbour-pair boundary checks)
+├── world_audit_checks_regions.py       (its connectivity/topology checks)
+├── world_audit_checks_soils.py         (its material-placement checks)
 ├── world_determinism.py    (detect race conditions)
 ├── world_baseline.py       (capture reference outputs)
 ├── world_check.py          (regression suite runner)

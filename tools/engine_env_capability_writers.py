@@ -11,9 +11,11 @@ grammar and citation presence only, so until this check the doc could
 claim a field has no writers at all and a change falsifying it passed
 every gate -- the drift class #1669 closed for the field COUNT, still
 open for the ownership CLAIMS. `CAPABILITY_WRITER_MODULES` is a
-checked-in, both-directions map of the same shape as the aggregate's
-`RENDER_MAIN_ONLY_MODULES`: an undeclared write fails, a stale entry
-fails, and the map's KEYS must equal the live field set. It scans
+checked-in, both-directions map of the same shape as the
+structural-boundary owner's `RENDER_MAIN_ONLY_MODULES`
+(tools/engine_env_capability_boundaries.py since issue #2064): an
+undeclared write fails, a stale entry fails, and the map's KEYS must
+equal the live field set. It scans
 DIRECT `IORef` mutation only, through the raw `EngineEnv` accessor and
 through any capability-record accessor projecting it alike; SS6.1's
 permanent cohort is exempt (design decision D-4); and every

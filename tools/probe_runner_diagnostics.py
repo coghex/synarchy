@@ -47,7 +47,7 @@ from typing import NamedTuple
 #
 # The marker deliberately does not start with `[`: the runner's own
 # verdict announcements do (`[3/12] chop_probe.py ... PASS`), and
-# `tools/test_run_probes.py`'s `progress_lines` helper counts those by
+# `probe_runner_tests.support`'s `progress_lines` helper counts those by
 # that shape. Keeping the two apart means a progress record can never be
 # miscounted as a verdict.
 PROGRESS_MARKER = "#probe-progress#"
