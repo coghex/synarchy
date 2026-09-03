@@ -509,10 +509,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                       "loop across 5 distinct tillable sites; slowest registered "
                                       "probe (~11 min observed, O(n^2) TCP tile scan over natural terrain)"),),
     # #1440: #922's description already recorded two independent counts.
-    "tutorial": (Reason(SLOW_WORLDGEN, "needs a real generated world for a natural "
+    "tutorial": (Reason(SLOW_WORLDGEN, "needs TWO real generated worlds for a natural "
                         "lake or river to discover and a water-free camp far from "
-                        "it, plus a real save/restart/load across two engine boots "
-                        "(#922)"),
+                        "it, plus two real save/restart/loads across four engine "
+                        "boots (#922, #996, #1941)"),
                  Reason(SCENARIO_HEAVY, "the radio-share leg runs on AI arbitration "
                         "timing, and #922 requirement 6 classifies this integration "
                         "check as recorded manual verification rather than a CI "

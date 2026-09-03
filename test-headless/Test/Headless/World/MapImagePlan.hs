@@ -438,6 +438,62 @@ spec = describe "map image plan (#2020)" $ do
             , "assert(asked == 1024, 'checked size ' .. tostring(asked))"
             ]
 
+        -- #2288: the second pre-destruction admission. A refused
+        -- world.setGenConfig has to cost the player nothing, which is
+        -- only true because the call happens BEFORE destroyWorld().
+        it "records rejected with the diagnostic, destroys nothing and \
+           \starts nothing when the gen config is refused" $ runsOk $ lns
+            [ createWorldStubs
+            , "world.checkMapImagePlan = function() return true end"
+            , "genConfigResult = { false,"
+            , "  'world_gen.erosion_intensity = Infinity is outside the domain'"
+            , "  .. ' (a finite number from 0.0 to 2.0); the world generation'"
+            , "  .. ' configuration is left unchanged.' }"
+            , "local generation = dofile('scripts/create_world/generation.lua')"
+            , "local menu = newMenu(generation)"
+            , "generation.start(menu, logPanelStub)"
+            , "assert(menu.genState == generation.IDLE,"
+            , "       'genState must stay IDLE on a refusal, got '"
+            , "       .. tostring(menu.genState))"
+            , "assert(calls.setGenConfig == 1, 'the config was never offered')"
+            , "assert(calls.destroyWorld == 0, 'the live world was destroyed')"
+            , "assert(calls.startGeneration == 0, 'generation was started')"
+            , "assert(worldViewStub.worldParams == nil,"
+            , "       'worldView.worldParams was overwritten')"
+            , "assert(#outcomes == 1, 'expected exactly one recorded outcome')"
+            , "assert(outcomes[1].outcome == 'rejected',"
+            , "       'expected rejected, got ' .. tostring(outcomes[1].outcome))"
+            , "assert(outcomes[1].reason and"
+            , "       outcomes[1].reason:find('erosion_intensity', 1, true),"
+            , "       'the reason did not name the field: '"
+            , "       .. tostring(outcomes[1].reason))"
+            , "assert(shownStatus == 'Cannot generate this world',"
+            , "       'the player was not told')"
+            , "assert(shownLines[1]:find('erosion_intensity', 1, true),"
+            , "       'the diagnostic was not displayed')"
+            ]
+
+        it "evaluates the gen config BEFORE destroying the live world" $
+            runsOk $ lns
+            [ createWorldStubs
+            , "local order = {}"
+            , "world.checkMapImagePlan = function() return true end"
+            , "world.setGenConfig = function()"
+            , "  calls.setGenConfig = calls.setGenConfig + 1"
+            , "  order[#order+1] = 'setGenConfig'"
+            , "  return true"
+            , "end"
+            , "package.loaded['scripts.world_manager'].destroyWorld = function()"
+            , "  calls.destroyWorld = calls.destroyWorld + 1"
+            , "  order[#order+1] = 'destroyWorld'"
+            , "end"
+            , "local generation = dofile('scripts/create_world/generation.lua')"
+            , "local menu = newMenu(generation)"
+            , "generation.start(menu, logPanelStub)"
+            , "assert(order[1] == 'setGenConfig' and order[2] == 'destroyWorld',"
+            , "       'wrong order: ' .. table.concat(order, ','))"
+            ]
+
 -- | Everything @scripts/create_world/generation.lua@ reaches for,
 --   stubbed. Nothing here may touch a real engine call: the point is to
 --   observe exactly which of these the script does and does not invoke
@@ -450,8 +506,12 @@ createWorldStubs = lns
     , "shownStatus = nil"
     , "engine = { logInfo = function() end, logWarn = function() end,"
     , "           logError = function() end, logDebug = function() end }"
+    , "genConfigResult = { true }"
     , "world = {"
-    , "  setGenConfig = function() calls.setGenConfig = calls.setGenConfig + 1 end,"
+    , "  setGenConfig = function()"
+    , "    calls.setGenConfig = calls.setGenConfig + 1"
+    , "    return table.unpack(genConfigResult)"
+    , "  end,"
     , "}"
     , "debug = debug or {}"
     , "debug.recordOutcome = function(t) outcomes[#outcomes+1] = t end"
@@ -471,11 +531,12 @@ createWorldStubs = lns
     , "  isActive = function() return true end,"
     , "  destroyWorld = function() calls.destroyWorld = calls.destroyWorld + 1 end,"
     , "}"
-    , "package.loaded['scripts.world_view'] = {"
+    , "worldViewStub = {"
     , "  startGeneration = function()"
     , "    calls.startGeneration = calls.startGeneration + 1"
     , "  end,"
     , "}"
+    , "package.loaded['scripts.world_view'] = worldViewStub"
     , "function newMenu(generation)"
     , "  return { genState = generation.IDLE, genElapsed = 0,"
     , "           pending = { seed = '2A', worldSize = '64',"

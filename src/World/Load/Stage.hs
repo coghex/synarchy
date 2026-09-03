@@ -21,6 +21,7 @@ module World.Load.Stage
     ( stageSession
     , StageError(..)
     , renderStageError
+    , stagedGenParamsWarning
     ) where
 
 import UPrelude
@@ -43,6 +44,9 @@ import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Flora.Designation (admitChunkFlora)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
+import World.Generate.Config
+    ( WorldGenFieldRejection, describeWorldGenRejection
+    , repairWorldGenParams )
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Grid (worldToGrid)
 import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
@@ -329,6 +333,17 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssMaterialRegistry = registry
                       }
 
+-- | The warning one repaired save setting produces (#2288): the page it
+--   came from, the full field name, the value the save stored, and the
+--   default that replaced it. Exposed so a spec can pin the whole line
+--   without staging a save.
+stagedGenParamsWarning
+    ∷ WorldPageId → (WorldGenFieldRejection, Text) → Text
+stagedGenParamsWarning pid (r, dflt) =
+    "Saved page '" <> unWorldPageId pid <> "': "
+      <> describeWorldGenRejection r
+      <> "; using the default " <> dflt
+
 -- | Stage one saved page: gen params + mutable game state (own fresh
 --   IORefs), zoom cache + center chunk + queued remainder (or the arena
 --   rebuild special case), and the resolved building/unit slices. Mirrors
@@ -357,11 +372,24 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           (liveEdits, liveCropPlots, livePlantDesignations) wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
-        params    = wpsGenParams wps
+        -- #2288 requirement 4: a save's STORED floating-point generation
+        -- settings are repaired here, at the one boundary every decoded
+        -- page passes through -- the current @world-pages@ component and
+        -- every migrated historical one alike, since each version's
+        -- decoder converges on 'World.Save.Component.Page.blankPageSnapshot'
+        -- and from there on this staging step. Each out-of-domain
+        -- setting takes the shipped default and is warned about with the
+        -- page it came from; every sibling setting, and everything else
+        -- about the page, survives untouched. Done BEFORE the params are
+        -- written to the staged world state, so nothing downstream --
+        -- chunk generation, the zoom cache, publication -- can see the
+        -- stored value.
+        (params, genRejections) = repairWorldGenParams (wpsGenParams wps)
         seed      = wgpSeed params
         worldSize = wgpWorldSize params
 
     logInfo logger CatWorld $ "Staging saved page: " <> unWorldPageId pid
+    forM_ genRejections $ logWarn logger CatWorld . stagedGenParamsWarning pid
 
     worldState ← emptyWorldState
     let phaseRef   = wsLoadPhaseRef worldState
