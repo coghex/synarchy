@@ -33,6 +33,7 @@ import Control.Concurrent.STM.TVar (modifyTVar')
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownersGated)
 import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import Unit.Types
+import World.State.Types (WorldManager(..))
 import Unit.Sim.Types
 import Unit.Anim (stateKey, resolveStateAnim, poseTag, chooseAnim)
 import Unit.Thread.Command (processAllUnitCommands)
@@ -225,6 +226,22 @@ unitTickWith seams env lastTimeRef utsRef = do
 --   issued from the world thread's destroy-all handler would race that
 --   read-modify-write and could be lost outright.
 --
+--   __The WORLD thread is fenced separately, because the queues do not
+--   reach it.__ Since #1602 it commits a bound building placement
+--   itself ('World.Thread.Command.BoundSpawn') instead of forwarding it
+--   to the building queue, and it is where pages are registered. So the
+--   two markers order this reset against the two entity queues and say
+--   nothing about that thread: a @world.init@ plus a bound placement
+--   drained before this tick would stamp @biSpawnedAt@ from the
+--   outgoing clock and then have that clock move backwards underneath
+--   it. 'World.State.Types.wmSessionTeardown' closes that: the
+--   destroy-all handler sets it in the same atomic update that empties
+--   the page set, 'World.Thread.processAllCommands' refuses to register
+--   a page while it is set, and clearing it below is this function's
+--   LAST act — after both the rows and the clock — so the world thread
+--   can never observe the fence lifted while any part of the reset is
+--   still outstanding.
+--
 --   The event ring is cleared with 'clearEventStoreRows', which keeps
 --   the store's mutation-sequence counter exactly as the load-publish
 --   reset does (#1714): a row emitted after this still outranks any
@@ -240,6 +257,8 @@ endSessionEpoch env = do
                              clearEventStoreRows
     writeIORef (wsGameTimeRef (toWorldSimCapability env))
                freshSessionGameTime
+    atomicModifyIORef' (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+        (mgr { wmSessionTeardown = False }, ())
 
 -- | Copy sim-thread positions/facing into the render-visible UnitManager.
 --   Also drives unit animations: the resolved anim for (usPose, usState)

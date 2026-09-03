@@ -673,6 +673,42 @@ data WorldManager = WorldManager
       --   'World.Load.Publish.publishStagedSession' resets it outright,
       --   which is also what covers the one path that DISCARDS queued
       --   commands ('World.Thread.processAuthorizedSave').
+    , wmSessionTeardown ∷ !Bool
+      -- ^ True from the moment 'World.Thread.Command.Basic'\'s
+      --   @handleWorldDestroyAllCommand@ empties the page set until the
+      --   Exit-to-Menu teardown it queued has actually COMPLETED
+      --   (#2291) — that is, until the unit thread has drained
+      --   @UnitClearAll@ and @BuildingClearAll@ and run
+      --   'Unit.Thread.endSessionEpoch', which clears this flag as its
+      --   last act.
+      --
+      --   It exists because the teardown spans two threads while the
+      --   NEXT session is created on only one of them. The world thread
+      --   registers pages and, since #1602, commits bound building
+      --   placements itself rather than through the building queue, so
+      --   the queue markers that order the boundary against those two
+      --   queues say nothing about it. Without this flag a @world.init@
+      --   drained in the same window could register a page, a bound
+      --   placement could stamp @biSpawnedAt@ from the OUTGOING clock,
+      --   and the reset would then move that clock backwards underneath
+      --   the new session's own record.
+      --
+      --   'World.Thread.processAllCommands' is the only reader: while
+      --   this is set it stops the drain at a page-registering command
+      --   rather than running it, leaving it and everything behind it
+      --   queued in order for a later tick. Nothing else is deferred,
+      --   and nothing is discarded — the boundary costs at most the one
+      --   unit tick the teardown needs.
+      --
+      --   A load is not fenced by it and does not need to be: a load
+      --   publish discards both queue markers with the rest of the unit
+      --   and building queues ('World.Load.Publish.discardStaleQueues'),
+      --   so no teardown remains to complete, and the replacement
+      --   manager it installs starts with this False.
+      --
+      --   NOT persisted: it names an in-flight cross-thread transition,
+      --   and a save taken mid-teardown restores into a process where
+      --   that transition does not exist.
     }
 
 emptyWorldManager ∷ WorldManager
@@ -684,6 +720,7 @@ emptyWorldManager = WorldManager
     , wmProjectedWorlds = []
     , wmProjectedVisible = []
     , wmSelectionPending = 0
+    , wmSessionTeardown = False
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME

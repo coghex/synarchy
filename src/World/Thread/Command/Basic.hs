@@ -111,7 +111,15 @@ handleWorldDestroyAllCommand env logger = do
         let m' = completeSelectionChange m
         in ((if isJust (selectionHead (wmVisible m'))
                then bumpSelectionGen else id)
-            m' { wmWorlds = [], wmVisible = [] }, ())
+            -- 'wmSessionTeardown' opens HERE, in the same atomic update
+            -- that empties the page set, and closes only when the unit
+            -- thread has finished the teardown queued below (#2291). It
+            -- is what stops the NEXT session being registered on this
+            -- thread while the clears and the epoch reset are still
+            -- outstanding — see the field's own doc and
+            -- 'World.Thread.processAllCommands'.
+            m' { wmWorlds = [], wmVisible = []
+               , wmSessionTeardown = True }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:

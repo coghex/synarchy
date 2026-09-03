@@ -207,6 +207,12 @@ publishStagedSession env logger requestId staged = do
         , wmProjectedGen = outgoingSelectionGen + 1
         , wmProjectedWorlds = [ spPageId p | p ← ssPages staged ]
         , wmProjectedVisible = []
+        -- No teardown is outstanding against the replacement session
+        -- (#2291): 'discardStaleQueues' above threw away the unit and
+        -- building queues, boundary markers included, so nothing is left
+        -- to complete and nothing may fence this session's page
+        -- registrations.
+        , wmSessionTeardown = False
         }
 
     -- Restore visibility through the real handler so its side effects

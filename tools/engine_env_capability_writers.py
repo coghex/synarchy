@@ -325,6 +325,7 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "focusManagerRef": frozenset({"Engine.Scripting.Lua.API.ShellFocus"}),
     "worldManagerRef": frozenset({
         "Engine.Scripting.Lua.API.World.Lifecycle",
+        "Unit.Thread",
         "World.Thread.Command.Basic",
         "World.Thread.Command.Init",
         "World.Thread.Command.UI",

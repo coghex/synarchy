@@ -48,7 +48,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.SessionEpoch (freshSessionGameTime)
 import Engine.Core.State
     ( EngineEnv, buildingManagerRef, eventStoreRef, gameTimeRef, loggerRef
-    , notificationCfgRef, unitManagerRef, worldManagerRef )
+    , notificationCfgRef, unitManagerRef, worldManagerRef, worldQueue )
 import Engine.PlayerEvent
     (CategoryCfg(..), PlayerEvent(..), StoredEvent(..), clearEventStoreRows)
 import Engine.PlayerEvent.Emit (emitEvent, readEventLogProgress)
@@ -59,9 +59,11 @@ import Unit.Faction (Faction(..))
 import Unit.Thread
     (UnitTickSeams(..), productionUnitTickSeams, unitTickWith)
 import Unit.Types
+import World.Command.Types (WorldCommand(..))
 import World.Load.Publish (resetTransientState)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldManager(..), emptyWorldManager, emptyWorldState)
+import World.Thread (worldTickWith)
 import World.Thread.Command.Basic (handleWorldDestroyAllCommand)
 import qualified Data.Map.Strict as Map
 import Engine.Asset.Handle (TextureHandle(..))
@@ -70,6 +72,12 @@ import Engine.Asset.Handle (TextureHandle(..))
 
 sessionPage ∷ WorldPageId
 sessionPage = WorldPageId "session_epoch_page"
+
+-- | The page the NEXT session would come up on. An arena, because it
+--   registers through the same @wmWorlds@ insertion a full
+--   @world.init@ does without paying for world generation.
+arenaPage ∷ WorldPageId
+arenaPage = WorldPageId "session_epoch_next"
 
 sessionUnit ∷ UnitId
 sessionUnit = UnitId 1
@@ -160,10 +168,28 @@ runUnitTick env = do
     _ ← unitTickWith seams env lastRef (ucUtsRef (toUnitCombatCapability env))
     pure ()
 
+-- | One world tick with a still clock. Real 'worldTickWith', because
+--   the fence being gated lives in its command drain and a hand-rolled
+--   stand-in would prove nothing about the production loop.
+runWorldTick ∷ EngineEnv → IO ()
+runWorldTick env = do
+    lastRef ← newIORef 0
+    _ ← worldTickWith (pure 0) env lastRef
+    pure ()
+
 destroyAll ∷ EngineEnv → IO ()
 destroyAll env = do
     logger ← readIORef (loggerRef env)
     handleWorldDestroyAllCommand env logger
+
+registeredPages ∷ EngineEnv → IO [WorldPageId]
+registeredPages env = map fst ∘ wmWorlds <$> readIORef (worldManagerRef env)
+
+teardownPending ∷ EngineEnv → IO Bool
+teardownPending env = wmSessionTeardown <$> readIORef (worldManagerRef env)
+
+queuedWorld ∷ EngineEnv → IO Int
+queuedWorld env = depthOf (worldQueue env)
 
 liveUnits ∷ EngineEnv → IO Int
 liveUnits env = HM.size ∘ umInstances <$> readIORef (unitManagerRef env)
@@ -289,6 +315,34 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         runUnitTick env
         queuedUnit env     `shouldReturn` 0
         queuedBuilding env `shouldReturn` 0
+
+    it "the world thread cannot register the next session's page while \
+       \the boundary is outstanding, and does once it completes" $
+        withHeadlessEngineNoWorld $ \env → do
+        _ ← installSession env
+        destroyAll env
+        teardownPending env `shouldReturn` True
+        -- The world thread is where pages are registered and where a
+        -- bound placement is committed directly (#1602), so the two
+        -- queue markers do not order the reset against it. Without the
+        -- fence this tick would give the next session a page while the
+        -- outgoing clock is still live.
+        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
+        runWorldTick env
+        registeredPages env `shouldReturn` []
+        queuedWorld env     `shouldReturn` 1
+        clock env           `shouldReturn` outgoingClock
+
+        -- The unit tick completes the teardown and lifts the fence.
+        runUnitTick env
+        clock env           `shouldReturn` freshSessionGameTime
+        teardownPending env `shouldReturn` False
+
+        -- Only now does the page appear — on the new epoch, so nothing
+        -- placed on it can carry a stamp the reset would move under.
+        runWorldTick env
+        registeredPages env `shouldReturn` [arenaPage]
+        queuedWorld env     `shouldReturn` 0
 
     it "a load still installs the save's own clock: the load-publish \
        \transient reset leaves it alone" $
