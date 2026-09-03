@@ -673,14 +673,27 @@ data WorldManager = WorldManager
       --   'World.Load.Publish.publishStagedSession' resets it outright,
       --   which is also what covers the one path that DISCARDS queued
       --   commands ('World.Thread.processAuthorizedSave').
-    , wmSessionTeardown ∷ !Bool
-      -- ^ True from the moment 'World.Thread.Command.Basic'\'s
-      --   @handleWorldDestroyAllCommand@ empties the page set until the
-      --   Exit-to-Menu teardown it queued has actually COMPLETED
-      --   (#2291) — that is, until the unit thread has drained
-      --   @UnitClearAll@ and @BuildingClearAll@ and run
-      --   'Unit.Thread.endSessionEpoch', which clears this flag as its
-      --   last act.
+    , wmTeardownsPending ∷ !Int
+      -- ^ How many Exit-to-Menu teardowns have been STARTED but not yet
+      --   completed (#2291). 'World.Thread.Command.Basic'\'s
+      --   @handleWorldDestroyAllCommand@ increments it in the same
+      --   atomic update that empties the page set;
+      --   'Unit.Thread.endSessionEpoch' decrements it as its last act,
+      --   once it has drained that boundary's @UnitClearAll@ and
+      --   @BuildingClearAll@ and reset the epoch. Non-zero means at
+      --   least one boundary is still outstanding.
+      --
+      --   A COUNT rather than a flag, for the same reason
+      --   'wmSelectionPending' above is: two destroy-alls can be
+      --   accepted before the unit thread ticks once, and each queues
+      --   its own clear-and-marker pair. A flag would be lowered by the
+      --   FIRST marker while the second pair was still queued — the
+      --   next world tick could then register a page and commit a bound
+      --   placement onto it, which the second @BuildingClearAll@ would
+      --   erase and the second reset would re-zero the clock under.
+      --   Decrementing clamps at zero, again like 'wmSelectionPending',
+      --   so the one path that DISCARDS queued markers cannot drive it
+      --   negative.
       --
       --   It exists because the teardown spans two threads while the
       --   NEXT session is created on only one of them. The world thread
@@ -694,17 +707,17 @@ data WorldManager = WorldManager
       --   the new session's own record.
       --
       --   'World.Thread.processAllCommands' is the only reader: while
-      --   this is set it stops the drain at a page-registering command
+      --   this is non-zero it stops the drain at a page-registering command
       --   rather than running it, leaving it and everything behind it
       --   queued in order for a later tick. Nothing else is deferred,
       --   and nothing is discarded — the boundary costs at most the one
       --   unit tick the teardown needs.
       --
       --   A load is not fenced by it and does not need to be: a load
-      --   publish discards both queue markers with the rest of the unit
+      --   publish discards every queued marker with the rest of the unit
       --   and building queues ('World.Load.Publish.discardStaleQueues'),
       --   so no teardown remains to complete, and the replacement
-      --   manager it installs starts with this False.
+      --   manager it installs starts this back at zero.
       --
       --   NOT persisted: it names an in-flight cross-thread transition,
       --   and a save taken mid-teardown restores into a process where
@@ -720,7 +733,7 @@ emptyWorldManager = WorldManager
     , wmProjectedWorlds = []
     , wmProjectedVisible = []
     , wmSelectionPending = 0
-    , wmSessionTeardown = False
+    , wmTeardownsPending = 0
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME

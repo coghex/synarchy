@@ -45,6 +45,7 @@ import Engine.Core.Capability.Building
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import qualified Engine.Core.Queue as Q
+import Engine.Core.Queue (QueueStats(..))
 import Engine.Core.SessionEpoch (freshSessionGameTime)
 import Engine.Core.State
     ( EngineEnv, buildingManagerRef, eventStoreRef, gameTimeRef, loggerRef
@@ -66,6 +67,7 @@ import World.State.Types (WorldManager(..), emptyWorldManager, emptyWorldState)
 import World.Thread (worldTickWith)
 import World.Thread.Command.Basic (handleWorldDestroyAllCommand)
 import qualified Data.Map.Strict as Map
+import qualified Data.Text as T
 import Engine.Asset.Handle (TextureHandle(..))
 
 -- * Fixture
@@ -185,8 +187,22 @@ destroyAll env = do
 registeredPages ∷ EngineEnv → IO [WorldPageId]
 registeredPages env = map fst ∘ wmWorlds <$> readIORef (worldManagerRef env)
 
-teardownPending ∷ EngineEnv → IO Bool
-teardownPending env = wmSessionTeardown <$> readIORef (worldManagerRef env)
+teardownsPending ∷ EngineEnv → IO Int
+teardownsPending env = wmTeardownsPending <$> readIORef (worldManagerRef env)
+
+-- | The queue's contents in order, put straight back. Constructor
+--   names, because 'WorldCommand' has no 'Eq' and the claim is about
+--   ORDER, not payloads.
+queuedWorldOrder ∷ EngineEnv → IO [Text]
+queuedWorldOrder env = do
+    pending ← Q.flushQueue (worldQueue env)
+    mapM_ (Q.writeQueue (worldQueue env)) pending
+    pure (map commandTag pending)
+
+commandTag ∷ WorldCommand → Text
+commandTag (WorldInitArena _)     = "InitArena"
+commandTag (WorldInitArenaDone _) = "InitArenaDone"
+commandTag other                  = T.takeWhile (≢ ' ') (tshow other)
 
 queuedWorld ∷ EngineEnv → IO Int
 queuedWorld env = depthOf (worldQueue env)
@@ -321,7 +337,7 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         withHeadlessEngineNoWorld $ \env → do
         _ ← installSession env
         destroyAll env
-        teardownPending env `shouldReturn` True
+        teardownsPending env `shouldReturn` 1
         -- The world thread is where pages are registered and where a
         -- bound placement is committed directly (#1602), so the two
         -- queue markers do not order the reset against it. Without the
@@ -336,13 +352,65 @@ spec = describe "Exit to Menu session epoch (issue #2291)" $ do
         -- The unit tick completes the teardown and lifts the fence.
         runUnitTick env
         clock env           `shouldReturn` freshSessionGameTime
-        teardownPending env `shouldReturn` False
+        teardownsPending env `shouldReturn` 0
 
         -- Only now does the page appear — on the new epoch, so nothing
         -- placed on it can carry a stamp the reset would move under.
         runWorldTick env
         registeredPages env `shouldReturn` [arenaPage]
         queuedWorld env     `shouldReturn` 0
+
+    it "withholding a page registration takes only that command out of \
+       \the queue, so nothing accepted during the deferral can overtake \
+       \it" $ withHeadlessEngineNoWorld $ \env → do
+        _ ← installSession env
+        destroyAll env
+        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
+        Q.writeQueue (worldQueue env) (WorldInitArenaDone arenaPage)
+        before ← Q.queueStats (worldQueue env)
+        runWorldTick env
+        after  ← Q.queueStats (worldQueue env)
+
+        -- The claim is about a CONCURRENT producer, which no
+        -- single-threaded example can schedule, so it is made against
+        -- the property that produces the guarantee: the deferral moves
+        -- the withheld head and NOTHING else. One dequeue, one enqueue,
+        -- both the arena command's. A deferral that flushed the queue
+        -- and rewrote it around the withheld command would show the
+        -- tail leaving and re-entering here — and a producer appending
+        -- in that window would be re-accepted AHEAD of a command it was
+        -- accepted after, applying an arena's follow-up traffic before
+        -- the page it names exists.
+        (qsDequeued after - qsDequeued before) `shouldBe` 1
+        (qsEnqueued after - qsEnqueued before) `shouldBe` 1
+        qsDepth after `shouldBe` 2
+        queuedWorldOrder env `shouldReturn` ["InitArena", "InitArenaDone"]
+        registeredPages env  `shouldReturn` []
+
+    it "two boundaries accepted before the unit thread ticks each hold \
+       \the fence until their OWN teardown completes" $
+        withHeadlessEngineNoWorld $ \env → do
+        _ ← installSession env
+        destroyAll env
+        destroyAll env
+        teardownsPending env `shouldReturn` 2
+        Q.writeQueue (worldQueue env) (WorldInitArena arenaPage)
+
+        -- One unit tick completes exactly ONE boundary: the drain stops
+        -- at the first marker it takes, leaving the second pair queued.
+        -- A Bool fence would read "clear" here and let the page
+        -- register, only for the second BuildingClearAll to erase
+        -- whatever was placed on it and the second reset to re-zero the
+        -- clock underneath it.
+        runUnitTick env
+        teardownsPending env `shouldReturn` 1
+        runWorldTick env
+        registeredPages env `shouldReturn` []
+
+        runUnitTick env
+        teardownsPending env `shouldReturn` 0
+        runWorldTick env
+        registeredPages env `shouldReturn` [arenaPage]
 
     it "a load still installs the save's own clock: the load-publish \
        \transient reset leaves it alone" $

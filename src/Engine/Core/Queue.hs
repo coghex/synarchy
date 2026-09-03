@@ -169,6 +169,49 @@ tryReadQueue q = STM.atomically $ do
           STM.modifyTVar' (queueCounters q) (countDequeue 1)
           return (Just (tsValue ts))
 
+-- | 'tryReadQueue', handing back the element still WRAPPED in its
+--   enqueue stamp so 'unreadQueue' can put it back unchanged.
+--
+--   The pair exists for one consumer-side pattern: a drain that cannot
+--   decide whether it may run a message until it has looked at it, and
+--   must leave a message it declines exactly where it was
+--   ("World.Thread"'s Exit-to-Menu fence, #2291). Deciding INSIDE the
+--   transaction is not an option — the predicate would force the
+--   element there, which is the O(backlog) hazard the module header
+--   forbids — so the decision happens between two transactions and
+--   'unreadQueue' repairs the queue afterwards.
+--
+--   __Single-consumer only.__ Another consumer dequeuing between the two
+--   calls would see the queue without the withheld element. Every
+--   'Queue' here is drained by exactly one thread, and both calls must
+--   be made by it.
+tryReadQueueStamped ∷ Queue α → IO (Maybe (Timestamped α))
+tryReadQueueStamped q = STM.atomically $ do
+    mts ← tryReadTQueue (queueTQueue q)
+    case mts of
+      Nothing  → return Nothing
+      Just ~ts → do
+          STM.modifyTVar' (queueCounters q) (countDequeue 1)
+          return (Just ts)
+
+-- | Put an element taken by 'tryReadQueueStamped' back at the FRONT of
+--   the queue, carrying the enqueue instant it already had.
+--
+--   The front, not the tail, is what makes this order-preserving: a
+--   producer that appended while the element was withheld lands BEHIND
+--   it, which is where it belonged all along — it was accepted later.
+--   Re-queuing through 'writeQueue' instead would let that producer
+--   overtake, and flushing-and-rewriting the whole queue would do the
+--   same in a wider window.
+--
+--   The stamp is carried rather than resampled so a withheld message's
+--   reported age keeps counting from when the queue actually accepted
+--   it; a deferral must not make a backlog look younger than it is.
+unreadQueue ∷ Queue α → Timestamped α → IO ()
+unreadQueue q ts = STM.atomically $ do
+    unGetTQueue (queueTQueue q) ts
+    STM.modifyTVar' (queueCounters q) countEnqueue
+
 -- | Read with a timeout (microseconds). Don't wrap 'readQueue' in
 --   'System.Timeout.timeout' instead: its exception can arrive after
 --   the STM dequeue commits, silently dropping the message. Here the

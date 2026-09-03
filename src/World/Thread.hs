@@ -140,21 +140,32 @@ worldTickWith clock env lastTimeRef = do
 --
 --   So a page-registering command is left QUEUED rather than run, with
 --   everything behind it, and the drain resumes on a later tick.
---   Nothing else is fenced and nothing is discarded: an outstanding
---   teardown lasts one unit tick, and the flag is cleared by that reset
---   itself ('World.State.Types.wmSessionTeardown').
+--   Nothing else is fenced and nothing is discarded: each outstanding
+--   teardown lasts one unit tick, and the count is decremented by that
+--   reset itself ('World.State.Types.wmTeardownsPending').
+--
+--   Withholding goes through 'Engine.Core.Queue.unreadQueue', which
+--   restores the command to the FRONT of the queue and leaves the rest
+--   of the queue untouched. Flushing the queue and rewriting it around
+--   the withheld command would not do: a producer appending in that
+--   window would be re-accepted AHEAD of a command it was accepted
+--   after, so an arena's follow-up traffic could apply before the page
+--   it names is registered. Restoring to the front cannot reorder
+--   anything, because everything else is by construction behind it and
+--   never leaves the queue.
 processAllCommands ∷ EngineEnv → LoggerState → IO ()
 processAllCommands env logger = do
-    mCmd ← Q.tryReadQueue queue
-    case mCmd of
-        Nothing  → return ()
-        Just cmd → do
+    mStamped ← Q.tryReadQueueStamped queue
+    case mStamped of
+        Nothing      → return ()
+        Just stamped → do
+            let cmd = Q.tsValue stamped
             fenced ← if beginsSession cmd
-                        then wmSessionTeardown
+                        then (> 0) ∘ wmTeardownsPending
                                  <$> readIORef (wsWorldManagerRef worldSim)
                         else pure False
             if fenced
-            then requeueAhead queue cmd
+            then Q.unreadQueue queue stamped
             else do
                 handleWorldCommand env logger cmd
                 settleSelection env
@@ -173,17 +184,6 @@ beginsSession ∷ WorldCommand → Bool
 beginsSession (WorldInit _ _ _ _ _) = True
 beginsSession (WorldInitArena _)    = True
 beginsSession _                     = False
-
--- | Put @cmd@ back at the FRONT of @q@, ahead of everything still
---   queued behind it. The queue has no push-front, so the tail is
---   flushed and rewritten after it; both operations run on this thread,
---   the only consumer, so a producer appending concurrently lands after
---   the rewritten tail exactly as it would have anyway.
-requeueAhead ∷ Q.Queue α → α → IO ()
-requeueAhead q cmd = do
-    rest ← Q.flushQueue q
-    Q.writeQueue q cmd
-    mapM_ (Q.writeQueue q) rest
 
 -- | The capture lock admits only its queued WorldSave / WorldLoadPublish
 -- command. A load's WorldLoadPublish reaches this window only after every
