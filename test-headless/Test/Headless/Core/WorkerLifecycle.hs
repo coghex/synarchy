@@ -23,9 +23,21 @@
 --   the callback blocks on a gate this module holds, the kill is sent
 --   while it is blocked, and the callback must still complete.
 --
+--   #2283 added the fail-stop half: a SYNCHRONOUS tick failure has the
+--   shared loop write 'Engine.Core.Lifecycle.CleaningUp' itself, before
+--   either crash callback runs, so a crash report that throws — the
+--   engine logger writes to a handle, and a departed reader turns the
+--   next write into a @resource vanished@ — can no longer leave a live
+--   engine with a dead worker. Those cases give the probe worker a
+--   logger backend that raises, a diagnostic that raises, a cleanup
+--   that raises and a fallback sink that raises, and pin what survives
+--   all four; the forced-termination cases assert the converse, that an
+--   ASYNCHRONOUS exception writes no transition at all.
+--
 --   Nothing in this module boots an engine: the shared definition
 --   deliberately does not mention 'Engine.Core.State.EngineEnv', which
---   is exactly what lets a throwing startup action be injected.
+--   is exactly what lets a throwing startup action be injected, and the
+--   lifecycle it transitions is a bare 'IORef' each case owns.
 --
 --   Every @await@ below is a TOLERANCE, not a timing assertion. The
 --   cases assert what did or did not happen — which callbacks ran, how
@@ -51,7 +63,9 @@ import Engine.Core.Error.Exception
     (EngineException(..), ExceptionType(..), SystemError(..))
 import Engine.Core.Log
     ( LogBackend(..), LogCategory(..), LogConfig(..), LogEntry(..)
-    , LogLevel(..), LoggerState(..), defaultLogConfig, initLogger )
+    , LogLevel(..), LoggerState(..), defaultLogConfig, initLogger
+    , logError )
+import Engine.Core.Lifecycle (EngineLifecycle(..))
 import Engine.Core.Thread
 
 -- | A logger whose entries land in an 'IORef' instead of a handle.
@@ -77,13 +91,16 @@ capturedEntries capturedRef = reverse ⊚ readIORef capturedRef
 -- | A worker whose only distinguishing marks are the log lines, so a
 --   case can assert on them. Callbacks default to inert.
 probeSpec ∷ IORef LoggerState
+          → IORef EngineLifecycle
           → (IORef ThreadControl → IO (Either ε σ))
           → (σ → IO (Maybe σ))
           → WorkerSpec ε σ
-probeSpec loggerRef startup tick = WorkerSpec
+probeSpec loggerRef lifecycle startup tick = WorkerSpec
     { wsName        = "Probe"
     , wsLoggerRef   = loggerRef
     , wsCategory    = CatThread
+    , wsLifecycleRef = lifecycle
+    , wsCrashSink   = \_ → pure ()
     , wsStartingMsg = "Starting probe worker..."
     , wsStartedMsg  = Just "Probe worker started"
     , wsFailMsg     = "Failed starting probe worker: "
@@ -93,7 +110,42 @@ probeSpec loggerRef startup tick = WorkerSpec
     , wsTick        = tick
     , wsOnStop      = \_ → pure ()
     , wsOnCrash     = \_ _ → pure ()
+    , wsOnCrashCleanup = \_ _ → pure ()
     }
+
+-- | The lifecycle a probe worker starts against: a live engine, which
+--   is what a crash has to advance. Every case gets its own, so what
+--   one worker wrote is never another's starting point.
+newLifecycle ∷ IO (IORef EngineLifecycle)
+newLifecycle = newIORef EngineRunning
+
+-- | A logger whose backend RAISES at or above @level@ instead of
+--   writing — the closed stdout pipe of #2283, since
+--   'Engine.Core.Log.Format' hands a 'LogToCallback' backend the entry
+--   with no guard at all. Quieter entries are captured as usual, so a
+--   case can still assert on what did get out.
+throwingLogger ∷ LogLevel → IO (IORef [LogEntry], IORef LoggerState)
+throwingLogger level = do
+    capturedRef ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback $ \e →
+            if leLevel e ≥ level
+              then throwIO (userError "log handle vanished")
+              else atomicModifyIORef' capturedRef (\es → (e : es, ()))
+        }
+    writeIORef (lsMinLevel logger) LevelDebug
+    writeIORef (lsEnabled logger) True
+    writeIORef (lsCategoryLevels logger) Map.empty
+    loggerRef ← newIORef logger
+    pure (capturedRef, loggerRef)
+
+-- | Append to a list held in reverse, the shape every recorder below
+--   uses.
+record ∷ IORef [α] → α → IO ()
+record ref x = atomicModifyIORef' ref (\xs → (x : xs, ()))
+
+recorded ∷ IORef [α] → IO [α]
+recorded ref = reverse ⊚ readIORef ref
 
 -- | Poll to a generous ceiling (~10 s). Returns the condition's final
 --   value so a case can fail with its own message.
@@ -147,8 +199,9 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "startup failure" $ do
     it "propagates a typed EngineException, not a bare error call" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ticksRef ← newIORef (0 ∷ Int)
-      let worker = probeSpec loggerRef
+      let worker = probeSpec loggerRef lifecycle
             (\_ → throwIO (userError "probe startup exploded")
                     ∷ IO (Either Void ()))
             (\() → atomicModifyIORef' ticksRef (\n → (n + 1, Just ())))
@@ -183,7 +236,8 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
 
     it "logs the failure at the level the worker chose (the Lua thread warns)" $ do
       (capturedRef, loggerRef) ← captureLogger
-      let worker = (probeSpec loggerRef
+      lifecycle ← newLifecycle
+      let worker = (probeSpec loggerRef lifecycle
                       (\_ → throwIO (userError "quiet failure")
                               ∷ IO (Either Void ()))
                       (\() → pure (Just ())))
@@ -200,8 +254,9 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "startup refusal" $
     it "forks nothing and hands the refusal back without an exception" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ticksRef ← newIORef (0 ∷ Int)
-      let worker = probeSpec loggerRef
+      let worker = probeSpec loggerRef lifecycle
             (\_ → pure (Left ("no listener" ∷ Text)))
             (\() → atomicModifyIORef' ticksRef (\n → (n + 1, Just ())))
       outcome ← startWorkerThreadEither worker
@@ -217,8 +272,9 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "running ticks" $ do
     it "threads the startup's value and each tick's state into the next tick" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       seenRef ← newIORef []
-      ts ← startWorkerThread $ probeSpec loggerRef
+      ts ← startWorkerThread $ probeSpec loggerRef lifecycle
              (\_ → noRefusal (pure (7 ∷ Int)))
              (bumpAndRecord seenRef)
       reached ← awaitTrue ((≥ 4) ∘ length ⊚ readIORef seenRef)
@@ -233,8 +289,9 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
 
     it "omits the post-fork line for a worker that declares none" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                         (\() → pure (Just ())))
                { wsStartedMsg = Nothing }
       shutdownThread ts
@@ -243,10 +300,11 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
 
     it "ends the loop when a tick returns Nothing" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ticksRef ← newIORef (0 ∷ Int)
       stopsRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure (0 ∷ Int)))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure (0 ∷ Int)))
                 (\n → do
                    writeIORef ticksRef (n + 1)
                    pure (if n ≥ 2 then Nothing else Just (n + 1))))
@@ -261,8 +319,9 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "paused polling" $
     it "runs no tick while paused and resumes when set back to running" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ticksRef ← newIORef (0 ∷ Int)
-      ts ← startWorkerThread $ probeSpec loggerRef
+      ts ← startWorkerThread $ probeSpec loggerRef lifecycle
              (\_ → noRefusal (pure ()))
              (\() → atomicModifyIORef' ticksRef (\n → (n + 1, Just ())))
       started ← awaitTrue ((> 0) ⊚ readIORef ticksRef)
@@ -284,10 +343,11 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "stop cleanup and completion signalling" $
     it "runs the stop callback once, fills the done MVar, and ticks no more" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ticksRef ← newIORef (0 ∷ Int)
       stopsRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 (\() → atomicModifyIORef' ticksRef (\n → (n + 1, Just ()))))
                { wsOnStop = \() → atomicModifyIORef' stopsRef
                                     (\c → (c + 1, ())) }
@@ -306,11 +366,12 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "tick exceptions" $ do
     it "ends the loop on the first throw, crashing once and never stopping" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       ticksRef ← newIORef (0 ∷ Int)
       crashesRef ← newIORef ([] ∷ [Text])
       stopsRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure (0 ∷ Int)))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure (0 ∷ Int)))
                 (\n → do
                    writeIORef ticksRef (n + 1)
                    when (n ≥ 2) $ throwIO (userError "tick exploded")
@@ -340,9 +401,10 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
       -- pops. Frame counts are not observable, so this asserts the
       -- consequence: a bounded-but-large run simply completes.
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       let iterations = 200000 ∷ Int
       finalRef ← newIORef (0 ∷ Int)
-      ts ← startWorkerThread $ probeSpec loggerRef
+      ts ← startWorkerThread $ probeSpec loggerRef lifecycle
              (\_ → noRefusal (pure (0 ∷ Int)))
              (\n → do
                 writeIORef finalRef (n + 1)
@@ -350,15 +412,148 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
       takeMVar (tsDone ts)
       readIORef finalRef `shouldReturn` iterations
 
+  describe "worker crash fail-stop (#2283)" $ do
+    it "transitions the lifecycle before a crash report and a cleanup that both throw" $ do
+      -- The production shape the issue names: the logger's backend has
+      -- died — a reader closed the stdout pipe the boot points it at —
+      -- so the worker's crash line throws, and the cleanup behind it
+      -- throws too. Neither may cost the engine its shutdown.
+      (_, loggerRef) ← throwingLogger LevelError
+      lifecycle ← newLifecycle
+      ticksRef ← newIORef (0 ∷ Int)
+      observedRef ← newIORef ([] ∷ [EngineLifecycle])
+      cleanupRef ← newIORef ([] ∷ [EngineLifecycle])
+      sinkRef ← newIORef ([] ∷ [Text])
+      ts ← startWorkerThread $
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure (0 ∷ Int)))
+                (\n → do
+                   writeIORef ticksRef (n + 1)
+                   when (n ≥ 2) $ throwIO (userError "tick exploded")
+                   pure (Just (n + 1))))
+               { wsOnCrash = \_ e → do
+                   -- Read FIRST, from inside the callback and before it
+                   -- reports anything: the decision is already made by
+                   -- the time the worker gets a say in it.
+                   readIORef lifecycle ⌦ record observedRef
+                   logger ← readIORef loggerRef
+                   logError logger CatThread $
+                     "Probe thread crashed: " <> tshow e
+               , wsOnCrashCleanup = \_ _ → do
+                   readIORef lifecycle ⌦ record cleanupRef
+                   throwIO (userError "cleanup exploded")
+               , wsCrashSink = \line → do
+                   record sinkRef line
+                   throwIO (userError "sink exploded")
+               }
+      -- The loop exited, and the join left the completion record in
+      -- place: a worker that died with its transition unwritten is the
+      -- defect, so completion alone proves nothing on its own.
+      joined ← timeout (5 * 1000000) (readMVar (tsDone ts))
+      joined `shouldBe` Just ()
+      readIORef lifecycle `shouldReturn` CleaningUp
+      -- Observed from inside the callback: not merely eventually
+      -- CleaningUp, but CleaningUp BEFORE any reporting ran.
+      recorded observedRef `shouldReturn` [CleaningUp]
+      -- The throwing diagnostic did not cost the cleanup its turn, and
+      -- the cleanup saw the transition too.
+      recorded cleanupRef `shouldReturn` [CleaningUp]
+      -- Nothing kept running, and completion stays observable.
+      settleQuiet
+      readIORef ticksRef `shouldReturn` 3
+      tryReadMVar (tsDone ts) `shouldReturn` Just ()
+      -- Both failures were reported on the logger-independent sink,
+      -- naming the worker and the stage — and the sink threw on each,
+      -- which cost nothing.
+      recorded sinkRef `shouldReturn`
+        [ "Probe thread crash report itself failed: user error (log handle vanished)"
+        , "Probe thread crash cleanup itself failed: user error (cleanup exploded)"
+        ]
+
+    it "still reports the crash at its own level and category when the logger works" $ do
+      -- The control for the case above: with a working backend the
+      -- diagnostic is unchanged, and the fallback sink is never used.
+      (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
+      sinkRef ← newIORef ([] ∷ [Text])
+      ts ← startWorkerThread $
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure (0 ∷ Int)))
+                (\n → do
+                   when (n ≥ 2) $ throwIO (userError "tick exploded")
+                   pure (Just (n + 1))))
+               { wsOnCrash = \_ e → do
+                   logger ← readIORef loggerRef
+                   logError logger CatThread $
+                     "Probe thread crashed: " <> tshow e
+               , wsCrashSink = record sinkRef
+               }
+      joined ← timeout (5 * 1000000) (readMVar (tsDone ts))
+      joined `shouldBe` Just ()
+      entries ← capturedEntries capturedRef
+      [ (leLevel e, leCategory e, leMessage e)
+        | e ← entries, leLevel e ≥ LevelWarn ] `shouldBe`
+        [ (LevelError, CatThread
+          , "Probe thread crashed: user error (tick exploded)") ]
+      readIORef lifecycle `shouldReturn` CleaningUp
+      recorded sinkRef `shouldReturn` []
+
+    it "keeps the ordered crash cleanup behind a diagnostic that threw" $ do
+      -- The Lua worker's shape: three cleanup steps in #2170's order,
+      -- which used to sit in the same callback as the log line and so
+      -- were all abandoned the moment that line raised.
+      (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
+      stepsRef ← newIORef ([] ∷ [Text])
+      sinkRef ← newIORef ([] ∷ [Text])
+      ts ← startWorkerThread $
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure (0 ∷ Int)))
+                (\n → do
+                   when (n ≥ 1) $ throwIO (userError "tick exploded")
+                   pure (Just (n + 1))))
+               { wsOnCrash = \_ _ → throwIO (userError "diagnostic exploded")
+               , wsOnCrashCleanup = \_ _ → do
+                   record stepsRef "stopDebugConsole"
+                   record stepsRef "drainDebugQueue"
+                   record stepsRef "Lua.close"
+               , wsCrashSink = record sinkRef
+               }
+      joined ← timeout (5 * 1000000) (readMVar (tsDone ts))
+      joined `shouldBe` Just ()
+      recorded stepsRef `shouldReturn`
+        ["stopDebugConsole", "drainDebugQueue", "Lua.close"]
+      readIORef lifecycle `shouldReturn` CleaningUp
+      -- Only the diagnostic failed, so only it was reported.
+      recorded sinkRef `shouldReturn`
+        [ "Probe thread crash report itself failed: user error (diagnostic exploded)" ]
+
+    it "keeps the transition monotonic, never rewinding a stopped engine" $ do
+      -- 'requestEngineCleanup''s contract, now that the crash branch is
+      -- one of its callers: a worker discovering a failure after the
+      -- engine finished stopping has nothing left to ask for.
+      let crashUnder initial = do
+            (_, loggerRef) ← captureLogger
+            lifecycle ← newIORef initial
+            ts ← startWorkerThread $ probeSpec loggerRef lifecycle
+                   (\_ → noRefusal (pure ()))
+                   (\() → throwIO (userError "tick exploded")
+                            ∷ IO (Maybe ()))
+            joined ← timeout (5 * 1000000) (readMVar (tsDone ts))
+            joined `shouldBe` Just ()
+            readIORef lifecycle
+      crashUnder EngineStarting `shouldReturn` CleaningUp
+      crashUnder EngineRunning  `shouldReturn` CleaningUp
+      crashUnder CleaningUp     `shouldReturn` CleaningUp
+      crashUnder EngineStopped  `shouldReturn` EngineStopped
+
   describe "forced termination (#2165)" $ do
     it "kills a tick that outlives the graceful timeout and returns only after the join" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       entered ← newEmptyMVar
       gate ← newEmptyMVar
       stopsRef ← newIORef (0 ∷ Int)
       crashesRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 -- Blocks until released, which this case never does:
                 -- the stop request can only be honoured by a kill.
                 (\() → putMVar entered () ≫ takeMVar gate ≫ pure (Just ())))
@@ -378,6 +573,10 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
       -- kill was never mistaken for a crash.
       readIORef stopsRef `shouldReturn` 1
       readIORef crashesRef `shouldReturn` 0
+      -- #2283: the fail-stop transition belongs to a SYNCHRONOUS
+      -- failure alone, so a ThreadKilled must leave the lifecycle
+      -- exactly where it found it.
+      readIORef lifecycle `shouldReturn` EngineRunning
       -- Both sides of the kill name the worker: the escalation, then
       -- the worker's own account of what ended it.
       reportedEntries capturedRef `shouldReturn`
@@ -387,12 +586,13 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
 
     it "treats a non-ThreadKilled asynchronous exception as a forced termination, not a crash" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       entered ← newEmptyMVar
       gate ← newEmptyMVar
       stopsRef ← newIORef (0 ∷ Int)
       crashesRef ← newIORef ([] ∷ [Text])
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 (\() → putMVar entered () ≫ takeMVar gate ≫ pure (Just ())))
                { wsOnStop  = countAfterPause stopsRef
                , wsOnCrash = \_ e → atomicModifyIORef' crashesRef
@@ -408,18 +608,23 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
       tryReadMVar (tsDone ts) `shouldReturn` Just ()
       readIORef stopsRef `shouldReturn` 1
       readIORef crashesRef `shouldReturn` []
+      -- #2283: and the same holds for an asynchronous exception that
+      -- is not ThreadKilled — the classification is by type, so the
+      -- lifecycle must be untouched here too.
+      readIORef lifecycle `shouldReturn` EngineRunning
       -- No escalation line — nothing timed out — only the worker's own.
       reportedEntries capturedRef `shouldReturn`
         [ (LevelWarn, "Probe thread forcibly terminated: user interrupt") ]
 
     it "reports a worker that survives the kill on the log and as an EngineException" $ do
       (capturedRef, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       entered ← newEmptyMVar
       release ← newEmptyMVar
       stopsRef ← newIORef (0 ∷ Int)
       crashesRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 -- Stands in for a worker stuck in a safe foreign call:
                 -- under an uninterruptible mask the kill cannot be
                 -- delivered until this case releases the tick.
@@ -463,6 +668,7 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
 
     it "lets a stop callback already in progress complete when the kill lands during it" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       entered ← newEmptyMVar
       gate ← newEmptyMVar
       inStop ← newEmptyMVar
@@ -470,7 +676,7 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
       stopsRef ← newIORef (0 ∷ Int)
       crashesRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 (\() → putMVar entered () ≫ takeMVar gate ≫ pure (Just ())))
                { wsOnStop  = \() → do
                    -- Announce, then block on a gate the case holds, then
@@ -511,11 +717,12 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
   describe "shutdown join and idempotency (#2165)" $ do
     it "joins a stop request that was written before the call instead of skipping it" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       entered ← newEmptyMVar
       gate ← newEmptyMVar
       stopsRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 (\() → putMVar entered () ≫ takeMVar gate ≫ pure (Just ())))
                { wsOnStop = countAfterPause stopsRef }
       -- The caller wrote the request itself, with the loop blocked
@@ -530,9 +737,10 @@ spec = describe "Engine.Core.Thread shared worker lifecycle (#1147)" $ do
 
     it "returns at once on a second call after a confirmed join, re-running nothing" $ do
       (_, loggerRef) ← captureLogger
+      lifecycle ← newLifecycle
       stopsRef ← newIORef (0 ∷ Int)
       ts ← startWorkerThread $
-             (probeSpec loggerRef (\_ → noRefusal (pure ()))
+             (probeSpec loggerRef lifecycle (\_ → noRefusal (pure ()))
                 (\() → pure (Just ())))
                { wsOnStop = \() → atomicModifyIORef' stopsRef (\c → (c + 1, ())) }
       shutdownThread ts

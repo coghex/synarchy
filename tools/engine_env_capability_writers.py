@@ -281,14 +281,15 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "loggerRef": frozenset(),
     "luaToEngineQueue": frozenset(),
     "luaQueue": frozenset(),
+    # The six workers dropped off this list in #2283: the fail-stop
+    # transition they each used to write at the end of their own crash
+    # callback is now `Engine.Core.Thread`'s, performed through
+    # `requestEngineCleanup` on the bare `IORef` the `WorkerSpec`
+    # carries, before any of their reporting runs. Nothing in a worker
+    # writes `lifecycleRef` directly any more.
     "lifecycleRef": frozenset({
-        "Combat.Thread",
-        "Engine.Input.Thread",
         "Engine.Loop.Mode",
         "Engine.Scripting.Lua.API.Core",
-        "Sim.Thread",
-        "Unit.Thread",
-        "World.Thread",
     }),
     "assetPoolRef": frozenset(),
     "textureNameRegistryRef": frozenset(),

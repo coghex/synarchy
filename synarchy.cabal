@@ -385,6 +385,7 @@ library
                      Engine.Core.Monad
                      Engine.Core.ReadOnlyRef
                      Engine.Core.State
+                     Engine.Core.Lifecycle
                      Engine.Core.Capability.Building
                      Engine.Core.Capability.Core
                      Engine.Core.Capability.ContentRegistries

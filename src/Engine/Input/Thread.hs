@@ -33,7 +33,7 @@ import Engine.Core.Log (logDebug, logError, LogCategory(..))
 -- own row is empty; its modules are permanent SS6.1 exceptions). The
 -- opaque `EngineEnv` is still threaded into @inputTick@/
 -- 'processInputs', which hand it on to not-yet-narrowed callees.
-import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
+import Engine.Core.State (EngineEnv, saveBarrierRef)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.InputView
     (InputViewCapability(..), toInputViewCapability)
@@ -46,6 +46,8 @@ startInputThread env = startWorkerThread WorkerSpec
     { wsName        = "Input"
     , wsLoggerRef   = ccLoggerRef (toCoreCapability env)
     , wsCategory    = CatInput
+    , wsLifecycleRef = ccLifecycleRef (toCoreCapability env)
+    , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting input thread..."
       -- This worker has never logged a post-fork line.
     , wsStartedMsg  = Nothing
@@ -68,7 +70,9 @@ startInputThread env = startWorkerThread WorkerSpec
     , wsOnCrash     = \_ e → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logError logger CatInput $ "Input thread crashed: " <> tshow e
-        writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
+      -- The lifecycle write this line used to precede belongs to the
+      -- shared loop now, ahead of the log (#2283).
+    , wsOnCrashCleanup = \_ _ → pure ()
     }
 
 inputTick ∷ EngineEnv → IO (Maybe ())
