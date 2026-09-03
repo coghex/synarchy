@@ -1,10 +1,14 @@
 {-# LANGUAGE Strict, DeriveGeneric, DeriveAnyClass #-}
 module World.Time.Types
-    ( WorldTime(..)
+    ( module World.Time.Scale
+    , WorldTime(..)
     , defaultWorldTime
     , worldTimeToSunAngle
     , advanceWorldClock
     , WorldDate(..)
+    , worldDateAddDaysChecked
+    , calendarDaysPerYearChecked
+    , worldDateToDayOfYearChecked
     , defaultWorldDate
     , worldDateToDayOfYear
     , worldDateAddDays
@@ -22,6 +26,7 @@ import UPrelude
 import Control.DeepSeq (NFData)
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
+import World.Time.Scale
 
 -- | Time of day in the world.
 --   hour: 0-23, minute: 0-59
@@ -54,20 +59,45 @@ worldTimeToSunAngle (WorldTime h m) =
 --   invalidate date-dependent caches (flora textures) only when the day
 --   actually changed. A single tick can cross several midnights at high
 --   time scales.
+--
+--   __Total over every input (#2280).__ @world.setTimeScale@ refuses a
+--   scale outside 'World.Time.Scale.classifyTimeScale''s domain at the
+--   Lua door, but this function enforces the same domain again so a
+--   producer that goes around that door cannot corrupt the clock. It
+--   also guards each 'floor' it evaluates and the calendar carry that
+--   follows, because a scale inside the domain can still be handed an
+--   elapsed step no normal tick would produce.
+--
+--   For an unacceptable scale, an unacceptable elapsed step, a day count
+--   or wrapped-minute total that will not fit an 'Int', or a calendar
+--   carry that would overflow 'wdYear', the answer is the EXACT input
+--   time and date with zero rolled days — never a partially applied
+--   advance. Every accepted input keeps the behaviour it already had,
+--   and the returned 'WorldTime' always satisfies @0 ≤ wtHour ≤ 23@ and
+--   @0 ≤ wtMinute ≤ 59@.
 advanceWorldClock ∷ CalendarConfig → Float → Float → WorldTime → WorldDate
                   → (WorldTime, WorldDate, Int)
-advanceWorldClock cc timeScale dtSeconds (WorldTime h m) date =
-    let totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
-        newTotal = totalMinutes + timeScale * dtSeconds
-        daysRolled = floor (newTotal / 1440.0) ∷ Int
-        wrapped = newTotal - 1440.0 * fromIntegral daysRolled
-        newH = floor wrapped `div` 60
-        newM = floor wrapped `mod` 60
-        time' = WorldTime (newH `mod` 24) (newM `mod` 60)
-        date' = if daysRolled > 0
-                then worldDateAddDays cc daysRolled date
-                else date
-    in (time', date', daysRolled)
+advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) date
+    | not (acceptedTimeScale timeScale) = unchanged
+    | not (acceptedElapsed dtSeconds)   = unchanged
+    | otherwise = case floorToInt (newTotal / clockMinutesPerDay) of
+        Nothing         → unchanged
+        Just daysRolled → carry daysRolled
+  where
+    unchanged = (time, date, 0)
+    totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
+    newTotal = totalMinutes + timeScale * dtSeconds
+    carry daysRolled =
+        case floorToInt (newTotal - clockMinutesPerDay * fromIntegral daysRolled) of
+            Nothing → unchanged
+            Just wrappedMinutes →
+                let time' = WorldTime ((wrappedMinutes `div` 60) `mod` 24)
+                                      (wrappedMinutes `mod` 60)
+                in if daysRolled > 0
+                    then case worldDateAddDaysChecked cc daysRolled date of
+                        Nothing    → unchanged
+                        Just date' → (time', date', daysRolled)
+                    else (time', date, daysRolled)
 
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.
@@ -142,6 +172,56 @@ worldDateAddDays cc delta date@(WorldDate year _ _)
         in WorldDate (year + yearsCarried)
                      (doy `div` dpm + 1)
                      (doy `mod` dpm + 1)
+
+-- | 'worldDateAddDays', but reporting every carry it cannot represent
+--   instead of wrapping through it or crashing on it (#2280).
+--
+--   Three distinct 'Int' hazards live on this path, and the clock's
+--   totality contract needs all three closed:
+--
+--     * 'wdYear' is an 'Int', and a day count near the accepted scale
+--       ceiling carries enough years to overflow it. The wrap would
+--       silently land the world in a negative year.
+--     * 'calendarDaysPerYear' MULTIPLIES two authored calendar fields.
+--       'CalendarConfig' arrives from world-gen data, not from a
+--       validated range, so that product can wrap — and a product that
+--       wraps to zero turns the @divMod@ below into a divide by zero,
+--       which is a crash rather than a wrong answer.
+--     * 'worldDateToDayOfYear' multiplies the (clamped) month index by
+--       the month length, which can overflow for the same reason.
+--
+--   'Nothing' says "this date cannot be advanced by this many days";
+--   'advanceWorldClock' answers that with the unchanged clock. For every
+--   input whose intermediates fit, the result is exactly
+--   'worldDateAddDays'.
+worldDateAddDaysChecked ∷ CalendarConfig → Int → WorldDate → Maybe WorldDate
+worldDateAddDaysChecked cc delta date@(WorldDate year _ _)
+    | delta ≤ 0 = Just date
+    | otherwise = do
+        daysPerYear ← calendarDaysPerYearChecked cc
+        dayOfYear ← worldDateToDayOfYearChecked cc date
+        total ← addChecked dayOfYear delta
+        let dpm = max 1 (ccDaysPerMonth cc)
+            (yearsCarried, doy) = total `divMod` daysPerYear
+        year' ← addChecked year yearsCarried
+        pure (WorldDate year' (doy `div` dpm + 1) (doy `mod` dpm + 1))
+
+-- | 'calendarDaysPerYear' with its product checked. Never zero when it
+--   answers 'Just': both factors are floored at 1 exactly as the
+--   unchecked version floors them, so the quotient it feeds is safe.
+calendarDaysPerYearChecked ∷ CalendarConfig → Maybe Int
+calendarDaysPerYearChecked cc =
+    mulCheckedNonNeg (max 1 (ccDaysPerMonth cc)) (max 1 (ccMonthsPerYear cc))
+
+-- | 'worldDateToDayOfYear' with its product and sum checked. The same
+--   clamping, so an in-range calendar gives the identical answer.
+worldDateToDayOfYearChecked ∷ CalendarConfig → WorldDate → Maybe Int
+worldDateToDayOfYearChecked cc (WorldDate _ month day) =
+    let dpm = max 1 (ccDaysPerMonth cc)
+        mpy = max 1 (ccMonthsPerYear cc)
+        m   = max 1 (min mpy month)
+        d   = max 1 (min dpm day)
+    in mulCheckedNonNeg (m - 1) dpm ⌦ \whole → addChecked whole (d - 1)
 
 -- | Whole days elapsed since the world epoch (year 1, month 1, day 1 —
 --   'defaultWorldDate'), i.e. a monotonic absolute day counter. This is
