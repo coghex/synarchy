@@ -14,6 +14,7 @@ module Engine.Scripting.Lua.Thread
   , processLuaMsg
   , processLuaMsgs
   , runDueScripts
+  , drainDebugQueue
   ) where
 
 import UPrelude
@@ -25,7 +26,8 @@ import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
 import Engine.Scripting.Lua.TickPolicy
     (schedulerSleepMicros, scriptIsDue, advanceTick)
 import Engine.Scripting.Lua.DebugServer
-    ( DebugCommand(..), DebugConsole(..), DebugServerConfig(..)
+    ( DebugCommand, DebugConsole(..), DebugServerConfig(..)
+    , cancelDebugCommand
     , defaultDebugServerConfig, startDebugServer, stopDebugConsole
     , inertDebugConsole, pollDebugCommand
     , DebugListenerFailure(..), ListenerAction(..), listenerAction
@@ -47,7 +49,6 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.MVar (tryPutMVar)
 import Control.Concurrent.STM.TQueue (TQueue, newTQueue)
 import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Control.Concurrent.STM.TVar (newTVarIO)
@@ -89,10 +90,16 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
         -- freed out from under a thread that might still be holding a
         -- command against it.
         stopDebugConsole (llsConsole lls)
-        -- Answer any debug commands still queued at teardown so their
-        -- client threads (and netcat connections) don't sit out the full
-        -- 30 s response timeout while the engine shuts down. Mirrors the
-        -- crash handler's drain.
+        -- Cancel every debug command still queued at teardown. Note the
+        -- ORDER, which #2170 fixed deliberately and #2282 did not
+        -- change: the console is stopped FIRST, so by the time this
+        -- runs every client handler has been closed, killed and joined
+        -- and no socket client is left to read the reply. What the
+        -- drain still buys is the lifecycle transition -- the queued
+        -- commands are CANCELLED and so can never be executed by
+        -- anything that outlives this teardown -- plus a filled
+        -- response cell for any in-process waiter. Mirrors the crash
+        -- handler's drain.
         drainDebugQueue (llsDebugQueue lls) "engine shutting down"
         Lua.close (lbsLuaState (llsBackend lls))
       -- The diagnostic ALONE (#2283). It is deliberately not the same
@@ -129,6 +136,16 @@ data LuaLoopState = LuaLoopState
     }
 
 -- | Answer and discard every queued debug command with one reply.
+--
+--   Goes through the shared 'cancelDebugCommand' (#2282), so a drained
+--   command is not merely off the queue with its response filled: it is
+--   CANCELLED, and a later claim on it can never succeed. That — not
+--   the reply — is what this contributes at teardown, because both
+--   callers stop the console BEFORE draining and no socket client
+--   survives to read anything. The two replies it is called with —
+--   @"engine shutting down"@ for the orderly stop and
+--   @"ERROR: Lua thread crashed: ..."@ for the crash handler — are
+--   unchanged, and remain the answer any in-process waiter sees.
 drainDebugQueue ∷ TQueue DebugCommand → T.Text → IO ()
 drainDebugQueue debugQueue reply = go
   where
@@ -136,8 +153,8 @@ drainDebugQueue debugQueue reply = go
         mCmd ← pollDebugCommand debugQueue
         case mCmd of
             Nothing → pure ()
-            Just (DebugCommand _ mvar) → do
-                _ ← tryPutMVar mvar reply
+            Just cmd → do
+                _ ← cancelDebugCommand cmd reply
                 go
 
 -- | The Lua thread's startup: create the backend state, register the

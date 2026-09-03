@@ -30,7 +30,6 @@ import qualified HsLua as Lua
 import Data.List (find)
 import Data.IORef (IORef, readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (readTVarIO)
-import Control.Concurrent.MVar (tryPutMVar)
 import Engine.Save.Barrier
     ( SaveOwner(..), beginSave, acknowledgeSave, waitForOwners
     , reachSnapshot, failSave )
@@ -39,7 +38,8 @@ import Engine.Load.Status (advanceLoad, failLoad, finishLoad
                           , ReconciliationFailure(..), LoadPhase(..))
 import Engine.Scripting.Lua.API.Save (applyLuaLoad, abortLuaLoad)
 import Engine.Scripting.Lua.Message (discardStaleLuaToEngineWork)
-import Engine.Scripting.Lua.DebugServer (DebugCommand(..), pollDebugCommand)
+import Engine.Scripting.Lua.DebugServer
+    ( cancelDebugCommand, pollDebugCommand )
 import World.Command.Types (WorldCommand(..))
 import World.Save.Payload (LoadReconcileContext(..))
 
@@ -341,12 +341,20 @@ processLuaMsg env ls stateRef msg = case msg of
     -- waiting response MVar so the client (netcat, a script) doesn't
     -- hang: none of them can possibly have been issued FOR the session
     -- that's live from this point on.
+    --
+    -- #2282 made that cancellation the SHARED 'cancelDebugCommand'
+    -- rather than a bare 'tryPutMVar'. Answering the MVar was never
+    -- what stopped the command running — being off the queue was, and
+    -- only until something put one back. A rejected command is now
+    -- CANCELLED in its own lifecycle cell and so is permanently
+    -- unclaimable, whoever holds it. The rejection text is unchanged,
+    -- verbatim.
     let cancelStaleDebugCommands = do
             mCmd ← pollDebugCommand (lbsDebugQueue ls)
             case mCmd of
                 Nothing → pure ()
-                Just (DebugCommand _ mvar) → do
-                    _ ← tryPutMVar mvar
+                Just cmd → do
+                    _ ← cancelDebugCommand cmd
                         "REJECTED: a load transaction replaced the \
                         \session while this command was queued"
                     cancelStaleDebugCommands
