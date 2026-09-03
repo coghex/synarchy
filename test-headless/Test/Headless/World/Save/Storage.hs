@@ -489,6 +489,28 @@ spec = do
                         "expected an owner-directory sync failure"
                 doesFileExist (authPath dir) `shouldReturn` False
 
+        it "reports a failure of the SECOND owner (saves/'s own owner, \
+           \the resolved resource root) the same way, naming THAT \
+           \directory -- the sync reached only after the first owner \
+           \already succeeded, so a single-owner implementation would \
+           \publish here" $
+            withTempSlotDir $ \dir → do
+                let (savesLike, root) = ownerDirsOf dir
+                seen ← newIORef []
+                r ← publishWithSync seen (≡ root) dir 1 "t1"
+                case r of
+                    Left f → do
+                        pfPhase f `shouldBe` PhaseOwnerDirectorySync
+                        pfPath f `shouldBe` Just root
+                        pfReason f `shouldSatisfy`
+                            T.isInfixOf "injected directory-sync failure"
+                    Right _ → expectationFailure
+                        "expected a resource-root owner sync failure"
+                -- It really did get past the first owner, so this is the
+                -- SECOND sync failing and not the first one misreported.
+                readIORef seen `shouldReturn` [savesLike, root]
+                doesFileExist (authPath dir) `shouldReturn` False
+
         it "distinguishes the SLOT's own directory sync from its \
            \owners' -- a failure inside the slot still reports \
            \PhaseDirectorySync naming the slot" $
