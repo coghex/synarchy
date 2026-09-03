@@ -347,9 +347,12 @@ fixtureUnit page = UnitInstance
     , uiClimbDest = Nothing, uiTrailState = Nothing
     }
 
--- | A 2x3 building def, so a single anchor-only construction
---   designation expands to a footprint of SIX marker candidates — a
---   number no other quantity in this fixture could be mistaken for.
+-- | A MULTI-tile (2x3) building def, so the example below is asserting
+--   something: since #1845 a committed designation contributes exactly
+--   ONE candidate however large its def's footprint is, and a 1x1 def
+--   would make that indistinguishable from a per-footprint-tile count.
+--   The footprint's own size is what the example guards against
+--   returning.
 footprintDef ∷ BuildingDef
 footprintDef = BuildingDef
     { bdName = "scene_stats_building", bdDisplayName = "Scene Stats Hall"
@@ -556,8 +559,7 @@ scannedMeaningSpec = describe "the per-category scanned meanings" $ do
         withTexture ← runPass env
         scannedOf ScCursor withTexture `shouldBe` 3
 
-    it "expands a construction designation to its def's whole\
-       \ footprint" $ \env → do
+    it "counts one candidate per committed building designation" $ \env → do
         ws ← resetScene env gameplayCamera
         bm ← readIORef (buildingManagerRef env)
         writeIORef (buildingManagerRef env) bm
@@ -565,15 +567,15 @@ scannedMeaningSpec = describe "the per-category scanned meanings" $ do
         writeIORef (wsConstructDesignationsRef ws) $ HM.singleton (0, 0)
             (newConstructDesignation 0 (CtBuilding (bdName footprintDef))
                                  firstConstructAttemptId)
-        cs ← readIORef (wsCursorRef ws)
-        writeIORef (wsCursorRef ws)
-            cs { constructBuildingTexture = Just (TextureHandle 9) }
         stats ← runPass env
-        -- ONE anchor-only map entry (#807), six candidates: the
-        -- designation's candidates are the FOOTPRINT tiles, not the
-        -- map entries.
-        scannedOf ScCursor stats
-            `shouldBe` bdTileW footprintDef * bdTileH footprintDef
+        -- ONE anchor-only map entry, ONE candidate. #1845 replaced
+        -- #807's per-footprint-tile marker repetition with a single
+        -- sprite of the building's own art, so the def's 2x3 footprint
+        -- changes the SIZE of that one quad and not the count — and no
+        -- cursor texture arms the builder any more, because there is no
+        -- category placeholder left to arm it with.
+        bdTileW footprintDef * bdTileH footprintDef `shouldSatisfy` (> 1)
+        scannedOf ScCursor stats `shouldBe` 1
 
     it "counts every ground-item record on the page" $ \env → do
         ws ← resetScene env gameplayCamera

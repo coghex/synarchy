@@ -370,6 +370,49 @@ spec = describe "unit AI reconciliation boundary (#1589)" $ do
         , "assert(scrubbedCount() == 3, 'all three edges dangled')"
         ]
 
+    it "keeps a construct job whose STAKED building survived the save, \
+       \drops one whose stake never landed, and leaves a job that has \
+       \not staked yet alone (#1845)" $ runsOk $ lns
+        [ prelude
+        -- The stake id is the ONE thing that tells a resumed job
+        -- whether its own building landed, so it is persisted as a
+        -- typed reference rather than re-derived from what the tile
+        -- looks like. That makes it the integrity graph's business:
+        -- an id that still names a building is a job to finish, one
+        -- that does not is a job whose building never appeared, and a
+        -- job that has not reached its stake yet is neither.
+        -- The dropped job must hand its designation BACK, not merely
+        -- vanish: an engine-side entry left `claimed` by a job that no
+        -- longer exists is adopted as an orphan by the next scan and is
+        -- unavailable to anybody for a whole claim timeout.
+        , "local RELEASED = {}"
+        , "construction = { setJobStatus = function(w, x, y, st, at)"
+        , "  RELEASED[#RELEASED + 1] = w .. ':' .. x .. ',' .. y .. ':'"
+        , "    .. st .. ':' .. tostring(at) end }"
+        , "local ai = { [1] = { constructJob = { x = 1, y = 1, attempt = 3,"
+        , "                       category = 'building', building = 'hut',"
+        , "                       stakedBid = 42 } },"
+        , "             [2] = { constructJob = { x = 2, y = 2, attempt = 4,"
+        , "                       category = 'building', building = 'hut',"
+        , "                       stakedBid = 999 } },"
+        , "             [3] = { constructJob = { x = 3, y = 3, attempt = 5,"
+        , "                       category = 'structure', pack = 'p',"
+        , "                       kind = 'wall' } } }"
+        , "R.reconcile(ai, { 1, 2, 3 }, { 42 }, CTX)"
+        , "assert(ai[1].constructJob ~= nil,"
+        , "  'a job whose staked building is still there survives')"
+        , "assert(ai[1].constructJob.stakedBid == 42, 'with its stake intact')"
+        , "assert(ai[2].constructJob == nil,"
+        , "  'a job whose stake never landed is dropped whole')"
+        , "assert(ai[3].constructJob ~= nil,"
+        , "  'a job that has not staked yet is left alone')"
+        , "assert(scrubbedCount() == 1, 'exactly one edge dangled')"
+        , "assert(#RELEASED == 1,"
+        , "  'exactly the dropped job releases its designation')"
+        , "assert(RELEASED[1] == 'B:2,2:pending:4',"
+        , "  'on that unit own page and exact attempt: ' .. RELEASED[1])"
+        ]
+
     it "refuses to run at all when a schema row names a release path no \
        \hook supplies, instead of silently degrading that drop to a bare \
        \field assignment" $ runsOk $ lns

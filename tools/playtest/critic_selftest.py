@@ -25,8 +25,10 @@ Consumes the production owners (`critic_click`, `critic_signals`,
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -693,6 +695,83 @@ def selftest() -> int:
               all(_ref_key(ref) in fbc.get(f_["adjudication_call"], set())
                   for f_ in data["findings"]
                   for ref in f_.get("screenshots", [])))
+
+        # #2220: a report's evidence images must resolve from wherever
+        # the report was written. `_ref_key` doubles as the "spelled
+        # exactly as the trace records it" oracle: it matches a ref
+        # against the trace's own `screenshot` / `post_screenshot`
+        # strings and returns None for anything rebased or invented.
+        IMG_REF = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+        default_refs = IMG_REF.findall(report)
+        check("the default-location report still spells every image link "
+              "exactly as the trace records it (#2220 changes nothing here)",
+              bool(default_refs)
+              and all(_ref_key(r) is not None for r in default_refs),
+              str([r for r in default_refs if _ref_key(r) is None][:3]))
+
+        def _trace_files():
+            # content-addressed, so "unmodified" means the bytes are
+            # unchanged rather than merely the timestamps
+            snap = {}
+            for root, _dirs, names in os.walk(tdir):
+                for name in names:
+                    path = os.path.join(root, name)
+                    with open(path, "rb") as fh:
+                        snap[os.path.relpath(path, tdir)] = hashlib.sha256(
+                            fh.read()).hexdigest()
+            return snap
+
+        # the two path relationships `--out` can name that the default
+        # run above does not cover: a directory beside the trace, and
+        # one nested inside it.
+        before_out = _trace_files()
+        for where, out_dir, outside in (
+                ("a sibling dir", os.path.join(tmp, "elsewhere"), True),
+                ("a dir inside the trace",
+                 os.path.join(tdir, "nested-report"), False)):
+            rp_o, fp_o = run_critic(tdir, FakeCritic(), out_dir=out_dir)
+            base = os.path.dirname(rp_o)
+            refs = IMG_REF.findall(open(rp_o).read())
+            check(f"a report written to {where} still references screenshots",
+                  bool(refs))
+            check("...every image target is relative, never a "
+                  f"machine-specific absolute path ({where})",
+                  all(not os.path.isabs(r) for r in refs), str(refs[:3]))
+            unresolved = [r for r in refs
+                          if not os.path.exists(os.path.join(base, r))]
+            check("...and resolves to an existing file from the report's "
+                  f"own directory ({where})",
+                  not unresolved, str(unresolved[:3]))
+            inside = os.path.abspath(tdir) + os.sep
+            check("...each landing on a trace-owned frame, nothing copied "
+                  f"out ({where})",
+                  all(os.path.abspath(os.path.join(base, r)).startswith(inside)
+                      for r in refs))
+            with open(fp_o) as f:
+                data_o = json.load(f)
+            attached = [ref for f_ in data_o["findings"]
+                        for ref in f_.get("screenshots", [])]
+            check("findings.json keeps its trace-relative screenshot paths "
+                  f"({where})",
+                  bool(attached)
+                  and all(_ref_key(ref) is not None for ref in attached),
+                  str([r for r in attached if _ref_key(r) is None][:3]))
+            check(f"...with evidence.screenshots still mirroring them ({where})",
+                  all(f_["evidence"]["screenshots"] == f_["screenshots"]
+                      for f_ in data_o["findings"]))
+            check("...and adjudication_calls still keyed by signed turn "
+                  f"numbers ({where})",
+                  all(isinstance(n, int) and not isinstance(n, bool)
+                      for a in data_o["adjudication_calls"]
+                      for n in a["frames"]))
+            if outside:
+                # the trace stays the sole owner of its frames: an
+                # --out run beside it neither rewrites nor removes a
+                # single file under it (a nested --out legitimately
+                # adds its own two artifacts, so it is exempt).
+                check("...leaving every file under the trace untouched "
+                      f"({where})",
+                      _trace_files() == before_out)
 
         # batched end-to-end: max_frames=2 still covers everything
         rp4, fp4 = run_critic(tdir, FakeCritic(),

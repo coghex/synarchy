@@ -4,6 +4,7 @@
 --   placement is valid, plus a reason string when it isn't.
 module Building.Placement
     ( canPlaceAt
+    , buildingAnchorZ
     , PlacementResult(..)
     , RemoteCheck(..)
     , remoteCheck
@@ -133,6 +134,30 @@ isRemote (RemoteDistance (Just d)) = d > remotePortalThresholdTiles
 --   ground" — ice over ocean is still a flat surface you can put a
 --   portal on. The blanket fluid-rejection check we used initially
 --   was too strict for this world's geology (mostly ice/glaciers).
+-- | The grid z a building anchored at @(gx, gy)@ lands on: that tile's
+--   own TERRAIN surface, resolved into the stored frame. 'Nothing' when
+--   the chunk is not resident, which is the one state nobody can answer
+--   for.
+--
+--   The single answer @building.spawn@ stamps onto the instance
+--   ('biGridZ') and the committed-designation ghost draws at (#1845), so
+--   a planned building cannot be drawn at a z it will not land on. That
+--   is not a tidiness point: a terrain edit under a live designation
+--   would otherwise leave the ghost at its stored @cdZ@ while the stake
+--   landed somewhere else, and the hand-off — which must be invisible —
+--   would move the building.
+--
+--   Deliberately the TERRAIN surface and not 'lookupSurfaceZ's
+--   max(terrain, fluid): that is the map the spawn has always read, and
+--   the placement check's own flat-ground test is a separate question
+--   asked of a separate map.
+buildingAnchorZ ∷ Int → WorldTileData → Int → Int → Maybe Int
+buildingAnchorZ worldSize wtd gx gy =
+    let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
+    in case lookupChunk chunkCoord wtd of
+        Nothing → Nothing
+        Just lc → Just (lcTerrainSurfaceMap lc VU.! columnIndex lx ly)
+
 lookupSurfaceZ ∷ Int → WorldTileData → (Int, Int) → Maybe Int
 lookupSurfaceZ worldSize wtd (gx, gy) =
     let (chunkCoord, (lx, ly), _) = canonicalTileFrame worldSize gx gy
