@@ -17,8 +17,11 @@
 --   written by the Lua planting primitive, read by the render pass and
 --   harvest queries. Persisted per page ('wpsCropPlots').
 module World.Flora.CropPlot
-    ( CropPlot(..)
+    ( CropPlotOf(..)
+    , CropPlot
     , CropPlots
+    , SavedCropPlot
+    , SavedCropPlots
     , emptyCropPlots
     , newCropPlot
     , cropPlotElapsedDays
@@ -31,12 +34,25 @@ import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
 import World.Flora.Identity (floraInstanceIdNone)
+import World.Flora.Reference (FloraRef)
 import World.Flora.Types (FloraId, FloraInstance(..))
 
--- | One planted tile. Field order is load-bearing (positional Generic
+-- | One planted tile, parameterized by HOW it names its species
+--   (#2243). Field order is load-bearing (positional Generic
 --   Serialize — append, don't reorder).
-data CropPlot = CropPlot
-    { cpSpecies    ∷ !FloraId
+--
+--   The live session instantiates it at 'FloraId' ('CropPlot', below):
+--   that is the runtime handle every growth, render and harvest path
+--   already uses, and nothing about them changes. A SAVE instantiates
+--   it at 'World.Flora.Reference.FloraRef' ('SavedCropPlot'), because
+--   the runtime handle means nothing outside the session that minted
+--   it. Parameterizing the one record — rather than mirroring it — is
+--   what keeps the two spellings from drifting: a field added for
+--   gameplay reasons appears on both, and the two conversions
+--   ('World.Thread.Command.Save.WriteWorld' out,
+--   'World.Load.Stage' back) stay one-line species swaps.
+data CropPlotOf s = CropPlot
+    { cpSpecies    ∷ !s
     , cpPlantedDay ∷ !Int
       -- ^ Absolute world day ('World.Time.worldAbsoluteDay') the crop
       --   was planted — the age-0 baseline. The #332 runtime measures
@@ -48,7 +64,15 @@ data CropPlot = CropPlot
       --   fiHealth — scales growth speed via World.Flora.Growth.
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
+-- | The LIVE plot: species by runtime handle.
+type CropPlot = CropPlotOf FloraId
+
 type CropPlots = HM.HashMap (Int, Int) CropPlot
+
+-- | The PERSISTED plot: species by durable reference (#2243).
+type SavedCropPlot = CropPlotOf FloraRef
+
+type SavedCropPlots = HM.HashMap (Int, Int) SavedCropPlot
 
 emptyCropPlots ∷ CropPlots
 emptyCropPlots = HM.empty
@@ -58,7 +82,7 @@ newCropPlot = CropPlot
 
 -- | Days elapsed since planting, clamped to non-negative (a plot can't
 --   have gone negative-age even if queried before its planted day).
-cropPlotElapsedDays ∷ Int → CropPlot → Int
+cropPlotElapsedDays ∷ Int → CropPlotOf s → Int
 cropPlotElapsedDays absDay cp = max 0 (absDay - cpPlantedDay cp)
 
 -- | Synthesize a placement-shaped instance so 'World.Flora.Growth' /

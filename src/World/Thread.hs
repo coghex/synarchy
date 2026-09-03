@@ -12,8 +12,8 @@ import Data.List (partition)
 import Engine.Core.Clock (monotonicSeconds, sampleElapsed)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
-    , startWorkerThread)
-import Engine.Core.State (EngineEnv, EngineLifecycle(..))
+    , startWorkerThread, workerCrashStderrSink)
+import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability(..), toCoreCapability)
 import Engine.Core.Capability.SaveLoad
     (SaveLoadCapability(..), toSaveLoadCapability)
@@ -42,6 +42,8 @@ startWorldThread env = startWorkerThread WorkerSpec
     { wsName        = "World"
     , wsLoggerRef   = ccLoggerRef (toCoreCapability env)
     , wsCategory    = CatWorld
+    , wsLifecycleRef = ccLifecycleRef (toCoreCapability env)
+    , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting world thread..."
     , wsStartedMsg  = Just "World thread started"
     , wsFailMsg     = "Failed starting world thread: "
@@ -55,7 +57,9 @@ startWorldThread env = startWorkerThread WorkerSpec
     , wsOnCrash     = \_ e → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logError logger CatWorld $ "World thread crashed: " <> tshow e
-        writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
+      -- The lifecycle write this line used to precede belongs to the
+      -- shared loop now, ahead of the log (#2283).
+    , wsOnCrashCleanup = \_ _ → pure ()
     }
 
 -- * World Tick

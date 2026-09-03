@@ -1,0 +1,14 @@
+behavior-probes	Select behavior probes	2026-09-02T18:20:45.6749977Z Selected probes: canteen_instance,craft,persistence_contract
+behavior-probes	Select project build cache epoch	﻿2026-09-02T18:20:45.6858849Z ##[group]Run python3 tools/ci_cache_epoch.py --ref 'd7e5fd6f'
+test-and-audits	Report cache restore outcomes	2026-09-02T18:21:44.5295955Z CI_CACHE_REPORT cache=deps-store outcome=EXACT_HIT primary_key=deps-v2-Linux-ghc9.12.2-c5c0f835 matched_key=deps-v2-Linux-ghc9.12.2-c5c0f835
+test-and-audits	Report cache restore outcomes	2026-09-02T18:21:44.5298498Z CI_CACHE_REPORT cache=dist-newstyle outcome=PREFIX_HIT primary_key=dist-v3-Linux-epoch-26 matched_key=dist-v3-Linux-epoch-25
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:29:22.4492390Z [36;1mpython3 tools/run_probes.py --only "canteen_instance,craft,persistence_contract" --exact --retries 1 --jobs 2[0m
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:29:33.5637501Z #probe-progress# 18:29:33 +0.0s | begin | canteen_instance (canteen_instance_probe.py) attempt 1/2 | dispatched
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:29:33.5647510Z #probe-progress# 18:29:33 +0.0s | begin | craft (craft_probe.py) attempt 1/2 | dispatched
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:30:09.1505126Z #probe-progress# 18:30:09 +35.6s | end | canteen_instance (canteen_instance_probe.py) attempt 1/2 | FAIL (35.6s)
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:30:09.1509046Z #probe-progress# 18:30:09 +35.6s | begin | canteen_instance (canteen_instance_probe.py) attempt 2/2 | solo retry
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:30:58.5508284Z #probe-progress# 18:30:58 +85.0s | end | craft (craft_probe.py) attempt 1/2 | PASS (85.0s)
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:31:00.1000000Z #probe-progress# 18:31:00 +86.5s | end | canteen_instance (canteen_instance_probe.py) attempt 2/2 | PASS (50.9s)
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:35:12.3773974Z #probe-progress# 18:35:12 +338.8s | begin | persistence_contract (persistence_contract_probe.py) attempt 1/2 | dispatched
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:38:38.3317844Z #probe-progress# 18:38:38 +544.8s | end | persistence_contract (persistence_contract_probe.py) attempt 1/2 | PASS (206.0s)
+behavior-probes	Behavior probes (path-selective)	2026-09-02T18:38:38.3338961Z [3/3] persistence_contract_probe.py ... [timeout 900s] PASS (206.0s)

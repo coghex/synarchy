@@ -20,8 +20,11 @@
 --   resident and no longer tilled — is the cancellation, and needs no
 --   field here to say so.
 module World.Plant.Types
-    ( PlantDesignation(..)
+    ( PlantDesignationOf(..)
+    , PlantDesignation
     , PlantDesignations
+    , SavedPlantDesignation
+    , SavedPlantDesignations
     , newPlantDesignation
     ) where
 
@@ -30,21 +33,32 @@ import GHC.Generics (Generic)
 import Control.DeepSeq (NFData)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
+import World.Flora.Reference (FloraRef)
 import World.Flora.Types (FloraId)
 
--- | One designated tile. Field order is load-bearing (positional
---   Generic Serialize — append, don't reorder).
-data PlantDesignation = PlantDesignation
+-- | One designated tile, parameterized by HOW it names its species
+--   (#2243) for exactly the reasons
+--   'World.Flora.CropPlot.CropPlotOf' is. Field order is load-bearing
+--   (positional Generic Serialize — append, don't reorder).
+data PlantDesignationOf s = PlantDesignation
     { ptZ    ∷ !Int
       -- ^ Surface z captured at designation time (markers render from
       --   it, same convention as 'World.Till.Types.TillDesignation').
-    , ptCrop ∷ !FloraId
+    , ptCrop ∷ !s
       -- ^ The chosen crop species, resolved from the player-facing
       --   crop name at designation time (mirrors
       --   'World.Flora.CropPlot.CropPlot''s cpSpecies).
     } deriving (Show, Eq, Generic, Serialize, NFData)
 
+-- | The LIVE designation: species by runtime handle.
+type PlantDesignation = PlantDesignationOf FloraId
+
 type PlantDesignations = HM.HashMap (Int, Int) PlantDesignation
+
+-- | The PERSISTED designation: species by durable reference (#2243).
+type SavedPlantDesignation = PlantDesignationOf FloraRef
+
+type SavedPlantDesignations = HM.HashMap (Int, Int) SavedPlantDesignation
 
 newPlantDesignation ∷ Int → FloraId → PlantDesignation
 newPlantDesignation = PlantDesignation

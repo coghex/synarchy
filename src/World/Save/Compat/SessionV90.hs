@@ -121,7 +121,7 @@ import World.Save.Component.Page
     ( WorldGenParamsDTOv1
     , WorldIdentityDTOv1(..), MineDesignationDTO(..)
     , ConstructDesignationDTOv1(..)
-    , TillDesignationDTO(..), PlantDesignationDTO(..), CropPlotDTO(..)
+    , TillDesignationDTO(..), PlantDesignationDTOv1(..), CropPlotDTOv1(..)
     , GroundItemsDTOv1(..), SpoilPileDTO(..)
     , PageCoreDTOv1(..), WorldPagesDTOv1(..), WorldPages(..)
     , PageEditsDTOv1(..), WorldEditsDTOv1(..), migrateWorldEditsV1
@@ -210,8 +210,8 @@ data WorldPageSaveV90 = WorldPageSaveV90
     , wp90CraftBills   ∷ !BillQueueDTOv1
     , wp90PowerNodes   ∷ !NodeRegistryDTOv1
     , wp90TillDesignations ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
-    , wp90CropPlots    ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
-    , wp90PlantDesignations ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , wp90CropPlots    ∷ !(HM.HashMap (Int, Int) CropPlotDTOv1)
+    , wp90PlantDesignations ∷ !(HM.HashMap (Int, Int) PlantDesignationDTOv1)
     , wp90Identity     ∷ !(Maybe WorldIdentityDTOv1)
         -- ^ v90 bytes predate #1092's language provenance, so this is
         --   the FROZEN pre-provenance identity shape; the migration

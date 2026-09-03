@@ -187,33 +187,101 @@ worldGetSeedFn wsc = do
         Nothing → Lua.pushnil
     return 1
 
--- | world.setTimeScale(pageId, scale)
+-- | world.setTimeScale(pageId, scale) → true | false, diagnostic
+--
 -- Set how fast time passes: game-minutes per real-second.
--- 1.0 = real-time, 60.0 = 1 game-hour per real-second, 0.0 = paused
+-- 1.0 = real-time, 60.0 = 1 game-hour per real-second, 0.0 = paused.
+--
+-- The second argument must be an actual Lua @number@ — a numeric STRING
+-- such as @"1"@ is refused, because 'Lua.tonumber' would coerce it and
+-- a typo'd payload would then reprogram the world clock. It is converted
+-- to the clock's authoritative 'Float' storage and only then classified,
+-- so a Lua number that is finite as a 'Double' but overflows on the way
+-- into 'Float' (@1e300@) is refused too.
+--
+-- The accepted domain is 'World.Time.Scale.classifyTimeScale': finite,
+-- non-negative, and at most 'World.Time.Scale.maxTimeScale'. That
+-- ceiling is a representation-safety bound derived from the clock's own
+-- constants — the largest scale whose worst-case tick still floors to a
+-- representable day count — NOT a gameplay speed limit; every shipped
+-- caller sits orders of magnitude below it. Both signed zeros are
+-- accepted and pause the page clock.
+--
+-- Returns exactly one result, @true@, when the request is queued.
+-- Returns exactly two, @false@ and a diagnostic string, when it is
+-- refused — a refusal never raises, so a caller that ignores the result
+-- (@scripts\/pause.lua@, every probe) is unaffected. A refused call
+-- queues nothing, touches neither the live scale nor a pause epoch's
+-- resume scale, leaves @world.getTimeScale@ reading what it read before,
+-- and does NOT bump the player-intent generation: validation happens
+-- before 'withPlayerIntent' is entered, not inside it.
+--
+-- Page-not-found is unchanged: a well-formed pageId naming an
+-- unregistered page still queues and still returns @true@; the world
+-- thread logs it when the command is drained.
 worldSetTimeScaleFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetTimeScaleFn wsc = do
-    pageIdArg ← Lua.tostring 1
-    scaleArg  ← Lua.tonumber 2
+    -- The type check comes first and is not 'Lua.tonumber': that
+    -- conversion accepts a numeric string, which is not a scale the
+    -- caller meant to set. TypeNumber covers BOTH Lua number subtypes,
+    -- so an integer literal -- what every shipped caller passes -- is a
+    -- number here exactly as a float literal is.
+    scaleTy ← Lua.ltype 2
+    if scaleTy ≢ Lua.TypeNumber
+        then do
+            tyName ← TE.decodeUtf8Lenient ⊚ Lua.typename scaleTy
+            refuseTimeScale $ "time scale must be a number, got " <> tyName
+                <> "; the existing time scale is left unchanged."
+        else do
+            scaleArg ← Lua.tonumber 2
+            case scaleArg of
+                Nothing → refuseTimeScale
+                    "time scale must be a number; the existing time \
+                    \scale is left unchanged."
+                Just (Lua.Number d) →
+                    let stored = realToFrac d ∷ Float
+                    in case classifyTimeScale stored of
+                        Left refusal →
+                            refuseTimeScale (describeTimeScaleRefusal refusal stored)
+                        Right scale → do
+                            pageIdArg ← Lua.tostring 1
+                            case pageIdArg of
+                                Nothing → refuseTimeScale
+                                    "page id must be a string; the \
+                                    \existing time scale is left unchanged."
+                                Just pageIdBS → do
+                                    Lua.liftIO $ queueTimeScale wsc
+                                        (WorldPageId (TE.decodeUtf8Lenient pageIdBS))
+                                        scale
+                                    Lua.pushboolean True
+                                    return 1
 
-    case (pageIdArg, scaleArg) of
-        (Just pageIdBS, Just (Lua.Number s)) → Lua.liftIO $ do
-            let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-            -- #913: bump at REQUEST time, not when the world thread
-            -- eventually applies the command. During a save the world
-            -- thread is inside the save transaction and cannot drain this
-            -- queue at all, so a handler-side bump would land AFTER the
-            -- autosave already decided whether to restore -- exactly the
-            -- window the generation exists to cover. Every caller of this
-            -- verb is expressing player intent (scripts/pause.lua's
-            -- resume, a speed control, the debug console); the engine's
-            -- own internal clock writes go straight to wsTimeScaleRef and
-            -- never come through here.
-            withPlayerIntent wsc $
-                Q.writeQueue (wsWorldQueue wsc)
-                    (WorldSetTimeScale pageId (realToFrac s))
-        _ → pure ()
+-- | The refusal half of 'worldSetTimeScaleFn''s return contract: two
+--   results, @false@ and the diagnostic, and no side effect whatsoever.
+refuseTimeScale ∷ Text → Lua.LuaE Lua.Exception Lua.NumResults
+refuseTimeScale diagnostic = do
+    Lua.pushboolean False
+    Lua.pushstring (TE.encodeUtf8 diagnostic)
+    return 2
 
-    return 0
+-- | Queue an ACCEPTED time-scale request as one player intent.
+--
+--   #913: bump at REQUEST time, not when the world thread eventually
+--   applies the command. During a save the world thread is inside the
+--   save transaction and cannot drain this queue at all, so a
+--   handler-side bump would land AFTER the autosave already decided
+--   whether to restore -- exactly the window the generation exists to
+--   cover. Every caller of this verb is expressing player intent
+--   (scripts/pause.lua's resume, a speed control, the debug console);
+--   the engine's own internal clock writes go straight to wsTimeScaleRef
+--   and never come through here.
+--
+--   Only reached for a scale 'classifyTimeScale' accepted, so a refused
+--   request never advances that generation (#2280).
+queueTimeScale ∷ WorldSimCapability → WorldPageId → Float → IO ()
+queueTimeScale wsc pageId scale =
+    withPlayerIntent wsc $
+        Q.writeQueue (wsWorldQueue wsc) (WorldSetTimeScale pageId scale)
 
 -- | world.getTimeScale(pageId) → number
 -- Reads the named world's current time scale directly from
