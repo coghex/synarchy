@@ -147,6 +147,12 @@ UNIT_ASSET_GLOBS = [
     "test-headless/Test/Headless/Asset/TextureFallback.hs",
     "test-headless/Test/Headless/Preview/UnitAnimation.hs",
     "tools/preview_probe.py",
+    # The preview probe's unit family (#2089): the filesystem-derived
+    # animation list, the compiled-index read, the YAML fps/loop scanner
+    # and the roster moved out of the facade into this owner, so an edit
+    # here is an edit to a unit-asset expectation. Its siblings under
+    # tools/preview/ own no unit expectation and stay unselected.
+    "tools/preview/units.py",
 ]
 
 # The save-compat gate (#1360): the ONE member of
@@ -567,6 +573,12 @@ def self_test() -> int:
         ("unit-assets",
          ["test-headless/Test/Headless/Asset/UnitInventory.hs"], True),
         ("unit-assets", ["tools/preview_probe.py"], True),
+        # The preview probe's unit family owns the unit-asset expectations
+        # since #2089 and must select the gate; the buildings family
+        # beside it owns none and must not, which pins the entry as the
+        # one owner rather than a tools/preview/* prefix.
+        ("unit-assets", ["tools/preview/units.py"], True),
+        ("unit-assets", ["tools/preview/buildings.py"], False),
         ("unit-assets", ["scripts/startup_loader.lua"], True),
         ("unit-assets", ["test-headless/Spec.hs"], True),
         ("unit-assets", ["synarchy.cabal"], True),
