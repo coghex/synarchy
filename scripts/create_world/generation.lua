@@ -88,13 +88,15 @@ function generation.start(menu, logPanel)
         return
     end
 
-    -- Destroy any previous world
-    if worldManager.isActive() then
-        worldManager.destroyWorld()
-    end
-
-    -- Push all config params to Haskell before init
-    world.setGenConfig({
+    -- #2288: the SECOND pre-destruction admission, for exactly the same
+    -- reason as the map-image check above. world.setGenConfig refuses
+    -- the whole update when any floating-point setting is outside its
+    -- domain -- an advanced-tab textbox will happily accept forty digits,
+    -- which overflows the engine's Float storage to infinity -- and a
+    -- refusal arriving after destroyWorld() would cost the player the
+    -- world they already had for a typo. So it is evaluated FIRST, and
+    -- only an accepted configuration destroys anything.
+    local configured, configRefusal = world.setGenConfig({
         world_size  = sizeNum,
         plate_count = plateNum,
         erosion_intensity = tonumber(p.erosionIntensity) or 0.7,
@@ -135,6 +137,31 @@ function generation.start(menu, logPanel)
             age_max    = math.max(1, math.floor(tonumber(p.ageMax) or 3)),
         },
     })
+
+    if configured == false then
+        local message = tostring(configRefusal
+            or "the world generation settings were refused")
+        engine.logWarn("Create World refused: " .. message)
+        logPanel.clear(menu)
+        logPanel.setStatus(menu, "Cannot generate this world")
+        logPanel.addLine(menu, message)
+        -- The reject half of this commit boundary, on the same terms as
+        -- the map-image refusal above: nothing was destroyed, the stored
+        -- configuration is unchanged, worldView.worldParams is untouched,
+        -- generation was never started, and genState stays IDLE -- so the
+        -- player keeps whatever world they already had.
+        debug.recordOutcome{
+            kind = "createWorld.generate", outcome = "rejected",
+            reason = message,
+        }
+        return
+    end
+
+    -- Destroy any previous world. Past this point every admission has
+    -- accepted, so the destruction is safe to make.
+    if worldManager.isActive() then
+        worldManager.destroyWorld()
+    end
 
     -- #1106: a name that is still a live SUGGESTION travels with its
     -- English gloss and the #1092 provenance of the language that

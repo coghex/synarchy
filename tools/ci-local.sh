@@ -181,6 +181,10 @@ step "unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
 
+step "haddock link audit"
+python3 tools/test_haddock_link_audit.py
+python3 tools/haddock_link_audit.py
+
 step "lua strict-decode audit"
 python3 tools/lua_strict_decode_audit.py --self-test
 python3 tools/lua_strict_decode_audit.py

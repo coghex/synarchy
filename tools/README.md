@@ -56,6 +56,50 @@ every build already carries it; `ci-local.sh` only scopes a temporary
 every module instead of trusting a possibly-stale warm build), restoring
 any pre-existing `cabal.project.local` on exit.
 
+## Haddock link audit (`haddock_link_audit.py`, #2292)
+
+```bash
+python3 tools/test_haddock_link_audit.py   # the fixture suite (runs first)
+python3 tools/haddock_link_audit.py        # the gate
+python3 tools/haddock_link_audit.py --update-baseline
+```
+
+Fails if a QUALIFIED haddock link `'Module.function'` in a `src/` or
+`app/` comment names a function the module does not export — the link
+then renders as plain text and points a reader at a module that hides
+the symbol. `synarchy.cabal`'s `-haddock` only validates comment
+SYNTAX; link TARGETS are resolved by the `haddock` tool, which no gate
+runs. Engine-free and under three seconds, so both `ci-local.sh` and
+`ci.yml`'s `static-audits` worker run it unconditionally.
+
+A link is reported only when the named module is in this tree, has an
+explicit export list, neither names the symbol nor supplies it through a
+`module X` re-export or a `Type(..)` group, and the symbol is a real
+top-level definition somewhere under `src/`/`app/`. That last clause is
+what keeps Lua verbs out: `'UI.setVisible'` resembles a Haskell
+reference only because `src/UI.hs` exists. Never reported: `@M.f@` code
+spans, backtick-quoted prose, unqualified `'f'` links, module links
+`"M.N"`, and anything inside a string, a character literal or a
+quasiquote. Comment awareness comes from `unicode_operator_audit.py`'s
+scanner through the `haskell_comment_spans` it exposes for this guard,
+rather than a second Haskell lexer free to drift.
+
+`tools/haddock_link_baseline.json` is a TEMPORARY generated ratchet, not
+an exemption list: `--update-baseline` writes it, nobody hand-edits it,
+and a run fails both on a link missing from it and on an entry no longer
+found, so it can only shrink. Owner decision D-3 in
+`docs/haddock_link_resolution_design.md` lands the guard first (HLR-1);
+HLR-5 deletes the baseline and `--update-baseline` together.
+
+`test_haddock_link_audit.py` drives the real `main()` over synthetic
+temporary roots. It pins every detection and permitted form in both
+directions, plus the false-greens the clean-run message would otherwise
+hide — an ASCII-`::`-only or same-line-`∷` definition rule (this tree is
+UnicodeSyntax throughout and the one same-module case declares its `∷`
+on a continuation line, so either rule would report zero dead links and
+generate an empty baseline), a dropped comment form, and treating every
+non-code span as a comment.
+
 ## World generation tools
 
 Scripts for auditing, checking determinism, and regression-testing the
@@ -3519,6 +3563,9 @@ tools/
 ├── test_audit_missing_baseline.py  (its missing-baseline exit-policy owner)
 ├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
+├── haddock_link_audit.py   (qualified haddock link resolution gate, #2292)
+├── haddock_link_baseline.json  (its generated, shrink-only ratchet — deleted by HLR-5)
+├── test_haddock_link_audit.py  (its fixture suite)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
