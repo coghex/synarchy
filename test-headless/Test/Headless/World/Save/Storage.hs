@@ -24,13 +24,14 @@ import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import Data.Either (isLeft)
+import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import System.Directory
     ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
     , doesDirectoryExist, doesFileExist, listDirectory, removeFile
     , getPermissions, setPermissions, Permissions(..), createFileLink
     , withCurrentDirectory )
 import System.FilePath ((</>), takeDirectory)
-import System.IO (stderr)
+import System.IO (stderr, openBinaryTempFile)
 
 import Engine.Core.Log
     (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
@@ -275,6 +276,42 @@ authPath, prevPath ∷ FilePath → FilePath
 authPath dir = dir </> authoritativeFileName
 prevPath dir = dir </> previousGenerationFileName
 
+-- ---------------------------------------------------------------------
+-- Directory-sync fault injection (issue #2229)
+-- ---------------------------------------------------------------------
+
+-- | A directory-sync seam ('publishGenerationWithSeams') that RECORDS
+--   every directory it is asked to sync, in call order, and throws for
+--   the ones @failOn@ selects.
+--
+--   Fault injection rather than a real @fsync@ failure: a directory
+--   fsync does not fail on demand on a healthy filesystem, and the
+--   assertions below are about which directories this transaction syncs
+--   and what it reports when one cannot be — never about the kernel's
+--   own behaviour.
+recordingSync ∷ IORef [FilePath] → (FilePath → Bool) → FilePath → IO ()
+recordingSync seen failOn path = do
+    modifyIORef' seen (⧺ [path])
+    when (failOn path) $
+        ioError (userError ("injected directory-sync failure: " <> path))
+
+-- | The two directories a publication that CREATES @dir@ must make
+--   durable, in the order 'World.Save.Storage.slotOwnerDirectories'
+--   syncs them: the slot's own owner (@\<root\>\/saves@ under
+--   'withTempSlotDir') and that directory's owner (the scratch root).
+ownerDirsOf ∷ FilePath → (FilePath, FilePath)
+ownerDirsOf dir = (takeDirectory dir, takeDirectory (takeDirectory dir))
+
+-- | Publish through the injected-sync seam, recording every sync.
+publishWithSync
+    ∷ IORef [FilePath] → (FilePath → Bool) → FilePath → Word64 → Text
+    → IO (Either PublishFailure [Text])
+publishWithSync seen failOn dir seed ts =
+    let (meta, bytes) = buildEncoded seed "slot" ts
+    in publishGenerationWithSeams openBinaryTempFile
+           (recordingSync seen failOn) dir "slot" meta bytes
+           HS.empty HS.empty
+
 -- | Best-effort delete, swallowing "already gone" — used to simulate an
 --   authoritative generation that vanished mid-rotation.
 forceRemoveFile ∷ FilePath → IO ()
@@ -395,6 +432,94 @@ spec = do
                 doesFileExist (prevPath dir) `shouldReturn` False
                 entries ← listDirectory dir
                 entries `shouldBe` [authoritativeFileName]
+
+        -- Issue #2229: the entry NAMING a newly created slot
+        -- directory is part of the durability boundary too.
+        it "syncs BOTH owning directories when it creates the slot \
+           \directory -- saves/ (so the entry naming the slot survives) \
+           \and saves/'s own owner, which listSaves routinely creates \
+           \without syncing, so an existing saves/ never proves its own \
+           \naming entry is durable" $
+            withTempSlotDir $ \dir → do
+                let (savesLike, root) = ownerDirsOf dir
+                -- withTempSlotDir already created savesLike: this is
+                -- exactly the "saves/ exists but was never synced" case.
+                doesDirectoryExist savesLike `shouldReturn` True
+                seen ← newIORef []
+                r ← publishWithSync seen (const False) dir 1 "t1"
+                r `shouldBe` Right []
+                synced ← readIORef seen
+                -- Owners first, innermost outwards, and both BEFORE the
+                -- slot's own post-rename syncs.
+                take 2 synced `shouldBe` [savesLike, root]
+                drop 2 synced `shouldSatisfy` all (≡ dir)
+
+        it "adds NO owner-directory sync to the ordinary overwrite of an \
+           \ESTABLISHED slot -- one already holding a generation, whose \
+           \owning entry the publication that established it made \
+           \durable" $
+            withTempSlotDir $ \dir → do
+                let (savesLike, root) = ownerDirsOf dir
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                seen ← newIORef []
+                r ← publishWithSync seen (const False) dir 2 "t2"
+                r `shouldBe` Right []
+                synced ← readIORef seen
+                synced `shouldSatisfy` all (≡ dir)
+                synced `shouldNotSatisfy` elem savesLike
+                synced `shouldNotSatisfy` elem root
+                -- ...and it really did sync its own directory, so the
+                -- assertion above is not vacuously true of an empty list.
+                synced `shouldSatisfy` not . null
+
+        it "reports an owner-directory sync failure as its OWN phase, \
+           \naming the directory that actually failed, BEFORE success \
+           \-- and publishes nothing" $
+            withTempSlotDir $ \dir → do
+                let (savesLike, _root) = ownerDirsOf dir
+                seen ← newIORef []
+                r ← publishWithSync seen (≡ savesLike) dir 1 "t1"
+                case r of
+                    Left f → do
+                        pfPhase f `shouldBe` PhaseOwnerDirectorySync
+                        pfPath f `shouldBe` Just savesLike
+                        pfReason f `shouldSatisfy`
+                            T.isInfixOf "injected directory-sync failure"
+                    Right _ → expectationFailure
+                        "expected an owner-directory sync failure"
+                doesFileExist (authPath dir) `shouldReturn` False
+
+        it "distinguishes the SLOT's own directory sync from its \
+           \owners' -- a failure inside the slot still reports \
+           \PhaseDirectorySync naming the slot" $
+            withTempSlotDir $ \dir → do
+                seen ← newIORef []
+                r ← publishWithSync seen (≡ dir) dir 1 "t1"
+                case r of
+                    Left f → do
+                        pfPhase f `shouldBe` PhaseDirectorySync
+                        pfPath f `shouldBe` Just dir
+                    Right _ → expectationFailure
+                        "expected a slot-directory sync failure"
+
+        it "RETRIES the owner-directory sync after one failed -- the \
+           \empty slot directory the failed attempt left behind is not \
+           \an established slot, so the retry must not report success \
+           \having skipped the sync it still owes" $
+            withTempSlotDir $ \dir → do
+                let (savesLike, root) = ownerDirsOf dir
+                firstSeen ← newIORef []
+                first ← publishWithSync firstSeen (≡ savesLike) dir 1 "t1"
+                first `shouldSatisfy` isLeft
+                -- The leftover this is all about: a slot directory with
+                -- no generation in it.
+                doesDirectoryExist dir `shouldReturn` True
+                doesFileExist (authPath dir) `shouldReturn` False
+                retrySeen ← newIORef []
+                retry ← publishWithSync retrySeen (const False) dir 1 "t1"
+                retry `shouldBe` Right []
+                synced ← readIORef retrySeen
+                take 2 synced `shouldBe` [savesLike, root]
 
         it "a second publish retains the first generation as the \
            \previous generation" $
