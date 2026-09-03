@@ -9,11 +9,19 @@ module World.Generate.Config.Types
     , TimelineYaml(..)
     , defaultWorldGenConfig
     , defaultTimelineYaml
+      -- * The raw YAML document
+    , WorldGenConfigRaw(..)
+    , SunYamlRaw(..)
+    , MoonYamlRaw(..)
+    , ClimateYamlRaw(..)
+    , ResourcesYamlRaw(..)
+    , numberSourceOf
     ) where
 
 import UPrelude
 import qualified Data.Yaml as Yaml
 import Data.Aeson ((.:), (.!=), (.:?), (.=), FromJSON(..), ToJSON(..))
+import Engine.Core.Yaml.Scalar (NumberSource(..))
 import World.Geology.Timeline.Types (TimelineParams(..), defaultTimelineParams)
 import World.Time.Types
     ( CalendarConfig(..), defaultCalendarConfig
@@ -171,6 +179,70 @@ defaultTimelineYaml = TimelineYaml
     , tyAgeMax    = tlpAgeMax defaultTimelineParams
     }
 
+-- Raw YAML documents (#2288)
+--
+-- Every floating-point leaf decodes as a 'NumberSource' rather than a
+-- 'Float', for two reasons. A scalar spelling a non-finite number
+-- (@.inf@, @.nan@) is a YAML STRING, so a bare 'Float' leaf would fail
+-- the whole document's parse and discard every other setting in the
+-- file; and a warning about a rejected leaf has to quote the number as
+-- the file spelled it, not the infinity it narrowed to.
+--
+-- Nothing here applies the domain. These records are the structural
+-- decode only; 'World.Generate.Config.Validate.resolveWorldGenConfigRaw'
+-- narrows and judges each leaf.
+
+data SunYamlRaw = SunYamlRaw
+    { sunrTiltAngle ∷ !NumberSource
+    , sunrDayLength ∷ !NumberSource
+    } deriving (Show, Eq)
+
+data MoonYamlRaw = MoonYamlRaw
+    { moonrCycleDays   ∷ !Int
+    , moonrPhaseOffset ∷ !NumberSource
+    } deriving (Show, Eq)
+
+data ClimateYamlRaw = ClimateYamlRaw
+    { climrIterations      ∷ !Int
+    , climrCoriolisScale   ∷ !NumberSource
+    , climrWindDrag        ∷ !NumberSource
+    , climrThermalInertia  ∷ !NumberSource
+    , climrOrographicScale ∷ !NumberSource
+    , climrEvapScale       ∷ !NumberSource
+    , climrAlbedoFeedback  ∷ !NumberSource
+    , climrThcThreshold    ∷ !NumberSource
+    } deriving (Show, Eq)
+
+data ResourcesYamlRaw = ResourcesYamlRaw
+    { resrOreAbundance    ∷ !NumberSource
+    , resrIronAbundance   ∷ !NumberSource
+    , resrCopperAbundance ∷ !NumberSource
+    } deriving (Show, Eq)
+
+data WorldGenConfigRaw = WorldGenConfigRaw
+    { wcrSeed              ∷ !(Maybe Word64)
+    , wcrWorldSize         ∷ !Int
+    , wcrPlateCount        ∷ !Int
+    , wcrCalendar          ∷ !CalendarYaml
+    , wcrSun               ∷ !SunYamlRaw
+    , wcrMoon              ∷ !MoonYamlRaw
+    , wcrClimate           ∷ !ClimateYamlRaw
+    , wcrErosionIntensity  ∷ !NumberSource
+    , wcrVolcanicActivity  ∷ !NumberSource
+    , wcrLavaPoolDepth     ∷ !Int
+    , wcrLavaPoolRadius    ∷ !Int
+    , wcrWaterfallQuantum  ∷ !Int
+    , wcrResources         ∷ !ResourcesYamlRaw
+    , wcrTimeline          ∷ !TimelineYaml
+    } deriving (Show, Eq)
+
+-- | A default 'Float' as the source a document would have spelled it
+--   with, so an ABSENT leaf and a leaf written with the default value
+--   resolve identically. Every shipped default is finite, so the
+--   widening is exact.
+numberSourceOf ∷ Float → NumberSource
+numberSourceOf x = NumberSource (realToFrac x) (tshow x)
+
 -- FromJSON instances
 
 -- NOTE: optional fields must use (.:?) with (.!=). With (.:), a
@@ -186,35 +258,46 @@ instance FromJSON CalendarYaml where
         <*> v .:? "minutes_per_hour" .!= cyMinutesPerHour defaultCalendarYaml
     parseJSON _ = fail "Expected an object for calendar"
 
-instance FromJSON SunYaml where
-    parseJSON (Yaml.Object v) = SunYaml
-        <$> v .:? "tilt_angle" .!= syTiltAngle defaultSunYaml
-        <*> v .:? "day_length" .!= syDayLength defaultSunYaml
+instance FromJSON SunYamlRaw where
+    parseJSON (Yaml.Object v) = SunYamlRaw
+        <$> v .:? "tilt_angle" .!= numberSourceOf (syTiltAngle defaultSunYaml)
+        <*> v .:? "day_length" .!= numberSourceOf (syDayLength defaultSunYaml)
     parseJSON _ = fail "Expected an object for sun"
 
-instance FromJSON MoonYaml where
-    parseJSON (Yaml.Object v) = MoonYaml
+instance FromJSON MoonYamlRaw where
+    parseJSON (Yaml.Object v) = MoonYamlRaw
         <$> v .:? "cycle_days"   .!= myCycleDays defaultMoonYaml
-        <*> v .:? "phase_offset" .!= myPhaseOffset defaultMoonYaml
+        <*> v .:? "phase_offset"
+                .!= numberSourceOf (myPhaseOffset defaultMoonYaml)
     parseJSON _ = fail "Expected an object for moon"
 
-instance FromJSON ClimateYaml where
-    parseJSON (Yaml.Object v) = ClimateYaml
+instance FromJSON ClimateYamlRaw where
+    parseJSON (Yaml.Object v) = ClimateYamlRaw
         <$> v .:? "iterations"       .!= clIterations defaultClimateYaml
-        <*> v .:? "coriolis_scale"   .!= clCoriolisScale defaultClimateYaml
-        <*> v .:? "wind_drag"        .!= clWindDrag defaultClimateYaml
-        <*> v .:? "thermal_inertia"  .!= clThermalInertia defaultClimateYaml
-        <*> v .:? "orographic_scale" .!= clOrographicScale defaultClimateYaml
-        <*> v .:? "evap_scale"       .!= clEvapScale defaultClimateYaml
-        <*> v .:? "albedo_feedback"  .!= clAlbedoFeedback defaultClimateYaml
-        <*> v .:? "thc_threshold"    .!= clThcThreshold defaultClimateYaml
+        <*> v .:? "coriolis_scale"
+                .!= numberSourceOf (clCoriolisScale defaultClimateYaml)
+        <*> v .:? "wind_drag"
+                .!= numberSourceOf (clWindDrag defaultClimateYaml)
+        <*> v .:? "thermal_inertia"
+                .!= numberSourceOf (clThermalInertia defaultClimateYaml)
+        <*> v .:? "orographic_scale"
+                .!= numberSourceOf (clOrographicScale defaultClimateYaml)
+        <*> v .:? "evap_scale"
+                .!= numberSourceOf (clEvapScale defaultClimateYaml)
+        <*> v .:? "albedo_feedback"
+                .!= numberSourceOf (clAlbedoFeedback defaultClimateYaml)
+        <*> v .:? "thc_threshold"
+                .!= numberSourceOf (clThcThreshold defaultClimateYaml)
     parseJSON _ = fail "Expected an object for climate"
 
-instance FromJSON ResourcesYaml where
-    parseJSON (Yaml.Object v) = ResourcesYaml
-        <$> v .:? "ore_abundance"    .!= ryOreAbundance defaultResourcesYaml
-        <*> v .:? "iron_abundance"   .!= ryIronAbundance defaultResourcesYaml
-        <*> v .:? "copper_abundance" .!= ryCopperAbundance defaultResourcesYaml
+instance FromJSON ResourcesYamlRaw where
+    parseJSON (Yaml.Object v) = ResourcesYamlRaw
+        <$> v .:? "ore_abundance"
+                .!= numberSourceOf (ryOreAbundance defaultResourcesYaml)
+        <*> v .:? "iron_abundance"
+                .!= numberSourceOf (ryIronAbundance defaultResourcesYaml)
+        <*> v .:? "copper_abundance"
+                .!= numberSourceOf (ryCopperAbundance defaultResourcesYaml)
     parseJSON _ = fail "Expected an object for resources"
 
 instance FromJSON TimelineYaml where
@@ -229,25 +312,63 @@ instance FromJSON TimelineYaml where
         <*> v .:? "age_max"     .!= tyAgeMax defaultTimelineYaml
     parseJSON _ = fail "Expected an object for timeline"
 
-instance FromJSON WorldGenConfig where
+-- | The world-generation document, structurally. There is deliberately
+--   no @FromJSON WorldGenConfig@ beside this one: a second decode path
+--   would be a second place a float leaf could enter unjudged.
+instance FromJSON WorldGenConfigRaw where
     parseJSON (Yaml.Object v) = do
         wgObj ← v .: "world_gen"
-        WorldGenConfig
+        WorldGenConfigRaw
             <$> wgObj .:? "seed"
             <*> wgObj .:? "world_size"  .!= wgcWorldSize defaultWorldGenConfig
             <*> wgObj .:? "plate_count" .!= wgcPlateCount defaultWorldGenConfig
             <*> wgObj .:? "calendar"    .!= wgcCalendar defaultWorldGenConfig
-            <*> wgObj .:? "sun"         .!= wgcSun defaultWorldGenConfig
-            <*> wgObj .:? "moon"        .!= wgcMoon defaultWorldGenConfig
-            <*> wgObj .:? "climate"     .!= wgcClimate defaultWorldGenConfig
-            <*> wgObj .:? "erosion_intensity" .!= wgcErosionIntensity defaultWorldGenConfig
-            <*> wgObj .:? "volcanic_activity" .!= wgcVolcanicActivity defaultWorldGenConfig
+            <*> wgObj .:? "sun"         .!= defaultSunYamlRaw
+            <*> wgObj .:? "moon"        .!= defaultMoonYamlRaw
+            <*> wgObj .:? "climate"     .!= defaultClimateYamlRaw
+            <*> wgObj .:? "erosion_intensity"
+                    .!= numberSourceOf (wgcErosionIntensity defaultWorldGenConfig)
+            <*> wgObj .:? "volcanic_activity"
+                    .!= numberSourceOf (wgcVolcanicActivity defaultWorldGenConfig)
             <*> wgObj .:? "lava_pool_depth" .!= wgcLavaPoolDepth defaultWorldGenConfig
             <*> wgObj .:? "lava_pool_radius" .!= wgcLavaPoolRadius defaultWorldGenConfig
             <*> wgObj .:? "waterfall_quantum" .!= wgcWaterfallQuantum defaultWorldGenConfig
-            <*> wgObj .:? "resources"   .!= wgcResources defaultWorldGenConfig
+            <*> wgObj .:? "resources"   .!= defaultResourcesYamlRaw
             <*> wgObj .:? "timeline"    .!= wgcTimeline defaultWorldGenConfig
     parseJSON _ = fail "Expected an object for world_gen"
+
+-- | The raw mirrors of the shipped defaults, for an absent sub-table.
+
+defaultSunYamlRaw ∷ SunYamlRaw
+defaultSunYamlRaw = SunYamlRaw
+    { sunrTiltAngle = numberSourceOf (syTiltAngle defaultSunYaml)
+    , sunrDayLength = numberSourceOf (syDayLength defaultSunYaml)
+    }
+
+defaultMoonYamlRaw ∷ MoonYamlRaw
+defaultMoonYamlRaw = MoonYamlRaw
+    { moonrCycleDays   = myCycleDays defaultMoonYaml
+    , moonrPhaseOffset = numberSourceOf (myPhaseOffset defaultMoonYaml)
+    }
+
+defaultClimateYamlRaw ∷ ClimateYamlRaw
+defaultClimateYamlRaw = ClimateYamlRaw
+    { climrIterations      = clIterations defaultClimateYaml
+    , climrCoriolisScale   = numberSourceOf (clCoriolisScale defaultClimateYaml)
+    , climrWindDrag        = numberSourceOf (clWindDrag defaultClimateYaml)
+    , climrThermalInertia  = numberSourceOf (clThermalInertia defaultClimateYaml)
+    , climrOrographicScale = numberSourceOf (clOrographicScale defaultClimateYaml)
+    , climrEvapScale       = numberSourceOf (clEvapScale defaultClimateYaml)
+    , climrAlbedoFeedback  = numberSourceOf (clAlbedoFeedback defaultClimateYaml)
+    , climrThcThreshold    = numberSourceOf (clThcThreshold defaultClimateYaml)
+    }
+
+defaultResourcesYamlRaw ∷ ResourcesYamlRaw
+defaultResourcesYamlRaw = ResourcesYamlRaw
+    { resrOreAbundance    = numberSourceOf (ryOreAbundance defaultResourcesYaml)
+    , resrIronAbundance   = numberSourceOf (ryIronAbundance defaultResourcesYaml)
+    , resrCopperAbundance = numberSourceOf (ryCopperAbundance defaultResourcesYaml)
+    }
 
 -- ToJSON instances
 

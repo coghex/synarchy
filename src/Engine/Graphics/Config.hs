@@ -28,6 +28,7 @@ import Data.Aeson ((.:), (.!=), (.=), (.:?), FromJSON(..), ToJSON(..)
                    , Value(..), withText)
 import Data.Aeson.Types (typeMismatch)
 import Engine.Core.ConfigWrite (writeConfigYaml)
+import Engine.Core.Yaml.Scalar (nonFiniteSpelling)
 import Engine.Core.Log (LoggerState, logWarn, LogCategory(..), logInfo)
 import Engine.Graphics.Config.Domain
 import Vulkan.Core10 (SampleCountFlags, SampleCountFlagBits(..), Filter(..))
@@ -230,18 +231,6 @@ instance FromJSON UIScaleSource where
         Nothing → fail ("ui_scale: expected a number, got the string "
                           <> show t)
     parseJSON v = typeMismatch "ui_scale number" v
-
--- | The non-finite number a scalar spells, if it spells one: YAML 1.1/1.2
---   core-schema (@.inf@, @+.inf@, @-.inf@, @.nan@), aeson's (@+inf@,
---   @-inf@) and Haskell's own 'show' forms, case-insensitively.
-nonFiniteSpelling ∷ Text → Maybe Double
-nonFiniteSpelling t
-    | s `elem` [".inf", "+.inf", "inf", "+inf", "infinity", "+infinity"] = Just (1 / 0)
-    | s `elem` ["-.inf", "-inf", "-infinity"]                            = Just (-1 / 0)
-    | s `elem` [".nan", "nan"]                                           = Just (0 / 0)
-    | otherwise                                                          = Nothing
-  where
-    s = T.toLower (T.strip t)
 
 instance FromJSON VideoConfigRaw where
     parseJSON (Object v) = do
