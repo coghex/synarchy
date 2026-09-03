@@ -12,8 +12,8 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON(..), ToJSON(..), (.:), (.:?), (.!=), (.=)
                   , withObject, object)
-import System.Directory (doesFileExist, createDirectoryIfMissing)
-import System.FilePath (takeDirectory)
+import System.Directory (doesFileExist)
+import Engine.Core.ConfigWrite (writeConfigYaml)
 import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))
 import Engine.PlayerEvent (NotificationCfg, CategoryCfg(..))
 
@@ -182,16 +182,28 @@ loadNotificationCfg logger registryPath overridesPath = do
 --   under the @categories:@ key, matching the shape that
 --   'loadOverrides' reads. Called from the settings tab on every
 --   checkbox toggle.
-writeNotificationOverrides ∷ FilePath → NotificationCfg → IO ()
-writeNotificationOverrides path cfg = do
-    createDirectoryIfMissing True (takeDirectory path)
-    let toSettings c = CategorySettings
-            { csLog   = ccLog   c
-            , csPopup = ccPopup c
-            , csPause = ccPause c
-            }
-        overrides = HM.map (fullOverride . toSettings) cfg
-    Yaml.encodeFile path (OverridesFile overrides)
+--
+--   @Right ()@ when the file was durably replaced; @Left@ naming the
+--   path and the cause when it was not (#2202). The write goes through
+--   'writeConfigYaml', which also creates @config/@ when it is absent —
+--   so a crash part way through can never leave a truncated
+--   @config/notifications.local.yaml@ for the next boot to reject.
+--
+--   __Live state on a failed write (#2202).__ Unchanged from #786: the
+--   caller merges into the live notification config FIRST and persists
+--   afterwards, and a failed write does not roll that merge back. The
+--   in-memory config is what routes the next emit; the YAML is the
+--   next-session record.
+writeNotificationOverrides ∷ FilePath → NotificationCfg → IO (Either Text ())
+writeNotificationOverrides path cfg =
+    writeConfigYaml path (OverridesFile overrides)
+  where
+    toSettings c = CategorySettings
+        { csLog   = ccLog   c
+        , csPopup = ccPopup c
+        , csPause = ccPause c
+        }
+    overrides = HM.map (fullOverride . toSettings) cfg
 
 -- | Resolve one registry row against the player overrides, FIELD BY
 --   FIELD (#1938). The registry row is the base; each checkbox the
@@ -232,11 +244,20 @@ loadOverrides logger path entries = do
         then do
             let defaults = HM.fromList
                     [ (reId e, fullOverride (reDefaults e)) | e ← entries ]
-            createDirectoryIfMissing True (takeDirectory path)
-            Yaml.encodeFile path (OverridesFile defaults)
-            logInfo logger CatEvent $
-                "Wrote default notification overrides to "
-                  <> T.pack path
+            -- #2202: the defaults are already derived at this point, so
+            -- a failed materialization costs the player only the
+            -- editable file, never the boot. Report it and carry on with
+            -- them; do NOT log the success line after a 'Left', and do
+            -- not leave a partial file behind ('writeConfigYaml'
+            -- publishes by rename or not at all).
+            written ← writeConfigYaml path (OverridesFile defaults)
+            case written of
+                Right () → logInfo logger CatEvent $
+                    "Wrote default notification overrides to "
+                      <> T.pack path
+                Left err → logWarn logger CatEvent $
+                    "Could not write default notification overrides: "
+                      <> err <> "; continuing with the registry defaults"
             return defaults
         else do
             eOv ← Yaml.decodeFileEither path

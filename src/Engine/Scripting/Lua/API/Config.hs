@@ -240,15 +240,21 @@ setVideoConfigFn env = do
     lefts = foldr (\e acc → either (: acc) (const acc) e) []
 
 -- | @engine.saveVideoConfig()@ → @true@ when @config/video.local.yaml@
---   was written, @false@ when 'saveVideoConfig' refused the in-memory
---   config (every rejected field is logged there).
+--   was durably replaced, @false@ when 'saveVideoConfig' refused the
+--   in-memory config or the write itself failed. Both causes are logged
+--   at warning level with the path, by 'saveVideoConfig' itself.
+--
+--   A filesystem failure NEVER raises a Lua error (#2202): this verb
+--   runs inside @data.save()@, and an exception here unwound past the
+--   remaining persistence steps, so a full disk cost the player their
+--   autosave settings too.
 saveVideoConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveVideoConfigFn env = do
     written ← Lua.liftIO $ do
         config ← readIORef (rvVideoConfigRef (toRenderViewCapability env))
         logger ← readIORef (loggerRef env)
         saveVideoConfig logger "config/video.local.yaml" config
-    Lua.pushboolean written
+    Lua.pushboolean (either (const False) (const True) written)
     return 1
 
 loadDefaultConfigFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults

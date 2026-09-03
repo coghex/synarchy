@@ -11,6 +11,7 @@ module Engine.Asset.YamlMaterials
     , normalizeMaterialDef
       -- * Loading
     , loadMaterialYaml
+    , loadMaterialYamlOutcome
     , loadMaterialDirectory
     , materialPropsFromDef
     , loadPopulatedMaterialRegistry
@@ -22,7 +23,7 @@ import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))
 import World.Material
     (MaterialRegistry, MaterialProps(..), registerMaterial, emptyMaterialRegistry)
@@ -165,8 +166,18 @@ normalizeMaterialDef logger path def
 --   directly.
 loadMaterialYaml ∷ LoggerState → FilePath → IO [MaterialDef]
 loadMaterialYaml logger path =
-    loadYamlList logger "material" "materials" mfMaterials path
-        ⌦ mapM (normalizeMaterialDef logger path)
+    fromMaybe [] ⊚ loadMaterialYamlOutcome logger path
+
+-- | 'loadMaterialYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). Normalization runs on the decoded
+--   list exactly as it always has; a parse failure has nothing to
+--   normalize. The startup loader needs the two apart; every other
+--   caller reads 'loadMaterialYaml'.
+loadMaterialYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [MaterialDef])
+loadMaterialYamlOutcome logger path =
+    loadYamlListOutcome logger "material" "materials" mfMaterials path
+        ⌦ traverse (mapM (normalizeMaterialDef logger path))
 
 -- | Load and concatenate all @.yaml@\/@.yml@ files in a directory (non-recursive)
 loadMaterialDirectory ∷ LoggerState → FilePath → IO [MaterialDef]

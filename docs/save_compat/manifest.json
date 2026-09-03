@@ -2176,6 +2176,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/v1-location-significant-contents.expected.json"
         }
       ]
+    },
+    {
+      "id": "w1-construct-stake-reference",
+      "description": "The #1845 shape (lua.unit_ai v9): a constructJob carries the BuildingId its own stake returned, held between the queued spawn and the completion that retires the job. building.spawn returns on QUEUED while the completion removes the designation on a different queue, so the job holds that id to know whether its OWN stake landed rather than whether something that merely looks like it is standing at the tile -- designation admission does not check building occupancy, so a stranger really can be. The job here is inside that window: a real designation at (5,5), and the real BuildingId a real building.spawn returned, which has not landed at that anchor. So the field goes through unit_ai_save_refs' typed-reference wrap and the production codec as a resolvable building edge, rather than being hand-built. Two things the fixture is shaped around, both correct behaviour that would otherwise leave it with nothing to carry: a job whose stake IS standing at its anchor completes on the next tick from any distance, and an acolyte within construct scan range of a designation it cannot stake cancels it -- hence the mid-window job and the unit spawned 160 tiles away. The transient staking clock beside the id is stripped at snapshot, which the same payload proves by its absence. A v1-v8 payload has the field ABSENT, which is the correct v9 value: such a job resumes as not-yet-staked and re-stakes, and the engine's own occupancy refusal is what stops it double-building.",
+      "declaredAt": "2026-09-02",
+      "declaredByIssue": 1845,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "current format (no migration needed)",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 10,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 5,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 9,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "w1-construct-stake-reference",
+          "path": "test-headless/data/save-compat/w1-construct-stake-reference.bin",
+          "kind": "complete-session",
+          "sha256": "237e7e45295aa12c003a8ab0dbe88ba6ac6696f517dba0a0fa76635e02d83270",
+          "sizeBytes": 909186,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 120,120, 0, 'player'), then construction.designate('generated_page', 5, 5, 5, 5, 'building', 'cargo_hold_S'); return true, settled 4.0s and held until `(function()   local p='generated_page'   local j=construction.getDesignationAt(p,5,5)   if not j then return false end   local info=building.getInfo(1)   if not info or info.defName~='cargo_hold_S' then return false end   local ai=require('scripts.unit_ai')   ai.aiState[1]=ai.aiState[1] or {}   ai.aiState[1].constructJob={x=5,y=5,attempt=j.attempt,category='building',     building='cargo_hold_S',stakedBid=1,staking=1e9}   return ai.aiState[1].constructJob.stakedBid==1 end)() `, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/w1-construct-stake-reference.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

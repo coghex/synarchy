@@ -26,7 +26,6 @@ module World.Thread.Command.Cursor.Construct
     , handleWorldCancelConstructCommand
     , handleWorldSetConstructStatusCommand
     , handleWorldAddConstructProgressCommand
-    , handleWorldSetConstructDesignateTextureCommand
     , handleWorldSetConstructLineModeCommand
     , handleWorldSetConstructStructureTargetCommand
     , popConstructDesignation
@@ -38,13 +37,12 @@ import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Engine.Asset.Handle (TextureHandle)
 import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv)
-import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import World.Types
 import World.Generate (globalToChunk)
 import World.Generate.Coordinates (canonicalTile)
@@ -586,31 +584,6 @@ withConstructChunk worldState (gx, gy) f = do
             bumpQuadCacheGen worldState
             writeIORef (wsZoomQuadCacheRef worldState) Nothing
             writeIORef (wsBgQuadCacheRef worldState)   Nothing
-
--- | Ghost texture for committed BUILDING construction designations.
---
---   #1846 retired the STRUCTURE branch with the category placeholder it
---   set: a structure ghost now draws the piece's own art. The command,
---   its category argument and the building branch stay, because DTV-10
---   (#1845) — not a declared prerequisite of #1846 — still drives the
---   building half through them, and 'tools/construction_blueprint_footprint_probe.py'
---   exercises that path. A category other than \"building\" is now a
---   no-op with a warning rather than a silent write to a field that no
---   longer exists; the whole command goes when its last consumer does.
-handleWorldSetConstructDesignateTextureCommand ∷ EngineEnv → LoggerState
-    → WorldPageId → Text → TextureHandle → IO ()
-handleWorldSetConstructDesignateTextureCommand env logger pageId cat tid = do
-    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    case lookup pageId (wmWorlds mgr) of
-        Just worldState
-            | cat ≡ "building" →
-                atomicModifyIORef' (wsCursorRef worldState) $ \cs →
-                    (cs { constructBuildingTexture = Just tid }, ())
-            | otherwise → logWarn logger CatWorld $
-                "construction.setDesignateTexture: unknown category '"
-                <> cat <> "' — structures draw their own art (#1846) and \
-                \'building' is the only category left"
-        Nothing → pure ()
 
 -- | The structure piece the build tool has ARMED (#1846), or 'Nothing'
 --   on leaving placement.

@@ -157,21 +157,25 @@ luaTable kvs = "{ " <> T.intercalate ", "
 --   has to floor before it formats.
 luaPrelude ∷ Scenario → Text
 luaPrelude sc = T.unlines $
-    [ "local infos, warns, calls = {}, {}, {}"
+    [ "local infos, warns, calls, errors = {}, {}, {}, {}"
     , "local files = " <> filesTable
     , "local counts = " <> countsTable
     , "engine = {}"
     , "engine.logInfo = function(m) infos[#infos + 1] = m end"
     , "engine.logWarn = function(m) warns[#warns + 1] = m end"
+    , "engine.logError = function(m) errors[#errors + 1] = m end"
     , "engine.loadTexture = function() end"
     , "engine.loadTutorialDir = function() end"
     , "engine.listFiles = function(dir, ext) return files[dir] end"
     , "engine.listFilesRecursive = function(dir, ext) return files[dir] end"
     , "local function loader(dir)"
-    , "  return function(p)"
+    , "  return function(p, wantOutcome)"
     , "    calls[#calls + 1] = p"
     , "    local n = counts[p]"
     , "    if n == nil then error('unexpected path: ' .. tostring(p)) end"
+    -- Every file here parses; #2203's failure shapes are
+    -- 'Test.Headless.Startup.Readiness''s subject, not this module's.
+    , "    if wantOutcome then return n + 0.0, true end"
     , "    return n + 0.0"
     , "  end"
     , "end"
@@ -180,10 +184,12 @@ luaPrelude sc = T.unlines $
       | f ← normalFams ]
     ⧺ [ "local SL = require('scripts.startup_loader')"
       , "function runProfile(profile)"
-      , "  infos, warns, calls = {}, {}, {}"
+      , "  infos, warns, calls, errors = {}, {}, {}, {}"
       , "  SL.build(profile)"
       , "  local guard = 0"
-      , "  while not SL.isDone() do"
+      -- #2203 gave the queue a second terminal state; without it a
+      -- failing scenario spins here instead of reporting.
+      , "  while not SL.isDone() and not SL.isFailed() do"
       , "    SL.tick(0)"
       , "    guard = guard + 1"
       , "    assert(guard < 100000, 'the startup queue never drained')"
@@ -307,6 +313,23 @@ callBinding b verb path = do
     digits t = case T.filter isDigit t of
         d | T.null d  → -1
           | otherwise → read (T.unpack d)
+
+-- | The same call with #2203's parse outcome asked for: the count
+--   first, then whether the file DECODED. Returned as one formatted
+--   string so both values come back through the same read-back the
+--   count already used.
+callBindingOutcome ∷ Bindings → Text → Text → IO (Int, Bool)
+callBindingOutcome b verb path = do
+    out ← executeDebugLua (lbsLuaState (bnLua b))
+        ("return string.format('%d/%s', engine." <> verb
+         <> "('" <> path <> "', true))")
+    -- 'luaValueToText' renders a returned STRING quoted; the digits
+    -- and the flag are the payload.
+    let cleaned      = T.strip (T.filter (≢ '"') out)
+        (nTxt, rest) = T.breakOn "/" cleaned
+    pure ( if T.null nTxt ∨ T.any (not ∘ isDigit) nTxt
+               then -1 else read (T.unpack nTxt)
+         , T.drop 1 rest ≡ "true" )
 
 entriesAt ∷ LogLevel → [LogEntry] → [Text]
 entriesAt lvl = map leMessage ∘ filter ((≡ lvl) ∘ leLevel)
@@ -488,7 +511,11 @@ spec = describe "Startup asset logging" $ do
             [ l | l ← aggregates r, "infection " `T.isInfixOf` l ]
                 `shouldBe`
                 [ "Startup assets: infection loaded 0 from 0 file(s)" ]
-            length (aggregates r) `shouldBe` 12
+            -- Every family up to and including the empty one aggregates;
+            -- the queue then stops, because #2203 made a family that
+            -- discovered nothing a terminal startup failure
+            -- ('Test.Headless.Startup.Readiness' owns that half).
+            length (aggregates r) `shouldBe` 5
             rrWarns r `shouldBe` []
             -- and the family is simply skipped, not loaded with a phantom path
             [ p | p ← rrCalls r, "data/infections" `T.isPrefixOf` p ]
@@ -524,14 +551,19 @@ spec = describe "Startup asset logging" $ do
     describe "existing diagnostics keep their level and meaning \
              \(requirements 5 and 6)" $ beforeAll newBindings $ do
 
-        it "a YAML parse failure still warns, and the binding still \
-           \reports its zero at Debug" $ \b →
+        it "a YAML parse failure still warns, still reports its zero at \
+           \Debug, and now says it did NOT parse (#2203)" $ \b →
             withFixtureDir "parse-failure"
                 [ ("broken.yaml", "materials:\n  - id: [unclosed\n") ]
                 $ \root → do
                 let path = T.pack (root </> "broken.yaml")
                 (n, entries) ← callBinding b "loadMaterialYaml" path
+                -- The DEFAULT answer is still the one number it always
+                -- was, zero included: #2203 made the outcome opt-in
+                -- precisely so this shape could not move.
                 n `shouldBe` 0
+                callBindingOutcome b "loadMaterialYaml" path
+                    `shouldReturn` (0, False)
                 length [ m | m ← entriesAt LevelWarn entries
                            , "Failed to parse material YAML" `T.isInfixOf` m ]
                     `shouldBe` 1
@@ -539,13 +571,17 @@ spec = describe "Startup asset logging" $ do
                 mentioning "loadMaterialYaml: loaded 0 textures"
                            LevelDebug entries `shouldSatisfy` (not ∘ null)
 
-        it "a valid file with zero entries does NOT warn, and keeps its \
-           \path and zero at Debug" $ \b →
+        it "a valid file with zero entries does NOT warn, keeps its path \
+           \and zero at Debug, and says it DID parse (#2203)" $ \b →
             withFixtureDir "empty-list" [ ("empty.yaml", "materials: []\n") ]
                 $ \root → do
                 let path = T.pack (root </> "empty.yaml")
                 (n, entries) ← callBinding b "loadMaterialYaml" path
                 n `shouldBe` 0
+                -- The same zero as the malformed case above, and the
+                -- one thing that tells them apart.
+                callBindingOutcome b "loadMaterialYaml" path
+                    `shouldReturn` (0, True)
                 entriesAt LevelWarn entries `shouldBe` []
                 entriesAt LevelInfo entries `shouldBe` []
                 let debugs = mentioning "loadMaterialYaml: loaded"

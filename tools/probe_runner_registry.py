@@ -74,8 +74,9 @@ PROBES = [
     ("construction", "construction_probe.py",
      "construct_job AI end-to-end: claim/source/progress/place/stake/release (#96)"),
     ("construction_blueprint_footprint", "construction_blueprint_footprint_probe.py",
-     "offscreen: committed CtBuilding blueprint renders its full def footprint "
-     "while staying one designation job (#807)"),
+     "offscreen: committed CtBuilding blueprint renders ONE ghost of the "
+     "building's own sprite, in the staked building's own box, while staying "
+     "one designation job (#807/#1845)"),
     ("content_registry", "content_registry_probe.py",
      "content-registries capability (#890): all seven registries written via "
      "their public load*Yaml verb and read back via their public query, plus "

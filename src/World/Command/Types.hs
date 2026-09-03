@@ -203,11 +203,17 @@ data WorldCommand
         --   (gx, gy). Deltas are pre-normalised to the job's total
         --   work (1.0 = done) and the sum is clamped to [0, 1].
         --
-        --   A BUILDING blueprint's alpha ramps with it. A STRUCTURE
-        --   site's does not (#1846): it is already invisible by the
-        --   time any progress is poured, because D-15/D-16 make it
+        --   NEITHER ghost ramps with it, and only a STRUCTURE job
+        --   sends this at all. A structure site is already invisible by
+        --   the time any progress is poured (#1846): D-15/D-16 make it
         --   vanish when its materials are PAID for and show nothing
-        --   until the finished piece appears.
+        --   until the finished piece appears. A BUILDING designation
+        --   accrues no progress here whatsoever (#1845) — it is staked
+        --   into a real 'BuildingInstance' and the work accumulates on
+        --   THAT, so its ghost holds a fixed 60 % until the staked
+        --   building enters its own build-progress frames. The alpha
+        --   ramp this used to describe was a dead 0.45 + 0.55 * 0 and
+        --   is deleted.
         --
         --   Completion (placing the piece + removing the designation)
         --   stays Lua-side — the AI resolves art/materials, so it owns
@@ -222,11 +228,6 @@ data WorldCommand
         --   because the catalogue is keyed by pack NAME and is global;
         --   this is requirement 9's bounded page-level sweep, and it is
         --   enqueued only when a failure actually CHANGED the catalogue.
-    | WorldSetConstructDesignateTexture WorldPageId Text TextureHandle
-        -- ^ Ghost texture for committed BUILDING construction
-        --   designations. Structures draw their own art (#1846), so the
-        --   category argument survives only until DTV-10 (#1845) retires
-        --   the mechanism; anything but "building" is refused.
     | WorldSetConstructStructureTarget WorldPageId (Maybe StructurePiece)
         -- ^ The structure piece the build tool has ARMED (#1846), or
         --   'Nothing' on leaving placement. Drives the pre-anchor hover

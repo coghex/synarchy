@@ -26,7 +26,7 @@
 --
 -- APPEND-ONLY: this enum derives 'Serialize' through 'Generic', so it is
 -- positional by constructor tag and rides into saves via
--- "World.Save.Component.Entities"' unit-sim component. Adding a
+-- "World.Save.Component.EntitySimulation"'s unit-sim component. Adding a
 -- constructor is a pure append; inserting or reordering silently
 -- corrupts saved move targets (@tools/enum_append_only_audit.py@ guards
 -- this).

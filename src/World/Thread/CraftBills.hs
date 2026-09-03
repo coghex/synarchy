@@ -16,7 +16,8 @@
 --   * 'World.Load.Publish' brings a loaded session up PAUSED. A save
 --     written while a bill's claimant was already missing restores that
 --     bill verbatim (deliberately — see
---     'World.Save.Component.Entities'), so the repair has to be able to
+--     'World.Save.Component.EntitySystems'), so the repair has to be able
+--     to
 --     land while the engine is still paused, or the player would see a
 --     loaded station drawing power for a worker that does not exist
 --     until they happened to unpause.

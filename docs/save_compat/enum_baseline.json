@@ -9,7 +9,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"craft-bills\" — World.Save.Component.Entities",
+          "carrier": "\"craft-bills\" — World.Save.Component.EntitySystems",
           "via": "PageCraftBillsDTO → BillQueueDTO → CraftBillDTO → BillMode"
         },
         {
@@ -213,7 +213,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"power-nodes\" — World.Save.Component.Entities",
+          "carrier": "\"power-nodes\" — World.Save.Component.EntitySystems",
           "via": "PagePowerNodesDTO → NodeRegistryDTO → PowerNodeDTO → PowerRole"
         },
         {
@@ -247,11 +247,11 @@
       ],
       "carriers": [
         {
-          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "carrier": "\"unit-sim\" — World.Save.Component.EntitySimulation",
           "via": "PageSimDTO → UnitSimStateDTO → Direction"
         },
         {
-          "carrier": "\"units\" — World.Save.Component.Entities",
+          "carrier": "\"units\" — World.Save.Component.EntitySnapshots",
           "via": "PageUnitsDTO → UnitInstanceDTO → Direction"
         },
         {
@@ -314,7 +314,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "carrier": "\"unit-sim\" — World.Save.Component.EntitySimulation",
           "via": "PageSimDTO → UnitSimStateDTO → MoveTargetDTO → MoveHazardPolicy"
         },
         {
@@ -343,7 +343,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "carrier": "\"unit-sim\" — World.Save.Component.EntitySimulation",
           "via": "PageSimDTO → UnitSimStateDTO → Pose"
         },
         {
@@ -406,7 +406,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"unit-sim\" — World.Save.Component.Entities",
+          "carrier": "\"unit-sim\" — World.Save.Component.EntitySimulation",
           "via": "PageSimDTO → UnitSimStateDTO → UnitActivity"
         },
         {

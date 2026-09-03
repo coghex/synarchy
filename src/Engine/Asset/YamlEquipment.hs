@@ -4,13 +4,14 @@ module Engine.Asset.YamlEquipment
     , EquipmentYamlClass(..)
     , EquipmentYamlFile(..)
     , loadEquipmentYaml
+    , loadEquipmentYamlOutcome
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import Engine.Core.Log (LoggerState)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 
 -- | One slot entry inside an equipment class YAML.
 data EquipmentYamlSlot = EquipmentYamlSlot
@@ -60,6 +61,15 @@ instance FromJSON EquipmentYamlFile where
     parseJSON = withObject "EquipmentYamlFile" $ \v → EquipmentYamlFile
         ⊚ v .: "classes"
 
+-- | 'loadEquipmentYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadEquipmentYaml'.
+loadEquipmentYamlOutcome
+    ∷ LoggerState → FilePath → IO (Maybe [EquipmentYamlClass])
+loadEquipmentYamlOutcome logger =
+    loadYamlListOutcome logger "equipment" "equipment classes" eyfClasses
+
 loadEquipmentYaml ∷ LoggerState → FilePath → IO [EquipmentYamlClass]
-loadEquipmentYaml logger =
-    loadYamlList logger "equipment" "equipment classes" eyfClasses
+loadEquipmentYaml logger path =
+    fromMaybe [] ⊚ loadEquipmentYamlOutcome logger path

@@ -6,12 +6,13 @@ module Engine.Asset.YamlVegetation
     , VegetationFile(..)
       -- * Loading
     , loadVegetationYaml
+    , loadVegetationYamlOutcome
     ) where
 
 import UPrelude
 import GHC.Generics (Generic)
 import Data.Aeson (FromJSON(..), (.:), withObject)
-import Engine.Asset.YamlList (loadYamlList)
+import Engine.Asset.YamlList (loadYamlListOutcome)
 import Engine.Core.Log (LoggerState)
 
 -- | Variant IDs are @id_start .. id_start + len - 1@
@@ -37,6 +38,14 @@ instance FromJSON VegetationFile where
 
 -- * YAML parsing
 
+-- | 'loadVegetationYaml' with the decode OUTCOME kept (#2203):
+--   'Nothing' is a parse failure, @Just xs@ a file that decoded
+--   (possibly to an empty list). The startup loader needs the two
+--   apart; every other caller reads 'loadVegetationYaml'.
+loadVegetationYamlOutcome ∷ LoggerState → FilePath → IO (Maybe [VegetationDef])
+loadVegetationYamlOutcome logger =
+    loadYamlListOutcome logger "vegetation" "vegetation types" vfVegetation
+
 loadVegetationYaml ∷ LoggerState → FilePath → IO [VegetationDef]
-loadVegetationYaml logger =
-    loadYamlList logger "vegetation" "vegetation types" vfVegetation
+loadVegetationYaml logger path =
+    fromMaybe [] ⊚ loadVegetationYamlOutcome logger path

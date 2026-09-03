@@ -30,13 +30,13 @@ import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg, OverridesFile)
 import Engine.PlayerEvent (emptyEventStore)
 import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
+import Engine.Core.ConfigWrite (copyConfigFile, writeConfigBytes)
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..), LoggerState, logInfo, logWarn
                        , LogCategory(..))
 import System.IO (stdout)
-import System.Directory (doesFileExist, copyFile, createDirectoryIfMissing)
-import System.FilePath (takeDirectory)
+import System.Directory (doesFileExist)
 import qualified Data.ByteString as BS
 import Engine.Core.State
 import Engine.Save.Barrier (newSaveBarrier)
@@ -179,11 +179,12 @@ data LegacyNeutralityCheck = LegacyNeutralityCheck
 --   accusing a file that is fine.
 --
 --   Both classes reach the same outcome: the legacy file is untouched
---   ('copyFile' never writes its source), no local file appears (that
---   copy is atomic, so a failed one leaves nothing behind to poison the
---   existence gate above), the boot falls back to the versioned
---   default/registry exactly like a missing legacy file, and the
---   migration is re-attempted on the next boot.
+--   ('copyConfigFile' never writes its source), no local file appears
+--   (that copy publishes by atomic rename or not at all, #2202, so a
+--   failed one leaves nothing behind to poison the existence gate
+--   above), the boot falls back to the versioned default/registry
+--   exactly like a missing legacy file, and the migration is
+--   re-attempted on the next boot.
 migrateLegacyConfig ∷ ∀ a. (FromJSON a, Eq a)
                     ⇒ Proxy a → LoggerState → Maybe LegacyNeutralityCheck
                     → FilePath → FilePath → IO ()
@@ -212,20 +213,28 @@ migrateLegacyConfig _ logger mCheck legacyPath localPath = do
                                                   (lncRecordPath check)
                 else return True
       case (outcome ∷ Either SomeException Bool) of
+        -- #2202: the copy is DURABLE — a temporary in the destination's
+        -- own directory, fsync, atomic rename, fsync the directory — so
+        -- an interrupted copy can never leave a partial local file. That
+        -- matters most HERE: migration is gated on the local file's mere
+        -- EXISTENCE, so one partial copy used to suppress every later
+        -- migration attempt permanently. 'copyConfigFile' reports rather
+        -- than throws, which is exactly the shape #2210's
+        -- destination-blaming arm already wanted.
         Right True → do
-          copied ← try (copyFile legacyPath localPath)
-          case (copied ∷ Either SomeException ()) of
+          copied ← copyConfigFile legacyPath localPath
+          case copied of
             Right () → logInfo logger CatInit $
               "Migrated legacy config " <> T.pack legacyPath
                 <> " -> " <> T.pack localPath
-            Left e → logWarn logger CatInit $
+            Left err → logWarn logger CatInit $
               "Legacy config " <> T.pack legacyPath
                 <> " is valid, but writing it to " <> T.pack localPath
                 <> " failed; the destination could not be written. The "
                 <> "legacy file is untouched and the boot falls back to "
                 <> "the versioned default, so the migration is retried "
                 <> "on the next boot once the destination is writable: "
-                <> T.pack (displayException e)
+                <> err
         Right False → logInfo logger CatInit $
           "Legacy config " <> T.pack legacyPath
             <> " carries no player state (it resolves to the same "
@@ -282,9 +291,7 @@ recordNeutralLegacy logger legacyPath recordPath = do
     stale ← if hasRecord
               then (≢ legacyBytes) ⊚ BS.readFile recordPath
               else return True
-    when stale $ do
-      createDirectoryIfMissing True (takeDirectory recordPath)
-      BS.writeFile recordPath legacyBytes
+    when stale $ writeConfigOrFail recordPath legacyBytes
   case (outcome ∷ Either SomeException ()) of
     Right () → return ()
     Left e   → logWarn logger CatInit $
@@ -292,6 +299,18 @@ recordNeutralLegacy logger legacyPath recordPath = do
         <> T.pack legacyPath <> " at " <> T.pack recordPath
         <> "; a later change to the versioned default may re-examine it: "
         <> T.pack (displayException e)
+
+-- | Durably write the neutrality record (#2202), raising on failure so
+--   'recordNeutralLegacy's existing warning-and-continue handler reports
+--   the cause — the throw is how the outcome is CONSUMED rather than
+--   discarded. Durability matters here for the same reason it matters
+--   for the migration copy above: a truncated record decodes as
+--   'Nothing', which re-promotes the very placeholder #1937 exists to
+--   suppress.
+writeConfigOrFail ∷ FilePath → BS.ByteString → IO ()
+writeConfigOrFail path bytes = do
+  written ← writeConfigBytes path bytes
+  either (ioError ∘ userError ∘ T.unpack) pure written
 
 -- | Allocate every 'IORef', queue, and subsystem, then bundle into
 --   'EngineEnv'. Logs to stdout (the graphical default).
