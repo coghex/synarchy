@@ -128,6 +128,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
             bm         ← readIORef (buildingManagerRef env)
             um         ← readIORef (unitManagerRef env)
             uts        ← readIORef (utsRef env)
+            -- #2243: a save names its flora species, and the catalog is
+            -- the only thing that can turn a live 'FloraId' into a name.
+            -- Read ONCE up here, like every other global — the barrier
+            -- has already quiesced the session, so every page is named
+            -- against one consistent catalog, and the component encoders
+            -- downstream never touch live state at all.
+            floraCat   ← readIORef (floraCatalogRef env)
             mParams ← readIORef (wsGenParamsRef primaryWs)
             case mParams of
                 Nothing →
@@ -203,43 +210,58 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                         (\uid _ → uid `HS.member` savedUids)
                                         (utsSimStates uts)
                                     persistedEdits = appendFluidSnapshot edits tiles
-                                pure $ Right PageSnapshot
-                                    { pgsPageId     = pid
-                                    , pgsGenParams  = params
-                                    , pgsCameraX    = wcx
-                                    , pgsCameraY    = wcy
-                                    , pgsTimeHour   = h
-                                    , pgsTimeMinute = m
-                                    , pgsDateYear   = y
-                                    , pgsDateMonth  = mo
-                                    , pgsDateDay    = d
-                                    , pgsMapMode    = mapMode
-                                    , pgsEdits      = persistedEdits
-                                    , pgsMineDesignations = mineDesigs
-                                    , pgsConstructDesignations = constructDesigs
-                                    , pgsConstructNextAttempt = constructNext
-                                    , pgsGroundItems = groundItems
-                                    , pgsSpoilPiles  = spoilPiles
-                                    , pgsBuildings   = buildings
-                                    , pgsUnits       = units
-                                    , pgsUnitSimStates = simStates
-                                    , pgsFloraHarvests = floraHarvests
-                                    , pgsChopDesignations = chopDesigs
-                                    , pgsPendingChopMigration = pendingChop
-                                    , pgsPendingFloraHarvests = pendingHarvests
-                                    , pgsPlantedFloraCursor = plantedCursor
-                                    , pgsCraftBills  = craftBills
-                                    , pgsTransferOrders = transferOrders
-                                    , pgsPowerNodes  = powerNodes
-                                    , pgsContainerKnowledge = containerKnowledge
-                                    , pgsTillDesignations = tillDesigs
-                                    , pgsCropPlots   = cropPlots
-                                    , pgsPlantDesignations = plantDesigs
-                                    , pgsIdentity    = identity
-                                    -- #2021: always 'Just' — the
-                                    -- live ref is not optional.
-                                    , pgsGeneratedId = Just generatedId
-                                    }
+                                -- #2243: the one place a live species
+                                -- handle becomes a durable reference. A
+                                -- handle this build's own catalog cannot
+                                -- name fails the whole transaction here,
+                                -- before anything is encoded or written,
+                                -- rather than shipping a save no build
+                                -- could resolve.
+                                case nameFloraReferences floraCat pid
+                                         persistedEdits cropPlots
+                                         plantDesigs of
+                                  Left unnamed → pure $ Left $
+                                    "cannot save: "
+                                    <> T.intercalate "; "
+                                         (map renderUnnamedFloraRef unnamed)
+                                  Right (namedEdits, namedCrops, namedPlants) →
+                                    pure $ Right PageSnapshot
+                                        { pgsPageId     = pid
+                                        , pgsGenParams  = params
+                                        , pgsCameraX    = wcx
+                                        , pgsCameraY    = wcy
+                                        , pgsTimeHour   = h
+                                        , pgsTimeMinute = m
+                                        , pgsDateYear   = y
+                                        , pgsDateMonth  = mo
+                                        , pgsDateDay    = d
+                                        , pgsMapMode    = mapMode
+                                        , pgsEdits      = namedEdits
+                                        , pgsMineDesignations = mineDesigs
+                                        , pgsConstructDesignations = constructDesigs
+                                        , pgsConstructNextAttempt = constructNext
+                                        , pgsGroundItems = groundItems
+                                        , pgsSpoilPiles  = spoilPiles
+                                        , pgsBuildings   = buildings
+                                        , pgsUnits       = units
+                                        , pgsUnitSimStates = simStates
+                                        , pgsFloraHarvests = floraHarvests
+                                        , pgsChopDesignations = chopDesigs
+                                        , pgsPendingChopMigration = pendingChop
+                                        , pgsPendingFloraHarvests = pendingHarvests
+                                        , pgsPlantedFloraCursor = plantedCursor
+                                        , pgsCraftBills  = craftBills
+                                        , pgsTransferOrders = transferOrders
+                                        , pgsPowerNodes  = powerNodes
+                                        , pgsContainerKnowledge = containerKnowledge
+                                        , pgsTillDesignations = tillDesigs
+                                        , pgsCropPlots   = namedCrops
+                                        , pgsPlantDesignations = namedPlants
+                                        , pgsIdentity    = identity
+                                        -- #2021: always 'Just' — the
+                                        -- live ref is not optional.
+                                        , pgsGeneratedId = Just generatedId
+                                        }
                     case sequence maybePages of
                       Left err → do
                         logWarn logger CatWorld err

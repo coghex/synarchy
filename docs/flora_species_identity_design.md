@@ -191,6 +191,18 @@ plants. That competition is deliberate and permitted (see D-1).
   a migration that resolves the numeric id against the *current* catalog.
 - `world-activity` v5 → v6: `CropPlotDTO` and `PlantDesignationDTO` carry the
   species name; v5 is frozen and migrated the same way.
+- (As built, 2026-09-03: the migration itself resolves nothing — `atVersion`
+  sees only the decoded payload and has no catalog. A legacy ordinal is
+  carried forward as `FloraByLegacyId` and resolved at the two boundaries
+  that do hold a catalog, which is where the numbers above are read from and
+  written to in either direction. Same wording change as #1854's, whose
+  rewrite likewise moved from "in the migration" to "at apply time".)
+- (As built: neither planting constructor was retyped. `WorldEditDTO` is
+  positionally serialized and guarded by `tools/enum_append_only_audit.py`,
+  which records each constructor's payload — so retyping `WePlaceFloraD`'s
+  or `WePlaceFloraWithIdD`'s `FloraId` slot would have reinterpreted a
+  shipped tag. A third constructor, `WePlaceFloraRefD`, was appended instead,
+  exactly as #1854 appended the second.)
 - Resolution at load: a name that `findSpeciesByName` cannot resolve is a
   `MissingFloraRef` naming the source, page, coordinate, and species name; the
   check now also walks plant designations.
