@@ -621,6 +621,16 @@ spec = describe "unit motion argument domains" $ do
         it "rejects a non-numeric value" $ \_ →
             rejects "max_speed: fast" "max_speed"
 
+        -- An explicitly written null is a value the author supplied,
+        -- not an omission — and Aeson's `.:?` reports the two
+        -- identically, so an absence test written with it would hand
+        -- this the 3.0 default. All three YAML spellings, since they
+        -- all resolve to the same Null and a lookup that missed one
+        -- would reopen the hole.
+        forM_ ["null", "~", ""] $ \spelling →
+            it ("rejects an explicit null written as " ⧺ show spelling) $
+                \_ → rejects ("max_speed: " <> spelling) "max_speed"
+
         it "keeps the 3.0 default when the key is absent" $ \_ →
             fmap uydMaxSpeed (decodeUnit (unitYaml "display_name: x"))
                 `shouldBe` Right 3.0

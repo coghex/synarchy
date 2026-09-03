@@ -461,6 +461,13 @@ instance FromJSON UnitYamlDef where
 --   optional and every shipped def that omits it means \"typical\".
 --   Only a value the author actually wrote is judged.
 --
+--   Absence is decided by a direct 'KM.lookup' rather than by @.:?@,
+--   which reports an explicit @null@ as 'Nothing' and would hand
+--   @max_speed: null@ the default instead of refusing it. A written
+--   @null@ (in any of YAML's spellings — @null@, @~@, or an empty
+--   value) is a value the author supplied and is not a speed, so it
+--   takes the not-a-number branch like any other wrong type.
+--
 --   Taking the whole 'Aeson.Value' rather than decoding to 'Float'
 --   first is deliberate, for the reason the two sibling parsers give:
 --   YAML's @.nan@\/@.inf@ resolve to STRINGS (the yaml package's scalar
@@ -474,8 +481,7 @@ instance FromJSON UnitYamlDef where
 requireMaxSpeed ∷ Aeson.Object → Aeson.Parser Float
 requireMaxSpeed v = do
     unitName ← v .:? "name" .!= ("<unnamed>" ∷ Text)
-    mval ← v .:? "max_speed"
-    case mval of
+    case KM.lookup (Key.fromText "max_speed") v of
         Nothing  → pure 3.0
         Just val → case val of
             Aeson.Number s →
