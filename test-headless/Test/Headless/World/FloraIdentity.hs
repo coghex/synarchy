@@ -40,7 +40,7 @@ import World.Chop.Types
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Chunk.Types
 import World.Edit.Types (WorldEdit(..), WorldEdits)
-import World.Flora.CropPlot (CropPlot(..), cropPlotInstance)
+import World.Flora.CropPlot (CropPlotOf(..), cropPlotInstance)
 import World.Flora.Designation
 import World.Flora.Harvest (tickFloraHarvests)
 import World.Flora.Identity

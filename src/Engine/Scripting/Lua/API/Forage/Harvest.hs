@@ -28,7 +28,7 @@ import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import World.Types
 import World.Generate.Coordinates (canonicalTile)
 import World.Flora.Growth (floraGrowth, harvestOpen)
-import World.Flora.CropPlot (CropPlot(..), cropPlotElapsedDays,
+import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
                              cropPlotInstance)
 import Item.Types (lookupItemDef)
 import Item.Ground (spawnGroundItem)

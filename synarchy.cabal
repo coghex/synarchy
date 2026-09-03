@@ -921,6 +921,7 @@ library
                      World.Time.Local
                      World.Flora.Identity
                      World.Flora.Types
+                     World.Flora.Reference
                      World.Flora.Designation
                      World.Flora.HitTest
                      World.Flora.Growth

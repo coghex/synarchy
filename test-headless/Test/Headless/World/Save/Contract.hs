@@ -90,9 +90,10 @@ import Item.Ground (GroundItems(..), GroundItem(..))
 import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Spoil.Types (emptySpoilPiles, SpoilPile(..))
 import World.Flora.Harvest (emptyFloraHarvests)
-import World.Flora.CropPlot (emptyCropPlots, CropPlot(..))
-import World.Flora.Types (FloraId(..))
+import World.Flora.CropPlot (CropPlotOf(..))
 import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
+import qualified Data.List as L
+import World.Flora.Reference (FloraRef(..), renderFloraRef)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Material.Id (MaterialId(..))
 import World.Mine.Types (MineDesignation(..))
@@ -102,7 +103,7 @@ import World.Construct.Types
     (ConstructDesignation(..), ConstructTarget(..), ConstructStatus(..))
 import World.Chop.Types (ChopDesignation(..))
 import World.Till.Types (TillDesignation(..))
-import World.Plant.Types (PlantDesignation(..))
+import World.Plant.Types (PlantDesignationOf(..))
 import Craft.Bills (emptyCraftBills, CraftBill(..), CraftBills(..), BillId(..), BillMode(..))
 import Unit.Transfer
     ( TransferBatch(..), TransferEndpoint(..), TransferItemRef(..)
@@ -360,7 +361,13 @@ richPage = PageSnapshot
     , pgsDateMonth    = 5
     , pgsDateDay      = 17
     , pgsMapMode      = ZMPressure
-    , pgsEdits        = HM.singleton (ChunkCoord 0 0) [WeDeleteTile 1 2]
+      -- #2243: the first of the three durable species references the
+      -- round trip below reads back BY NAME. Its planted id is 2, below
+      -- 'pgsPlantedFloraCursor' (3) so 'validateWorldEdits' is satisfied.
+    , pgsEdits        = HM.singleton (ChunkCoord 0 0)
+        [ WeDeleteTile 1 2
+        , WePlaceFloraRef 15 16 (FloraByName "wheat") 4 0.5
+              (plantedFloraInstanceId 2) ]
     , pgsMineDesignations      = HM.singleton (1, 2) (MineDesignation 0 (0.9, 0.8, 0.7, 0.6) 0.3)
     , pgsConstructDesignations = HM.singleton (3, 4)
         (ConstructDesignation 0 (CtBuilding "cargo_hold_S") CsClaimed 0.5
@@ -394,8 +401,14 @@ richPage = PageSnapshot
     , pgsTransferOrders = richTransferOrders
     , pgsPowerNodes   = richNodes
     , pgsTillDesignations = HM.singleton (9, 10) (TillDesignation 0)
-    , pgsCropPlots    = HM.singleton (11, 12) (CropPlot (FloraId 3) 5 0.9)
-    , pgsPlantDesignations = HM.singleton (13, 14) (PlantDesignation 0 (FloraId 3))
+      -- #2243: a captured page names its species. The edit log's own
+      -- planted crop is 'richEdits' below; these two are the other two
+      -- durable reference sites, all three naming the same species so a
+      -- round trip that mixed them up is visible.
+    , pgsCropPlots    = HM.singleton (11, 12)
+                            (CropPlot (FloraByName "wheat") 5 0.9)
+    , pgsPlantDesignations = HM.singleton (13, 14)
+                            (PlantDesignation 0 (FloraByName "wheat"))
     , pgsContainerKnowledge = richKnowledge
     , pgsIdentity     = Just (WorldIdentity "Aldermoor Deep"
                                   (Just "the deep home")
@@ -548,7 +561,7 @@ minimalPage2 = PageSnapshot
     , pgsTransferOrders = emptyTransferOrders
     , pgsPowerNodes   = emptyPowerNodes
     , pgsTillDesignations = HM.empty
-    , pgsCropPlots    = emptyCropPlots
+    , pgsCropPlots    = HM.empty
     , pgsPlantDesignations = HM.empty
     , pgsContainerKnowledge = emptyContainerKnowledge
     , pgsIdentity     = customIdentity
@@ -657,6 +670,22 @@ luaCid name = ComponentId ("lua." <> name)
 luaNames ∷ HS.HashSet Text
 luaNames = HS.fromList ["unit_ai", "building_spawn"]
 
+-- | Every durable flora-species reference one decoded page carries,
+--   labelled by which of the three sites it came from and sorted so the
+--   comparison is order-independent (#2243). Reading the three sites
+--   through ONE accessor is what makes a site that lost its reference
+--   visible as an absent row rather than as a silently shorter list.
+speciesRefsOf ∷ SessionSnapshot → WorldPageId → [(Text, FloraRef)]
+speciesRefsOf snap pid = case HM.lookup pid (snapPages snap) of
+    Nothing → []
+    Just p  → L.sortOn (fmap renderFloraRef) $
+        [ ("edit log", ref)
+        | es ← HM.elems (pgsEdits p)
+        , WePlaceFloraRef _ _ ref _ _ _ ← es ]
+        ⧺ [ ("crop plot", cpSpecies cp) | cp ← HM.elems (pgsCropPlots p) ]
+        ⧺ [ ("plant designation", ptCrop pd)
+          | pd ← HM.elems (pgsPlantDesignations p) ]
+
 spec ∷ Spec
 spec = do
     describe "fresh-process structural equivalence (pure round trip, \
@@ -735,6 +764,21 @@ spec = do
                           , EndpointBuilding (BuildingId 2)) ]
                     map troUnit (transferOrderList (ordersOf snap page1))
                         `shouldBe` [UnitId 1, UnitId 1]
+                    -- #2243, stated explicitly for the same reason as
+                    -- the four above: the derived Eq already covers all
+                    -- three durable species references, but reading each
+                    -- back BY NAME is what makes a codec that quietly
+                    -- reverted to persisting a numeric ordinal — or one
+                    -- that crossed a crop plot's species with a plant
+                    -- designation's — legible when it breaks. All three
+                    -- name the same species, so a swap shows up as the
+                    -- WRONG SITE losing its reference, not as a
+                    -- different name.
+                    speciesRefsOf snap page1 `shouldBe`
+                        [ ("crop plot", FloraByName "wheat")
+                        , ("edit log", FloraByName "wheat")
+                        , ("plant designation", FloraByName "wheat") ]
+                    speciesRefsOf snap page2 `shouldBe` []
 
     describe "Lua component encoding pin (issue #1103)" $ do
         it "encodeSessionSnapshot puts each LuaComponentSpec's OWN id, \
