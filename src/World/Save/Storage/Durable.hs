@@ -42,7 +42,8 @@ import qualified Data.ByteString as BS
 import qualified Data.List as L
 import qualified Data.Text as T
 import Data.Char (isDigit)
-import Control.Exception (IOException, SomeException, try, finally, onException)
+import Control.Exception
+    (IOException, SomeException, try, finally, mask_, onException)
 import System.Directory (doesFileExist, removeFile, pathIsSymbolicLink)
 import System.FilePath (takeDirectory)
 import System.IO
@@ -170,12 +171,29 @@ syncDirectory dir = do
 --   generated suffix BEFORE it, whereas a dot-free template keeps the
 --   generated suffix trailing — which is what lets 'isTransientName'
 --   recognise (and only ever recognise) names this primitive produced.
+--
+--   THE PLACEHOLDER IS OWNED FROM THE MOMENT IT EXISTS (#2202 review
+--   round 2). Between 'openBinaryTempFile' returning and 'removeFile'
+--   running there is a real file on disk that nothing had claimed
+--   responsibility for, so an asynchronous exception delivered in that
+--   window — @killThread@ during shutdown, a timeout — left it behind
+--   for ever, under a name no later run reproduces. 'mask_' keeps a
+--   delivery out of the window entirely except at an INTERRUPTIBLE
+--   point ('hClose' takes an @MVar@), and 'onException' covers that one
+--   remaining point by removing the placeholder before the exception
+--   continues. The exception itself always propagates: this closes a
+--   leak, never a shutdown path.
 claimUniquePath ∷ FilePath → String → IO FilePath
-claimUniquePath dir template = do
+claimUniquePath dir template = mask_ $ do
     (path, h) ← openBinaryTempFile dir template
-    hClose h
-    removeFile path
+    releasePlaceholder h path `onException` void (removeIfExists path)
     pure path
+  where
+    -- Deliberately 'hClose', not 'closeQuietly': a failure here must
+    -- reach the 'onException' above so the placeholder is removed,
+    -- rather than being swallowed on the way to a 'removeFile' that
+    -- then never runs.
+    releasePlaceholder h path = hClose h >> removeFile path
 
 -- | True iff @name@ is exactly @template@ immediately followed by at
 --   least one digit — 'openBinaryTempFile''s own naming convention for a

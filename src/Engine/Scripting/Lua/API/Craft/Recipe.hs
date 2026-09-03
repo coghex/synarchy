@@ -28,6 +28,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.Core (CoreCapability)
 import Engine.Core.Capability.ContentRegistries
     (ContentRegistriesCapability(..))
+import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
 import Engine.Core.Log (LogCategory(..), logDebug)
 import Engine.Core.Log.Monad (getLoggerFor)
 import Engine.Asset.YamlRecipes
@@ -41,12 +42,13 @@ loadRecipeYamlFn ∷ CoreCapability → ContentRegistriesCapability
 loadRecipeYamlFn core regs = do
     pathArg ← Lua.tostring 1
     case pathArg of
-        Nothing → Lua.pushnumber 0 >> return 1
+        Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            count ← Lua.liftIO $ do
+            (parsed, count) ← Lua.liftIO $ do
                 logger ← getLoggerFor core
-                defs ← loadRecipeYaml logger filePath
+                mDefs ← loadRecipeYamlOutcome logger filePath
+                let defs = fromMaybe [] mDefs
                 total ← foldM (\acc d → do
                     let recipe = RecipeDef
                             { rdId        = ryId d
@@ -71,9 +73,8 @@ loadRecipeYamlFn core regs = do
                 logDebug logger CatAsset $
                     "loadRecipeYaml: loaded " <> tshow total
                     <> " recipes from " <> T.pack filePath
-                return total
-            Lua.pushnumber (Lua.Number (fromIntegral count))
-            return 1
+                return (isJust mDefs, total)
+            pushYamlResult parsed count
   where
     ingr i = RecipeIngredient { riItem = ryiItem i, riCount = ryiCount i }
     -- Total given Engine.Asset.YamlRecipes' parser already rejects any

@@ -30,7 +30,7 @@ import System.Directory
     , getPermissions, setPermissions, Permissions(..), createFileLink
     , withCurrentDirectory )
 import System.FilePath ((</>), takeDirectory)
-import System.IO (stderr)
+import System.IO (stderr, openBinaryTempFile)
 
 import Engine.Core.Log
     (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
@@ -521,6 +521,96 @@ spec = do
                 case r of
                     Left f  → pfPhase f `shouldBe` PhaseCandidateCreate
                     Right _ → expectationFailure "expected a candidate-create failure"
+
+        -- Issue #2227: an existing generation that is PRESENT but
+        -- unreadable is neither absent nor confirmed free of foreign
+        -- optional data, yet the old preflight answered "no foreign
+        -- data" for it and the rest of the transaction then destroyed
+        -- exactly that file. Both refusals below are driven through
+        -- 'publishGenerationWithSeams', whose reader seam fails ONE
+        -- exact generation path and delegates every other read to the
+        -- production 'BS.readFile' -- so each generation is proved
+        -- independently, and neither test depends on filesystem mode
+        -- bits, which CI's root containers ignore.
+        let failReadOf victim path
+                | path ≡ victim =
+                    ioError (userError "injected generation read failure")
+                | otherwise = BS.readFile path
+            -- An exact directory listing is stricter than asking
+            -- 'isOwnedArtifactName' about each entry: it rejects a
+            -- leftover candidate ('candidateTemplate'), a staged
+            -- previous generation ('staleTemplate'), AND anything else
+            -- a refusal might have left behind.
+            expectOnlyGenerations dir = do
+                entries ← listDirectory dir
+                entries `shouldMatchList`
+                    [authoritativeFileName, previousGenerationFileName]
+
+        it "refuses the publish and names the AUTHORITATIVE generation \
+           \when that file is present but cannot be read during the \
+           \preflight (#2227) -- the loader classifies an unreadable \
+           \authoritative file GenerationCorrupt, so the recovering \
+           \topology would otherwise rename the candidate straight over \
+           \an intact file a POSIX rename never needed to read" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                authBefore ← BS.readFile (authPath dir)
+                prevBefore ← BS.readFile (prevPath dir)
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGenerationWithSeams openBinaryTempFile
+                        (failReadOf (authPath dir)) dir "slot" metaC bytesC
+                        HS.empty HS.empty
+                case r of
+                    Left f  → do
+                        pfPhase f `shouldBe` PhaseExistingGenerationRead
+                        pfPath f `shouldBe` Just (authPath dir)
+                        pfReason f `shouldSatisfy`
+                            T.isInfixOf "injected generation read failure"
+                    Right _ → expectationFailure
+                        "expected an existing-generation read refusal"
+                BS.readFile (authPath dir) `shouldReturn` authBefore
+                BS.readFile (prevPath dir) `shouldReturn` prevBefore
+                expectOnlyGenerations dir
+
+        it "refuses the publish and names the PREVIOUS generation when \
+           \that file is present but cannot be read during the preflight \
+           \(#2227) -- an intact authoritative file beside it would \
+           \otherwise take the ordinary retained topology, which stages \
+           \.prev aside and sweeps it away once the new generation is \
+           \durable" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                _ ← publishOK dir "slot" 2 "slot" "t2"
+                authBefore ← BS.readFile (authPath dir)
+                prevBefore ← BS.readFile (prevPath dir)
+                let (metaC, bytesC) = buildEncoded 3 "slot" "t3"
+                r ← publishGenerationWithSeams openBinaryTempFile
+                        (failReadOf (prevPath dir)) dir "slot" metaC bytesC
+                        HS.empty HS.empty
+                case r of
+                    Left f  → do
+                        pfPhase f `shouldBe` PhaseExistingGenerationRead
+                        pfPath f `shouldBe` Just (prevPath dir)
+                        pfReason f `shouldSatisfy`
+                            T.isInfixOf "injected generation read failure"
+                    Right _ → expectationFailure
+                        "expected an existing-generation read refusal"
+                BS.readFile (authPath dir) `shouldReturn` authBefore
+                BS.readFile (prevPath dir) `shouldReturn` prevBefore
+                expectOnlyGenerations dir
+
+        it "still publishes when the unreadable path is not a generation \
+           \file at all (#2227) -- the refusal keys on the two exact \
+           \generation names, never on the seam having been supplied" $
+            withTempSlotDir $ \dir → do
+                _ ← publishOK dir "slot" 1 "slot" "t1"
+                let (metaB, bytesB) = buildEncoded 2 "slot" "t2"
+                r ← publishGenerationWithSeams openBinaryTempFile
+                        (failReadOf (dir </> "unrelated-note.txt")) dir "slot"
+                        metaB bytesB HS.empty HS.empty
+                r `shouldBe` Right []
+                BS.readFile (authPath dir) `shouldReturn` bytesB
 
         it "reports an unsafe-path failure and never writes through a \
            \slot directory that is itself a symlink" $

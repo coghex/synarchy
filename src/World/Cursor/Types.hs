@@ -50,14 +50,6 @@ data CursorState = CursorState
     --   hovered tile; with both, the whole extent. With no armed piece
     --   it previews nothing, anchor or not.
     , constructAnchor ∷ Maybe (Int, Int)
-    -- | Ghost texture for committed BUILDING construction designations.
-    --   Set from Lua like the cursor textures.
-    --
-    --   Structures no longer have one: #1846 replaced the category
-    --   placeholder with the piece's own art, resolved through #1842's
-    --   catalogue and drawn by the same geometry the placer builds with.
-    --   DTV-10 (#1845) retires this last one and the mechanism with it.
-    , constructBuildingTexture ∷ Maybe TextureHandle
     -- | The structure piece the build tool currently has ARMED, or
     --   'Nothing' when it is off or holding a building target (#1846).
     --
@@ -106,7 +98,8 @@ data CursorState = CursorState
     --   CtBuilding designation referenced one missing from bmDefs
     --   (#807). renderWorldCursorQuads runs every frame, so this dedups
     --   the log to one warning per distinct missing name per session
-    --   instead of flooding it.
+    --   instead of flooding it. Since #1845 such a designation draws no
+    --   ghost at all, so the warning is the ONLY report of it.
     , constructMissingDefsWarned ∷ HS.HashSet Text
     }
 
@@ -130,7 +123,6 @@ emptyCursorState =
         , mineAnchor = Nothing
         , mineDesignTexture = Nothing
         , constructAnchor = Nothing
-        , constructBuildingTexture = Nothing
         , constructStructureTarget = Nothing
         , constructLineMode = False
         , chopDesignTexture = Nothing

@@ -363,8 +363,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                   "initializeVulkan (app/App/Preview.hs), same as the "
                                   "graphical boot path — no GPU on the CI runner (#722)"),),
     "construction_blueprint_footprint": (Reason(NEEDS_GPU, "offscreen boot: proves the "
-                                  "committed building-blueprint footprint via real "
-                                  "screenshot diffing (#807) — no GPU on the CI runner"),),
+                                  "committed building blueprint's ghost is the building's "
+                                  "own sprite, matching the staked one, via real "
+                                  "screenshot diffing (#807/#1845) — no GPU on the CI runner"),),
     "portal_ghost": (Reason(NEEDS_GPU, "offscreen boot: verifies the build-tool ghost's "
                                        "rendered tint via real screenshots — no GPU on the CI runner (#778)"),),
     "structure_rotation": (Reason(NEEDS_GPU, "offscreen boot: captures one stamped "

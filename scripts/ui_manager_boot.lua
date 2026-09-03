@@ -163,11 +163,11 @@ function uiManager.checkReady()
             local startupLoader = require("scripts.startup_loader")
             uiManager.ensureLoadingScreen()
             if uiManager.bootProfile == "arena" then
-                startupLoader.build("arena")
-                startupLoader.runAll()
                 initialized = true
-                uiManager.startupBootDone = true
-                uiManager.finishArenaBoot()
+                if loadingScreen.runArenaStartup() then
+                    uiManager.startupBootDone = true
+                    uiManager.finishArenaBoot()
+                end
                 return
             end
             -- Boot the loading screen first so the user sees a green

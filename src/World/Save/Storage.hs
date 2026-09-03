@@ -148,6 +148,7 @@ module World.Save.Storage
     , renderPublishFailure
     , publishGeneration
     , publishGenerationWithCandidateCreator
+    , publishGenerationWithSeams
     , GenerationSource(..)
     , LoadSelection(..)
     , selectLoadGeneration
@@ -165,6 +166,7 @@ import System.Directory
     , renameFile )
 import System.FilePath ((</>))
 import System.IO (Handle, openBinaryTempFile)
+import System.IO.Error (isDoesNotExistError)
 import World.Save.Storage.Durable
     ( rejectSymlinkedPath, rejectSymlinkedManagedPath, durableFlush
     , syncDirectory, claimUniquePath, isTransientName, closeQuietly
@@ -275,6 +277,21 @@ rejectSymlinkedSlotDir = rejectSymlinkedManagedPath
 --   phase, never just "save failed").
 data StoragePhase
     = PhaseUnsafePath
+    | PhaseExistingGenerationRead
+        -- ^ Issue #2227: one of the slot's existing generation files
+        --   (@world.synworld@ or @world.synworld.prev@) is PRESENT but
+        --   its bytes could not be read during the pre-publication
+        --   inspection below — a permission refusal, an I\/O error, a
+        --   file locked by something else. Distinct from
+        --   'PhaseForeignOptionalData', which reports the opposite
+        --   outcome: a generation that WAS read and definitely does
+        --   carry an unrecognized optional component. An unreadable
+        --   file is not evidence of either answer, and treating it as
+        --   \"no foreign data\" let the rest of the transaction rename
+        --   over (authoritative) or stage and sweep away (previous) an
+        --   intact generation it had never actually inspected. The
+        --   publish is refused instead, before any candidate exists —
+        --   see 'existingGenerationPreflight'.
     | PhaseForeignOptionalData
         -- ^ Requirement 9 (issue #766, save-overhaul C4): the slot's
         --   existing authoritative generation carries an optional
@@ -331,13 +348,17 @@ publishGeneration
     → HS.HashSet Text    -- ^ every Lua component NAME this encode included
     → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
-publishGeneration = publishGenerationWithCandidateCreator openBinaryTempFile
+publishGeneration =
+    publishGenerationWithSeams openBinaryTempFile BS.readFile
 
 -- | The storage transaction with the candidate-file creation operation
 -- supplied by the caller. Production uses 'publishGeneration'; this
 -- narrow seam lets the headless gate exercise the candidate-create
 -- failure classification deterministically, including in CI containers
 -- that run as root and therefore bypass ordinary directory mode bits.
+--
+-- Reads existing generations with the production 'BS.readFile'; to
+-- inject a read failure as well, use 'publishGenerationWithSeams'.
 publishGenerationWithCandidateCreator
     ∷ (FilePath → String → IO (FilePath, Handle))
     → FilePath        -- ^ slot directory
@@ -347,16 +368,45 @@ publishGenerationWithCandidateCreator
     → HS.HashSet Text    -- ^ every Lua component NAME this encode included
     → HS.HashSet Text    -- ^ the subset of those marked required
     → IO (Either PublishFailure [Text])
-publishGenerationWithCandidateCreator createCandidate dir slotName expectedMeta
-    encoded luaKnownNames luaRequiredNames = do
+publishGenerationWithCandidateCreator createCandidate =
+    publishGenerationWithSeams createCandidate BS.readFile
+
+-- | The storage transaction with BOTH injectable I\/O seams supplied by
+-- the caller: the candidate-file creation operation, and the read of an
+-- EXISTING generation file during the pre-publication inspection
+-- ('existingGenerationPreflight'). Production uses 'publishGeneration',
+-- which passes 'openBinaryTempFile' and 'BS.readFile' — the reader seam
+-- exists so the headless gate can fail one exact generation path at a
+-- time (issue #2227) without depending on filesystem mode bits, which
+-- CI's root containers ignore. The reader is handed the full path of
+-- the generation being inspected and is expected to throw an
+-- 'IOException' the way 'BS.readFile' does; it is never used for the
+-- candidate's own re-read (that stays 'BS.readFile' under
+-- 'PhaseCandidateReread').
+publishGenerationWithSeams
+    ∷ (FilePath → String → IO (FilePath, Handle))
+    → (FilePath → IO BS.ByteString)
+    → FilePath        -- ^ slot directory
+    → Text             -- ^ slot name (diagnostics only)
+    → SaveMetadata      -- ^ metadata this candidate must decode back to
+    → BS.ByteString      -- ^ complete, already-encoded envelope bytes
+    → HS.HashSet Text    -- ^ every Lua component NAME this encode included
+    → HS.HashSet Text    -- ^ the subset of those marked required
+    → IO (Either PublishFailure [Text])
+publishGenerationWithSeams createCandidate readGeneration dir slotName
+    expectedMeta encoded luaKnownNames luaRequiredNames = do
     safety ← rejectSymlinkedSlotDir dir
     case safety of
         Left reason →
             pure (Left (failure PhaseUnsafePath (Just dir) reason))
         Right () → do
-            foreignData ← foreignOptionalDataCheck dir luaKnownNames
-            case foreignData of
-                Left reason →
+            preflight ← existingGenerationPreflight readGeneration dir
+                            luaKnownNames
+            case preflight of
+                Left (PreflightUnreadable path reason) →
+                    pure (Left (failure PhaseExistingGenerationRead
+                                    (Just path) reason))
+                Left (PreflightForeignData reason) →
                     pure (Left (failure PhaseForeignOptionalData (Just dir) reason))
                 Right () → do
                     dirResult ← try (createDirectoryIfMissing True dir)
@@ -383,6 +433,19 @@ publishGenerationWithCandidateCreator createCandidate dir slotName expectedMeta
 publishFailureFor ∷ Text → StoragePhase → Maybe FilePath → Text → PublishFailure
 publishFailureFor slotName phase path reason =
     PublishFailure phase slotName path reason
+
+-- | Why 'existingGenerationPreflight' refused this publish. Internal to
+--   the two 'StoragePhase' constructors the caller maps these onto —
+--   'PhaseExistingGenerationRead' and 'PhaseForeignOptionalData' — kept
+--   as a named type rather than a bare 'Text' so the two genuinely
+--   different outcomes (issue #2227: \"could not look\" versus issue
+--   #766's \"looked, and found unrecognized data\") cannot collapse back
+--   into one indistinguishable refusal.
+data PreflightRefusal
+    = PreflightUnreadable !FilePath !Text
+        -- ^ That EXACT generation file is present but unreadable; the
+        --   'Text' is the underlying 'IOException'.
+    | PreflightForeignData !Text
 
 -- | Requirement 9 (issue #766, save-overhaul C4): refuse to overwrite a
 --   slot whose CURRENT authoritative generation carries an optional
@@ -414,26 +477,62 @@ publishFailureFor slotName phase path reason =
 --   closes that gap; an ordinary @.prev@ (the routine previous
 --   generation from the last publish) never carries foreign data in
 --   practice, so this adds no friction to the common case.
-foreignOptionalDataCheck ∷ FilePath → HS.HashSet Text → IO (Either Text ())
-foreignOptionalDataCheck dir luaKnownNames = do
+--
+--   Issue #2227 closes the hole in \"trivially safe\": a generation file
+--   that is PRESENT but whose bytes cannot be read is not absent and is
+--   not corrupt — an @EACCES@, an @EIO@, or a file something else holds
+--   open answers neither question this check asks. Reporting \"no
+--   foreign data\" for it handed the rest of the transaction a verdict
+--   the check had never earned, and the transaction then destroyed
+--   exactly that file: an unreadable AUTHORITATIVE generation is
+--   classified 'GenerationCorrupt' by the loader's own decoder, making
+--   the topology 'AuthoritativeRecovering', which renames the candidate
+--   straight over it (a POSIX rename needs write permission on the
+--   DIRECTORY, not read permission on the file, so a read refusal never
+--   stopped it); an unreadable @.prev@ beside an intact authoritative
+--   file is staged aside by 'stageOldPrevious' and removed by
+--   'cleanupAfterPublish'. So an unreadable generation now refuses the
+--   whole publish ('PreflightUnreadable' → 'PhaseExistingGenerationRead'),
+--   before any candidate file exists, naming the offending path and
+--   carrying the underlying I\/O error. Bytes that READ fine but do not
+--   structurally decode are unchanged by this: they still report no
+--   foreign ids (the paragraph above), and #1203's corrupt-versus-
+--   incompatible topology split still owns what happens to them.
+existingGenerationPreflight
+    ∷ (FilePath → IO BS.ByteString)
+    → FilePath
+    → HS.HashSet Text
+    → IO (Either PreflightRefusal ())
+existingGenerationPreflight readGeneration dir luaKnownNames = do
     authIds ← foreignIdsIn (dir </> authoritativeFileName)
     prevIds ← foreignIdsIn (dir </> previousGenerationFileName)
-    case authIds ⧺ prevIds of
-        [] → pure (Right ())
-        ids → pure (Left
-            ("existing generation carries data this build does not \
-             \recognize (" <> T.intercalate ", " (map cidText (L.nub ids))
-             <> ") -- refusing to overwrite it; save to a different name \
-                \to keep both"))
+    pure $ do
+        auth ← authIds
+        prev ← prevIds
+        case auth ⧺ prev of
+            [] → Right ()
+            ids → Left (PreflightForeignData
+                ("existing generation carries data this build does not \
+                 \recognize (" <> T.intercalate ", " (map cidText (L.nub ids))
+                 <> ") -- refusing to overwrite it; save to a different name \
+                    \to keep both"))
   where
     cidText (ComponentId t) = t
     foreignIdsIn path = do
         exists ← doesFileExist path
-        if not exists then pure [] else do
-            readResult ← try (BS.readFile path)
+        if not exists then pure (Right []) else do
+            readResult ← try (readGeneration path)
             case readResult of
-                Left (_ ∷ IOException) → pure []
-                Right bytes → pure (foreignOptionalComponentIds luaKnownNames bytes)
+                -- A file that vanished between the existence check above
+                -- and this read really IS absent (requirement 4's first
+                -- publish / previous-only recovery, losing a race with
+                -- an external remover) -- never the \"present but
+                -- unreadable\" case this refuses on.
+                Left (e ∷ IOException)
+                    | isDoesNotExistError e → pure (Right [])
+                    | otherwise → pure (Left (PreflightUnreadable path (showT e)))
+                Right bytes →
+                    pure (Right (foreignOptionalComponentIds luaKnownNames bytes))
 
 writeValidateAndPublish
     ∷ FilePath → Text → SaveMetadata → BS.ByteString
