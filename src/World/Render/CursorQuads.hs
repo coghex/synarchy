@@ -10,7 +10,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, buildingManagerRef, loggerRef)
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.RenderHandoff
   (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.RenderView
@@ -60,10 +60,10 @@ import World.Render.SpriteDepth (frameFrontWallLift, liftSpriteSortKey)
 maxMinePreviewSide ∷ Int
 maxMinePreviewSide = 64
 
-renderWorldCursorQuads ∷ EngineEnv → WorldPageId → WorldState → Float
-                       → IO (V.Vector SortableQuad)
-renderWorldCursorQuads env pageId worldState tileAlpha =
-    snd ⊚ renderWorldCursorQuadsScanned env pageId worldState tileAlpha
+renderWorldCursorQuads ∷ EngineEnv → BuildingManager → WorldPageId
+                       → WorldState → Float → IO (V.Vector SortableQuad)
+renderWorldCursorQuads env bm pageId worldState tileAlpha =
+    snd ⊚ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha
 
 -- | 'renderWorldCursorQuads' with the scene-assembly telemetry (#1921)
 --   this pass contributes: the marker-tile CANDIDATES it evaluated,
@@ -86,9 +86,9 @@ renderWorldCursorQuads env pageId worldState tileAlpha =
 --   candidate may still emit two quads (a background and a foreground),
 --   so no @emitted <= scanned@ relation holds here.
 renderWorldCursorQuadsScanned
-    ∷ EngineEnv → WorldPageId → WorldState → Float
+    ∷ EngineEnv → BuildingManager → WorldPageId → WorldState → Float
     → IO (Int, V.Vector SortableQuad)
-renderWorldCursorQuadsScanned env pageId worldState tileAlpha = do
+renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
     let rv = toRenderViewCapability env
     camera   ← readIORef (rvCameraRef rv)
     tileData ← readIORef (wsTilesRef worldState)
@@ -328,7 +328,6 @@ renderWorldCursorQuadsScanned env pageId worldState tileAlpha = do
     -- since #1845 a BUILDING renders its OWN art too, so no category
     -- placeholder is left in this pass at all.
     constructDesigns ← readIORef (wsConstructDesignationsRef worldState)
-    bm ← readIORef (buildingManagerRef env)
 
     -- A designation naming a def missing from bmDefs (a broken save or
     -- mod) draws NOTHING (#1845 requirement 7). #807's anchor-tile

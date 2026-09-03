@@ -30,8 +30,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import Data.IORef (readIORef)
-import Engine.Core.State (EngineEnv, buildingGhostRef, buildingManagerRef
-   )
+import Engine.Core.State (EngineEnv, buildingGhostRef)
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Asset.Handle (TextureHandle(..), toInt)
@@ -51,10 +50,11 @@ import Building.Visual
 -- | Like 'Unit.Render.renderUnitQuads', one sweep over every visible
 --   page's buildings, so each instance's quad takes ITS OWN page's
 --   solar slot (#1869).
-renderBuildingQuads ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int
-                    → Int → Float → IO (V.Vector SortableQuad)
-renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha =
-    snd ⊚ renderBuildingQuadsScanned env solarSlotOf facing zSlice
+renderBuildingQuads ∷ EngineEnv → BuildingManager → (WorldPageId → Word32)
+                    → CameraFacing → Int → Int → Float
+                    → IO (V.Vector SortableQuad)
+renderBuildingQuads env bm solarSlotOf facing zSlice effDepth tileAlpha =
+    snd ⊚ renderBuildingQuadsScanned env bm solarSlotOf facing zSlice
                                      effDepth tileAlpha
 
 -- | 'renderBuildingQuads' with the scene-assembly telemetry (#1921)
@@ -66,10 +66,9 @@ renderBuildingQuads env solarSlotOf facing zSlice effDepth tileAlpha =
 --   map is what the pass walks. It stays non-zero under GPU-free
 --   headless execution, where emitted is legitimately zero.
 renderBuildingQuadsScanned
-    ∷ EngineEnv → (WorldPageId → Word32) → CameraFacing → Int
-    → Int → Float → IO (Int, V.Vector SortableQuad)
-renderBuildingQuadsScanned env solarSlotOf facing zSlice effDepth tileAlpha = do
-    bm ← readIORef (buildingManagerRef env)
+    ∷ EngineEnv → BuildingManager → (WorldPageId → Word32) → CameraFacing
+    → Int → Int → Float → IO (Int, V.Vector SortableQuad)
+renderBuildingQuadsScanned env bm solarSlotOf facing zSlice effDepth tileAlpha = do
     -- Render only the visible worlds' buildings — buildings are
     -- world-scoped so a hidden world's must not draw here (#76).
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
@@ -204,10 +203,11 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
 --   The ghost has no page of its own — it previews a placement on
 --   whichever page is active — so it takes the ACTIVE page's solar slot
 --   (#1869), which is the page the placement will land on.
-renderGhostQuad ∷ EngineEnv → Word32 → CameraFacing → Int → Int → Float
-                → IO (V.Vector SortableQuad)
-renderGhostQuad env solarSlot facing zSlice effDepth tileAlpha =
-    snd ⊚ renderGhostQuadScanned env solarSlot facing zSlice effDepth tileAlpha
+renderGhostQuad ∷ EngineEnv → BuildingManager → Word32 → CameraFacing → Int
+                → Int → Float → IO (V.Vector SortableQuad)
+renderGhostQuad env bm solarSlot facing zSlice effDepth tileAlpha =
+    snd ⊚ renderGhostQuadScanned env bm solarSlot facing zSlice effDepth
+                                 tileAlpha
 
 -- | 'renderGhostQuad' with the scene-assembly telemetry (#1921) this
 --   pass contributes: the optional ghost CANDIDATE — zero or one —
@@ -217,14 +217,14 @@ renderGhostQuad env solarSlot facing zSlice effDepth tileAlpha =
 --   definition lookup and the texture-system check reject it, since
 --   those rejections are exactly what an emitted count of zero beside
 --   a scanned count of one records.
-renderGhostQuadScanned ∷ EngineEnv → Word32 → CameraFacing → Int → Int → Float
+renderGhostQuadScanned ∷ EngineEnv → BuildingManager → Word32 → CameraFacing
+                       → Int → Int → Float
                        → IO (Int, V.Vector SortableQuad)
-renderGhostQuadScanned env solarSlot facing zSlice effDepth tileAlpha = do
+renderGhostQuadScanned env bm solarSlot facing zSlice effDepth tileAlpha = do
     mGhost ← readIORef (buildingGhostRef env)
     case mGhost of
         Nothing → return (0, V.empty)
-        Just ghost → do
-            bm ← readIORef (buildingManagerRef env)
+        Just ghost →
             case HM.lookup (bgDefName ghost) (bmDefs bm) of
                 Nothing → return (1, V.empty)
                 Just def → do

@@ -621,6 +621,42 @@ renderSpec = describe "the committed designation render pass" $ do
         quadWorldUV drawn `shouldBe` quadWorldUV raw
         sqTexture drawn `shouldBe` sqTexture raw
 
+    it "makes the yield frame-atomic against a mid-frame stake" $ \env → do
+        -- 'World.Render.updateWorldTiles' assembles the cursor quads and
+        -- the building quads in two passes, and the UNIT thread can
+        -- apply a queued 'BuildingSpawn' between them. Reading the
+        -- manager separately meant the cursor pass could see no stake
+        -- and draw the designation while the building pass saw the new
+        -- instance and drew its own 60 % ghost — two overlapping 60 %
+        -- quads in ONE published frame, which is exactly what the
+        -- hand-off must never look like.
+        --
+        -- Both passes now take the frame's ONE snapshot, so this pass
+        -- answers from the value it was handed and not from whatever
+        -- the unit thread has done since.
+        ws ← scene env
+        plan ws workDef
+        before ← readIORef (buildingManagerRef env)
+        -- The interleaved spawn lands NOW, after the frame's snapshot.
+        stake env workDef
+        after ← readIORef (buildingManagerRef env)
+        -- Against the frame's own snapshot the designation still draws —
+        -- and so the building pass, reading that same snapshot, has no
+        -- instance to draw. Exactly one 60 % ghost.
+        (_, mid) ← cursorPassWith env before ws
+        V.length mid `shouldBe` 1
+        stakedGhostFrom before `shouldSatisfy` isNothing
+        -- The NEXT frame's snapshot has the stake, so the designation
+        -- yields and the instance draws instead. Exactly one again.
+        (_, next) ← cursorPassWith env after ws
+        V.length next `shouldBe` 0
+        stakedGhostFrom after `shouldSatisfy` isJust
+        -- The two never both draw, whichever snapshot a frame took.
+        forM_ [before, after] $ \snap → do
+            (_, qs) ← cursorPassWith env snap ws
+            let placed = maybe 0 (const 1) (stakedGhostFrom snap) ∷ Int
+            V.length qs + placed `shouldBe` 1
+
     it "leaves a structure designation to its own ghost pass" $ \env → do
         ws ← scene env
         writeIORef (wsConstructDesignationsRef ws) $ HM.singleton anchorTile
@@ -1065,6 +1101,17 @@ raiseTerrain ws z = do
     writeIORef (wsTilesRef ws) wtd
         { wtdChunks = HM.map bump (wtdChunks wtd) }
 
+-- | What 'Building.Render's placed pass would emit for the fixture's
+--   anchor from one manager snapshot. The scanned entry point emits
+--   nothing headlessly (no texture system), so this is 'buildingToQuad'
+--   — the very body it calls — over the instances that snapshot holds.
+stakedGhostFrom ∷ BuildingManager → Maybe SortableQuad
+stakedGhostFrom bm = case HM.elems (bmInstances bm) of
+    []         → Nothing
+    (inst : _) → buildingToQuad (const 0) noFaceMapVertexId facing zSlice
+                     effDepth tileAlpha False inst
+                     (HM.lookup (biDefName inst) (bmDefs bm)) 0 texSizes
+
 plan ∷ WorldState → BuildingDef → IO ()
 plan ws def = writeIORef (wsConstructDesignationsRef ws) $
     HM.singleton anchorTile
@@ -1078,9 +1125,21 @@ stake env def = do
         { bmInstances = HM.singleton (BuildingId 1)
             (instanceOf def (fst anchorTile) (snd anchorTile) anchorZ 0) }
 
+-- | The cursor pass over the LIVE manager — what a frame does when it
+--   takes its snapshot at this instant.
 cursorPass ∷ EngineEnv → WorldState → IO (Int, V.Vector SortableQuad)
-cursorPass env ws =
-    renderWorldCursorQuadsScanned env fixturePage ws tileAlpha
+cursorPass env ws = do
+    bm ← readIORef (buildingManagerRef env)
+    cursorPassWith env bm ws
+
+-- | The cursor pass against a GIVEN snapshot, which is how
+--   'World.Render.updateWorldTiles' calls it: one manager value serves
+--   the whole frame, so the designation's yield and the staked
+--   instance's own quad cannot disagree about whether the stake exists.
+cursorPassWith ∷ EngineEnv → BuildingManager → WorldState
+               → IO (Int, V.Vector SortableQuad)
+cursorPassWith env bm ws =
+    renderWorldCursorQuadsScanned env bm fixturePage ws tileAlpha
 
 spec ∷ Spec
 spec = describe "building ghost" $ do

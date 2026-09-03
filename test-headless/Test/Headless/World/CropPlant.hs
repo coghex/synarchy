@@ -809,7 +809,8 @@ markerQuads env ws = do
     writeIORef (wsCursorRef ws) emptyCursorState
         { plantDesignTexture = Just plantMarkerTexture
         , mineDesignTexture  = Just mineMarkerTexture }
-    renderWorldCursorQuads env fixturePage ws 1.0
+    readIORef (buildingManagerRef env)
+        >>= \bm → renderWorldCursorQuads env bm fixturePage ws 1.0
 
 quadFaceMaps ∷ SortableQuad → [Float]
 quadFaceMaps quad = map faceMapId [sqV0 quad, sqV1 quad, sqV2 quad, sqV3 quad]
