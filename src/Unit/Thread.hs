@@ -15,15 +15,15 @@ import Engine.Core.Capability.UnitCombat
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (IORef, readIORef, writeIORef, newIORef, atomicModifyIORef'
+import Data.IORef (IORef, readIORef, newIORef, atomicModifyIORef'
                   , modifyIORef')
 import Control.Concurrent (threadDelay)
 import Engine.Core.Clock (monotonicSeconds, sampleElapsed, sanitiseElapsed)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
-    , startWorkerThread)
+    , startWorkerThread, workerCrashStderrSink)
 import Engine.Core.State
-    (EngineEnv, EngineLifecycle(..), lifecycleRef, loggerRef, saveBarrierRef)
+    (EngineEnv, lifecycleRef, loggerRef, saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownersGated)
 import Engine.Core.Log (logDebug, logError, LogCategory(..))
 import Unit.Types
@@ -64,6 +64,8 @@ startUnitThread env = startWorkerThread WorkerSpec
     { wsName        = "Unit"
     , wsLoggerRef   = loggerRef env
     , wsCategory    = CatThread
+    , wsLifecycleRef = lifecycleRef env
+    , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting unit thread..."
     , wsStartedMsg  = Just "Unit thread started"
     , wsFailMsg     = "Failed starting unit thread: "
@@ -82,7 +84,9 @@ startUnitThread env = startWorkerThread WorkerSpec
     , wsOnCrash     = \_ e → do
         logger ← readIORef (loggerRef env)
         logError logger CatThread $ "Unit thread crashed: " <> tshow e
-        writeIORef (lifecycleRef env) CleaningUp
+      -- The lifecycle write this line used to precede belongs to the
+      -- shared loop now, ahead of the log (#2283).
+    , wsOnCrashCleanup = \_ _ → pure ()
     }
 
 -- | One unit tick against the given seams (#2204). The simulation @dt@

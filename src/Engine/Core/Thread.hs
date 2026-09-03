@@ -26,6 +26,48 @@
 --   lets @Test.Headless.Core.WorkerLifecycle@ drive this module with
 --   a bare logger and no engine at all.
 --
+--   == Fail-stop: the decision first, the reporting after (#2283)
+--
+--   A synchronous tick failure ends the worker, and the engine must
+--   shut down with it. That DECISION — 'requestEngineCleanup' on
+--   'wsLifecycleRef' — is made here, by this module, as the first thing
+--   the crash branch does. It used to be the LAST line of each of the
+--   six 'wsOnCrash' callbacks, after their crash log, which made the
+--   whole engine's fail-stop conditional on a log line landing: the
+--   logger writes to a handle ('Engine.Core.Log.Format'), a headless or
+--   graphical boot points that handle at stdout, and a reader that
+--   closes the pipe turns the next log call into a @resource vanished@
+--   throw. That throw escaped the tick guard, ended the thread with
+--   only 'tsDone' filled — which no loop reads while the engine runs —
+--   and left the engine in 'EngineRunning' with a dead worker.
+--
+--   So the ordering is inverted and enforced in one place: the
+--   transition is written before any callback runs, and neither
+--   callback can skip, delay or reorder it. Both callbacks then run
+--   under their own guard —
+--
+--   * 'wsOnCrash' is the worker's crash DIAGNOSTIC — the same line, at
+--     the same level and category, each worker always logged;
+--   * 'wsOnCrashCleanup' is ordered cleanup that must happen even when
+--     the diagnostic threw (the Lua worker's console stop, queue drain
+--     and 'Lua.close', #2170's order).
+--
+--   — and a failure of either is reported through 'wsCrashSink', which
+--   is deliberately NOT the engine logger: in the case that matters the
+--   logger is precisely what threw. 'workerCrashStderrSink' is what
+--   production passes, and it swallows its own failure too, so nothing
+--   from this branch can escape the loop. The pattern — decide first,
+--   then report best-effort through an injected sink — is
+--   'Engine.Scripting.Lua.DebugServer.handleDebugListenerLossWith''s,
+--   for the same reason.
+--
+--   Monotonicity is 'requestEngineCleanup''s: 'EngineStarting' and
+--   'EngineRunning' advance, 'CleaningUp' stays, and 'EngineStopped' is
+--   never rewound. This is not the lifecycle's only writer —
+--   'Engine.Loop.Mode', @App.Dump@ and the Lua console's listener-loss
+--   hook each still write it on their own paths — it is the only writer
+--   of THIS transition, the one a synchronous worker crash asks for.
+--
 --   == Shutdown: graceful wait, forced kill, second join (#2165)
 --
 --   'shutdownThread' is a JOIN, on every path. It writes the stop
@@ -93,13 +135,16 @@ import Control.Concurrent
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, readMVar)
 import Control.Exception
     ( SomeAsyncException, SomeException, catch, finally, fromException
-    , throwIO, uninterruptibleMask_ )
+    , throwIO, try, uninterruptibleMask_ )
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Void (Void, absurd)
+import System.IO (hFlush, hPutStrLn, stderr)
+import System.IO.Error (tryIOError)
 import System.Timeout (timeout)
 import qualified Data.Text as T
 import Engine.Core.Error.Exception
     (EngineException(..), ExceptionType(..), SystemError(..), mkErrorContext)
+import Engine.Core.Lifecycle (EngineLifecycle, requestEngineCleanup)
 import Engine.Core.Log
     (LogCategory, LoggerState, logError, logInfo, logWarn)
 
@@ -173,6 +218,21 @@ data WorkerSpec ε σ = WorkerSpec
       -- ^ Read once, before the guarded startup, so the failure line can
       --   be logged whatever the startup action did.
     , wsCategory    ∷ LogCategory
+    , wsLifecycleRef ∷ IORef EngineLifecycle
+      -- ^ The engine lifecycle this worker's fail-stop transitions
+      --   (#2283). The shared loop writes it ITSELF, through
+      --   'requestEngineCleanup', before either crash callback runs —
+      --   the callbacks are handed no say in it. Held as the bare
+      --   'IORef' rather than reached through
+      --   'Engine.Core.State.EngineEnv' so this module stays
+      --   engine-free and a spec can supply one with 'newIORef'.
+    , wsCrashSink   ∷ T.Text → IO ()
+      -- ^ Where a crash callback's OWN failure is reported (#2283).
+      --   Deliberately not the engine logger: the failure this reports
+      --   is, in the case that motivated it, the logger having thrown.
+      --   Production passes 'workerCrashStderrSink'; the loop runs it
+      --   under a guard as well, so a sink that also throws costs
+      --   nothing but the line.
     , wsStartingMsg ∷ T.Text
       -- ^ Logged at info level as the first thing inside the guard.
     , wsStartedMsg  ∷ Maybe T.Text
@@ -198,10 +258,19 @@ data WorkerSpec ε σ = WorkerSpec
       --   by an asynchronous exception (#2165), so a force-killed
       --   worker gets the same cleanup, once.
     , wsOnCrash     ∷ σ → SomeException → IO ()
-      -- ^ Runs when a tick throws a SYNCHRONOUS exception — anything
-      --   that does not downcast to 'SomeAsyncException'. Every worker
-      --   is fail-stop, so the loop always ends afterwards; the callback
-      --   owns only the reporting and cleanup, not the decision.
+      -- ^ The worker's crash DIAGNOSTIC, run when a tick throws a
+      --   SYNCHRONOUS exception — anything that does not downcast to
+      --   'SomeAsyncException'. Every worker is fail-stop, so the loop
+      --   always ends afterwards; the callback owns only the reporting,
+      --   never the decision, which the shared loop has already written
+      --   by the time this runs (#2283, module haddock). Guarded: a
+      --   throw here still lets 'wsOnCrashCleanup' run.
+    , wsOnCrashCleanup ∷ σ → SomeException → IO ()
+      -- ^ Ordered crash cleanup, run after 'wsOnCrash' under its own
+      --   guard, so a diagnostic that threw cannot skip it (#2283).
+      --   Only the Lua worker has one — stop the console, drain the
+      --   debug queue, close the Lua state, in that order (#2170); the
+      --   other five leave it inert.
     }
 
 -- | Startup for the five workers that cannot refuse.
@@ -272,6 +341,24 @@ logStartFailure spec logger msg = case wsFailLevel spec of
     WorkerFailError → logError logger (wsCategory spec) msg
     WorkerFailWarn  → logWarn  logger (wsCategory spec) msg
 
+-- | The 'wsCrashSink' every production worker passes: one stderr line,
+--   itself best-effort.
+--
+--   Not the engine logger, and not routed through it: this exists for
+--   the crash whose reporting failed, and the reporting that fails is
+--   the logger's (#2283). Mirrors
+--   'Engine.Scripting.Lua.DebugServer.putStderrLine', which reports
+--   boot cleanup on the same channel for the same reason.
+workerCrashStderrSink ∷ T.Text → IO ()
+workerCrashStderrSink t = void ∘ tryIOError $
+    hPutStrLn stderr (T.unpack t) ≫ hFlush stderr
+
+-- | 'try' at 'SomeException', so a best-effort step's failure is data
+--   rather than an escape. Mirrors
+--   'Engine.Scripting.Lua.DebugServer.tryAnyIO'.
+tryAny ∷ IO α → IO (Either SomeException α)
+tryAny = try
+
 -- | The shared loop: control-state dispatch, paused polling, and the
 --   guarded running tick.
 --
@@ -305,7 +392,7 @@ workerLoop spec stateRef unmask = go
                         -- function wrapper use.
                         case fromException e ∷ Maybe SomeAsyncException of
                             Just _  → forcedTermination seed e
-                            Nothing → wsOnCrash spec seed e
+                            Nothing → failStop seed e
                         pure Nothing
                     )
                 case next of
@@ -320,6 +407,24 @@ workerLoop spec stateRef unmask = go
         logWarn logger (wsCategory spec) $
             wsName spec <> " thread forcibly terminated: " <> tshow e
         wsOnStop spec seed
+    -- A synchronous tick failure. The DECISION first — see the module
+    -- haddock's fail-stop section — then the worker's own diagnostic
+    -- and its ordered cleanup, each under its own guard so neither can
+    -- prevent the other or escape the loop.
+    failStop seed e = do
+        _ ← requestEngineCleanup (wsLifecycleRef spec)
+        bestEffort "crash report"  (wsOnCrash spec seed e)
+        bestEffort "crash cleanup" (wsOnCrashCleanup spec seed e)
+    -- Never throws: the guarded step's failure goes to the sink, and
+    -- the sink's own failure goes nowhere. There is no channel left to
+    -- report a broken reporter on.
+    bestEffort what act = do
+        outcome ← tryAny act
+        case outcome of
+            Right () → pure ()
+            Left e' → void ∘ tryAny ∘ wsCrashSink spec $
+                wsName spec <> " thread " <> what
+                <> " itself failed: " <> tshow e'
 
 -- | Signal stop and block until the thread's loop actually exits, under
 --   'productionShutdownTimeouts': 10 s to stop on its own, then a

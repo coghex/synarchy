@@ -2993,13 +2993,48 @@ may be derived from it.
    verb `flora.register` is nonfatal by contrast: a collision returns
    `nil`, warns, and mutates nothing.
 
+4. **A save names its species; only a live session numbers them
+   (#2243).** The three durable references — a planted-flora edit
+   (`WePlaceFloraRefD`), a crop plot's `cpiSpecies`, a plant
+   designation's `ptiCrop` — carry a
+   `World.Flora.Reference.FloraRef`, and no code writes a `FloraId` to
+   a save. The catalog is the only thing that relates a name to a
+   handle, and it is read at exactly TWO boundaries:
+   `World.Thread.Command.Save.WriteWorld` names every live handle at
+   capture (`nameFloraReferences`), and `World.Load.Stage.stageSession`
+   resolves every name back (`resolveFloraReferences`) for the whole
+   session before any page's live refs are written. Between them the
+   value is a name — in the `SessionSnapshot`, in the `SaveData` bridge,
+   and on disk. Each boundary refuses rather than guesses: a live handle
+   this build cannot name fails the SAVE before publication, and
+   `missingFloraReferences` fails the LOAD, naming the species, the
+   site, the page and the tile — over all three sites, plant
+   designations included, which the pre-#2243 check never walked at all.
+   Component migrations stay pure (`atVersion` sees only the decoded
+   payload), which is exactly why the resolution lives at those
+   boundaries and not in the migration.
+
 **Legacy numeric references are reinterpreted once, on purpose.**
 Canonical registration renumbers nearly the whole shipped catalog, so a
 `FloraId` persisted in a `WorldEditDTO`, `CropPlotDTO` or
 `PlantDesignationDTO` before #2241 generally names a different species
 afterwards. Accepted, not mitigated: `currentSaveVersion` is a worldgen
 bookkeeping marker with no on-disk compatibility role, so its bump
-neither migrates nor rejects anything. Name-based persistence is #2243.
+neither migrates nor rejects anything.
+
+#2243 applies that reinterpretation one last time and then closes the
+hole. A `world-edits` v1/v2 or `world-activity` v1-v5 payload — and the
+B1 `session` v90 tree, which reshapes its numeric flora fields through
+the same migrations — carries its ordinals forward as
+`FloraByLegacyId`, and the load boundary resolves them by EXISTENCE
+against the catalog of the build that loads them: unresolvable is a
+refusal naming the NUMBER, resolvable is accepted as whatever species
+that catalog happens to number there, **which may not be the species
+that was planted**. That is the documented limitation (D-2), not a
+guard — the catalog that minted the number was never saved, and
+refusing every pre-name save would strand all of them. The very next
+save of a loaded session writes names, so each save crosses this
+boundary at most once.
 
 **Chop reconciliation is bounded by ownership.** `admitChunkFlora` drops
 every durable chop designation whose canonical tile the admitted chunk
@@ -3019,7 +3054,14 @@ owes the save-compat gate); `--match "Startup"` (the two-order loader
 proof in `Startup asset logging`, the shipped-duplicate readiness
 failure in `Startup readiness`); `--match "Asset.FloraContent"`
 (whole-file refusal atomicity, `flora.register`'s nonfatal refusal);
-`--match "Chop authority"` (the three-designation reconciliation case).
+`--match "Chop authority"` (the three-designation reconciliation case);
+and for the persistence rule, `--match "flora species references"` (each
+site refused by name, a legacy ordinal refused by number, the
+catalog-reorder regression, and the save-side refusal), `--match
+"persistence contract"` (all three sites read back by name after a real
+round trip) and `--match "flora species names across baselines"` (the
+tracked `x1-flora-species-names` fixture really carries all three, and a
+pre-#2243 baseline still decodes as ordinals).
 Flora stays outside `tools/world_check.py`'s baselines, so no terrain
 recapture is owed.
 

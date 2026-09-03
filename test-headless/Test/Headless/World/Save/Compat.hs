@@ -53,3 +53,7 @@ spec = do
     Baselines.movementHazardSpec
     Legacy.unknownOptionalDataSpec
     Legacy.b2FallbackSpec
+    -- Appended (#2243) rather than interleaved: every group above keeps
+    -- the exact item path it has always had, which is what the ordering
+    -- note in this module's haddock exists to protect.
+    Baselines.floraSpeciesNameSpec

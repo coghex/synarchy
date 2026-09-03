@@ -33,7 +33,7 @@ import World.Generate.Coordinates
 import World.Mine.Types (MineDesignation(..))
 import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Till.Types (TillDesignation(..))
-import World.Plant.Types (PlantDesignation(..))
+import World.Plant.Types (PlantDesignationOf(..))
 import World.Construct.Extent (structureDragExtent)
 import World.Construct.Plan (PlanWorld(..))
 import Structure.Render (translateQuad)

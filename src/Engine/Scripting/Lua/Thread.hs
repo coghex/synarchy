@@ -37,7 +37,7 @@ import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State
-    (EngineEnv(..), EngineLifecycle(..), requestEngineCleanup)
+    (EngineEnv(..), requestEngineCleanup)
 import Engine.Core.Types (EngineConfig(..))
 import Engine.Save.Barrier (SaveOwner(..), ownerGated)
 import Engine.Input.Types (InputState)
@@ -45,7 +45,7 @@ import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
-import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (tryPutMVar)
 import Control.Concurrent.STM.TQueue (TQueue, newTQueue)
@@ -69,6 +69,8 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
     { wsName        = "Lua"
     , wsLoggerRef   = loggerRef env
     , wsCategory    = CatLua
+    , wsLifecycleRef = lifecycleRef env
+    , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting Lua scripting thread..."
       -- This worker has never logged a post-fork line.
     , wsStartedMsg  = Nothing
@@ -93,16 +95,23 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
         -- crash handler's drain.
         drainDebugQueue (llsDebugQueue lls) "engine shutting down"
         Lua.close (lbsLuaState (llsBackend lls))
-    , wsOnCrash     = \lls e → do
+      -- The diagnostic ALONE (#2283). It is deliberately not the same
+      -- callback as the cleanup below: this line goes through the
+      -- engine logger, which writes to a handle a dead reader can
+      -- break, and a throw here used to abandon the console stop, the
+      -- queue drain and the Lua close along with the lifecycle write.
+      -- The lifecycle write has moved into the shared loop, ahead of
+      -- this; the cleanup is its own guarded phase after it.
+    , wsOnCrash     = \_ e → do
         logger ← readIORef (loggerRef env)
         logWarn logger CatLua $ "Lua thread crashed: " <> tshow e
+    , wsOnCrashCleanup = \lls e → do
         -- Same ordering as the clean stop above (#2170).
         stopDebugConsole (llsConsole lls)
         -- Drain pending debug commands so clients don't hang
         drainDebugQueue (llsDebugQueue lls) $
             "ERROR: Lua thread crashed: " <> tshow e
         Lua.close (lbsLuaState (llsBackend lls))
-        writeIORef (lifecycleRef env) CleaningUp
     }
 
 -- | What the Lua startup hands to every later tick: the backend state

@@ -226,8 +226,13 @@ materialPropsFromDef def =
 --   @engine.loadSave@ with no prior @world.init@ in the SAME process
 --   would see an entirely empty registry (every id but air reporting
 --   as "unknown") when validating a save's material references.
---   Idempotent, like the population pass it mirrors — safe to call
---   even when a live world has already populated the registry.
+--   Builds a registry VALUE from disk and never touches the live ref,
+--   so it is idempotent and safe to call even when a live world has
+--   already populated the registry. Both callers then treat what it
+--   returns as the BASE and overlay the live registrations on top of it
+--   with 'World.Material.mergeMaterialRegistry' — the load path since
+--   #763, world init since #2278 — so an id registered at runtime from
+--   a file outside @dir@ is never lost to a rebuild.
 loadPopulatedMaterialRegistry ∷ LoggerState → FilePath → IO MaterialRegistry
 loadPopulatedMaterialRegistry logger dir = do
     matDefs ← loadMaterialDirectory logger dir

@@ -121,8 +121,11 @@ module World.Save.Component.Page
     , WorldPagesDTOv9(..)
     , PageEditsDTOv1(..)
     , WorldEditsDTOv1(..)
+    , PageEditsDTOv2(..)
+    , WorldEditsDTOv2(..)
     , WorldPages(..)
     , migrateWorldEditsV1
+    , migrateWorldEditsV2
     , migrateWorldPagesV1
     , migrateWorldPagesV2
     , migrateWorldPagesV3
@@ -141,6 +144,8 @@ module World.Save.Component.Page
     , WorldActivityDTOv3(..)
     , PageActivityDTOv4(..)
     , WorldActivityDTOv4(..)
+    , PageActivityDTOv5(..)
+    , WorldActivityDTOv5(..)
     , WorldActivityDTOv2(..)
     , migrateWorldActivityV2
       -- * Frozen leaf DTOs (requirement 4)
@@ -163,6 +168,7 @@ module World.Save.Component.Page
     , toWorldIdentityDTOv2
     , WorldEditDTO(..)
     , WorldEditDTOv1(..)
+    , WorldEditDTOv2(..)
     , MineDesignationDTO(..)
     , StructurePieceDTO(..)
     , ConstructTargetDTO(..)
@@ -176,7 +182,9 @@ module World.Save.Component.Page
     , FloraHarvestsDTOv1
     , TillDesignationDTO(..)
     , PlantDesignationDTO(..)
+    , PlantDesignationDTOv1(..)
     , CropPlotDTO(..)
+    , CropPlotDTOv1(..)
     , ItemStorageDTO(..)
     , ItemInstanceDTO(..)
     , ItemInstanceDTOv1(..)
@@ -262,6 +270,7 @@ import World.Edit.Types (WorldEdit(..), WorldEdits, emptyWorldEdits)
 import World.Fluid.Types (FluidType)
 import World.Material.Id (MaterialId)
 import World.Flora.Types (FloraId)
+import World.Flora.Reference (FloraRef(..))
 import World.Mine.Types (MineDesignation(..), MineDesignations)
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructTarget(..), StructurePiece(..)
@@ -272,16 +281,19 @@ import World.Construct.Attempt
     , firstConstructAttemptId, takeConstructAttempts )
 import World.Construct.Receipt (ConstructPayment(..))
 import World.Flora.Identity
-    ( FloraInstanceId, floraInstanceIdToLua
+    ( FloraInstanceId, floraInstanceIdToLua, floraInstanceIdNone
     , isFloraInstanceIdNone, isPlantedFloraInstanceId
     , firstPlantedFloraCursor, nextPlantedFloraCursor
     , plantedFloraCursorAbove )
 import World.Till.Types (TillDesignation(..), TillDesignations)
-import World.Plant.Types (PlantDesignation(..), PlantDesignations)
+import World.Plant.Types
+    ( PlantDesignationOf(..), SavedPlantDesignation
+    , SavedPlantDesignations )
 import World.Spoil.Types (SpoilPile(..), SpoilPiles, emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests,
                             emptyPendingFloraHarvests)
-import World.Flora.CropPlot (CropPlot(..), CropPlots, emptyCropPlots)
+import World.Flora.CropPlot
+    ( CropPlotOf(..), SavedCropPlot, SavedCropPlots )
 import Item.Ground (GroundItem(..), GroundItems(..), emptyGroundItems)
 import Item.Types (ItemInstance(..), ItemStorage(..))
 import World.Save.Types
@@ -423,6 +435,38 @@ data WorldEditDTO
       -- trailing constructor leaves all eleven older tags meaning exactly
       -- what they meant (tools/enum_append_only_audit.py).
     | WePlaceFloraWithIdD !Int !Int !FloraId !Int !Float !FloraInstanceId
+      -- #2243: appended at the END on exactly the same terms. The
+      -- species is now a durable 'FloraRef' — an authored name — so the
+      -- two numeric constructors above became decode-only the day this
+      -- one landed, and @world-edits@ v3 payloads carry only this tag
+      -- for a planted crop. Retyping @WePlaceFloraWithIdD@'s 'FloraId'
+      -- slot in place would have reinterpreted tag 11 in every shipped
+      -- v2 log (tools/enum_append_only_audit.py records each
+      -- constructor's payload, not just its name).
+    | WePlaceFloraRefD !Int !Int !FloraRef !Int !Float !FloraInstanceId
+    deriving (Show, Eq, Generic, Serialize)
+
+-- | The FROZEN pre-#2243 edit sum (@world-edits@ v2), preserved
+--   verbatim for decode-only backward compatibility. Byte-compatible
+--   with 'WorldEditDTO' for every tag it declares — an append cannot
+--   move an earlier one — but frozen anyway, on the discipline
+--   'WorldEditDTOv1' established: a LATER append to the live sum then
+--   cannot reach a v2 payload, and the shape a shipped v2 log was
+--   written with stays readable in one place instead of being inferred
+--   from the live type's history.
+data WorldEditDTOv2
+    = WeDeleteTileDv2 !Int !Int
+    | WeSetFluidTileDv2 !Int !Int !FluidType
+    | WeAddTileDv2 !Int !Int !MaterialId
+    | WeSetSlopeDv2 !Int !Int !Int !Word8
+    | WeSetCellDv2 !Int !Int !Int !MaterialId
+    | WeSetStructureDv2 !Int !Int !Word8 !Int !Int !Int
+    | WeClearStructureDv2 !Int !Int !Word8
+    | WeSetVegDv2 !Int !Int !Int !Word8
+    | WePlaceFloraDv2 !Int !Int !FloraId !Int !Float
+    | WeSetFluidSnapshotDv2 !Int !Int !FluidType !Int
+    | WeClearFluidSnapshotDv2 !Int !Int
+    | WePlaceFloraWithIdDv2 !Int !Int !FloraId !Int !Float !FloraInstanceId
     deriving (Show, Eq, Generic, Serialize)
 
 -- | The FROZEN pre-#1854 edit sum, preserved verbatim for decode-only
@@ -457,19 +501,52 @@ data WorldEditDTOv1
 --   the identity-bearing constructor once the page's own world size is
 --   in hand (see its note) — the same "repair lives in ONE place, at
 --   apply time" rule #1175's canonical-frame repair follows.
-migrateWorldEditDTOv1 ∷ WorldEditDTOv1 → WorldEditDTO
+migrateWorldEditDTOv1 ∷ WorldEditDTOv1 → WorldEditDTOv2
 migrateWorldEditDTOv1 e = case e of
-    WeDeleteTileDv1 a b            → WeDeleteTileD a b
-    WeSetFluidTileDv1 a b f        → WeSetFluidTileD a b f
-    WeAddTileDv1 a b m             → WeAddTileD a b m
-    WeSetSlopeDv1 a b c w          → WeSetSlopeD a b c w
-    WeSetCellDv1 a b c m           → WeSetCellD a b c m
-    WeSetStructureDv1 a b w c d f  → WeSetStructureD a b w c d f
-    WeClearStructureDv1 a b w      → WeClearStructureD a b w
-    WeSetVegDv1 a b c w            → WeSetVegD a b c w
-    WePlaceFloraDv1 a b fl d fx    → WePlaceFloraD a b fl d fx
-    WeSetFluidSnapshotDv1 a b f z  → WeSetFluidSnapshotD a b f z
-    WeClearFluidSnapshotDv1 a b    → WeClearFluidSnapshotD a b
+    WeDeleteTileDv1 a b            → WeDeleteTileDv2 a b
+    WeSetFluidTileDv1 a b f        → WeSetFluidTileDv2 a b f
+    WeAddTileDv1 a b m             → WeAddTileDv2 a b m
+    WeSetSlopeDv1 a b c w          → WeSetSlopeDv2 a b c w
+    WeSetCellDv1 a b c m           → WeSetCellDv2 a b c m
+    WeSetStructureDv1 a b w c d f  → WeSetStructureDv2 a b w c d f
+    WeClearStructureDv1 a b w      → WeClearStructureDv2 a b w
+    WeSetVegDv1 a b c w            → WeSetVegDv2 a b c w
+    WePlaceFloraDv1 a b fl d fx    → WePlaceFloraDv2 a b fl d fx
+    WeSetFluidSnapshotDv1 a b f z  → WeSetFluidSnapshotDv2 a b f z
+    WeClearFluidSnapshotDv1 a b    → WeClearFluidSnapshotDv2 a b
+
+-- | v2 → current (#2243). Every constructor crosses unchanged except
+--   the two planting ones, which cross into the named 'WePlaceFloraRefD'
+--   carrying 'FloraByLegacyId': a pre-#2243 log records an ORDINAL, and
+--   there is nothing in its bytes and nothing available to a pure
+--   component migration ('atVersion' sees only the decoded payload) that
+--   could turn one into a name. The catalog that could is read at the
+--   load boundary — 'World.Save.Types.missingFloraReferences' refuses
+--   the load if the ordinal resolves to nothing there, and
+--   'World.Load.Stage.stagePage' resolves the rest — which is the same
+--   "the repair that needs outside context happens later, in ONE place"
+--   rule 'migrateWorldEditsV1' already follows for #1854's ids.
+--
+--   The id-LESS v1 form keeps crossing into the id-less state it has
+--   always had: 'applyWorldEdits' allocates its 'FloraInstanceId' below,
+--   and does so for the named constructor exactly as it did for
+--   'WePlaceFloraWithIdD'.
+migrateWorldEditDTOv2 ∷ WorldEditDTOv2 → WorldEditDTO
+migrateWorldEditDTOv2 e = case e of
+    WeDeleteTileDv2 a b            → WeDeleteTileD a b
+    WeSetFluidTileDv2 a b f        → WeSetFluidTileD a b f
+    WeAddTileDv2 a b m             → WeAddTileD a b m
+    WeSetSlopeDv2 a b c w          → WeSetSlopeD a b c w
+    WeSetCellDv2 a b c m           → WeSetCellD a b c m
+    WeSetStructureDv2 a b w c d f  → WeSetStructureD a b w c d f
+    WeClearStructureDv2 a b w      → WeClearStructureD a b w
+    WeSetVegDv2 a b c w            → WeSetVegD a b c w
+    WePlaceFloraDv2 a b fl d fx    →
+        WePlaceFloraRefD a b (FloraByLegacyId fl) d fx floraInstanceIdNone
+    WeSetFluidSnapshotDv2 a b f z  → WeSetFluidSnapshotD a b f z
+    WeClearFluidSnapshotDv2 a b    → WeClearFluidSnapshotD a b
+    WePlaceFloraWithIdDv2 a b fl d fx i →
+        WePlaceFloraRefD a b (FloraByLegacyId fl) d fx i
 
 toWorldEditDTO ∷ WorldEdit → WorldEditDTO
 toWorldEditDTO (WeDeleteTile a b)              = WeDeleteTileD a b
@@ -483,6 +560,8 @@ toWorldEditDTO (WeSetVeg a b c w)              = WeSetVegD a b c w
 toWorldEditDTO (WePlaceFlora a b fl d fx)     = WePlaceFloraD a b fl d fx
 toWorldEditDTO (WePlaceFloraWithId a b fl d fx i) =
     WePlaceFloraWithIdD a b fl d fx i
+toWorldEditDTO (WePlaceFloraRef a b ref d fx i) =
+    WePlaceFloraRefD a b ref d fx i
 toWorldEditDTO (WeSetFluidSnapshot a b f z)    = WeSetFluidSnapshotD a b f z
 toWorldEditDTO (WeClearFluidSnapshot a b)      = WeClearFluidSnapshotD a b
 
@@ -498,6 +577,8 @@ fromWorldEditDTO (WeSetVegD a b c w)           = WeSetVeg a b c w
 fromWorldEditDTO (WePlaceFloraD a b fl d fx)  = WePlaceFlora a b fl d fx
 fromWorldEditDTO (WePlaceFloraWithIdD a b fl d fx i) =
     WePlaceFloraWithId a b fl d fx i
+fromWorldEditDTO (WePlaceFloraRefD a b ref d fx i) =
+    WePlaceFloraRef a b ref d fx i
 fromWorldEditDTO (WeSetFluidSnapshotD a b f z) = WeSetFluidSnapshot a b f z
 fromWorldEditDTO (WeClearFluidSnapshotD a b)   = WeClearFluidSnapshot a b
 
@@ -692,30 +773,62 @@ toTillDesignationDTO = TillDesignationDTO . tlZ
 fromTillDesignationDTO ∷ TillDesignationDTO → TillDesignation
 fromTillDesignationDTO = TillDesignation . tliZ
 
--- | Frozen mirror of 'PlantDesignation'.
+-- | Frozen mirror of 'World.Plant.Types.SavedPlantDesignation' — the
+--   CURRENT (@world-activity@ v6) shape, whose crop is the durable
+--   'FloraRef' #2243 persists rather than the runtime ordinal.
 data PlantDesignationDTO = PlantDesignationDTO
     { ptiZ    ∷ !Int
-    , ptiCrop ∷ !FloraId
+    , ptiCrop ∷ !FloraRef
     } deriving (Show, Eq, Generic, Serialize)
 
-toPlantDesignationDTO ∷ PlantDesignation → PlantDesignationDTO
+-- | The FROZEN pre-#2243 shape (@world-activity@ v1–v5, and the v90
+--   legacy tree), whose crop is a runtime 'FloraId'. Retyping the field
+--   in place would have re-laid out every shipped activity payload —
+--   a single-constructor record emits no tag, so nothing would have
+--   moved visibly and everything would have decoded to garbage.
+data PlantDesignationDTOv1 = PlantDesignationDTOv1
+    { pti1Z    ∷ !Int
+    , pti1Crop ∷ !FloraId
+    } deriving (Show, Eq, Generic, Serialize)
+
+toPlantDesignationDTO ∷ SavedPlantDesignation → PlantDesignationDTO
 toPlantDesignationDTO p = PlantDesignationDTO (ptZ p) (ptCrop p)
 
-fromPlantDesignationDTO ∷ PlantDesignationDTO → PlantDesignation
+fromPlantDesignationDTO ∷ PlantDesignationDTO → SavedPlantDesignation
 fromPlantDesignationDTO d = PlantDesignation (ptiZ d) (ptiCrop d)
 
--- | Frozen mirror of 'CropPlot'.
+-- | v1 → current (#2243): the ordinal becomes a legacy reference, on
+--   exactly the terms 'migrateWorldEditDTOv2' spells out.
+migratePlantDesignationDTOv1 ∷ PlantDesignationDTOv1 → PlantDesignationDTO
+migratePlantDesignationDTOv1 d =
+    PlantDesignationDTO (pti1Z d) (FloraByLegacyId (pti1Crop d))
+
+-- | Frozen mirror of 'World.Flora.CropPlot.SavedCropPlot' — the CURRENT
+--   (@world-activity@ v6) shape. See 'PlantDesignationDTO' above.
 data CropPlotDTO = CropPlotDTO
-    { cpiSpecies    ∷ !FloraId
+    { cpiSpecies    ∷ !FloraRef
     , cpiPlantedDay ∷ !Int
     , cpiHealth     ∷ !Float
     } deriving (Show, Eq, Generic, Serialize)
 
-toCropPlotDTO ∷ CropPlot → CropPlotDTO
+-- | The FROZEN pre-#2243 crop plot (@world-activity@ v1–v5, and the v90
+--   legacy tree).
+data CropPlotDTOv1 = CropPlotDTOv1
+    { cpi1Species    ∷ !FloraId
+    , cpi1PlantedDay ∷ !Int
+    , cpi1Health     ∷ !Float
+    } deriving (Show, Eq, Generic, Serialize)
+
+toCropPlotDTO ∷ SavedCropPlot → CropPlotDTO
 toCropPlotDTO c = CropPlotDTO (cpSpecies c) (cpPlantedDay c) (cpHealth c)
 
-fromCropPlotDTO ∷ CropPlotDTO → CropPlot
+fromCropPlotDTO ∷ CropPlotDTO → SavedCropPlot
 fromCropPlotDTO d = CropPlot (cpiSpecies d) (cpiPlantedDay d) (cpiHealth d)
+
+-- | v1 → current (#2243).
+migrateCropPlotDTOv1 ∷ CropPlotDTOv1 → CropPlotDTO
+migrateCropPlotDTOv1 d = CropPlotDTO
+    (FloraByLegacyId (cpi1Species d)) (cpi1PlantedDay d) (cpi1Health d)
 
 -- | Frozen mirror of 'Item.Types.ItemStorage' — a portable item's
 --   INTERNAL weight + bulk capacities (#1233). Frozen rather than reused
@@ -976,14 +1089,16 @@ toTillDTO = HM.map toTillDesignationDTO
 fromTillDTO ∷ HM.HashMap (Int, Int) TillDesignationDTO → TillDesignations
 fromTillDTO = HM.map fromTillDesignationDTO
 
-toPlantDTO ∷ PlantDesignations → HM.HashMap (Int, Int) PlantDesignationDTO
+toPlantDTO ∷ SavedPlantDesignations
+           → HM.HashMap (Int, Int) PlantDesignationDTO
 toPlantDTO = HM.map toPlantDesignationDTO
-fromPlantDTO ∷ HM.HashMap (Int, Int) PlantDesignationDTO → PlantDesignations
+fromPlantDTO ∷ HM.HashMap (Int, Int) PlantDesignationDTO
+             → SavedPlantDesignations
 fromPlantDTO = HM.map fromPlantDesignationDTO
 
-toCropDTO ∷ CropPlots → HM.HashMap (Int, Int) CropPlotDTO
+toCropDTO ∷ SavedCropPlots → HM.HashMap (Int, Int) CropPlotDTO
 toCropDTO = HM.map toCropPlotDTO
-fromCropDTO ∷ HM.HashMap (Int, Int) CropPlotDTO → CropPlots
+fromCropDTO ∷ HM.HashMap (Int, Int) CropPlotDTO → SavedCropPlots
 fromCropDTO = HM.map fromCropPlotDTO
 
 toSpoilDTO ∷ SpoilPiles → HM.HashMap (Int, Int) SpoilPileDTO
@@ -1783,7 +1898,7 @@ blankPageSnapshot pid params =
           -- the allocator starts where a fresh page's does.
         , pgsTransferOrders = emptyTransferOrders
         , pgsTillDesignations = HM.empty
-        , pgsCropPlots    = emptyCropPlots
+        , pgsCropPlots    = HM.empty
         , pgsPlantDesignations = HM.empty
         }
 
@@ -1806,6 +1921,15 @@ data PageEditsDTOv1 = PageEditsDTOv1
     , ped1Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv1])
     } deriving (Show, Generic, Serialize)
 
+-- | The FROZEN @world-edits@ v2 page slice (#2243): the v2 shape
+--   verbatim — page id, edit log at 'WorldEditDTOv2', and #1854's
+--   allocator cursor.
+data PageEditsDTOv2 = PageEditsDTOv2
+    { ped2PageId ∷ !WorldPageId
+    , ped2Edits  ∷ !(HM.HashMap ChunkCoord [WorldEditDTOv2])
+    , ped2PlantedFloraCursor ∷ !Word64
+    } deriving (Show, Generic, Serialize)
+
 newtype WorldEditsDTO = WorldEditsDTO { wedPages ∷ [PageEditsDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
@@ -1815,17 +1939,40 @@ newtype WorldEditsDTOv1 = WorldEditsDTOv1 { wed1Pages ∷ [PageEditsDTOv1] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN @world-edits@ v2 component payload (#2243).
+newtype WorldEditsDTOv2 = WorldEditsDTOv2 { wed2Pages ∷ [PageEditsDTOv2] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
 -- | v1 → v2 (#1854): every edit crosses through
 --   'migrateWorldEditDTOv1', and the cursor starts at the fresh-page
 --   floor. Both the ids and the real cursor are established by
 --   'applyWorldEdits', which is the only place that knows the page's
 --   world size — see its note.
+--
+--   #2243: this lands on the FROZEN v2 shape and then crosses into the
+--   current one through 'migrateWorldEditsV2', so a v1 payload takes
+--   exactly the same species translation a v2 payload does rather than
+--   a second copy of it.
 migrateWorldEditsV1 ∷ WorldEditsDTOv1 → WorldEditsDTO
-migrateWorldEditsV1 (WorldEditsDTOv1 slices) = WorldEditsDTO
+migrateWorldEditsV1 (WorldEditsDTOv1 slices) = migrateWorldEditsV2 $
+    WorldEditsDTOv2
+        [ PageEditsDTOv2
+            { ped2PageId = ped1PageId s
+            , ped2Edits  = HM.map (map migrateWorldEditDTOv1) (ped1Edits s)
+            , ped2PlantedFloraCursor = firstPlantedFloraCursor
+            }
+        | s ← slices ]
+
+-- | v2 → v3 (#2243): every edit crosses through
+--   'migrateWorldEditDTOv2' — which names the two planting forms by
+--   their legacy ordinal — and the cursor crosses verbatim.
+migrateWorldEditsV2 ∷ WorldEditsDTOv2 → WorldEditsDTO
+migrateWorldEditsV2 (WorldEditsDTOv2 slices) = WorldEditsDTO
     [ PageEditsDTO
-        { pedPageId = ped1PageId s
-        , pedEdits  = HM.map (map migrateWorldEditDTOv1) (ped1Edits s)
-        , pedPlantedFloraCursor = firstPlantedFloraCursor
+        { pedPageId = ped2PageId s
+        , pedEdits  = HM.map (map migrateWorldEditDTOv2) (ped2Edits s)
+        , pedPlantedFloraCursor = ped2PlantedFloraCursor s
         }
     | s ← slices ]
 
@@ -1847,15 +1994,23 @@ validateWorldEdits (WorldEditsDTO slices) =
          <> tshow (pedPlantedFloraCursor s) <> ")")
     | s     ← slices
     , edits ← HM.elems (pedEdits s)
-    , WePlaceFloraWithIdD _ _ _ _ _ iid ← edits
+    , iid   ← plantedIds edits
     , isPlantedFloraInstanceId iid
     , plantedFloraCursorAbove [iid] > pedPlantedFloraCursor s
     ]
+  where
+    -- Both identity-bearing planting forms, so the invariant keeps
+    -- holding for a v2 payload's ids after #2243 renamed which
+    -- constructor a CURRENT payload writes. The id-less 'WePlaceFloraD'
+    -- carries nothing to check.
+    plantedIds edits =
+        [ iid | WePlaceFloraWithIdD _ _ _ _ _ iid ← edits ]
+        ⧺ [ iid | WePlaceFloraRefD _ _ _ _ _ iid ← edits ]
 
 worldEditsCodec ∷ ComponentCodec WorldEditsDTO
 worldEditsCodec = componentCodec ComponentSpec
     { csComponent     = worldEditsComponentId
-    , csVersion       = 2
+    , csVersion       = 3
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap → WorldEditsDTO
@@ -1863,7 +2018,8 @@ worldEditsCodec = componentCodec ComponentSpec
                        (pgsPlantedFloraCursor p)
         | p ← orderedPages snap ]
     , csDecode        = id
-    , csOlderVersions = [ atVersion 1 migrateWorldEditsV1 ]
+    , csOlderVersions = [ atVersion 2 migrateWorldEditsV2
+                        , atVersion 1 migrateWorldEditsV1 ]
     , csValidate      = validateWorldEdits
     }
 
@@ -1900,15 +2056,23 @@ applyWorldEdits ver (WorldEditsDTO slices) =
             (edits, cursor) = assignPlantedIds worldSize seed decoded
         in p { pgsEdits = edits, pgsPlantedFloraCursor = cursor }
 
--- | Rewrite every id-less 'WePlaceFlora' into 'WePlaceFloraWithId',
---   allocating from @seed@ upward, and return the log beside a cursor
---   that sits strictly above every planted id it now carries.
+-- | Give every id-LESS planting edit an identity, allocating from
+--   @seed@ upward, and return the log beside a cursor that sits strictly
+--   above every planted id it now carries.
+--
+--   #2243: every planting edit reaching here is a 'WePlaceFloraRef' —
+--   'migrateWorldEditDTOv2' turns both legacy numeric forms into one,
+--   and a current payload only ever carried it — so the id-less v1 case
+--   is now spelled as one bearing 'World.Flora.Identity.floraInstanceIdNone'
+--   rather than as its own constructor. The allocation itself is
+--   unchanged.
 assignPlantedIds ∷ Int → Word64 → WorldEdits → (WorldEdits, Word64)
 assignPlantedIds worldSize seed edits =
     let ordered = L.sortOn (chunkOrderKey worldSize . fst) (HM.toList edits)
         (rebuilt, cursor) = L.foldl' perChunk ([], max firstPlantedFloraCursor seed)
                                      ordered
-        allocated = [ iid | (_, es) ← rebuilt, WePlaceFloraWithId _ _ _ _ _ iid ← es ]
+        allocated = [ iid | (_, es) ← rebuilt
+                           , WePlaceFloraRef _ _ _ _ _ iid ← es ]
     in ( HM.fromList (reverse rebuilt)
        , max cursor (plantedFloraCursorAbove allocated) )
   where
@@ -1916,16 +2080,13 @@ assignPlantedIds worldSize seed edits =
         let (es', cursor') = L.foldl' perEdit ([], cursor) es
         in ((coord, reverse es') : acc, cursor')
     perEdit (acc, cursor) e = case e of
-        WePlaceFlora gx gy fid day w →
-            let (iid, cursor') = nextPlantedFloraCursor cursor
-            in (WePlaceFloraWithId gx gy fid day w iid : acc, cursor')
-        WePlaceFloraWithId _ _ _ _ _ iid
+        WePlaceFloraRef _ _ _ _ _ iid
             | isFloraInstanceIdNone iid →
                 let (iid', cursor') = nextPlantedFloraCursor cursor
                 in (reId e iid' : acc, cursor')
         _ → (e : acc, cursor)
-    reId (WePlaceFloraWithId gx gy fid day w _) iid =
-        WePlaceFloraWithId gx gy fid day w iid
+    reId (WePlaceFloraRef gx gy ref day w _) iid =
+        WePlaceFloraRef gx gy ref day w iid
     reId e _ = e
     -- Canonical coordinate FIRST, then the raw key as a tie-break. The
     -- canonical key alone is not a total order over this map: near the
@@ -1986,6 +2147,31 @@ newtype WorldActivityDTO = WorldActivityDTO { wadPages ∷ [PageActivityDTO] }
     deriving stock (Generic)
     deriving newtype (Show, Serialize)
 
+-- | The FROZEN pre-#2243 activity slice (@world-activity@ v5): the v5
+--   shape verbatim — everything the current slice carries, but with the
+--   crop plots and plant designations still naming their species by
+--   runtime ordinal.
+data PageActivityDTOv5 = PageActivityDTOv5
+    { pad5PageId        ∷ !WorldPageId
+    , pad5Mine          ∷ !(HM.HashMap (Int, Int) MineDesignationDTO)
+    , pad5Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTO)
+    , pad5Chop          ∷ !(HM.HashMap FloraInstanceId ChopDesignationDTO)
+    , pad5Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
+    , pad5Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTOv1)
+    , pad5FloraHarvests ∷ !(HM.HashMap FloraInstanceId Float)
+    , pad5CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTOv1)
+    , pad5GroundItems   ∷ !GroundItemsDTO
+    , pad5SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
+    , pad5PendingChop   ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
+    , pad5PendingHarvests ∷ !FloraHarvestsDTOv1
+    , pad5ConstructNextAttempt ∷ !ConstructAttemptId
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldActivityDTOv5 =
+    WorldActivityDTOv5 { wad5Pages ∷ [PageActivityDTOv5] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
 -- | The FROZEN pre-#1844 activity slice (@world-activity@ v4): #1854's
 --   instance-keyed Chop/harvest maps and pending-migration maps, but
 --   with construct designations still at their five-field
@@ -1996,9 +2182,9 @@ data PageActivityDTOv4 = PageActivityDTOv4
     , pad4Construct       ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTOv1)
     , pad4Chop            ∷ !(HM.HashMap FloraInstanceId ChopDesignationDTO)
     , pad4Till            ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
-    , pad4Plant           ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad4Plant           ∷ !(HM.HashMap (Int, Int) PlantDesignationDTOv1)
     , pad4FloraHarvests   ∷ !(HM.HashMap FloraInstanceId Float)
-    , pad4CropPlots       ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad4CropPlots       ∷ !(HM.HashMap (Int, Int) CropPlotDTOv1)
     , pad4GroundItems     ∷ !GroundItemsDTO
     , pad4SpoilPiles      ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     , pad4PendingChop     ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
@@ -2022,9 +2208,9 @@ data PageActivityDTOv3 = PageActivityDTOv3
     , pad3Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTOv1)
     , pad3Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
     , pad3Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
-    , pad3Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad3Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTOv1)
     , pad3FloraHarvests ∷ !FloraHarvestsDTOv1
-    , pad3CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad3CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTOv1)
     , pad3GroundItems   ∷ !GroundItemsDTO
     , pad3SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     } deriving (Show, Generic, Serialize)
@@ -2046,9 +2232,9 @@ data PageActivityDTOv2 = PageActivityDTOv2
     , pad2Construct     ∷ !(HM.HashMap (Int, Int) ConstructDesignationDTOv1)
     , pad2Chop          ∷ !(HM.HashMap (Int, Int) ChopDesignationDTOv1)
     , pad2Till          ∷ !(HM.HashMap (Int, Int) TillDesignationDTO)
-    , pad2Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTO)
+    , pad2Plant         ∷ !(HM.HashMap (Int, Int) PlantDesignationDTOv1)
     , pad2FloraHarvests ∷ !FloraHarvestsDTOv1
-    , pad2CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTO)
+    , pad2CropPlots     ∷ !(HM.HashMap (Int, Int) CropPlotDTOv1)
     , pad2GroundItems   ∷ !GroundItemsDTOv1
     , pad2SpoilPiles    ∷ !(HM.HashMap (Int, Int) SpoilPileDTO)
     } deriving (Show, Generic, Serialize)
@@ -2107,24 +2293,46 @@ migratePageActivityV3 s = PageActivityDTOv4
 --   is ordered rather than taken from hashmap traversal, and why a
 --   legacy @paid@ flag becomes 'CpLegacyPaid' rather than a receipt
 --   invented here.
-migratePageActivityV4 ∷ PageActivityDTOv4 → PageActivityDTO
+migratePageActivityV4 ∷ PageActivityDTOv4 → PageActivityDTOv5
 migratePageActivityV4 s =
     let (construct, next) = migrateConstructDesignations (pad4Construct s)
-    in PageActivityDTO
-        { padPageId               = pad4PageId s
-        , padMine                 = pad4Mine s
-        , padConstruct            = construct
-        , padChop                 = pad4Chop s
-        , padTill                 = pad4Till s
-        , padPlant                = pad4Plant s
-        , padFloraHarvests        = pad4FloraHarvests s
-        , padCropPlots            = pad4CropPlots s
-        , padGroundItems          = pad4GroundItems s
-        , padSpoilPiles           = pad4SpoilPiles s
-        , padPendingChop          = pad4PendingChop s
-        , padPendingHarvests      = pad4PendingHarvests s
-        , padConstructNextAttempt = next
+    in PageActivityDTOv5
+        { pad5PageId               = pad4PageId s
+        , pad5Mine                 = pad4Mine s
+        , pad5Construct            = construct
+        , pad5Chop                 = pad4Chop s
+        , pad5Till                 = pad4Till s
+        , pad5Plant                = pad4Plant s
+        , pad5FloraHarvests        = pad4FloraHarvests s
+        , pad5CropPlots            = pad4CropPlots s
+        , pad5GroundItems          = pad4GroundItems s
+        , pad5SpoilPiles           = pad4SpoilPiles s
+        , pad5PendingChop          = pad4PendingChop s
+        , pad5PendingHarvests      = pad4PendingHarvests s
+        , pad5ConstructNextAttempt = next
         }
+
+-- | v5 → v6 (#2243). Every field crosses unchanged except the crop
+--   plots and plant designations, whose species ordinals become legacy
+--   references — see 'migrateWorldEditDTOv2' for why a pure migration
+--   cannot resolve one to a name here, and where it is resolved instead.
+migratePageActivityV5 ∷ PageActivityDTOv5 → PageActivityDTO
+migratePageActivityV5 s = PageActivityDTO
+    { padPageId               = pad5PageId s
+    , padMine                 = pad5Mine s
+    , padConstruct            = pad5Construct s
+    , padChop                 = pad5Chop s
+    , padTill                 = pad5Till s
+    , padPlant                = HM.map migratePlantDesignationDTOv1
+                                      (pad5Plant s)
+    , padFloraHarvests        = pad5FloraHarvests s
+    , padCropPlots            = HM.map migrateCropPlotDTOv1 (pad5CropPlots s)
+    , padGroundItems          = pad5GroundItems s
+    , padSpoilPiles           = pad5SpoilPiles s
+    , padPendingChop          = pad5PendingChop s
+    , padPendingHarvests      = pad5PendingHarvests s
+    , padConstructNextAttempt = pad5ConstructNextAttempt s
+    }
 
 -- | v1/v2 → v3: every designation map crosses unchanged and each ground
 --   item's physical values decode absent (see 'migrateItemInstanceDTOv1'
@@ -2135,20 +2343,28 @@ migratePageActivityV4 s =
 migrateWorldActivityV2 ∷ WorldActivityDTOv2 → WorldActivityDTO
 migrateWorldActivityV2 (WorldActivityDTOv2 slices) =
     WorldActivityDTO
-        (map (migratePageActivityV4 . migratePageActivityV3
+        (map (migratePageActivityV5 . migratePageActivityV4
+                                    . migratePageActivityV3
                                     . migratePageActivityV2)
              slices)
 
--- | v3 → v5: see 'migratePageActivityV3' and 'migratePageActivityV4'.
+-- | v3 → v6: see 'migratePageActivityV3' onward.
 migrateWorldActivityV3 ∷ WorldActivityDTOv3 → WorldActivityDTO
 migrateWorldActivityV3 (WorldActivityDTOv3 slices) =
-    WorldActivityDTO (map (migratePageActivityV4 . migratePageActivityV3)
+    WorldActivityDTO (map (migratePageActivityV5 . migratePageActivityV4
+                                                 . migratePageActivityV3)
                           slices)
 
--- | v4 → v5: see 'migratePageActivityV4'.
+-- | v4 → v6: see 'migratePageActivityV4' and 'migratePageActivityV5'.
 migrateWorldActivityV4 ∷ WorldActivityDTOv4 → WorldActivityDTO
 migrateWorldActivityV4 (WorldActivityDTOv4 slices) =
-    WorldActivityDTO (map migratePageActivityV4 slices)
+    WorldActivityDTO (map (migratePageActivityV5 . migratePageActivityV4)
+                          slices)
+
+-- | v5 → v6: see 'migratePageActivityV5'.
+migrateWorldActivityV5 ∷ WorldActivityDTOv5 → WorldActivityDTO
+migrateWorldActivityV5 (WorldActivityDTOv5 slices) =
+    WorldActivityDTO (map migratePageActivityV5 slices)
 
 -- | Component-local invariant (#760, mirrors
 --   @worldPagesCodec@'s @validatePages@ precedent above): every ground
@@ -2225,13 +2441,14 @@ validateWorldActivity (WorldActivityDTO slices) = concat
 worldActivityCodec ∷ ComponentCodec WorldActivityDTO
 worldActivityCodec = componentCodec ComponentSpec
     { csComponent     = worldActivityComponentId
-    , csVersion       = 5
+    , csVersion       = 6
     , csRequired      = True
     , csDeps          = [worldPagesComponentId]
     , csEncode        = \snap →
         WorldActivityDTO (map toActivity (orderedPages snap))
     , csDecode        = id
-    , csOlderVersions = [ atVersion 4 migrateWorldActivityV4
+    , csOlderVersions = [ atVersion 5 migrateWorldActivityV5
+                        , atVersion 4 migrateWorldActivityV4
                         , atVersion 3 migrateWorldActivityV3
                         , atVersion 2 migrateWorldActivityV2
                         , atVersion 1 migrateWorldActivityV2 ]

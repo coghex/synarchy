@@ -59,10 +59,10 @@ import Building.Knowledge (ContainerKnowledge)
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
-import World.Plant.Types (PlantDesignations)
+import World.Plant.Types (SavedPlantDesignations)
 import World.Spoil.Types (SpoilPiles)
 import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests)
-import World.Flora.CropPlot (CropPlots)
+import World.Flora.CropPlot (SavedCropPlots)
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Engine.Graphics.Camera (CameraFacing)
@@ -175,8 +175,14 @@ data PageSnapshot = PageSnapshot
       --   diagnostic 'World.Save.Integrity.sessionIntegrityWarnings'
       --   reports.
     , pgsTillDesignations ∷ !TillDesignations
-    , pgsCropPlots    ∷ !CropPlots
-    , pgsPlantDesignations ∷ !PlantDesignations
+    , pgsCropPlots    ∷ !SavedCropPlots
+      -- ^ #2243: species by authored NAME, not by the runtime handle
+      --   the live 'World.Flora.CropPlot.CropPlots' carries — see
+      --   "World.Flora.Reference" for why a capture may not persist a
+      --   handle. Same for 'pgsPlantDesignations' below and for the
+      --   planting entries in 'pgsEdits', which
+      --   'World.Edit.Types.WePlaceFloraRef' spells.
+    , pgsPlantDesignations ∷ !SavedPlantDesignations
     , pgsIdentity     ∷ !(Maybe WorldIdentity)
     , pgsGeneratedId  ∷ !(Maybe GeneratedWorldId)
       -- ^ #2021: which generated FOUNDATION this page descends from.

@@ -14,12 +14,12 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
-    , startWorkerThread)
+    , startWorkerThread, workerCrashStderrSink)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Capability.Core
     (CoreCapability(..), toCoreCapability)
-import Engine.Core.State (EngineEnv, EngineLifecycle(..), saveBarrierRef)
+import Engine.Core.State (EngineEnv, saveBarrierRef)
 import Engine.Save.Barrier (SaveOwner(..), acknowledgeCurrent, ownerGated)
 import Engine.Core.Log (logDebug, logError, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
@@ -45,6 +45,8 @@ startSimThread env = startWorkerThread WorkerSpec
     { wsName        = "Sim"
     , wsLoggerRef   = ccLoggerRef (toCoreCapability env)
     , wsCategory    = CatWorld
+    , wsLifecycleRef = ccLifecycleRef (toCoreCapability env)
+    , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting simulation thread..."
     , wsStartedMsg  = Just "Simulation thread started"
     , wsFailMsg     = "Failed starting sim thread: "
@@ -58,7 +60,9 @@ startSimThread env = startWorkerThread WorkerSpec
     , wsOnCrash     = \_ e → do
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
         logError logger CatWorld $ "Sim thread crashed: " <> tshow e
-        writeIORef (ccLifecycleRef (toCoreCapability env)) CleaningUp
+      -- The lifecycle write this line used to precede belongs to the
+      -- shared loop now, ahead of the log (#2283).
+    , wsOnCrashCleanup = \_ _ → pure ()
     }
 
 -- | True when at least one world is active and holds chunks — i.e. there
