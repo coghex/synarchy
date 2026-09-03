@@ -113,9 +113,39 @@ worldGetGenDefaultsFn wsc = do
     Lua.setfield (Lua.nth 2) "timeline"
     return 1
 
--- | world.setGenConfig(table)
---   Updates the world generation config from a Lua table.
---   Only updates fields that are present in the table.
+-- | @world.setGenConfig(table)@ → @true@ | @false, diagnostic@
+--
+--   Updates the world generation config from a Lua table. Only fields
+--   PRESENT in the table are updated; an absent field inherits the
+--   current value, exactly as it always did.
+--
+--   #2288 gave the verb a return contract and a domain. Every
+--   floating-point setting is narrowed to its stored 'Float' and judged
+--   against "World.Generate.Config.Domain" — the same domain the YAML
+--   loader applies — and ONE out-of-domain field refuses the WHOLE
+--   update: nothing is written, and the call answers @false@ plus a
+--   diagnostic naming the field and the rejected value. An accepted
+--   update answers @true@.
+--
+--   Two shapes of bad floating input are distinguished:
+--
+--   * A field ABSENT from the table (or from an absent sub-table)
+--     inherits the current configuration's value. That is the verb's
+--     partial-update contract and is not an error.
+--   * A field PRESENT but not coercible to a number refuses the update.
+--     It cannot mean "inherit": the caller wrote something there. The
+--     helper used to fold both cases into the default, so a typo
+--     silently generated a different world.
+--
+--   Numeric STRINGS stay accepted, deliberately unlike
+--   @world.setTimeScale@'s stricter argument check (#2280): this table
+--   is assembled from create-world text boxes, and @tonumber@ has
+--   always been what reads them.
+--
+--   The INTEGER settings are untouched by all of this (#2288 is scoped
+--   to the floating-point ones): they keep the read they always had, in
+--   which a present but uncoercible value falls back to the current
+--   configuration rather than refusing.
 worldSetGenConfigFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 worldSetGenConfigFn wsc = do
     -- The config table starts on top of the Lua stack. hslua's 'Lua.nth N'
@@ -128,14 +158,13 @@ worldSetGenConfigFn wsc = do
             mi ← Lua.tointeger Lua.top
             Lua.pop 1
             pure $ maybe def fromIntegral mi
-        getFloatField ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
-        getFloatField name def = do
-            _ ← Lua.getfield (Lua.nth 1) name
-            mn ← Lua.tonumber Lua.top
+        getFloatField ∷ Lua.Name → Text → Float
+                      → Lua.LuaE Lua.Exception (Either Text Float)
+        getFloatField name field def = do
+            ty ← Lua.getfield (Lua.nth 1) name
+            r ← readFloat ty field def
             Lua.pop 1
-            pure $ case mn of
-                Just (Lua.Number n) → realToFrac n
-                _                   → def
+            pure r
         getSubInt ∷ Lua.Name → Lua.Name → Int → Lua.LuaE Lua.Exception Int
         getSubInt tbl name def = do
             _ ← Lua.getfield (Lua.nth 1) tbl
@@ -149,21 +178,20 @@ worldSetGenConfigFn wsc = do
                 else do
                     Lua.pop 1
                     pure def
-        getSubFloat ∷ Lua.Name → Lua.Name → Float → Lua.LuaE Lua.Exception Float
-        getSubFloat tbl name def = do
+        getSubFloat ∷ Lua.Name → Lua.Name → Text → Float
+                    → Lua.LuaE Lua.Exception (Either Text Float)
+        getSubFloat tbl name field def = do
             _ ← Lua.getfield (Lua.nth 1) tbl
             isT ← Lua.istable Lua.top
             if isT
                 then do
-                    _ ← Lua.getfield (Lua.nth 1) name
-                    mn ← Lua.tonumber Lua.top
+                    ty ← Lua.getfield (Lua.nth 1) name
+                    r ← readFloat ty field def
                     Lua.pop 2
-                    pure $ case mn of
-                        Just (Lua.Number n) → realToFrac n
-                        _                   → def
+                    pure r
                 else do
                     Lua.pop 1
-                    pure def
+                    pure (Right def)
 
     oldCfg ← Lua.liftIO $ readIORef (wsWorldGenConfigRef wsc)
     let oldCal = wgcCalendar oldCfg
@@ -176,8 +204,10 @@ worldSetGenConfigFn wsc = do
     -- Top-level
     plateCount ← getIntField "plate_count" (wgcPlateCount oldCfg)
     worldSize  ← getIntField "world_size"  (wgcWorldSize oldCfg)
-    erosionInt ← getFloatField "erosion_intensity" (wgcErosionIntensity oldCfg)
-    volcanicAct ← getFloatField "volcanic_activity" (wgcVolcanicActivity oldCfg)
+    erosionInt ← getFloatField "erosion_intensity" fieldErosionIntensity
+                               (wgcErosionIntensity oldCfg)
+    volcanicAct ← getFloatField "volcanic_activity" fieldVolcanicActivity
+                                (wgcVolcanicActivity oldCfg)
     waterfallQ ← getIntField "waterfall_quantum" (wgcWaterfallQuantum oldCfg)
 
     -- Calendar
@@ -187,27 +217,38 @@ worldSetGenConfigFn wsc = do
     mphr ← getSubInt "calendar" "minutes_per_hour" (cyMinutesPerHour oldCal)
 
     -- Sun
-    tilt ← getSubFloat "sun" "tilt_angle" (syTiltAngle oldSun)
-    dayL ← getSubFloat "sun" "day_length" (syDayLength oldSun)
+    tilt ← getSubFloat "sun" "tilt_angle" fieldTiltAngle (syTiltAngle oldSun)
+    dayL ← getSubFloat "sun" "day_length" fieldDayLength (syDayLength oldSun)
 
     -- Moon
-    cyc  ← getSubInt   "moon" "cycle_days"   (myCycleDays oldMoon)
-    poff ← getSubFloat "moon" "phase_offset" (myPhaseOffset oldMoon)
+    cyc  ← getSubInt   "moon" "cycle_days" (myCycleDays oldMoon)
+    poff ← getSubFloat "moon" "phase_offset" fieldPhaseOffset
+                       (myPhaseOffset oldMoon)
 
     -- Resources
-    oreAb  ← getSubFloat "resources" "ore_abundance"    (ryOreAbundance oldRes)
-    ironAb ← getSubFloat "resources" "iron_abundance"   (ryIronAbundance oldRes)
-    copAb  ← getSubFloat "resources" "copper_abundance" (ryCopperAbundance oldRes)
+    oreAb  ← getSubFloat "resources" "ore_abundance" fieldOreAbundance
+                         (ryOreAbundance oldRes)
+    ironAb ← getSubFloat "resources" "iron_abundance" fieldIronAbundance
+                         (ryIronAbundance oldRes)
+    copAb  ← getSubFloat "resources" "copper_abundance" fieldCopperAbundance
+                         (ryCopperAbundance oldRes)
 
     -- Climate
-    iters  ← getSubInt   "climate" "iterations"       (clIterations oldCl)
-    corio  ← getSubFloat "climate" "coriolis_scale"   (clCoriolisScale oldCl)
-    wdrag  ← getSubFloat "climate" "wind_drag"        (clWindDrag oldCl)
-    therm  ← getSubFloat "climate" "thermal_inertia"  (clThermalInertia oldCl)
-    orog   ← getSubFloat "climate" "orographic_scale" (clOrographicScale oldCl)
-    evap   ← getSubFloat "climate" "evap_scale"       (clEvapScale oldCl)
-    albedo ← getSubFloat "climate" "albedo_feedback"  (clAlbedoFeedback oldCl)
-    thc    ← getSubFloat "climate" "thc_threshold"    (clThcThreshold oldCl)
+    iters  ← getSubInt   "climate" "iterations" (clIterations oldCl)
+    corio  ← getSubFloat "climate" "coriolis_scale" fieldCoriolisScale
+                         (clCoriolisScale oldCl)
+    wdrag  ← getSubFloat "climate" "wind_drag" fieldWindDrag
+                         (clWindDrag oldCl)
+    therm  ← getSubFloat "climate" "thermal_inertia" fieldThermalInertia
+                         (clThermalInertia oldCl)
+    orog   ← getSubFloat "climate" "orographic_scale" fieldOrographicScale
+                         (clOrographicScale oldCl)
+    evap   ← getSubFloat "climate" "evap_scale" fieldEvapScale
+                         (clEvapScale oldCl)
+    albedo ← getSubFloat "climate" "albedo_feedback" fieldAlbedoFeedback
+                         (clAlbedoFeedback oldCl)
+    thc    ← getSubFloat "climate" "thc_threshold" fieldThcThreshold
+                         (clThcThreshold oldCl)
 
     -- Timeline depth
     tlEon  ← getSubInt "timeline" "eon_count"   (tyEonCount oldTl)
@@ -219,18 +260,72 @@ worldSetGenConfigFn wsc = do
     tlAMin ← getSubInt "timeline" "age_min"     (tyAgeMin oldTl)
     tlAMax ← getSubInt "timeline" "age_max"     (tyAgeMax oldTl)
 
-    let newCfg = normalizeWorldGenConfig $ oldCfg
-            { wgcWorldSize  = worldSize
-            , wgcPlateCount = plateCount
-            , wgcErosionIntensity = erosionInt
-            , wgcVolcanicActivity = volcanicAct
-            , wgcWaterfallQuantum = waterfallQ
-            , wgcCalendar   = CalendarYaml dpm mpy hpd mphr
-            , wgcSun        = SunYaml tilt dayL
-            , wgcMoon       = MoonYaml cyc poff
-            , wgcClimate    = ClimateYaml iters corio wdrag therm orog evap albedo thc
-            , wgcResources  = ResourcesYaml oreAb ironAb copAb
-            , wgcTimeline   = TimelineYaml tlEon tlEra tlPMin tlPMax tlEMin tlEMax tlAMin tlAMax
-            }
-    Lua.liftIO $ writeIORef (wsWorldGenConfigRef wsc) newCfg
-    return 0
+    -- Assembly in 'Either', so the FIRST unreadable float short-circuits
+    -- before a candidate configuration exists at all. Every read above
+    -- has already happened; this only decides what to do with them.
+    let assembled = do
+            ei ← erosionInt
+            va ← volcanicAct
+            ta ← tilt
+            dl ← dayL
+            po ← poff
+            oa ← oreAb
+            ia ← ironAb
+            ca ← copAb
+            cs ← corio
+            wd ← wdrag
+            ti ← therm
+            os ← orog
+            es ← evap
+            af ← albedo
+            tt ← thc
+            pure $ normalizeWorldGenConfig $ oldCfg
+                { wgcWorldSize  = worldSize
+                , wgcPlateCount = plateCount
+                , wgcErosionIntensity = ei
+                , wgcVolcanicActivity = va
+                , wgcWaterfallQuantum = waterfallQ
+                , wgcCalendar   = CalendarYaml dpm mpy hpd mphr
+                , wgcSun        = SunYaml ta dl
+                , wgcMoon       = MoonYaml cyc po
+                , wgcClimate    = ClimateYaml iters cs wd ti os es af tt
+                , wgcResources  = ResourcesYaml oa ia ca
+                , wgcTimeline   = TimelineYaml tlEon tlEra tlPMin tlPMax
+                                               tlEMin tlEMax tlAMin tlAMax
+                }
+    case assembled of
+        Left diagnostic → refuseGenConfig diagnostic
+        Right candidate → case worldGenConfigRejections candidate of
+            (r : _) → refuseGenConfig (describeWorldGenRejection r)
+            []      → do
+                Lua.liftIO $ writeIORef (wsWorldGenConfigRef wsc) candidate
+                Lua.pushboolean True
+                return 1
+
+-- | Read the float at the top of the stack, given the type
+--   'Lua.getfield' just reported.
+--
+--   Narrowed with 'narrowWorldGenFloat' rather than @realToFrac@, so
+--   the domain check downstream judges exactly the 'Float' that would be
+--   stored — including the infinity a finite Lua number such as @1e40@
+--   becomes on the way in, which is the reported exploit.
+readFloat ∷ Lua.Type → Text → Float
+          → Lua.LuaE Lua.Exception (Either Text Float)
+readFloat Lua.TypeNil _ def = pure (Right def)
+readFloat ty field _ = do
+    mn ← Lua.tonumber Lua.top
+    case mn of
+        Just (Lua.Number n) → pure (Right (narrowWorldGenFloat n))
+        Nothing → do
+            tyName ← TE.decodeUtf8Lenient ⊚ Lua.typename ty
+            pure (Left (field <> " must be a number, got " <> tyName))
+
+-- | The refusal half of 'worldSetGenConfigFn''s return contract: two
+--   results, @false@ and the diagnostic, and no side effect whatsoever.
+--   The stored configuration is exactly what it was.
+refuseGenConfig ∷ Text → Lua.LuaE Lua.Exception Lua.NumResults
+refuseGenConfig reason = do
+    Lua.pushboolean False
+    Lua.pushstring (TE.encodeUtf8
+        (reason <> "; the world generation configuration is left unchanged."))
+    return 2

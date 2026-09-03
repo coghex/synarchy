@@ -26,8 +26,8 @@ import Engine.Core.Log
   , LogLevel(..), LoggerState, defaultLogConfig, initLogger )
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 import World.Generate.Config
-  ( WorldGenConfig(..), defaultWorldGenConfig, loadWorldGenConfig
-  , minimumWorldSize )
+  ( WorldGenConfig(..), WorldGenConfigRaw, defaultWorldGenConfig
+  , loadWorldGenConfig, minimumWorldSize )
 
 -- | A logger whose entries are captured in emission order. Everything
 --   the loader emits is visible, not just the warnings, so "no warning"
@@ -59,10 +59,17 @@ shapeOf = map (\e → (leLevel e, leCategory e))
 --   independently of the loader. Asserting that the warning CONTAINS
 --   this is what separates passing the real diagnostic through from
 --   emitting a canned "config was bad" line.
+--
+--   Decoded as 'WorldGenConfigRaw' because that is the document shape
+--   the loader itself decodes (#2288): a float leaf decodes there
+--   preserving its source spelling, so a non-finite scalar is a
+--   field-local domain rejection rather than the structural failure
+--   this helper is about. Decoding to anything else here would be
+--   comparing against a decoder the loader does not run.
 decoderErrorFor ∷ FilePath → IO Text
 decoderErrorFor path = do
     result ← Yaml.decodeFileEither path
-    case result ∷ Either Yaml.ParseException WorldGenConfig of
+    case result ∷ Either Yaml.ParseException WorldGenConfigRaw of
         Left err → pure (tshow err)
         Right _  → do
             expectationFailure ("expected " ⧺ path ⧺ " not to decode")
