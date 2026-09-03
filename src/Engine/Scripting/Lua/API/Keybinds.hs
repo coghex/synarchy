@@ -213,14 +213,22 @@ removeActionKeysMatchingFn env = do
     return 1
 
 -- | engine.saveKeybinds() → bool
---   Persist the live bindings to config/keybinds.local.yaml.
+--   Persist the live bindings to config/keybinds.local.yaml. @true@ when
+--   the file was durably replaced, @false@ when the write failed —
+--   'Engine.Input.Bindings.saveKeyBindings' logs the path and the cause
+--   at warning level, and the live bindings stay applied for the session
+--   either way (its haddock states that policy).
+--
+--   Before #2202 this returned @true@ unconditionally and let a
+--   filesystem failure escape as a Lua error, which the settings screen
+--   reported as nothing at all.
 saveKeybindsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveKeybindsFn env = do
-    Lua.liftIO $ do
+    written ← Lua.liftIO $ do
         bindings ← readIORef (icKeyBindingsRef (toInputCapability env))
         logger ← readIORef (ccLoggerRef (toCoreCapability env))
         saveKeyBindings logger "config/keybinds.local.yaml" bindings
-    Lua.pushboolean True
+    Lua.pushboolean (either (const False) (const True) written)
     return 1
 
 -- | engine.loadDefaultKeybinds() → { action = { keys } }

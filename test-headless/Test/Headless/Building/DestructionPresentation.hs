@@ -731,7 +731,12 @@ quadCentre facing = do
 
 scannedBuildings ∷ EngineEnv → IO (Int, Int)
 scannedBuildings env = do
-    (scanned, quads) ← renderBuildingQuadsScanned env (const 0) FaceSouth
+    -- #1845: the pass takes the FRAME's building-manager snapshot, so
+    -- the cursor pass's staking yield and this pass's own quad cannot
+    -- be decided against two different worlds. Read live here, which is
+    -- what one frame does at its own start.
+    bm ← readIORef (buildingManagerRef env)
+    (scanned, quads) ← renderBuildingQuadsScanned env bm (const 0) FaceSouth
                                                   zSlice effDepth tileAlpha
     pure (scanned, V.length quads)
 

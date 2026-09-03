@@ -22,10 +22,12 @@ import Data.Serialize (Serialize)
 --   constructor silently maps existing saved `usFacing` values to the
 --   wrong direction.
 --
---   TWO save components store this enum, both in
---   `World.Save.Component.Entities`: `units`
---   (`UnitInstanceDTO.uidFacing`) and `unit-sim`
---   (`UnitSimStateDTO.simFacing`). If the geometry ever needs different
+--   TWO save components store this enum: `units`
+--   (`UnitInstanceDTO.uidFacing`, declared in
+--   `World.Save.Component.EntitySnapshots`) and `unit-sim`
+--   (`UnitSimStateDTO.simFacing`, declared in
+--   `World.Save.Component.EntitySimulation`). If the geometry ever
+--   needs different
 --   cardinality (16-way etc.), or the order otherwise has to change,
 --   BOTH must be migrated; `currentSaveVersion` is a bookkeeping marker
 --   and does not gate on-disk compatibility. For each component: raise

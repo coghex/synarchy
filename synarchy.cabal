@@ -379,6 +379,7 @@ library
                      Engine.Scripting.Lua.API.Flora
                      Engine.Scripting.Lua.API.YamlResult
                      Engine.Scripting.Lua.API.YamlTextures
+                     Engine.Core.ConfigWrite
                      Engine.Core.Defaults
                      Engine.Core.Init
                      Engine.Core.Monad
@@ -863,6 +864,7 @@ library
                      World.State.Types
                      World.Save.Types
                      World.Save.Snapshot
+                     World.Save.PageOrder
                      World.Save.Snapshot.Adapter
                      World.Save.Envelope.Types
                      World.Save.Envelope.Codec
@@ -876,6 +878,9 @@ library
                      World.Save.Component.Session
                      World.Save.Component.Page
                      World.Save.Component.Entities
+                     World.Save.Component.EntitySnapshots
+                     World.Save.Component.EntitySimulation
+                     World.Save.Component.EntitySystems
                      World.Save.Component.Knowledge
                      World.Save.Component.Transfer
                      World.Save.Component
@@ -1282,6 +1287,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
+                   Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
@@ -1409,6 +1415,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Render.QuadVertices
                    Test.Headless.Core.ConfigState
+                   Test.Headless.Core.ConfigWrite
                    Test.Headless.Core.Queue
                    Test.Headless.Core.DebugListener
                    Test.Headless.Core.DebugSocket
@@ -1447,6 +1454,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.AssetSchema
                    Test.Headless.Building.CameraFacing
                    Test.Headless.Building.DestructionPresentation
+                   Test.Headless.Building.Ghost
                    Test.Headless.Building.Knowledge
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents

@@ -63,7 +63,7 @@
 --   component's own version dispatch noticing — riding on the older
 --   global-version mechanism is not good enough for the new component
 --   contract. They are therefore FROZEN
---   ('World.Save.Component.Entities.BuildingInstanceDTO' /
+--   ('World.Save.Component.EntitySnapshots.BuildingInstanceDTO' /
 --   'UnitInstanceDTO'), like every other reachable live record.
 --
 --   Do not gold-plate: stop at leaves. The concrete components apply this
@@ -85,9 +85,21 @@
 --   'WorldGenParamsDTO') and "World.Save.Component.WorldGenHistory"
 --   (every decode-only @WorldGenParamsDTOv1@ … @WorldGenParamsDTOv6@).
 --   Downstream modules import the façade; the owners exist so a wire
---   fact has one home, not so consumers have to choose one. This
---   paragraph names them; the RULE they implement is still stated here
---   and nowhere else.
+--   fact has one home, not so consumers have to choose one.
+--
+--   "World.Save.Component.Entities" is the same shape (#2150): a
+--   FAÇADE that declares nothing and re-exports the five entity
+--   components from three sibling owners —
+--   "World.Save.Component.EntitySnapshots" (@"buildings"@ and
+--   @"units"@: the frozen instance DTOs and the stat-modifier / wound
+--   / scar records they nest), "World.Save.Component.EntitySimulation"
+--   (@"unit-sim"@: three live versions of the per-unit simulation
+--   state) and "World.Save.Component.EntitySystems" (@"craft-bills"@
+--   and @"power-nodes"@: the two page-scoped registries and their
+--   allocator validators).
+--
+--   These paragraphs name the owners; the RULE they implement is still
+--   stated here and nowhere else.
 module World.Save.Component.Types
     ( ComponentPhase(..)
     , ComponentError(..)

@@ -168,7 +168,11 @@ function settingsMenu.onDefaults()
     -- rebuild below repopulates the Input rows from the reset bindings.
     if engine.loadDefaultKeybinds then
         engine.loadDefaultKeybinds()
-        engine.saveKeybinds()
+        -- #2202: the write-through persist returns false rather than
+        -- raising when config/keybinds.local.yaml could not be written.
+        if not engine.saveKeybinds() then
+            engine.logWarn("Could not persist keybindings")
+        end
     end
     -- #1671: this rebuild destroys and recreates every control, so it
     -- owes the same caller-side control-focus (#745) snapshot/restore

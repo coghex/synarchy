@@ -109,6 +109,7 @@ import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffecti
 import qualified Test.Headless.Combat.Severing as CombatSevering
 import qualified Test.Headless.Combat.Wounds as CombatWounds
 import qualified Test.Headless.Magma.Shape as MagmaShape
+import qualified Test.Headless.Sim.Admission as SimAdmission
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Sim.Conservation as SimConservation
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
@@ -248,6 +249,7 @@ import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
+import qualified Test.Headless.Core.ConfigWrite as ConfigWrite
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
@@ -277,6 +279,7 @@ import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
 import qualified Test.Headless.Building.CameraFacing as BuildingCameraFacing
 import qualified Test.Headless.Building.DestructionPresentation as BuildingDestruction
+import qualified Test.Headless.Building.Ghost as BuildingGhost
 import qualified Test.Headless.Building.MachineShopConstruction
     as MachineShopConstruction
 import qualified Test.Headless.Building.WorkbenchConstruction
@@ -468,6 +471,14 @@ main = hspec $ do
     -- both halves -- the codec round trip and the live capture/restore.
     aroundAll withHeadlessEngine $
         describe "persistence contract" WorldTransferOrders.spec
+    -- Own engine (#2232): generates a private w8 page AND an arena page,
+    -- then FLUSHES the sim queue to read what init seeded -- both of
+    -- which the shared-worlds engine above must not see. The flush is
+    -- only sound because no sim worker drains that queue in a headless
+    -- fixture, so it must not share an engine with anything else that
+    -- reads it.
+    aroundAll withHeadlessEngine $
+        describe "sim chunk admission" SimAdmission.spec
     -- Own engine (#1596): both halves EDIT their own private w8 pages
     -- and hand-deliver WorldApplyFluids batches to the live world
     -- thread, which the shared-worlds engine above must not see. The
@@ -745,6 +756,10 @@ main = hspec $ do
     describe "Font SDF atlas repertoire" GraphicsFontRepertoire.spec
     describe "Construct.Corners" ConstructCorners.spec
     describe "Construct.Footprint" ConstructFootprint.spec
+
+    -- #1845: the pure half needs nothing; the render half boots its own
+    -- headless engine over one synthetic page, like SceneStats above.
+    BuildingGhost.spec
     ConstructPlan.spec
     StructureGhost.spec
     FrameAssembly.spec
@@ -878,6 +893,7 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    describe "Core.ConfigWrite" ConfigWrite.spec
     FixtureLogging.spec
     LogCategoryEnv.spec
     LogMonad.spec

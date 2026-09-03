@@ -16,12 +16,11 @@ module Test.Headless.Core.ConfigState (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally, try, SomeException, displayException)
+import Control.Exception (finally)
 import Data.IORef (newIORef, readIORef, modifyIORef')
 import System.Directory
   ( getTemporaryDirectory, createDirectoryIfMissing
-  , removeDirectoryRecursive, doesDirectoryExist, doesFileExist
-  , copyFile )
+  , removeDirectoryRecursive, doesDirectoryExist, doesFileExist )
 import System.FilePath ((</>))
 import System.IO (stderr)
 import Data.Aeson (FromJSON(..), withObject, (.:))
@@ -29,6 +28,7 @@ import Data.Proxy (Proxy(..))
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
+import Engine.Core.ConfigWrite (copyConfigFile)
 import Engine.Core.Init
   ( resolveConfigPath, migrateLegacyConfig
   , LegacyNeutralityCheck(..) )
@@ -105,19 +105,25 @@ legacyWarnings ∷ [(LogLevel, Text)] → [Text]
 legacyWarnings entries =
     [m | (LevelWarn, m) ← entries, "Legacy config " `T.isInfixOf` m]
 
--- | The exception 'copyFile' itself raises for a fixture, rendered
---   exactly as 'migrateLegacyConfig' renders it. DERIVED by attempting
+-- | The cause 'copyConfigFile' itself reports for a fixture, which is
+--   verbatim what 'migrateLegacyConfig' renders. DERIVED by attempting
 --   the same copy rather than hard-coded, so the assertion pins "the
 --   warning carries the real cause" without pinning one @directory@
 --   release's wording. Fails loudly if the fixture is not actually a
 --   destination failure.
+--
+--   #2202 moved the copy from a raw 'copyFile' to the durable
+--   config-write helper, so the cause is now that helper's own 'Left'
+--   rather than a rendered exception; deriving it through the SAME
+--   function production calls is what keeps this honest across that
+--   kind of change.
 copyFailureText ∷ FilePath → FilePath → IO Text
 copyFailureText legacy local = do
-    attempt ← try (copyFile legacy local)
-    case (attempt ∷ Either SomeException ()) of
+    attempt ← copyConfigFile legacy local
+    case attempt of
         Right () → "" <$ expectationFailure
             "fixture is not a destination failure: the copy succeeded"
-        Left e   → return (T.pack (displayException e))
+        Left err → return err
 
 -- | #2210 requirement 1: the destination failure is a WARNING, it names
 --   the local path it could not write and carries the real exception,
@@ -493,9 +499,10 @@ spec = do
         -- A directory occupying the local path is the portable way to
         -- make the destination unwritable: the 'doesFileExist' gate
         -- still reports no local file, so migration runs to the copy,
-        -- but 'copyFile' cannot install a regular file there. No
-        -- permission bit is touched, so this behaves the same for a
-        -- root-privileged runner.
+        -- but the copy cannot install a regular file there — @rename(2)@
+        -- refuses to replace a directory with a file (#2202 made that
+        -- copy a durable publish). No permission bit is touched, so this
+        -- behaves the same for a root-privileged runner.
         let unwritableFixture legacyBody dir = do
                 let legacy = dir </> "legacy.yaml"
                     local  = dir </> "local.yaml"
@@ -577,6 +584,7 @@ spec = do
                 (cfg0, _) ← loadNotificationCfg logger registryPath overridesPath
                 let updated = HM.adjust (\c → c { ccLog = True }) "debug" cfg0
                 writeNotificationOverrides overridesPath updated
+                    `shouldReturn` Right ()
                 (cfg1, _) ← loadNotificationCfg logger registryPath overridesPath
                 case HM.lookup "debug" cfg1 of
                     Nothing → expectationFailure "debug category missing from resolved config"
@@ -670,6 +678,7 @@ spec = do
                 let updated = HM.adjust
                         (\c → c { ccPause = False }) "survival_critical" cfg0
                 writeNotificationOverrides overridesPath updated
+                    `shouldReturn` Right ()
                 (cfg1, _) ← loadNotificationCfg logger registryPath overridesPath
                 c ← categoryOf cfg1 "survival_critical"
                 triple c `shouldBe` (True, True, False)
