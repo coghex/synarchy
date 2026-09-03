@@ -619,7 +619,14 @@ end
 function data.save(widgetValues)
     engine.logInfo("Saving settings...")
     local result = data.apply(widgetValues)
-    engine.saveVideoConfig()
+    -- #2202: engine.saveVideoConfig() returns false (never raises) when
+    -- config/video.local.yaml could not be written, so name the family
+    -- the way saveSaveConfig already names autosave. Without this the
+    -- only trace of a lost video save was "Saving settings..." followed
+    -- by "Settings saved.".
+    if not engine.saveVideoConfig() then
+        engine.logWarn("Could not persist video settings")
+    end
     -- #913: persist the just-applied autosave settings to
     -- config/save.local.yaml.
     data.saveSaveConfig()

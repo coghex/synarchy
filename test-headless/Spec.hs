@@ -247,6 +247,7 @@ import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
 import qualified Test.Headless.Core.ConfigState as ConfigState
+import qualified Test.Headless.Core.ConfigWrite as ConfigWrite
 import qualified Test.Headless.Core.Queue as CoreQueue
 import qualified Test.Headless.Core.LogCategoryEnv as LogCategoryEnv
 import qualified Test.Headless.Core.FixtureLogging as FixtureLogging
@@ -876,6 +877,7 @@ main = hspec $ do
     describe "Render.ViewportGuard" ViewportGuard.spec
     describe "Render.QuadVertices" QuadVertices.spec
     describe "Core.ConfigState" ConfigState.spec
+    describe "Core.ConfigWrite" ConfigWrite.spec
     FixtureLogging.spec
     LogCategoryEnv.spec
     LogMonad.spec

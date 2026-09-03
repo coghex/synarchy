@@ -30,13 +30,13 @@ import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg, OverridesFile)
 import Engine.PlayerEvent (emptyEventStore)
 import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
+import Engine.Core.ConfigWrite (copyConfigFile, writeConfigBytes)
 import Engine.Core.Defaults
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..), LoggerState, logInfo, logWarn
                        , LogCategory(..))
 import System.IO (stdout)
-import System.Directory (doesFileExist, copyFile, createDirectoryIfMissing)
-import System.FilePath (takeDirectory)
+import System.Directory (doesFileExist)
 import qualified Data.ByteString as BS
 import Engine.Core.State
 import Engine.Save.Barrier (newSaveBarrier)
@@ -183,13 +183,13 @@ migrateLegacyConfig _ logger mCheck legacyPath localPath = do
         case (eVal ∷ Either Yaml.ParseException a) of
           Left err → ioError $ userError $ show err
           Right val → case mCheck of
-            Nothing → True <$ copyFile legacyPath localPath
+            Nothing → True <$ copyConfigOrFail legacyPath localPath
             Just check → do
               neutral ← legacyIsNeutral check val
               if neutral
                 then False <$ recordNeutralLegacy logger legacyPath
                                                   (lncRecordPath check)
-                else True  <$ copyFile legacyPath localPath
+                else True  <$ copyConfigOrFail legacyPath localPath
       case (outcome ∷ Either SomeException Bool) of
         Right True → logInfo logger CatInit $
           "Migrated legacy config " <> T.pack legacyPath
@@ -250,9 +250,7 @@ recordNeutralLegacy logger legacyPath recordPath = do
     stale ← if hasRecord
               then (≢ legacyBytes) ⊚ BS.readFile recordPath
               else return True
-    when stale $ do
-      createDirectoryIfMissing True (takeDirectory recordPath)
-      BS.writeFile recordPath legacyBytes
+    when stale $ writeConfigOrFail recordPath legacyBytes
   case (outcome ∷ Either SomeException ()) of
     Right () → return ()
     Left e   → logWarn logger CatInit $
@@ -260,6 +258,29 @@ recordNeutralLegacy logger legacyPath recordPath = do
         <> T.pack legacyPath <> " at " <> T.pack recordPath
         <> "; a later change to the versioned default may re-examine it: "
         <> T.pack (displayException e)
+
+-- | Durably copy a legacy config onto its local path (#2202), raising a
+--   descriptive 'IOError' when the copy did not happen. The throw is how
+--   the outcome is CONSUMED rather than discarded: it lands in
+--   'migrateLegacyConfig's existing @Left@ arm, which already reports a
+--   failed migration as a warning and leaves the local file absent so a
+--   later boot can try again — exactly the policy a partially copied
+--   file used to defeat, since the existence gate would have seen it and
+--   never looked at the legacy file again.
+copyConfigOrFail ∷ FilePath → FilePath → IO ()
+copyConfigOrFail src dst = do
+  copied ← copyConfigFile src dst
+  either (ioError ∘ userError ∘ T.unpack) pure copied
+
+-- | Durably write the neutrality record (#2202), raising on failure so
+--   'recordNeutralLegacy's existing warning-and-continue handler reports
+--   the cause. Same reasoning as 'copyConfigOrFail': a truncated record
+--   decodes as 'Nothing', which re-promotes the very placeholder #1937
+--   exists to suppress.
+writeConfigOrFail ∷ FilePath → BS.ByteString → IO ()
+writeConfigOrFail path bytes = do
+  written ← writeConfigBytes path bytes
+  either (ioError ∘ userError ∘ T.unpack) pure written
 
 -- | Allocate every 'IORef', queue, and subsystem, then bundle into
 --   'EngineEnv'. Logs to stdout (the graphical default).

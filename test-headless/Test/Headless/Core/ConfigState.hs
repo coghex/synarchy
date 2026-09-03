@@ -430,6 +430,7 @@ spec = do
                 (cfg0, _) ← loadNotificationCfg logger registryPath overridesPath
                 let updated = HM.adjust (\c → c { ccLog = True }) "debug" cfg0
                 writeNotificationOverrides overridesPath updated
+                    `shouldReturn` Right ()
                 (cfg1, _) ← loadNotificationCfg logger registryPath overridesPath
                 case HM.lookup "debug" cfg1 of
                     Nothing → expectationFailure "debug category missing from resolved config"
@@ -523,6 +524,7 @@ spec = do
                 let updated = HM.adjust
                         (\c → c { ccPause = False }) "survival_critical" cfg0
                 writeNotificationOverrides overridesPath updated
+                    `shouldReturn` Right ()
                 (cfg1, _) ← loadNotificationCfg logger registryPath overridesPath
                 c ← categoryOf cfg1 "survival_critical"
                 triple c `shouldBe` (True, True, False)

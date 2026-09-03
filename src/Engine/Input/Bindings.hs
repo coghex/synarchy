@@ -10,6 +10,7 @@ import Data.Aeson ((.:?), FromJSON(..), ToJSON(..), Value(..), object, (.=))
 import Data.Aeson.Types (Parser)
 import qualified Graphics.UI.GLFW as GLFW
 import Engine.Input.Types
+import Engine.Core.ConfigWrite (writeConfigYaml)
 import Engine.Core.Log (LoggerState, logWarn, logInfo, LogCategory(..), logDebug)
 
 -- | Each action maps to a **list** of key names; the action fires when
@@ -113,11 +114,33 @@ loadKeyBindings logger path = do
             return bindings
 
 -- | Save keybindings back to a YAML file as @keybinds:@ arrays.
-saveKeyBindings ∷ LoggerState → FilePath → KeyBindings → IO ()
+--   @Right ()@ when the file was durably replaced; @Left@ naming the
+--   path and the cause when it was not.
+--
+--   __Live state on a failed write (#2202).__ Keybindings are
+--   write-through: the editor mutates the live 'KeyBindings' ref first
+--   and persists afterwards, so a failed write leaves the player's new
+--   binding ACTIVE for the rest of the session and only loses it at the
+--   next boot. Reverting the live ref to undo a disk failure would take
+--   the player's rebind away in front of them, which is why this
+--   deliberately does not.
+--
+--   The write goes through 'writeConfigYaml', so a crash part way
+--   through can never leave a truncated @config/keybinds.local.yaml@ —
+--   which the loader would report as malformed and silently replace
+--   with the defaults.
+saveKeyBindings ∷ LoggerState → FilePath → KeyBindings → IO (Either Text ())
 saveKeyBindings logger path bindings = do
-    Yaml.encodeFile path (KeyBindingConfig bindings)
-    logInfo logger CatInput $ "Saved keybindings to " <> T.pack path
-                            <> " (" <> tshow (Map.size bindings) <> " actions)"
+    written ← writeConfigYaml path (KeyBindingConfig bindings)
+    case written of
+        Right () → do
+            logInfo logger CatInput $
+                "Saved keybindings to " <> T.pack path
+                  <> " (" <> tshow (Map.size bindings) <> " actions)"
+            return (Right ())
+        Left err → do
+            logWarn logger CatInput $ "Keybindings not saved: " <> err
+            return (Left err)
 
 -- | True when *any* key bound to the action is currently held.
 isActionDown ∷ Text → KeyBindings → InputState → Bool

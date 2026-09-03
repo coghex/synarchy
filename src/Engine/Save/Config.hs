@@ -55,6 +55,7 @@ import Data.Aeson
     (Object, Value(..), FromJSON(..), ToJSON(..), (.:?), (.=), object)
 import Data.Aeson.Types (Pair, Parser, parseMaybe)
 import Control.Exception (SomeException, try)
+import Engine.Core.ConfigWrite (writeConfigYaml)
 import System.Directory (doesFileExist, removeFile)
 import Engine.Core.Log (LoggerState, LogCategory(..), logInfo, logWarn)
 
@@ -254,13 +255,23 @@ clearLocalFile logger path = do
                     <> T.pack path
                 pure (Right ())
 
+-- | Publish the sparse override document. The write goes through
+--   'writeConfigYaml' (#2202), so a crash part way through can never
+--   leave a truncated @config/save.local.yaml@ — which
+--   'loadSaveConfig''s per-key overlay would silently resolve past,
+--   handing the player back the tracked template's autosave interval
+--   without ever saying the file was damaged.
+--
+--   __Live state on a failed write (#2202).__ Unchanged: this family
+--   has no live ref of its own. @engine.setSaveConfig@ pushes the
+--   applied values to the Lua-side scheduler independently of this
+--   write, so a failed persist leaves the running autosave cycle on the
+--   values the player just applied and loses them only at the next boot.
 writeOverrides ∷ LoggerState → FilePath → [Pair] → IO (Either Text ())
 writeOverrides logger path overrides = do
-    written ← try (Yaml.encodeFile path (object ["save" .= object overrides]))
-    case written ∷ Either SomeException () of
-        Left e → do
-            let msg = "could not write " <> T.pack path <> ": "
-                        <> tshow e
+    written ← writeConfigYaml path (object ["save" .= object overrides])
+    case written of
+        Left msg → do
             logWarn logger CatInit $ "save config: " <> msg
             pure (Left msg)
         Right () → do
