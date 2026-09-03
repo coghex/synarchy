@@ -60,6 +60,9 @@ module World.Flora.Identity
     , firstPlantedFloraCursor
     , nextPlantedFloraCursor
     , plantedFloraCursorAbove
+      -- * Placement salts (#2241)
+    , floraPlacementSalt
+    , floraInstanceSalt
       -- * Boundary encoding
     , floraInstanceIdToLua
     , floraInstanceIdFromLua
@@ -160,6 +163,35 @@ generatedFloraInstanceId pageKey cgx cgy speciesName ordinal =
     -- therefore shares an id, which is far below the birthday-collision
     -- floor the 62-bit space already carries.
     nonZero w = if w ≡ 0 then 1 else w
+
+-- | The salt one species' per-tile PLACEMENT roll is drawn with
+--   (#2241). Derived from that species' own authored key — the same
+--   'World.Flora.Types.floraWorldGenKey' that orders
+--   'World.Flora.Types.worldGenSpecies' — and from nothing positional:
+--   not the registration-order 'World.Flora.Types.FloraId', not the
+--   'Data.HashMap.Strict.toList' traversal behind that list, and not
+--   an index into it. Adding, removing or reordering an unrelated
+--   species therefore cannot change whether this one places.
+--
+--   Lives beside 'generatedFloraInstanceId' because it is the same
+--   promise about the same key, and because 'hashText' — the
+--   unsalted, release-stable FNV-1a these values must never lose —
+--   is defined here.
+floraPlacementSalt ∷ Text → Word64
+floraPlacementSalt key =
+    avalanche (hashText key `xor` 0x506C616365526F6C)   -- "PlaceRol"
+
+-- | The salt ONE placed instance's own sub-tile offset, variant and
+--   initial age are drawn with (#2241): the species' authored key and
+--   that instance's 0-based ordinal on the tile, never a list index.
+--
+--   Disjoint from 'floraPlacementSalt' by construction — the two fold
+--   in different constants — so an instance draw can never reproduce
+--   the roll that admitted it.
+floraInstanceSalt ∷ Text → Int → Word64
+floraInstanceSalt key ordinal =
+    avalanche (hashText key `xor` 0x496E7374616E6365    -- "Instance"
+                            `xor` (fromIntegral ordinal * 0x9E3779B97F4A7C15))
 
 -- | The splitmix64/murmur3 finalizer: spread every input bit across
 --   the whole word before the namespace mask throws the top two away.

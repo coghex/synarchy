@@ -9,14 +9,18 @@ on a warm checkout.
 Composition (#2070)
 -------------------
 This module is composition, dispatch and reporting only -- it holds no
-test body. The 62 test groups live with six owners, each of which keeps
+test body. The 65 test groups live with six owners, each of which keeps
 its own ordered inventory in `TESTS`:
 
   `test_audit_categories`        the emitted-category inventory derived
-                                 from world_audit.py's source by AST, and
-                                 its two mutation groups (2);
-  `test_audit_world_audit`       world_audit.py's checks over synthetic
-                                 grids and the tracked real lava dump (26);
+                                 by AST from the source of every module
+                                 backing the live ALL_CHECKS registry,
+                                 its two mutation groups, and the #2224
+                                 closure of that derivation (3);
+  `test_audit_world_audit`       world_audit's checks over synthetic
+                                 grids, the tracked real lava dump, and
+                                 the #2224 registry composition and
+                                 façade surface (28);
   `test_audit_world_check`       world_check.py's summary comparison and
                                  determinism status (14);
   `test_audit_content_hash`      the baseline content-hash gate, #1361 (4);
@@ -87,10 +91,13 @@ OWNERS = {
 #: The group count each owner carried at the split (#2070, requirement
 #: 16): 28 audit/category groups as 26 + 2, then 14, 4, 9 and 7 -- 62 in
 #: all. A floor, not an exact count, so a legitimately added group joins
-#: without an edit here; an owner declaring FEWER is a truncation.
+#: without an edit here; an owner declaring FEWER is a truncation. The
+#: world_audit floor rose to 28 and the categories floor to 3 with
+#: #2224, which added the registry composition and façade surface groups
+#: to the first and the inventory-closure group to the second.
 MINIMUM_GROUPS = {
-    "world_audit": 26,
-    "categories": 2,
+    "world_audit": 28,
+    "categories": 3,
     "world_check": 14,
     "content_hash": 4,
     "strict_capture": 9,

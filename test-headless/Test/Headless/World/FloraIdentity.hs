@@ -259,12 +259,14 @@ spec = do
 
       it "does not rename a surviving plant when an unrelated species is \
          \added or reordered" $ do
-        -- The hazard the issue names: generated placement salts its
-        -- ROLLS off the species' position in worldGenSpecies, which
-        -- comes from a HashMap. An id derived from that position — or
-        -- from the registration-order FloraId — would rename plants
-        -- nobody touched. These two catalogs give "probe_oak" DIFFERENT
-        -- FloraIds and different list positions; the id must not move.
+        -- The hazard the issue names: an id derived from a species'
+        -- position in worldGenSpecies — or from its registration-order
+        -- FloraId — would rename plants nobody touched. These two
+        -- catalogs give "probe_oak" DIFFERENT FloraIds and different
+        -- list positions; the id must not move. (#2241 later extended
+        -- the same promise to the placement ROLLS themselves, which
+        -- did salt off that position at the time this was written;
+        -- "Test.Headless.World.FloraOrder" owns that half.)
         let catA = emptyFloraCatalog
                 { fcSpecies = HM.fromList [(1, bare "probe_oak")]
                 , fcNextId = 2 }

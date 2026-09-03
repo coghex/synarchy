@@ -2,9 +2,12 @@
 -- | Item-definition discovery (#1232, PLC-1 of epic #1231): items are
 --   the one data family whose definitions may be organized into logical
 --   subdirectories, so @data\/items\/@ is walked recursively and loaded
---   in one canonical order, while every other family — flora above all,
---   whose ids are allocated in load order and salt worldgen placement —
---   keeps @engine.listFiles@'s flat, OS-ordered enumeration untouched.
+--   in one canonical order, while every other family keeps
+--   @engine.listFiles@'s flat enumeration untouched. Flora is flat too,
+--   but no longer OS-ordered: #2241 gave it @canonicalFileOrder@ at its
+--   own call site, because its sequential ids are what a save's numeric
+--   flora references name ('Test.Headless.Startup.AssetLogging' owns
+--   that half).
 --
 --   Three layers, because the contract is split across three of them and
 --   an assertion at one layer cannot see a break in another:

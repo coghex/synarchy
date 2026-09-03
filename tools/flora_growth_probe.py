@@ -22,9 +22,11 @@ needs worldgen) and checks the DERIVED growth runtime end-to-end:
      fruiting stage — mirrors the real white_clover's phases/annual
      cycle rather than depending on natural white_clover placement,
      which isn't guaranteed inside the probe's fixed scan region). Both
-     are appended AFTER the data/flora species, in that order, so the
-     real species' placement rolls AND probe_berry's own index stay
-     untouched.
+     register AFTER the data/flora species and BEFORE world.init, which
+     is what makes them visible to worldgen; since #2241 a placement
+     roll is salted from the species' own authored NAME rather than its
+     catalog position, so registering them cannot move a shipped
+     species' roll whatever order it happens in.
   4. Aging + reseed: jumping the date years ahead grows ages; far
      enough out a perennial has wrapped to generation >= 1 (the old
      plant died through the dead window and reseeded).
@@ -454,16 +456,19 @@ def bootstrap(port, art):
                  + ", ".join(rejected))
     print(f"  [PASS] all {len(shipped)} shipped data/flora/*.yaml files "
           f"still register")
-    # The probe's own fruiting species — appended after the real flora
-    # so their placement hashes (indexed by registration order) are
-    # untouched. Max-tolerance worldGen: places on any seed.
+    # The probe's own fruiting species, registered after the shipped
+    # flora simply because worldgen reads the catalog when it generates
+    # a chunk. Placement is salted from each species' authored NAME
+    # since #2241, so this order no longer changes anyone else's rolls;
+    # what it still has to do is register before world.init.
+    # Max-tolerance worldGen: places on any seed.
     berry_path = art.fixture("probe_berry")
     with open(berry_path, "w") as f:
         f.write(PROBE_BERRY_YAML)
     load_fixture_yaml(port, "engine.loadFloraYaml", berry_path)
-    # The probe's own no-fruiting-stage species — appended AFTER
-    # probe_berry so both the real flora's indices and probe_berry's
-    # own index stay untouched. Max-tolerance worldGen: places on any
+    # The probe's own no-fruiting-stage species. Its name is distinct
+    # from probe_berry's, which since #2241 is all that keeps their
+    # placement rolls apart. Max-tolerance worldGen: places on any
     # seed, same as probe_berry.
     clover_path = art.fixture("probe_clover")
     with open(clover_path, "w") as f:
@@ -485,7 +490,7 @@ def set_date(port, page, y, mo, d):
 
 
 def find_species_tile(port, species, harvestable=None, exclude=None,
-                       extra_cond=None, lo=-64, hi=64):
+                       extra_cond=None, sole=False, lo=-64, hi=64):
     """Scan the loaded region for the first tile whose FIRST-listed
     instance of `species` (array order — the same instance
     growth_entry's plain species-id lookup below reads back, so search
@@ -500,20 +505,31 @@ def find_species_tile(port, species, harvestable=None, exclude=None,
     share a tile: world.harvestFlora resolves a shared tile's "first
     harvestable" pick by internal list order, not registration order,
     so a harvest-action test on one owned fixture must land on a tile
-    the other owned fixture isn't also standing on. Returns (gx, gy) or
-    None."""
+    the other owned fixture isn't also standing on.
+
+    `sole` requires the tile carry EXACTLY ONE instance of `species`
+    itself. A groundcover placement rolls two or three onto a tile
+    routinely (World.Flora.Placement's instanceCount), and a bare
+    `world.harvestFlora(gx, gy)` takes ONE of them — so any check about
+    what a SECOND call on the same tile does has to start from a tile
+    with nothing left to fall through to. Without it the check is
+    hostage to how many plants that particular tile happened to roll,
+    which #2241 moved once by re-salting the roll off the species name.
+    Returns (gx, gy) or None."""
     cond = f"e.id=='{species}'"
     if harvestable is not None:
         cond += f" and e.harvestable=={'true' if harvestable else 'false'}"
     if extra_cond is not None:
         cond += f" and ({extra_cond})"
+    if sole:
+        cond += " and n==1"
     bad_cond = f"x.id=='{exclude}'" if exclude is not None else "false"
     r = send(
         port,
         f"for gx={lo},{hi} do for gy={lo},{hi} do "
         f"local t=world.getFloraGrowthAt(gx,gy); "
-        f"if t then local e,bad=nil,false; for _,x in ipairs(t) do "
-        f"if e==nil and x.id=='{species}' then e=x end; "
+        f"if t then local e,bad,n=nil,false,0; for _,x in ipairs(t) do "
+        f"if x.id=='{species}' then n=n+1; if e==nil then e=x end end; "
         f"if {bad_cond} then bad=true end end; "
         f"if e and ({cond}) and not bad then return gx..','..gy end end "
         f"end end return 'none'",
@@ -612,8 +628,15 @@ def run_probe(args, art) -> bool:
         # max-tolerance fixtures that commonly share a tile, and a
         # shared tile's harvestFlora pick (test 3d below) must
         # unambiguously resolve to the raspberry under test.
+        #
+        # `sole` for the same reason one step further in: 3b harvests
+        # this tile and then asserts the NEXT bare harvest is refused
+        # while the timer runs. A tile carrying two or three raspberries
+        # — which a groundcover roll produces routinely — would answer
+        # that second call from a co-tenant whose timer has not started,
+        # and the refusal under test would never be reached.
         rasp = find_species_tile(port, "probe_berry", harvestable=True,
-                                  exclude="probe_clover")
+                                  exclude="probe_clover", sole=True)
         if not rasp:
             print(f"  [FAIL] probe_berry fixture not found in scan region "
                   f"— this is a fixture-placement regression, not a "

@@ -2,6 +2,7 @@ module Engine.Scripting.Lua.API.Register.World
   ( registerWorldAPI
   ) where
 
+import Engine.Core.Capability.Core (toCoreCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.World
@@ -164,7 +165,8 @@ registerWorldAPI env backendState = do
   Lua.setglobal (Lua.Name "world")
 
   Lua.newtable
-  registerLuaFunction "register" (floraRegisterFn (toWorldSimCapability env))
+  registerLuaFunction "register"
+    (floraRegisterFn (toCoreCapability env) (toWorldSimCapability env))
   registerLuaFunction "setLifecycle" (floraSetLifecycleFn (toWorldSimCapability env))
   registerLuaFunction "addCycleStage" (floraAddCycleStageFn (toWorldSimCapability env))
   registerLuaFunction "addCycleOverride" (floraAddCycleOverrideFn (toWorldSimCapability env))

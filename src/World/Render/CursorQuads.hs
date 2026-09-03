@@ -10,7 +10,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector as V
 import Data.IORef (readIORef, atomicModifyIORef')
-import Engine.Core.State (EngineEnv, buildingManagerRef, loggerRef)
+import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Core.Capability.RenderHandoff
   (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Engine.Core.Capability.RenderView
@@ -22,18 +22,21 @@ import Engine.Asset.Handle (toInt)
 import Engine.Scene.Types (SortableQuad(..))
 import Engine.Graphics.Camera (Camera2D(..))
 import Building.Types (BuildingManager(..))
+import Building.Render (buildingGhostQuad)
+import Building.Placement (buildingAnchorZ)
+import Building.Visual (buildingStakedAt, designatedGhostAlpha)
+import Engine.Graphics.Vulkan.Types.Vertex (noFaceMapVertexId)
 import World.Types
 import World.Generate (viewDepth)
 import World.Generate.Coordinates
     (globalToChunk, canonicalTileFrame, localizeTileToAnchor)
 import World.Mine.Types (MineDesignation(..))
-import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..)
-                            , constructDesignationFootprint
-                            , constructDesignationFootprintSize)
+import World.Construct.Types (ConstructDesignation(..), ConstructTarget(..))
 import World.Till.Types (TillDesignation(..))
 import World.Plant.Types (PlantDesignation(..))
 import World.Construct.Extent (structureDragExtent)
 import World.Construct.Plan (PlanWorld(..))
+import Structure.Render (translateQuad)
 import World.Render.StructureGhost
     ( GhostEnv(..), structureDesignationGhosts, structurePreviewGhosts )
 import World.Render.Camera (placementCamera, quadCacheMargins)
@@ -57,9 +60,10 @@ import World.Render.SpriteDepth (frameFrontWallLift, liftSpriteSortKey)
 maxMinePreviewSide ∷ Int
 maxMinePreviewSide = 64
 
-renderWorldCursorQuads ∷ EngineEnv → WorldState → Float → IO (V.Vector SortableQuad)
-renderWorldCursorQuads env worldState tileAlpha =
-    snd ⊚ renderWorldCursorQuadsScanned env worldState tileAlpha
+renderWorldCursorQuads ∷ EngineEnv → BuildingManager → WorldPageId
+                       → WorldState → Float → IO (V.Vector SortableQuad)
+renderWorldCursorQuads env bm pageId worldState tileAlpha =
+    snd ⊚ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha
 
 -- | 'renderWorldCursorQuads' with the scene-assembly telemetry (#1921)
 --   this pass contributes: the marker-tile CANDIDATES it evaluated,
@@ -67,9 +71,11 @@ renderWorldCursorQuads env worldState tileAlpha =
 --
 --   \"Candidates\" is the set the ACTIVE tool mode's returned vector is
 --   built from, and nothing else: the always-on marker builders (mine,
---   chop, till, plant, and construction designations expanded to their
---   full footprints) plus that mode's own hover, selection and preview
---   builders. This module is @Strict@, so every builder's bindings are
+--   chop, till, plant, and the two construction ghosts — one candidate
+--   per committed BUILDING designation since #1845 made it one sprite
+--   rather than one marker per footprint tile, and one per unpaid
+--   STRUCTURE site, counted by that builder itself) plus that mode's
+--   own hover, selection and preview builders. This module is @Strict@, so every builder's bindings are
 --   forced whichever mode is active — but a builder whose quads the
 --   mode does not return contributed no candidate to the answer, and
 --   counting it would pair a scanned total with an unrelated emitted
@@ -80,8 +86,9 @@ renderWorldCursorQuads env worldState tileAlpha =
 --   candidate may still emit two quads (a background and a foreground),
 --   so no @emitted <= scanned@ relation holds here.
 renderWorldCursorQuadsScanned
-    ∷ EngineEnv → WorldState → Float → IO (Int, V.Vector SortableQuad)
-renderWorldCursorQuadsScanned env worldState tileAlpha = do
+    ∷ EngineEnv → BuildingManager → WorldPageId → WorldState → Float
+    → IO (Int, V.Vector SortableQuad)
+renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
     let rv = toRenderViewCapability env
     camera   ← readIORef (rvCameraRef rv)
     tileData ← readIORef (wsTilesRef worldState)
@@ -316,21 +323,20 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
                     ]
 
     -- Construction-designation ghosts (#95): world annotations like the
-    -- mine markers, visible in every tool mode. A BUILDING renders with
-    -- its category blueprint texture; a STRUCTURE renders its own piece
-    -- art through 'World.Render.StructureGhost' (#1846).
+    -- mine markers, visible in every tool mode. Since #1846 a STRUCTURE
+    -- renders its own piece art through 'World.Render.StructureGhost';
+    -- since #1845 a BUILDING renders its OWN art too, so no category
+    -- placeholder is left in this pass at all.
     constructDesigns ← readIORef (wsConstructDesignationsRef worldState)
-    bm ← readIORef (buildingManagerRef env)
 
-    -- #807: a CtBuilding designation is stored as ONE anchor-only map
-    -- entry regardless of footprint size (one durable job), so it must
-    -- be expanded here into the def's full footprint — the ghost used
-    -- to render only the anchor tile. A designation naming a def
-    -- missing from bmDefs (a broken save/mod) falls back to that
-    -- anchor-only tile instead of guessing geometry
-    -- (constructDesignationFootprint); since this pass runs every
-    -- frame, warn about it only ONCE per distinct missing name per
-    -- session rather than flooding the log.
+    -- A designation naming a def missing from bmDefs (a broken save or
+    -- mod) draws NOTHING (#1845 requirement 7). #807's anchor-tile
+    -- fallback is gone: a fabricated marker for a definition this
+    -- session cannot resolve claims a footprint, an anchor and an
+    -- appearance nobody can substantiate, and the honest report of that
+    -- state is the diagnostic alone. Since this pass runs every frame,
+    -- warn only ONCE per distinct missing name per session rather than
+    -- flooding the log.
     let missingBuildingDefs = HS.fromList
             [ defName
             | (_, cd) ← HM.toList constructDesigns
@@ -344,7 +350,7 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
         forM_ (HS.toList newlyMissingDefs) $ \defName →
             logWarn logger CatRender $
                 "construction blueprint: unknown building def '"
-                <> defName <> "' — rendering anchor tile only"
+                <> defName <> "' — drawing no ghost"
         atomicModifyIORef' (wsCursorRef worldState) $ \cs →
             ( cs { constructMissingDefsWarned =
                      HS.union newlyMissingDefs (constructMissingDefsWarned cs) }
@@ -388,39 +394,61 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
         structureGhosts = structureDesignationGhosts ghostEnv
         structureGhostQuads = snd structureGhosts
 
-    -- Only BUILDINGS still draw a category marker. Structures draw the
-    -- piece's own art through 'World.Render.StructureGhost' below
-    -- (#1846); DTV-10 (#1845) retires this remaining half and the
-    -- mechanism with it.
-    let constructTexFor cd = case cdTarget cd of
-            CtStructure _ → Nothing
-            CtBuilding  _ → constructBuildingTexture cs'
-        -- Build-progress display (#96): the blueprint ghost solidifies
-        -- as the build AI pours progress in — a fresh designation sits
-        -- at 45 % alpha and ramps to opaque at progress 1.0 (the piece
-        -- itself then replaces the ghost). The mining analogue carves
-        -- terrain slopes per corner; construction ADDS material, so the
-        -- ramp is the marker-level equivalent. Applied uniformly across
-        -- every footprint tile of a building designation, same as the
-        -- texture — one job, one consistent tint/alpha (#807 req 3).
-        --
-        -- This ramp is a BUILDING behaviour now. A structure site never
-        -- solidifies: D-15/D-16 make it vanish outright once its
-        -- materials are paid for, and #1846 implements that.
-        constructAlphaFor cd =
-            tileAlpha * (0.45 + 0.55 * max 0.0 (min 1.0 (cdProgress cd)))
+    -- The committed BUILDING designation (#1845, D-19): ONE ghost of the
+    -- building's own art, at D-19's 60 %, never tinted — the red is
+    -- placement feedback and the player already committed to this job
+    -- (requirement 5). #807's per-footprint-tile repetition of a
+    -- category marker is deliberately reversed: one building, one
+    -- sprite, sized and anchored by 'buildingGhostQuad', the very body
+    -- the placement preview draws through.
+    --
+    -- Two designations are NOT drawn. A def this session cannot resolve
+    -- draws nothing (warned about above), and a designation whose
+    -- building has already been STAKED yields to the instance: the
+    -- spawn lands on the building queue while the completion removes
+    -- the designation on the world queue, so a frame can see both, and
+    -- both are the same 60 % ghost of the same def at the same anchor
+    -- (requirement 3). Drawing them together would double the opacity
+    -- for the width of that hand-off.
+    -- The z the ghost sits at is the z the STAKE will land on, read
+    -- live from the anchor's own terrain by the very function
+    -- 'building.spawn' stamps 'biGridZ' from. 'cdZ' — the surface level
+    -- captured at designation time — is the fallback for a
+    -- non-resident chunk, the one state nobody can answer for. Reading
+    -- the stored value instead would leave a designation whose ground
+    -- has since been edited drawing at a z the building will not land
+    -- on, and the hand-off this slice makes invisible would move it.
+    let designationZ ax ay cd =
+            fromMaybe (cdZ cd) (buildingAnchorZ worldSize tileData ax ay)
         constructDesignQuads
             | HM.null constructDesigns = V.empty
             | otherwise = V.fromList
-                [ worldCursorToQuad lookupSlot lookupFmSlot textures
-                      facing fx fy (cdZ cd) zSlice effectiveDepth
-                      (constructAlphaFor cd) wrapOff tex
-                | (anchor, cd) ← HM.toList constructDesigns
-                , Just tex ← [constructTexFor cd]
-                , (fx, fy) ← constructDesignationFootprint (bmDefs bm) anchor cd
-                , let (chunkCoord, _) = globalToChunk fx fy
+                [ quad
+                | ((ax, ay), cd) ← HM.toList constructDesigns
+                , CtBuilding defName ← [cdTarget cd]
+                , Just def ← [HM.lookup defName (bmDefs bm)]
+                , not (buildingStakedAt pageId defName (ax, ay)
+                                        (bmInstances bm))
+                , let (chunkCoord, _) = globalToChunk ax ay
                 , Just wrapOff ← [isChunkVisibleWrapped facing worldSize
                                       vb camX camY chunkCoord]
+                , Just built ← [buildingGhostQuad lookupSlot noFaceMapVertexId
+                                    facing zSlice effectiveDepth texSizes
+                                    tileAlpha designatedGhostAlpha True def
+                                    ax ay (designationZ ax ay cd)]
+                  -- Chunks are stored u-wrapped, so the visibility test
+                  -- answers through the NEAREST alias and hands back that
+                  -- alias's screen offset. The quad is built at the
+                  -- tile's own coordinates and then translated by it —
+                  -- the same two-step every other world annotation takes
+                  -- (#1175/#1176), and the same one
+                  -- 'World.Render.StructureGhost' takes for a structure
+                  -- ghost. 'translateQuad' moves positions only: sort
+                  -- key and world UV are untouched, so a seam-side ghost
+                  -- keeps sorting and lighting as the tile it plans on.
+                  -- Away from the seam the offset is (0, 0) and this is
+                  -- the identity.
+                , let quad = translateQuad wrapOff built
                 ]
 
     -- Hover quads (bg + fg) — used by both info and mine tools.
@@ -609,17 +637,19 @@ renderWorldCursorQuadsScanned env worldState tileAlpha = do
           + designationScanned (chopDesignTexture cs') chopDesigns
           + designationScanned (tillDesignTexture cs') tillDesigns
           + designationScanned (plantDesignTexture cs') plantDesigns
-          -- A construction designation is stored anchor-only and
-          -- expands to the def's whole footprint (#807), so its
-          -- candidates are the FOOTPRINT tiles, not the map entries.
-          -- Folded strictly over the map itself rather than over a
-          -- second 'HM.toList': requirement 9 forbids the counter
+          -- One candidate per committed BUILDING designation (#1845):
+          -- the map entry IS the candidate now that the ghost is one
+          -- sprite rather than one marker per footprint tile. Counted
+          -- before the def lookup, the staking yield and the visibility
+          -- cull reject any of them — those rejections are exactly what
+          -- an emitted count below the scanned one records. Folded
+          -- strictly over the map itself rather than over a second
+          -- 'HM.toList': #1921 requirement 9 forbids the counter
           -- allocating in proportion to the candidates it counts, and
           -- an empty map folds to 0 without a guard.
-          + HM.foldl' (\acc cd →
-                if isJust (constructTexFor cd)
-                then acc + constructDesignationFootprintSize (bmDefs bm) cd
-                else acc) 0 constructDesigns
+          + HM.foldl' (\acc cd → case cdTarget cd of
+                CtBuilding _  → acc + 1
+                CtStructure _ → acc) 0 constructDesigns
           -- Structure designations left that fold when they stopped
           -- using a category marker (#1846); their candidates are the
           -- unpaid structure sites the ghost builder enumerates, counted

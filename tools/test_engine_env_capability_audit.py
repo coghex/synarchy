@@ -44,8 +44,9 @@ its own ordered inventory in `TESTS`:
   `test_engine_env_capability_writers`             the SS5
       writing-module scanner, the focused owner issue #2036 gave it
       (issues #1892, #2059). It is the one owner with a command line
-      of its own, runnable alone for iteration; the aggregate composes
-      its `TESTS` and never calls its `main`.
+      of its own, runnable alone for iteration -- whole, or one of its
+      own case owners at a time since #2228 split it in turn; the
+      aggregate composes its `TESTS` and never calls its `main`.
 
 `test_engine_env_capability_audit_support` is the single source of what
 two or more of the first five share: the #1922 assertion facility, the
@@ -53,7 +54,12 @@ synthetic EngineEnv record and inventory-document builders, the two
 real-repository readers, and the persistence-inventory audit's
 `extract_record_fields`. Dependencies run one way -- support imports no
 owner, owners import support and the production audit modules they
-exercise, and only this façade imports the owners.
+exercise, and only this façade imports the owners. The writers owner
+repeats that shape one level down, behind its own façade: it has case
+owners and a support module of its own, and this file names none of
+them. `_sources` below reads the topology the owner publishes instead,
+so a composing owner's inventory is still checked in both directions
+without this façade learning what its children are called.
 
 `compose()` builds the run sequence this gate has always used: the
 owner inventories concatenated in the order above, with one seam. The
@@ -125,17 +131,51 @@ class CompositionError(Exception):
     """The owner inventories no longer compose into the complete run."""
 
 
+#: The attribute a COMPOSING owner uses to name the owners it composes
+#: -- the same name this module gives its own mapping, because it is
+#: the same idea one level down.
+COMPOSED_OWNERS = "OWNERS"
+
+
+def _sources(module: ModuleType) -> list[ModuleType]:
+    """The modules whose definitions count as `module`'s own.
+
+    Usually just `module`. An owner that is itself a façade -- the
+    writer owner since #2228 -- defines only its composition guard and
+    builds its `TESTS` from case owners of its own, which it publishes
+    in a `COMPOSED_OWNERS` mapping. Reading that mapping off the module
+    is what keeps THIS file ignorant of the writer child topology: it
+    never names, imports, or orders a child module, and gains no
+    knowledge of one that has not published itself. Composition
+    nests, so a child that composes in turn is followed the same way.
+    """
+    composed = getattr(module, COMPOSED_OWNERS, None)
+    if not isinstance(composed, dict):
+        return [module]
+    found = [module]
+    for child in composed.values():
+        if isinstance(child, ModuleType) and child not in found:
+            found.extend(_sources(child))
+    return found
+
+
 def _defined_cases(module: ModuleType) -> dict[str, object]:
     """Every module-level `test_*` function the owner itself defines.
 
     Membership is by definition, not by attribute: a function an owner
     merely imported from a sibling is not its case, so it can neither
-    pad this owner's inventory nor be run twice under two owners.
+    pad this owner's inventory nor be run twice under two owners. A
+    composing owner's own definitions are its case owners' too, so both
+    directions below keep their bite across a nested split -- an
+    inventory entry no composed module defines is still refused, and a
+    `test_*` a composed module defines that the owner's inventory omits
+    is still refused.
     """
     return {
-        name: value for name, value in vars(module).items()
+        name: value for source in _sources(module)
+        for name, value in vars(source).items()
         if name.startswith("test_") and inspect.isfunction(value)
-        and value.__module__ == module.__name__
+        and value.__module__ == source.__name__
     }
 
 

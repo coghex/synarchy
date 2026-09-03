@@ -130,7 +130,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 97
+currentSaveVersion = 98
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -311,10 +311,15 @@ data WorldPageSave = WorldPageSave
         -- ^ Construction designations (#95): build target + status +
         --   progress per tile.
         --
-        --   A BUILDING marker re-renders from the stored z like a mine
-        --   designation, so its restoration needs no chunk loading.
+        --   NEITHER ghost re-renders from the stored z the way a mine
+        --   designation does. A BUILDING ghost reads the anchor's live
+        --   terrain for the z its stake will land on (#1845), falling
+        --   back to the stored value only where that terrain is not
+        --   resident — so a restored designation over an unpublished
+        --   chunk draws at its saved level and snaps to the real one
+        --   when the chunk arrives, rather than being absent.
         --
-        --   A STRUCTURE ghost does need resident terrain (#1846): it
+        --   A STRUCTURE ghost is stricter (#1846): it
         --   draws the piece's own art at the final grid z
         --   'World.Construct.Plan' resolves, and that resolution reads
         --   live terrain. This is NOT a restoration requirement — the

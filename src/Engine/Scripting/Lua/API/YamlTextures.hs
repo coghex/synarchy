@@ -25,8 +25,9 @@ import Engine.Core.State (EngineEnv, loggerRef
    )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Core.Log (LogCategory(..), logDebug, logWarn)
-import Engine.Scripting.Lua.API.YamlResult (pushYamlResult)
+import Engine.Core.Log (LogCategory(..), logDebug, logError, logWarn)
+import Engine.Scripting.Lua.API.YamlResult
+    (pushYamlRefusal, pushYamlResult)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import Engine.Asset.Handle (TextureHandle(..), AssetState(..))
 import Engine.Asset.Types (AssetPool)
@@ -239,6 +240,14 @@ isTextureNameRegistered env name =
 
 -- | Parse a flora YAML: load textures, build species and world-gen entries,
 --   insert into the FloraCatalog. Returns number of textures queued.
+--
+--   #2241: the authored @name@ is flora's stable species key — it keys
+--   the placement salts, the per-plant identity and, after #2243, a
+--   save's own references — so two species may not share one. The whole
+--   file is PREFLIGHTED against that before any of it is registered
+--   (see 'duplicateFloraNames'); a collision refuses the file entire and
+--   answers through 'pushYamlRefusal', leaving the catalog, the id
+--   allocator, the texture registry and the load queue untouched.
 loadFloraYamlFn ∷ EngineEnv → LuaBackendState
                 → Lua.LuaE Lua.Exception Lua.NumResults
 loadFloraYamlFn env backendState = do
@@ -247,7 +256,7 @@ loadFloraYamlFn env backendState = do
         Nothing → pushYamlResult False 0
         Just pathBS → do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
-            (parsed, count) ← Lua.liftIO $ do
+            outcome ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
                 mDefs ← loadFloraYamlOutcome logger filePath
                 let defs = fromMaybe [] mDefs
@@ -255,18 +264,55 @@ loadFloraYamlFn env backendState = do
                 let (lteq, _) = lbsMsgQueues backendState
                     catRef = wsFloraCatalogRef (toWorldSimCapability env)
 
-                total ← foldM (\acc def → do
-                    texCount ← registerFloraSpecies env backendState lteq catRef def
-                    return (acc + texCount)
-                    ) (0 ∷ Int) defs
+                -- Preflight BEFORE anything observable happens.
+                -- 'registerFloraSpecies' allocates an id and queues
+                -- textures well before its catalog insert, so a refusal
+                -- decided partway through would already have advanced
+                -- fcNextId and registered texture names for the
+                -- definitions ahead of the collision.
+                existing ← readIORef catRef
+                case duplicateFloraNames existing defs of
+                    Just clash → do
+                        logError logger CatAsset $
+                            "loadFloraYaml: refused " <> T.pack filePath
+                            <> " entirely: duplicate flora name '"
+                            <> clash <> "' — the authored name is a "
+                            <> "species' stable key and must be unique"
+                        return (Left clash)
+                    Nothing → do
+                        total ← foldM (\acc def → do
+                            texCount ← registerFloraSpecies env backendState lteq catRef def
+                            return (acc + texCount)
+                            ) (0 ∷ Int) defs
 
-                logDebug logger CatAsset $
-                    "loadFloraYaml: loaded " <> tshow (length defs)
-                    <> " species (" <> tshow total
-                    <> " textures) from " <> T.pack filePath
-                return (isJust mDefs, total)
+                        logDebug logger CatAsset $
+                            "loadFloraYaml: loaded " <> tshow (length defs)
+                            <> " species (" <> tshow total
+                            <> " textures) from " <> T.pack filePath
+                        return (Right (isJust mDefs, total))
 
-            pushYamlResult parsed count
+            case outcome of
+                Left clash          → pushYamlRefusal clash
+                Right (parsed, cnt) → pushYamlResult parsed cnt
+
+-- | The first authored name in @defs@ that cannot be admitted: one
+--   already registered in @cat@, or one that appears twice within the
+--   file itself. 'Nothing' when the whole file may be registered.
+--
+--   Both halves matter and neither implies the other: a file may
+--   duplicate a shipped name without repeating itself, and a file may
+--   repeat itself while colliding with nothing already loaded. Checked
+--   in the file's own document order so the reported name is the first
+--   one an author would find.
+duplicateFloraNames ∷ FloraCatalog → [FloraYamlDef] → Maybe Text
+duplicateFloraNames cat = go []
+  where
+    go _    []           = Nothing
+    go seen (def : rest)
+        | name `elem` seen                            = Just name
+        | isJust (findSpeciesByName name cat)         = Just name
+        | otherwise                                   = go (name : seen) rest
+      where name = fydName def
 
 unknownFloraTexture ∷ FilePath
 unknownFloraTexture = "assets/textures/flora/unknown_flora.png"

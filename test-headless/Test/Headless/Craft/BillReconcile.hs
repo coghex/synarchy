@@ -366,7 +366,7 @@ spec = describe "craft bill claimant reconciliation (#1680)" $ do
         let (bills, bid) = workingBill deadUid
         -- (1) The WIRE half: through the component's own DTO and
         -- encoding, exactly as
-        -- 'World.Save.Component.Entities.craftBillsCodec' writes and
+        -- 'World.Save.Component.EntitySystems.craftBillsCodec' writes and
         -- reads a page's queue. #1680 changes nothing here — the claim
         -- and the working flag come back untouched, which is the #763
         -- verbatim-restore contract this must not disturb.

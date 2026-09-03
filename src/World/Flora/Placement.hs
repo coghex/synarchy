@@ -38,7 +38,12 @@ computeChunkFlora pageKey seed worldSize coord surfMap surfMats surfSlopes
                   fluidMap climate catalog =
     let ChunkCoord cx cy = coord
         chunkArea = chunkSize * chunkSize
-        wgSpecies = worldGenSpecies catalog
+        -- Each world-generating species paired with its own authored
+        -- key (#2241), resolved ONCE per chunk. Everything downstream
+        -- salts off that key; nothing salts off a position in this
+        -- list.
+        wgSpecies = [ (fid, wg, floraWorldGenKey catalog fid)
+                    | (fid, wg) ← worldGenSpecies catalog ]
 
         tileOrder = shuffledIndices seed cx cy chunkArea
 
@@ -101,24 +106,30 @@ shuffledIndices seed cx cy n =
 
 -- * Per-Tile Placement
 
---   #1854: the placement ROLLS still salt off @i@, this species'
---   position in the whole 'worldGenSpecies' list — changing that would
---   change which plants exist in every shipped world. The stable
---   IDENTITY deliberately does NOT: it is derived from the species'
---   own YAML @name@ and its own per-tile ordinal @j@ (see
---   'World.Flora.Identity.generatedFloraInstanceId'), so adding or
---   reordering an unrelated species cannot rename a plant that is
---   still there.
+--   #1854 made the stable per-plant IDENTITY a function of the
+--   species' own YAML @name@ and its per-tile ordinal @j@ (see
+--   'World.Flora.Identity.generatedFloraInstanceId'). #2241 finished
+--   the job: the placement ROLL and the instance draw are salted from
+--   that same authored key too ('floraPlacementSalt' /
+--   'floraInstanceSalt'), never from this species' position in the
+--   'worldGenSpecies' list. Discovery order, registration order and
+--   hash-map traversal order therefore cannot reach a roll.
+--
+--   What this does NOT promise is that adding or removing a species
+--   which actually PLACES leaves the others alone: flora share one
+--   occupancy map, and 'markOccupied' lets an earlier placement
+--   suppress a later candidate. That ecological competition is
+--   deliberate (#2241 requirement 2).
 placeTileFlora
     ∷ Text → Int → Word64 → Int → Int → Int → Int → Int
     → Word8 → Word8 → Float → Float → Float → Int
-    → [(FloraId, FloraWorldGen)]
+    → [(FloraId, FloraWorldGen, Text)]
     → FloraCatalog
     → [FloraInstance]
 placeTileFlora pageKey worldSize seed gx gy lx ly surfZ matId slopeId
                temp precip humidity altitude wgSpecies catalog =
-    concatMap (\(i, (fid, wg)) →
-        let h = floraHash seed gx gy (fromIntegral i + 100)
+    concatMap (\(fid, wg, key) →
+        let h = floraHash seed gx gy (floraPlacementSalt key)
             roll = fromIntegral (h ⌃ 0xFFFF) / 65535.0 ∷ Float
             fitness = speciesFitness wg matId slopeId
                           temp precip humidity altitude
@@ -136,12 +147,13 @@ placeTileFlora pageKey worldSize seed gx gy lx ly surfZ matId slopeId
                     spName = maybe "" fsName (lookupSpecies fid catalog)
                     (cgx, cgy) = canonicalTile worldSize gx gy
                 in [ mkInstance cat fid lx ly surfZ seed gx gy
-                         (i * 10 + j) j count baseW maxAge fitness
+                         (floraInstanceSalt key j) j count baseW maxAge
+                         fitness
                          (generatedFloraInstanceId pageKey cgx cgy spName j)
                    | j ← [0 .. count - 1]
                    ]
            else []
-    ) (zip [0..] wgSpecies)
+    ) wgSpecies
 
 -- * Max Age from Lifecycle Data
 
@@ -198,12 +210,17 @@ instanceCount cat h
 --   evenly-spaced line across the tile ("laid at intervals / in rows"),
 --   using the same offU/offV sub-tile fields every other category
 --   jitters — @j@ is this instance's 0-based position among @count@.
+--
+--   @salt@ is 'World.Flora.Identity.floraInstanceSalt' of the species'
+--   authored key and @j@ (#2241), so a jitter, variant or age is a
+--   property of WHICH plant this is, never of where its species landed
+--   in the catalog.
 mkInstance ∷ Text → FloraId → Int → Int → Int → Word64 → Int → Int
-           → Int → Int → Int → Float → Float → Float → FloraInstanceId
+           → Word64 → Int → Int → Float → Float → Float → FloraInstanceId
            → FloraInstance
-mkInstance cat fid lx ly surfZ seed gx gy i j count baseWidth maxAge health
+mkInstance cat fid lx ly surfZ seed gx gy salt j count baseWidth maxAge health
            instanceId =
-    let h = floraHash seed gx gy (fromIntegral i + 1)
+    let h = floraHash seed gx gy salt
         rawU = fromIntegral ((h `shiftR` 0)  ⌃ 0xFF) / 255.0 - 0.5
         rawV = fromIntegral ((h `shiftR` 8)  ⌃ 0xFF) / 255.0 - 0.5
 
