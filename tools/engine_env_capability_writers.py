@@ -386,7 +386,13 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "World.Thread.Command.Init",
     }),
     "unitManagerRef": frozenset({
-        "Combat.Resolution",
+        # #2328: the strike's own writes moved into
+        # Combat.Resolution.Admission.commitIfAdmitted, which applies
+        # them in the SAME transaction that re-checks the strike's
+        # preconditions. Combat.Resolution now only READS the manager
+        # (its snapshot early-out); Wear still writes it for weapon and
+        # armour wear.
+        "Combat.Resolution.Admission",
         "Combat.Resolution.Wear",
         "Combat.Wounds.Tick",
         "Engine.Scripting.Lua.API.Construct.Payment",
@@ -417,7 +423,11 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "unitQueue": frozenset(),
     "utsRef": frozenset(),
     "statRNGRef": frozenset({
-        "Combat.Resolution",
+        # #2328: combat resolution no longer draws from the shared pool
+        # at all. Combat.Thread splits a strike stream off it ONCE at
+        # worker startup -- the only write -- and carries that stream in
+        # its loop state, so a refused strike advances nothing here.
+        "Combat.Thread",
         "Combat.Wounds.Tick",
         "Engine.Scripting.Lua.API.Forage.Harvest",
         "Engine.Scripting.Lua.API.Units.Stats",
