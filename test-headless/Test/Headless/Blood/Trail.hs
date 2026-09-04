@@ -38,6 +38,8 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
 import World.Save.Types (toUnitSnapshot, fromUnitSnapshot)
+import Equipment.Types (emptyEquipmentClassManager)
+import Item.Types (emptyItemManager)
 import World.Save.Serialize (loadWorld)
 import World.Load.Stage (stageSession, renderStageError)
 import World.Load.Types (StagedSession(..), StagedPage(..))
@@ -404,8 +406,9 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
             um0 = emptyUnitManager
                 { umDefs = defs, umInstances = HM.singleton uid (minimalInst pageA (Just liveTs)) }
             snap = toUnitSnapshot pageA um0
-            (um1, orphans, unknownFactions, _) =
-                fromUnitSnapshot pageA defs emptyInfectionManager snap
+            (um1, orphans, unknownFactions, _, _) =
+                fromUnitSnapshot pageA defs emptyInfectionManager
+                    emptyEquipmentClassManager emptyItemManager snap
         orphans `shouldBe` []
         unknownFactions `shouldBe` []
         case HM.lookup uid (umInstances um1) of
@@ -447,8 +450,10 @@ lifecycleSpec = describe "Bleeding-trail lifecycle: destroy and save/load (#882)
 
         -- (1) save/load round-trip: the whole accumulator, cluster
         -- bookkeeping included, comes back Nothing.
-        let (um1, _, _, _) = fromUnitSnapshot pageA defs emptyInfectionManager
-                                 (toUnitSnapshot pageA um0)
+        let (um1, _, _, _, _) = fromUnitSnapshot pageA defs
+                                    emptyInfectionManager
+                                    emptyEquipmentClassManager emptyItemManager
+                                    (toUnitSnapshot pageA um0)
         case HM.lookup uid (umInstances um1) of
             Nothing    → expectationFailure "unit vanished across the save/load round-trip"
             Just inst' → uiTrailState inst' `shouldBe` Nothing

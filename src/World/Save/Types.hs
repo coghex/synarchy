@@ -105,6 +105,9 @@ import World.Flora.Reference
     ( FloraRef(..), renderFloraRef, resolveFloraRef, floraRefForId )
 import World.Chunk.Types (ChunkCoord(..))
 import Infection.Types (InfectionManager, lookupInfection)
+import Equipment.Types (EquipmentClassManager)
+import Equipment.Reconcile
+    (EquipmentOrphan(..), reconcileUnitEquipment)
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -114,7 +117,7 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitDef(..), UnitManager(..)
 import Unit.Direction (Direction(..))
 import Unit.Faction (factionFromTag, factionTag, parseFaction)
 import Unit.Sim.Types (UnitSimState(..))
-import Item.Types (ItemInstance(..))
+import Item.Types (ItemInstance(..), ItemManager)
 
 -- | 4-byte magic prefix of the pre-#759 flat save file. Spells
 --   "SYRA" (Synarchy) in little-endian. Detects "this isn't a save
@@ -726,6 +729,13 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       -- ^ v8: slot id → equipped item. Empty map is legal (no gear).
       --   Serialize roundtrip is positional, not name-keyed, so any
       --   future addition must go after this field; bump again if so.
+      --   The KEY is a content reference like the value's def name is,
+      --   and since #2307 'fromUnitSnapshot' reconciles it against the
+      --   equipment class the unit's definition declares today before
+      --   any of it reaches a live 'Unit.Types.Instance.UnitInstance' —
+      --   so a restored map is a subset of this one, never a superset,
+      --   and what it drops has moved into 'uisInventory' rather than
+      --   disappearing ('Equipment.Reconcile').
     , uisAccessories ∷ ![ItemInstance]
       -- ^ v10: items worn off the silhouette (robes, goggles, rings…).
       --   Order preserved. An item container added to this record must
@@ -821,10 +831,23 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
 --   longer exists; @infMgr@ is one immutable catalogue view for the whole
 --   staging attempt, never re-read per page, so a single load cannot
 --   reconcile two of its pages against different definition sets.
+--
+--   The fifth is #2307's equipment reconciliation, on exactly that
+--   footing and for exactly that reason: @ecMgr@ and @itemMgr@ are the
+--   session-wide catalogue views 'World.Load.Stage.stageSession' read
+--   once, and every saved equipment entry whose slot the unit's current
+--   class no longer declares -- or whose item kind that slot no longer
+--   accepts -- is MOVED to the unit's loose inventory here, before any
+--   caller can publish a unit carrying hidden-but-live equipment. Only
+--   the move is a diagnostic; the item itself survives exactly, which is
+--   what separates this from the two scrubs beside it
+--   ('Equipment.Reconcile').
 fromUnitSnapshot ∷ WorldPageId → HM.HashMap Text UnitDef → InfectionManager
+                 → EquipmentClassManager → ItemManager
                  → UnitSnapshot
-                 → (UnitManager, [UnitId], [Text], ImmunityScrub)
-fromUnitSnapshot page defs infMgr snap =
+                 → ( UnitManager, [UnitId], [Text], ImmunityScrub
+                   , [EquipmentOrphan] )
+fromUnitSnapshot page defs infMgr ecMgr itemMgr snap =
     let pairs = HM.toList (usnInstances snap)
         -- Everything below is derived from the units that actually made
         -- it in: an orphan's whole instance is discarded, so neither its
@@ -833,8 +856,28 @@ fromUnitSnapshot page defs infMgr snap =
                    | (uid, s) ← pairs
                    , Just d ← [HM.lookup (uisDefName s) defs]
                    ]
+        -- #2307: the equipment map is repaired BEFORE the immunity
+        -- scrub and the instance conversion below, so nothing
+        -- downstream -- not this restore's own 'uisInventory' read,
+        -- not the manager it returns -- can ever see the stale key.
+        -- The item is preserved exactly and appended to the loose
+        -- inventory; see 'reconcileUnitEquipment' for why the existing
+        -- inventory order is kept and the migrated entries are ordered
+        -- by slot id.
+        reconciled = [ (uid, d, s { uisEquipped = eq', uisInventory = inv' }
+                       , orphs)
+                     | (uid, d, s) ← kept
+                     , let (eq', inv', orphs) =
+                             reconcileUnitEquipment ecMgr itemMgr
+                                 (udEquipmentClass d) uid
+                                 (uisEquipped s) (uisInventory s)
+                     ]
+        -- Sorted, so the per-entry diagnostics a load emits are stable
+        -- rather than an enumeration of two hash maps.
+        eqOrphans = L.sortOn (\o → (unUnitId (eqoUnit o), eqoSlot o))
+                        (concat [ orphs | (_, _, _, orphs) ← reconciled ])
         resolved = [ (uid, fromUnitInstanceSnapshot page d (scrubbed s))
-                   | (uid, d, s) ← kept
+                   | (uid, d, s, _) ← reconciled
                    ]
         orphans  = [ uid
                    | (uid, s) ← pairs
@@ -874,7 +917,7 @@ fromUnitSnapshot page defs infMgr snap =
                 , umSelected  = mempty
                 , umNextId    = usnNextId snap
                 }
-    in (um, orphans, unknownFactions, immScrub)
+    in (um, orphans, unknownFactions, immScrub, eqOrphans)
 
 fromUnitInstanceSnapshot ∷ WorldPageId → UnitDef → UnitInstanceSnapshot
                          → UnitInstance
@@ -904,6 +947,10 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiModifiers   = uisModifiers s
     , uiSkills      = uisSkills s
     , uiKnowledge   = uisKnowledge s
+    -- #2307: both of these arrive ALREADY reconciled against the
+    -- unit's current equipment class -- 'fromUnitSnapshot' repairs the
+    -- snapshot before calling this -- so an entry under a retired slot
+    -- id can never reach a live instance from here.
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s

@@ -571,6 +571,7 @@ library
                      Engine.Scripting.Lua.API.Items.Ground
                      Engine.Scripting.Lua.API.Items.Render
                      Equipment.Types
+                     Equipment.Reconcile
                      Engine.Asset.YamlEquipment
                      Engine.Scripting.Lua.API.Equipment
                      Engine.Scripting.Lua.API.Equipment.Class
@@ -1508,6 +1509,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.DestructionPresentation
                    Test.Headless.Building.Ghost
                    Test.Headless.Building.Knowledge
+                   Test.Headless.Equipment.Reconcile
                    Test.Headless.Building.MachineShopConstruction
                    Test.Headless.Item.NestedContents
                    Test.Headless.Building.PageBinding

@@ -96,7 +96,8 @@ import World.Tool.Types (ToolMode(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Structure.Palette (emptyTexPalette, TexPalette(..))
 import Item.Ground (emptyGroundItems, GroundItems(..), GroundItem(..))
-import Item.Types (ItemInstance(..), ItemStorage(..))
+import Item.Types (ItemInstance(..), ItemStorage(..), emptyItemManager)
+import Equipment.Types (emptyEquipmentClassManager)
 import World.Spoil.Types (emptySpoilPiles)
 import World.Flora.Harvest (emptyFloraHarvests)
 import World.Edit.Types (emptyWorldEdits, WorldEdit(..))
@@ -3105,16 +3106,18 @@ spec = do
             woundedUnit imm wounds = (immUnit imm) { uisWounds = wounds }
             snapshotOf us = UnitSnapshot (HM.fromList us) 99
             restore infMgr snap =
-                fromUnitSnapshot page1 immunityUnitDefs infMgr snap
+                fromUnitSnapshot page1 immunityUnitDefs infMgr
+                    emptyEquipmentClassManager emptyItemManager snap
             restored infMgr snap uid =
-                let (um, _, _, _) = restore infMgr snap
+                let (um, _, _, _, _) = restore infMgr snap
                 in uiImmunities <$> HM.lookup uid (umInstances um)
-            scrubOf infMgr snap = let (_, _, _, sc) = restore infMgr snap in sc
+            scrubOf infMgr snap =
+                let (_, _, _, sc, _) = restore infMgr snap in sc
             -- Restore, then take the save the resulting session would
             -- write, through the same two adapters 'World.Load.Stage'
             -- and 'World.Thread.Command.Save.WriteWorld' use.
             resnapshotted infMgr snap uid =
-                let (um, _, _, _) = restore infMgr snap
+                let (um, _, _, _, _) = restore infMgr snap
                 in uisImmunities
                      <$> HM.lookup uid (usnInstances (toUnitSnapshot page1 um))
             pageWith us = (minimalWorldPageSave page1) { wpsUnits = us }

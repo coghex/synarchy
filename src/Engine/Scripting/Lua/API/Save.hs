@@ -847,9 +847,15 @@ continueLoad env logger requestId saveName descriptors = do
             -- what's missing (requirement 9: never silently prune
             -- affected entities). (Missing visual ASSETS stay a soft
             -- fallback, not gated here — only definitions. Equipment
-            -- slot-id keys remain a documented, pre-existing,
-            -- out-of-scope gap per docs/persistence_state_inventory.md
-            -- §9.)
+            -- slot-id KEYS are not a definition reference and are not
+            -- gated here either: since #2307 'World.Load.Stage'
+            -- reconciles each saved equipment map against the unit's
+            -- current equipment class while the session is still being
+            -- staged, moving an entry whose slot is gone — or whose item
+            -- kind that slot no longer accepts — into the unit's loose
+            -- inventory as a non-blocking diagnostic. The item
+            -- DEFINITION every such entry names is still gated right
+            -- here, and still rejects the whole load.)
             bm ← Lua.liftIO $ readIORef (buildingManagerRef env)
             um ← Lua.liftIO $ readIORef (unitManagerRef env)
             im ← Lua.liftIO $ readIORef (itemManagerRef env)
