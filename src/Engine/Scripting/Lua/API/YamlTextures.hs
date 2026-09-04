@@ -41,6 +41,7 @@ import Engine.Asset.YamlVegetation
 import Engine.Asset.YamlFlora
 import qualified Engine.Core.Queue as Q
 import World.Flora.Types
+import World.Flora.Growth (lifePhaseText, annualStageText)
 import World.Material (MaterialId(..), registerMaterial, materialIdByName)
 
 -- | If a yaml-declared texture path doesn't exist on disk, substitute the
@@ -340,67 +341,74 @@ registerFloraSpecies env backendState lteq catRef def = do
                 ("flora_base_" <> name) resolvedBase
     texCount ← newIORef (1 ∷ Int)
 
-    -- Build lifecycle
+    -- Build lifecycle. Total over the four authored spellings, with no
+    -- catch-all: an unrecognized one never reaches here because
+    -- 'Engine.Asset.YamlFlora.requireLifecycle' refuses the whole file
+    -- at decode time (#2315), and 'FloraLifecycle' has no fifth
+    -- constructor for one to arrive as.
     let lifecycle = case fydLifecycle def of
-            "perennial" → Perennial
+            LifecyclePerennial → Perennial
                 (maybe 1800.0 id (fydMinLife def))
                 (maybe 3600.0 id (fydMaxLife def))
                 (maybe 0.2 id (fydDeathChance def))
-            "annual"   → Annual
-            "biennial" → Biennial
-            _          → Evergreen
+            LifecycleAnnual    → Annual
+            LifecycleBiennial  → Biennial
+            LifecycleEvergreen → Evergreen
 
-    -- Build life phases (load a texture for each)
+    -- Build life phases (load a texture for each). Every tag arrives
+    -- already parsed and every one is registered: the unrecognized
+    -- token that used to be dropped here without a word now refuses the
+    -- whole file at decode time (#2315). The texture-registry name is
+    -- rendered back through 'lifePhaseText', the exact inverse of the
+    -- parser the author's token went through, so the registered names
+    -- are byte-for-byte the ones they were.
     phases ← foldM (\phaseMap yp → do
-        case parsePhaseTag (fypTag yp) of
-            Nothing → return phaseMap
-            Just tag → do
-                let path = texDir <> "/" <> T.unpack (fypTexture yp)
-                resolved ← resolveTexturePath env "Flora phase"
-                               unknownFloraTexture path
-                h ← loadAndRegister env backendState lteq UploadGlobalSampler
-                        ("flora_phase_" <> name <> "_" <> fypTag yp) resolved
-                atomicModifyIORef' texCount (\n → (n + 1, ()))
-                let phase = LifePhase
-                        { lpTag     = tag
-                        , lpAge     = fypAge yp
-                        , lpTexture = h
-                        }
-                return (HM.insert tag phase phaseMap)
+        let tag  = fypTag yp
+            path = texDir <> "/" <> T.unpack (fypTexture yp)
+        resolved ← resolveTexturePath env "Flora phase"
+                       unknownFloraTexture path
+        h ← loadAndRegister env backendState lteq UploadGlobalSampler
+                ("flora_phase_" <> name <> "_" <> lifePhaseText tag) resolved
+        atomicModifyIORef' texCount (\n → (n + 1, ()))
+        let phase = LifePhase
+                { lpTag     = tag
+                , lpAge     = fypAge yp
+                , lpTexture = h
+                }
+        return (HM.insert tag phase phaseMap)
         ) HM.empty (fydPhases def)
 
     -- Build annual cycle stages
     cycleStages ← foldM (\stages ycs → do
-        case parseCycleTag (fycsTag ycs) of
-            Nothing → return stages
-            Just tag → do
-                let path = texDir <> "/" <> T.unpack (fycsTexture ycs)
-                resolved ← resolveTexturePath env "Flora annual-cycle stage"
-                               unknownFloraTexture path
-                h ← loadAndRegister env backendState lteq UploadGlobalSampler
-                        ("flora_cycle_" <> name <> "_" <> fycsTag ycs) resolved
-                atomicModifyIORef' texCount (\n → (n + 1, ()))
-                let stage = AnnualStage
-                        { asTag      = tag
-                        , asStartDay = fycsStartDay ycs
-                        , asTexture  = h
-                        }
-                return (stages ++ [stage])
+        let tag  = fycsTag ycs
+            path = texDir <> "/" <> T.unpack (fycsTexture ycs)
+        resolved ← resolveTexturePath env "Flora annual-cycle stage"
+                       unknownFloraTexture path
+        h ← loadAndRegister env backendState lteq UploadGlobalSampler
+                ("flora_cycle_" <> name <> "_" <> annualStageText tag) resolved
+        atomicModifyIORef' texCount (\n → (n + 1, ()))
+        let stage = AnnualStage
+                { asTag      = tag
+                , asStartDay = fycsStartDay ycs
+                , asTexture  = h
+                }
+        return (stages ++ [stage])
         ) [] (fydAnnualCycle def)
 
-    -- Build cycle overrides
+    -- Build cycle overrides. The decoder has already required each pair
+    -- to name a phase and a stage THIS species declares, so every one
+    -- registered here is reachable by 'AnnualCycleKey' lookup.
     overrides ← foldM (\ovMap yco → do
-        case (parsePhaseTag (fycoPhase yco), parseCycleTag (fycoCycle yco)) of
-            (Just pTag, Just cTag) → do
-                let path = texDir <> "/" <> T.unpack (fycoTexture yco)
-                resolved ← resolveTexturePath env "Flora cycle override"
-                               unknownFloraTexture path
-                h ← loadAndRegister env backendState lteq UploadGlobalSampler
-                        ("flora_ov_" <> name <> "_" <> fycoPhase yco
-                         <> "_" <> fycoCycle yco) resolved
-                atomicModifyIORef' texCount (\n → (n + 1, ()))
-                return (HM.insert (AnnualCycleKey pTag cTag) h ovMap)
-            _ → return ovMap
+        let pTag = fycoPhase yco
+            cTag = fycoCycle yco
+            path = texDir <> "/" <> T.unpack (fycoTexture yco)
+        resolved ← resolveTexturePath env "Flora cycle override"
+                       unknownFloraTexture path
+        h ← loadAndRegister env backendState lteq UploadGlobalSampler
+                ("flora_ov_" <> name <> "_" <> lifePhaseText pTag
+                 <> "_" <> annualStageText cTag) resolved
+        atomicModifyIORef' texCount (\n → (n + 1, ()))
+        return (HM.insert (AnnualCycleKey pTag cTag) h ovMap)
         ) HM.empty (fydCycleOverrides def)
 
     -- Build the harvestable block (#94), loading the depleted texture
