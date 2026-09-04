@@ -610,7 +610,7 @@ digAmountInDomain v = digPositionInDomain v ∧ v ≥ 0
 --   the per-tick chunk fill is @(0.5 + skill \/ 100) \/ 4@ per drained
 --   corner-unit, so a skill of @1e9@ makes one tick's @floor p@ a
 --   number in the millions and
---   'World.Thread.Command.Edit.Dig.spawnYieldItems' materializes that
+--   @World.Thread.Command.Edit.Dig.spawnYieldItems@ materializes that
 --   many ground items on the world thread before the tick can end.
 digSkillInDomain ∷ Float → Bool
 digSkillInDomain v = digPositionInDomain v ∧ v ≥ 0 ∧ v ≤ 100

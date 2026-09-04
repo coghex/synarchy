@@ -152,7 +152,7 @@ import World.Save.Component.Types
 --   value could reach them and be written here. Such a save is still
 --   perfectly readable, so the wire shape deliberately does NOT reject
 --   it — decoding stays total and the component version is unchanged.
---   'World.Load.Stage.repairStagedMineDesignations' is the single place
+--   @World.Load.Stage.repairStagedMineDesignations@ is the single place
 --   the policy is applied: at staging, every corner of an offending
 --   designation is reset to 1.0 (undug) and its chunk progress to 0,
 --   'mdiZ' and the tile key are kept, one warning names the page and
