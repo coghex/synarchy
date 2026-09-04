@@ -593,11 +593,22 @@ def test_no_repaired_probe_still_reports_a_failure_to_stderr() -> None:
     tools = Path(TOOLS_DIR)
     for script in REPAIRED_PROBES:
         source = (tools / script).read_text(encoding="utf-8")
-        expect("file=sys.stderr" not in source,
-               f"{script} writes nothing to stderr; a failure there is "
-               f"exactly what the runner's tail cannot keep")
         expect("FailureEmitter" in source,
                f"{script} produces durable failure records instead")
+        # The scan follows a probe that has since been split behind a
+        # facade into its own package (#2095's tools/location_content/,
+        # #2164's tools/location_embark/): most of such a probe's source
+        # no longer lives in the launched file, and a scan of that file
+        # alone would keep passing while the code that could write to
+        # stderr moved out from under it.
+        package = tools / script[:-len("_probe.py")]
+        owners = (sorted(package.rglob("*.py"))
+                  if package.is_dir() else [])
+        for path in [tools / script, *owners]:
+            expect("file=sys.stderr" not in path.read_text(encoding="utf-8"),
+                   f"{path.relative_to(tools)} writes nothing to stderr; a "
+                   f"failure there is exactly what the runner's tail cannot "
+                   f"keep")
 
 
 def test_a_probes_setup_exit_is_recorded_and_recoverable() -> None:

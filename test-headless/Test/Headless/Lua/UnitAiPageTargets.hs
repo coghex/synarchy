@@ -142,6 +142,7 @@ prelude = lns
     , "  getMentalEffectiveness = function() return 1.0 end,"
     , "  getPose = function() return 'standing' end,"
     , "  dropItemById = function() end,"
+    , "  pickup = function() end,"
     , "  moveTo = function() MOVES = MOVES + 1 end,"
     , "  stop = function() STOPS = STOPS + 1 end,"
     , "  depositToCargo = function() DEPOSITS = DEPOSITS + 1; return false end,"
@@ -170,6 +171,7 @@ prelude = lns
     , "    return { gridX = b.x, gridY = b.y, tileW = 1, tileH = 1,"
     , "             page = b.page } end }"
     , "PICKUPS = 0"
+    , "PICKUP_OK = true"
     -- listGround is the ACTIVE page's listing; getGroundForUnit answers
     -- for the page the NAMED UNIT stands on, and returns (nil, true)
     -- when that page genuinely holds no such id. Rows carry a page and
@@ -187,7 +189,8 @@ prelude = lns
     , "      if r.id == gid then return r, true end"
     , "    end"
     , "    return nil, true end,"
-    , "  pickupGround = function() PICKUPS = PICKUPS + 1; return true end,"
+    , "  pickupGround = function()"
+    , "    PICKUPS = PICKUPS + 1; return PICKUP_OK end,"
     , "  getFood = function(defName)"
     , "    if defName == 'berry' then return { calories = 100 } end end,"
     , "  listDefs = function() return { { name = 'plate_steel', weight = 1 } } end }"
@@ -686,6 +689,85 @@ spec = describe "AI page pairing" $ do
                 , "  'an off-page forage target must be dropped')"
                 , "assert(MOVES == 0 and PICKUPS == 0,"
                 , "  'an off-page forage target must draw neither a walk nor a pickup')"
+                ]
+
+        -- #2293: forage is the ONE pickup ladder that deliberately does
+        -- not weigh the row, because eat_from_inventory consumes from
+        -- the INVENTORY — food a full unit may not pick up is food it
+        -- may not eat. Adding a capacity gate to either pickup form
+        -- fails these.
+        it "an over-capacity hungry unit still acquires ground food" $
+            runsOk $ lns
+                [ prelude
+                -- 500 kg carried against a 100 kg capacity: five times
+                -- over, on the rung that is the only way this unit eats.
+                , "unit.getCarryingWeight = function() return 500 end"
+                , "local home = { id = 1, defName = 'berry', x = 1, y = 0,"
+                , "               weight = 40 }"
+                , "GROUND = { home }"
+                , "GROUND_BY_PAGE = { [HOME] = { home } }"
+                , "local s = newState()"
+                , "s.forageTarget = { kind = 'ground', gid = 1, x = 1, y = 0 }"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 1,"
+                , "  'a starving unit over capacity must still take the food')"
+                , "assert(s.forageTarget == nil,"
+                , "  'and the completed target is retired')"
+                ]
+
+        it "an over-capacity hungry unit still collects a harvested yield" $
+            runsOk $ lns
+                [ prelude
+                -- The other pickup form: the yields a harvested plant
+                -- left on the ground, pulled in one per tick.
+                , "unit.getCarryingWeight = function() return 500 end"
+                , "local s = newState()"
+                , "s.foragePhase = 'collecting'"
+                , "s.forageLoot  = { 7, 8 }"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 1,"
+                , "  'the collecting rung must not gate on capacity either')"
+                , "assert(s.foragePhase == 'collecting',"
+                , "  'and the collection continues while loot remains')"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 2, 'the second yield is collected too')"
+                ]
+
+        it "a failed direct-ground pickup retires the stale target \
+           \instead of retrying it" $
+            runsOk $ lns
+                [ prelude
+                -- A raced commit: the row resolves, the pickup loses.
+                -- The gid must not be walked back to next tick.
+                , "PICKUP_OK = false"
+                , "local home = { id = 1, defName = 'berry', x = 1, y = 0 }"
+                , "GROUND = { home }"
+                , "GROUND_BY_PAGE = { [HOME] = { home } }"
+                , "local s = newState()"
+                , "s.forageTarget = { kind = 'ground', gid = 1, x = 1, y = 0 }"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 1, 'the pickup is attempted once')"
+                , "assert(s.forageTarget == nil,"
+                , "  'a failed pickup must retire the target')"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 1,"
+                , "  'and must not retry the stale gid on the next tick')"
+                ]
+
+        it "a failed collecting pickup ends the collection instead of \
+           \retrying the stale gid" $
+            runsOk $ lns
+                [ prelude
+                , "PICKUP_OK = false"
+                , "local s = newState()"
+                , "s.foragePhase = 'collecting'"
+                , "s.forageLoot  = { 7, 8 }"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 1, 'the pickup is attempted once')"
+                , "assert(s.foragePhase == nil and s.forageLoot == nil,"
+                , "  'a failed collection pickup must end the phase')"
+                , "needs.forageExecute(1, s, PARAMS)"
+                , "assert(PICKUPS == 1, 'and must not retry the stale gid')"
                 ]
 
     describe "unit-to-unit item targets" $ do
