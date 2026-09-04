@@ -30,6 +30,7 @@ module Test.Headless.Save.AutosaveRotation (spec) where
 
 import UPrelude
 import Test.Hspec
+import qualified Data.ByteString as BS
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
@@ -44,10 +45,14 @@ import Engine.Core.Log
     (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
 import World.Save.Autosave
     ( autosaveIncomingSlotName, autosaveRetiredSlotName, autosaveSlotName
-    , finalizeAutosaveRotationWithSync, prepareAutosaveCycleWithSync )
+    , finalizeAutosaveRotationWithSync, prepareAutosaveCycleWithSync
+    , finalizeAutosaveRotationWithSeams, prepareAutosaveCycleWithSeams )
 import World.Save.Serialize
-    (listSaves, savesDirectory, SaveListing(..))
-import World.Save.Storage (publishGeneration, renderPublishFailure)
+    ( listSaves, ListingSeams(..), productionListingSeams
+    , savesDirectory, SaveListing(..) )
+import World.Save.Storage
+    (publishGeneration, renderPublishFailure, authoritativeFileName)
+import World.Save.Storage.Durable (syncDirectory)
 import World.Save.Envelope (encodeSessionSnapshot)
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
@@ -192,8 +197,14 @@ slotPath name = savesDirectory </> T.unpack name
 --   'publishAutosave' stamped it with.
 slotTimestamps ∷ LoggerState → IO [(Text, Text)]
 slotTimestamps logger = do
-    listings ← listSaves logger HS.empty
-    pure [ (slName l, smTimestamp (slMetadata l)) | l ← listings ]
+    listed ← listSaves logger HS.empty
+    case listed of
+        Right listings →
+            pure [ (slName l, smTimestamp (slMetadata l)) | l ← listings ]
+        Left err → do
+            expectationFailure
+                ("listSaves refused the survey: " <> T.unpack err)
+            pure []
 
 -- | A FULL two-deep family plus a freshly staged generation — the shape
 --   that actually retires something.
@@ -325,3 +336,108 @@ spec = do
                 readIORef seen `shouldReturn` [savesDirectory]
                 doesDirectoryExist (slotPath autosaveRetiredSlotName)
                     `shouldReturn` False
+
+    -- Issue #2333: 'readSlotStates' surveys every cycle slot through
+    -- 'listSaves', and before containment an unreadable generation
+    -- ANYWHERE under saves/ threw straight out of both slot verbs. Their
+    -- Lua wrapper only converts a returned 'Left' into @false, reason@,
+    -- so @scripts/autosave.lua@'s reportFailure was unreachable and the
+    -- scheduler saw a raised Lua error instead.
+    --
+    -- Both halves matter, and they are different failures: a slot whose
+    -- generation cannot be read is contained to that slot and refuses
+    -- CONSERVATIVELY through the existing ownership rule, while a
+    -- saves/ that cannot be surveyed at all refuses before the survey
+    -- has anything to say about any slot.
+    describe "a listing failure refuses the cycle instead of throwing \
+             \(#2333)" $ do
+        let injected = "injected generation read failure"
+            failReadOf victim = productionListingSeams
+                { lsReadGeneration = \path →
+                    if path ≡ victim
+                        then ioError (userError injected)
+                        else BS.readFile path
+                }
+            blindSeams = productionListingSeams
+                { lsEnumerateSaves = \_ →
+                    ioError (userError "injected enumeration failure")
+                }
+            authOf slot = slotPath slot </> authoritativeFileName
+            familyShape = do
+                one ← doesDirectoryExist (slotPath (autosaveSlotName 1))
+                two ← doesDirectoryExist (slotPath (autosaveSlotName 2))
+                inc ← doesDirectoryExist (slotPath autosaveIncomingSlotName)
+                ret ← doesDirectoryExist (slotPath autosaveRetiredSlotName)
+                pure (one, two, inc, ret)
+
+        it "refuses with the existing could-not-be-read reason when an \
+           \in-range slot's only generation cannot be read -- the slot \
+           \directory is there, so treating it as free would rotate over \
+           \a save nothing was ever able to classify" $
+            withAutosaveRoot $ do
+                logger ← quietLogger
+                publishAutosave (autosaveSlotName 1) "newer"
+                publishAutosave (autosaveSlotName 2) "older"
+                before ← familyShape
+                r ← prepareAutosaveCycleWithSeams
+                        (failReadOf (authOf (autosaveSlotName 2)))
+                        syncDirectory logger HS.empty 2
+                case r of
+                    Left reason → do
+                        reason `shouldSatisfy` T.isInfixOf "autosave refused"
+                        reason `shouldSatisfy`
+                            T.isInfixOf "could not be read"
+                        reason `shouldSatisfy`
+                            T.isInfixOf (autosaveSlotName 2)
+                    Right () → expectationFailure
+                        "expected the unreadable slot to refuse the cycle"
+                familyShape `shouldReturn` before
+
+        it "still runs the cycle when the unreadable generation RECOVERS \
+           \from its previous one -- that slot listed, so it classified, \
+           \and requirement 5's refusal never applies to it" $
+            withAutosaveRoot $ do
+                logger ← quietLogger
+                -- Two publishes into one slot: the second leaves a
+                -- previous generation behind for the fallback.
+                publishAutosave (autosaveSlotName 1) "older"
+                publishAutosave (autosaveSlotName 1) "newer"
+                publishAutosave autosaveIncomingSlotName "staged"
+                r ← prepareAutosaveCycleWithSeams
+                        (failReadOf (authOf (autosaveSlotName 1)))
+                        syncDirectory logger HS.empty 2
+                -- A staged generation is rotated in first, so a clean
+                -- prepare here reports the ROTATION's success.
+                r `shouldBe` Right ()
+
+        it "refuses BOTH slot verbs, before anything moves, when saves/ \
+           \itself cannot be enumerated -- an empty survey would read as \
+           \'every slot is free'" $
+            withAutosaveRoot $ do
+                logger ← quietLogger
+                fullFamily
+                before ← familyShape
+                prepared ← prepareAutosaveCycleWithSeams blindSeams
+                        syncDirectory logger HS.empty 2
+                case prepared of
+                    Left reason → do
+                        reason `shouldSatisfy` T.isInfixOf "autosave refused"
+                        reason `shouldSatisfy`
+                            T.isInfixOf (T.pack savesDirectory)
+                        reason `shouldSatisfy`
+                            T.isInfixOf "injected enumeration failure"
+                    Right () → expectationFailure
+                        "expected the unenumerable saves/ to refuse prepare"
+                finalized ← finalizeAutosaveRotationWithSeams blindSeams
+                        syncDirectory logger HS.empty 2
+                case finalized of
+                    Left reason → do
+                        reason `shouldSatisfy`
+                            T.isInfixOf "autosave rotation refused"
+                        reason `shouldSatisfy`
+                            T.isInfixOf (T.pack savesDirectory)
+                        reason `shouldSatisfy`
+                            T.isInfixOf "injected enumeration failure"
+                    Right () → expectationFailure
+                        "expected the unenumerable saves/ to refuse rotation"
+                familyShape `shouldReturn` before

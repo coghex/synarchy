@@ -1277,6 +1277,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.AutosaveRotation
+                   Test.Headless.Save.ListingFailureBoundary
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.OwnerPark

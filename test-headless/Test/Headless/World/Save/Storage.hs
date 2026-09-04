@@ -34,14 +34,17 @@ import System.FilePath ((</>), takeDirectory)
 import System.IO (stderr, openBinaryTempFile)
 
 import Engine.Core.Log
-    (initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState)
+    ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..), LoggerState
+    , LogEntry(..) )
 import World.Save.Serialize
-    (listSaves, loadWorld, savesDirectory, SaveListing(..), loadPhaseFor)
+    ( listSaves, listSavesWithSeams, ListingSeams(..), productionListingSeams
+    , loadWorld, savesDirectory, saveExtension, SaveListing(..), loadPhaseFor )
 import World.Save.Storage
 import World.Save.Storage.Durable (syncDirectory)
 import World.Save.Envelope
     ( encodeSessionSnapshot, metadataComponentId, metadataComponentVersion
-    , currentEnvelopeVersion, LoadProgress(..) )
+    , currentEnvelopeVersion, LoadProgress(..)
+    , decodeSaveEnvelopeMetadataClassified, GenerationFailure(..) )
 import World.Save.Envelope.Codec
     (encodeEnvelope, decodeEnvelope, DecodedEnvelope(..))
 import World.Save.Envelope.Types
@@ -401,6 +404,34 @@ shouldSelect dir source seed = do
 --   somewhere for its 'logWarn' calls to go).
 testLogger ∷ IO LoggerState
 testLogger = initLogger defaultLogConfig { lcBackend = LogToHandle stderr }
+
+-- | A logger that KEEPS what it was told, in emission order (issue
+--   #2333). Containment is not only "the other slots still list" but
+--   "the failure is REPORTED", once, naming the file that failed and
+--   why -- and a stderr logger can prove neither.
+capturingLogger ∷ IO (LoggerState, IO [Text])
+capturingLogger = do
+    seen ← newIORef ([] ∷ [Text])
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback (\e → modifyIORef' seen (⧺ [leMessage e])) }
+    pure (logger, readIORef seen)
+
+-- | Only the diagnostics 'listSaves' itself emitted.
+listingDiagnostics ∷ [Text] → [Text]
+listingDiagnostics = filter ("listSaves:" `T.isPrefixOf`)
+
+-- | 'listSaves' with the ROOT survey asserted to have succeeded: a case
+--   about per-entry containment is not about the root, so a 'Left' here
+--   is a broken fixture rather than the outcome under test.
+listSavesOK ∷ LoggerState → IO [SaveListing]
+listSavesOK logger = do
+    result ← listSaves logger HS.empty
+    case result of
+        Right listings → pure listings
+        Left err → do
+            expectationFailure
+                ("listSaves refused the whole survey: " <> T.unpack err)
+            pure []
 
 -- | 'World.Save.Serialize.listSaves' resolves everything relative to the
 --   process's CURRENT DIRECTORY (its own @savesDirectory@ constant is a
@@ -1256,7 +1287,7 @@ spec = do
                 _ ← publishOK target "leaked" 1 "leaked" "t1"
                 createDirectoryIfMissing True savesDirectory
                 createFileLink target (savesDirectory </> "leaked")
-                saves ← listSaves logger HS.empty
+                saves ← listSavesOK logger
                 map slName saves `shouldNotContain` ["leaked"]
 
         it "never lists any slot when saves/ itself is a symlink" $
@@ -1265,7 +1296,7 @@ spec = do
                 let target = "leaked-target"
                 _ ← publishOK (target </> "leaked") "leaked" 1 "leaked" "t1"
                 createFileLink target savesDirectory
-                saves ← listSaves logger HS.empty
+                saves ← listSavesOK logger
                 saves `shouldBe` []
 
         it "never lists (or reads through) a legacy flat-file save \
@@ -1276,7 +1307,7 @@ spec = do
                 BS.writeFile decoy "not a real save"
                 createDirectoryIfMissing True savesDirectory
                 createFileLink decoy (savesDirectory </> "leaked.synworld")
-                saves ← listSaves logger HS.empty
+                saves ← listSavesOK logger
                 map slName saves `shouldNotContain` ["leaked"]
 
         it "loadWorld never reads through a legacy flat-file save whose \
@@ -1303,7 +1334,7 @@ spec = do
                 BS.writeFile decoy "not a real save"
                 removeFile (authPath slot)
                 createFileLink decoy (authPath slot)
-                saves ← listSaves logger HS.empty `finally` removeFile decoy
+                saves ← listSavesOK logger `finally` removeFile decoy
                 case filter ((≡ "leaked") . slName) saves of
                     [entry] → do
                         slRecovered entry `shouldBe` True
@@ -1325,8 +1356,242 @@ spec = do
                 removeFile (prevPath slot)
                 createFileLink decoy (authPath slot)
                 createFileLink decoy (prevPath slot)
-                saves ← listSaves logger HS.empty `finally` removeFile decoy
+                saves ← listSavesOK logger `finally` removeFile decoy
                 map slName saves `shouldNotContain` ["leaked"]
+
+    -- Issue #2333: the three generation reads inside 'listSaves' were
+    -- bare 'BS.readFile' calls, so ONE unreadable file (a permission
+    -- failure, a special file, a file removed between the existence
+    -- check and the read) escaped the traversal as an 'IOException' and
+    -- no listing was built at all -- taking down the main menu's save
+    -- list and both autosave slot verbs, whose Lua wrappers turn an
+    -- escaped Haskell exception into a Lua error their callers'
+    -- fallbacks never see.
+    --
+    -- Every fixture below fails ONE exact path through
+    -- 'listSavesWithSeams'' reader seam and delegates every other read
+    -- to the production 'BS.readFile', for the same reason #2227's
+    -- publish tests do: filesystem mode bits are ignored by CI's root
+    -- containers, and a directory standing in for an unreadable
+    -- generation never reaches the read at all ('doesFileExist' sends
+    -- it down the missing-generation path instead).
+    --
+    -- Each case also asserts the DIAGNOSTIC, through a capturing
+    -- logger: containment that silently swallowed the failure would
+    -- pass a "the healthy slot still lists" assertion just as well.
+    describe "World.Save.Serialize.listSaves read containment \
+             \(issue #2333 -- a failing generation read is blamed on its \
+             \own slot, never on the whole listing)" $ do
+        let healthySlot   = savesDirectory </> "healthy"
+            failingSlot   = savesDirectory </> "wounded"
+            legacyPath    = savesDirectory </> "relic" <> saveExtension
+            injected      = "injected generation read failure"
+            -- The reader seam #2227 established, in listing's shape: one
+            -- victim path throws, everything else reads for real.
+            failReadOf victim = productionListingSeams
+                { lsReadGeneration = \path →
+                    if path ≡ victim
+                        then ioError (userError injected)
+                        else BS.readFile path
+                }
+            -- Records every generation path actually READ, in order, so
+            -- a case can assert a file was never consulted at all.
+            recordingSeams ref = productionListingSeams
+                { lsReadGeneration = \path → do
+                    modifyIORef' ref (⧺ [path])
+                    BS.readFile path
+                }
+            -- A healthy sibling every case keeps, because "the rest of
+            -- the listing survives" is half of what containment means.
+            plantHealthy = do
+                _ ← publishOK healthySlot "healthy" 9 "healthy" "t9"
+                pure ()
+            namesOf = map slName
+            listWith seams logger = do
+                result ← listSavesWithSeams seams logger HS.empty
+                case result of
+                    Right listings → pure listings
+                    Left err → do
+                        expectationFailure
+                            ("expected a per-entry failure, but the whole \
+                             \survey was refused: " <> T.unpack err)
+                        pure []
+
+        it "lists a slot whose AUTHORITATIVE generation cannot be read \
+           \from its previous generation instead, marked recovered -- \
+           \the same fallback-eligible classification \
+           \decodeGenerationFile gives an unreadable file on the LOAD \
+           \path" $
+            withSavesRoot $ do
+                plantHealthy
+                _ ← publishOK failingSlot "wounded" 1 "wounded" "t1"
+                _ ← publishOK failingSlot "wounded" 2 "wounded" "t2"
+                (logger, readSeen) ← capturingLogger
+                listings ← listWith (failReadOf (authPath failingSlot)) logger
+                namesOf listings `shouldMatchList` ["healthy", "wounded"]
+                case filter ((≡ "wounded") . slName) listings of
+                    [entry] → do
+                        slRecovered entry `shouldBe` True
+                        -- The PREVIOUS generation's own seed, so this is
+                        -- the earlier generation and not the one whose
+                        -- read failed.
+                        smSeed (slMetadata entry) `shouldBe` 1
+                    other → expectationFailure
+                        ("expected exactly one 'wounded' listing, got "
+                            <> show other)
+                case filter ((≡ "healthy") . slName) listings of
+                    [entry] → slRecovered entry `shouldBe` False
+                    other → expectationFailure
+                        ("expected exactly one 'healthy' listing, got "
+                            <> show other)
+                diagnostics ← listingDiagnostics <$> readSeen
+                case diagnostics of
+                    [one] → do
+                        T.unpack one `shouldContain` authPath failingSlot
+                        T.unpack one `shouldContain` injected
+                    other → expectationFailure
+                        ("expected exactly one listing diagnostic, got "
+                            <> show other)
+
+        it "skips ONLY the slot whose authoritative generation cannot be \
+           \read when it has no previous generation, naming the exact \
+           \path and the read error once" $
+            withSavesRoot $ do
+                plantHealthy
+                -- A single publish: no previous generation exists, so
+                -- the fallback has nothing to recover from.
+                _ ← publishOK failingSlot "wounded" 1 "wounded" "t1"
+                doesFileExist (prevPath failingSlot) `shouldReturn` False
+                (logger, readSeen) ← capturingLogger
+                listings ← listWith (failReadOf (authPath failingSlot)) logger
+                namesOf listings `shouldBe` ["healthy"]
+                diagnostics ← listingDiagnostics <$> readSeen
+                case diagnostics of
+                    [one] → do
+                        T.unpack one `shouldContain` authPath failingSlot
+                        T.unpack one `shouldContain` injected
+                        T.unpack one `shouldContain` "no previous generation"
+                    other → expectationFailure
+                        ("expected exactly one listing diagnostic, got "
+                            <> show other)
+
+        it "completes the previous-generation fallback as UNUSABLE when \
+           \the PREVIOUS file is the one that cannot be read, naming \
+           \that path -- the authoritative generation here is corrupt \
+           \bytes, so the fallback is genuinely reached" $
+            withSavesRoot $ do
+                plantHealthy
+                _ ← publishOK failingSlot "wounded" 1 "wounded" "t1"
+                _ ← publishOK failingSlot "wounded" 2 "wounded" "t2"
+                whole ← BS.readFile (authPath failingSlot)
+                BS.writeFile (authPath failingSlot)
+                    (flipByteAt (BS.length whole - 1) whole)
+                (logger, readSeen) ← capturingLogger
+                listings ← listWith (failReadOf (prevPath failingSlot)) logger
+                namesOf listings `shouldBe` ["healthy"]
+                diagnostics ← listingDiagnostics <$> readSeen
+                case diagnostics of
+                    [one] → do
+                        T.unpack one `shouldContain` prevPath failingSlot
+                        T.unpack one `shouldContain` injected
+                    other → expectationFailure
+                        ("expected exactly one listing diagnostic, got "
+                            <> show other)
+
+        it "skips ONLY the legacy flat file that cannot be read, naming \
+           \its path and the read error once" $
+            withSavesRoot $ do
+                plantHealthy
+                let (_, bytes) = buildEncoded 5 "relic" "t5"
+                BS.writeFile legacyPath bytes
+                -- Precondition: the fixture really is a listable legacy
+                -- save, so the assertion below is about the READ and not
+                -- about an unrelated decode failure.
+                (baseLogger, _) ← capturingLogger
+                base ← listWith productionListingSeams baseLogger
+                namesOf base `shouldMatchList` ["healthy", "relic"]
+                (logger, readSeen) ← capturingLogger
+                listings ← listWith (failReadOf legacyPath) logger
+                namesOf listings `shouldBe` ["healthy"]
+                diagnostics ← listingDiagnostics <$> readSeen
+                case diagnostics of
+                    [one] → do
+                        T.unpack one `shouldContain` legacyPath
+                        T.unpack one `shouldContain` injected
+                    other → expectationFailure
+                        ("expected exactly one listing diagnostic, got "
+                            <> show other)
+
+        it "still drops a semantically INCOMPATIBLE authoritative \
+           \generation WITHOUT consulting the previous one -- \
+           \requirement 7's no-fallback rule is about what the bytes \
+           \MEAN, and containing unreadable bytes must not turn it into \
+           \a fallback" $
+            withSavesRoot $ do
+                plantHealthy
+                _ ← publishOK failingSlot "wounded" 1 "wounded" "t1"
+                _ ← publishOK failingSlot "wounded" 2 "wounded" "t2"
+                whole ← BS.readFile (authPath failingSlot)
+                BS.writeFile (authPath failingSlot)
+                    (corruptEnvelopeVersion whole)
+                -- Precondition: this fixture is INCOMPATIBLE at listing
+                -- depth, not corrupt. A corrupt one would legitimately
+                -- fall back, and the assertion below would then be
+                -- testing nothing.
+                planted ← BS.readFile (authPath failingSlot)
+                case decodeSaveEnvelopeMetadataClassified HS.empty planted of
+                    Left (GenerationIncompatible _ _) → pure ()
+                    other → expectationFailure
+                        ("fixture must classify as GenerationIncompatible, \
+                         \got " <> show (() <$ other))
+                reads' ← newIORef ([] ∷ [FilePath])
+                (logger, readSeen) ← capturingLogger
+                listings ← listWith (recordingSeams reads') logger
+                namesOf listings `shouldBe` ["healthy"]
+                consulted ← readIORef reads'
+                consulted `shouldContain` [authPath failingSlot]
+                consulted `shouldNotContain` [prevPath failingSlot]
+                diagnostics ← listingDiagnostics <$> readSeen
+                length diagnostics `shouldBe` 1
+
+        -- Requirement 4: enumerating saves/ is the ONE failure that
+        -- cannot be blamed on a slot. Reporting it as an empty listing
+        -- would tell every consumer "there are no saves", which is the
+        -- answer that lets an autosave cycle rotate over slots it never
+        -- managed to look at.
+        it "reports a FAILED ENUMERATION of saves/ as a refusal naming \
+           \the directory and the error, never as an empty listing, and \
+           \logs nothing itself -- the reason is what its two public \
+           \consumers each report once" $
+            withSavesRoot $ do
+                plantHealthy
+                (logger, readSeen) ← capturingLogger
+                let blindSeams = productionListingSeams
+                        { lsEnumerateSaves = \_ →
+                            ioError (userError "injected enumeration failure")
+                        }
+                result ← listSavesWithSeams blindSeams logger HS.empty
+                case result of
+                    Right listings → expectationFailure
+                        ("expected a refusal, got " <> show (namesOf listings))
+                    Left reason → do
+                        T.unpack reason `shouldContain` savesDirectory
+                        T.unpack reason
+                            `shouldContain` "injected enumeration failure"
+                readSeen `shouldReturn` []
+
+        it "reports a saves/ that cannot even be CREATED the same way, \
+           \through the production seams -- a plain file occupying the \
+           \name needs no injection at all" $
+            withSavesRoot $ do
+                BS.writeFile savesDirectory "not a directory"
+                (logger, readSeen) ← capturingLogger
+                result ← listSaves logger HS.empty
+                case result of
+                    Right listings → expectationFailure
+                        ("expected a refusal, got " <> show (namesOf listings))
+                    Left reason → T.unpack reason `shouldContain` savesDirectory
+                readSeen `shouldReturn` []
 
     -- Issue #1919: 'failedAtPhase' used to be recovered by
     -- substring-matching the rendered failure text. It is now derived

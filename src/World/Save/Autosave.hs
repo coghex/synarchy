@@ -134,8 +134,10 @@ module World.Save.Autosave
     , publicSaveListings
     , prepareAutosaveCycle
     , prepareAutosaveCycleWithSync
+    , prepareAutosaveCycleWithSeams
     , finalizeAutosaveRotation
     , finalizeAutosaveRotationWithSync
+    , finalizeAutosaveRotationWithSeams
     ) where
 
 import UPrelude
@@ -150,7 +152,8 @@ import System.FilePath ((</>))
 import Engine.Core.Log (LoggerState, LogCategory(..), logInfo)
 import Engine.Save.Config (rotationDepthMin, rotationDepthMax)
 import World.Save.Serialize
-    (listSaves, savesDirectory, saveExtension, SaveListing(..))
+    ( listSavesWithSeams, ListingSeams, productionListingSeams
+    , savesDirectory, saveExtension, SaveListing(..) )
 import World.Save.Types (SaveMetadata(..))
 import World.Save.Storage.Durable (syncDirectory)
 import qualified World.Save.Storage as Storage
@@ -260,22 +263,46 @@ cycleSlotNames depth =
     map autosaveSlotName [1 .. depth]
         ⧺ [autosaveIncomingSlotName, autosaveRetiredSlotName]
 
-readSlotStates ∷ LoggerState → HS.HashSet Text → [Text] → IO [SlotState]
-readSlotStates logger luaKnownNames names = do
-    listings ← listSaves logger luaKnownNames
-    let classified = HM.fromList
-            [ (slName l, smAutosave (slMetadata l)) | l ← listings ]
-    forM names $ \name → do
-        let dir  = savesDirectory </> T.unpack name
-            flat = savesDirectory </> T.unpack name <> saveExtension
-        dirExists  ← doesDirectoryExist dir
-        flatExists ← doesFileExist flat
-        pure SlotState { ssName       = name
-                       , ssDir        = dir
-                       , ssDirExists  = dirExists
-                       , ssLegacyFileExists = flatExists
-                       , ssClassified = HM.lookup name classified
-                       }
+-- | The per-slot facts a cycle decides on, or the reason the survey
+--   itself could not be taken.
+--
+--   #2333: a 'Left' here is @saves\/@ itself being unenumerable, and it
+--   must NOT be flattened into an empty listing on the way through.
+--   Every slot in range would then look absent — 'ssClassified' would
+--   read 'Nothing' only because nothing at all was listed — and
+--   'ownershipProblem' below could not tell "this directory holds a
+--   manual save" from "the directory could not be surveyed". A cycle
+--   refuses outright instead.
+--
+--   An individual slot that could not be READ is a different matter and
+--   is NOT a 'Left': 'listSavesWithSeams' contains that to its own slot,
+--   so the slot arrives here classified 'Nothing' and
+--   'ownershipProblem' gives it the conservative "could not be read"
+--   refusal it always has. A slot whose authoritative generation was
+--   unreadable but whose PREVIOUS generation listed arrives classified
+--   from that validated metadata, exactly as any other recovered
+--   listing does.
+readSlotStates
+    ∷ ListingSeams → LoggerState → HS.HashSet Text → [Text]
+    → IO (Either Text [SlotState])
+readSlotStates seams logger luaKnownNames names = do
+    listed ← listSavesWithSeams seams logger luaKnownNames
+    case listed of
+        Left reason → pure (Left reason)
+        Right listings → do
+            let classified = HM.fromList
+                    [ (slName l, smAutosave (slMetadata l)) | l ← listings ]
+            fmap Right $ forM names $ \name → do
+                let dir  = savesDirectory </> T.unpack name
+                    flat = savesDirectory </> T.unpack name <> saveExtension
+                dirExists  ← doesDirectoryExist dir
+                flatExists ← doesFileExist flat
+                pure SlotState { ssName       = name
+                               , ssDir        = dir
+                               , ssDirExists  = dirExists
+                               , ssLegacyFileExists = flatExists
+                               , ssClassified = HM.lookup name classified
+                               }
 
 -- | Check EVERY slot in range before anything mutates: a manual save at
 --   @autosave-3@ must stop the cycle that would have overwritten it, not
@@ -337,13 +364,27 @@ prepareAutosaveCycle = prepareAutosaveCycleWithSync syncDirectory
 prepareAutosaveCycleWithSync
     ∷ (FilePath → IO ()) → LoggerState → HS.HashSet Text → Int
     → IO (Either Text ())
-prepareAutosaveCycleWithSync syncDir logger luaKnownNames requestedDepth = do
+prepareAutosaveCycleWithSync = prepareAutosaveCycleWithSeams
+                                    productionListingSeams
+
+-- | 'prepareAutosaveCycleWithSync' with the listing's own I\/O seams
+--   supplied too (issue #2333), so the gate can fail one exact
+--   generation read, or the enumeration of @saves\/@ itself, and prove
+--   the cycle REFUSES rather than throwing.
+prepareAutosaveCycleWithSeams
+    ∷ ListingSeams → (FilePath → IO ()) → LoggerState → HS.HashSet Text
+    → Int → IO (Either Text ())
+prepareAutosaveCycleWithSeams seams syncDir logger luaKnownNames
+    requestedDepth = do
     let depth = clampDepth requestedDepth
-    slots ← readSlotStates logger luaKnownNames (cycleSlotNames depth)
-    problem ← cycleProblem slots
-    case problem of
-        Just reason → pure (Left ("autosave refused: " <> reason))
-        Nothing → do
+    surveyed ← readSlotStates seams logger luaKnownNames (cycleSlotNames depth)
+    case surveyed of
+      Left reason → pure (Left ("autosave refused: " <> reason))
+      Right slots → do
+        problem ← cycleProblem slots
+        case problem of
+          Just reason → pure (Left ("autosave refused: " <> reason))
+          Nothing → do
             -- A generation still sitting in the RETIRED slot is one a
             -- previous cycle had already moved out of the family and was
             -- interrupted before deleting. It has genuinely aged out, so
@@ -357,7 +398,7 @@ prepareAutosaveCycleWithSync syncDir logger luaKnownNames requestedDepth = do
                     logInfo logger CatWorld
                         "Autosave: a previously published generation was \
                         \never rotated in -- doing that first"
-                    finalizeAutosaveRotationWithSync syncDir logger
+                    finalizeAutosaveRotationWithSeams seams syncDir logger
                         luaKnownNames depth
                 Right () → pure (Right ())
   where
@@ -425,26 +466,38 @@ finalizeAutosaveRotation = finalizeAutosaveRotationWithSync syncDirectory
 finalizeAutosaveRotationWithSync
     ∷ (FilePath → IO ()) → LoggerState → HS.HashSet Text → Int
     → IO (Either Text ())
-finalizeAutosaveRotationWithSync syncDir logger luaKnownNames requestedDepth = do
+finalizeAutosaveRotationWithSync = finalizeAutosaveRotationWithSeams
+                                        productionListingSeams
+
+-- | 'finalizeAutosaveRotationWithSync' with the listing's own I\/O seams
+--   supplied too (issue #2333) — see 'prepareAutosaveCycleWithSeams'.
+finalizeAutosaveRotationWithSeams
+    ∷ ListingSeams → (FilePath → IO ()) → LoggerState → HS.HashSet Text
+    → Int → IO (Either Text ())
+finalizeAutosaveRotationWithSeams seams syncDir logger luaKnownNames
+    requestedDepth = do
     let depth = clampDepth requestedDepth
-    slots ← readSlotStates logger luaKnownNames (cycleSlotNames depth)
-    let byName = HM.fromList [ (ssName s, s) | s ← slots ]
-        slotAt i = HM.lookup (autosaveSlotName i) byName
-        incoming = HM.lookup autosaveIncomingSlotName byName
-        retired  = HM.lookup autosaveRetiredSlotName byName
-    problem ← cycleProblem slots
-    case problem of
-        Just reason → pure (Left ("autosave rotation refused: " <> reason))
-        Nothing → do
-            -- The retire rename below needs that name free.
-            retiredCleared ← clearRetired syncDir logger slots
-            case (retiredCleared, incoming, retired) of
-                (Left err, _, _) →
-                    pure (Left ("autosave rotation refused: " <> err))
-                (Right (), Just inc, Just ret) | ssDirExists inc →
-                    performRotation syncDir logger depth slotAt inc ret
-                _ → pure (Left "autosave rotation refused: nothing was \
-                               \published to rotate in")
+    surveyed ← readSlotStates seams logger luaKnownNames (cycleSlotNames depth)
+    case surveyed of
+      Left reason → pure (Left ("autosave rotation refused: " <> reason))
+      Right slots → do
+        let byName = HM.fromList [ (ssName s, s) | s ← slots ]
+            slotAt i = HM.lookup (autosaveSlotName i) byName
+            incoming = HM.lookup autosaveIncomingSlotName byName
+            retired  = HM.lookup autosaveRetiredSlotName byName
+        problem ← cycleProblem slots
+        case problem of
+            Just reason → pure (Left ("autosave rotation refused: " <> reason))
+            Nothing → do
+                -- The retire rename below needs that name free.
+                retiredCleared ← clearRetired syncDir logger slots
+                case (retiredCleared, incoming, retired) of
+                    (Left err, _, _) →
+                        pure (Left ("autosave rotation refused: " <> err))
+                    (Right (), Just inc, Just ret) | ssDirExists inc →
+                        performRotation syncDir logger depth slotAt inc ret
+                    _ → pure (Left "autosave rotation refused: nothing was \
+                                   \published to rotate in")
 
 -- | Drop the oldest owned generation, shift the rest down, then move the
 --   staged generation into @autosave-1@. Runs only after every check
