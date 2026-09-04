@@ -65,8 +65,9 @@ removeGroundItem gid gis =
 --   place it at (#2336).
 --
 --   The live spawn boundaries refuse a non-finite coordinate outright
---   ('Engine.Scripting.Lua.API.Items.Ground.groundSpawnCoord'), so this
---   is about the saves written BEFORE they did. Nothing downstream
+--   (@Engine.Scripting.Lua.API.Items.Ground.groundSpawnCoord@ — a code
+--   span, not a link: it is module-private there), so this is about the
+--   saves written BEFORE they did. Nothing downstream
 --   raises on a stored NaN or infinity: GHC's 'floor' answers 0, so
 --   "World.Render.GroundItemQuads" resolves tile (0, 0) with NaN
 --   sub-tile offsets and emits a quad the GPU discards, leaving an item
