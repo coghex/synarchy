@@ -28,7 +28,7 @@ import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, freshItemInstanceId)
-import Craft.Bills (BillId(..))
+import Craft.Bills (BillId(..), lookupBill)
 import Craft.Types
 import Craft.Execute (consumeIngredients, craftQuality, applyMentalQuality)
 import Combat.Resolution.Common (mentalEffectiveness)
@@ -39,6 +39,8 @@ import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..),
                        BuildingActivity(..), BuildingManager(..),
                        currentActivity, footprintDist)
 import Engine.Scripting.Lua.API.Power (isRecipePoweredAt)
+import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
+import World.State.Types (WorldState(..))
 
 -- | craft.execute(uid, recipeId) → ok, idsOrErr. Runs one craft
 --   against the unit's TOP-LEVEL inventory: knowledge gate, then
@@ -68,7 +70,9 @@ craftExecuteFn env = do
 --   craft.execute stays station-blind (tests / debug console); the
 --   craft AI (#329) routes through this. The optional `billId` (#590)
 --   is the bill this craft completes, if any — see validateStation's
---   haddock for why passing it matters to the power gate.
+--   haddock for why passing it matters to the power gate, and for the
+--   #2325 rule that a supplied bill must exist on the ACTING UNIT's own
+--   page.
 craftExecuteAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 craftExecuteAtFn env = do
     idArg   ← Lua.tointeger 1
@@ -105,6 +109,19 @@ craftExecuteAtFn env = do
 --   executeAt call) or not (a bare/ad-hoc call, no bill involved) to
 --   count it exactly once rather than twice or not at all. Callers with
 --   no bill in play (debug console, tests) pass 'Nothing'.
+--
+--   A SUPPLIED @mBillId@ is additionally required to name a bill that
+--   really exists on the ACTING UNIT's own world page (#2325). Bill ids
+--   are per-page and every allocator starts at 1, so the AI's retained
+--   @job.billId@ names a real bill on some other page whenever the
+--   applied visible page has moved under it; without this check a craft
+--   fired for a bill the crafter does not hold consumes that crafter's
+--   inputs and produces outputs against a stranger's order. Resolved
+--   through 'unitOwningWorldState', with no active-page fallback, so a
+--   missing unit or a unit whose page has no live world is refused too.
+--   The check is READ-ONLY and, being part of the gate, runs before
+--   'executeCraft' — a refusal leaves inventory and outputs untouched
+--   and reports the absent bill by id.
 validateStation ∷ EngineEnv → Maybe BillId → UnitId → Text → BuildingId
                 → IO (Either Text ())
 validateStation env mBillId uid rid bid = do
@@ -112,6 +129,14 @@ validateStation env mBillId uid rid bid = do
     bm      ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     um      ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     now     ← readIORef (wsGameTimeRef (toWorldSimCapability env))
+    -- #2325: only looked up when a bill was actually supplied, so the
+    -- bare/ad-hoc callers cost nothing. Nothing = "the acting unit has no
+    -- live page", which is a refusal, not "no bill required".
+    mActorBills ← case mBillId of
+        Nothing → return Nothing
+        Just _  → do
+            mWs ← unitOwningWorldState env uid
+            traverse (readIORef ∘ wsCraftBillsRef) mWs
     -- #590: power is job-dependent — a recipe with no power_draw (the
     -- default) needs none checked at all, regardless of the station's
     -- own wiring. An unknown recipe id resolves to 0 draw here (trivially
@@ -143,6 +168,14 @@ validateStation env mBillId uid rid bid = do
         let utile = (floor (uiGridX u), floor (uiGridY u))
         unless (footprintDist inst utile ≤ 1) $
             Left "unit not adjacent to station"
+        -- #2325: the supplied bill must be one of the ACTING UNIT's own
+        -- page's bills. Last in the gate so every reason above keeps its
+        -- existing precedence for every caller.
+        forM_ mBillId $ \billId → case mActorBills of
+            Nothing → Left "no live world page for the crafting unit"
+            Just bills → unless (isJust (lookupBill billId bills)) $
+                Left ("no bill " <> tshow (unBillId billId)
+                      <> " on the crafting unit's world page")
   where
     note e = maybe (Left e) Right
 

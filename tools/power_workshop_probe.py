@@ -349,7 +349,7 @@ def craft_timeout_bundle(port: int, bill_id, uid: int) -> dict:
     was never selected.
     """
     return {
-        "bill": send_json(port, f"return craft.getBill({bill_id})"),
+        "bill": send_json(port, f"return craft.getBill({uid}, {bill_id})"),
         "network": first_network(port),
         "aiState": send_json(port,
             f"local s = require('scripts.unit_ai').getState({uid}); "
@@ -548,7 +548,7 @@ def main() -> int:
             "drainW stays 0 on claim alone (not yet marked working — "
             "mirrors the AI's fetch/walking phases)", drain_of(port))
 
-        send(port, f"craft.setBillWorking({bill_id}, true); return 'ok'")
+        send(port, f"craft.setBillWorking({uid}, {bill_id}, true); return 'ok'")
         passed = check(passed,
             drain_of(port) == PROBE_DRAIN_W,
             "drainW == 150W once the bill is marked working", drain_of(port))
@@ -580,7 +580,7 @@ def main() -> int:
             "working through the pause", drain_of(port))
         send(port, f"craft.setBillPaused({bill_id}, false); return 'ok'")
 
-        send(port, f"craft.setBillWorking({bill_id}, false); return 'ok'")
+        send(port, f"craft.setBillWorking({uid}, {bill_id}, false); return 'ok'")
         passed = check(passed,
             drain_of(port) == 0,
             "drainW back to 0 once un-marked working", drain_of(port))
@@ -588,8 +588,8 @@ def main() -> int:
         # releaseBill clears cbWorking on its own too, independent of an
         # explicit setBillWorking(false) — re-mark working then release
         # to prove the engine-side reset, not just the Lua-side one.
-        send(port, f"craft.setBillWorking({bill_id}, true); return 'ok'")
-        send(port, f"craft.releaseBill({bill_id}); return 'ok'")
+        send(port, f"craft.setBillWorking({uid}, {bill_id}, true); return 'ok'")
+        send(port, f"craft.releaseBill({uid}, {bill_id}); return 'ok'")
         passed = check(passed,
             drain_of(port) == 0,
             "drainW back to 0 the instant a working bill is released "
@@ -607,7 +607,7 @@ def main() -> int:
                        "continuing (2-count) bill queued for #796 pause test",
                        msg)
         send(port, f"craft.claimBill({bill_cont}, {uid}, 60); "
-                   f"craft.setBillWorking({bill_cont}, true); return 'ok'")
+                   f"craft.setBillWorking({uid}, {bill_cont}, true); return 'ok'")
         passed = check(passed, drain_of(port) == PROBE_DRAIN_W,
                        "drainW == 150W once the continuing bill is working",
                        drain_of(port))
@@ -615,11 +615,11 @@ def main() -> int:
         passed = check(passed, drain_of(port) == PROBE_DRAIN_W,
                        "drainW still 150W: pausing mid-cycle doesn't cut "
                        "the in-flight cycle's draw", drain_of(port))
-        remaining = send_json(port, f"return craft.completeBillCycle({bill_cont})")
+        remaining = send_json(port, f"return craft.completeBillCycle({uid}, {bill_cont})")
         passed = check(passed, remaining == 1,
                        "paused continuing bill retains its count (2 -> 1) "
                        "at cycle completion", remaining)
-        after = send_json(port, f"return craft.getBill({bill_cont})")
+        after = send_json(port, f"return craft.getBill({uid}, {bill_cont})")
         ok = (isinstance(after, dict) and "claimant" not in after
               and after.get("working") is False and after.get("paused") is True)
         passed = check(passed, ok,
@@ -655,7 +655,7 @@ def main() -> int:
         clear_find_water(port, uid)
 
         claimed = poll(port, 20, lambda: send_json(
-            port, f"local b = craft.getBill({bill_id}); "
+            port, f"local b = craft.getBill({uid}, {bill_id}); "
                   f"return b and b.claimant or -1") == uid)
         # #1758: on a timeout, sample the classifying state HERE —
         # before the working poll below sends another thing at the
@@ -670,7 +670,7 @@ def main() -> int:
         # (marked via craft.setBillWorking) rather than asserting drain
         # the instant it claims, which would still be mid-walk.
         working = poll(port, 20, lambda: send_json(
-            port, f"local b = craft.getBill({bill_id}); "
+            port, f"local b = craft.getBill({uid}, {bill_id}); "
                   f"return b and b.working or false") is True)
         # #1758: likewise — capture before the drain read that follows.
         working_bundle = (None if working
@@ -685,7 +685,7 @@ def main() -> int:
         # Give the AI a few seconds standing at the (browned-out) station
         # — progress must NOT move.
         time.sleep(5)
-        stalled = send_json(port, f"local b = craft.getBill({bill_id}); "
+        stalled = send_json(port, f"local b = craft.getBill({uid}, {bill_id}); "
                                    f"return b and b.progress or -1")
         passed = check(passed, stalled == 0,
                        "bill claimed but progress stays 0 while browned out",
@@ -693,7 +693,7 @@ def main() -> int:
 
         send(port, f"world.setTime('{PAGE}', 12, 0); return 'ok'")
         done = poll(port, 60, lambda: send(
-            port, f"return craft.getBill({bill_id}) and 'y' or 'n'"
+            port, f"return craft.getBill({uid}, {bill_id}) and 'y' or 'n'"
             ).strip('"') == "n")
         passed = check(passed, done, "bill completes once the network is powered")
         after_bars = ground_count_near(port, "steel_hardware", 6, 2, 3)
@@ -713,7 +713,7 @@ def main() -> int:
         bill_id, msg = add_bill(port, bid_w, PROBE_RECIPE)  # repeat forever
         passed = check(passed, bill_id is not None, "day/night bill queued", msg)
         send(port, f"craft.claimBill({bill_id}, {uid}, 3600); "
-                   f"craft.setBillWorking({bill_id}, true); return 'ok'")
+                   f"craft.setBillWorking({uid}, {bill_id}, true); return 'ok'")
 
         stored0 = as_float(send_json(port, f"return power.getNodeForBuilding({batt_bid}).storedWh"))
         send(port, f"world.setTime('{PAGE}', 12, 0); return 'ok'")
@@ -735,7 +735,8 @@ def main() -> int:
             stored1 is not None and stored2 is not None and stored2 < stored1,
             "battery storedWh falls over simulated night (active drain, no generation)",
             f"{stored1} -> {stored2}")
-        send(port, f"craft.releaseBill({bill_id}); craft.cancelBill({bill_id}); return 'ok'")
+        send(port, f"craft.releaseBill({uid}, {bill_id}); craft.cancelBill({bill_id}); "
+                   f"return 'ok'")
 
         print("\n" + ("ALL POWER WORKSHOP CHECKS PASSED" if passed else "SOME FAILED"))
         return 0 if passed else 1
