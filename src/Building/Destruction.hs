@@ -65,10 +65,19 @@ import Building.Visual (spriteAnchorOffset)
 --     "no visual" and reports it; it never corrects the declaration
 --     (no clamping, no un-looping) and never blocks the demolition.
 --
---   This is the ONE place the requirement-6 validation fires: the YAML
---   decoder accepts any fps and either loop value for every animation
---   (the built loop legitimately loops), so the role's own rules apply
---   at the point the role is resolved.
+--   The LOOP rule is this role's alone: the YAML decoder accepts either
+--   loop value for every animation (the built loop legitimately loops),
+--   so it applies at the point the role is resolved.
+--
+--   The finite-positive fps rule became a GENERAL authoring-boundary
+--   rule with #2347 — 'Engine.Asset.YamlBuildings' now refuses the whole
+--   file for any animation declaring a non-finite or non-positive fps —
+--   and the check below is deliberately RETAINED rather than folded
+--   into it. 'BuildingDef' is a public constructor: a hand-built
+--   definition, a Lua-registered one, and every test fixture reach this
+--   resolver without passing the decoder at all, so dropping the check
+--   here would move the guarantee from "always" to "only for definitions
+--   that came from a YAML file".
 resolveDestructionClip ∷ BuildingDef → Either Text (Maybe DestructionClip)
 resolveDestructionClip def =
     case Map.lookup RoleDestruction (bdRoleAnims def) of

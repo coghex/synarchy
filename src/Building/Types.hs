@@ -285,7 +285,10 @@ data BuildingGhost = BuildingGhost
 --   a finite positive fps, a non-looping clip, and at least one frame.
 --   Built only by 'Building.Destruction.resolveDestructionClip', so
 --   every consumer can assume those invariants instead of re-checking
---   them per frame.
+--   them per frame. The fps half of that is now also an authoring-
+--   boundary rule for EVERY animation (#2347); the resolver still
+--   re-checks it because 'BuildingDef' is a public constructor that a
+--   hand-built definition reaches without the decoder.
 --
 --   'dcFrameCount' is the FACING-INDEPENDENT clip length (the longest
 --   facing's count, exactly as 'buildingAnimMaxFrames' derives it): the
