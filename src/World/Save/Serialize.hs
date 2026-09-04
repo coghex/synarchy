@@ -11,7 +11,11 @@ module World.Save.Serialize
     , SaveListing(..)
     , savesDirectory
     , saveExtension
+    , saveSlotPath
+    , legacySavePath
     , sanitizeSaveName
+    , SaveRequestKind(..)
+    , checkSaveName
     , loadPhaseFor
     ) where
 
@@ -27,7 +31,8 @@ import Data.Time.Clock (UTCTime)
 import Data.Time.Format (parseTimeM, formatTime, defaultTimeLocale)
 import System.Directory (createDirectoryIfMissing, listDirectory
                         , doesFileExist, doesDirectoryExist)
-import System.FilePath ((</>), takeExtension, dropExtension)
+import System.FilePath ((</>), takeExtension, dropExtension
+                      , addTrailingPathSeparator)
 import World.Save.Types (SaveData, SaveMetadata(..), checkWorldCount)
 import World.Save.Envelope
     ( encodeSessionSnapshot, decodeSessionEnvelope
@@ -76,10 +81,82 @@ savesDirectory = "saves"
 --   (@saves\/\<name\>.synworld@). Nothing writes this shape any more —
 --   every save is published as a slot DIRECTORY — but 'listSaves' still
 --   lists one and 'loadWorld' still loads one, so any code reasoning
---   about whether a save NAME is occupied has to consider both forms
---   (see "World.Save.Autosave").
+--   about whether a save NAME is occupied has to consider both forms:
+--   'World.Save.Autosave.ownershipProblem' for an autosave cycle,
+--   'checkSaveName' below for a manual save, and 'listSaves' when it
+--   decides which of the two forms a name's single row describes.
 saveExtension ∷ String
 saveExtension = ".synworld"
+
+-- | The MODERN slot-directory path (@saves\/\<name\>\/@) a sanitized
+--   save NAME resolves to — the form 'writeSaveFiles' publishes, and
+--   the form 'loadWorld' selects whenever it exists AT ALL.
+saveSlotPath ∷ Text → FilePath
+saveSlotPath name = savesDirectory </> T.unpack name
+
+-- | The pre-#762 LEGACY FLAT file path (@saves\/\<name\>.synworld@) the
+--   same save NAME resolves to — the form 'loadWorld' falls back to only
+--   when 'saveSlotPath' does not exist.
+legacySavePath ∷ Text → FilePath
+legacySavePath name = savesDirectory </> T.unpack name <> saveExtension
+
+-- | Which kind of request is asking to publish under a save name.
+--   Only 'checkSaveName''s legacy-occupancy rule distinguishes them
+--   (issue #2335): an autosave cycle is refused the same collision one
+--   step earlier, by "World.Save.Autosave"'s own ownership check, so
+--   applying it twice would only replace that path's specific reason
+--   with a less useful one.
+--
+--   Deliberately NOT 'World.Save.Types.AutosaveRequest': that record is
+--   captured at request ACCEPTANCE, after the barrier has opened, and no
+--   preflight check has one yet.
+data SaveRequestKind
+    = ManualSave
+      -- ^ A player-initiated @engine.saveWorld@ request.
+    | ScheduledAutosave
+      -- ^ The interval autosave scheduler's request (#913).
+    deriving (Show, Eq)
+
+-- | The complete save-NAME admission check @engine.saveWorld@ applies
+--   BEFORE it opens a save transaction: 'sanitizeSaveName' first, then —
+--   for a 'ManualSave' only — the legacy-flat-file occupancy rule
+--   (issue #2335). 'Right' carries the name it is safe to publish under.
+--
+--   A save NAME has two physical forms, and only one of them is
+--   writable: 'writeSaveFiles' publishes the slot DIRECTORY, while
+--   'loadWorld' prefers a directory over a flat namesake. Publishing a
+--   directory over an occupied name therefore leaves the player's legacy
+--   generation on disk but unreachable BY NAME — the exact shadowing
+--   'World.Save.Autosave.ownershipProblem' has refused since #913, for
+--   the same reason. Refusing here rather than at 'writeSaveFiles' is
+--   what makes it a refusal rather than a failed save: no barrier is
+--   opened, no snapshot is captured, and nothing on disk is touched.
+--
+--   Occupancy is the PRESENCE of the regular flat file and nothing more.
+--   Its bytes are never read, let alone decoded, so a corrupt,
+--   incompatible or pre-envelope legacy file shadows a name exactly as a
+--   loadable one does — and is preserved exactly as one is. Autosave
+--   already draws the line in that same place ('doesFileExist', no
+--   decode).
+checkSaveName ∷ SaveRequestKind → Text → IO (Either Text Text)
+checkSaveName kind rawName =
+    case sanitizeSaveName rawName of
+    Left err   → pure (Left err)
+    Right name → case kind of
+        ScheduledAutosave → pure (Right name)
+        ManualSave        → maybe (Right name) Left ⊚ legacyOccupancy name
+
+-- | Why a manual save must not publish under this (already sanitized)
+--   name, if it must not. See 'checkSaveName'.
+legacyOccupancy ∷ Text → IO (Maybe Text)
+legacyOccupancy name = do
+    let flat = legacySavePath name
+    occupied ← doesFileExist flat
+    pure $ if not occupied then Nothing else Just $
+        "a legacy flat save file '" <> T.pack flat <> "' already occupies \
+        \that save name -- saving there would shadow it (a slot directory \
+        \is loaded in preference to a flat file, so it could no longer be \
+        \loaded by name). Rename or remove it to save under that name."
 
 -- | Publish already-encoded envelope bytes (see 'encodeSessionSnapshot')
 --   as a new authoritative generation for @saves/{name}/@ (issue #762,
@@ -157,8 +234,8 @@ loadWorld logger rawName luaKnownNames luaRequiredNames =
     case sanitizeSaveName rawName of
     Left err   → return (Left (LoadPaused, "Invalid save name: " <> err))
     Right name → do
-        let dirPath    = savesDirectory </> T.unpack name
-            legacyPath = savesDirectory </> T.unpack name <> saveExtension
+        let dirPath    = saveSlotPath name
+            legacyPath = legacySavePath name
         dirExists ← doesDirectoryExist dirPath
         if dirExists
             then loadFromDirectory dirPath name
@@ -542,6 +619,36 @@ listSavesWithSeams seams logger luaKnownNames = do
                                 return []
 
     loadLegacyEntry name path = do
+        -- #2335: at most ONE row per logical save NAME, and it is the
+        -- form loading that name would actually reach. 'loadWorld'
+        -- selects the slot DIRECTORY whenever one exists AT ALL, before
+        -- it ever looks at the flat path, so a flat file with a
+        -- directory namesake is unreachable by name and must not be
+        -- published as a second row that would silently load the
+        -- directory instead (every consumer keys a listing row by
+        -- 'slName' alone). That holds even when the directory turns out
+        -- to be corrupt, symlinked or otherwise unlistable: the flat
+        -- file is no more reachable by name then, so NEITHER row is
+        -- published and the directory's own path reports why.
+        --
+        -- The decision is a direct 'doesDirectoryExist' on the namesake
+        -- rather than a look at what the other entries produced, so it
+        -- is independent of enumeration order.
+        shadowed ← doesDirectoryExist (saveSlotPath name)
+        if shadowed
+          then do
+            logWarn logger CatWorld $
+                "listSaves: skipping legacy save file '" <> T.pack path
+                    <> "': the save name is already held by the slot \
+                       \directory '"
+                    <> T.pack (addTrailingPathSeparator (saveSlotPath name))
+                    <> "', which is what loading '" <> name
+                    <> "' reaches. Neither file was modified -- rename \
+                       \one of them to list both."
+            return []
+          else loadLegacyFileEntry name path
+
+    loadLegacyFileEntry name path = do
         -- Requirement 12: a legacy flat file's OWN listing path never
         -- routed through 'loadDirEntry''s containment check — apply it
         -- here directly (also covers a symlinked 'savesDirectory' via

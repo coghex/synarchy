@@ -41,7 +41,8 @@ import Engine.PlayerEvent.Emit (emitEvent)
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import World.Material (mergeMaterialRegistry)
 import World.Save.Serialize
-    (listSaves, loadWorld, sanitizeSaveName, SaveListing(..))
+    ( listSaves, loadWorld, checkSaveName, SaveRequestKind(..)
+    , SaveListing(..) )
 import World.Save.Autosave
     (prepareAutosaveCycle, finalizeAutosaveRotation, publicSaveListings)
 import Engine.Core.Capability.WorldSim
@@ -281,7 +282,9 @@ saveOwnerSet env = do
     pure $ if inputActive then Set.insert SaveInput base else base
 
 -- | engine.saveWorld(pageId, saveName). Validates the request
---   synchronously (name, world-exists, gen-params present), then
+--   synchronously ('World.Save.Serialize.checkSaveName' — the name is
+--   well-formed and, for a manual save, not already held by a legacy
+--   flat file — world-exists, gen-params present), then
 --   collects every registered Lua module's state via
 --   `scripts.lib.save_modules.snapshotAll()` and enqueues a
 --   `WorldSave` command carrying the per-module envelope components to
@@ -317,12 +320,23 @@ saveWorldFn env = do
                 pageId   = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
             logger ← Lua.liftIO $ readIORef (loggerRef env)
             loading ← Lua.liftIO $ loadInProgress (loadStatusRef env)
+            -- #2335: the whole save-NAME admission rule, in one call --
+            -- 'sanitizeSaveName' plus, for a MANUAL request only, the
+            -- refusal to publish a slot directory over a name a pre-#762
+            -- legacy flat file already holds. Both are synchronous
+            -- rejections in the same shape below, and both land BEFORE
+            -- 'beginSave': no barrier opens, no snapshot is captured,
+            -- and nothing on disk is touched. An autosave keeps its own
+            -- ownership check in "World.Save.Autosave", one step earlier.
+            nameCheck ← Lua.liftIO $ checkSaveName
+                (if wantAutosave then ScheduledAutosave else ManualSave)
+                saveName
             if loading
               then do
                 Lua.liftIO $ logWarn logger CatLua $
                     "saveWorld rejected: a load transaction is already active"
                 Lua.pushboolean False
-              else case sanitizeSaveName saveName of
+              else case nameCheck of
                 Left err → do
                     Lua.liftIO $ do
                         logWarn logger CatLua $
