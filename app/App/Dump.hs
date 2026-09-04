@@ -463,7 +463,7 @@ settleWaitFailure result = case result of
 --
 --   Generous on purpose: unlike the init and chunk waits, this one
 --   covers COMPUTE as well as a handoff — the sim runs up to
---   'Sim.Thread.maxFastSettleIterations' synchronous fluid ticks over
+--   @Sim.Thread.maxFastSettleIterations@ synchronous fluid ticks over
 --   every loaded chunk before it emits a single batch. The number that
 --   matters is the other end: a strand used to hold a CI job to its
 --   90-minute cap (@.github\/workflows\/ci.yml@) and an operator's shell
