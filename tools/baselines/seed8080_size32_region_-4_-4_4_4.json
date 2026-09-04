@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "dd1643ade7e74b7568a883a316e14c1f24b17e78381f13c9b63a50fd7c3310ea",
-      "dd1643ade7e74b7568a883a316e14c1f24b17e78381f13c9b63a50fd7c3310ea",
-      "dd1643ade7e74b7568a883a316e14c1f24b17e78381f13c9b63a50fd7c3310ea"
+      "f64ede0b5d9c704bf3c2ca590a5a2027ab69ecd809542fa3838ced26240a7223",
+      "f64ede0b5d9c704bf3c2ca590a5a2027ab69ecd809542fa3838ced26240a7223",
+      "f64ede0b5d9c704bf3c2ca590a5a2027ab69ecd809542fa3838ced26240a7223"
     ]
   },
   "tileCount": 20736,
@@ -27,30 +27,30 @@
     "count": 20736
   },
   "fluidStats": {
-    "dry": 9280,
-    "lake": 2988,
+    "dry": 9281,
+    "lake": 2989,
     "ocean": 6813,
-    "river": 1655
+    "river": 1653
   },
   "fluidEnvelope": {
     "dry": {
-      "min": 9280,
-      "max": 9280,
-      "median": 9280,
+      "min": 9281,
+      "max": 9281,
+      "median": 9281,
       "all": [
-        9280,
-        9280,
-        9280
+        9281,
+        9281,
+        9281
       ]
     },
     "lake": {
-      "min": 2988,
-      "max": 2988,
-      "median": 2988,
+      "min": 2989,
+      "max": 2989,
+      "median": 2989,
       "all": [
-        2988,
-        2988,
-        2988
+        2989,
+        2989,
+        2989
       ]
     },
     "ocean": {
@@ -64,13 +64,13 @@
       ]
     },
     "river": {
-      "min": 1655,
-      "max": 1655,
-      "median": 1655,
+      "min": 1653,
+      "max": 1653,
+      "median": 1653,
       "all": [
-        1655,
-        1655,
-        1655
+        1653,
+        1653,
+        1653
       ]
     }
   },
@@ -9813,7 +9813,7 @@
         {
           "x": 58,
           "y": -45,
-          "details": "river surf=204 -> water nbr surf=197 diff=7"
+          "details": "lake surf=204 -> water nbr surf=197 diff=7"
         },
         {
           "x": 58,

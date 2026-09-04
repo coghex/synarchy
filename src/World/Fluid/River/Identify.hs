@@ -78,10 +78,10 @@ import World.Fluid.River.Identify.Components
     ( extendRiverChains, clampCentreSurfaces, clampLateralSurfaces
     , expandWidth, depthFromRadius, cullByLength, labelRiverComponents
     , buildRivers )
+import World.Fluid.River.Identify.Common (SpillwayOwners)
 import World.Fluid.River.Identify.Flow
     ( computePrecipUnits, computeEvapUnits, buildLakeIdAt
-    , computeSpillways, buildIsSpillwayOf, computeDescentDirs
-    , bucketSortAscending, computeFlowAccumulation )
+    , resolveSpillways, bucketSortAscending, computeFlowAccumulation )
 import World.Fluid.River.Types (WorldRivers(..), emptyWorldRivers)
 import World.Weather.Types (ClimateState)
 
@@ -120,7 +120,6 @@ identifyWorldRivers seed worldSize lakes terrain climate waterfallQuantum0
         -- stepped-gorge clamp, so floor it at 1 regardless of config source.
         waterfallQuantum = max 1 waterfallQuantum0
         worldTiles = worldSize * chunkSize
-        nTiles    = worldTiles * worldTiles
 
         -- Per-tile climate units.
         precipUnits = computePrecipUnits worldSize climate terrain
@@ -129,14 +128,15 @@ identifyWorldRivers seed worldSize lakes terrain climate waterfallQuantum0
         -- Reverse-index lakes to a tile → lakeId map (-1 if not in any).
         lakeIdAt = buildLakeIdAt worldSize lakes
 
-        -- Per-lake spillway tile (-1 if none usable).
-        spillwayOf = computeSpillways worldSize lakes terrain lakeIdAt
-
-        -- Inverse: per-tile → lakeId of which it's the spillway (-1 if none).
-        isSpillwayOf = buildIsSpillwayOf nTiles spillwayOf
-
-        -- D4 steepest descent — spillways exclude their source lake.
-        dir = computeDescentDirs worldTiles terrain lakeIdAt isSpillwayOf
+        -- The spillway stage: each lake's outlet tile, the per-tile
+        -- inverse carrying EVERY lake that spills through a tile
+        -- (#2323 — adjacent basins can share one), D4 steepest
+        -- descents that exclude every contributor, and the demotion of
+        -- a shared outlet whose last descent that exclusion removed.
+        -- 'spillwayOf' and 'owners' are the post-demotion effective
+        -- tables; 'dir' is derived from the pre-demotion contributors.
+        (spillwayOf, owners, dir) =
+            resolveSpillways worldSize lakes terrain lakeIdAt
 
         -- Sorted tile indices (ascending z, skipping minBound).
         ascOrder = bucketSortAscending terrain
@@ -146,7 +146,7 @@ identifyWorldRivers seed worldSize lakes terrain climate waterfallQuantum0
             worldTiles terrain lakeIdAt dir spillwayOf
             precipUnits evapUnits ascOrder
 
-    in traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf
+    in traceRivers seed worldSize terrain lakeIdAt owners spillwayOf
                    dir flow ascOrder waterfallQuantum riftAt
 
 -- * River trace
@@ -159,7 +159,7 @@ traceRivers
     → Int                  -- ^ worldSize
     → VU.Vector Int        -- ^ terrain
     → VU.Vector Int        -- ^ lakeIdAt
-    → VU.Vector Int        -- ^ isSpillwayOf
+    → SpillwayOwners       -- ^ per-tile spillway contributors
     → VU.Vector Int        -- ^ spillwayOf
     → VU.Vector Word8      -- ^ dir
     → VU.Vector Int        -- ^ flow
@@ -167,7 +167,7 @@ traceRivers
     → Int                  -- ^ waterfall quantum (max surface drop / step)
     → (Int → Int → Float)  -- ^ rift-intensity field
     → WorldRivers
-traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
+traceRivers seed worldSize terrain lakeIdAt owners spillwayOf dir flow
             ascOrder waterfallQuantum riftAt =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
@@ -239,7 +239,7 @@ traceRivers seed worldSize terrain lakeIdAt isSpillwayOf spillwayOf dir flow
         -- Step 4: build per-component bookkeeping (bbox, sources,
         -- sinks, peak flow). Uses post-breakthrough data so bboxes
         -- include the carved canyons.
-        rivers = buildRivers worldSize terrain lakeIdAt isSpillwayOf
+        rivers = buildRivers worldSize terrain lakeIdAt owners
                              spillwayOf dir flow isRiverTileB compIdB nComps
 
         -- Step 5: per-chunk bitmasks + surface z + width slices.
