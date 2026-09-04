@@ -215,10 +215,16 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
         -- uncapped speed.
         step = case mtHazard mt of
             FallPermitted  → rawStep
-            -- Bound the MAGNITUDE, not just the upper end: nothing
-            -- rejects a negative speed at the `unit.moveTo` boundary, and
-            -- a large negative step spans just as many tiles (backwards)
-            -- as a large positive one. A non-finite step refuses to move
+            -- Bound the MAGNITUDE, not just the upper end: a large
+            -- negative step spans just as many tiles (backwards) as a
+            -- large positive one, and this clamp is the only thing
+            -- standing between one and a skipped tile boundary. Since
+            -- #2290 both the `unit.moveTo` ingress and the
+            -- `UnitMoveTo` handler refuse a negative speed, so no
+            -- SPEED can produce one any more — but `rawStepLength`
+            -- also multiplies by a grade and a material factor, so the
+            -- bound stays two-sided rather than resting on a caller's
+            -- domain. A non-finite step refuses to move
             -- at all, the fail-closed posture the rest of the policy
             -- takes — with the isNaN test FIRST, because every comparison
             -- against NaN is False and a bare clamp chain would launder it

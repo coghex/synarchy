@@ -18,12 +18,16 @@ import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.Body (injurySpeedMult)
+import Unit.Thread.Command.MotionGuard (motionPayloadOk)
 import Unit.Thread.Command.Pose (isTransitioning)
 import Unit.Thread.Movement (startJump, jumpMaxTiles)
 
 handleUnitMoveToCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                         → Float → Float → Float → MoveHazardPolicy → IO ()
 handleUnitMoveToCommand env utsRef uid tx ty speed hazard = do
+  ok ← motionPayloadOk env "UnitMoveTo" [("targetX", tx), ("targetY", ty)]
+                                        [("speed", speed)]
+  when ok $ do
     -- Apply the injury speed multiplier on receipt so EVERY move
     -- command — commanded, wander, attack-pursuit, retreat — gets
     -- scaled the same way without the AI caller having to know.
@@ -94,6 +98,8 @@ handleUnitMoveToCommand env utsRef uid tx ty speed hazard = do
 handleUnitSetMoveSpeedCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                               → Float → IO ()
 handleUnitSetMoveSpeedCommand env utsRef uid speed = do
+  ok ← motionPayloadOk env "UnitSetMoveSpeed" [] [("speed", speed)]
+  when ok $ do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     let effSpeed = case HM.lookup uid (umInstances um) of
             Nothing   → speed

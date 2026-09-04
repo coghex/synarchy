@@ -19,6 +19,7 @@ import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Sim.Types
+import Unit.Thread.Command.MotionGuard (motionPayloadOk)
 import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Page.Types (WorldPageId(..))
@@ -55,9 +56,19 @@ handleUnitClearAllCommand env utsRef = do
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())
 
+-- | Snap a unit to (gx, gy), grounding it at @mGz@ or at the surface.
+--
+--   A non-finite coordinate is DROPPED here rather than installed
+--   (#2290): 'floor' does not throw and 'World.Generate.globalToChunk'
+--   maps any 'Int' somewhere, so a NaN would land silently in
+--   @usRealX@\/@usRealY@ and be persisted from there. @unit.setPos@
+--   already refuses one at the scripting boundary; this is the same
+--   domain enforced at the authoritative end of the queue.
 handleUnitTeleportCommand ∷ EngineEnv → IORef UnitThreadState → UnitId
                           → Float → Float → Maybe Int → IO ()
 handleUnitTeleportCommand env utsRef uid gx gy mGz = do
+  ok ← motionPayloadOk env "UnitTeleport" [("gridX", gx), ("gridY", gy)] []
+  when ok $ do
     gz ← case mGz of
         Just z  → return z
         Nothing → do

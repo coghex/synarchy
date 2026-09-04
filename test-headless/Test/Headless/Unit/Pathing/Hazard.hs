@@ -393,9 +393,14 @@ spec = do
             states `shouldSatisfy` not . any isFalling
 
         it "bounds a protected tick's displacement in BOTH directions" $ do
-            -- The cap has to bound the MAGNITUDE: nothing rejects a
-            -- negative speed at the `unit.moveTo` boundary, and a large
-            -- negative step spans just as many tiles backwards.
+            -- The cap has to bound the MAGNITUDE: a large negative
+            -- step spans just as many tiles backwards as a positive one
+            -- spans forwards. Since #2290 no negative SPEED survives
+            -- either the `unit.moveTo` ingress or the `UnitMoveTo`
+            -- handler, so this drives the clamp directly rather than
+            -- through a verb that would now refuse it — the step is a
+            -- product of speed, grade and material factor, and the cap
+            -- must bound the product.
             --
             -- The assertion is the invariant the single-boundary argument
             -- actually rests on — a displacement STRICTLY under one tile
