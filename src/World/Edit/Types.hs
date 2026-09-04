@@ -113,7 +113,7 @@ data WorldEdit
                                            --   payload in place, would
                                            --   reinterpret tag 8 in every
                                            --   shipped @world-edits@ v1 log.
-                                           --   'World.Save.Component.Page.applyWorldEdits'
+                                           --   'World.Save.Component.PageEdits.applyWorldEdits'
                                            --   rewrites each one into the
                                            --   identity-bearing form as the
                                            --   page is assembled, so no live
@@ -145,7 +145,7 @@ data WorldEdit
                                            --   object graph is its target, and
                                            --   the invariant that guards it is
                                            --   the page's allocator cursor
-                                           --   ('World.Save.Component.Page.validateWorldEdits').
+                                           --   ('World.Save.Component.PageEdits.validateWorldEdits').
                                            --
                                            --   A NEW constructor rather than a
                                            --   sixth field on 'WePlaceFlora',

@@ -34,15 +34,22 @@ unitsComponentId ∷ ComponentId
 unitsComponentId = ComponentId "units"
 worldPagesComponentId ∷ ComponentId
 worldPagesComponentId = ComponentId "world-pages"
+worldEditsComponentId ∷ ComponentId
+worldEditsComponentId = ComponentId "world-edits"
+worldActivityComponentId ∷ ComponentId
+worldActivityComponentId = ComponentId "world-activity"
 """
 
-# A component module shaped like the real `World.Save.Component.Page`:
-# its codec decodes INTO a canonical type (`WorldPages`) that reaches the
-# whole live snapshot, while the bytes it actually writes are the
-# `*DTO*`s. Seeding the canonical type instead would attribute every
-# enum in the session to `"world-pages"`.
-_PAGE_HS = """\
-module World.Save.Component.Page where
+# A component module shaped like the real
+# `World.Save.Component.PageCore`: its codec decodes INTO a canonical
+# type (`WorldPages`) that reaches the whole live snapshot, while the
+# bytes it actually writes are the `*DTO*`s. Seeding the canonical type
+# instead would attribute every enum in the session to `"world-pages"`.
+# It is named for the real owner because `NON_WIRE_COMPONENT_DECLS` is a
+# PRODUCTION constant checked against this tree — its `WorldPages` entry
+# must name a module that exists here.
+_PAGE_CORE_HS = """\
+module World.Save.Component.PageCore where
 
 data WorldPages = WorldPages ![PageSnapshot]
 
@@ -62,6 +69,36 @@ worldPagesCodec = componentCodec ComponentSpec
 
 basePageSnapshots ∷ WorldPagesDTO → WorldPages
 basePageSnapshots = undefined
+"""
+
+# A second component owner, shaped like the real
+# `World.Save.Component.PageEdits`: the module declaring a guarded wire
+# SUM also declares the codec that puts it on the wire. That pairing is
+# what makes a module move change the type's carrier LABEL as well as
+# its qualified key — the case #2135's owner split introduced and
+# section 3d below mutates. Its `via` path is two hops
+# (`WorldEditsDTO → PageEditsDTO → WorldEditDTO`), so a case can change
+# the path without touching anything else.
+_PAGE_EDITS_HS = """\
+module World.Save.Component.PageEdits where
+
+data WorldEditDTO
+    = WeDeleteTileD !Int !Int
+    | WeAddTileD !Int !Int !Int
+    deriving (Show, Eq, Generic, Serialize)
+
+data PageEditsDTO = PageEditsDTO
+    { pedEdits ∷ ![WorldEditDTO]
+    } deriving (Show, Eq, Generic, Serialize)
+
+newtype WorldEditsDTO = WorldEditsDTO [PageEditsDTO]
+    deriving (Show, Eq, Generic, Serialize)
+
+worldEditsCodec ∷ ComponentCodec WorldEditsDTO
+worldEditsCodec = componentCodec ComponentSpec
+    { csComponent = worldEditsComponentId
+    , csVersion   = 1
+    }
 """
 
 # NOT a wire module: the canonical in-memory session shape, reachable
@@ -142,7 +179,8 @@ def _source_tree() -> dict[str, str]:
     tree = dict(_STUB_MODULES)
     tree["src/World/Save/Component/Types.hs"] = _TYPES_HS
     tree["src/World/Save/Component/Entities.hs"] = _ENTITIES_HS
-    tree["src/World/Save/Component/Page.hs"] = _PAGE_HS
+    tree["src/World/Save/Component/PageCore.hs"] = _PAGE_CORE_HS
+    tree["src/World/Save/Component/PageEdits.hs"] = _PAGE_EDITS_HS
     tree["src/World/Save/Snapshot.hs"] = _SNAPSHOT_HS
     tree["src/Unit/Sim/Types.hs"] = _POSE_HS
     return tree
@@ -589,6 +627,122 @@ def _self_test() -> list[str]:
             "module Unit.Sim.Types where", "module Unit.Sim.Stance where")
     expect_fail("relocation with an ambiguous destination", ambiguous,
                 "INCOMPATIBLE", "Unit.Sim.Types.Pose", "baseline only")
+    # 3d. #2135's owner split is the case 3c's attribution clause was
+    #     NOT written for. Splitting `World.Save.Component.Page` moved
+    #     each codec into the owner module that also declares its own
+    #     wire sum, so a moved type's carrier LABEL — which names the
+    #     CODEC's module — moves with the declaration. Nothing on the
+    #     wire changed, so it must ratchet; and eliding the module inside
+    #     a label must not make any OTHER attribution difference
+    #     ratchetable, so each of the three that must stay INCOMPATIBLE
+    #     gets its own case in exactly this shape.
+    def moved_owner(module: str, body: str | None = None) -> dict[str, str]:
+        """The clean tree with the `"world-edits"` owner — its guarded
+        sum AND the codec whose carrier label names its module — living
+        in `module` instead, optionally with an edited `body`."""
+        tree = {k: v for k, v in _clean_tree().items()
+                if k != "src/World/Save/Component/PageEdits.hs"}
+        rel = "src/" + module.replace(".", "/") + ".hs"
+        tree[rel] = (_PAGE_EDITS_HS if body is None else body).replace(
+            "module World.Save.Component.PageEdits where",
+            f"module {module} where")
+        return tree
+
+    _MOVED_OWNER = "World.Save.Component.PageEditLog"
+
+    def expect_not_relocated(label: str, tree: dict[str, str],
+                             *needles: str) -> None:
+        """A move the relaxed label comparison must still refuse."""
+        code, out = _run(tree)
+        if code == 0:
+            failures.append(f"{label}: expected a failure, got a clean pass")
+            return
+        if "RELOCATED" in out:
+            failures.append(f"{label}: absorbed as a relocation despite a "
+                            f"real attribution change:\n{out}")
+        for needle in ("INCOMPATIBLE",
+                       "World.Save.Component.PageEdits.WorldEditDTO",
+                       "baseline only") + needles:
+            if needle not in out:
+                failures.append(
+                    f"{label}: output did not mention {needle!r}:\n{out}")
+        # ...and the ratchet must refuse it too, which is the step that
+        # would actually rewrite the captured attribution.
+        code, update_out = _run(tree, update=True)
+        if code == 0 or "refusing to update" not in update_out:
+            failures.append(f"{label}: --update-baseline did not refuse "
+                            f"loudly:\n{update_out}")
+
+    owner_move = moved_owner(_MOVED_OWNER)
+    code, owner_out = _run(owner_move)
+    if code == 0:
+        failures.append("component owner move: must still fail until the "
+                        "baseline records the new owner")
+    if "INCOMPATIBLE" in owner_out:
+        failures.append(f"component owner move: misreported as a "
+                        f"byte-reinterpreting change:\n{owner_out}")
+    for needle in (f"{_MOVED_OWNER}.WorldEditDTO",
+                   "RELOCATED from World.Save.Component.PageEdits."
+                   "WorldEditDTO",
+                   "WeDeleteTileD/2, WeAddTileD/3",
+                   "no saved byte changed meaning", "--update-baseline"):
+        if needle not in owner_out:
+            failures.append(f"component owner move: output did not mention "
+                            f"{needle!r}:\n{owner_out}")
+    if "baseline only" in owner_out:
+        failures.append(f"component owner move: also reported as a "
+                        f"baseline-only deletion:\n{owner_out}")
+    code, owner_ratchet = _run(owner_move, update=True)
+    if code != 0:
+        failures.append(f"component owner move: --update-baseline refused a "
+                        f"pure module move:\n{owner_ratchet}")
+    owner_baseline = owner_ratchet.split("<<baseline>>\n", 1)[1]
+    # The ratchet must move BOTH pieces of ownership metadata: the
+    # qualified key and the module named inside the carrier label. A
+    # baseline that kept the old label would leave the relaxed
+    # comparison permanently papering over a stale record.
+    for needle in (f'"{_MOVED_OWNER}.WorldEditDTO"',
+                   f'\\"world-edits\\" — {_MOVED_OWNER}'):
+        if needle not in owner_baseline:
+            failures.append(f"component owner move ratchet: baseline missing "
+                            f"{needle!r}:\n{owner_baseline}")
+    for stale in ('"World.Save.Component.PageEdits.WorldEditDTO"',
+                  '\\"world-edits\\" — World.Save.Component.PageEdits'):
+        if stale in owner_baseline:
+            failures.append(f"component owner move ratchet: baseline kept "
+                            f"{stale!r}:\n{owner_baseline}")
+    expect_clean("component owner move ratcheted",
+                 dict(owner_move, **{BASELINE_REL: owner_baseline}))
+
+    # The three attribution facts the relaxation must NOT swallow. Each
+    # is the same module move with exactly one of them also changed.
+    expect_not_relocated(
+        "component owner move that changes the COMPONENT",
+        moved_owner(_MOVED_OWNER,
+                    _PAGE_EDITS_HS.replace("worldEditsComponentId",
+                                           "worldActivityComponentId")))
+    expect_not_relocated(
+        "component owner move that drops the type OFF the wire",
+        moved_owner(_MOVED_OWNER,
+                    _PAGE_EDITS_HS.replace("pedEdits ∷ ![WorldEditDTO]",
+                                           "pedCount ∷ !Int")))
+    expect_not_relocated(
+        "component owner move that changes the `via` path",
+        moved_owner(_MOVED_OWNER,
+                    _PAGE_EDITS_HS.replace(
+                        "newtype WorldEditsDTO = WorldEditsDTO [PageEditsDTO]",
+                        "newtype WorldEditsDTO = WorldEditsDTO [WorldEditDTO]")))
+    # ...and a constructor change alongside the move stays what it has
+    # always been, in this shape too.
+    expect_not_relocated(
+        "component owner move with a constructor reorder",
+        moved_owner(_MOVED_OWNER,
+                    _PAGE_EDITS_HS.replace(
+                        "    = WeDeleteTileD !Int !Int\n"
+                        "    | WeAddTileD !Int !Int !Int\n",
+                        "    = WeAddTileD !Int !Int !Int\n"
+                        "    | WeDeleteTileD !Int !Int\n")))
+
     # A genuine DELETION still fails AND still cannot be ratcheted away.
     # The `deleted`/`renamed` guidance cases above prove the report; this
     # proves `--update-baseline` remains unable to erase the evidence,
@@ -845,7 +999,11 @@ def _self_test() -> list[str]:
     # 13. Vacuity: nothing discovered, or nothing declared, must fail.
     empty_src = {k: v for k, v in _clean_tree().items()
                  if k not in ("src/Unit/Sim/Types.hs",
-                              "src/World/Tool/Types.hs")}
+                              "src/World/Tool/Types.hs",
+                              # The `"world-edits"` owner declares the
+                              # fixture's third guarded sum, so leaving it
+                              # in would make this case prove nothing.
+                              "src/World/Save/Component/PageEdits.hs")}
     expect_fail("no guarded types discovered", empty_src,
                 "would pass vacuously")
     no_baseline = _clean_tree()
@@ -897,7 +1055,8 @@ def _self_test() -> list[str]:
             ("WIRE_ROOT_GLOB_EXCLUSIONS",
              "src/World/Save/Component/Types.hs",
              "stale WIRE_ROOT_GLOB_EXCLUSIONS entry"),
-            ("NON_WIRE_COMPONENT_DECLS", "src/World/Save/Component/Page.hs",
+            ("NON_WIRE_COMPONENT_DECLS",
+             "src/World/Save/Component/PageCore.hs",
              "stale NON_WIRE_COMPONENT_DECLS")):
         tree = {k: v for k, v in _clean_tree().items() if k != dropped}
         # Force a finding so the carrier walk runs.
@@ -959,7 +1118,8 @@ def _self_test() -> list[str]:
              "    }\n",
              "names no wire type this reader can resolve")):
         tree = with_pose("Crouching", "Standing", "Crawling")
-        tree["src/World/Save/Component/Page.hs"] = _PAGE_HS + "\n" + block
+        tree["src/World/Save/Component/PageCore.hs"] = \
+            _PAGE_CORE_HS + "\n" + block
         expect_fail(f"codec discovery: {label}", tree, needle)
 
     # 15. A guarded type no save-wire DTO reaches says so, rather than

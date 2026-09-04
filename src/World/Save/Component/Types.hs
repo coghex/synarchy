@@ -68,8 +68,9 @@
 --
 --   Do not gold-plate: stop at leaves. The concrete components apply this
 --   rule in "World.Save.Component.WorldGen" (the worldgen-params tree),
---   "World.Save.Component.Page" (world edits / designations / ground
---   items), and "World.Save.Component.Entities" (unit-sim / craft-bills /
+--   the three page-scoped owners behind "World.Save.Component.Page"
+--   (world edits / designations / ground items), and
+--   "World.Save.Component.Entities" (unit-sim / craft-bills /
 --   power-nodes, plus the frozen building/unit instance DTOs and their
 --   nested item / stat-modifier / wound / scar records).
 --

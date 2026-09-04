@@ -90,7 +90,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldIdentityDTO → EtymologySourceDTO → NameExprDTO → GramNumber"
         },
         {
@@ -164,7 +164,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → LocationInstancesDTO → LocationInstanceDTO → LocationLifecycle"
         },
         {
@@ -601,7 +601,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "carrier": "\"world-activity\" — World.Save.Component.PageActivity",
           "via": "PageActivityDTO → ConstructDesignationDTO → ConstructPayment"
         },
         {
@@ -637,7 +637,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "carrier": "\"world-activity\" — World.Save.Component.PageActivity",
           "via": "PageActivityDTO → ConstructDesignationDTO → ConstructStatus"
         },
         {
@@ -851,11 +851,11 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "carrier": "\"world-activity\" — World.Save.Component.PageActivity",
           "via": "PageActivityDTO → CropPlotDTO → FloraRef"
         },
         {
-          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
           "via": "PageEditsDTO → WorldEditDTO → FloraRef"
         },
         {
@@ -1006,7 +1006,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
           "via": "PageEditsDTO → WorldEditDTO → FluidType"
         },
         {
@@ -1049,7 +1049,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent"
         },
         {
@@ -1158,7 +1158,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → PersistentFeature → FeatureActivity"
         },
         {
@@ -1201,7 +1201,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → FeatureEvolution"
         },
         {
@@ -1283,7 +1283,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → FeatureShape"
         },
         {
@@ -1348,7 +1348,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → FeatureEvolution → VolcanicFeature"
         },
         {
@@ -1427,7 +1427,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoPeriod → GeoScale"
         },
         {
@@ -1503,7 +1503,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → HydroEvolution"
         },
         {
@@ -1614,7 +1614,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → HydroFeature"
         },
         {
@@ -1658,7 +1658,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → GeoTimeline → GeoEvent → HydroFeature → LakeParams → LakeSource"
         },
         {
@@ -1707,7 +1707,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → ZoomMapMode"
         },
         {
@@ -1762,15 +1762,15 @@
         }
       ]
     },
-    "World.Save.Component.Page.ConstructTargetDTO": {
-      "source": "src/World/Save/Component/Page.hs",
+    "World.Save.Component.PageActivity.ConstructTargetDTO": {
+      "source": "src/World/Save/Component/PageActivity.hs",
       "onSaveWire": true,
       "components": [
         "world-activity"
       ],
       "carriers": [
         {
-          "carrier": "\"world-activity\" — World.Save.Component.Page",
+          "carrier": "\"world-activity\" — World.Save.Component.PageActivity",
           "via": "PageActivityDTO → ConstructDesignationDTO → ConstructTargetDTO"
         },
         {
@@ -1795,15 +1795,15 @@
         }
       ]
     },
-    "World.Save.Component.Page.WorldEditDTO": {
-      "source": "src/World/Save/Component/Page.hs",
+    "World.Save.Component.PageEdits.WorldEditDTO": {
+      "source": "src/World/Save/Component/PageEdits.hs",
       "onSaveWire": true,
       "components": [
         "world-edits"
       ],
       "carriers": [
         {
-          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
           "via": "PageEditsDTO → WorldEditDTO"
         }
       ],
@@ -1940,15 +1940,15 @@
         }
       ]
     },
-    "World.Save.Component.Page.WorldEditDTOv1": {
-      "source": "src/World/Save/Component/Page.hs",
+    "World.Save.Component.PageEdits.WorldEditDTOv1": {
+      "source": "src/World/Save/Component/PageEdits.hs",
       "onSaveWire": true,
       "components": [
         "world-edits"
       ],
       "carriers": [
         {
-          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
           "via": "WorldEditsDTOv1 → PageEditsDTOv1 → WorldEditDTOv1"
         },
         {
@@ -2065,15 +2065,15 @@
         }
       ]
     },
-    "World.Save.Component.Page.WorldEditDTOv2": {
-      "source": "src/World/Save/Component/Page.hs",
+    "World.Save.Component.PageEdits.WorldEditDTOv2": {
+      "source": "src/World/Save/Component/PageEdits.hs",
       "onSaveWire": true,
       "components": [
         "world-edits"
       ],
       "carriers": [
         {
-          "carrier": "\"world-edits\" — World.Save.Component.Page",
+          "carrier": "\"world-edits\" — World.Save.Component.PageEdits",
           "via": "WorldEditsDTOv2 → PageEditsDTOv2 → WorldEditDTOv2"
         }
       ],
@@ -2347,7 +2347,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldIdentityDTO → EtymologySourceDTO → NameExprDTO"
         }
       ],
@@ -2597,7 +2597,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → ClimateStateDTO → AtmoGridDTO → PressureSystemDTO → PressureType"
         },
         {
@@ -2630,7 +2630,7 @@
       ],
       "carriers": [
         {
-          "carrier": "\"world-pages\" — World.Save.Component.Page",
+          "carrier": "\"world-pages\" — World.Save.Component.PageCore",
           "via": "PageCoreDTO → WorldGenParamsDTO → ClimateStateDTO → SurfaceBudgetDTO → SurfaceType"
         },
         {

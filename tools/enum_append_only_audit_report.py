@@ -12,6 +12,7 @@ no save-wire DTO reaches stays guarded and says so.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from enum_append_only_audit_model import (
@@ -105,6 +106,58 @@ def wire_attribution(qualified: str,
     )
 
 
+# The two shapes `compute_wire_carriers` builds a carrier LABEL in. A
+# codec carrier is `"<component>" — <the codec's module>`; a root-module
+# carrier is `<the declaring module> — <why that module is a wire root>`.
+# Both name a MODULE, and both are what `owner_blind_attribution` has to
+# be able to look past.
+_CODEC_CARRIER_LABEL_RE = re.compile(
+    r'^(?P<head>"[^"]*") — (?P<module>[A-Z][A-Za-z0-9_\']*'
+    r"(?:\.[A-Z][A-Za-z0-9_']*)*)$")
+_ROOT_CARRIER_LABEL_RE = re.compile(
+    r"^(?P<module>[A-Z][A-Za-z0-9_']*(?:\.[A-Z][A-Za-z0-9_']*)*) — "
+    r"(?P<tail>.+)$", re.DOTALL)
+
+
+def carrier_label_without_owner(label: str) -> tuple:
+    """One carrier label with the MODULE it names replaced by its form.
+
+    A carrier label is built from two facts: WHO carries the type (a
+    component id, or the reason a root module is on the wire) and WHICH
+    module the carrying declaration currently lives in. Only the first is
+    a wire fact. The second is ownership metadata that a pure module move
+    — issue #2135 split `World.Save.Component.Page`'s three codecs into
+    three owner modules — legitimately changes without any saved byte
+    changing meaning.
+
+    The FORM is kept in the returned tuple so the two shapes can never
+    compare equal to each other: a codec carrier turning into a
+    root-module carrier is a change in who carries the type, not in where
+    a declaration lives. Anything matching neither shape is compared
+    verbatim, so an unrecognised label is strict rather than permissive."""
+    codec = _CODEC_CARRIER_LABEL_RE.match(label)
+    if codec is not None:
+        return ("codec", codec.group("head"))
+    root = _ROOT_CARRIER_LABEL_RE.match(label)
+    if root is not None:
+        return ("root", root.group("tail"))
+    return ("literal", label)
+
+
+def owner_blind_attribution(attribution: tuple) -> tuple:
+    """A save-wire attribution with every carrier label's module elided.
+
+    Everything else is left exactly as it was: the on-wire status, the
+    component set, the number of carriers, their order, and each one's
+    `via` path. So a difference in any of THOSE still fails the
+    comparison in `relocations()` — this only stops the module name
+    embedded in a label from being read as one."""
+    on_wire, components, carriers = attribution
+    return (on_wire, components,
+            tuple((carrier_label_without_owner(label), path)
+                  for label, path in carriers))
+
+
 def recorded_attribution(entry: BaselineEntry) -> tuple:
     """The same tuple, read back from a baseline entry. An entry that
     never captured `onSaveWire` is read as claiming whatever its
@@ -150,17 +203,30 @@ def relocations(guarded: dict[str, GuardedType],
       constructor is still the byte-reinterpreting change the audit
       exists to catch, and is reported as one;
     - its freshly walked save-wire ATTRIBUTION — on-wire status,
-      components, and carrier paths — equals the attribution the
-      baseline captured. This clause is what stops a deletion wearing a
-      module move's clothes: attribution is walked by bare TYPE NAME, so
-      dropping a persisted enum from its DTO and adding an unrelated
-      OFF-wire enum with the same name and constructors elsewhere would
-      otherwise pair, and `--update-baseline` would rewrite the entry to
+      components, carrier count and order, and every carrier's `via`
+      path — equals the attribution the baseline captured, once each
+      carrier label's MODULE is elided by `owner_blind_attribution`.
+      This clause is what stops a deletion wearing a module move's
+      clothes: attribution is walked by bare TYPE NAME, so dropping a
+      persisted enum from its DTO and adding an unrelated OFF-wire enum
+      with the same name and constructors elsewhere would otherwise
+      pair, and `--update-baseline` would rewrite the entry to
       `onSaveWire: false` with no components — erasing the very
-      attribution the diagnostic for a later deletion depends on. A
-      genuine move leaves all three identical, because the carrier
-      labels name the CODEC's module and the `via` paths name types, not
-      the declaring module.
+      attribution the diagnostic for a later deletion depends on.
+
+      Eliding the module is what #2135 needed and is the ONLY relaxation
+      here. A carrier label names the CODEC's module (or, for a root
+      carrier, the declaring one), so moving a codec out of the module
+      that also declares its own wire sum — which is exactly what
+      splitting `World.Save.Component.Page` into three owners does —
+      changes the label for a type whose bytes did not move. Before
+      #2135 that could not happen: #2098 moved DTO declarations while
+      leaving the codecs in place, so the labels happened to stay
+      identical, and this clause was written assuming they always would.
+      Every other component of the attribution is still compared exactly,
+      so a change to the component set, to the on-wire status, or to any
+      `via` path remains INCOMPATIBLE — each with its own case in
+      `--self-test`.
 
     A genuine DELETION therefore still fails twice over: nothing answers
     to the bare name, and if something does, its attribution does not
@@ -184,8 +250,10 @@ def relocations(guarded: dict[str, GuardedType],
         source, destination = sources[0], destinations[0]
         if guarded[destination].constructors != baseline[source].constructors:
             continue
-        if wire_attribution(destination, carriers) \
-                != recorded_attribution(baseline[source]):
+        if owner_blind_attribution(
+                    wire_attribution(destination, carriers)) \
+                != owner_blind_attribution(
+                    recorded_attribution(baseline[source])):
             continue
         moved[source] = destination
     return moved
@@ -219,9 +287,10 @@ def compare(guarded: dict[str, GuardedType],
                     f" — the declaration moved between modules and no "
                     f"saved byte changed meaning.",
                     f"    Its save-wire attribution — on-wire status, "
-                    f"components and carrier paths — is unchanged too, so "
-                    f"only the baseline's ownership metadata (its qualified "
-                    f"key and `source`) is stale.",
+                    f"components and every carrier's `via` path — is "
+                    f"unchanged too, so only the baseline's ownership "
+                    f"metadata (its qualified key, its `source`, and the "
+                    f"module named inside a carrier label) is stale.",
                 ]))
                 continue
             findings.append(Finding(qualified, True, [

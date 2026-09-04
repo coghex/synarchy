@@ -339,10 +339,6 @@
     },
     {
       "path": "src/World/Edit/Types.hs",
-      "link": "'World.Save.Component.Page.validateWorldEdits'"
-    },
-    {
-      "path": "src/World/Edit/Types.hs",
       "link": "'World.Thread.Command.Save.WriteWorld.appendFluidSnapshot'"
     },
     {
@@ -426,12 +422,12 @@
       "link": "'Engine.Scripting.Lua.API.Save.autosaveSlotVerb'"
     },
     {
-      "path": "src/World/Save/Component/Page.hs",
-      "link": "'World.Load.Stage.stagePage'"
+      "path": "src/World/Save/Component/PageCore.hs",
+      "link": "'World.Save.Component.WorldGen.fromLocationInstanceDTOv5'"
     },
     {
-      "path": "src/World/Save/Component/Page.hs",
-      "link": "'World.Save.Component.WorldGen.fromLocationInstanceDTOv5'"
+      "path": "src/World/Save/Component/PageEdits.hs",
+      "link": "'World.Load.Stage.stagePage'"
     },
     {
       "path": "src/World/Save/Payload.hs",
@@ -456,10 +452,6 @@
     {
       "path": "src/World/Save/Types.hs",
       "link": "'World.Load.Stage.stagePage'"
-    },
-    {
-      "path": "src/World/Save/Types.hs",
-      "link": "'World.Save.Component.Page.migrateWorldEditDTOv2'"
     },
     {
       "path": "src/World/Save/Types.hs",
