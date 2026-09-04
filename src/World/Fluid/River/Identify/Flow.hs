@@ -3,9 +3,9 @@
 -- | Per-tile flow accumulation for the river-identification pipeline:
 --   climate → precip/evap units, the lake-id reverse index, per-lake
 --   spillway identification and its one-to-many per-tile inverse, D4
---   steepest-descent directions, and the
---   ascending-z bucket sort + flow-accumulation walk that turns those
---   into a per-tile flow field. Everything
+--   steepest-descent directions, and the ascending-z bucket sort +
+--   flow-accumulation walk that turns those into a per-tile flow
+--   field. Everything
 --   'World.Fluid.River.Identify.identifyWorldRivers' needs before it
 --   hands off to the trace stage. See that module's header comment
 --   for the full pipeline overview.
