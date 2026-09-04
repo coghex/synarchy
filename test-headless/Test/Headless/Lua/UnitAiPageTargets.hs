@@ -82,6 +82,15 @@ prelude = lns
     , "GROUND = {}"
     , "MOVES, STOPS = 0, 0"
     , "DEPOSITS, WITHDRAWS, TO_UNIT, TO_BUILDING = 0, 0, 0, 0"
+    -- #2297: the medic ladder's own surface. WOUNDS is what makes a
+    -- unit a patient, KNOW is per-uid so one medic can genuinely
+    -- outrank another, and TREAT_RANGE stands in for the engine's
+    -- unit.treatmentRange() so a case can move the reach and watch the
+    -- shipped arrival check follow it.
+    , "WOUNDS, KNOW = {}, {}"
+    , "TREAT_RANGE = 1.5"
+    , "TREATS, INFECT_TREATS = 0, 0"
+    , "faction = { areAllies = function() return true end }"
     , "function unitRow(uid, defName, x, y, pg, inv)"
     , "  UNITS[uid] = { uid = uid, defName = defName, gridX = x, gridY = y,"
     , "                 page = pg, inv = inv or {}, contents = {} }"
@@ -138,7 +147,16 @@ prelude = lns
     , "    if STATS[k] ~= nil then return STATS[k] end"
     , "    return 1.0 end,"
     , "  getSkill = function() return 25.0 end,"
-    , "  getKnowledge = function() return true end,"
+    -- A LEVEL, not a flag: unit_ai_medic multiplies it by intelligence
+    -- to rank medics, so a boolean could not model two of them.
+    , "  getKnowledge = function(uid) return KNOW[uid] or 50.0 end,"
+    , "  getFaction = function() return 'player' end,"
+    , "  getWounds = function(uid) return WOUNDS[uid] or {} end,"
+    , "  treatBleeding = function()"
+    , "    TREATS = TREATS + 1; return { ok = true } end,"
+    , "  treatInfection = function()"
+    , "    INFECT_TREATS = INFECT_TREATS + 1; return { ok = true } end,"
+    , "  treatmentRange = function() return TREAT_RANGE end,"
     , "  getMentalEffectiveness = function() return 1.0 end,"
     , "  getPose = function() return 'standing' end,"
     , "  dropItemById = function() end,"
@@ -231,10 +249,20 @@ prelude = lns
     , "local ACTOR = unitRow(1, 'acolyte', 0, 0, HOME,"
     , "                      { { defName = 'plate_steel', category = 'Materials' } })"
     , "local function newState() return { currentAction = nil } end"
+    -- One bleeding ally at (3, 0) on the given page: seeping above
+    -- treat_min_seep and unclotted, which is all needsTreatment reads.
+    , "function woundedAlly(uid, pg, x)"
+    , "  unitRow(uid, 'acolyte', x or 3, 0, pg)"
+    , "  WOUNDS[uid] = { { kind = 'slash', bandage = 1.0, clot = 0 } }"
+    , "end"
+    , "function clearUnit(uid) UNITS[uid] = nil; WOUNDS[uid] = nil end"
     ]
 
 spec ∷ Spec
-spec = describe "AI page pairing" $ do
+spec = pageSpec >> reachSpec
+
+pageSpec ∷ Spec
+pageSpec = describe "AI page pairing" $ do
 
     describe "store_materials" $ do
         it "ignores a cargo on another page, and takes the same one on its own" $
@@ -804,3 +832,166 @@ spec = describe "AI page pairing" $ do
                 , "assert(h and h.uid == 2 and h.kit == 'medkit',"
                 , "  'a same-page kit holder must still be selected')"
                 ]
+
+    describe "treat_ally (#2297)" $ do
+        it "ignores a bleeding ally on another page, and takes the same one on its own" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, AWAY)"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u == -math.huge,"
+                , "  'an off-page patient must not score, got ' .. tostring(u))"
+                , "assert(s.treatPending == nil,"
+                , "  'an off-page patient must leave no pending target')"
+                , "-- The SAME ally, same coordinates and same wound, on"
+                , "-- the medic's own page."
+                , "clearUnit(2)"
+                , "woundedAlly(2, HOME)"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v > 0,"
+                , "  'a same-page patient must still score, got ' .. tostring(v))"
+                , "assert(t.treatPending and t.treatPending.uid == 2,"
+                , "  'a same-page patient must still be nominated')"
+                ]
+
+        -- The nearest-wins scan is the part that has to be page-aware,
+        -- not just the ladder around it: a NEARER off-page ally that
+        -- still gets picked wins the slot and is then dropped by the
+        -- medic ranking, so the on-page ally standing further out is
+        -- never treated at all. Only the on-page ally must be seen.
+        it "never lets a nearer off-page ally beat the on-page one to the slot" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, AWAY, 1)   -- one tile out, wrong world"
+                , "woundedAlly(3, HOME, 3)   -- three tiles out, right one"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'the on-page ally must still be treatable, got ' .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 3,"
+                , "  'the on-page ally must be the one nominated, got '"
+                , "  .. tostring(s.treatPending and s.treatPending.uid))"
+                ]
+
+        -- The squad rule reads across the whole roster: only the best
+        -- AVAILABLE medic takes a patient, and every other one stands
+        -- down. A ranked medic on another page therefore does not just
+        -- fail to help -- it silences the one that could.
+        it "never ranks a medic on another page, and still stands down for an on-page one" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, HOME)"
+                , "-- A far more capable medic, standing ON the patient."
+                , "unitRow(3, 'acolyte', 3, 0, AWAY)"
+                , "KNOW[3] = 100.0"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'an off-page rival must not outrank the on-page medic, got '"
+                , "  .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 2,"
+                , "  'the on-page medic must still take the patient')"
+                , "-- Control: the SAME rival on the patient's own page"
+                , "-- does outrank it, so the case above is about the"
+                , "-- page and not about the ranking failing outright."
+                , "clearUnit(3)"
+                , "unitRow(3, 'acolyte', 3, 0, HOME)"
+                , "KNOW[3] = 100.0"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v == -math.huge,"
+                , "  'a same-page better medic must take the patient, got '"
+                , "  .. tostring(v))"
+                ]
+
+        -- aiState is global across pages but only the LOADED page is
+        -- ticked, so an off-page claimer never reaches treatExecute to
+        -- release its claim. Left holding the slot it would pin the
+        -- patient forever against a medic standing right beside them --
+        -- a suppression no engine-side refusal can undo, because
+        -- nothing is ever attempted.
+        it "never lets a claim held by a medic on another page suppress an on-page one" $
+            runsOk $ lns
+                [ prelude
+                , "local core = require('scripts.unit_ai_core')"
+                , "woundedAlly(2, HOME)"
+                , "unitRow(3, 'acolyte', 5, 0, AWAY)"
+                , "core.aiState[3] = { treatClaim = { patient = 2 } }"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'an off-page claimer must not hold the patient, got '"
+                , "  .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 2,"
+                , "  'the on-page medic must still take the patient')"
+                , "-- Control: the SAME claimer, same claim, on the"
+                , "-- patient's own page still reserves it (#306)."
+                , "UNITS[3] = nil"
+                , "unitRow(3, 'acolyte', 5, 0, HOME)"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v == -math.huge,"
+                , "  'a same-page claimer must still hold the patient, got '"
+                , "  .. tostring(v))"
+                ]
+
+        -- A claim OUTLIVES the tick that made it, so the page it was
+        -- made on can move underneath it. Releasing it late -- after
+        -- the kit fetch, or at the walk -- would already have moved an
+        -- item and steered a sprint at another world's coordinates.
+        it "releases a stored claim on an off-page patient before any walk, fetch or treat" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, AWAY)"
+                , "local s = newState()"
+                , "s.treatClaim = { patient = 2 }"
+                , "medic.treatExecute(1, s, PARAMS)"
+                , "assert(s.treatClaim == nil,"
+                , "  'an off-page claim must be released')"
+                , "assert(MOVES == 0 and STOPS == 0,"
+                , "  'an off-page claim must steer neither a walk nor a stop')"
+                , "assert(TO_UNIT == 0,"
+                , "  'an off-page claim must not fetch a kit')"
+                , "assert(TREATS == 0 and INFECT_TREATS == 0,"
+                , "  'an off-page claim must not treat')"
+                , "clearUnit(2)"
+                , "woundedAlly(2, HOME)"
+                , "local t = newState()"
+                , "t.treatClaim = { patient = 2 }"
+                , "medic.treatExecute(1, t, PARAMS)"
+                , "assert(t.treatClaim ~= nil,"
+                , "  'a same-page claim must be kept')"
+                , "assert(MOVES == 1,"
+                , "  'a same-page claim must still draw the walk')"
+                ]
+
+-- The other half of #2297's "one authority": the shipped arrival
+-- check must READ unit.treatmentRange() rather than restate 1.5, so
+-- the AI can never walk to a distance the engine then refuses. Moving
+-- the stubbed reach either way is the only thing that separates the
+-- two.
+reachSpec ∷ Spec
+reachSpec = describe "AI medic treat reach" $ do
+    it "walks or treats by the engine's reach, not by a copied number" $
+        runsOk $ lns
+            [ prelude
+            , "woundedAlly(2, HOME)   -- three tiles from the medic"
+            , "TREAT_RANGE = 5.0"
+            , "local s = newState()"
+            , "s.treatClaim = { patient = 2 }"
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(MOVES == 0,"
+            , "  'a patient inside the engine reach must not be walked to')"
+            , "assert(TREATS == 1,"
+            , "  'a patient inside the engine reach must be treated')"
+            , "TREAT_RANGE = 1.5"
+            , "local t = newState()"
+            , "t.treatClaim = { patient = 2 }"
+            , "medic.treatExecute(1, t, PARAMS)"
+            , "assert(MOVES == 1,"
+            , "  'a patient beyond the engine reach must be walked to')"
+            , "assert(TREATS == 1,"
+            , "  'a patient beyond the engine reach must not be treated')"
+            ]

@@ -11,6 +11,11 @@ import Engine.Scripting.Lua.API.Units.Transfer
 -- Durable transfer ORDERS (#1247) — the walk-then-commit executor's
 -- own verbs, kept in their own module beside the contract they drive.
 import Engine.Scripting.Lua.API.Units.TransferOrder
+-- #2297's two read-only medical queries, imported directly for the
+-- same reason as the transfer verbs above: the Units facade's export
+-- list is frozen at the pre-split surface.
+import Engine.Scripting.Lua.API.Units.Medical
+    (unitCanTreatFn, unitTreatmentRangeFn)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -57,6 +62,8 @@ registerUnitAPI env = do
   registerLuaFunction "getItemContents" (unitGetItemContentsFn env)
   registerLuaFunction "treatBleeding" (unitTreatBleedingFn env)
   registerLuaFunction "treatInfection" (unitTreatInfectionFn env)
+  registerLuaFunction "treatmentRange" (unitTreatmentRangeFn env)
+  registerLuaFunction "canTreat" (unitCanTreatFn env)
   registerLuaFunction "frostbite"    (unitFrostbiteFn env)
   registerLuaFunction "injure"       (unitInjureFn env)
   registerLuaFunction "drink"        (unitDrinkFn env)

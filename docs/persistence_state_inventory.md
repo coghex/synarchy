@@ -94,6 +94,7 @@ the affected fields as unclassified.
 | `unitQueue` | global | Exclude | — | transport queue; see contract §3 | none yet |
 | `utsRef` | global | Rebuild | `wpsUnits`/`wpsUnitSimStates` after load | the IORef itself is always freshly allocated at boot and repopulated from the restored `UnitInstance`/`UnitSimState` snapshot, not itself directly serialized; the classification decision for the state it holds lives on `UnitThreadState.utsSimStates` (§5), which IS persisted | `tools/movement_probe.py` (post-load steering sanity) |
 | `statRNGRef` | global | Exclude | — | explicitly non-deterministic, not save-seeded (contract §1) | none yet |
+| `treatRNGRef` | global | Exclude | — | medical-treatment rolls only (#2297); explicitly non-deterministic and not save-seeded, exactly like `statRNGRef` | none yet |
 | `buildingManagerRef` | global | Rebuild | see §5 (`BuildingManager` fields classified individually) | the IORef itself is always freshly allocated at boot; the interesting classification decisions live on `BuildingManager`'s own fields (§5) | none yet |
 | `texPaletteRef` | global | Persist exactly | — | `sdTexPalette` | `tools/persistence_contract_probe.py` (see §12) |
 | `texPaletteHandlesRef` | global | Exclude | `texPaletteRef` | runtime GPU translation table rebuilt from `texPaletteRef` | none yet |
