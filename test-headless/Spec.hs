@@ -46,6 +46,7 @@ import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
 import qualified Test.Headless.Unit.CargoApi as UnitCargoApi
 import qualified Test.Headless.Unit.MedicalReach as UnitMedicalReach
+import qualified Test.Headless.Unit.MedicalKitInstance as UnitMedicalKitInstance
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.ArenaSeed as ArenaSeed
@@ -564,6 +565,10 @@ main = hspec $ do
     -- manager ref and installs its own two-page world manager, for the
     -- same reason as the cargo spec above.
     aroundAll withHeadlessEngine UnitMedicalReach.spec
+    -- Own engine (#2302): the medical kit-instance spec WRITES the
+    -- unit and item manager refs and installs its own world manager,
+    -- for the same reason as the reach spec above.
+    aroundAll withHeadlessEngine UnitMedicalKitInstance.spec
     -- Own engine (#1205): the live power.placeNode path WRITES the
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
