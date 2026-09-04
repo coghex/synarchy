@@ -1404,6 +1404,11 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ClickCorrelation
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
+                   Test.Headless.UI.ItemList.Support
+                   Test.Headless.UI.ItemList.Model
+                   Test.Headless.UI.ItemList.Rows
+                   Test.Headless.UI.ItemList.Invalidation
+                   Test.Headless.UI.ItemList.Tabbar
                    Test.Headless.UI.ContainerWindowStack
                    Test.Headless.UI.TransferGestures
                    Test.Headless.UI.ConsumableGesture

@@ -3,13 +3,13 @@
 --   to merge into one inventory row.
 --
 --   Asserted one field at a time, in the style the PARENT row key is
---   already pinned in 'Test.Headless.UI.ItemList' — because the two are
---   one contract seen at two depths. A bandage's quality and realized
---   weight split a row while the bandage sits in a unit's inventory, so
---   they must split a row when the same bandage sits inside a kit. The
---   two deliberate exclusions ('iiInstanceId', 'iiTemp') are asserted in
---   the same style, since silently GAINING either one is the regression
---   this gate exists to catch.
+--   already pinned in 'Test.Headless.UI.ItemList.Model' — because the
+--   two are one contract seen at two depths. A bandage's quality and
+--   realized weight split a row while the bandage sits in a unit's
+--   inventory, so they must split a row when the same bandage sits
+--   inside a kit. The two deliberate exclusions ('iiInstanceId',
+--   'iiTemp') are asserted in the same style, since silently GAINING
+--   either one is the regression this gate exists to catch.
 --
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Item.ContentsSignature"'@.
