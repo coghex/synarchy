@@ -81,7 +81,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef)
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Data.List (maximumBy)
 import qualified System.Random as Random
@@ -148,8 +148,22 @@ import Combat.Resolution.Events
 --   charge. A refusal at the first point additionally draws no RNG; one
 --   at the commit has already drawn the swing's roll, which is a read
 --   of a shared stream rather than an effect on either unit.
-resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → Float → Float → IO ()
-resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
+--   The swing's RANDOMNESS follows the same all-or-nothing rule as its
+--   effects. The strike stream is carried by the combat worker
+--   ('Combat.Thread'), and this reserves from it the way #2297's
+--   treatment rolls reserve theirs: a PURE split, the kept half
+--   returned only once the strike has actually committed. A refusal at
+--   either point returns the generator it was handed, untouched, so a
+--   strike that never happened cannot shift what the next one rolls.
+--   That is only sound because this stream has ONE consumer — this
+--   function, on the combat worker, never re-entrant. The four-writer
+--   'ucStatRNGRef' could not give it: claiming atomically IS advancing
+--   it, and a refusal would then have to unwind against concurrent
+--   draws. Resolution therefore never touches that pool at all.
+resolveAttack
+    ∷ EngineEnv → Random.StdGen → Word32 → Word32 → AttackMode
+    → Float → Float → IO Random.StdGen
+resolveAttack env gen0 atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Weapon/armor item defs + their worked-material properties are
@@ -163,6 +177,12 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     let atkId = UnitId atkRaw
         tgtId = UnitId tgtRaw
+        -- The reservation. `local` is what this strike rolls from;
+        -- `kept` is what the worker carries on if it commits.
+        (kept, local) = Random.splitGen gen0
+        -- Every path that does not commit returns the stream exactly as
+        -- it was handed over.
+        unspent = pure gen0
     case (HM.lookup atkId (umInstances um),
           HM.lookup tgtId (umInstances um)) of
         (Just atk, Just tgt) →
@@ -193,22 +213,28 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
                         -- admission gate it re-checks.
                         case checkAdmission (attackRangeOf im adef atk)
                                             reachBonus mode atk tgt of
-                            Just refusal →
+                            Just refusal → do
                                 refuse env logger gt atkRaw tgtRaw mode refusal
-                            Nothing →
-                                runResolution env logger im sm gt
-                                    atkRaw tgtRaw mode reachBonus lungeSpeed
-                                    atk adef tgt tdef
-                _ → pure ()
-        _ → pure ()
+                                unspent
+                            Nothing → do
+                                committed ← runResolution env logger im sm gt
+                                    local atkRaw tgtRaw mode reachBonus
+                                    lungeSpeed atk adef tgt tdef
+                                if committed then pure kept else unspent
+                _ → unspent
+        _ → unspent
 
+-- | The swing itself, rolled from the RESERVED generator and reporting
+--   whether it committed — which is what tells 'resolveAttack' whether
+--   the reservation is spent or handed back.
 runResolution
     ∷ EngineEnv → LoggerState → ItemManager → SubstanceManager → Double
+    → Random.StdGen
     → Word32 → Word32 → AttackMode → Float → Float
     → UnitInstance → UnitDef
     → UnitInstance → UnitDef
-    → IO ()
-runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef = do
+    → IO Bool
+runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef = do
     let mEquipped = firstEquippedWeapon im (uiEquipment atk)
         mWeapon   = (\(_, _, w) → w) ⊚ mEquipped
         natW      = udNaturalWeapon adef
@@ -263,34 +289,41 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
     let pDodge = awareness
                * defenderDodgeChance defEff tgt (lungeSpeed > 0) pTgt
 
-    -- Single RNG transaction: draw hit-roll + (if hit) the joint
-    -- body-part + wound-kind decision from the same generator,
-    -- atomically. The joint picker (pickPartKind) blends a random
-    -- score by area_weight × weapon.eff against a "smart" score by
+    -- One roll budget, drawn PURELY off the reserved generator: the
+    -- hit roll, then (if it lands) the dodge save, then the joint
+    -- body-part + wound-kind decision, then the subpart allocation.
+    -- The joint picker (pickPartKind) blends a random score by
+    -- area_weight × weapon.eff against a "smart" score by
     -- tactical_value × resistance-bypass × bleed_factor, using the
     -- attacker's intelligence as the blend coefficient. High-int
-    -- attackers naturally target vital low-resistance combos; low-
-    -- int attackers flail at whatever's biggest with whatever motion
-    -- the weapon supports.
-    rngOut ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \rng0 →
-        let (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rng0
-        in if roll > pHit
-            then (rng1, Left False)            -- whiff (attacker missed)
-            else
-                -- The strike was on target — does the defender slip it?
-                let (dodgeRoll, rngD) = Random.uniformR (0.0 ∷ Float, 1.0) rng1
-                in if dodgeRoll < pDodge
-                    then (rngD, Left True)      -- dodged (defender evaded)
-                    else
-                        let (partKind, rng2) =
-                                pickPartKind rngD atk tdef mWeapon natW
-                                    candidateParts
-                            -- One extra roll for subpart allocation (the
-                            -- 50/50 skull/jaw etc.) — drawn here in the
-                            -- same atomic transaction so the whole
-                            -- resolution is one RNG step.
-                            (alloc, rng3) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
-                        in (rng3, Right (partKind, alloc))
+    -- attackers naturally target vital low-resistance combos; low-int
+    -- attackers flail at whatever's biggest with whatever motion the
+    -- weapon supports.
+    --
+    -- No shared pool is touched (#2328): the generator is a value the
+    -- combat worker carries, reserved by 'resolveAttack' and spent only
+    -- if this swing commits. The trailing generator is discarded for
+    -- exactly that reason — the reservation's OTHER half is what the
+    -- worker carries on, so a refused swing rolls nothing away.
+    let rngOut =
+            let (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rngIn
+            in if roll > pHit
+                then Left False                 -- whiff (attacker missed)
+                else
+                    -- The strike was on target — does the defender slip it?
+                    let (dodgeRoll, rngD) = Random.uniformR (0.0 ∷ Float, 1.0) rng1
+                    in if dodgeRoll < pDodge
+                        then Left True          -- dodged (defender evaded)
+                        else
+                            let (partKind, rng2) =
+                                    pickPartKind rngD atk tdef mWeapon natW
+                                        candidateParts
+                                -- One extra roll for subpart allocation
+                                -- (the 50/50 skull/jaw etc.), drawn off
+                                -- the same reserved generator so the
+                                -- whole resolution is one budget.
+                                (alloc, _) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
+                            in Right (partKind, alloc)
 
     case rngOut of
         Left isDodge → do
@@ -302,9 +335,10 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
             committed ← commitStrike env reachBonus mode atkRaw tgtRaw rangeOf
                             (\_ _ um' → spendStrikeCost gt mode atkRaw um')
             case committed of
-                CommitVanished → pure ()
-                CommitRefused refusal →
+                CommitVanished → pure False
+                CommitRefused refusal → do
                     refuse env logger gt atkRaw tgtRaw mode refusal
+                    pure False
                 CommitApplied → do
                     pushEvent env (missEvent gt atkRaw tgtRaw mode
                                              (lungeSpeed > 0) isDodge)
@@ -315,6 +349,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                                   <> tshow tgtRaw
                                   <> " (p_hit=" <> tshow pHit
                                   <> " p_dodge=" <> tshow pDodge <> ")"
+                    pure True
         Right ((partId, kind), allocRoll) → do
             let -- Resolve the swing into one or more (kind, energy-fraction)
                 -- COMPONENTS. A natural "paw" (combo_attack) fuses
@@ -423,9 +458,10 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                             (\_ _ um' → spendStrikeCost gt mode atkRaw
                                             (woundTarget um'))
             case committed of
-              CommitVanished → pure ()
-              CommitRefused refusal →
+              CommitVanished → pure False
+              CommitRefused refusal → do
                 refuse env logger gt atkRaw tgtRaw mode refusal
+                pure False
               CommitApplied → do
                 pushEvent env (hitEvent gt atkRaw tgtRaw partId headKind
                                          severity rawDmg effDmg mode
@@ -503,6 +539,7 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
                                 <> " " <> kind <> "@" <> partId
                                 <> " sev=" <> tshow severity
                                 <> " injuries=" <> tshow dist
+                pure True
 
 
 -- ----- Helpers -----

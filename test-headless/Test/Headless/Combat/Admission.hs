@@ -179,7 +179,20 @@ data Outcome = Outcome
     , oStance  ∷ Float
     , oWounds  ∷ Int
     , oKills   ∷ Int
+    , oGenIn   ∷ Random.StdGen
+      -- ^ the strike stream handed to the drain…
+    , oGenOut  ∷ Random.StdGen
+      -- ^ …and the one it handed back. Equal ⇒ nothing was rolled away.
+    , oStatGen ∷ Random.StdGen
+      -- ^ the SHARED stat pool after the drain. Resolution must never
+      --   touch it at all (#2328).
     } deriving (Show)
+
+-- | The strike stream every fixture drain starts from. Fixed, so a
+--   refusal's "the generator came back untouched" is an equality
+--   against a known value rather than against whatever was there.
+seedGen ∷ Random.StdGen
+seedGen = Random.mkStdGen 20260903
 
 -- | Queue one strike against @attacker@/@target@ and run the REAL
 --   drain. The instances handed in are the ones present at COMMIT —
@@ -196,14 +209,18 @@ drive env mode reachBonus attacker target = do
         , umInstances = HM.fromList
             [ (UnitId attackerUid, attacker), (UnitId targetUid, target) ] }
     writeIORef (combatEventsRef env) Seq.empty
-    -- Fixed generator: the hit/dodge/part draws are then the same on
-    -- every run, so the resolvable case's outcome is a constant rather
-    -- than a coin flip that could mask a refusal.
-    writeIORef (statRNGRef env) (Random.mkStdGen 20260903)
+    -- The shared stat pool is set to a KNOWN value so the assertion
+    -- that resolution left it alone is an equality, not an absence.
+    writeIORef (statRNGRef env) statGenBefore
     _ ← drainUnitQueue env
     Q.writeQueue (combatQueue env)
         (CombatAttack attackerUid targetUid mode reachBonus 0)
-    processAllCommands env
+    -- The strike stream is a VALUE the worker carries, so the drain
+    -- takes one and hands one back: fixed here, which also makes the
+    -- resolvable case's hit/dodge/part draws the same on every run
+    -- rather than a coin flip that could mask a refusal.
+    genOut ← processAllCommands env seedGen
+    statAfter ← readIORef (statRNGRef env)
     evs ← readIORef (combatEventsRef env)
     um  ← readIORef (unitManagerRef env)
     kills ← length ∘ filter isKill ⊚ drainUnitQueue env
@@ -215,7 +232,15 @@ drive env mode reachBonus attacker target = do
         , oStance  = maybe (-1) (HM.lookupDefault (-1) "stance" ∘ uiStats) atk'
         , oWounds  = maybe (-1) (length ∘ uiWounds) tgt'
         , oKills   = kills
+        , oGenIn   = seedGen
+        , oGenOut  = genOut
+        , oStatGen = statAfter
         }
+
+-- | A recognisable value for the shared stat pool, so "resolution never
+--   touched it" is checkable by equality.
+statGenBefore ∷ Random.StdGen
+statGenBefore = Random.mkStdGen 4242
 
 -- | Empty the unit-command queue, returning what was on it. Used both
 --   to clear it before the strike and to read back whether the strike
@@ -265,6 +290,10 @@ expectRefusal refusal o = do
     oStamina o `shouldBe` startStamina
     oStance o `shouldBe` startStance
     oKills o `shouldBe` 0
+    -- Randomness is a mutation too: a strike that never happened must
+    -- not shift what the next one rolls, on either stream.
+    oGenOut o `shouldBe` oGenIn o
+    oStatGen o `shouldBe` statGenBefore
 
 initEnv ∷ IO EngineEnv
 initEnv = do
@@ -353,9 +382,15 @@ spec = beforeAll initEnv $ do
           \env → do
             o ← driveAtSeparation env Quick 1.0 (baseRange + 0.5)
             kinds o `shouldNotContain` ["refused"]
-            -- …and it really resolved: the swing was paid for.
+            -- …and it really resolved: the swing was paid for, and the
+            -- reservation it rolled from was spent. Without this the
+            -- refusal cases' "the stream came back untouched" would
+            -- pass against a resolution that never rolls at all.
             oStamina o `shouldSatisfy` (< startStamina)
             oStance o `shouldSatisfy` (< startStance)
+            oGenOut o `shouldNotBe` oGenIn o
+            -- The shared stat pool is still not resolution's business.
+            oStatGen o `shouldBe` statGenBefore
 
         it "refuses that same separation without the reach bonus" $ \env → do
             o ← driveAtSeparation env Quick 0 (baseRange + 0.5)
@@ -565,3 +600,66 @@ spec = beforeAll initEnv $ do
             nRefused `shouldSatisfy` (> 0)
             -- …and no write was ever handed a stance the check refused.
             lowest `shouldSatisfy` (≥ cost)
+
+    -- The review's own ask: force invalidation AFTER the snapshot check
+    -- and prove the shared pool is untouched. The snapshot is read at
+    -- the top of resolveAttack and the commit happens after the
+    -- awareness lookup and the roll, so the only way to land inside
+    -- that window is a real concurrent writer on the manager.
+    describe "randomness is spent only by a strike that commits" $ do
+
+        it "leaves both streams alone when the world moves under a queued strike" $
+          \env → do
+            -- A competing thread flips the target's page while a long
+            -- run of strikes drains, so refusals land at BOTH points —
+            -- the snapshot check and the commit transaction. Whichever
+            -- one fires, the strike stream must come back exactly as
+            -- many splits along as there were commits, and the shared
+            -- stat pool must not have moved at all.
+            let queued = 200 ∷ Int
+            wm ← setupPages
+            writeIORef (worldManagerRef env) wm
+            writeIORef (unitManagerRef env) emptyUnitManager
+                { umDefs = HM.singleton "admission_dummy" testDef
+                , umInstances = HM.fromList
+                    [ (UnitId attackerUid, testUnit pageA 0 0 1.0e9)
+                    , (UnitId targetUid,   testUnit pageA 0 0 startStance) ] }
+            writeIORef (combatEventsRef env) Seq.empty
+            writeIORef (statRNGRef env) statGenBefore
+            _ ← drainUnitQueue env
+            replicateM_ queued $ Q.writeQueue (combatQueue env)
+                (CombatAttack attackerUid targetUid Quick 0 0)
+            stop ← newIORef False
+            done ← newEmptyMVar
+            _ ← forkIO $
+                let loop other = do
+                        halt ← readIORef stop
+                        if halt then putMVar done () else do
+                            atomicModifyIORef' (unitManagerRef env) $ \um →
+                                ( um { umInstances = HM.adjust
+                                        (\i → i { uiPage = if other
+                                                    then pageB else pageA })
+                                        (UnitId targetUid) (umInstances um) }
+                                , () )
+                            loop (not other)
+                in loop True
+            genOut ← processAllCommands env seedGen
+            writeIORef stop True
+            takeMVar done
+            statAfter ← readIORef (statRNGRef env)
+            evs ← toList ⊚ readIORef (combatEventsRef env)
+            let refusalCount = length
+                    [ () | ev ← evs, ceKind ev ≡ "refused" ]
+                commitCount = length evs - refusalCount
+                -- One split per COMMITTED strike, none for a refusal.
+                expected = iterate (fst ∘ Random.splitGen) seedGen
+                            !! commitCount
+            -- Both outcomes really occurred, so neither half is vacuous.
+            refusalCount `shouldSatisfy` (> 0)
+            commitCount `shouldSatisfy` (> 0)
+            length evs `shouldBe` queued
+            -- The shared four-writer pool was never resolution's to
+            -- spend, refusal or not.
+            statAfter `shouldBe` statGenBefore
+            -- …and the strike stream advanced exactly once per commit.
+            genOut `shouldBe` expected

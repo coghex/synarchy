@@ -21,8 +21,9 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, atomicModifyIORef')
 import Control.Concurrent (threadDelay)
+import qualified System.Random as Random
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
     , startWorkerThread, workerCrashStderrSink)
@@ -45,6 +46,26 @@ woundsTickEvery = 6
 combatTickRate ∷ Double
 combatTickRate = 1.0 / 60.0
 
+-- | What the worker carries from tick to tick.
+--
+--   'clStrikeGen' is the STRIKE STREAM (#2328). It lives here, and not
+--   on 'EngineEnv', because it has exactly one consumer — this thread's
+--   own 'Combat.Resolution.resolveAttack', which drains commands
+--   sequentially and is never re-entrant — so it can be reserved by a
+--   pure split and spent only once a strike has actually committed.
+--   That is what lets a refused strike advance NOTHING: on the
+--   four-writer 'ucStatRNGRef' the same trick is unavailable, because
+--   claiming atomically is already advancing it and a refusal would
+--   have to unwind against concurrent draws (the rationale #2297 wrote
+--   down for the medical stream). Split off 'ucStatRNGRef' once at
+--   startup, like 'Combat.Wounds.Tick' does, so it is seeded from the
+--   same system entropy without sharing the pool.
+data CombatLoop = CombatLoop
+    { clTick      ∷ !Int
+      -- ^ counter modulo 'woundsTickEvery'
+    , clStrikeGen ∷ !Random.StdGen
+    }
+
 startCombatThread ∷ EngineEnv → IO ThreadState
 startCombatThread env = startWorkerThread WorkerSpec
     { wsName        = "Combat"
@@ -57,7 +78,9 @@ startCombatThread env = startWorkerThread WorkerSpec
     , wsFailMsg     = "Failed starting combat thread: "
     , wsFailLevel   = WorkerFailError
     , wsFailFatal   = "Combat thread start failure."
-    , wsStartup     = \_ → noRefusal (pure 0)
+    , wsStartup     = \_ → noRefusal
+        (CombatLoop 0 ⊚ atomicModifyIORef'
+            (ucStatRNGRef (toUnitCombatCapability env)) Random.splitGen)
     , wsTick        = combatTick env
     , wsOnStop      = \_ → do
         logger ← readIORef (loggerRef env)
@@ -77,11 +100,13 @@ startCombatThread env = startWorkerThread WorkerSpec
     , wsOnCrashCleanup = \_ _ → pure ()
     }
 
--- | Counter modulo `woundsTickEvery` so we only run the wound
---   subsystem at ~10 Hz instead of the 60 Hz command-drain rate. It is
---   the loop state the shared lifecycle threads from tick to tick.
-combatTick ∷ EngineEnv → Int → IO (Maybe Int)
-combatTick env tick = do
+-- | Advance one tick, carrying the loop state the shared lifecycle
+--   threads from tick to tick: the counter modulo `woundsTickEvery`, so
+--   the wound subsystem runs at ~10 Hz rather than the 60 Hz command-
+--   drain rate, and the strike stream every drained command reserves
+--   from.
+combatTick ∷ EngineEnv → CombatLoop → IO (Maybe CombatLoop)
+combatTick env loop = do
     -- Honour the global pause toggle. Same gate the unit
     -- thread uses around gameTime + movement: when paused
     -- we sleep the tick and do nothing, so combat events
@@ -98,17 +123,19 @@ combatTick env tick = do
             -- pass it must drain nothing more until capture completes.
             locked ← ownerGated (saveBarrierRef env) SaveCombat
             saving ← saveInProgress (saveBarrierRef env)
-            when (saving ∧ not locked) $ processAllCommands env
+            gen' ← if saving ∧ not locked
+                then processAllCommands env (clStrikeGen loop)
+                else pure (clStrikeGen loop)
             acknowledgeCurrent (saveBarrierRef env) SaveCombat
-            pure tick
+            pure loop { clStrikeGen = gen' }
         else do
-            processAllCommands env
-            let next = (tick + 1) `mod` woundsTickEvery
+            gen' ← processAllCommands env (clStrikeGen loop)
+            let next = (clTick loop + 1) `mod` woundsTickEvery
             when (next ≡ 0) $
                 tickAllWounds env
                     (realToFrac (combatTickRate
                         * fromIntegral woundsTickEvery))
-            pure next
+            pure CombatLoop { clTick = next, clStrikeGen = gen' }
     threadDelay (floor (combatTickRate * 1000000 ∷ Double))
     pure (Just next)
 
@@ -120,21 +147,22 @@ combatTick env tick = do
 --   mutating the world between admission and commit (#2328), which is
 --   the window the whole admission contract is about. Nothing in
 --   production calls it outside 'combatTick'.
-processAllCommands ∷ EngineEnv → IO ()
+processAllCommands ∷ EngineEnv → Random.StdGen → IO Random.StdGen
 processAllCommands env = go
   where
-    go = do
+    go gen = do
         mCmd ← Q.tryReadQueue (ucCombatQueue (toUnitCombatCapability env))
         case mCmd of
-            Nothing  → pure ()
-            Just cmd → do
-                handleCommand env cmd
-                go
+            Nothing  → pure gen
+            Just cmd → handleCommand env gen cmd ≫= go
 
-handleCommand ∷ EngineEnv → CombatCommand → IO ()
-handleCommand env (CombatAttack attacker target mode reachBonus impactSpeed) =
+-- | Resolve one command, returning the strike stream to carry on with:
+--   the one the command was handed if it refused, an advanced one if it
+--   committed (#2328).
+handleCommand ∷ EngineEnv → Random.StdGen → CombatCommand → IO Random.StdGen
+handleCommand env gen (CombatAttack attacker target mode reachBonus impactSpeed) =
     -- Full resolution: hit roll → body part → damage → wound →
     -- death check + stamina drain. Emits "miss" / "hit" / "death"
     -- events. reachBonus lifts the strike-height reach + impactSpeed folds
     -- the lunge's full-body momentum into the strike (both 0 = normal swing).
-    resolveAttack env attacker target mode reachBonus impactSpeed
+    resolveAttack env gen attacker target mode reachBonus impactSpeed
