@@ -451,7 +451,13 @@ spec = describe "generated world identity, at the engine boundary (#2021)" $ do
             `shouldBe` L.sort (L.nub (savedGeneratedIds sd))
 
         -- Readable at listing depth, with no gameplay component decoded.
-        listings ← listSaves logger HS.empty
+        listed' ← listSaves logger HS.empty
+        listings ← case listed' of
+            Right ls → pure ls
+            Left err → do
+                expectationFailure
+                    ("listSaves refused the survey: " <> T.unpack err)
+                pure []
         case find ((≡ T.pack twinSlot) . slName) listings of
             Nothing → expectationFailure
                 ("listSaves did not report " <> twinSlot)

@@ -19,15 +19,18 @@ import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapabi
 import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
-import Engine.Core.Log (LoggerState, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 import qualified Engine.Core.Queue as Q
-import World.State.Types (WorldManager(..))
-import World.Page.Types (WorldPageId)
+import World.Generate.Types (WorldGenParams(..))
+import World.State.Types (WorldManager(..), WorldState(..))
+import World.Page.Types (WorldPageId(..))
 import Building.Types
 import Building.Destruction
     ( captureDestructionEffect, destructionExpired
     , pruneExpiredDestructions )
 import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
+import Building.Reservation
+    (clearReservations, commitFootprint, releaseReservation)
 import Building.Knowledge.Live
     ( containerObserver, forgetAllContainers, forgetContainerEverywhere
     , markPendingSeed, sweepPendingSeeds )
@@ -152,8 +155,13 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
     -- Bulk removal is immediate and SILENT (#2091): every outstanding
     -- destruction effect goes with the instances, and none is spawned.
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
-        ( bm { bmInstances = HM.empty, bmSelected = Nothing
-             , bmDestructions = HM.empty }
+        -- #2326: outstanding footprint reservations go with the
+        -- instances. This clear is enqueued BEHIND every pending spawn
+        -- (#58), so anything still holding tiles here was admitted for a
+        -- session that is being torn down and can never commit.
+        ( clearReservations bm
+            { bmInstances = HM.empty, bmSelected = Nothing
+            , bmDestructions = HM.empty }
         , () )
     forgetAllContainers (wsWorldManagerRef sim)
 
@@ -179,10 +187,15 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
     -- world.destroyAll would otherwise re-insert an orphan building into
     -- the cleared manager after teardown (#58).
     wmgr ← readIORef (wsWorldManagerRef sim)
-    let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
+    let mPage     = lookup pageId (wmWorlds wmgr)
+        worldGone = isNothing mPage
     case HM.lookup defName (bmDefs bm) of
-        _ | worldGone → pure ()
-        Nothing →
+        -- #2326: every path that drops the spawn retires what that
+        -- request left behind — its footprint claim, and any power node
+        -- already allocated against the id it was promised.
+        _ | worldGone → dropRequest
+        Nothing → do
+            dropRequest
             logWarn logger CatThread $
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
@@ -208,8 +221,47 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
                     , biMaterialsDelivered = HM.empty
                     , biStorage            = []
                     }
-            atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
-                (bm' { bmInstances = HM.insert bid inst (bmInstances bm') }, ())
+            -- #2326: the footprint is decided HERE, in the same
+            -- transition that inserts. 'commitFootprint' verifies this
+            -- request still OWNS the reservation its admission took and
+            -- that the tiles are still free of committed instances on
+            -- this page; a request that holds neither inserts nothing.
+            -- Nothing between the two reads can interleave, which is
+            -- exactly what the admitting thread could not promise.
+            worldSize ← maybe (pure 0)
+                (\ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws))
+                mPage
+            committed ← atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+                let (retired, accepted) =
+                        commitFootprint worldSize pageId bid gx gy
+                                        (bdTileW def) (bdTileH def) bm'
+                in if accepted
+                   then ( retired { bmInstances =
+                                        HM.insert bid inst (bmInstances retired) }
+                        , True )
+                   -- The claim, if this request held one, is retired
+                   -- here too: a refused commit must not leave tiles
+                   -- claimed for a building that will never appear.
+                   else (retired, False)
+            -- A rejected commit performs NO winner-only follow-up: no
+            -- instance, and none of the container seeding below. It
+            -- also UNDOES what the admission already did on this id's
+            -- behalf (#2326), which is what keeps "no power node
+            -- references a building that failed to commit" true of the
+            -- code rather than only of the paths one can reach today.
+            unless committed $ do
+                -- The CLAIM is not touched here: 'commitFootprint' has
+                -- already retired it if it was this placement's, and
+                -- deliberately left it alone if it was not — a replayed
+                -- or mis-addressed command must not cancel a live claim.
+                -- Only the power node, which no earlier step could have
+                -- known to retire, is cleaned up.
+                retirePowerNodeEverywhere (wsWorldManagerRef sim) bid
+                logDebug logger CatThread $
+                    "BuildingSpawn dropped: footprint no longer claimed by "
+                    <> "building id " <> tshow (unBuildingId bid) <> " ('"
+                    <> defName <> "' at " <> tshow gx <> "," <> tshow gy
+                    <> " on " <> unWorldPageId pageId <> ")"
             -- #1087: an INSTANT-BUILT storage building (bdBuildWork ==
             -- 0) reaches Built on currentActivity's TIME-BASED arm —
             -- immediately when it declares no appearing animation, or
@@ -222,5 +274,32 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
             -- A WORKER-BUILT one (SeedAtBuildCompletion) is untouched:
             -- it is created at zero progress and seeds from its own
             -- progress crossing.
-            when (seedTriggerFor def ≡ SeedWhenBuilt) $
+            when (committed ∧ seedTriggerFor def ≡ SeedWhenBuilt) $
                 markPendingSeed (containerObserver bld sim reg) bid
+  where
+    -- #2326: retire everything this request holds, for the two arms
+    -- that refuse it BEFORE the commit transition runs. Those never
+    -- reach 'commitFootprint', so the claim is this request's own to
+    -- release; the refused-commit path above deliberately does not
+    -- reuse this, because there the claim has already been decided.
+    --
+    -- @power.placeNode@ is the reason the node half exists. It is the
+    -- one admission with irreversible side effects of its own: it
+    -- allocates a 'Power.Types.PowerNode' against the id it was
+    -- promised and queues the spawn separately, so a spawn refused
+    -- afterwards would leave that node pointing at a building nobody
+    -- can demolish — the permanent, uncancellable row #1206 made the
+    -- building manager the authority for. This is the same
+    -- 'retirePowerNodeEverywhere' the @BuildingDestroy@ arm runs for
+    -- exactly that reason, and running it on every refusal makes a
+    -- spawn that never commits indistinguishable from one demolished
+    -- immediately.
+    --
+    -- The claim release is spelled out through the capability accessor,
+    -- rather than behind a helper taking the handle, because that is
+    -- what keeps the write attributable to this module in the SS5
+    -- writing-module map.
+    dropRequest = do
+        atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+            (releaseReservation bid bm', ())
+        retirePowerNodeEverywhere (wsWorldManagerRef sim) bid

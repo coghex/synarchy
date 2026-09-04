@@ -30,6 +30,8 @@ module Test.Headless.Building.PageBinding.Support
     , portalName, shedName
       -- * Scene
     , resetScene, resetSceneBothVisible, resetNoWorlds, resetHiddenOnly
+      -- * Admission
+    , admitPlacement
       -- * Queue readers and controlled dispatch
     , drainBuildingQueue
     , committedPlacements
@@ -72,6 +74,7 @@ import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), emptyBuildingManager )
 import Building.Command.Types (BuildingCommand(..))
+import Building.Reservation (reserveFootprint)
 import Building.Thread.Command (processAllBuildingCommands)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.Building (toBuildingCapability)
@@ -356,6 +359,40 @@ resetHiddenOnly env = do
     writeIORef (wsGenParamsRef wsA) (Just (genParamsFor sizeA (ChunkCoord 0 0)))
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(pageA, wsA)], wmVisible = [] }
+
+-- * Admission
+
+-- | Admit a placement exactly the way @building.spawn@ does (#2326),
+--   and hand back the 'BuildingId' that transaction allocated.
+--
+--   A spawn command carries the footprint CLAIM its admission took, and
+--   'Building.Thread.Command.applyBuildingSpawn' inserts nothing
+--   without one. So a scenario that writes a 'BuildingSpawn' or
+--   'World.Command.Types.WorldSpawnBoundBuilding' by hand — which is
+--   how the examples below land a selection change at an exact point
+--   AROUND one, rather than only before or after a whole click — has to
+--   take that claim through the production transaction first. An id
+--   invented here would describe a spawn no admission ever accepted,
+--   and every "the building landed" assertion under it would be
+--   vacuous.
+--
+--   The def and the page's u-wrap world size are read back out of the
+--   live fixture, so this cannot drift from what @resetScene@ installed.
+admitPlacement ∷ EngineEnv → WorldPageId → Text → (Int, Int) → IO BuildingId
+admitPlacement env pid defName (gx, gy) = do
+    bm ← readIORef (buildingManagerRef env)
+    wm ← readIORef (worldManagerRef env)
+    def ← case HM.lookup defName (bmDefs bm) of
+        Just d  → pure d
+        Nothing → fail ("admitPlacement: no def " <> T.unpack defName)
+    size ← case lookup pid (wmWorlds wm) of
+        Nothing → fail ("admitPlacement: no page " <> show pid)
+        Just ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
+    eBid ← atomicModifyIORef' (buildingManagerRef env)
+                              (reserveFootprint size pid def gx gy)
+    case eBid of
+        Right bid  → pure bid
+        Left reason → fail ("admitPlacement refused: " <> T.unpack reason)
 
 -- * Queue readers
 

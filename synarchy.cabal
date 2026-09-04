@@ -532,6 +532,7 @@ library
                      Building.Render
                      Building.Visual
                      Building.Placement
+                     Building.Reservation
                      Building.HitTest
                      Structure.Types
                      Structure.ArtCatalog
@@ -1160,17 +1161,22 @@ test-suite synarchy-test-graphical
 test-suite synarchy-test-headless
     import: warnings, lang, build-policy
     type: exitcode-stdio-1.0
-    -- `app` is here for three pure modules: App.Cli's parser (#1191),
-    -- App.Preview.Config's hidden-window policy, and
-    -- App.ResourceRoot's root precedence (#1949). All live in the
-    -- executable rather than the library, and their app-local imports
-    -- stay within this set, so compiling them into this suite tests
+    -- `app` is here for four pure policies that live in the executable
+    -- rather than the library: App.Cli's parser (#1191),
+    -- App.Preview.Config's hidden-window policy, App.ResourceRoot's
+    -- root precedence (#1949), and App.Dump's fast-settle wait (#2334).
+    -- Their app-local imports stay within this set (App.Dump reaches
+    -- only App.Boot and App.Exception, neither of which imports
+    -- another app module), so compiling them into this suite tests
     -- their policy without booting a process. `test-headless` stays
     -- FIRST so main-is resolves to test-headless/Spec.hs, not
     -- app/Main.hs.
     hs-source-dirs: test-headless, app
     main-is: Spec.hs
-    other-modules: App.Cli
+    other-modules: App.Boot
+                   App.Cli
+                   App.Dump
+                   App.Exception
                    App.Preview.Config
                    App.ResourceRoot
                    Test.Headless.UPrelude
@@ -1277,6 +1283,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.AutosaveRotation
+                   Test.Headless.Save.ListingFailureBoundary
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.OwnerPark
@@ -1318,6 +1325,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Combat.Severing
                    Test.Headless.Combat.Wounds
                    Test.Headless.Magma.Shape
+                   Test.Headless.App.DumpSettleWait
                    Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
                    Test.Headless.Sim.Seam
@@ -1503,6 +1511,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.PageBinding.Support
                    Test.Headless.Building.PageBinding.SynchronousStaleness
                    Test.Headless.Building.PortalSpawnBinding
+                   Test.Headless.Building.FootprintExclusivity
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Building.WorkbenchConstruction
@@ -1594,6 +1603,11 @@ test-suite synarchy-test-headless
                 , scientific
                 , directory
                 , filepath
+                -- App.Dump's engine action is written in EngineM, whose
+                -- throwError comes from mtl (#2334). Compiling that
+                -- module here is what makes its fast-settle wait
+                -- reviewable without booting a dump.
+                , mtl
                 -- One fixture needs a special file (a FIFO named like a
                 -- frame) that `directory` cannot create; the library
                 -- already depends on `unix`.

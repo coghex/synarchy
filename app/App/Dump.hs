@@ -3,12 +3,20 @@
 module App.Dump
   ( DumpGenParams(..)
   , runDump
+    -- * The fast-settle wait (#2334)
+  , SettleWatch(..)
+  , SettleWaitResult(..)
+  , classifySettleWait
+  , awaitFastSettle
+  , settleWaitFailure
+  , fastSettleBudgetSeconds
+  , settleReportGraceSeconds
   ) where
 
 import UPrelude
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar)
-import Data.IORef (readIORef, writeIORef)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, tryReadMVar)
+import Data.IORef (IORef, readIORef, writeIORef)
 import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Data.List (sortBy)
 import Data.Ord (comparing)
@@ -30,8 +38,10 @@ import Control.Monad.Error.Class (MonadError(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
 import Engine.Core.State (EngineEnv(..), EngineLifecycle(..))
 import Engine.Core.Types (BootProfile(..), BootMode(..))
+import Engine.Core.Clock (monotonicSeconds)
 import Engine.Core.Error.Exception (EngineException(..), ExceptionType(..)
                                    , SystemError(..), mkErrorContext)
+import Engine.Core.Thread (ThreadState(..))
 import Engine.Core.Log (LogBackend(..), shutdownLogger)
 import Engine.Scripting.Lua.Message (processLuaMessages)
 import Engine.Loop.Shutdown (checkStatus)
@@ -45,7 +55,8 @@ import World.Weather.Lookup (lookupWaterTable)
 import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
-import Sim.Command.Types (SimCommand(..))
+import Sim.Command.Types (SimCommand(..), FastSettleRequest(..)
+                         , FastSettleOutcome(..))
 import App.Cli (DumpLayers(..), ChunkRegion(..), chunkRegionCoords)
 import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
 import App.Boot (FatalStream(..), bootConfig, handleBootResult
@@ -171,12 +182,25 @@ runDump layers gen region = do
         -- dump sees a stable state. The sim was paused at the start
         -- of dump mode, so this is the first time it actually
         -- simulates anything for these chunks.
-        liftIO $ do
+        settleResult ← liftIO $ do
             hPutStrLn stderr "dump: fast-settling sim..."
             settleDone ← newEmptyMVar
-            Q.writeQueue (simQueue env') (SimFastSettleAll settleDone)
-            takeMVar settleDone
-            hPutStrLn stderr "dump: sim settled"
+            simDeadline ← (+ fastSettleBudgetSeconds) ⊚ monotonicSeconds
+            Q.writeQueue (simQueue env')
+                (SimFastSettleAll (FastSettleRequest settleDone simDeadline))
+            -- The sim owns the inner deadline; this one is deliberately
+            -- the same instant plus a grace, so a sim that is still
+            -- alive gets to name WHICH world stalled before this wait
+            -- falls back to a bare timeout.
+            awaitFastSettle monotonicSeconds (lifecycleRef env')
+                SettleWatch { swSim   = tsDone ⊚ ewSim workers
+                            , swWorld = tsDone ⊚ ewWorld workers }
+                settleDone (simDeadline + settleReportGraceSeconds)
+        case settleWaitFailure settleResult of
+            Just why → throwError $ EngineException (ExSystem why)
+                "dump aborted before emitting output"
+                mkErrorContext
+            Nothing → liftIO $ hPutStrLn stderr "dump: sim settled"
 
         liftIO $ do
             manager ← readIORef (worldManagerRef env')
@@ -253,15 +277,18 @@ runDump layers gen region = do
   result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
   handleBootResult FatalToStderr env' workers result
 
--- | The one polling loop behind every dump-mode wait. The timeout is
---   given in /seconds/; internally we poll every 250ms (4 iterations
---   per second). Returns 'True' on completion, 'False' on timeout so
---   the caller can fail the dump rather than emit partial output.
+-- | The polling loop behind the dump's two boolean waits, 'waitForInit'
+--   and 'waitForChunks'. The timeout is given in /seconds/; internally
+--   we poll every 250ms (4 iterations per second). Returns 'True' on
+--   completion, 'False' on timeout so the caller can fail the dump
+--   rather than emit partial output.
 --
 --   Readiness is checked BEFORE deciding to time out, so a completion
 --   that lands in the final poll window (after the last sleep) is still
---   counted as success rather than a spurious timeout. Every wait below
---   inherits that ordering from here.
+--   counted as success rather than a spurious timeout. Both waits below
+--   inherit that ordering from here, and 'awaitFastSettle' — which needs
+--   an outcome rather than a boolean, and so runs its own loop at the
+--   same 'pollInterval' — restates it deliberately (#2334).
 pollUntil ∷ String → String → Int → IO Bool → IO Bool
 pollUntil doneMsg timeoutMsg seconds isReady = go (seconds * pollsPerSecond)
   where
@@ -299,6 +326,163 @@ waitForChunks env seconds =
         worldReady env $ \ws → do
             remaining ← length <$> readIORef (wsInitQueueRef ws)
             pure (remaining ≡ 0)
+
+-- | The two worker exit signals the fast-settle wait watches (#2334).
+--
+--   A record rather than a pair, for the reason 'DumpGenParams' is one
+--   (#1081): exchanging the two at the call site would type-check and
+--   then report a world crash as a sim crash for the rest of the
+--   project's life.
+--
+--   Each is that worker's 'Engine.Core.Thread.tsDone', which the fork
+--   finalizer fills on ANY exit including a crash, and which is READ
+--   never taken — so a settle wait observing it does not consume the
+--   evidence a later shutdown depends on. 'Nothing' is a mode that
+--   never started that worker; dump starts both, so both are 'Just'
+--   there.
+data SettleWatch = SettleWatch
+    { swSim   ∷ !(Maybe (MVar ()))
+    , swWorld ∷ !(Maybe (MVar ()))
+    }
+
+-- | How the dump's fast-settle wait ended (#2334). Exactly one
+--   constructor means the settle landed; see 'settleWaitFailure'.
+data SettleWaitResult
+    = SettleSettled
+      -- ^ The sim published 'FastSettleApplied' and nothing else was
+      --   showing: every requested writeback reached world-thread
+      --   application.
+    | SettleReported !FastSettleOutcome
+      -- ^ The sim published a FAILING outcome, which names the world
+      --   whose acknowledgement failed or never arrived.
+    | SettleWorldExited
+      -- ^ The world worker's 'tsDone' filled: it left before the settle
+      --   completed, so no further writeback can ever be applied.
+    | SettleSimExited
+      -- ^ The sim worker's 'tsDone' filled without publishing.
+    | SettleCleaningUp
+      -- ^ The engine lifecycle left its running states with no worker
+      --   'tsDone' to attribute it to.
+    | SettleTimedOut
+      -- ^ The deadline passed with nothing else observable.
+    deriving (Eq, Show)
+
+-- | The fast-settle wait's whole decision, kept apart from the polling
+--   so the precedence is testable without timing (#2334).
+--
+--   Precedence: any observable FAILURE beats a published success. The
+--   sim fills its completion and the world worker can fail-stop in the
+--   same instant, and a dump that read the success would emit
+--   partial-success JSON derived from tiles a dead world thread had
+--   stopped writing. So success is returned only when nothing else is
+--   showing.
+--
+--   Provenance where it exists, and only there. A filled sim or world
+--   'tsDone' names the worker that exited; 'CleaningUp' names nothing,
+--   because 'Engine.Core.State.EngineLifecycle' is a four-constructor
+--   enum that carries no cause — so a lifecycle-only observation is
+--   reported generically rather than guessed at and mislabelled.
+--
+--   The world is checked before the sim because a world worker that
+--   left is the cause the sim's own strand is a symptom of. The
+--   deadline is checked LAST, so a completion landing inside the final
+--   poll window is still counted — the same readiness-before-timeout
+--   ordering 'pollUntil' documents.
+--
+--   'Nothing' means nothing is decidable yet: keep waiting.
+classifySettleWait
+    ∷ Maybe FastSettleOutcome  -- ^ the completion, once published
+    → Bool                     -- ^ the world worker has exited
+    → Bool                     -- ^ the sim worker has exited
+    → Bool                     -- ^ the lifecycle has left its running states
+    → Bool                     -- ^ the deadline has passed
+    → Maybe SettleWaitResult
+classifySettleWait mOutcome worldExited simExited cleaning expired
+    | Just outcome ← mOutcome
+    , outcome ≢ FastSettleApplied       = Just (SettleReported outcome)
+    | worldExited                       = Just SettleWorldExited
+    | simExited                         = Just SettleSimExited
+    | cleaning                          = Just SettleCleaningUp
+    | mOutcome ≡ Just FastSettleApplied = Just SettleSettled
+    | expired                           = Just SettleTimedOut
+    | otherwise                         = Nothing
+
+-- | Wait for the sim's fast settle: bounded, and watching the two
+--   workers whose death is the only other way it can end (#2334).
+--
+--   Polls at 'pollInterval', the cadence every other dump wait uses.
+--   The deadline is an absolute monotonic instant so the loop cannot
+--   drift, and the clock is a parameter so a spec can drive the whole
+--   decision without sleeping.
+awaitFastSettle
+    ∷ IO Double                 -- ^ monotonic clock
+    → IORef EngineLifecycle
+    → SettleWatch
+    → MVar FastSettleOutcome    -- ^ the settle's completion
+    → Double                    -- ^ absolute monotonic deadline
+    → IO SettleWaitResult
+awaitFastSettle clock lifecycle watch done deadline = go
+  where
+    go = do
+        mOutcome ← tryReadMVar done
+        worldExited ← hasExited (swWorld watch)
+        simExited ← hasExited (swSim watch)
+        cleaning ← leftRunning ⊚ readIORef lifecycle
+        now ← clock
+        case classifySettleWait mOutcome worldExited simExited cleaning
+                                (now ≥ deadline) of
+            Just result → pure result
+            Nothing     → threadDelay pollInterval >> go
+    -- A worker the mode never started cannot have exited.
+    hasExited = maybe (pure False) (fmap isJust ∘ tryReadMVar)
+    leftRunning lc = lc ≡ CleaningUp ∨ lc ≡ EngineStopped
+
+-- | The 'SystemError' a settle result fails the dump with, or 'Nothing'
+--   for the one result that means the settle actually landed (#2334).
+--
+--   Every failure travels the same route the init and chunk timeouts
+--   already take: an 'EngineException' out of the engine action, caught
+--   by @handleBootResult FatalToStderr@, which is what turns it into a
+--   nonzero exit and a stderr diagnostic with no JSON on stdout.
+settleWaitFailure ∷ SettleWaitResult → Maybe SystemError
+settleWaitFailure result = case result of
+    SettleSettled → Nothing
+    SettleReported outcome → Just ∘ IOError $
+        "dump: sim fast settle failed: " <> tshow outcome
+    SettleWorldExited → Just $ IOError
+        "dump: world thread exited before the sim fast settle completed"
+    SettleSimExited → Just $ IOError
+        "dump: sim thread exited before the sim fast settle completed"
+    SettleCleaningUp → Just $ IOError
+        "dump: engine began shutting down before the sim fast settle \
+        \completed"
+    SettleTimedOut → Just $ TimeoutError
+        "dump: sim fast settle did not complete in time"
+
+-- | The fast settle's budget, in seconds.
+--
+--   Generous on purpose: unlike the init and chunk waits, this one
+--   covers COMPUTE as well as a handoff — the sim runs up to
+--   @Sim.Thread.maxFastSettleIterations@ synchronous fluid ticks over
+--   every loaded chunk before it emits a single batch. The number that
+--   matters is the other end: a strand used to hold a CI job to its
+--   90-minute cap (@.github\/workflows\/ci.yml@) and an operator's shell
+--   indefinitely, so any bound far below that is the whole win, and one
+--   an order of magnitude above the settles actually observed cannot
+--   cost a healthy dump its output.
+fastSettleBudgetSeconds ∷ Double
+fastSettleBudgetSeconds = 600
+
+-- | How long the dump waits past the sim's own deadline before giving
+--   up on it.
+--
+--   The sim and the dump share one instant, so without this they expire
+--   together and the race decides which diagnostic the operator gets.
+--   The grace resolves it in favour of the specific one: a live sim
+--   names the world whose acknowledgement stalled, and only a sim that
+--   cannot report at all leaves this wait to say so generically.
+settleReportGraceSeconds ∷ Double
+settleReportGraceSeconds = 5
 
 -- | Poll cadence for the dump-mode wait helpers: a 250ms sleep between
 --   checks, so four polls make up one second of timeout budget.

@@ -30,7 +30,7 @@ import Data.Time.Clock (getCurrentTime, addUTCTime)
 import Data.Time.Format (formatTime, defaultTimeLocale)
 import qualified Data.Text as T
 import Engine.Core.State (EngineEnv(..))
-import Engine.Core.Log (LogCategory(..), LoggerState, logWarn)
+import Engine.Core.Log (LogCategory(..), LoggerState, logError, logWarn)
 import Engine.Scripting.Lua.API.Save.Bridge
     ( describeLuaComponents, collectLuaComponents, prepareLuaLoad
     , applyLuaLoad, abortLuaLoad )
@@ -111,6 +111,13 @@ import Engine.Load.Status
 --   future listing surface inherits the rule without a private filter of
 --   its own — neither @scripts\/main_menu.lua@ nor
 --   @scripts\/save_browser.lua@ carries one.
+--
+--   ALWAYS returns a table (issue #2333). A slot that could not be read
+--   is dropped from it by 'listSaves' itself; a @saves\/@ that could not
+--   be surveyed at all yields an EMPTY table plus one logged error. This
+--   verb never raises, because a raised Lua error is not a value the
+--   @engine.listSaves() or {}@ both menu scripts write can fall back
+--   from.
 saveListFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 saveListFn env = do
     logger ← Lua.liftIO $ readIORef (loggerRef env)
@@ -129,7 +136,20 @@ saveListFn env = do
             Lua.liftIO $ logWarn logger CatLua $ "listSaves: " <> err
             return []
     let luaKnownNames = HS.fromList [ name | (name, _, _) ← descriptors ]
-    listed ← Lua.liftIO $ listSaves logger luaKnownNames
+    -- Issue #2333: @saves/@ itself being unenumerable is the ONE failure
+    -- listing cannot contain to a slot, and it arrives here as 'Left'
+    -- rather than as an escaped 'IOException'. That distinction is the
+    -- whole point: 'registerLuaFunction' turns an escaped Haskell
+    -- exception into a LUA ERROR, so @engine.listSaves() or {}@ in
+    -- @scripts/main_menu.lua@ and @scripts/save_browser.lua@ would never
+    -- reach its own fallback and the menu build would raise instead of
+    -- listing. One logged error here, an empty table to Lua.
+    listedOrErr ← Lua.liftIO $ listSaves logger luaKnownNames
+    listed ← case listedOrErr of
+        Right ls → return ls
+        Left err → do
+            Lua.liftIO $ logError logger CatLua $ "listSaves: " <> err
+            return []
     -- Filter BEFORE indexing: the survivors are numbered 1..n with no
     -- hole, which is what `#`, `[1]` and `ipairs` on the Lua side
     -- already rely on.
