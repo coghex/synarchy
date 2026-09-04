@@ -636,6 +636,18 @@ main = hspec $ do
     -- worlds engine's pages. Its page is an arena page, so staging
     -- rebuilds flat chunks instead of generating a world.
     aroundAll withHeadlessEngineNoWorld GenConfigDomain.stagingSpec
+    -- #2339: the canonical form of a stored world date, at its two
+    -- ingresses. Both halves get their OWN world-thread-free engine, for
+    -- the same reasons the gen-domain pair above does. The setter half
+    -- installs its own single-page manager, reads back the queue a
+    -- world.setDate left there, and finishes each call through the
+    -- production handler -- a running worker would drain the queue and
+    -- rewrite the page's clock underneath it. The staging half drives
+    -- World.Load.Stage.stageSession against a forged one-page arena
+    -- save, so it must not gain or disturb the shared engine's pages.
+    describe "World.Calendar" $ do
+        aroundAll withHeadlessEngineNoWorld Calendar.setterSpec
+        aroundAll withHeadlessEngineNoWorld Calendar.stagingSpec
     -- #2307: the saved-equipment-slot reconciliation, split the same
     -- way. The pure half needs no engine; the staging half gets its OWN
     -- world-thread-free engine for the same reason the gen-domain one
