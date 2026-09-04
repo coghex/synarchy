@@ -49,8 +49,14 @@ data River = River
       --   captured so variable-width can be added without redoing
       --   the trace.
     , rivSourceLake ∷ !(Maybe LakeId)
-      -- ^ When the river is spawned by a lake spillway, the source
-      --   lake's id. 'Nothing' for precipitation-fed sources.
+      -- ^ The river's single source lake, when it has exactly one.
+      --   Taken over the whole connected component: every lake that
+      --   spills through any of its tiles joins one union, and this is
+      --   'Just' only when that union names exactly one lake (#2323).
+      --   'Nothing' therefore means "does not have exactly one lake
+      --   source" — precipitation-fed, fed by two basins sharing one
+      --   spillway tile, or fed by separate spillways of different
+      --   lakes — rather than "precipitation-fed" alone.
     , rivSinkLake   ∷ !(Maybe LakeId)
       -- ^ When the river terminates by emptying into a lake (rather
       --   than the ocean or world boundary), the sink lake's id.

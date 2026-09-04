@@ -28,7 +28,8 @@ import Data.STRef (newSTRef, readSTRef, writeSTRef, modifySTRef')
 import World.Chunk.Types (chunkSize)
 import World.Constants (seaLevel)
 import World.Fluid.River.Identify.Common
-    ( dirNorth, dirEast, dirSouth, dirWest, stepDir, sortDescOn )
+    ( dirNorth, dirEast, dirSouth, dirWest, stepDir, sortDescOn
+    , SpillwayOwners, spillwayOwnersAt )
 import World.Fluid.River.Types (River(..))
 
 -- | Reference flow level that maps to one tile of perpendicular width.
@@ -399,13 +400,14 @@ labelRiverComponents worldTiles isRiverTile =
         pure (idsF, n)
 
 -- | Build the 'River' vector. For each component compute bbox, peak
---   flow, source-lake (if its start tile is a spillway), sink-lake
---   (if a downstream tile of the chain enters a lake).
+--   flow, source-lake (aggregated over every spillway tile in the
+--   component — see 'rivSourceLake'), sink-lake (if a downstream tile
+--   of the chain enters a lake).
 buildRivers
     ∷ Int                  -- ^ worldSize
     → VU.Vector Int        -- ^ terrain
     → VU.Vector Int        -- ^ lakeIdAt
-    → VU.Vector Int        -- ^ isSpillwayOf
+    → SpillwayOwners       -- ^ per-tile spillway contributors
     → VU.Vector Int        -- ^ spillwayOf
     → VU.Vector Word8      -- ^ dir
     → VU.Vector Int        -- ^ flow
@@ -413,7 +415,7 @@ buildRivers
     → VU.Vector Int        -- ^ compId
     → Int                  -- ^ nComps
     → V.Vector River
-buildRivers worldSize _terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
+buildRivers worldSize _terrain lakeIdAt owners _spillwayOf dir flow
             isRiverTile compId nComps =
     let worldTiles = worldSize * chunkSize
         nTiles     = worldTiles * worldTiles
@@ -425,6 +427,7 @@ buildRivers worldSize _terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
         bbMaxY  ← VUM.replicate nComps (minBound ∷ Int)
         peak    ← VUM.replicate nComps (0        ∷ Int)
         srcLake ← VUM.replicate nComps (-1       ∷ Int)
+        srcMany ← VUM.replicate nComps False
         snkLake ← VUM.replicate nComps (-1       ∷ Int)
         forM_ [0 .. nTiles - 1] $ \i → when (isRiverTile VU.! i) $ do
             let cid = compId VU.! i
@@ -436,9 +439,18 @@ buildRivers worldSize _terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
             VUM.modify bbMaxX (max gx) cid
             VUM.modify bbMaxY (max gy) cid
             VUM.modify peak   (max fl) cid
-            -- Source lake: this tile is a spillway → record.
-            let sp = isSpillwayOf VU.! i
-            when (sp ≥ 0) (VUM.write srcLake cid sp)
+            -- Source lakes: every lake spilling through this tile
+            -- joins the component's contributor union (#2323). A
+            -- shared spillway contributes BOTH its basins here, and a
+            -- component fed by two separate spillways collects both —
+            -- so the scalar 'rivSourceLake' below survives only when
+            -- the whole union names exactly one lake. Order-free by
+            -- construction: no traversal order can pick a winner.
+            VU.forM_ (spillwayOwnersAt owners i) $ \sp → do
+                seen ← VUM.read srcLake cid
+                if seen < 0
+                    then VUM.write srcLake cid sp
+                    else when (seen ≢ sp) (VUM.write srcMany cid True)
             -- Sink lake: this tile's D4 step lands in a lake.
             case stepDir worldTiles i (dir VU.! i) of
                 Just dn → do
@@ -451,12 +463,15 @@ buildRivers worldSize _terrain lakeIdAt isSpillwayOf _spillwayOf dir flow
         bMaxYF ← VU.unsafeFreeze bbMaxY
         peakF  ← VU.unsafeFreeze peak
         srcF   ← VU.unsafeFreeze srcLake
+        manyF  ← VU.unsafeFreeze srcMany
         snkF   ← VU.unsafeFreeze snkLake
         pure $ V.generate nComps $ \cid →
             River
                 { rivFlowRate   = peakF VU.! cid
                 , rivSourceLake = let s = srcF VU.! cid
-                                  in if s ≥ 0 then Just s else Nothing
+                                  in if s ≥ 0 ∧ not (manyF VU.! cid)
+                                     then Just s
+                                     else Nothing
                 , rivSinkLake   = let s = snkF VU.! cid
                                   in if s ≥ 0 then Just s else Nothing
                 , rivBBoxMinX   = bMinXF VU.! cid

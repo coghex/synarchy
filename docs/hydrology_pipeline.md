@@ -134,6 +134,64 @@ identification splits the same way: `World.Fluid.River.Identify` plus
 Rivers and lakes each emit a per-chunk **carve delta** here
 (`wrCarveDelta`, `wlCarveDelta`). That is carving mechanism **B** — see §8.
 
+### 5.1 Spillway ownership is one-to-many
+
+`World.Fluid.River.Identify.Flow.computeSpillways` gives each lake ONE
+outlet tile: the lowest above-sea neighbour of any of its tiles that is not
+its own (`-1` where the lowest such neighbour is at or below sea level — that
+basin drains to the ocean, not to a river). Nothing constrains two *adjacent*
+basins from picking the **same** tile, so the per-tile inverse of that table is
+a **relation, not a function**.
+
+That inverse is `SpillwayOwners` (`.Identify.Common`), a compressed-sparse-row
+map from tile to the complete set of lakes spilling through it, always in
+ascending `LakeId` order. The ordering is a property of how it is built, not of
+a later sort: no consumer can observe an owner that depends on traversal order.
+`Flow.resolveSpillways` is the whole stage — outlet selection, inversion,
+descent, and the demotion below — and is the only thing `identifyWorldRivers`
+calls for it.
+
+**All contributing basins are excluded from the descent.** `computeDescentDirs`
+gives a spillway tile a steepest-descent direction chosen from neighbours in
+*none* of its contributing basins. Excluding only one of them would let a
+second contributor's injected outflow step straight back into its own lake,
+where `walkInject` absorbs it — leaving that lake with no usable outlet at all.
+
+**The no-descent fallback: spillway `-1`, before injection.** If excluding every
+contributor removes the shared tile's *last* descent candidate, keeping the tile
+as anyone's outlet would still add each contributor's accumulated flow there,
+because `computeFlowAccumulation` injects before `walkInject` ever observes the
+missing direction. So `demoteBlockedSharedSpillways` treats **every**
+contributor of such a tile as having spillway `-1`: none of their flow is added
+at the tile, no injection walk starts from it, and it contributes no river
+source. Two bounds keep this to the collision case:
+
+- It fires only where the **contributor exclusion** removed the last candidate.
+  A shared tile with no descent for an unrelated reason — it is itself a third
+  lake's tile, or has no lower non-void neighbour at all — keeps its
+  contributors, because nothing is being routed back into itself there.
+- It fires only on tiles with **two or more** contributors. A unique-owner
+  spillway with no valid descent still injects, and its walk simply terminates.
+
+The demotion changes injection and source metadata only. The tile keeps the
+`dirNone` the exclusion produced; there is no second, exclusion-free descent
+pass that could re-admit a contributing basin for it.
+
+### 5.2 `rivSourceLake` is a component-wide union
+
+`.Identify.Components.buildRivers` collects, over the whole connected river
+component, the union of contributors of every spillway tile it contains — both
+basins of a shared outlet, and the separate basins of two non-shared outlets
+that happen to feed one component. `River.rivSourceLake` is `Just lakeId` **only
+when that union names exactly one lake**, and `Nothing` otherwise.
+
+So `Nothing` means "does not have exactly one lake source", which is broader
+than the "precipitation-fed" it used to mean: a river fed by two basins sharing
+one spillway, or by two lakes' separate spillways, records `Nothing` rather than
+an arbitrarily elected representative. The field stays
+`Maybe LakeId` — the `River` wire shape and the `world-pages` component version
+are unchanged, and historical scalar values decode exactly as written.
+
 ## 6. Stage 4 — per-chunk composition
 
 `World.Generate.Chunk.generateChunk` composes one chunk from the tables stages

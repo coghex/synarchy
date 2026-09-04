@@ -2,7 +2,8 @@
 
 -- | Per-tile flow accumulation for the river-identification pipeline:
 --   climate → precip/evap units, the lake-id reverse index, per-lake
---   spillway identification, D4 steepest-descent directions, and the
+--   spillway identification and its one-to-many per-tile inverse, D4
+--   steepest-descent directions, and the
 --   ascending-z bucket sort + flow-accumulation walk that turns those
 --   into a per-tile flow field. Everything
 --   'World.Fluid.River.Identify.identifyWorldRivers' needs before it
@@ -13,8 +14,10 @@ module World.Fluid.River.Identify.Flow
     , computeEvapUnits
     , buildLakeIdAt
     , computeSpillways
-    , buildIsSpillwayOf
+    , buildSpillwayOwners
     , computeDescentDirs
+    , demoteBlockedSharedSpillways
+    , resolveSpillways
     , bucketSortAscending
     , computeFlowAccumulation
     ) where
@@ -31,7 +34,8 @@ import World.Constants (seaLevel)
 import World.Fluid.Lake.Types
     ( WorldLakes(..), LakeChunkEntry(..), Lake(..) )
 import World.Fluid.River.Identify.Common
-    ( dirNorth, dirEast, dirSouth, dirWest, dirNone, stepDir, sortDescOn )
+    ( dirNorth, dirEast, dirSouth, dirWest, dirNone, stepDir, sortDescOn
+    , SpillwayOwners(..), spillwayOwnerCount, isSpillwayOwner )
 import World.Weather.Lookup (LocalClimate(..), lookupLocalClimate)
 import World.Weather.Types (ClimateState)
 
@@ -172,78 +176,197 @@ computeSpillways worldSize lakes terrain lakeIdAt =
                 else VUM.write v lid (-1)
         pure v
 
--- | Per-tile inverse: tile idx → lakeId of which it is the spillway
---   (-1 = not a spillway). If a tile is the spillway of two lakes
---   (rare; would require adjacent basins), the last-written wins.
-buildIsSpillwayOf ∷ Int → VU.Vector Int → VU.Vector Int
-buildIsSpillwayOf nTiles spillwayOf = VU.create $ do
-    v ← VUM.replicate nTiles (-1 ∷ Int)
-    forM_ [0 .. VU.length spillwayOf - 1] $ \lid → do
+-- | Per-tile inverse of 'computeSpillways': the COMPLETE set of lakes
+--   that spill through each tile, ascending by lake id (#2323).
+--
+--   Two adjacent basins can independently pick the same lowest
+--   external neighbour, so this relation is one-to-many. The ascending
+--   order is a property of the construction (the outer loop walks lake
+--   ids upward and appends), not of any later sort, so no consumer can
+--   observe a traversal-order-dependent owner. See 'SpillwayOwners'.
+buildSpillwayOwners ∷ Int → VU.Vector Int → SpillwayOwners
+buildSpillwayOwners nTiles spillwayOf = runST $ do
+    let nLakes = VU.length spillwayOf
+    counts ← VUM.replicate nTiles (0 ∷ Int)
+    forM_ [0 .. nLakes - 1] $ \lid → do
         let s = spillwayOf VU.! lid
-        when (s ≥ 0) (VUM.write v s lid)
-    pure v
+        when (s ≥ 0) (VUM.modify counts (+ 1) s)
+    -- Prefix sum into per-tile group starts.
+    offsets ← VUM.new (nTiles + 1)
+    cursor  ← newSTRef (0 ∷ Int)
+    forM_ [0 .. nTiles - 1] $ \t → do
+        p ← readSTRef cursor
+        VUM.write offsets t p
+        c ← VUM.read counts t
+        writeSTRef cursor (p + c)
+    total ← readSTRef cursor
+    VUM.write offsets nTiles total
+    -- Fill, reusing 'counts' as the per-tile write cursor.
+    forM_ [0 .. nTiles - 1] $ \t → do
+        p ← VUM.read offsets t
+        VUM.write counts t p
+    out ← VUM.new total
+    forM_ [0 .. nLakes - 1] $ \lid → do
+        let s = spillwayOf VU.! lid
+        when (s ≥ 0) $ do
+            p ← VUM.read counts s
+            VUM.write out p lid
+            VUM.write counts s (p + 1)
+    offsetsF ← VU.unsafeFreeze offsets
+    outF     ← VU.unsafeFreeze out
+    pure (SpillwayOwners offsetsF outF)
 
 -- * D4 descent
 
--- | Per-tile D4 steepest descent direction. Spillways exclude
---   neighbours in their source lake so lake outflow doesn't feed
---   back into the basin.  Beyond-glacier tiles, lake tiles, and
---   open-ocean (sub-sea, no lake assigned) tiles are tagged
---   'dirNone'.
+-- | Per-tile D4 steepest descent direction. A spillway excludes
+--   neighbours in EVERY basin that spills through it (#2323), so no
+--   contributor's outflow is routed straight back into itself.
+--   Beyond-glacier tiles, lake tiles, and open-ocean (sub-sea, no lake
+--   assigned) tiles are tagged 'dirNone'.
 computeDescentDirs
     ∷ Int                  -- ^ worldTiles
     → VU.Vector Int        -- ^ terrain
     → VU.Vector Int        -- ^ lakeIdAt
-    → VU.Vector Int        -- ^ isSpillwayOf
+    → SpillwayOwners       -- ^ per-tile spillway contributors
     → VU.Vector Word8
-computeDescentDirs worldTiles terrain lakeIdAt isSpillwayOf =
+computeDescentDirs worldTiles terrain lakeIdAt owners =
     let nTiles = worldTiles * worldTiles
     in VU.generate nTiles $ \idx →
-        let t  = terrain   VU.! idx
-            lk = lakeIdAt  VU.! idx
-            sp = isSpillwayOf VU.! idx
-        in if t ≡ minBound
-              ∨ lk ≥ 0
-              ∨ (t ≤ seaLevel ∧ lk < 0)
-           then dirNone
-           else
-             let bx = idx `mod` worldTiles
-                 by = idx `div` worldTiles
-                 -- Candidate neighbours: include only if it would
-                 -- not feed flow back into our source lake.
-                 candidate ok nIdx d
-                     | not ok = Nothing
-                     | otherwise =
-                         let nz   = terrain  VU.! nIdx
-                             nLid = lakeIdAt VU.! nIdx
-                         in if nz ≡ minBound
-                            then Nothing
-                            else if sp ≥ 0 ∧ nLid ≡ sp
-                                 then Nothing  -- spillway: exclude source lake
-                                 else if nz < t
-                                      then Just (nz, d)
-                                      else Nothing
-                 -- E/W always have a candidate via the x-torus wrap
-                 -- (see 'stepDir'); N/S still respect v-axis bounds.
-                 eIdx = if bx < worldTiles - 1
-                        then idx + 1
-                        else idx + 1 - worldTiles
-                 wIdx = if bx > 0
-                        then idx - 1
-                        else idx - 1 + worldTiles
-                 cN = candidate (by > 0)              (idx - worldTiles) dirNorth
-                 cS = candidate (by < worldTiles - 1) (idx + worldTiles) dirSouth
-                 cE = candidate True                  eIdx               dirEast
-                 cW = candidate True                  wIdx               dirWest
-                 pick a b = case (a, b) of
-                     (Nothing, x) → x
-                     (x, Nothing) → x
-                     (Just (z1, _), Just (z2, _))
-                         | z1 ≤ z2 → a
-                         | otherwise → b
-             in case foldr pick Nothing [cN, cE, cS, cW] of
-                    Nothing      → dirNone
-                    Just (_, d') → d'
+        descentDirAt worldTiles terrain lakeIdAt
+                     (isSpillwayOwner owners idx) idx
+
+-- | One tile's D4 steepest descent under an arbitrary neighbour-lake
+--   exclusion. @excluded lid@ rejects a neighbour belonging to lake
+--   @lid@.
+--
+--   'computeDescentDirs' passes the tile's own contributor set;
+--   'demoteBlockedSharedSpillways' passes @const False@ to ask what
+--   the descent would have been with no exclusion at all, which is how
+--   it tells "the exclusion removed the last candidate" apart from
+--   "this tile had no descent either way".
+{-# INLINE descentDirAt #-}
+descentDirAt
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Int        -- ^ lakeIdAt
+    → (Int → Bool)         -- ^ neighbour lake ids to exclude
+    → Int                  -- ^ tile index
+    → Word8
+descentDirAt worldTiles terrain lakeIdAt excluded idx =
+    let t  = terrain  VU.! idx
+        lk = lakeIdAt VU.! idx
+    in if t ≡ minBound
+          ∨ lk ≥ 0
+          ∨ (t ≤ seaLevel ∧ lk < 0)
+       then dirNone
+       else
+         let bx = idx `mod` worldTiles
+             by = idx `div` worldTiles
+             -- Candidate neighbours: include only if it would not
+             -- feed flow back into a contributing source lake.
+             candidate ok nIdx d
+                 | not ok = Nothing
+                 | otherwise =
+                     let nz   = terrain  VU.! nIdx
+                         nLid = lakeIdAt VU.! nIdx
+                     in if nz ≡ minBound
+                        then Nothing
+                        else if nLid ≥ 0 ∧ excluded nLid
+                             then Nothing  -- spillway: exclude a source lake
+                             else if nz < t
+                                  then Just (nz, d)
+                                  else Nothing
+             -- E/W always have a candidate via the x-torus wrap
+             -- (see 'stepDir'); N/S still respect v-axis bounds.
+             eIdx = if bx < worldTiles - 1
+                    then idx + 1
+                    else idx + 1 - worldTiles
+             wIdx = if bx > 0
+                    then idx - 1
+                    else idx - 1 + worldTiles
+             cN = candidate (by > 0)              (idx - worldTiles) dirNorth
+             cS = candidate (by < worldTiles - 1) (idx + worldTiles) dirSouth
+             cE = candidate True                  eIdx               dirEast
+             cW = candidate True                  wIdx               dirWest
+             pick a b = case (a, b) of
+                 (Nothing, x) → x
+                 (x, Nothing) → x
+                 (Just (z1, _), Just (z2, _))
+                     | z1 ≤ z2 → a
+                     | otherwise → b
+         in case foldr pick Nothing [cN, cE, cS, cW] of
+                Nothing      → dirNone
+                Just (_, d') → d'
+
+-- | The no-descent fallback for a SHARED spillway (#2323, req 3).
+--
+--   When excluding every contributing basin leaves a shared tile with
+--   no descent candidate at all, keeping the tile as anyone's spillway
+--   would inject each contributor's accumulated flow at a tile that
+--   cannot pass it on: 'computeFlowAccumulation' adds the inject
+--   BEFORE 'walkInject' ever observes the missing direction. So every
+--   contributor of such a tile is demoted to spillway @-1@ — none of
+--   their flow is added there, no walk starts there, and the tile
+--   contributes no river-source metadata.
+--
+--   Two bounds make this a fix for the collision and nothing else. It
+--   applies only where the CONTRIBUTOR EXCLUSION is what removed the
+--   last candidate — a shared tile with no descent for an independent
+--   reason (it belongs to a third lake, or has no lower non-void
+--   neighbour at all) keeps its prior behaviour, because no
+--   contributor is being routed back into itself there. And it applies
+--   only to tiles with two or more contributors: a unique-owner
+--   spillway with no valid descent still injects, and its walk simply
+--   terminates, as before.
+--
+--   The demotion touches injection and source metadata ONLY: the
+--   tile keeps the exclusion-derived 'dirNone' 'computeDescentDirs'
+--   already gave it, and no second, exclusion-free descent pass can
+--   re-admit a contributing basin for it.
+demoteBlockedSharedSpillways
+    ∷ Int                  -- ^ worldTiles
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Int        -- ^ lakeIdAt
+    → SpillwayOwners       -- ^ contributors, before demotion
+    → VU.Vector Word8      -- ^ dir, as derived from those contributors
+    → VU.Vector Int        -- ^ spillwayOf, before demotion
+    → (VU.Vector Int, SpillwayOwners)
+       -- ^ (effective spillwayOf, effective contributors)
+demoteBlockedSharedSpillways worldTiles terrain lakeIdAt owners dir
+                             spillwayOf =
+    let nTiles = VU.length (spoOffsets owners) - 1
+        blocked t = spillwayOwnerCount owners t ≥ 2
+                  ∧ dir VU.! t ≡ dirNone
+                  ∧ descentDirAt worldTiles terrain lakeIdAt
+                                 (const False) t ≢ dirNone
+        spillwayOf' = VU.map (\s → if s ≥ 0 ∧ blocked s then -1 else s)
+                             spillwayOf
+    in (spillwayOf', buildSpillwayOwners nTiles spillwayOf')
+
+-- | The whole spillway stage, as 'World.Fluid.River.Identify' runs it:
+--   pick each lake's outlet, invert that into per-tile contributor
+--   sets, derive descents that exclude every contributor, then apply
+--   the shared-spillway demotion above. Returns the EFFECTIVE spillway
+--   table and contributor sets — the ones downstream stages must use —
+--   alongside the descent field, which is derived from the
+--   pre-demotion contributors and is not recomputed.
+resolveSpillways
+    ∷ Int                  -- ^ worldSize
+    → WorldLakes
+    → VU.Vector Int        -- ^ terrain
+    → VU.Vector Int        -- ^ lakeIdAt
+    → (VU.Vector Int, SpillwayOwners, VU.Vector Word8)
+       -- ^ (effective spillwayOf, effective owners, descent dirs)
+resolveSpillways worldSize lakes terrain lakeIdAt =
+    let worldTiles  = worldSize * chunkSize
+        nTiles      = worldTiles * worldTiles
+        spillwayOf0 = computeSpillways worldSize lakes terrain lakeIdAt
+        owners0     = buildSpillwayOwners nTiles spillwayOf0
+        dir         = computeDescentDirs worldTiles terrain lakeIdAt owners0
+        (spillwayOf, owners) =
+            demoteBlockedSharedSpillways worldTiles terrain lakeIdAt
+                                         owners0 dir spillwayOf0
+    in (spillwayOf, owners, dir)
 
 -- * Bucket sort (ascending z)
 

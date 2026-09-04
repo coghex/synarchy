@@ -2,15 +2,21 @@
 
 -- | Shared low-level primitives for the river-identification pipeline
 --   ("World.Fluid.River.Identify" and its siblings): D4 direction codes,
---   the world-grid stepping function, and the descending-sort helper
---   used by both the flow/spillway pass and the component-culling pass.
+--   the world-grid stepping function, the descending-sort helper
+--   used by both the flow/spillway pass and the component-culling pass,
+--   and the per-tile spillway-ownership relation those two passes share.
 module World.Fluid.River.Identify.Common
     ( dirNorth, dirEast, dirSouth, dirWest, dirNone
     , stepDir
     , sortDescOn
+    , SpillwayOwners(..)
+    , spillwayOwnersAt
+    , spillwayOwnerCount
+    , isSpillwayOwner
     ) where
 
 import UPrelude
+import qualified Data.Vector.Unboxed as VU
 
 -- * Direction codes
 --
@@ -74,3 +80,58 @@ sortDescOn key = foldr insertDesc []
     insertDesc x (y:rest)
         | key x ≥ key y = x : y : rest
         | otherwise     = y : insertDesc x rest
+
+-- * Spillway ownership
+
+-- | Which lakes spill through a tile (#2323).
+--
+--   A spillway tile is the lowest above-sea external neighbour of some
+--   basin, and nothing stops two ADJACENT basins from independently
+--   picking the same tile. The relation is therefore one-to-many, and
+--   collapsing it to a per-tile scalar silently discarded every
+--   contributor but the last one written — which misrouted the
+--   discarded lake's outflow straight back into its own basin and
+--   misreported the resulting river's source.
+--
+--   Stored compressed-sparse-row: 'spoOffsets' has length
+--   @nTiles + 1@, and tile @t@'s contributors are the slice
+--   @spoLakes[spoOffsets ! t .. spoOffsets ! (t+1) - 1]@. That slice is
+--   always in ascending 'World.Fluid.Lake.Types.LakeId' order, so no
+--   consumer ever sees a traversal-order-dependent owner. Most tiles
+--   own an empty slice.
+data SpillwayOwners = SpillwayOwners
+    { spoOffsets ∷ !(VU.Vector Int)
+      -- ^ Per-tile start offsets into 'spoLakes'; length @nTiles + 1@.
+    , spoLakes   ∷ !(VU.Vector Int)
+      -- ^ Contributor lake ids, grouped by tile, ascending within
+      --   each tile's group.
+    } deriving (Show, Eq)
+
+-- | The complete contributor set of one tile, ascending. Empty when
+--   the tile is no lake's spillway.
+{-# INLINE spillwayOwnersAt #-}
+spillwayOwnersAt ∷ SpillwayOwners → Int → VU.Vector Int
+spillwayOwnersAt (SpillwayOwners offs lids) idx =
+    let lo = offs VU.! idx
+        hi = offs VU.! (idx + 1)
+    in VU.slice lo (hi - lo) lids
+
+-- | How many lakes spill through this tile. @0@ for an ordinary tile,
+--   @1@ for a unique-owner spillway, @≥ 2@ for a shared one.
+{-# INLINE spillwayOwnerCount #-}
+spillwayOwnerCount ∷ SpillwayOwners → Int → Int
+spillwayOwnerCount (SpillwayOwners offs _) idx =
+    (offs VU.! (idx + 1)) - (offs VU.! idx)
+
+-- | Does lake @lid@ spill through tile @idx@? Hot path — the empty
+--   case (nearly every tile) costs two vector reads and a comparison,
+--   and the occupied case scans a slice of one or two elements.
+{-# INLINE isSpillwayOwner #-}
+isSpillwayOwner ∷ SpillwayOwners → Int → Int → Bool
+isSpillwayOwner (SpillwayOwners offs lids) idx lid =
+    let lo = offs VU.! idx
+        hi = offs VU.! (idx + 1)
+        scan i | i ≥ hi              = False
+               | lids VU.! i ≡ lid   = True
+               | otherwise           = scan (i + 1)
+    in lo < hi ∧ scan lo
