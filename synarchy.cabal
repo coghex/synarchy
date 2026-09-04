@@ -1362,6 +1362,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Bills
                    Test.Headless.Craft.BillReconcile
                    Test.Headless.Craft.OutputIdentity
+                   Test.Headless.Craft.BillPageBinding
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
                    Test.Headless.Power.Demolition

@@ -18,14 +18,17 @@
 -- Per-page ids are the reason this needs an explicit context rather
 -- than live queries. craft_bill and ground_item are PER-PAGE
 -- allocators, and the live Lua queries that could answer "does this id
--- exist?" resolve through the ACTIVE page (craft.getBill,
+-- exist?" used to resolve through the ACTIVE page (craft.getBill,
 -- item.listGround) while the mutating verb they would authorize
 -- resolves through the OWNING unit's page (item.pickupGround). #1666
--- has since given the ground-item half an owning-page read of its own,
+-- gave the ground-item half an owning-page read of its own,
 -- item.getGroundForUnit(uid, gid), which is what unit_ai_pickup.lua's
--- own order now uses; craft.getBill still has no counterpart, and
--- reconciliation takes the engine's authoritative restored sets either
--- way rather than interrogating live pages at all. Asking
+-- own order uses, and #2325 did the same for bills:
+-- craft.getBill(uid, billId) now reads the acting unit's own page too.
+-- Reconciliation still takes the engine's authoritative restored sets
+-- rather than interrogating live pages at all, because a reference
+-- surviving a load may name a unit that is itself gone -- there is no
+-- acting unit left to resolve a page from. Asking
 -- the active page about another page's id is exactly the wrong-entity
 -- match World.Save.Integrity.luaEdgeResolves refuses to make, so the
 -- engine hands the restored session's real sets to onSaveLoaded
