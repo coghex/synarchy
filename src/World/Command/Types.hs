@@ -5,6 +5,11 @@ module World.Command.Types
     , FluidWriteback(..)
     , FluidWritebackBatch(..)
     , FluidAckOutcome(..)
+    , digPositionInDomain
+    , digAmountInDomain
+    , digSkillInDomain
+    , digPerceptionInDomain
+    , digTileCoordinate
     ) where
 
 import UPrelude
@@ -552,3 +557,96 @@ data WorldCommand
         --   through no window at all) and marks unconditionally, exactly
         --   as this command always did.
     deriving (Show)
+
+-- * The numeric domain of 'WorldDigTile' (#2338)
+--
+--   Stated here, next to the constructor whose fields they describe, so
+--   the scripting boundary that refuses a call and the world thread's
+--   own defensive check test the SAME predicate rather than two
+--   opinions that can drift — the shape 'Unit.Command.Types'
+--   already uses for the motion commands (#2290).
+--
+--   Every one of them is judged AFTER narrowing to the 'Float' the
+--   command carries. A Lua number is a 'Double', so a perfectly
+--   ordinary finite @1e39@ is @Infinity@ in the field it is about to be
+--   written to, and a check made before narrowing would let exactly
+--   that through.
+
+-- | The domain a dig command's tile-space POSITION fields — @uxPos@ and
+--   @uyPos@ — must already be in: merely finite.
+--
+--   Position picks the corner drain ORDER ('World.Mine.Types.drainCorners'
+--   sorts by squared distance to it) and the spoil start vertex, so an
+--   arbitrarily distant finite one is a legitimate, if odd, request: it
+--   drains a well-defined corner order. A NaN is not — every comparison
+--   against it is false, so the sort silently keeps its input order and
+--   the digger-side rule this command exists to express stops holding.
+digPositionInDomain ∷ Float → Bool
+digPositionInDomain v = not (isNaN v ∨ isInfinite v)
+
+-- | The domain a dig command's @amount@ must be in: finite and
+--   non-negative.
+--
+--   Zero is IN domain and is a no-op drain — a tick whose tool ×
+--   material speed collapsed to nothing is a stalled dig, not a bad
+--   command. Negative is not: 'World.Mine.Types.drainCorners' stops on
+--   @amt ≤ 0@, so a negative amount pours nothing yet still reports a
+--   completed pour, and the caller learns nothing. Non-finite is the
+--   damage this domain exists for: NaN misses that same @≤ 0@ stop,
+--   @min v NaN@ is NaN, and all four corners become NaN — after which
+--   'World.Mine.Types.cornersDone' can never hold, no spoil is routed,
+--   no yield accrues, and the unfinishable designation round-trips
+--   through the save verbatim.
+digAmountInDomain ∷ Float → Bool
+digAmountInDomain v = digPositionInDomain v ∧ v ≥ 0
+
+-- | The domain a dig command's @minerSkill@ must be in: finite and
+--   within the 0–100 skill scale every engine-derived skill is already
+--   on (@scripts/unit_ai_dig.lua@ reads one straight off
+--   @unit.getSkill@).
+--
+--   Both ends are IN domain: zero is an untrained digger and 100 a
+--   maxed one, and both are ordinary. The ceiling is not cosmetic —
+--   the per-tick chunk fill is @(0.5 + skill \/ 100) \/ 4@ per drained
+--   corner-unit, so a skill of @1e9@ makes one tick's @floor p@ a
+--   number in the millions and
+--   'World.Thread.Command.Edit.Dig.spawnYieldItems' materializes that
+--   many ground items on the world thread before the tick can end.
+digSkillInDomain ∷ Float → Bool
+digSkillInDomain v = digPositionInDomain v ∧ v ≥ 0 ∧ v ≤ 100
+
+-- | The domain a dig command's @perception@ must be in: merely finite.
+--
+--   Deliberately NOT bounded above or below here. 'World.Gem.gemChanceAt'
+--   already clamps it with @max 0@ and saturates the find chance it
+--   scales, so a large or negative finite perception is a bounded,
+--   recoverable, one-shot effect on a single gem roll. A non-finite one
+--   is not bounded by that clamp: @max 0 NaN@ is NaN, and the roll it
+--   feeds decides nothing.
+digPerceptionInDomain ∷ Float → Bool
+digPerceptionInDomain = digPositionInDomain
+
+-- | The 'Int' tile coordinate a Lua number names, or 'Nothing' when it
+--   names none.
+--
+--   'WorldDigTile' stores @gx@\/@gy@ as 'Int', so the question is not
+--   whether the number survives a narrowing to 'Float' — it never
+--   reaches one — but whether ROUNDING it lands inside 'Int' at all.
+--   @round \@Double \@Int@ is undefined outside that range and wraps in
+--   practice, which would turn a call naming @1e30@ into one naming an
+--   arbitrary tile. Rounding through 'Integer' first is exact for every
+--   finite 'Double', so the bound tested is the real one rather than a
+--   convenient approximation of it.
+digTileCoordinate ∷ Double → Maybe Int
+digTileCoordinate d
+    -- The rounding itself is guarded, not merely its result: this
+    -- module is @Strict@, so a @where@-bound @round d@ would be forced
+    -- even on the NaN branch that never reads it, and @round \@Double
+    -- \@Integer@ of a NaN is a huge allocation rather than an error.
+    | isNaN d ∨ isInfinite d = Nothing
+    | otherwise =
+        let r = round d ∷ Integer
+        in if r < toInteger (minBound ∷ Int)
+              ∨ r > toInteger (maxBound ∷ Int)
+             then Nothing
+             else Just (fromInteger r)

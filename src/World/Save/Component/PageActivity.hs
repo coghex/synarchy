@@ -144,6 +144,20 @@ import World.Save.Component.PageCore (orderedPages)
 import World.Save.Component.Types
 
 -- | Frozen mirror of 'MineDesignation'.
+--
+--   __Non-finite legacy progress is repaired on the way in, not
+--   refused (#2338).__ This DTO round-trips 'mdiCorners' and
+--   'mdiChunkProgress' verbatim, and before @world.digTile@ and the
+--   @WorldDigTile@ handler judged their arguments a NaN or infinite
+--   value could reach them and be written here. Such a save is still
+--   perfectly readable, so the wire shape deliberately does NOT reject
+--   it — decoding stays total and the component version is unchanged.
+--   'World.Load.Stage.repairStagedMineDesignations' is the single place
+--   the policy is applied: at staging, every corner of an offending
+--   designation is reset to 1.0 (undug) and its chunk progress to 0,
+--   'mdiZ' and the tile key are kept, one warning names the page and
+--   the tile, and the load proceeds. A designation whose numbers are
+--   all finite is untouched.
 data MineDesignationDTO = MineDesignationDTO
     { mdiZ             ∷ !Int
     , mdiCorners       ∷ !(Float, Float, Float, Float)

@@ -21,6 +21,9 @@ import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Unit.Command.Types (UnitCommand(..))
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
+-- The dig-argument domains (#2338) come in through this re-export of
+-- 'World.Command.Types', which is where they are stated — beside the
+-- 'WorldDigTile' constructor whose fields they describe.
 import World.Types
 import World.Generate.Coordinates (globalToChunk, canonicalTileFrame)
 import World.Edit.Types (WorldEdit(..), appendEdit)
@@ -71,183 +74,226 @@ handleWorldDigTileCommand ∷ EngineEnv → IORef StdGen → Q.Queue UnitCommand
     → Int → Int → Float → Float → Float → Float → Float → IO ()
 handleWorldDigTileCommand env rngRef unitQ logger pageId rawGX rawGY rawUX rawUY
                           amount skill percep = do
-    mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    case lookup pageId (wmWorlds mgr) of
-        Nothing →
+  payloadOk ← digPayloadOk logger pageId (rawGX, rawGY)
+      [ ("uxPos", rawUX, digPositionInDomain)
+      , ("uyPos", rawUY, digPositionInDomain)
+      , ("amount", amount, digAmountInDomain)
+      , ("minerSkill", skill, digSkillInDomain)
+      , ("perception", percep, digPerceptionInDomain) ]
+  when payloadOk $ do
+      mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+      case lookup pageId (wmWorlds mgr) of
+          Nothing →
+              logWarn logger CatWorld $
+                  "World not found for dig tile: " <> unWorldPageId pageId
+          Just ws → do
+              -- #1175: the mine designation this consumes is stored under a
+              -- CANONICAL key, so the tile is resolved into that frame before
+              -- anything is looked up — a dig job coord restored from a
+              -- pre-#1175 save can still be a u-alias, and a raw lookup would
+              -- silently find no designation and never progress it. The
+              -- digger's own position takes the SAME whole-tile shift: the wrap
+              -- is an isometry, so "which corner of the tile is the digger
+              -- nearest" (spoilStartVertex) stays the answer it was. Identity
+              -- away from the seam.
+              worldSize ← pageWrapWorldSize ws
+              let (digCoord, (digLx, digLy), (dgx, dgy)) =
+                      canonicalTileFrame worldSize rawGX rawGY
+                  digIdx = columnIndex digLx digLy
+                  gx = rawGX + dgx
+                  gy = rawGY + dgy
+                  ux = rawUX + fromIntegral dgx
+                  uy = rawUY + fromIntegral dgy
+              desigs ← readIORef (wsMineDesignationsRef ws)
+              case HM.lookup (gx, gy) desigs of
+                  Nothing → pure ()
+                  Just md → do
+                      td0 ← readIORef (wsTilesRef ws)
+                      registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
+                      piles ← readIORef (wsSpoilRef ws)
+                      let oldCorners = mdCorners md
+                          sumC (a, b, c, d) = a + b + c + d
+                          -- Properties of the dug material (the
+                          -- column's cell at the designation z).
+                          mDigProps = do
+                              lc ← lookupChunk digCoord td0
+                              let col  = lcTiles lc V.! digIdx
+                                  relZ = mdZ md - ctStartZ col
+                              matId ← if relZ ≥ 0
+                                         ∧ relZ < VU.length (ctMats col)
+                                      then Just (ctMats col VU.! relZ)
+                                      else Nothing
+                              pure (getMaterialProps registry
+                                        (MaterialId matId))
+                          mSpoil = do
+                              props ← mDigProps
+                              spoilName ← mpDigSpoil props
+                              spoilId ← materialIdByName registry spoilName
+                              pure (spoilId, mpDigBulking props)
+                          mChunkItem = mDigProps ⌦ mpDigChunk
+                          tileOk = spoilTileOk td0 desigs (mdZ md)
+                          startV = spoilStartVertex (ux, uy) (gx, gy)
+                          -- Refusal gate: this tick's worst-case spoil
+                          -- must fit before anything drains.
+                          plannedSpoil = case mSpoil of
+                              Nothing → 0
+                              Just (_, bulking) →
+                                  min amount (sumC oldCorners) * bulking
+                          capacity = case mSpoil of
+                              Nothing → 0
+                              Just (spoilId, _) →
+                                  spoilCapacity tileOk spoilId startV piles
+                          blocked = plannedSpoil > 0 ∧ capacity < plannedSpoil
+                      if blocked
+                        then logDebug logger CatWorld $
+                               "Dig blocked (no spoil room) at "
+                                 <> tshow gx <> "," <> tshow gy
+                        else do
+                          let corners' = drainCorners (ux, uy) (gx, gy)
+                                                      amount oldCorners
+                              drained  = sumC oldCorners - sumC corners'
+                          -- Route the spoil before the tile mutates so
+                          -- the legality predicate sees the pre-dig
+                          -- world (the dig tile is excluded by its own
+                          -- designation either way).
+                          case mSpoil of
+                              Nothing → pure ()
+                              Just (spoilId, bulking) | drained > 0 → do
+                                  let (piles', leftover) = depositSpoil
+                                          tileOk spoilId startV
+                                          (drained * bulking) piles
+                                  when (leftover > 0.001) $
+                                      logWarn logger CatWorld $
+                                          "Spoil leftover "
+                                            <> tshow leftover
+                                            <> " despite capacity check at "
+                                            <> tshow gx <> ","
+                                            <> tshow gy
+                                  writeIORef (wsSpoilRef ws) piles'
+                                  -- Promote any tile whose corners
+                                  -- completed a full level.
+                                  promoteFullSpoilTiles env unitQ logger
+                                      pageId ws startV
+                              _ → pure ()
+                          -- Chunk-yield accumulator: deterministic, per
+                          -- tile, scaled by the CURRENT digger's mining
+                          -- skill each tick (0.5 + skill/100 chunks per
+                          -- full tile = 4 corner-units). Whole chunks
+                          -- spawn as ground items at the dig site; the
+                          -- fractional remainder rides on the
+                          -- designation (and dies with it — one tile
+                          -- only provides what was extracted from it).
+                          chunkRemainder ← case mChunkItem of
+                              Nothing → pure (mdChunkProgress md)
+                              Just chunkDef | drained > 0 → do
+                                  let rate = (0.5 + skill / 100) / 4
+                                      p    = mdChunkProgress md
+                                           + drained * rate
+                                      n    = floor p ∷ Int
+                                  when (n > 0) $
+                                      spawnYieldItems env rngRef logger ws
+                                          chunkDef (gx, gy) n
+                                  pure (p - fromIntegral n)
+                              _ → pure (mdChunkProgress md)
+                          if cornersDone corners'
+                            then do
+                              -- Gem roll, once per COMPLETED tile: the
+                              -- seeded region field says which gem (if
+                              -- any) this area hosts and how rich it
+                              -- runs; the finishing digger's PERCEPTION
+                              -- scales the find chance (spotting the
+                              -- glint — deliberately not mining skill).
+                              when (maybe False mpDigGems mDigProps) $ do
+                                  paramsM ← readIORef (wsGenParamsRef ws)
+                                  let seed = maybe 0 (fromIntegral ∘ wgpSeed)
+                                                   paramsM
+                                  case gemChanceAt seed (gx, gy) percep of
+                                      Nothing → pure ()
+                                      Just (gemDef, chance) → do
+                                          roll ← atomicModifyIORef'
+                                              rngRef $ \g →
+                                              let (v, g') = randomR
+                                                      (0, 1 ∷ Float) g
+                                              in (g', v)
+                                          when (roll < chance) $
+                                              spawnYieldItems env rngRef
+                                                  logger ws gemDef (gx, gy) 1
+                              atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
+                                  (HM.delete (gx, gy) m, ())
+                              handleWorldDeleteTileCommand env logger pageId gx gy
+                            else do
+                              let md' = md { mdCorners = corners'
+                                           , mdChunkProgress = chunkRemainder }
+                              atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
+                                  (HM.insert (gx, gy) md' m, ())
+                              td ← readIORef (wsTilesRef ws)
+                              case lookupChunk digCoord td of
+                                  Nothing → pure ()
+                                  Just lc → do
+                                      let lc' = applyDigSlopeToChunk (gx, gy) md' lc
+                                      -- #1854 requirement 16: an edit that takes the tile's
+                                      -- rooted flora with it must take that plant's
+                                      -- designation and regrowth timer too, or an orphan
+                                      -- entry outlives the plant it addressed.
+                                      replaceChunkForgettingFlora ws lc lc'
+                                      bumpQuadCacheGen ws
+                                      writeIORef (wsZoomQuadCacheRef ws) Nothing
+                                      writeIORef (wsBgQuadCacheRef ws)   Nothing
+                                      -- #1858: a PARTIAL dig sheds the
+                                      -- tile's surface vegetation as soon
+                                      -- as one corner drops
+                                      -- ('applyDigSlopeToChunk'), and mine
+                                      -- admission does not exclude a tile
+                                      -- carrying a plant designation — so
+                                      -- this write, not the eventual tile
+                                      -- deletion, is where such a tile
+                                      -- stops being tilled soil.
+                                      _ ← revalidatePlantDesignations logger ws
+                                      -- #1844: the dig moved this tile's
+                                      -- resolved surface, so its own
+                                      -- structure designation (if any) is
+                                      -- re-checked against the 'cdZ' it
+                                      -- captured. Scoped to the dug tile.
+                                      _ ← revalidateConstructDesignations
+                                              env logger ws
+                                              (ConstructKeys [(gx, gy)])
+                                      pure ()
+
+-- | Whether a dig command's numeric payload may be acted on, warning
+--   once naming the first offending field when it may not (#2338).
+--
+--   The domains are 'World.Command.Types' — the same predicates
+--   @world.digTile@ refuses a call against — rather than a second
+--   opinion written here, so the boundary and the authority cannot
+--   drift. The shape is 'Unit.Thread.Command.MotionGuard''s (#2290).
+--
+--   Nothing the shipped engine can call reaches this: @world.digTile@
+--   is the only producer of 'World.Command.Types.WorldDigTile' and it
+--   refuses an out-of-domain value before the command is ever queued.
+--   It is kept anyway because the world queue is a seam a future
+--   producer can join without reading the verb it bypassed, and because
+--   the damage is silent rather than loud: a NaN amount makes every
+--   corner NaN, after which 'cornersDone' can never hold, the
+--   designation is unfinishable by any digger, and it is written into
+--   the next save verbatim. A skill of @1e9@ is worse than silent —
+--   'spawnYieldItems' would materialize millions of ground items on
+--   this thread inside one tick.
+--
+--   It runs BEFORE the page lookup, so a refused command leaves the
+--   designation map, the spoil piles, the ground items, the edit log
+--   and every follow-up this handler would queue exactly as they were.
+digPayloadOk ∷ LoggerState → WorldPageId → (Int, Int)
+             → [(Text, Float, Float → Bool)] → IO Bool
+digPayloadOk logger pageId (gx, gy) fields =
+    case [ (name, v) | (name, v, inDomain) ← fields, not (inDomain v) ] of
+        [] → pure True
+        ((field, value) : _) → do
             logWarn logger CatWorld $
-                "World not found for dig tile: " <> unWorldPageId pageId
-        Just ws → do
-            -- #1175: the mine designation this consumes is stored under a
-            -- CANONICAL key, so the tile is resolved into that frame before
-            -- anything is looked up — a dig job coord restored from a
-            -- pre-#1175 save can still be a u-alias, and a raw lookup would
-            -- silently find no designation and never progress it. The
-            -- digger's own position takes the SAME whole-tile shift: the wrap
-            -- is an isometry, so "which corner of the tile is the digger
-            -- nearest" (spoilStartVertex) stays the answer it was. Identity
-            -- away from the seam.
-            worldSize ← pageWrapWorldSize ws
-            let (digCoord, (digLx, digLy), (dgx, dgy)) =
-                    canonicalTileFrame worldSize rawGX rawGY
-                digIdx = columnIndex digLx digLy
-                gx = rawGX + dgx
-                gy = rawGY + dgy
-                ux = rawUX + fromIntegral dgx
-                uy = rawUY + fromIntegral dgy
-            desigs ← readIORef (wsMineDesignationsRef ws)
-            case HM.lookup (gx, gy) desigs of
-                Nothing → pure ()
-                Just md → do
-                    td0 ← readIORef (wsTilesRef ws)
-                    registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
-                    piles ← readIORef (wsSpoilRef ws)
-                    let oldCorners = mdCorners md
-                        sumC (a, b, c, d) = a + b + c + d
-                        -- Properties of the dug material (the
-                        -- column's cell at the designation z).
-                        mDigProps = do
-                            lc ← lookupChunk digCoord td0
-                            let col  = lcTiles lc V.! digIdx
-                                relZ = mdZ md - ctStartZ col
-                            matId ← if relZ ≥ 0
-                                       ∧ relZ < VU.length (ctMats col)
-                                    then Just (ctMats col VU.! relZ)
-                                    else Nothing
-                            pure (getMaterialProps registry
-                                      (MaterialId matId))
-                        mSpoil = do
-                            props ← mDigProps
-                            spoilName ← mpDigSpoil props
-                            spoilId ← materialIdByName registry spoilName
-                            pure (spoilId, mpDigBulking props)
-                        mChunkItem = mDigProps ⌦ mpDigChunk
-                        tileOk = spoilTileOk td0 desigs (mdZ md)
-                        startV = spoilStartVertex (ux, uy) (gx, gy)
-                        -- Refusal gate: this tick's worst-case spoil
-                        -- must fit before anything drains.
-                        plannedSpoil = case mSpoil of
-                            Nothing → 0
-                            Just (_, bulking) →
-                                min amount (sumC oldCorners) * bulking
-                        capacity = case mSpoil of
-                            Nothing → 0
-                            Just (spoilId, _) →
-                                spoilCapacity tileOk spoilId startV piles
-                        blocked = plannedSpoil > 0 ∧ capacity < plannedSpoil
-                    if blocked
-                      then logDebug logger CatWorld $
-                             "Dig blocked (no spoil room) at "
-                               <> tshow gx <> "," <> tshow gy
-                      else do
-                        let corners' = drainCorners (ux, uy) (gx, gy)
-                                                    amount oldCorners
-                            drained  = sumC oldCorners - sumC corners'
-                        -- Route the spoil before the tile mutates so
-                        -- the legality predicate sees the pre-dig
-                        -- world (the dig tile is excluded by its own
-                        -- designation either way).
-                        case mSpoil of
-                            Nothing → pure ()
-                            Just (spoilId, bulking) | drained > 0 → do
-                                let (piles', leftover) = depositSpoil
-                                        tileOk spoilId startV
-                                        (drained * bulking) piles
-                                when (leftover > 0.001) $
-                                    logWarn logger CatWorld $
-                                        "Spoil leftover "
-                                          <> tshow leftover
-                                          <> " despite capacity check at "
-                                          <> tshow gx <> ","
-                                          <> tshow gy
-                                writeIORef (wsSpoilRef ws) piles'
-                                -- Promote any tile whose corners
-                                -- completed a full level.
-                                promoteFullSpoilTiles env unitQ logger
-                                    pageId ws startV
-                            _ → pure ()
-                        -- Chunk-yield accumulator: deterministic, per
-                        -- tile, scaled by the CURRENT digger's mining
-                        -- skill each tick (0.5 + skill/100 chunks per
-                        -- full tile = 4 corner-units). Whole chunks
-                        -- spawn as ground items at the dig site; the
-                        -- fractional remainder rides on the
-                        -- designation (and dies with it — one tile
-                        -- only provides what was extracted from it).
-                        chunkRemainder ← case mChunkItem of
-                            Nothing → pure (mdChunkProgress md)
-                            Just chunkDef | drained > 0 → do
-                                let rate = (0.5 + skill / 100) / 4
-                                    p    = mdChunkProgress md
-                                         + drained * rate
-                                    n    = floor p ∷ Int
-                                when (n > 0) $
-                                    spawnYieldItems env rngRef logger ws
-                                        chunkDef (gx, gy) n
-                                pure (p - fromIntegral n)
-                            _ → pure (mdChunkProgress md)
-                        if cornersDone corners'
-                          then do
-                            -- Gem roll, once per COMPLETED tile: the
-                            -- seeded region field says which gem (if
-                            -- any) this area hosts and how rich it
-                            -- runs; the finishing digger's PERCEPTION
-                            -- scales the find chance (spotting the
-                            -- glint — deliberately not mining skill).
-                            when (maybe False mpDigGems mDigProps) $ do
-                                paramsM ← readIORef (wsGenParamsRef ws)
-                                let seed = maybe 0 (fromIntegral ∘ wgpSeed)
-                                                 paramsM
-                                case gemChanceAt seed (gx, gy) percep of
-                                    Nothing → pure ()
-                                    Just (gemDef, chance) → do
-                                        roll ← atomicModifyIORef'
-                                            rngRef $ \g →
-                                            let (v, g') = randomR
-                                                    (0, 1 ∷ Float) g
-                                            in (g', v)
-                                        when (roll < chance) $
-                                            spawnYieldItems env rngRef
-                                                logger ws gemDef (gx, gy) 1
-                            atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
-                                (HM.delete (gx, gy) m, ())
-                            handleWorldDeleteTileCommand env logger pageId gx gy
-                          else do
-                            let md' = md { mdCorners = corners'
-                                         , mdChunkProgress = chunkRemainder }
-                            atomicModifyIORef' (wsMineDesignationsRef ws) $ \m →
-                                (HM.insert (gx, gy) md' m, ())
-                            td ← readIORef (wsTilesRef ws)
-                            case lookupChunk digCoord td of
-                                Nothing → pure ()
-                                Just lc → do
-                                    let lc' = applyDigSlopeToChunk (gx, gy) md' lc
-                                    -- #1854 requirement 16: an edit that takes the tile's
-                                    -- rooted flora with it must take that plant's
-                                    -- designation and regrowth timer too, or an orphan
-                                    -- entry outlives the plant it addressed.
-                                    replaceChunkForgettingFlora ws lc lc'
-                                    bumpQuadCacheGen ws
-                                    writeIORef (wsZoomQuadCacheRef ws) Nothing
-                                    writeIORef (wsBgQuadCacheRef ws)   Nothing
-                                    -- #1858: a PARTIAL dig sheds the
-                                    -- tile's surface vegetation as soon
-                                    -- as one corner drops
-                                    -- ('applyDigSlopeToChunk'), and mine
-                                    -- admission does not exclude a tile
-                                    -- carrying a plant designation — so
-                                    -- this write, not the eventual tile
-                                    -- deletion, is where such a tile
-                                    -- stops being tilled soil.
-                                    _ ← revalidatePlantDesignations logger ws
-                                    -- #1844: the dig moved this tile's
-                                    -- resolved surface, so its own
-                                    -- structure designation (if any) is
-                                    -- re-checked against the 'cdZ' it
-                                    -- captured. Scoped to the dug tile.
-                                    _ ← revalidateConstructDesignations
-                                            env logger ws
-                                            (ConstructKeys [(gx, gy)])
-                                    pure ()
+                "WorldDigTile: " <> field <> " is out of domain ("
+                <> tshow value <> ") at " <> tshow gx <> "," <> tshow gy
+                <> " on page " <> unWorldPageId pageId
+                <> " — command dropped"
+            pure False
 
 -- | Spawn @n@ yield items (chunks, gems) as ground items scattered
 --   on the dig tile. Each gets a random sub-tile position, retried a

@@ -23,9 +23,14 @@ import Data.ByteString (ByteString)
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
 import qualified Engine.Core.Queue as Q
+import Engine.Core.Capability.Core (CoreCapability(..))
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
+import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Core.State (activeWorldPageFrom)
+import Engine.Scripting.Lua.API.World.DigArgs
+    ( defaultingPerception, defaultingSkill, readDigArg, readDigTileArg
+    , requiredAmount, requiredPosition, requiredTileCoordinate )
 import Location.Instance
     ( LocationInstance(..), LocationInstanceId(..)
     , instancesInChunk, lifecycleFromName )
@@ -328,33 +333,64 @@ worldAddTileFn wsc = do
 --   by tool × material speed (see getDigInfoAt). minerSkill (the
 --   current digger's mining skill; optional, defaults 0) scales the
 --   per-tick chunk-yield fill — pass it every tick so a mid-dig
---   handoff uses the new digger's rate.
-worldDigTileFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
-worldDigTileFn wsc = do
+--   handoff uses the new digger's rate. perception (optional, defaults
+--   1) scales the gem roll the completing tile makes.
+--
+--   Every numeric argument is judged against its own domain before
+--   anything is queued (#2338): @gx@ and @gy@ must name a tile, @ux@,
+--   @uy@ and @perception@ must be finite once narrowed to the 'Float'
+--   the command carries, @amount@ must additionally be non-negative,
+--   and @minerSkill@ must sit inside the 0–100 skill scale every
+--   engine-derived skill is already on. A violation warns once naming
+--   the verb, the argument and the value, and enqueues NOTHING — where
+--   it used to substitute a default or narrow a non-finite number into
+--   the mine state, which is durable and survives the save.
+--
+--   The two optional slots keep their defaults for an omitted or
+--   explicitly-@nil@ argument only. Anything else actually supplied —
+--   a table, a boolean, a numeric string — is a caller bug and refuses
+--   the call rather than quietly inheriting the default, matching the
+--   distinction 'Engine.Scripting.Lua.API.Units.MotionArgs' draws.
+worldDigTileFn ∷ CoreCapability → WorldSimCapability
+               → Lua.LuaE Lua.Exception Lua.NumResults
+worldDigTileFn cc wsc = do
     pageIdArg ← Lua.tostring 1
-    gxArg ← Lua.tonumber 2
-    gyArg ← Lua.tonumber 3
-    uxArg ← Lua.tonumber 4
-    uyArg ← Lua.tonumber 5
-    amtArg ← Lua.tonumber 6
-    skillArg ← Lua.tonumber 7
-    percepArg ← Lua.tonumber 8
-    case (pageIdArg, gxArg, gyArg, uxArg, uyArg, amtArg) of
-        (Just pageIdBS, Just gx, Just gy, Just ux, Just uy, Just amt) →
-            Lua.liftIO $ do
-                let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                    skill = case skillArg of
-                        Just (Lua.Number s) → realToFrac s
-                        _                   → 0
-                    percep = case percepArg of
-                        Just (Lua.Number s) → realToFrac s
-                        _                   → 1.0
-                Q.writeQueue (wsWorldQueue wsc) $
-                    WorldDigTile pageId (round gx) (round gy)
-                                 (realToFrac ux) (realToFrac uy)
-                                 (realToFrac amt) skill percep
-        _ → pure ()
-    return 0
+    gxArg     ← readDigTileArg 2
+    gyArg     ← readDigTileArg 3
+    uxArg     ← readDigArg 4
+    uyArg     ← readDigArg 5
+    amtArg    ← readDigArg 6
+    skillArg  ← readDigArg 7
+    percepArg ← readDigArg 8
+    case pageIdArg of
+        Nothing → return 0
+        Just pageIdBS → do
+            let verb = "world.digTile"
+                checked = (,,,,,)
+                    <$> requiredTileCoordinate verb "gx" gxArg
+                    ⊛ requiredTileCoordinate verb "gy" gyArg
+                    ⊛ requiredPosition verb "ux" uxArg
+                    ⊛ requiredPosition verb "uy" uyArg
+                    ⊛ requiredAmount verb "amount" amtArg
+                    ⊛ ((,) <$> defaultingSkill verb "minerSkill" 0 skillArg
+                           ⊛ defaultingPerception verb "perception" 1
+                                 percepArg)
+            case checked of
+                -- One warning per refused call, naming the FIRST
+                -- unusable slot: 'Either' short-circuits, so a call
+                -- with several bad arguments does not emit several
+                -- lines for what is one mistake.
+                Left why → Lua.liftIO $ do
+                    logger ← readIORef (ccLoggerRef cc)
+                    logWarn logger CatWorld why
+                    return 0
+                Right (gx, gy, ux, uy, amt, (skill, percep)) →
+                    Lua.liftIO $ do
+                        let pageId =
+                                WorldPageId (TE.decodeUtf8Lenient pageIdBS)
+                        Q.writeQueue (wsWorldQueue wsc) $
+                            WorldDigTile pageId gx gy ux uy amt skill percep
+                        return 0
 
 -- | world.deleteTile(pageId, gx, gy) → bool
 -- Enqueues a dig-1-Z-down edit at the given tile. The actual mutation
