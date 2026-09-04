@@ -19,6 +19,7 @@ import qualified Test.Headless.WorldGen.BorderProbe as BorderProbe
 import qualified Test.Headless.WorldGen.WrapSeam as WrapSeam
 import qualified Test.Headless.WorldGen.CoastBreach as CoastBreach
 import qualified Test.Headless.WorldGen.Breakthrough as Breakthrough
+import qualified Test.Headless.WorldGen.SharedSpillway as SharedSpillway
 import qualified Test.Headless.WorldGen.BedDepth as BedDepth
 import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.WorldGen.ConfigLoad as WorldGenConfigLoad
@@ -670,6 +671,7 @@ main = hspec $ do
     describe "Arena base seeding (#1718)" ArenaSeed.pureSpec
     describe "WorldGen.CoastBreach" CoastBreach.spec
     describe "WorldGen.Breakthrough" Breakthrough.spec
+    describe "shared lake spillways" SharedSpillway.spec
     describe "WorldGen.BedDepth" BedDepth.spec
     describe "WorldGen.FluidSurfaceFold" FluidSurfaceFold.spec
     -- #2286: filesystem + logger only. Deliberately OUTSIDE the shared

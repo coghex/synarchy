@@ -1200,6 +1200,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.WrapSeam
                    Test.Headless.WorldGen.CoastBreach
                    Test.Headless.WorldGen.Breakthrough
+                   Test.Headless.WorldGen.SharedSpillway
                    Test.Headless.WorldGen.BedDepth
                    Test.Headless.WorldGen.FluidSurfaceFold
                    Test.Headless.WorldGen.ConfigLoad

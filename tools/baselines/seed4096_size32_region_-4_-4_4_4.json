@@ -14,9 +14,9 @@
     "deterministic": true,
     "distinctHashes": 1,
     "hashes": [
-      "64c65e63f9fa030e9a6468c27b84fbf052eeb0badbf40ae2787eb61ba3e87c4f",
-      "64c65e63f9fa030e9a6468c27b84fbf052eeb0badbf40ae2787eb61ba3e87c4f",
-      "64c65e63f9fa030e9a6468c27b84fbf052eeb0badbf40ae2787eb61ba3e87c4f"
+      "44274c8aabdbe61d083807419d7d6d313ce52519441da265578939340c4f6e0f",
+      "44274c8aabdbe61d083807419d7d6d313ce52519441da265578939340c4f6e0f",
+      "44274c8aabdbe61d083807419d7d6d313ce52519441da265578939340c4f6e0f"
     ]
   },
   "tileCount": 20736,
@@ -27,21 +27,21 @@
     "count": 20736
   },
   "fluidStats": {
-    "dry": 12724,
+    "dry": 12726,
     "lake": 4605,
     "lava": 125,
     "ocean": 1630,
-    "river": 1652
+    "river": 1650
   },
   "fluidEnvelope": {
     "dry": {
-      "min": 12724,
-      "max": 12724,
-      "median": 12724,
+      "min": 12726,
+      "max": 12726,
+      "median": 12726,
       "all": [
-        12724,
-        12724,
-        12724
+        12726,
+        12726,
+        12726
       ]
     },
     "lake": {
@@ -75,13 +75,13 @@
       ]
     },
     "river": {
-      "min": 1652,
-      "max": 1652,
-      "median": 1652,
+      "min": 1650,
+      "max": 1650,
+      "median": 1650,
       "all": [
-        1652,
-        1652,
-        1652
+        1650,
+        1650,
+        1650
       ]
     }
   },
@@ -137,13 +137,13 @@
       ]
     },
     "ISOLATED_FLUID": {
-      "min": 28,
-      "max": 28,
-      "median": 28,
+      "min": 29,
+      "max": 29,
+      "median": 29,
       "all": [
-        28,
-        28,
-        28
+        29,
+        29,
+        29
       ]
     },
     "LAVA_RIM_INCOMPLETE": {
@@ -207,13 +207,13 @@
       ]
     },
     "WATER_WATER_CLIFF": {
-      "min": 1960,
-      "max": 1960,
-      "median": 1960,
+      "min": 1959,
+      "max": 1959,
+      "median": 1959,
       "all": [
-        1960,
-        1960,
-        1960
+        1959,
+        1959,
+        1959
       ]
     }
   },
@@ -224,14 +224,14 @@
       "FLOATING_LAKE": 1549,
       "FLOATING_WATER": 87,
       "ISLAND_1TILE": 5,
-      "ISOLATED_FLUID": 28,
+      "ISOLATED_FLUID": 29,
       "LAVA_RIM_INCOMPLETE": 1,
       "MID_RIVER_CLIFF": 27,
       "MULTI_ISLAND": 1,
       "RIVER_CHUNK_GAP": 11,
       "WATER_ABOVE_LAND": 138,
       "WATER_CLIFF": 138,
-      "WATER_WATER_CLIFF": 1960
+      "WATER_WATER_CLIFF": 1959
     },
     "issues": {
       "DESERT_SOIL_ON_SLOPE": [
@@ -8654,6 +8654,11 @@
           "x": 73,
           "y": 31,
           "details": "lake surf=23 surrounded by dry"
+        },
+        {
+          "x": 77,
+          "y": -51,
+          "details": "lake surf=170 surrounded by dry"
         },
         {
           "x": 77,
@@ -19913,11 +19918,6 @@
           "x": 76,
           "y": -54,
           "details": "river surf=183 -> water nbr surf=175 diff=8"
-        },
-        {
-          "x": 76,
-          "y": -53,
-          "details": "river surf=175 -> water nbr surf=170 diff=5"
         },
         {
           "x": 76,
