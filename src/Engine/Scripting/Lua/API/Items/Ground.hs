@@ -35,8 +35,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import Engine.Scripting.Lua.API.Units.Page (unitOwningWorldState)
-import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem
-                   , removeGroundItem)
+import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
 import Item.Materialize (ItemOverrides(..), materializeItem, pristineItem)
 import Item.Roll (GroundConditionBase, mkGroundConditionBase
                  , rollGroundCondition, rollGroundQuality)
@@ -44,6 +43,7 @@ import Item.Temperature (effectiveItemTemp)
 import Item.Types
 import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import World.Cursor.Types (CursorState(..))
+import World.GroundItems (takeGroundItemOnPage)
 import World.Types (WorldManager(..), WorldState(..), WorldPageId(..)
                    , WorldGenParams(..), wmWorlds)
 import World.Weather.Ambient (ambientTempAt)
@@ -348,9 +348,7 @@ worldSpawnLocationSignificantItemFn env = do
                                         -- ground rather than leaving an
                                         -- unowned duplicate reward.
                                         unless bound $ void $
-                                            atomicModifyIORef'
-                                                (wsGroundItemsRef ws)
-                                                (removeGroundItem gid)
+                                            takeGroundItemOnPage ws gid
                                         pure bound
         _ → pure False
     Lua.pushboolean filled
@@ -558,8 +556,7 @@ itemRemoveGroundFn env = do
                 Nothing → Lua.pushboolean False >> return 1
                 Just ws → do
                     mGi ← Lua.liftIO $
-                        atomicModifyIORef' (wsGroundItemsRef ws) $
-                            removeGroundItem (fromIntegral n)
+                        takeGroundItemOnPage ws (fromIntegral n)
                     Lua.pushboolean (isJust mGi)
                     return 1
         _ → Lua.pushboolean False >> return 1
@@ -686,7 +683,7 @@ itemPickupGroundFn env = do
 --   from" true by construction rather than by inspection.
 pickupGroundOnPage ∷ EngineEnv → WorldState → UnitId → Int → IO Bool
 pickupGroundOnPage env ws uid gid = do
-    mGi ← atomicModifyIORef' (wsGroundItemsRef ws) $ removeGroundItem gid
+    mGi ← takeGroundItemOnPage ws gid
     case mGi of
         -- Nothing was removed, so there is nothing to deselect either:
         -- a pre-removal failure leaves ground, unit and cursor exactly

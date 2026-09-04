@@ -208,6 +208,7 @@ divergence: loading used to merge, not replace" for the full writeup.
 | `wsOreSurveyRef` | Rebuild | loaded chunk/ore data | zoom-map survey memo, derived | none yet |
 | `wsMineDesignationsRef` | Persist exactly | — | `wpsMineDesignations` | `tools/persistence_contract_probe.py` (see §12) |
 | `wsGroundItemsRef` | Persist exactly | — | `wpsGroundItems` | `tools/item_instance_probe.py` |
+| `wsGroundItemLock` | Exclude | — | #2300: the mutex held while this page's ground-item map and the ground-item selection in `wsCursorRef` are decided together, so an existence check and the selection it authorises are one step with respect to any thread removing an item. Same standing as `wsInitQueueLock` above: a lock is not state a save could hold — it has no value, only an occupancy that is meaningless outside the process — and a fresh or loaded page gets a fresh one. Nothing derives from it; it is never read as gameplay state | hspec `--match "ground item selection"` |
 | `wsSpoilRef` | Persist exactly | — | `wpsSpoilPiles` | `tools/persistence_contract_probe.py` (see §12) |
 | `wsStructureStageRef` | Exclude | — | explicitly never saved; in-progress structure placement must finish or be abandoned by the snapshot boundary (contract §3) | `tools/location_stamp_idempotent_probe.py` (idempotency, not this state directly) |
 | `wsConstructDesignationsRef` | Persist exactly | — | `wpsConstructDesignations` | `tools/construction_probe.py` |
