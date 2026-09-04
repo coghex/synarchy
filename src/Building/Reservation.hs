@@ -60,7 +60,6 @@ module Building.Reservation
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Data.IORef (IORef, atomicModifyIORef')
 import Building.Types
 import World.Generate.Coordinates (canonicalTile)
 import World.Page.Types (WorldPageId)
@@ -144,33 +143,34 @@ footprintClear worldSize ax ay w h held =
 --   left behind — so requirement 3's "a lost race leaks nothing" holds
 --   by construction rather than by a cleanup path that could be missed.
 --
+--   Shaped for 'Data.IORef.atomicModifyIORef'', which is where the
+--   test, the allocation and the record become one critical section.
+--
 --   The anchor must already be canonical ('World.Generate.Coordinates.
 --   canonicalTile'), as both call sites resolve it before validating.
 reserveFootprint
-    ∷ IORef BuildingManager
-    → Int              -- ^ world size in chunks
+    ∷ Int              -- ^ world size in chunks
     → WorldPageId      -- ^ the page this placement lands on
     → BuildingDef
     → Int → Int        -- ^ canonical anchor
-    → IO (Either Text BuildingId)
-reserveFootprint ref worldSize pid def gx gy =
-    atomicModifyIORef' ref $ \bm →
-        if not (footprintClear worldSize gx gy (bdTileW def) (bdTileH def)
-                    (tilesHeldOnPage worldSize pid (bmInstances bm)
-                                     (bmReservations bm)))
-        then (bm, Left occupancyConflictReason)
-        else
-            let (bid, bm') = nextBuildingId bm
-                res = FootprintReservation
-                    { frPage    = pid
-                    , frAnchorX = gx
-                    , frAnchorY = gy
-                    , frTileW   = bdTileW def
-                    , frTileH   = bdTileH def
-                    }
-            in ( bm' { bmReservations =
-                            HM.insert bid res (bmReservations bm') }
-               , Right bid )
+    → BuildingManager
+    → (BuildingManager, Either Text BuildingId)
+reserveFootprint worldSize pid def gx gy bm
+    | not (footprintClear worldSize gx gy (bdTileW def) (bdTileH def)
+              (tilesHeldOnPage worldSize pid (bmInstances bm)
+                               (bmReservations bm)))
+        = (bm, Left occupancyConflictReason)
+    | otherwise =
+        let (bid, bm') = nextBuildingId bm
+            res = FootprintReservation
+                { frPage    = pid
+                , frAnchorX = gx
+                , frAnchorY = gy
+                , frTileW   = bdTileW def
+                , frTileH   = bdTileH def
+                }
+        in ( bm' { bmReservations = HM.insert bid res (bmReservations bm') }
+           , Right bid )
 
 -- | The commit half, as a PURE manager transition so its caller can run
 --   it inside the very 'Data.IORef.atomicModifyIORef'' that inserts the
@@ -225,9 +225,9 @@ commitFootprint worldSize pid bid gx gy w h bm = (retired, accepted)
 --   commit: its world went away (#58), its def is unknown, or its page
 --   binding went stale (#1602). Idempotent, and harmless for a request
 --   that never held one.
-releaseReservation ∷ IORef BuildingManager → BuildingId → IO ()
-releaseReservation ref bid = atomicModifyIORef' ref $ \bm →
-    (bm { bmReservations = HM.delete bid (bmReservations bm) }, ())
+releaseReservation ∷ BuildingId → BuildingManager → BuildingManager
+releaseReservation bid bm =
+    bm { bmReservations = HM.delete bid (bmReservations bm) }
 
 -- | Drop every outstanding reservation — the teardown case. Runs with
 --   @BuildingClearAll@, which is enqueued behind every pending spawn

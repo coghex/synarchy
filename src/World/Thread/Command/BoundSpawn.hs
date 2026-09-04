@@ -21,7 +21,7 @@ module World.Thread.Command.BoundSpawn
     ) where
 
 import UPrelude
-import Data.IORef (readIORef)
+import Data.IORef (atomicModifyIORef', readIORef)
 import Building.Thread.Command (applyBuildingSpawn)
 import Building.Reservation (releaseReservation)
 import Building.Types (BuildingId(..))
@@ -67,8 +67,12 @@ handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     if wmSelectionGen mgr ≢ bindGen
     then do
-        releaseReservation
-            (bcBuildingManagerRef (toBuildingCapability env)) bid
+        -- #2326: the claim @building.spawn@ took for this placement is
+        -- retired here, through the capability accessor, so the write
+        -- stays attributable to this module.
+        atomicModifyIORef'
+            (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
+                (releaseReservation bid bm, ())
         logDebug logger CatWorld $
             "Bound building placement dropped: page selection moved since "
             <> "the click (" <> defName <> " on " <> unWorldPageId pageId

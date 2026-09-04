@@ -29,7 +29,8 @@ import Building.Destruction
     ( captureDestructionEffect, destructionExpired
     , pruneExpiredDestructions )
 import Building.Knowledge (SeedTrigger(..), seedTriggerFor)
-import Building.Reservation (commitFootprint, clearReservations, releaseReservation)
+import Building.Reservation
+    (clearReservations, commitFootprint, releaseReservation)
 import Building.Knowledge.Live
     ( containerObserver, forgetAllContainers, forgetContainerEverywhere
     , markPendingSeed, sweepPendingSeeds )
@@ -192,9 +193,9 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
         -- #2326: every path that drops the spawn retires its footprint
         -- reservation on the way out, so a claim can outlive the request
         -- that took it only for as long as that request is in flight.
-        _ | worldGone → releaseReservation (bcBuildingManagerRef bld) bid
+        _ | worldGone → releaseClaim
         Nothing → do
-            releaseReservation (bcBuildingManagerRef bld) bid
+            releaseClaim
             logWarn logger CatThread $
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
@@ -264,3 +265,10 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
             -- progress crossing.
             when (committed ∧ seedTriggerFor def ≡ SeedWhenBuilt) $
                 markPendingSeed (containerObserver bld sim reg) bid
+  where
+    -- #2326: retire this request's footprint claim. Spelled out here,
+    -- through the capability accessor, rather than behind a helper
+    -- taking the handle: that is what keeps the write attributable to
+    -- this module in the SS5 writing-module map.
+    releaseClaim = atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+        (releaseReservation bid bm', ())

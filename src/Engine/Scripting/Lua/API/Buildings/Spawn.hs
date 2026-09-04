@@ -16,7 +16,7 @@ import Engine.Core.Capability.WorldSim
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import Engine.Core.State (EngineEnv, activeWorldPageFrom, resolveActiveWorld)
 import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
@@ -131,10 +131,11 @@ buildingSpawnFn env = do
                                 -- request reading that same snapshot,
                                 -- and what refuses this one — with no id
                                 -- consumed — when it lost the race.
-                                eBid ← reserveFootprint
+                                eBid ← atomicModifyIORef'
                                     (bcBuildingManagerRef
                                         (toBuildingCapability env))
-                                    worldSizeChunks pid def cgx cgy
+                                    (reserveFootprint worldSizeChunks
+                                                      pid def cgx cgy)
                                 case eBid of
                                     Left reason → pure (Left reason)
                                     Right bid → do

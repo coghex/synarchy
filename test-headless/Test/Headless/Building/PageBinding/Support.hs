@@ -388,7 +388,8 @@ admitPlacement env pid defName (gx, gy) = do
     size ← case lookup pid (wmWorlds wm) of
         Nothing → fail ("admitPlacement: no page " <> show pid)
         Just ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws)
-    eBid ← reserveFootprint (buildingManagerRef env) size pid def gx gy
+    eBid ← atomicModifyIORef' (buildingManagerRef env)
+                              (reserveFootprint size pid def gx gy)
     case eBid of
         Right bid  → pure bid
         Left reason → fail ("admitPlacement refused: " <> T.unpack reason)

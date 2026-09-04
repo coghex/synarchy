@@ -227,10 +227,11 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                             -- its original index, no BuildingId is
                             -- consumed, and no PowerNode is ever created
                             -- for a building that will not commit.
-                            eBid ← reserveFootprint
+                            eBid ← atomicModifyIORef'
                                 (bcBuildingManagerRef
                                     (toBuildingCapability env))
-                                worldSizeChunks pid def cgx cgy
+                                (reserveFootprint worldSizeChunks
+                                                  pid def cgx cgy)
                             case eBid of
                                 Left reason → do
                                     rollback item ix
