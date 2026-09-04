@@ -52,6 +52,7 @@ import qualified Engine.Core.Queue as Q
 import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
+import Building.Reservation (reserveFootprint)
 import Location.Instance (emptyLocationInstances)
 import Craft.Bills (BillId(..))
 import Craft.Types (RecipeDef(..), lookupRecipe)
@@ -167,6 +168,13 @@ powerPlaceNodeFn env = do
 --   so the comparison and the removal have to be the one critical
 --   section. 'Unit.Selection.onActivePage' enforces the same equality
 --   for selection.
+--
+--   #2326 orders the rest for the same reason. The footprint is CLAIMED
+--   before the two side effects that would otherwise have to be undone:
+--   a placement that loses the footprint race is refused on the ordinary
+--   rejection path — item restored at its original index, no id
+--   consumed — instead of leaving a 'PowerNode' pointing at a building
+--   that never commits.
 placeNodeOn ∷ EngineEnv → WorldState → WorldPageId → Text → UnitId → Int → Int
             → PowerRole → Float → IO (Either Text (PowerNodeId, BuildingId))
 placeNodeOn env ws pid defName uid gx gy role param = do
@@ -210,15 +218,31 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                             pure (Left reason)
                         Placeable → do
                             let gz = floorZAt worldSizeChunks wtd cgx cgy
-                            bid ← atomicModifyIORef'
-                                    (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
-                                        let (bid', bm'') = nextBuildingId bm'
-                                        in (bm'', bid')
-                            Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-                                BuildingSpawn bid defName cgx cgy gz pid
-                            nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
-                                addPowerNode bid role param
-                            pure (Right (nid, bid))
+                            -- #2326: claim the footprint and allocate
+                            -- the id in ONE transaction, and do it
+                            -- BEFORE either irreversible side effect
+                            -- below. A node placement that loses the
+                            -- race is refused exactly like an ordinary
+                            -- placement refusal: the item goes back at
+                            -- its original index, no BuildingId is
+                            -- consumed, and no PowerNode is ever created
+                            -- for a building that will not commit.
+                            eBid ← reserveFootprint
+                                (bcBuildingManagerRef
+                                    (toBuildingCapability env))
+                                worldSizeChunks pid def cgx cgy
+                            case eBid of
+                                Left reason → do
+                                    rollback item ix
+                                    pure (Left reason)
+                                Right bid → do
+                                    Q.writeQueue
+                                        (bcBuildingQueue
+                                            (toBuildingCapability env)) $
+                                        BuildingSpawn bid defName cgx cgy gz pid
+                                    nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
+                                        addPowerNode bid role param
+                                    pure (Right (nid, bid))
   where
     WorldPageId pidText = pid
     -- Splice the popped instance back at its ORIGINAL index — list

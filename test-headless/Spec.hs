@@ -282,6 +282,8 @@ import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
+import qualified Test.Headless.Building.FootprintExclusivity
+    as BuildingFootprintExclusivity
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
@@ -943,6 +945,10 @@ main = hspec $ do
     -- "nothing was committed" is asserted on the queue itself.
     BuildingPageBinding.spec
     BuildingPortalSpawnBinding.spec
+    -- #2326: its own headless engine for the same reason — an admitted
+    -- spawn must sit in its queue until an example drains it, so
+    -- "against one pre-commit snapshot" is a controlled state.
+    BuildingFootprintExclusivity.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec

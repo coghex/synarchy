@@ -290,9 +290,15 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                   -- save taken during playback holds neither the
                   -- demolished building nor its presentation, and the
                   -- replacement session starts with none.
+                  -- No footprint reservation survives a load either
+                  -- (#2326): a placement admitted in the outgoing
+                  -- session has no claim on the incoming one's tiles,
+                  -- and its queued spawn is refused at commit for
+                  -- exactly that reason.
                   finalBuildings = BuildingManager
                       { bmDefs = buildingDefs, bmInstances = mergedBuildings
                       , bmNextId = nextBid, bmSelected = Nothing
+                      , bmReservations = HM.empty
                       , bmDestructions = HM.empty }
                   finalUnits = UnitManager
                       { umDefs = unitDefs, umInstances = mergedUnits

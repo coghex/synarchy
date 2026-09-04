@@ -16,7 +16,7 @@ import Engine.Core.Capability.WorldSim
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
+import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv, activeWorldPageFrom, resolveActiveWorld)
 import World.Page.Types (WorldPageId(..))
 import qualified Engine.Core.Queue as Q
@@ -27,6 +27,7 @@ import Building.Placement
     ( buildingAnchorZ, canPlaceAt, PlacementResult(..), RemoteCheck(..)
     , remoteCheck, isRemote
     )
+import Building.Reservation (reserveFootprint)
 import Location.Bounds (remotePortalThresholdTiles)
 import World.Types
     ( WorldManager(..), WorldState(..), WorldGenParams(..) )
@@ -40,7 +41,8 @@ import Location.Instance (emptyLocationInstances)
 
 -- | building.spawn(defName, gx, gy [, pageId [, bindGen]]) — returns the
 --   new building id on success, or @(nil, reason)@ otherwise (unknown
---   def, placement invalid, stale page binding). Placement is validated
+--   def, placement invalid, footprint already claimed, stale page
+--   binding). Placement is validated
 --   server-side too so Lua scripts can't accidentally place into water
 --   etc. An explicit pageId (slot 4) pins the spawn — AND the
 --   occupancy/terrain-Z check — to that live page (even hidden) instead
@@ -56,6 +58,15 @@ import Location.Instance (emptyLocationInstances)
 --   move between the check and the resolution: a mismatch spawns
 --   nothing and answers @(nil, "page binding stale")@, distinct from
 --   every ordinary placement refusal.
+--
+--   #2326: the placement check above is ADVISORY — it reads a manager
+--   snapshot, and the insertion happens later on another thread. What
+--   is authoritative is the 'Building.Reservation.reserveFootprint'
+--   transaction that follows it: the footprint claim and the
+--   'BuildingId' allocation are taken together, so a second request
+--   admitted against that same snapshot is refused here, synchronously,
+--   with @(nil, "tile already occupied")@ and no id consumed. The
+--   commit re-verifies that claim before it inserts.
 --
 --   That is the SYNCHRONOUS half, and it is what this call owes its
 --   caller — but it is not the commit, and this thread cannot make it
@@ -112,13 +123,24 @@ buildingSpawnFn env = do
                             NotPlaceable reason → pure (Left reason)
                             Placeable → do
                                 let gz = floorZAt worldSizeChunks wtd cgx cgy
-                                bid ← atomicModifyIORef'
-                                        (bcBuildingManagerRef (toBuildingCapability env)) $ \bm' →
-                                            let (bid', bm'') = nextBuildingId bm'
-                                            in (bm'', bid')
-                                enqueueSpawn env bindArg
-                                    bid defName cgx cgy gz pid
-                                pure (Right bid)
+                                -- #2326: the id allocation and the
+                                -- footprint claim are ONE transaction.
+                                -- The check above ran against a snapshot
+                                -- and is advisory; this is what makes
+                                -- the tiles unavailable to the next
+                                -- request reading that same snapshot,
+                                -- and what refuses this one — with no id
+                                -- consumed — when it lost the race.
+                                eBid ← reserveFootprint
+                                    (bcBuildingManagerRef
+                                        (toBuildingCapability env))
+                                    worldSizeChunks pid def cgx cgy
+                                case eBid of
+                                    Left reason → pure (Left reason)
+                                    Right bid → do
+                                        enqueueSpawn env bindArg
+                                            bid defName cgx cgy gz pid
+                                        pure (Right bid)
                     (_, Nothing, _) → pure (Left "unknown building")
                     (_, _, Nothing)  → pure (Left "no active world")
             case result of
@@ -153,6 +175,14 @@ buildingDestroyFn env = do
 --   @(true, nil, false)@ on success or @(false, reason, stale)@ on
 --   rejection. Cheap to call every frame from the build tool's ghost
 --   preview update.
+--
+--   ADVISORY, and deliberately so (#2326 requirement 4). It is an early
+--   diagnostic and the page-binding probe, not the authority on whether
+--   the tiles are free: it reports on a manager snapshot any concurrent
+--   admission can move, and it deliberately ignores 'bmReservations' so
+--   a ghost is never greyed out by a placement that has not landed.
+--   @building.spawn@'s own reservation transaction is what actually
+--   decides, and a true answer here can still be refused there.
 --
 --   #1602: ONE 'wsWorldManagerRef' read now answers the whole call. The
 --   page identity, the page-scoped occupancy filter, the location
