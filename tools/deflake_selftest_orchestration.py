@@ -40,7 +40,8 @@ import probe_census  # type: ignore  # noqa: E402
 # `os.fsync` -- are reached through the STORAGE owner, which is the
 # module that stages and fsyncs a census write since #2131.
 import probe_census_storage as census_storage  # type: ignore  # noqa: E402
-import probe_claim  # type: ignore  # noqa: E402
+import probe_claim_lease as claim_lease  # type: ignore  # noqa: E402
+import probe_claim_storage as claim_storage  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
 import probe_select  # type: ignore  # noqa: E402
@@ -271,7 +272,7 @@ def test_a_lost_selection_to_claim_race_does_nothing_at_all() -> None:
         resources: list = []
 
         def denied(probe, **kw):
-            raise probe_claim.ClaimDenied(probe, owner="another agent",
+            raise claim_lease.ClaimDenied(probe, owner="another agent",
                                           age_seconds=12.0)
 
         def take(probe, **kw):
@@ -371,28 +372,28 @@ def test_the_claimed_set_keeps_a_held_probe_out_of_selection() -> None:
     scratch = Scratch()
     try:
         # A real claim file, written by the real claim module.
-        claim = probe_claim.acquire(PROBE, root=scratch.claims,
+        claim = claim_lease.acquire(PROBE, root=scratch.claims,
                                     lease_seconds=600.0)
         try:
             held = deflake.claimed_probe_keys(
                 registry={PROBE: "a", OTHER: "b"}, root=scratch.claims,
-                now=probe_claim.utc_now())
+                now=claim_storage.utc_now())
             expect(held == {PROBE},
                    f"the held probe is reported as claimed ({held})")
         finally:
             claim.release()
         held = deflake.claimed_probe_keys(
             registry={PROBE: "a", OTHER: "b"}, root=scratch.claims,
-            now=probe_claim.utc_now())
+            now=claim_storage.utc_now())
         expect(held == set(),
                f"and nothing is claimed once it is released ({held})")
         # An EXPIRED claim is not a live one: the lease is what decides.
-        expired = probe_claim.acquire(OTHER, root=scratch.claims,
+        expired = claim_lease.acquire(OTHER, root=scratch.claims,
                                       lease_seconds=0.01)
         time.sleep(0.05)
         held = deflake.claimed_probe_keys(
             registry={PROBE: "a", OTHER: "b"}, root=scratch.claims,
-            now=probe_claim.utc_now())
+            now=claim_storage.utc_now())
         expect(held == set(),
                f"a lapsed claim does not keep a probe out of selection "
                f"({held})")

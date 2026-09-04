@@ -2,11 +2,11 @@
 """`/deflake`: one bounded probe census measurement, end to end (#1436).
 
 Five components each answer one question and none of them runs anything:
-`probe_select` (#1435) picks a probe, `probe_claim` (#1434) makes it
-this agent's, `probe_resource_lock` (#1436) keeps a foreign engine out
-of the tracked files it touches, `probe_flake` (#1425) measures it, and
-`probe_census` (#1428/#1429) records the result. This is the
-orchestration that puts them in order:
+`probe_select` (#1435) picks a probe, the `probe_claim_*` owners
+(#1434, #2148) make it this agent's, `probe_resource_lock` (#1436)
+keeps a foreign engine out of the tracked files it touches,
+`probe_flake` (#1425) measures it, and `probe_census` (#1428/#1429)
+records the result. This is the orchestration that puts them in order:
 
     python3 tools/deflake.py
 
@@ -106,9 +106,10 @@ ingestion and after a successful release, and only then does the
 invocation report `recorded`.
 
 A `recorded` outcome does not guarantee a retained result to sit beside:
-`probe_claim.retain_measurement` can fail while the ingestion that
-follows it succeeds. That, and a handoff that cannot be written, are the
-nonzero `managed-error` — the census update has already committed, is
+`probe_claim_orchestration.retain_measurement` can fail while the
+ingestion that follows it succeeds. That, and a handoff that cannot be
+written, are the nonzero `managed-error` — the census update has
+already committed, is
 append-only, and is neither retried nor rolled back, so both facts are
 reported and `handoff_document` stays null. The outcome vocabulary does
 not grow: an eleventh step that invented a new one would make every
@@ -185,7 +186,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_census  # noqa: E402
-import probe_claim  # noqa: E402
+import probe_claim_lease as claim_lease  # noqa: E402
+import probe_claim_orchestration as claim_orchestration  # noqa: E402
+import probe_claim_storage as claim_storage  # noqa: E402
 import probe_engine  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
@@ -360,11 +363,11 @@ def claimed_probe_keys(*, registry, root, now) -> set:
     An OPTIMIZATION, and only that: it keeps the selector from choosing
     a probe whose claim is certainly unavailable, so a busy roster
     reports "everything is claimed" instead of losing a race. The
-    authority on ownership is `probe_claim.acquire`, which is why losing
+    authority on ownership is `claim_lease.acquire`, which is why losing
     that race anyway is a first-class outcome rather than an error.
 
     A claim file that cannot be read at all is treated as OCCUPIED —
-    the same safe direction `probe_claim.acquire` takes with one.
+    the same safe direction `claim_lease.acquire` takes with one.
     """
     base = Path(root)
     claimed = set()
@@ -372,13 +375,13 @@ def claimed_probe_keys(*, registry, root, now) -> set:
         return claimed
     for key in sorted(registry):
         try:
-            document = probe_claim.read_claim(key, root=base)
-        except probe_claim.ClaimError:
+            document = claim_lease.read_claim(key, root=base)
+        except claim_storage.ClaimError:
             claimed.add(key)
             continue
         if document is None:
             continue
-        expires = probe_claim.parse_stamp(document.get("expires_at"))
+        expires = claim_storage.parse_stamp(document.get("expires_at"))
         if expires is not None and now < expires:
             claimed.add(key)
     return claimed
@@ -533,7 +536,7 @@ def write_handoff(path, document) -> str | None:
 def _require_commit(value, what: str) -> str:
     """A resolved full commit identity, or None.
 
-    `probe_flake._commit_sha` and `probe_claim.commit_sha` both answer
+    `probe_flake._commit_sha` and `claim_storage.commit_sha` both answer
     the literal string `unknown` when git could not be consulted, and
     `ingest_result` would key a cohort on that string. Refusing it here
     is what stops a fabricated cohort forming.
@@ -551,7 +554,7 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
                        namespace=None, artifact_root=None, result_path=None,
                        runs: int = CENSUS_RUN_COUNT,
                        rts_caps: int = RTS_CAPABILITIES,
-                       lease_seconds: float = probe_claim.LEASE_SECONDS,
+                       lease_seconds: float = claim_lease.LEASE_SECONDS,
                        now=None,
                        stale_after_seconds=probe_census.DEFAULT_STALE_AFTER_SECONDS,
                        inputs=None, load_census=None, claimed=None,
@@ -571,7 +574,8 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
     moment = now if now is not None else datetime.datetime.now(datetime.timezone.utc)
     live = inputs if inputs is not None else probe_select.live_inputs()
     read_census = load_census if load_census is not None else probe_census.load
-    take_claim = acquire_claim if acquire_claim is not None else probe_claim.acquire
+    take_claim = (acquire_claim if acquire_claim is not None
+                  else claim_lease.acquire)
     take_resources = (acquire_resources if acquire_resources is not None
                       else _acquire_probe_resources)
     prepare = (prepare_engine if prepare_engine is not None
@@ -589,7 +593,7 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
     observed_argv = list(sys.argv) if argv is None else list(argv)
     observed_cwd = os.getcwd() if cwd is None else str(cwd)
     read_head = (head_commit if head_commit is not None
-                 else (lambda: probe_claim.commit_sha(repo_root)))
+                 else (lambda: claim_storage.commit_sha(repo_root)))
 
     def say(message: str) -> None:
         if announce is not None:
@@ -615,11 +619,11 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
 
     try:
         claim_base = (Path(claim_root) if claim_root is not None
-                      else probe_claim.repository_claim_root(repo_root))
+                      else claim_storage.repository_claim_root(repo_root))
         held = (set(claimed) if claimed is not None
                 else claimed_probe_keys(registry=live["registry"],
                                         root=claim_base, now=moment))
-    except probe_claim.ClaimError as error:
+    except claim_storage.ClaimError as error:
         return Result(OUTCOME_MANAGED_ERROR,
                       detail=f"the claim namespace is unusable ({error})",
                       census_path=target)
@@ -648,14 +652,14 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
     try:
         claim = take_claim(probe, root=claim_base, lease_seconds=lease_seconds,
                            repo_root=repo_root)
-    except probe_claim.ClaimDenied as denied:
+    except claim_lease.ClaimDenied as denied:
         # The selection-to-claim race, lost. Nothing was measured, nothing
         # was written, the winner's claim is untouched, and no second
         # probe is selected.
         return Result(OUTCOME_CLAIM_BUSY, probe=probe,
                       detail=denied.describe(), census_path=target,
                       rung=selection.rung, skipped=_skip_report(selection))
-    except probe_claim.ClaimError as error:
+    except claim_storage.ClaimError as error:
         return Result(OUTCOME_MANAGED_ERROR, probe=probe, detail=str(error),
                       census_path=target)
 
@@ -697,14 +701,14 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
 def _release(claim) -> str | None:
     """Give the claim back; return the problem if that failed.
 
-    Token-checked by `probe_claim.Claim.release`, so a claim that has
+    Token-checked by `claim_lease.Claim.release`, so a claim that has
     already lapsed and been taken over is LEFT where it is rather than
     deleted out from under its successor.
     """
     try:
         claim.release()
         return None
-    except probe_claim.ClaimError as error:
+    except claim_storage.ClaimError as error:
         return str(error)
 
 
@@ -806,9 +810,9 @@ def _build_recorded_handoff(*, measurement, retained, recorded_row, probe,
     attribute it to this measurement.
 
     A `recorded` outcome does not guarantee a retained result path —
-    `probe_claim.retain_measurement` may fail while the census ingestion
-    that follows it succeeds — and there is nowhere to put a sibling
-    document without one.
+    `probe_claim_orchestration.retain_measurement` may fail while the
+    census ingestion that follows it succeeds — and there is nowhere to
+    put a sibling document without one.
     """
     if retained is None:
         return None, ("the completed measurement was not retained, so there "
@@ -868,7 +872,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
     record = claim.census_record(commit_sha=captured, requested_runs=runs)
     try:
         claim.commit_while_held(lambda: log_claim(target, probe, record))
-    except probe_claim.ClaimLost as error:
+    except claim_lease.ClaimLost as error:
         # Acquired, then lost before anything ran. Nothing was measured
         # and nothing was written, which is the same shape as losing the
         # race in the first place. `release` is token-checked, so the
@@ -946,7 +950,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             # claim exists to prevent.
             try:
                 claim.reassert()
-            except probe_claim.ClaimLost as error:
+            except claim_lease.ClaimLost as error:
                 return _no_work(OUTCOME_CLAIM_BUSY, claim, detail=(
                     f"the claim was lost before the measurement started "
                     f"({error}); the probe was not run"),
@@ -977,7 +981,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
                     commit=captured, **common)
             say(f"measuring {probe!r}: {runs} runs at {rts_caps} RTS "
                 f"capabilities")
-            with probe_claim.Renewer(claim):
+            with claim_lease.Renewer(claim):
                 measurement = run_measure(probe, runs,
                                           artifact_root=artifact_root,
                                           rts_caps=rts_caps,
@@ -1000,7 +1004,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
     # `run_one` has reaped each run's whole process group.
 
     # ---- 8. Retain, before anything that can fail -----------------------
-    retained, retain_problem = probe_claim.retain_measurement(
+    retained, retain_problem = claim_orchestration.retain_measurement(
         measurement, result_path)
     artifacts = measurement.retained_artifacts()
     common["measurement"] = measurement
@@ -1049,7 +1053,7 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             f"and no compensating record was appended, the claim (token "
             f"{claim.token}) is left for TTL recovery, and {kept}"),
             ownership=OWNERSHIP_CLAIM_HELD, commit=captured, **common)
-    except probe_claim.ClaimLost as error:
+    except claim_lease.ClaimLost as error:
         # Another agent may have been measuring the same probe, so this
         # result is not the exclusive observation the census records.
         problem = _release(claim)

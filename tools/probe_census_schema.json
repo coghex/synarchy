@@ -285,7 +285,7 @@
     },
 
     "claim": {
-      "$comment": "Exactly what probe_claim.Claim.census_record() writes: one successful acquisition of the per-probe lock, recorded BEFORE the measurement it authorizes runs. `token` is the acquisition token and the idempotency key -- replaying the same acquisition must remain one record, and the same token carrying different metadata is refused rather than appended.",
+      "$comment": "Exactly what probe_claim_lease.Claim.census_record() writes: one successful acquisition of the per-probe lock, recorded BEFORE the measurement it authorizes runs. `token` is the acquisition token and the idempotency key -- replaying the same acquisition must remain one record, and the same token carrying different metadata is refused rather than appended.",
       "type": "object",
       "required": ["token", "timestamp_utc", "commit_sha", "owner", "host",
                    "pid", "lease_seconds", "requested_runs"],
