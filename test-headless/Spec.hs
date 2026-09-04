@@ -161,6 +161,7 @@ import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefus
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Craft.OutputIdentity as CraftOutputIdentity
+import qualified Test.Headless.Craft.BillPageBinding as CraftBillPageBinding
 import qualified Test.Headless.Craft.BillReconcile as CraftBillReconcile
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
@@ -708,6 +709,12 @@ main = hspec $ do
     -- manager refs, exactly like the ItemCondition gate above. It needs
     -- no world -- craft.execute reads none.
     aroundAll withHeadlessEngineNoWorld CraftOutputIdentity.spec
+    -- Own engine (#2325): the bill page-binding gate installs its own
+    -- TWO-page world manager (each page carrying a bill numbered 1) and
+    -- rewrites the item, recipe, unit and building manager refs, so it
+    -- cannot share the worldgen engine. Both pages are in-memory
+    -- emptyWorldStates -- the craft-bill verbs read no terrain.
+    aroundAll withHeadlessEngineNoWorld CraftBillPageBinding.spec
     -- Own engine (#1716): the live unit.feed gate WRITES the item and
     -- unit manager refs, so it cannot share the worldgen engine. It
     -- needs no world at all -- unit.feed reads neither.

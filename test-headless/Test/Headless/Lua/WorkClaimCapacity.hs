@@ -312,9 +312,13 @@ craftPrelude sh = lns
     , "  getStorage = function() return {} end,"
     , "  getInfo = function(bid) return STATIONS[bid] end }"
     , "power = { isStationPoweredForRecipe = function() return true end }"
+    -- #2325: the bill lifecycle verbs take the ACTING UNIT first, so
+    -- these stubs must too — a 1-arg getBill stub would answer nil for
+    -- every production call and this fixture would stop reaching the
+    -- claim path it exists to count.
     , "craft = {"
     , "  getBills = function() return BILLS end,"
-    , "  getBill = function(id)"
+    , "  getBill = function(_uid, id)"
     , "    for _, b in ipairs(BILLS) do if b.id == id then return b end end"
     , "  end,"
     , "  get = function(rid) return RECIPES[rid] end,"

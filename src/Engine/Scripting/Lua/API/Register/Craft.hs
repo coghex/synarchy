@@ -32,12 +32,26 @@ registerCraftAPI env = do
   -- inventory (verify + consume inputs/fuel, produce outputs);
   -- executeAt (#326) additionally requires a Built work station
   -- offering the recipe's station kind with the unit adjacent.
-  -- The bill verbs (#329) manage the active world's per-station
-  -- standing-order queue (Craft.Bills): addBill / cancelBill /
-  -- getBill / getBills are the queue surface (UI #330);
-  -- claimBill / releaseBill / addBillProgress / completeBillCycle
-  -- are the craft AI's job lifecycle. setBillPaused / reorderBill are
-  -- the #330 station panel's pause + manual-reorder controls.
+  -- The bill verbs (#329) manage a per-station standing-order queue
+  -- (Craft.Bills) that lives PER WORLD PAGE, and #2325 splits them into
+  -- two families by which page each resolves. See
+  -- Engine.Scripting.Lua.API.Craft.Bill's module haddock for why.
+  --
+  --   * ACTOR-QUALIFIED, resolved on the ACTING UNIT's own page:
+  --       getBill(uid, billId)
+  --       claimBill(billId, uid, timeout)
+  --       releaseBill(uid, billId)
+  --       setBillWorking(uid, billId, working)
+  --       addBillProgress(uid, billId, delta)
+  --       completeBillCycle(uid, billId)
+  --     — the craft AI's job lifecycle (scripts/unit_ai_craft.lua),
+  --     which holds one numeric bill id across many ticks.
+  --     craft.executeAt's optional billId is validated the same way.
+  --   * ACTIVE-page, resolved on the page the player is looking at:
+  --       addBill / cancelBill / setBillPaused / reorderBill / getBills
+  --     — the #330 station panel's queue surface and its pause +
+  --     manual-reorder controls, plus the discovery listing the AI's own
+  --     scan starts from.
   Lua.newtable
   registerLuaFunction "get"      (craftGetFn regs)
   registerLuaFunction "getNames" (craftGetNamesFn regs)
