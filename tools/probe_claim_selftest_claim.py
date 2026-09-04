@@ -17,6 +17,7 @@ Not a gate of its own. Run through the aggregate:
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import signal
@@ -27,22 +28,60 @@ from datetime import timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import probe_claim  # type: ignore  # noqa: E402
+import probe_claim_lease as claim_lease  # type: ignore  # noqa: E402
+import probe_claim_storage as claim_storage  # type: ignore  # noqa: E402
 from probe_claim_selftest_support import (  # noqa: E402
     CONTENDER, LOCK_HOLDER, claim_root, expect, expect_raises, race,
     registry, scratch, scratch_repo)
 
+#: Requirement 11's one-way dependency direction between #2148's three
+#: owners: storage is the filesystem leaf, lease builds on storage,
+#: orchestration builds on both, and nothing builds upward. Each key
+#: maps an owner to the owners it may NOT import.
+OWNER_DIRECTION = {
+    "probe_claim_storage": ("probe_claim_lease", "probe_claim_orchestration"),
+    "probe_claim_lease": ("probe_claim_orchestration",),
+    "probe_claim_orchestration": (),
+}
+
+
+def _module_imports(module_name: str) -> set:
+    """Every module named by an import statement in `module_name`'s source.
+
+    Parsed rather than read off the imported module's `__dict__`: an
+    aliased `import probe_claim_storage as storage` hides the real name
+    from the attribute table, and a `from ... import` leaves no module
+    object there at all -- and a `from` is exactly the shape an upward
+    dependency would take, since it is also the one #2148 forbids for
+    reaching another owner's seams.
+    """
+    source = (Path(__file__).resolve().parent
+              / f"{module_name}.py").read_text(encoding="utf-8")
+    named = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            named.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            named.add(node.module)
+    return named
+
 
 def test_namespace() -> None:
-    """One repository, one claim namespace, whatever worktree asks."""
+    """One repository, one claim namespace, whatever worktree asks.
+
+    Also the structural claim the whole #2148 split rests on: the three
+    owners' imports run one way only. Nothing else in the tree enforces
+    that, and an upward import is how the exit codes, the lease bounds
+    or the claim schema would quietly end up defined in two places.
+    """
     print("\n-- the claim namespace is repository-common --")
     with registry(), scratch_repo() as (main_wt, other_wt, _census):
-        here = probe_claim.repository_claim_root(str(main_wt))
-        there = probe_claim.repository_claim_root(str(other_wt))
+        here = claim_storage.repository_claim_root(str(main_wt))
+        there = claim_storage.repository_claim_root(str(other_wt))
         expect(here == there,
                "a linked worktree resolves the SAME claim directory as the "
                "main checkout")
-        expect(here.is_absolute() and here.name == probe_claim.CLAIM_DIR_NAME,
+        expect(here.is_absolute() and here.name == claim_storage.CLAIM_DIR_NAME,
                "the namespace is an absolute path under the common git dir")
         expect(str(here).startswith(str(Path(main_wt).resolve())),
                "it lives under the MAIN checkout's git directory, not the "
@@ -52,37 +91,46 @@ def test_namespace() -> None:
         saved = dict(os.environ)
         try:
             os.environ["TMPDIR"] = str(other_wt)
-            expect(probe_claim.repository_claim_root(str(other_wt)) == here,
+            expect(claim_storage.repository_claim_root(str(other_wt)) == here,
                    "TMPDIR does not move the namespace")
         finally:
             os.environ.clear()
             os.environ.update(saved)
 
     with registry():
-        expect_raises(probe_claim.ClaimError,
-                      lambda: probe_claim.require_probe_key("alpha_probe.py"),
+        expect_raises(claim_storage.ClaimError,
+                      lambda: claim_lease.require_probe_key("alpha_probe.py"),
                       "a non-canonical spelling is refused, not claimed twice",
                       "unknown probe")
-        expect_raises(probe_claim.ClaimError,
-                      lambda: probe_claim.require_probe_key("../escape"),
+        expect_raises(claim_storage.ClaimError,
+                      lambda: claim_lease.require_probe_key("../escape"),
                       "a key with path structure never reaches a path",
                       "unknown probe")
-        expect(probe_claim.require_probe_key("alpha") == "alpha",
+        expect(claim_lease.require_probe_key("alpha") == "alpha",
                "a canonical key is accepted")
+
+    # Checked mechanically rather than by inspection. This is the ONE
+    # assertion #2148 adds to this gate; all 275 it inherited are
+    # preserved, so the tally reads 276.
+    upward = {owner: sorted(_module_imports(owner) & set(forbidden))
+              for owner, forbidden in OWNER_DIRECTION.items()}
+    expect(not any(upward.values()),
+           f"the claim owners import one way only -- storage, then lease, "
+           f"then orchestration (upward imports found: {upward})")
 
 
 def test_exclusive_acquisition() -> None:
     """One winner per probe; distinct probes never contend."""
     print("\n-- an exclusive claim, per probe --")
     with registry(), claim_root() as root:
-        first = probe_claim.acquire("alpha", root=root, lease_seconds=600)
-        expect(first.token and probe_claim.claim_path("alpha", root).exists(),
+        first = claim_lease.acquire("alpha", root=root, lease_seconds=600)
+        expect(first.token and claim_storage.claim_path("alpha", root).exists(),
                "the first claimant creates the claim file")
 
         try:
-            probe_claim.acquire("alpha", root=root, lease_seconds=600)
+            claim_lease.acquire("alpha", root=root, lease_seconds=600)
             expect(False, "a second claimant on the same probe is denied")
-        except probe_claim.ClaimDenied as denied:
+        except claim_lease.ClaimDenied as denied:
             expect(True, "a second claimant on the same probe is denied")
             expect(denied.owner == first.payload["owner"]
                    and denied.token == first.token,
@@ -93,17 +141,19 @@ def test_exclusive_acquisition() -> None:
             expect(denied.to_document()["outcome"] == "already-claimed",
                    "the denial is a distinct machine-readable outcome")
 
-        second = probe_claim.acquire("beta", root=root, lease_seconds=600)
+        second = claim_lease.acquire("beta", root=root, lease_seconds=600)
         expect(second.token != first.token,
                "a DIFFERENT probe is claimable while the first is held")
-        expect(probe_claim.read_claim("alpha", root=root)["token"] == first.token
-               and probe_claim.read_claim("beta", root=root)["token"] == second.token,
+        expect(claim_lease.read_claim("alpha", root=root)["token"]
+               == first.token
+               and claim_lease.read_claim("beta", root=root)["token"]
+               == second.token,
                "the two claims are independent records")
 
         expect(first.release() is True, "the holder releases its own claim")
-        expect(probe_claim.read_claim("alpha", root=root) is None,
+        expect(claim_lease.read_claim("alpha", root=root) is None,
                "a released claim is gone")
-        third = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+        third = claim_lease.acquire("alpha", root=root, lease_seconds=600)
         expect(third.token != first.token,
                "the probe is claimable again after release")
 
@@ -135,29 +185,29 @@ def test_expiry_and_reclaim() -> None:
     """A lapsed claim is reclaimable; a renewed one is not."""
     print("\n-- lease expiry, renewal and reclaim --")
     with registry(), claim_root() as root:
-        held = probe_claim.acquire("alpha", root=root, lease_seconds=600)
-        later = probe_claim.utc_now() + timedelta(seconds=599)
-        expect_raises(probe_claim.ClaimDenied,
-                      lambda: probe_claim.acquire("alpha", root=root,
+        held = claim_lease.acquire("alpha", root=root, lease_seconds=600)
+        later = claim_storage.utc_now() + timedelta(seconds=599)
+        expect_raises(claim_lease.ClaimDenied,
+                      lambda: claim_lease.acquire("alpha", root=root,
                                                   lease_seconds=600, now=later),
                       "one second before expiry the claim still holds")
-        past = probe_claim.utc_now() + timedelta(seconds=601)
-        successor = probe_claim.acquire("alpha", root=root, lease_seconds=600,
+        past = claim_storage.utc_now() + timedelta(seconds=601)
+        successor = claim_lease.acquire("alpha", root=root, lease_seconds=600,
                                         now=past)
         expect(successor.token != held.token,
                "one second after expiry the claim is reclaimable")
 
         # Renewal is what keeps a long, SUPPORTED measurement safe.
-        renewed = probe_claim.acquire("beta", root=root, lease_seconds=600)
-        renewed.renew(now=probe_claim.utc_now() + timedelta(seconds=590))
-        still_live = probe_claim.utc_now() + timedelta(seconds=1000)
-        expect_raises(probe_claim.ClaimDenied,
-                      lambda: probe_claim.acquire("beta", root=root,
+        renewed = claim_lease.acquire("beta", root=root, lease_seconds=600)
+        renewed.renew(now=claim_storage.utc_now() + timedelta(seconds=590))
+        still_live = claim_storage.utc_now() + timedelta(seconds=1000)
+        expect_raises(claim_lease.ClaimDenied,
+                      lambda: claim_lease.acquire("beta", root=root,
                                                   lease_seconds=600,
                                                   now=still_live),
                       "a renewed claim outlives its original lease")
-        expired = probe_claim.utc_now() + timedelta(seconds=1200)
-        taken = probe_claim.acquire("beta", root=root, lease_seconds=600,
+        expired = claim_storage.utc_now() + timedelta(seconds=1200)
+        taken = claim_lease.acquire("beta", root=root, lease_seconds=600,
                                     now=expired)
         expect(taken.token != renewed.token,
                "renewal extends the lease, it does not make it permanent")
@@ -171,15 +221,16 @@ def test_concurrent_stale_reclaimers() -> None:
         root.mkdir(parents=True)
         # A claim whose lease elapsed a moment ago, exactly as a crashed
         # agent would have left it.
-        stale = probe_claim.acquire("alpha", root=root, lease_seconds=1,
-                                    now=probe_claim.utc_now() - timedelta(seconds=30))
+        stale = claim_lease.acquire(
+            "alpha", root=root, lease_seconds=1,
+            now=claim_storage.utc_now() - timedelta(seconds=30))
         time.sleep(0.05)
         rows = race(root, "alpha", 6, lease=600.0)
         winners = [r for r in rows if r["outcome"] == "won"]
         expect(len(winners) == 1,
                "exactly one reclaimer succeeded"
                + ("" if len(winners) == 1 else f" (got {len(winners)}: {rows})"))
-        survivor = probe_claim.read_claim("alpha", root=root)
+        survivor = claim_lease.read_claim("alpha", root=root)
         expect(survivor is not None
                and survivor["token"] == winners[0]["token"],
                "the surviving claim is the one winner's, not a later "
@@ -192,20 +243,20 @@ def test_owner_safe_late_release() -> None:
     """An expired owner that exits late leaves the successor alone."""
     print("\n-- ownership-safe late release --")
     with registry(), claim_root() as root:
-        lapsed = probe_claim.acquire("alpha", root=root, lease_seconds=1)
-        successor = probe_claim.acquire(
+        lapsed = claim_lease.acquire("alpha", root=root, lease_seconds=1)
+        successor = claim_lease.acquire(
             "alpha", root=root, lease_seconds=600,
-            now=probe_claim.utc_now() + timedelta(seconds=60))
+            now=claim_storage.utc_now() + timedelta(seconds=60))
         expect(lapsed.release() is False,
                "the expired owner's release removes nothing")
-        current = probe_claim.read_claim("alpha", root=root)
+        current = claim_lease.read_claim("alpha", root=root)
         expect(current is not None and current["token"] == successor.token,
                "the successor's claim survives its predecessor's late exit")
-        expect_raises(probe_claim.ClaimLost, lapsed.renew,
+        expect_raises(claim_lease.ClaimLost, lapsed.renew,
                       "and its late RENEWAL is refused rather than overwriting "
                       "the successor's lease",
                       "no longer ours")
-        expect(probe_claim.read_claim("alpha", root=root)["token"]
+        expect(claim_lease.read_claim("alpha", root=root)["token"]
                == successor.token,
                "the successor's token is still the one on disk")
 
@@ -241,20 +292,20 @@ def test_a_contended_acquisition_gets_a_live_lease() -> None:
             expect(ready.exists(),
                    "the other process really is holding the claim lock, so "
                    "this acquisition genuinely waits for it")
-            started = probe_claim.utc_now()
-            claim = probe_claim.acquire("alpha", root=root,
+            started = claim_storage.utc_now()
+            claim = claim_lease.acquire("alpha", root=root,
                                         lease_seconds=lease)
         finally:
             holder.communicate(timeout=60)
 
-        waited = (probe_claim.utc_now() - started).total_seconds()
+        waited = (claim_storage.utc_now() - started).total_seconds()
         expect(waited > lease,
                f"the wait ({waited:.1f}s) really did outlast the {lease}s "
                f"lease, which is what makes this case discriminating")
-        stored = probe_claim.read_claim("alpha", root=root)
-        expires = probe_claim.parse_stamp(stored["expires_at"])
-        acquired = probe_claim.parse_stamp(stored["acquired_at"])
-        expect(probe_claim.utc_now() < expires,
+        stored = claim_lease.read_claim("alpha", root=root)
+        expires = claim_storage.parse_stamp(stored["expires_at"])
+        acquired = claim_storage.parse_stamp(stored["acquired_at"])
+        expect(claim_storage.utc_now() < expires,
                "the claim it finally took is LIVE, not born expired")
         expect(acquired >= started + timedelta(seconds=lease),
                "its timestamps were read after the wait, not before it")
@@ -275,27 +326,27 @@ def test_expiry_is_one_way() -> None:
     """
     print("\n-- expiry is one-way, even with no successor --")
     with registry(), claim_root() as root:
-        claim = probe_claim.acquire("alpha", root=root, lease_seconds=600)
-        past = probe_claim.utc_now() + timedelta(seconds=601)
+        claim = claim_lease.acquire("alpha", root=root, lease_seconds=600)
+        past = claim_storage.utc_now() + timedelta(seconds=601)
 
         # Nobody else has touched it. The token still matches. It is
         # still expired, and that is the whole point.
-        expect(probe_claim.read_claim("alpha", root=root)["token"]
+        expect(claim_lease.read_claim("alpha", root=root)["token"]
                == claim.token,
                "the lapsed claim is still on disk, still carrying our token")
-        expect_raises(probe_claim.ClaimLost,
+        expect_raises(claim_lease.ClaimLost,
                       lambda: claim.renew(now=past),
                       "an expired claim refuses to renew even with no "
                       "successor", "expired", "acquired again")
-        expect_raises(probe_claim.ClaimLost,
+        expect_raises(claim_lease.ClaimLost,
                       lambda: claim.reassert(now=past),
                       "and refuses to reassert")
-        expect(probe_claim.read_claim("alpha", root=root)["expires_at"]
+        expect(claim_lease.read_claim("alpha", root=root)["expires_at"]
                == claim.payload["expires_at"],
                "...having moved the stored expiry not one microsecond")
 
         # And the reclaim it was blocking really does succeed.
-        successor = probe_claim.acquire("alpha", root=root, lease_seconds=600,
+        successor = claim_lease.acquire("alpha", root=root, lease_seconds=600,
                                         now=past)
         expect(successor.token != claim.token,
                "so the probe is reclaimable, which is what the refusal "
@@ -303,16 +354,16 @@ def test_expiry_is_one_way() -> None:
 
         # A live claim renews exactly as before — a rule that refused
         # every renewal would be a different bug wearing this one's face.
-        live = probe_claim.acquire("beta", root=root, lease_seconds=600)
-        before = probe_claim.read_claim("beta", root=root)["expires_at"]
-        live.renew(now=probe_claim.utc_now() + timedelta(seconds=599))
-        expect(probe_claim.read_claim("beta", root=root)["expires_at"] > before,
+        live = claim_lease.acquire("beta", root=root, lease_seconds=600)
+        before = claim_lease.read_claim("beta", root=root)["expires_at"]
+        live.renew(now=claim_storage.utc_now() + timedelta(seconds=599))
+        expect(claim_lease.read_claim("beta", root=root)["expires_at"] > before,
                "a claim renewed one second before expiry still extends")
 
         # The renewer thread reports the loss rather than reviving it.
-        stalled = probe_claim.acquire("gamma", root=root, lease_seconds=0.3)
+        stalled = claim_lease.acquire("gamma", root=root, lease_seconds=0.3)
         time.sleep(0.5)
-        with probe_claim.Renewer(stalled, interval=0.05) as renewer:
+        with claim_lease.Renewer(stalled, interval=0.05) as renewer:
             time.sleep(0.3)
         expect(renewer.lost is not None and renewer.renewals == 0,
                "a stalled holder's renewer reports the loss instead of "
@@ -362,7 +413,7 @@ def test_malformed_claim() -> None:
     payloads["boolean pid"] = json.dumps({**complete, "pid": True})
     payloads["zero lease"] = json.dumps({**complete, "lease_seconds": 0})
     payloads["oversized lease"] = json.dumps(
-        {**complete, "lease_seconds": probe_claim.MAX_LEASE_SECONDS + 1})
+        {**complete, "lease_seconds": claim_storage.MAX_LEASE_SECONDS + 1})
     # INTERNALLY INCONSISTENT, and this is the shape that would wedge a
     # probe forever: every field well-typed, a one-second lease, and an
     # expiry years away. It never expires, and it never ages out either,
@@ -376,12 +427,12 @@ def test_malformed_claim() -> None:
     for name, text in payloads.items():
         with registry(), claim_root() as root:
             root.mkdir(parents=True, exist_ok=True)
-            path = probe_claim.claim_path("alpha", root)
+            path = claim_storage.claim_path("alpha", root)
             path.write_text(text, encoding="utf-8")
             os.utime(path, (time.time() - 100, time.time() - 100))
             expect_raises(
-                probe_claim.ClaimDenied,
-                lambda: probe_claim.acquire("alpha", root=root,
+                claim_lease.ClaimDenied,
+                lambda: claim_lease.acquire("alpha", root=root,
                                             lease_seconds=600),
                 f"a {name!r} claim 100s old is treated as HELD",
                 "unreadable")
@@ -389,12 +440,12 @@ def test_malformed_claim() -> None:
             # probe is WEDGED, which every later case needs to be able
             # to say too instead of dying on the first one.
             try:
-                taken = probe_claim.acquire("alpha", root=root,
+                taken = claim_lease.acquire("alpha", root=root,
                                             lease_seconds=60)
-                reclaimed = bool(taken.token) and probe_claim.read_claim(
+                reclaimed = bool(taken.token) and claim_lease.read_claim(
                     "alpha", root=root)["token"] == taken.token
                 detail = ""
-            except probe_claim.ClaimDenied as denied:
+            except claim_lease.ClaimDenied as denied:
                 reclaimed, detail = False, f" (still denied: {denied})"
             expect(reclaimed,
                    f"a {name!r} claim older than the lease is "
@@ -405,9 +456,9 @@ def test_release_on_every_managed_exit() -> None:
     """Normal completion, a raised exception and an interruption all release."""
     print("\n-- release on normal and abnormal (but managed) exit --")
     with registry(), claim_root() as root:
-        with probe_claim.acquire("alpha", root=root, lease_seconds=600):
+        with claim_lease.acquire("alpha", root=root, lease_seconds=600):
             pass
-        expect(probe_claim.read_claim("alpha", root=root) is None,
+        expect(claim_lease.read_claim("alpha", root=root) is None,
                "a normal completion releases the claim")
 
         class Boom(Exception):
@@ -415,11 +466,11 @@ def test_release_on_every_managed_exit() -> None:
 
         for kind in (Boom, KeyboardInterrupt, SystemExit):
             try:
-                with probe_claim.acquire("alpha", root=root, lease_seconds=600):
+                with claim_lease.acquire("alpha", root=root, lease_seconds=600):
                     raise kind("stopped")
             except BaseException:  # noqa: BLE001
                 pass
-            expect(probe_claim.read_claim("alpha", root=root) is None,
+            expect(claim_lease.read_claim("alpha", root=root) is None,
                    f"a {kind.__name__} inside the claim still releases it")
 
 
@@ -437,24 +488,24 @@ def test_crash_recovery_through_ttl() -> None:
             text=True)
         deadline = time.time() + 60
         while time.time() < deadline:
-            if probe_claim.read_claim("alpha", root=root) is not None:
+            if claim_lease.read_claim("alpha", root=root) is not None:
                 break
             time.sleep(0.05)
-        held = probe_claim.read_claim("alpha", root=root)
+        held = claim_lease.read_claim("alpha", root=root)
         expect(held is not None, "the child took the claim")
         os.kill(holder.pid, signal.SIGKILL)
         holder.wait(timeout=30)
-        expect(probe_claim.read_claim("alpha", root=root) is not None,
+        expect(claim_lease.read_claim("alpha", root=root) is not None,
                "a SIGKILLed holder's claim SURVIVES, exactly as intended — "
                "it does not vanish with the process")
-        expect_raises(probe_claim.ClaimDenied,
-                      lambda: probe_claim.acquire("alpha", root=root,
+        expect_raises(claim_lease.ClaimDenied,
+                      lambda: claim_lease.acquire("alpha", root=root,
                                                   lease_seconds=600),
                       "so the probe stays unavailable immediately after the "
                       "crash")
-        recovered = probe_claim.acquire(
+        recovered = claim_lease.acquire(
             "alpha", root=root, lease_seconds=3,
-            now=probe_claim.utc_now() + timedelta(seconds=10))
+            now=claim_storage.utc_now() + timedelta(seconds=10))
         expect(recovered.token != held["token"],
                "and becomes reclaimable once the lease elapses")
 
@@ -463,13 +514,13 @@ def test_renewer_keeps_a_long_measurement_alive() -> None:
     """The renewer thread refreshes a live claim on its own clock."""
     print("\n-- the renewer holds a long measurement's claim --")
     with registry(), claim_root() as root:
-        claim = probe_claim.acquire("alpha", root=root, lease_seconds=2)
-        first = probe_claim.read_claim("alpha", root=root)["expires_at"]
-        with probe_claim.Renewer(claim, interval=0.05) as renewer:
+        claim = claim_lease.acquire("alpha", root=root, lease_seconds=2)
+        first = claim_lease.read_claim("alpha", root=root)["expires_at"]
+        with claim_lease.Renewer(claim, interval=0.05) as renewer:
             time.sleep(1.2)
         expect(renewer.renewals > 0 and renewer.lost is None,
                f"the renewer refreshed the lease ({renewer.renewals} times)")
-        current = probe_claim.read_claim("alpha", root=root)
+        current = claim_lease.read_claim("alpha", root=root)
         expect(current is not None and current["token"] == claim.token,
                "the claim is still ours after the renewals")
         expect(current["expires_at"] >= first,
@@ -478,12 +529,12 @@ def test_renewer_keeps_a_long_measurement_alive() -> None:
         # A claim taken away underneath the renewer is REPORTED, never
         # silently re-taken: it means two agents may have measured one probe.
         claim.release()
-        other = probe_claim.acquire("alpha", root=root, lease_seconds=600)
-        with probe_claim.Renewer(claim, interval=0.05) as lost_renewer:
+        other = claim_lease.acquire("alpha", root=root, lease_seconds=600)
+        with claim_lease.Renewer(claim, interval=0.05) as lost_renewer:
             time.sleep(0.4)
         expect(lost_renewer.lost is not None,
                "a claim lost mid-measurement is reported")
-        expect(probe_claim.read_claim("alpha", root=root)["token"] == other.token,
+        expect(claim_lease.read_claim("alpha", root=root)["token"] == other.token,
                "and the new owner's claim is untouched")
 
 
