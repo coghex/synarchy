@@ -54,6 +54,13 @@
 -- nothing for the interval that spans them. A one-second get-up stun
 -- costs a pending order exactly as little as a five-minute collapse.
 --
+-- The module carries a SECOND, smaller job for the same two reasons:
+-- the elapsed-time WORK clocks (auto-harvest's picking, and since
+-- #2332 craft's and construct's pours) are last-sample stamps with
+-- exactly this hazard, so M.suspendOrders takes their boundary
+-- alongside the orders' and M.workInterval applies the same bound to
+-- the interval they charge. Both are documented at their definitions.
+--
 -- MAX_CHARGED_INTERVAL is the backstop for the gaps no such path can
 -- announce -- a save/load boundary, a unit that stopped being ticked
 -- at all: an interval longer than it is not one uninterrupted stretch
@@ -214,11 +221,13 @@ end
 -- charged charged.
 --
 -- Takes the state table (nil-tolerant, since a short-circuited tick
--- may run for a unit that has no AI state yet) rather than a uid, and
--- is called on EVERY swallowed tick rather than only at entry: an
--- interruption is a span, not an event, and only the last boundary
--- inside it bounds the interval the next sample sees.
-function M.suspendOrders(s)
+-- may run for a unit that has no AI state yet), and is called on EVERY
+-- swallowed tick rather than only at entry: an interruption is a span,
+-- not an event, and only the last boundary inside it bounds the
+-- interval the next sample sees. `uid` is the unit that state belongs
+-- to, needed by the craft boundary below and optional everywhere else
+-- -- a caller with only a state table still gets every stamp dropped.
+function M.suspendOrders(s, uid)
     if not s then return end
     if s.commandedTask  then s.commandedTask.stallSeenAt  = nil end
     if s.pickupOrder    then s.pickupOrder.stallSeenAt    = nil end
@@ -239,6 +248,72 @@ function M.suspendOrders(s)
     -- accumulated on the plant survives the interruption, exactly as a
     -- partially spent stall budget does.
     s.lastHarvestAt = nil
+    -- Craft's and construct's work clocks (#2332) are the same kind of
+    -- last-sample stamp and take the same boundary. Without it a
+    -- crafter or builder knocked down mid-pour keeps its stamp, and the
+    -- first tick after it stands charges the WHOLE collapse as instant
+    -- progress -- the hazard unit_ai_mental.lua's preempt already
+    -- documents, on the two paths that reach neither preempt nor an
+    -- onExit.
+    s.lastCraftAt     = nil
+    s.lastConstructAt = nil
+    -- Dropping the stamp alone is not enough for either job: both pour
+    -- from a PHASE, and re-entering that phase is what re-stamps the
+    -- clock and (for craft) re-arms #590's working flag. So take the
+    -- boundary exactly as each module's own onExit does -- demote the
+    -- pouring phase to `walking`, and clear the bill's working flag,
+    -- which craft.setBillWorking(uid, id, true) re-arms only on the
+    -- walking->working transition. A crafter collapsed at its station
+    -- must not keep that bill's power draw registered
+    -- (Craft.Bills.cbWorking) for the length of the collapse.
+    --
+    -- Persistent state is untouched, same as any preemption: the job,
+    -- its claim, its consumed materials and its banked progress all
+    -- survive: only the stamps, the re-entry phase and the working flag
+    -- change. Idempotent across the span, since the second and later
+    -- swallowed ticks find the phase already demoted.
+    if s.constructJob and s.constructJob.phase == "building" then
+        s.constructJob.phase = "walking"
+    end
+    local cj = s.craftJob
+    if cj and cj.phase == "working" then
+        cj.phase = "walking"
+        -- Guarded rather than assumed: this module is deliberately
+        -- dependency-free and drivable in a bare Lua VM, where `craft`
+        -- is simply absent (Test.Headless.Lua.UnitAiStall).
+        if uid and craft and craft.setBillWorking then
+            craft.setBillWorking(uid, cj.billId, false)
+        end
+    end
+end
+
+-- The interval ending at `now` that may be charged as WORK, given the
+-- last sample stamp `last`: the elapsed time when it is one
+-- uninterrupted stretch of AI ticking, and zero when it is not.
+--
+-- Two rules, the ones #1291/#1582 settled for auto-harvest and #2332
+-- extends to craft and construct:
+--
+--   * A missing stamp is a zero-length interval. Every path that
+--     swallows a tick drops the stamp through M.suspendOrders above as
+--     it happens, so the next reading charges nothing for the interval
+--     spanning it.
+--   * MAX_CHARGED_INTERVAL is the backstop for the gaps no path can
+--     announce -- a save/load boundary, a page hidden while another
+--     page keeps the session clock running, a unit that stopped being
+--     ticked at all. An interval longer than it is charged ZERO rather
+--     than being clamped down to the bound: the clamp would still
+--     credit seconds of work that never happened, and the bound is
+--     already far above the slowest cadence any of these clocks
+--     samples at. An interval exactly equal to it is still one
+--     uninterrupted stretch, and charges in full.
+--
+-- The work already banked on the plant, the bill or the designation
+-- survives all of that; only the clock restarts.
+function M.workInterval(last, now)
+    local dt = now - (last or now)
+    if dt > 0 and dt <= MAX_CHARGED_INTERVAL then return dt end
+    return 0
 end
 
 -- A new closest approach: the whole budget is available again.

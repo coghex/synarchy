@@ -260,8 +260,8 @@ local function tickOne(uid, defName)
     --     we'd clobber the state by issuing new commands.
     -- Crouching/Crawling pose with idle activity DOES run AI — that's
     -- how multi-phase actions (e.g. source-drink) advance.
-    -- Each return records an interruption boundary (#1291): none of the
-    -- swallowed interval, however brief, is charged to a pending order.
+    -- Each return records an interruption boundary (#1291/#2332): none
+    -- of it is charged to a pending order, or to any work clock.
     local pose     = unit.getPose(uid)
     local activity = unit.getActivity(uid)
     -- Lunge BOOKKEEPING, and nothing else, runs before those returns

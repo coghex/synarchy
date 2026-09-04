@@ -257,7 +257,7 @@ end
 -- WITHOUT creating it -- a unit with no AI state has no order to
 -- suspend.
 local function suspendOrders(uid)
-    stall.suspendOrders(aiState[uid])
+    stall.suspendOrders(aiState[uid], uid)
 end
 
 -----------------------------------------------------------
