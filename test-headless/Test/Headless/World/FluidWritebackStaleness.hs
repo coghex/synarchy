@@ -40,7 +40,7 @@ import UPrelude
 import Test.Hspec
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar)
-import Control.Exception (finally)
+import Control.Exception (ErrorCall(..), finally, throwIO, try)
 import Data.IORef (readIORef)
 import Data.List (find)
 import Data.Maybe (mapMaybe)
@@ -56,6 +56,7 @@ import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Test.Headless.Harness (sendWorldCommand, waitForWorldInit)
+import World.Thread.Command (handleApplyFluidsCommandWith)
 import World.Edit.Apply (replayEdits)
 import World.Edit.Types (WorldEdit(..))
 import World.Generate.Coordinates (chunkToGlobal)
@@ -175,7 +176,11 @@ spec =
         sendWorldCommand env
             (WorldApplyFluids (FluidWritebackBatch ackPageId allStale (Just ack)))
         acked ← timeout ackTimeoutMicros (takeMVar ack)
-        acked `shouldBe` Just ()
+        -- Applied, not merely delivered: dropping every writeback is one
+        -- of the nothing-to-do cases the handler has always completed
+        -- normally, so it must not read as a failure now that the ack
+        -- can carry one (#2334).
+        acked `shouldBe` Just FluidAckApplied
 
         -- …and nothing in either chunk moved on the way.
         edited ← chunkAt (epState ep) (epEdited ep)
@@ -186,6 +191,47 @@ spec =
         untouched ← chunkAt (epState ep) (epUntouched ep)
         lcFluidMap untouched `shouldBe` lcFluidMap (epUntBefore ep)
         lcSideDeco untouched `shouldBe` lcSideDeco (epUntBefore ep)
+
+      -- #2334. The ack above covers every way the handler can FINISH;
+      -- this covers the way it can leave without finishing. Before the
+      -- fix, an exception raised anywhere inside the application step —
+      -- 'revalidatePlantDesignations' and
+      -- 'revalidateConstructDesignations' both run in there, after the
+      -- tiles are already written — skipped the ack entirely, and the
+      -- waiter (the sim's fast settle, and behind it the whole @--dump@)
+      -- blocked forever on a world worker that had already died.
+      --
+      -- Driven through the production wrapper with a throwing
+      -- application step, the 'World.Save.Autosave.prepareAutosaveCycleWithSync'
+      -- seam idiom: the step is the only thing substituted, so the
+      -- try/ack/rethrow under test is the same code the real handler
+      -- runs. A real writeback application is not made to fail, which is
+      -- the point — the guarantee must not depend on one ever doing so.
+      it "acks a FAILURE and rethrows when the application step raises, so \
+         \the waiter is released and the world worker still fail-stops" $
+        \env → do
+        logger ← readIORef (loggerRef env)
+        ack ← newEmptyMVar
+        let boom = ErrorCall "writeback application blew up"
+            batch = FluidWritebackBatch ackPageId [] (Just ack)
+        raised ← try $ handleApplyFluidsCommandWith
+            (\_ _ _ _ → throwIO boom) env logger batch
+
+        -- Rethrown, unchanged: 'Engine.Core.Thread' classifies this
+        -- exception exactly as it did before, so the world worker keeps
+        -- the fail-stop it has always had rather than silently
+        -- swallowing the error to deliver an ack.
+        case raised of
+            Left (ErrorCall msg) →
+                msg `shouldBe` "writeback application blew up"
+            Right () → expectationFailure
+                "the throwing application step did not reach the caller"
+
+        -- …and the ack was delivered on the way out, naming the cause
+        -- rather than claiming the batch applied.
+        acked ← timeout ackTimeoutMicros (takeMVar ack)
+        acked `shouldBe`
+            Just (FluidAckFailed "writeback application blew up")
 
 -- | Requirement 6, registered under the @persistence contract@ describe
 --   (see @Spec.hs@) so that gate's @--match@ covers it.
@@ -377,11 +423,13 @@ ackTimeoutMicros = 30 * 1000 * 1000
 
 -- | Wait for a batch ack, failing the example rather than hanging the
 --   suite if the world thread never fulfils it.
-awaitAck ∷ MVar () → IO ()
+awaitAck ∷ MVar FluidAckOutcome → IO ()
 awaitAck ack = do
     got ← timeout ackTimeoutMicros (takeMVar ack)
     case got of
-        Just () → pure ()
+        Just FluidAckApplied → pure ()
+        Just (FluidAckFailed why) → expectationFailure
+            ("world thread failed a WorldApplyFluids batch: " ⧺ T.unpack why)
         Nothing → expectationFailure
             "world thread never acked a WorldApplyFluids batch"
 

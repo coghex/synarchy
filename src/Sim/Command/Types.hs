@@ -1,6 +1,8 @@
 {-# LANGUAGE Strict #-}
 module Sim.Command.Types
     ( SimCommand(..)
+    , FastSettleRequest(..)
+    , FastSettleOutcome(..)
     ) where
 
 import UPrelude
@@ -65,13 +67,48 @@ data SimCommand
         -- ^ Tick rate in microseconds (default 100000 = 10Hz). Global.
     | SimPause
     | SimResume
-    | SimFastSettleAll !(MVar ())
+    | SimFastSettleAll !FastSettleRequest
         -- ^ Synchronously run all settle ticks (no sleeping) across every
         --   world until each chunk has scsSettleTicks == 0 and no chunk is
         --   active. Then emits a 'WorldApplyFluids' batch (per world) with
         --   an ack and waits for the world thread to apply it, sets
-        --   ssPaused, and signals the MVar. Used by dump mode to get a
-        --   stable simulation state without waiting for the live sim loop.
+        --   ssPaused, and publishes the 'FastSettleOutcome'. Used by dump
+        --   mode to get a stable simulation state without waiting for the
+        --   live sim loop.
+
+-- | One 'SimFastSettleAll': where the outcome is published, and the ONE
+--   deadline every wait inside the settle shares (#2334).
+data FastSettleRequest = FastSettleRequest
+    { fsrDone     ∷ !(MVar FastSettleOutcome)
+      -- ^ Filled exactly once, after every fallible step of the settle
+      --   handler has run. A settle that never fills it is a sim worker
+      --   that died on the way; the caller watches the worker's
+      --   'Engine.Core.Thread.tsDone' for that, not this.
+    , fsrDeadline ∷ !Double
+      -- ^ An ABSOLUTE 'Engine.Core.Clock.monotonicSeconds' instant, not
+      --   a duration, and shared end to end: every per-world
+      --   acknowledgement wait spends what is left of this one budget,
+      --   so N worlds cannot restart it N times and multiply the
+      --   caller's total wait.
+    }
+
+-- | What one 'SimFastSettleAll' ended as (#2334).
+--
+--   Only 'FastSettleApplied' means every requested writeback reached
+--   world-thread application; the caller must treat every other
+--   constructor as a failed settle and emit nothing derived from the
+--   tiles.
+data FastSettleOutcome
+    = FastSettleApplied
+      -- ^ Every world's batch was acknowledged as applied.
+    | FastSettleWorldFailed !WorldPageId !Text
+      -- ^ This world's acknowledgement came back as a failure: the
+      --   world thread raised inside the batch handler, and the text is
+      --   what it raised.
+    | FastSettleAckDeadline !WorldPageId
+      -- ^ The shared 'fsrDeadline' ran out while waiting for this
+      --   world's acknowledgement.
+    deriving (Eq, Show)
 
 instance Show SimCommand where
     show (SimActivateWorld p t)   = "SimActivateWorld " <> show p <> " " <> show t

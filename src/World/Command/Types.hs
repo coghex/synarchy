@@ -4,6 +4,7 @@ module World.Command.Types
     , WorldCommand(..)
     , FluidWriteback(..)
     , FluidWritebackBatch(..)
+    , FluidAckOutcome(..)
     ) where
 
 import UPrelude
@@ -51,15 +52,38 @@ data FluidWriteback = FluidWriteback
     , fwSideDeco ∷ !(VU.Vector Word8)
     }
 
+-- | What a batch's acknowledgement reports (#2334).
+--
+--   The ack used to be a bare @()@, which could only ever mean "the
+--   handler reached its last statement". An exception raised anywhere
+--   before that statement therefore delivered NOTHING, and the waiter —
+--   the sim's fast settle, and through it the whole @--dump@ — blocked
+--   forever on a world worker that had already fail-stopped. Carrying
+--   the outcome is what lets the handler release its waiter on the way
+--   out without pretending the batch was applied.
+data FluidAckOutcome
+    = FluidAckApplied
+      -- ^ The handler ran to completion. That deliberately INCLUDES
+      --   every case it has always treated as nothing to do: an empty
+      --   batch, a page that is gone, and a batch whose writebacks were
+      --   all dropped as stale (#1596).
+    | FluidAckFailed !Text
+      -- ^ The handler raised, and this is what it raised. The world
+      --   worker still fail-stops on the rethrown original, so this
+      --   releases the waiter rather than swallowing the error.
+    deriving (Eq, Show)
+
 -- | A batch of fluid writebacks for ONE world plus an optional ack
---   'MVar', signalled once the world thread has applied the batch. The
---   'WorldPageId' scopes the batch so the world thread applies it only to
---   the world that produced it (not every visible world, #59). Runtime
---   ticks pass 'Nothing' (fire-and-forget); the dump's synchronous
---   fast-settle passes 'Just' and waits on it so the write lands before
---   it reads.
+--   'MVar', signalled once the world thread has finished with the batch
+--   — with 'FluidAckApplied' when it applied, 'FluidAckFailed' when it
+--   raised. The 'WorldPageId' scopes the batch so the world thread
+--   applies it only to the world that produced it (not every visible
+--   world, #59). Runtime ticks pass 'Nothing' (fire-and-forget); the
+--   dump's synchronous fast-settle passes 'Just' and waits on it so the
+--   write lands before it reads.
 data FluidWritebackBatch =
-    FluidWritebackBatch !WorldPageId ![FluidWriteback] !(Maybe (MVar ()))
+    FluidWritebackBatch !WorldPageId ![FluidWriteback]
+                        !(Maybe (MVar FluidAckOutcome))
 instance Show FluidWritebackBatch where
     show (FluidWritebackBatch pid ws _) =
         "FluidWritebackBatch(" <> show pid <> ", " <> show (length ws) <> ")"

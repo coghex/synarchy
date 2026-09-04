@@ -1,12 +1,15 @@
 {-# LANGUAGE Strict #-}
 module World.Thread.Command
     ( handleWorldCommand
+    , handleApplyFluidsCommandWith
+    , applyFluidWritebacks
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.MVar (putMVar)
+import Control.Exception (SomeException, throwIO, try)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv, statRNGRef, unitQueue)
@@ -277,12 +280,43 @@ handleWorldCommand env logger (WorldMarkLocationStamped pageId gx gy mWindow)
 --   writeback from the same batch, and it is taken here rather than in
 --   'applyOneWriteback' so the tiles are read and written exactly once.
 --
---   The ack fires whatever the outcome — batch empty, page gone, or
---   every writeback dropped — or 'SimFastSettleAll' and the @--dump@
---   fast-settle path would block forever waiting on it.
+--   The ack fires whatever the outcome — batch empty, page gone, every
+--   writeback dropped, or the application itself raising — or
+--   'SimFastSettleAll' and the @--dump@ fast-settle path would block
+--   forever waiting on it. Only the first three are
+--   'World.Command.Types.FluidAckApplied'; a raise acks
+--   'World.Command.Types.FluidAckFailed' and is then RETHROWN, so the
+--   world worker keeps the fail-stop it has always had (#2334).
 handleApplyFluidsCommand ∷ EngineEnv → LoggerState → FluidWritebackBatch
                          → IO ()
-handleApplyFluidsCommand env logger (FluidWritebackBatch pageId writebacks mAck) = do
+handleApplyFluidsCommand = handleApplyFluidsCommandWith applyFluidWritebacks
+
+-- | 'handleApplyFluidsCommand' with its application step supplied by the
+--   caller (#2334). Production passes 'applyFluidWritebacks'; the
+--   headless gate injects a throwing step to prove the ack is published
+--   as a failure and the exception still leaves the handler, without
+--   depending on a real writeback application ever failing. Same seam
+--   idiom as 'World.Save.Autosave.prepareAutosaveCycleWithSync'.
+--
+--   The ack is delivered BEFORE the rethrow, so the waiter is released
+--   even though this call does not return normally.
+handleApplyFluidsCommandWith
+    ∷ (EngineEnv → LoggerState → WorldPageId → [FluidWriteback] → IO ())
+    → EngineEnv → LoggerState → FluidWritebackBatch → IO ()
+handleApplyFluidsCommandWith apply env logger
+        (FluidWritebackBatch pageId writebacks mAck) = do
+    applied ← try (apply env logger pageId writebacks)
+    case applied of
+        Right () → forM_ mAck (`putMVar` FluidAckApplied)
+        Left (e ∷ SomeException) → do
+            forM_ mAck (`putMVar` FluidAckFailed (tshow e))
+            throwIO e
+
+-- | The production application step behind 'handleApplyFluidsCommand':
+--   everything between dequeuing the batch and acknowledging it.
+applyFluidWritebacks ∷ EngineEnv → LoggerState → WorldPageId
+                     → [FluidWriteback] → IO ()
+applyFluidWritebacks env logger pageId writebacks = do
     when (not (null writebacks)) $ do
         mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case lookup pageId (wmWorlds mgr) of
@@ -307,7 +341,6 @@ handleApplyFluidsCommand env logger (FluidWritebackBatch pageId writebacks mAck)
                     _ ← revalidateConstructDesignations env logger ws
                             (ConstructChunks (map fwCoord fresh))
                     pure ()
-    forM_ mAck (`putMVar` ())
 
 -- | Is this writeback derived from the chunk state the page currently
 --   holds? True exactly when the sim stamped it with the live-edit

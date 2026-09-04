@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Sim.Thread
     ( startSimThread
+    , completeFastSettleWith
     ) where
 
 import UPrelude
@@ -12,6 +13,8 @@ import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Data.Maybe (mapMaybe)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, takeMVar)
+import System.Timeout (timeout)
+import Engine.Core.Clock (monotonicSeconds)
 import Engine.Core.Thread
     (ThreadState, WorkerFailLevel(..), WorkerSpec(..), noRefusal
     , startWorkerThread, workerCrashStderrSink)
@@ -26,8 +29,10 @@ import qualified Engine.Core.Queue as Q
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Types (FluidCell(..), renderedSurfaceZ)
 import World.Command.Types (WorldCommand(..), FluidWriteback(..)
-                           , FluidWritebackBatch(..))
-import Sim.Command.Types (SimCommand(..))
+                           , FluidWritebackBatch(..)
+                           , FluidAckOutcome(..))
+import Sim.Command.Types (SimCommand(..), FastSettleRequest(..)
+                         , FastSettleOutcome(..))
 import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
                        , emptySimState, emptySimWorldState)
 import Sim.Fluid.Types (activeToFluidCell)
@@ -221,7 +226,7 @@ handleSimCommand env logger simStateRef cmd = do
         SimResume →
             writeIORef simStateRef $ ss { ssPaused = False }
 
-        SimFastSettleAll done → do
+        SimFastSettleAll req → do
             -- No wsTilesRef re-sync needed: the world sends the FINAL
             -- fluid in SimChunkLoaded (the old post-load seal that this
             -- guarded against was removed), so scsFluid is already fresh.
@@ -243,12 +248,92 @@ handleSimCommand env logger simStateRef cmd = do
             -- Emit each world's batch and WAIT for the world thread to apply
             -- it before signalling done — the dump reads wsTilesRef right
             -- after. One ack per world (dump worlds are typically just one).
-            forM_ (HM.toList dirtied) $ \(pid, sws) → do
-                ack ← newEmptyMVar
-                emitWorldDirtyFluids env pid sws (Just ack)
-                takeMVar ack
-            putMVar done ()
-            logDebug logger CatWorld "Sim: fast-settled and paused"
+            completeFastSettleWith
+                (\pid sws ack → emitWorldDirtyFluids env pid sws (Just ack))
+                monotonicSeconds (logDebug logger CatWorld) req
+                (HM.toList dirtied)
+
+-- | The whole tail of the 'SimFastSettleAll' handler: wait out every
+--   world's acknowledgement, report, and publish the outcome to the
+--   request's completion (#2334).
+--
+--   The publication is the last statement, AFTER the report, and that
+--   ordering is the point of keeping the two together in one tested
+--   function. Filling 'fsrDone' first would let a failure in the report
+--   kill this worker in the window where the caller has already read
+--   success and is about to emit output derived from a half-dead
+--   engine; the caller has no way to take that reading back. So the
+--   completion is only ever published once nothing fallible is left.
+--
+--   Both the emit step and the report are parameters so the headless
+--   gate can drive this without a world thread to acknowledge anything
+--   and without a logger that can be made to fail. Production supplies
+--   'emitWorldDirtyFluids' and @'logDebug' logger 'CatWorld'@, which is
+--   exactly what ran here before the seam existed.
+completeFastSettleWith
+    ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
+      -- ^ Emit one world's batch, to be acknowledged through this MVar.
+    → IO Double
+      -- ^ Monotonic clock; production passes
+      --   'Engine.Core.Clock.monotonicSeconds'.
+    → (Text → IO ())
+      -- ^ Report the settle's outcome.
+    → FastSettleRequest
+    → [(WorldPageId, SimWorldState)]
+    → IO ()
+completeFastSettleWith emit clock report req worlds = do
+    outcome ← awaitFastSettleAcks emit clock (fsrDeadline req) worlds
+    report ("Sim: fast-settled and paused (" <> tshow outcome <> ")")
+    putMVar (fsrDone req) outcome
+
+-- | Emit one 'WorldApplyFluids' batch per world and wait for each to be
+--   acknowledged, against ONE end-to-end deadline (#2334).
+--
+--   The deadline is an absolute monotonic instant, so the worlds SHARE
+--   the caller's budget instead of each restarting it: three worlds
+--   cannot turn a ten-minute budget into thirty minutes. An expired
+--   deadline yields a zero-microsecond 'timeout', which gives up at once
+--   rather than waiting forever — the negative value @deadline - now@
+--   would otherwise produce means "no timeout at all" to 'timeout',
+--   which is exactly the unbounded wait this replaces.
+--
+--   Stops at the FIRST world that fails or times out and reports it: the
+--   remaining worlds' batches are never emitted, because the settle has
+--   already failed and nothing downstream may read the tiles.
+--
+--   Reached only through 'completeFastSettleWith', which is what the
+--   headless gate drives: an outcome computed correctly and then never
+--   published strands the caller just as completely as one never
+--   computed, so the two are gated together.
+awaitFastSettleAcks
+    ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
+      -- ^ Emit one world's batch, to be acknowledged through this MVar.
+    → IO Double
+      -- ^ Monotonic clock; production passes
+      --   'Engine.Core.Clock.monotonicSeconds'.
+    → Double
+      -- ^ The shared absolute deadline ('Sim.Command.Types.fsrDeadline').
+    → [(WorldPageId, SimWorldState)]
+    → IO FastSettleOutcome
+awaitFastSettleAcks emit clock deadline = go
+  where
+    go [] = pure FastSettleApplied
+    go ((pid, sws):rest) = do
+        ack ← newEmptyMVar
+        emit pid sws ack
+        budget ← remainingMicros clock deadline
+        acked ← timeout budget (takeMVar ack)
+        case acked of
+            Nothing                   → pure (FastSettleAckDeadline pid)
+            Just (FluidAckFailed why) → pure (FastSettleWorldFailed pid why)
+            Just FluidAckApplied      → go rest
+
+-- | Microseconds left before an absolute monotonic deadline, floored at
+--   zero. See 'awaitFastSettleAcks' for why the floor matters.
+remainingMicros ∷ IO Double → Double → IO Int
+remainingMicros clock deadline = do
+    now ← clock
+    pure $ max 0 (ceiling ((deadline - now) * 1000000))
 
 -- | Run all sim ticks synchronously without sleeping for one world. Stops
 --   when no chunk has settle ticks remaining and no chunk is active, or
@@ -285,9 +370,10 @@ settleNewChunks sws
 --   sole writer of 'wsTilesRef') as a 'WorldApplyFluids' batch tagged with
 --   the world's page id, so the world thread applies it ONLY to that world
 --   (#59). The sim never touches 'wsTilesRef' itself. With 'Just' ack, the
---   world signals it after applying (the synchronous fast-settle waits).
+--   world reports the batch's outcome through it once it is done with it
+--   (the synchronous fast-settle waits on that).
 emitWorldDirtyFluids ∷ EngineEnv → WorldPageId → SimWorldState
-                     → Maybe (MVar ()) → IO ()
+                     → Maybe (MVar FluidAckOutcome) → IO ()
 emitWorldDirtyFluids env pid sws mAck = do
     let dirty = swsDirtyChunks sws
         writebacks = mapMaybe (\cc →
