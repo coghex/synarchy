@@ -113,13 +113,13 @@ treatBleedingIO env medic patient mOwner = do
                     kits = [ it | it ← uiInventory own
                                 , any ((≡ bandageItemName) . iiDefName)
                                       (iiContents it) ]
-                -- #2297: ONE draw from the shared stat pool, and the only
-                -- thing that happens outside the transaction below. The
-                -- capability roll and the whole attempt cycle run INSIDE
-                -- it, so a commit-time reach refusal leaves no rolled
-                -- stat, no dressing and no spent bandage; the draw itself
-                -- is handed back on that path.
-                (before, kept, local) ← drawTreatGen env
+                -- #2297: the treatment generator is RESERVED here and
+                -- only spent once the commit below has succeeded, so a
+                -- refusal at either check writes to nothing at all. The
+                -- capability roll and the whole attempt cycle run inside
+                -- that commit, so a refusal leaves no rolled stat, no
+                -- dressing and no spent bandage either.
+                (reservedFrom, kept, local) ← reserveTreatGen env
                 let (gStat, gLoop) = Random.splitGen local
                 committed ← atomicModifyIORef'
                     (ucUnitManagerRef (toUnitCombatCapability env)) $
@@ -204,31 +204,44 @@ treatBleedingIO env medic patient mOwner = do
                                (woundKind worst) "makeshift tourniquet"
                                "tourniquet" )
                 case committed of
-                  Left refusal → do
-                    returnTreatGen env before kept
-                    pure (treatFail (reachRefusalMessage refusal))
-                  Right res → pure res
+                  Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                  Right res → do
+                    publishTreatGen env reservedFrom kept
+                    pure res
 
--- | One draw from the shared stat RNG, remembered well enough to give
---   back: the pool as it stood, the half left behind, and the half this
---   treatment will use.
-drawTreatGen ∷ EngineEnv
-             → IO (Random.StdGen, Random.StdGen, Random.StdGen)
-drawTreatGen env =
-    atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \g0 →
-        let (kept, local) = Random.splitGen g0 in (kept, (g0, kept, local))
-
--- | Hand the draw back after a commit-time reach refusal: no treatment
---   happened, so the pool belongs where it was (#2297).
+-- | RESERVE a treatment generator without advancing the shared pool:
+--   a plain read plus a pure split, returning the pool as it stood, the
+--   half a commit will leave behind, and the half this treatment
+--   computes with.
 --
---   Compare-and-restore, never a blind write. That pool is shared, so
---   rewinding a draw somebody else made in the meantime would be a
---   worse bug than leaving ours spent — if the ref has moved on, this
---   leaves it alone.
-returnTreatGen ∷ EngineEnv → Random.StdGen → Random.StdGen → IO ()
-returnTreatGen env before kept =
+--   #2297: nothing is written here, so a treatment refused at EITHER
+--   check leaves @ucStatRNGRef@ exactly as it found it — whatever else
+--   is drawing from that shared pool at the time. Advancing first and
+--   putting it back afterwards cannot give the same guarantee: the pool
+--   has four writer threads, so a restore that ran after somebody
+--   else's draw would either clobber theirs or (being conditional)
+--   silently give up and leave the refused call's advance behind.
+reserveTreatGen ∷ EngineEnv
+                → IO (Random.StdGen, Random.StdGen, Random.StdGen)
+reserveTreatGen env = do
+    g0 ← readIORef (ucStatRNGRef (toUnitCombatCapability env))
+    let (kept, local) = Random.splitGen g0
+    pure (g0, kept, local)
+
+-- | Spend the reservation, once the treatment has actually committed.
+--
+--   The pool advances exactly once per committed treatment, atomically,
+--   which is the shared-pool rule 'Combat.Wounds.Tick' states: never
+--   hand the same generator out twice. If nothing else drew while this
+--   treatment was being computed, the half the reservation left behind
+--   is published, so the half it used is provably gone from the stream.
+--   If another consumer DID draw, that draw stands — this advances from
+--   what is actually there rather than rewinding to a stale value.
+publishTreatGen ∷ EngineEnv → Random.StdGen → Random.StdGen → IO ()
+publishTreatGen env reservedFrom kept =
     atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \cur →
-        (if cur ≡ kept then before else cur, ())
+        ( if cur ≡ reservedFrom then kept else fst (Random.splitGen cur)
+        , () )
 
 -- | The medic's effective @intelligence@, rolled and cached IN the
 --   caller's transaction when the def declares a template and nothing
@@ -516,11 +529,12 @@ treatInfectionIO env medic patient mOwner = do
                         targetKey = ( woundPart worst, woundKind worst
                                     , woundAt worst )
                         nLevel = max 0 (min 1 (level / 100))
-                    -- The same one-draw / give-it-back discipline the
+                    -- The same reserve-then-spend discipline the
                     -- bleeding verb uses (#2297): the capability roll is
                     -- a manager mutation, so it belongs inside the
-                    -- transaction that can still refuse.
-                    (before, kept, local) ← drawTreatGen env
+                    -- transaction that can still refuse, and the pool is
+                    -- not touched until that transaction commits.
+                    (reservedFrom, kept, local) ← reserveTreatGen env
                     committed ← atomicModifyIORef'
                         (ucUnitManagerRef (toUnitCombatCapability env)) $
                         commitInReach medic patient owner $ \um →
@@ -545,10 +559,11 @@ treatInfectionIO env medic patient mOwner = do
                                (woundKind worst) "antibiotics administered"
                                "antibiotics" )
                     case committed of
-                      Left refusal → do
-                        returnTreatGen env before kept
+                      Left refusal →
                         pure (treatFail (reachRefusalMessage refusal))
-                      Right res → pure res
+                      Right res → do
+                        publishTreatGen env reservedFrom kept
+                        pure res
 
 -- | unit.treatInfection(medicUid, patientUid [, kitOwnerUid]) →
 --     { ok, infection, part, kind, message, method } | nil

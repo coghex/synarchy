@@ -49,6 +49,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort, sortOn)
+import System.Random (StdGen, mkStdGen, newStdGen)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..), emptyItemManager)
@@ -493,6 +494,64 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
             null refused `shouldBe` False
             null treated `shouldBe` False
 
+        -- The pool the treatment draws from has four writer threads
+        -- (unit, combat, world, Lua), so "the refused call put it back"
+        -- is not a guarantee anyone can make: a restore that ran after
+        -- somebody else's draw would either clobber theirs or give up.
+        -- The reservation makes the refusal path write to that ref at
+        -- all, which is what this pins with a SECOND writer churning it
+        -- underneath.
+        it "writes nothing to the stat RNG while another thread churns it" $ \env → do
+            resetPages env
+            ls ← newBareLuaBackend env
+            stop ← newIORef False
+            movesDone ← newEmptyMVar
+            rngDone ← newEmptyMVar
+            _ ← forkIO $
+                let spin n = do
+                        halt ← readIORef stop
+                        if halt then putMVar movesDone () else do
+                            atomicModifyIORef' (unitManagerRef env) $ \um →
+                                ( movedTo um patientUid
+                                    (if even n then 11 else 20, 10), () )
+                            spin (n + 1)
+                in spin (0 ∷ Int)
+            -- The rival RNG consumer. It writes only values drawn from a
+            -- small fixed palette, so anything else sitting in the ref
+            -- afterwards can only have been written by the verb.
+            _ ← forkIO $
+                let spin n = do
+                        halt ← readIORef stop
+                        if halt then putMVar rngDone () else do
+                            writeIORef (statRNGRef env)
+                                (rngPalette !! (n `mod` length rngPalette))
+                            spin (n + 1)
+                in spin (0 ∷ Int)
+            outcomes ← forM [1 .. 300 ∷ Int] $ \_ → do
+                restock env
+                b4 ← untouched env
+                r  ← treatResult ls (bleed patientUid Nothing)
+                af ← untouched env
+                g  ← readIORef (statRNGRef env)
+                pure (r, b4, af, T.pack (show g))
+            writeIORef stop True
+            takeMVar movesDone
+            takeMVar rngDone
+            newStdGen ⌦ writeIORef (statRNGRef env)
+
+            let refused = [ o | o@(r, _, _, _) ← outcomes, isReachRefusal r ]
+                treated = [ o | o@(r, _, _, _) ← outcomes, r ≡ q "true|treated" ]
+                palette = map (T.pack ∘ show) rngPalette
+            -- Everything the verb owns is untouched by a refusal, even
+            -- though the RNG itself is moving for reasons of its own.
+            [ (b4, af) | (_, b4, af, _) ← refused
+                       , b4 { unStatRNG = "" } ≢ af { unStatRNG = "" } ]
+                `shouldBe` []
+            -- ...and the ref still holds a value only the rival wrote.
+            [ g | (_, _, _, g) ← refused, g `notElem` palette ] `shouldBe` []
+            null refused `shouldBe` False
+            null treated `shouldBe` False
+
     describe "the reach is one number, and it is the boundary" $ do
 
         it "unit.treatmentRange() reports the engine's own constant" $ \env → do
@@ -751,3 +810,9 @@ untouched env = do
 place ∷ EngineEnv → UnitId → (Float, Float) → IO ()
 place env u xy = atomicModifyIORef' (unitManagerRef env) $ \um →
     (movedTo um u xy, ())
+
+
+-- | The rival RNG consumer's whole vocabulary. Small and fixed so a
+--   sample can be attributed: a value outside it is one the verb wrote.
+rngPalette ∷ [StdGen]
+rngPalette = [ mkStdGen k | k ← [90001 .. 90008] ]
