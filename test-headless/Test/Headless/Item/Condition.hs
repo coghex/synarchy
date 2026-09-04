@@ -1,7 +1,8 @@
 {-# LANGUAGE Strict #-}
--- | Condition is runtime wear state, not authored item data (#1421).
+-- | Condition is runtime wear state, not authored item data (#1421),
+--   and a ground spawn's own arguments are held to their domains.
 --
---   Three claims are gated here, each against the production code
+--   Four claims are gated here, each against the production code
 --   rather than a restatement of it:
 --
 --   1. __Fresh items start at 100.__ Nothing rolls a starting condition
@@ -33,6 +34,20 @@
 --      that show a condition line show it only below 100, so a line
 --      appearing means the item has actually taken wear.
 --
+--   4. __A spawn's GEOMETRY has a domain too, and it belongs to the
+--      stored value.__ @item.spawnGround@,
+--      @world.spawnLocationSignificantItem@ and @blood.spawn@ each
+--      refuse a coordinate — and @blood.spawn@ every control it keeps
+--      as a 'Float' — that is missing, unconvertible, NaN, infinite, or
+--      finite in Lua but infinite once narrowed (#2336). Nothing
+--      downstream raises on one: @floor@ of a NaN is 0, so the item or
+--      decal resolves tile (0, 0) with NaN offsets and renders to a
+--      discarded quad. A ground item's position then persists exactly,
+--      so the load boundary drops an entry a pre-#2336 build already
+--      let through — warning once, never refusing the load, and
+--      leaving every reference to it dangling rather than inventing a
+--      replacement.
+--
 --   Run just this gate: @cabal test synarchy-test-headless
 --   --test-options='--match "Item.Condition"'@.
 module Test.Headless.Item.Condition (spec) where
@@ -46,7 +61,7 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Control.Monad (foldM)
 import Data.Either (isLeft, isRight)
-import Data.List (sort)
+import Data.List (find, sort)
 import Data.IORef
     (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Combat.Resolution.Damage (ResolvedStrike(..), resolveStrike)
@@ -61,7 +76,41 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Equipment.Types (EquipmentClass(..), EquipmentSlot(..))
-import Item.Ground (GroundItem(..), GroundItems(..), spawnGroundItem)
+import Blood.Types (BloodDecal(..), BloodStore(..), allDecals)
+import Building.Types (BuildingId(..))
+import Engine.Core.Log
+    ( LogBackend(..), LogCategory(..), LogConfig(..), LogEntry(..)
+    , LogLevel(..), LoggerState, defaultLogConfig, initLogger )
+import Engine.Graphics.Camera (CameraFacing(..))
+import Item.Ground
+    ( GroundItem(..), GroundItems(..), groundPositionIsFinite
+    , sanitizeGroundItems, spawnGroundItem )
+import Location.Instance
+    ( LocationInstance(..), LocationInstanceId(..), LocationInstances(..)
+    , LocationLifecycle(..), LocationSignificantItem(..)
+    , emptyLocationInstances, firstLocationInstanceId
+    , lookupLocationInstance )
+import Location.Bounds (AbsBounds(..))
+import Structure.Palette (emptyTexPalette)
+import Unit.Transfer
+    ( QueuedTransfer(..), TransferBatch(..), TransferEndpoint(..)
+    , TransferItemRef(..), TransferState(..) )
+import Unit.Transfer.Orders
+    (TransferOrders, addTransferOrder, emptyTransferOrders)
+import World.Chunk.Types (ChunkCoord(..))
+import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
+import World.Load.Stage
+    (stageSession, renderStageError, stagedGroundItemWarning)
+import World.Load.Types (StagedPage(..), StagedSession(..))
+import World.Save.Component.Page (blankPageSnapshot)
+import World.Save.Snapshot
+    (LiveCameraSnapshot(..), PageSnapshot(..), SessionSnapshot(..))
+import World.Save.Integrity
+    (IntegrityError(..), LuaRefEdge(..), luaReferenceErrors)
+import World.Save.Payload (LoadReconcileContext(..))
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
+import World.Save.Types (SaveData, UnitSnapshot(..), toUnitSnapshot)
+import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import Item.Roll
     ( GroundConditionBase, groundConditionBaseDomain
     , groundConditionBaseRange, groundConditionPenaltyRange
@@ -320,6 +369,352 @@ rejectedConditionExprs =
     , ("+Infinity",             "1/0")
     , ("-Infinity",             "-1/0")
     ]
+
+-- * Non-finite spawn geometry (#2336)
+--
+-- The distinction every table below turns on: the domain belongs to
+-- the value that is STORED, not to the number Lua handed over. A
+-- @GroundItem@ and a @BloodDecal@ keep 'Float's, so @1e39@ — a
+-- perfectly ordinary finite Lua number — is out of the domain because
+-- narrowing it produces an infinity, and a check written against the
+-- incoming 'Double' would wave it through.
+
+-- | Which coordinate argument carries the poison. Every ground-spawn
+--   example below runs both, so an x-only guard cannot satisfy the
+--   contract.
+data CoordSlot = SlotX | SlotY deriving (Eq, Show)
+
+coordSlots ∷ [CoordSlot]
+coordSlots = [SlotX, SlotY]
+
+coordSlotName ∷ CoordSlot → String
+coordSlotName SlotX = "x"
+coordSlotName SlotY = "y"
+
+-- | The coordinates both ground-spawn verbs must refuse, as the Lua
+--   expressions that produce them.
+--
+--   @nil@ and a non-numeric string are what @Lua.tonumber@ itself
+--   refuses — the "missing or unconvertible" half, which is unchanged
+--   behaviour for the arity case and newly load-bearing for the rest.
+--   @0/0@ and @±math.huge@ are genuine NaN and infinities under Lua
+--   5.4 float division. @±1e39@ is the case only a post-narrowing check
+--   catches.
+rejectedCoordExprs ∷ [(String, Text)]
+rejectedCoordExprs =
+    [ ("missing",                        "nil")
+    , ("unconvertible",                  "'not a number'")
+    , ("NaN",                            "0/0")
+    , ("+Infinity",                      "math.huge")
+    , ("-Infinity",                      "-math.huge")
+    , ("finite but overflowing a Float", "1e39")
+    , ("finite but overflowing a Float, negative", "-1e39")
+    ]
+
+-- | @item.spawnGround@ with @expr@ in @slot@ and a good coordinate in
+--   the other.
+spawnGroundCall ∷ CoordSlot → Text → Text
+spawnGroundCall SlotX expr = "item.spawnGround('ration', " <> expr <> ", 4)"
+spawnGroundCall SlotY expr = "item.spawnGround('ration', 3, " <> expr <> ")"
+
+-- | @world.spawnLocationSignificantItem@ against 'significantIid''s
+--   one owed slot, likewise.
+significantCall ∷ CoordSlot → Text → Text
+significantCall SlotX expr =
+    "world.spawnLocationSignificantItem(1, 1, " <> expr <> ", 4)"
+significantCall SlotY expr =
+    "world.spawnLocationSignificantItem(1, 1, 3, " <> expr <> ")"
+
+-- * The significant-obligation fixture (#917, borrowed)
+
+significantIid ∷ LocationInstanceId
+significantIid = LocationInstanceId 1
+
+significantSlot ∷ Int
+significantSlot = 1
+
+-- | A placed location owing exactly ONE unbound "ration", so
+--   @world.spawnLocationSignificantItem@ has a real obligation to fill
+--   and a refusal has a real binding to leave alone. Every other field
+--   is at a value these examples never read.
+owedInstance ∷ LocationInstance
+owedInstance = LocationInstance
+    { liId              = significantIid
+    , liDefId           = "ruin_small"
+    , liChunk           = ChunkCoord 0 0
+    , liAnchor          = (0, 0)
+    , liBounds          = AbsBounds 0 0 8 8
+    , liDisplayName     = "Small Ruin"
+    , liGloss           = Nothing
+    , liEtymology       = Nothing
+    , liLifecycle       = LifecycleDiscovered
+    , liContentsSpawned = False
+    , liEncounter       = Nothing
+    , liSignificant     =
+        [ LocationSignificantItem
+            { lsiSlot        = significantSlot
+            , lsiItemDefName = "ration"
+            , lsiInstanceId  = Nothing
+            , lsiTaken       = False } ]
+    , liClearEventEmitted = False
+    }
+
+-- | 'resetScene' plus that obligation on the page's gen params.
+resetSignificantScene ∷ EngineEnv → IO WorldState
+resetSignificantScene env = do
+    ws ← resetScene env
+    writeIORef (wsGenParamsRef ws) $ Just defaultWorldGenParams
+        { wgpLocationInstances = emptyLocationInstances
+            { lisNextId = firstLocationInstanceId + 1
+            , lisById   = HM.singleton significantIid owedInstance } }
+    pure ws
+
+-- | Everything a REFUSED significant spawn must leave alone: all four
+--   ground-spawn observables, plus the obligation's own binding and
+--   its taken latch.
+data SignificantObservation = SignificantObservation
+    { sigGround  ∷ GroundObservation
+    , sigBinding ∷ Maybe (Maybe Word64, Bool)
+    } deriving (Eq, Show)
+
+observeSignificant ∷ EngineEnv → WorldState → IO SignificantObservation
+observeSignificant env ws = do
+    g ← observeGround env ws
+    mParams ← readIORef (wsGenParamsRef ws)
+    let binding = do
+            p    ← mParams
+            inst ← lookupLocationInstance significantIid
+                       (wgpLocationInstances p)
+            e    ← find ((≡ significantSlot) ∘ lsiSlot) (liSignificant inst)
+            pure (lsiInstanceId e, lsiTaken e)
+    pure (SignificantObservation g binding)
+
+-- * The blood-decal fixture
+
+-- | Every @blood.spawn@ control the decal keeps as a 'Float'. The two
+--   positional coordinates are named here beside the five props so a
+--   control added later is either in this list or visibly absent.
+bloodGeometryFields ∷ [Text]
+bloodGeometryFields =
+    ["x", "y", "offsetX", "offsetY", "rotation", "scale", "opacity"]
+
+-- | The values that are non-finite ONCE STORED — the sweep every one of
+--   those fields gets.
+bloodNonFiniteExprs ∷ [(String, Text)]
+bloodNonFiniteExprs =
+    [ ("NaN",                            "0/0")
+    , ("+Infinity",                      "math.huge")
+    , ("-Infinity",                      "-math.huge")
+    , ("finite but overflowing a Float", "1e39")
+    ]
+
+-- | @blood.spawn@ with @expr@ in @field@ and everything else left at a
+--   value the verb accepts.
+bloodSpawnCall ∷ Text → Text → Text
+bloodSpawnCall "x" expr = "blood.spawn(" <> expr <> ", 2, 'cut', 'minor')"
+bloodSpawnCall "y" expr = "blood.spawn(1, " <> expr <> ", 'cut', 'minor')"
+bloodSpawnCall field expr =
+    "blood.spawn(1, 2, 'cut', 'minor', {" <> field <> " = " <> expr <> "})"
+
+-- | Both of @blood.spawn@'s return values, folded into one string,
+--   because the debug console reports only the first.
+bloodResult ∷ LuaBackendState → Text → IO Text
+bloodResult ls call = runOk ls $
+    "local a, b = " <> call <> "; return tostring(a) .. '|' .. tostring(b)"
+
+-- * The staged-load fixture (#2336 requirement 3)
+
+stagedPageId ∷ WorldPageId
+stagedPageId = WorldPageId "item_condition_staged"
+
+-- | The three ground entries the forged save carries. Ids and instance
+--   ids are distinct and hand-written so every assertion below can name
+--   exactly one of them.
+--
+--   Only ONE is poisoned, which is what makes "exactly one warning"
+--   measurable, and it sits BETWEEN two good entries so a filter that
+--   truncated instead of filtering would be caught.
+goodGidA, poisonedGid, goodGidB ∷ Int
+goodGidA    = 0
+poisonedGid = 1
+goodGidB    = 2
+
+goodIidA, poisonedIid, goodIidB ∷ Word64
+goodIidA    = 900
+poisonedIid = 901
+goodIidB    = 902
+
+-- | @gisNextId@ deliberately runs AHEAD of the highest live id: a
+--   dropped entry must not rewind it, and an allocator equal to
+--   @maximum + 1@ could not tell "preserved" from "recomputed".
+savedGroundNextId ∷ Int
+savedGroundNextId = 40
+
+savedGroundItems ∷ GroundItems
+savedGroundItems = GroundItems
+    { gisNextId = savedGroundNextId
+    , gisItems  = HM.fromList
+        [ (goodGidA,    GroundItem (mkItem "ration" goodIidA 100) 3 4)
+        , (poisonedGid, GroundItem (mkItem "worn_tool" poisonedIid 60)
+                                   (0 / 0) 4)
+        , (goodGidB,    GroundItem (mkItem "ration" goodIidB 100) 5 6)
+        ] }
+
+-- | One durable order naming BOTH a surviving ground item and the
+--   dropped one, so the load-time dangling diagnostic reports exactly
+--   the reference the sanitation invalidated. If staging built its
+--   entity set from the DECODED map instead of the sanitized one,
+--   neither would be reported.
+savedOrders ∷ TransferOrders
+savedOrders = case addTransferOrder (UnitId 11) batch emptyTransferOrders of
+    Just (orders, _) → orders
+    Nothing → error "fixture: addTransferOrder refused a fresh allocator"
+  where
+    batch = TransferBatch
+        { tbSource      = EndpointUnit (UnitId 11)
+        , tbDestination = EndpointBuilding (BuildingId 777)
+        , tbEntries =
+            [ QueuedTransfer
+                { qtItem = TransferItemRef
+                    { tirInstanceId = fromIntegral goodIidA
+                    , tirDefName    = "ration" }
+                , qtState = TransferQueued }
+            , QueuedTransfer
+                { qtItem = TransferItemRef
+                    { tirInstanceId = fromIntegral poisonedIid
+                    , tirDefName    = "worn_tool" }
+                , qtState = TransferQueued }
+            ] }
+
+-- | The obligation the save carries already BOUND to the item staging
+--   is about to drop. Nothing may rebind it, clear it, or latch it
+--   taken: a dangling obligation is the honest record of what happened,
+--   and inventing a replacement would hand the player a reward the
+--   location never spawned.
+boundInstance ∷ LocationInstance
+boundInstance = owedInstance
+    { liSignificant =
+        [ LocationSignificantItem
+            { lsiSlot        = significantSlot
+            , lsiItemDefName = "worn_tool"
+            , lsiInstanceId  = Just poisonedIid
+            , lsiTaken       = False } ] }
+
+-- | An ARENA page (the empty timeline at seed 0), so staging takes the
+--   flat-chunk rebuild instead of generating a world — this is an
+--   example about the sanitation, not about worldgen. Mirrors
+--   "Test.Headless.World.GenConfigDomain"'s staging fixture.
+stagedParams ∷ WorldGenParams
+stagedParams = defaultWorldGenParams
+    { wgpSeed = 0
+    , wgpLocationInstances = emptyLocationInstances
+        { lisNextId = firstLocationInstanceId + 1
+        , lisById   = HM.singleton significantIid boundInstance } }
+
+-- | The unit that OWNS the Lua @ground_item@ reference below.
+--   'luaEdgeResolves' resolves that kind against the owning unit's page
+--   only, so without a real unit on the page every such edge would fail
+--   to resolve whatever the ground map said — and the example would
+--   prove nothing.
+ownerUid ∷ UnitId
+ownerUid = UnitId 11
+
+savedUnits ∷ UnitSnapshot
+savedUnits = toUnitSnapshot stagedPageId emptyUnitManager
+    { umInstances = HM.singleton ownerUid holder { uiPage = stagedPageId }
+    , umNextId    = 12 }
+
+-- | The forged save, built the way a real one is: a 'SessionSnapshot'
+--   through 'snapshotToSaveData', which is the adapter staging's own
+--   input comes from.
+--
+--   Staged as-is (no units, so the transfer-order example's references
+--   dangle by construction); 'savedWithOwner' adds the unit the
+--   reference-edge example needs and is never staged.
+poisonedSave ∷ SaveData
+poisonedSave = poisonedSaveWith (UnitSnapshot HM.empty 0)
+
+savedWithOwner ∷ SaveData
+savedWithOwner = poisonedSaveWith savedUnits
+
+poisonedSaveWith ∷ UnitSnapshot → SaveData
+poisonedSaveWith units = snapshotToSaveData
+    (SaveRequestMeta "item_condition_slot" "2026-09-04T00:00:00.000000Z" False)
+    SessionSnapshot
+        { snapGameTime       = 0
+        , snapTexPalette     = emptyTexPalette
+        , snapNextItemId     = savedNextItemId
+        , snapNextBuildingId = 1
+        , snapNextUnitId     = 1
+        , snapActivePage     = stagedPageId
+        , snapVisiblePages   = [stagedPageId]
+        , snapLiveCamera     = LiveCameraSnapshot
+            { lcsOwnerPage = Just stagedPageId
+            , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceSouth }
+        , snapPages          = HM.singleton stagedPageId
+            ((blankPageSnapshot stagedPageId stagedParams)
+                { pgsGroundItems    = savedGroundItems
+                , pgsTransferOrders = savedOrders
+                , pgsUnits          = units })
+        }
+
+-- | The global item-instance cursor the save carries, above every
+--   instance id in it, so "preserved" is a real assertion.
+savedNextItemId ∷ Word64
+savedNextItemId = 1000
+
+-- | A logger whose entries are captured in emission order, so "exactly
+--   one warning" can be asserted rather than "at least one".
+capturingLogger ∷ IO (LoggerState, IO [LogEntry])
+capturingLogger = do
+    ref ← newIORef []
+    logger ← initLogger defaultLogConfig
+        { lcBackend = LogToCallback
+            (\e → atomicModifyIORef' ref (\es → (e : es, ()))) }
+    pure (logger, reverse ⊚ readIORef ref)
+
+-- | One Lua reference edge of @kind@ naming @rid@, owned by
+--   'ownerUid' on the staged page — the shape
+--   @scripts\/unit_ai_reconcile.lua@'s repair jobs, pickup orders and
+--   forage targets declare.
+refEdge ∷ Text → Text → Int → LuaRefEdge
+refEdge kind path rid = LuaRefEdge
+    { lreComponent = "unit_ai"
+    , lreKind      = kind
+    , lreId        = rid
+    , lreOwner     = Just (fromIntegral (unUnitId ownerUid))
+    , lrePath      = path
+    , lrePage      = Just (unWorldPageId stagedPageId)
+    }
+
+-- | Warnings whose message names @needle@ (mirrors
+--   "Test.Headless.World.GenConfigDomain"'s helper).
+warningsMentioning ∷ Text → [LogEntry] → [LogEntry]
+warningsMentioning needle =
+    filter (\e → leLevel e ≡ LevelWarn ∧ needle `T.isInfixOf` leMessage e)
+
+-- | Stage 'poisonedSave' through the REAL entry point, handing back the
+--   staged session and its one page beside everything the logger
+--   emitted.
+--
+--   A 'StageError' fails the example outright, so every caller is also
+--   asserting that a poisoned save still LOADS — requirement 3's
+--   \"never refuses the load for it\".
+stagePoisoned ∷ HasCallStack ⇒ EngineEnv
+              → IO (StagedSession, WorldState, [LogEntry])
+stagePoisoned env = do
+    writeIORef (itemManagerRef env) testItems
+    (logger, drain) ← capturingLogger
+    matReg ← readIORef (materialRegistryRef env)
+    staged ← stageSession env logger poisonedSave matReg ⌦ either
+        (\e → expectationFailure (T.unpack (renderStageError e))
+                ≫ error "unreachable")
+        pure
+    entries ← drain
+    case find ((≡ stagedPageId) ∘ spPageId) (ssPages staged) of
+        Nothing → expectationFailure "the staged page is missing"
+                    ≫ error "unreachable"
+        Just sp → pure (staged, spWorldState sp, entries)
 
 -- * YAML fixtures
 
@@ -704,6 +1099,304 @@ spec = describe "Item.Condition" $ do
                     readPanel worn     `shouldReturn` q "true,false"
                     readPanel broken   `shouldReturn` q "true,true"
                 _ → expectationFailure "expected three ground items"
+
+    -- 5. Non-finite spawn geometry (#2336), at the three live
+    --    boundaries that could admit it and at the load boundary that
+    --    could restore it.
+
+    describe "non-finite spawn geometry" $ do
+
+      describe "item.spawnGround coordinates" $ do
+
+        forM_ coordSlots $ \slot →
+          forM_ rejectedCoordExprs $ \(label, expr) →
+            it ("refuses a " ⧺ coordSlotName slot ⧺ " that is " ⧺ label
+                ⧺ ", answering nil and mutating nothing") $ \env → do
+                ws ← resetScene env
+                ls ← newBareLuaBackend env
+                writeIORef (statRNGRef env) (mkStdGen 20260904)
+                before ← observeGround env ws
+                r ← runOk ls $
+                    "return tostring(" <> spawnGroundCall slot expr <> ")"
+                r `shouldBe` q "nil"
+                -- The same four surfaces #1790's condition refusal
+                -- leaves alone, for the same reason: a refused spawn
+                -- must not shift a later gameplay roll.
+                after ← observeGround env ws
+                after `shouldBe` before
+
+        it "still accepts a numeric STRING and every magnitude a Float \
+           \can actually hold, so the refusals above are not vacuous" $
+          \env → do
+            ws ← resetScene env
+            ls ← newBareLuaBackend env
+            r ← runOk ls $ luaLines
+                [ "local a = item.spawnGround('ration', '3.5', 4);"
+                , "local b = item.spawnGround('ration', 1e38, -1e38);"
+                , "return string.format('%s,%s', tostring(a ~= nil),"
+                , "  tostring(b ~= nil))"
+                ]
+            r `shouldBe` q "true,true"
+            gis ← readIORef (wsGroundItemsRef ws)
+            sort (map giX (HM.elems (gisItems gis)))
+                `shouldBe` [3.5, 1e38]
+
+      describe "world.spawnLocationSignificantItem coordinates" $ do
+
+        forM_ coordSlots $ \slot →
+          forM_ rejectedCoordExprs $ \(label, expr) →
+            it ("refuses a " ⧺ coordSlotName slot ⧺ " that is " ⧺ label
+                ⧺ ", answering false and binding nothing") $ \env → do
+                ws ← resetSignificantScene env
+                ls ← newBareLuaBackend env
+                writeIORef (statRNGRef env) (mkStdGen 20260904)
+                before ← observeSignificant env ws
+                r ← runOk ls $
+                    "return tostring(" <> significantCall slot expr <> ")"
+                r `shouldBe` q "false"
+                after ← observeSignificant env ws
+                after `shouldBe` before
+                -- Spelled out as well as compared, so a fixture that
+                -- somehow started bound could not make the equality
+                -- above pass vacuously.
+                sigBinding after `shouldBe` Just (Nothing, False)
+
+        it "an ACCEPTED spawn fills the slot and moves those same \
+           \observables" $ \env → do
+            ws ← resetSignificantScene env
+            ls ← newBareLuaBackend env
+            before ← observeSignificant env ws
+            sigBinding before `shouldBe` Just (Nothing, False)
+            r ← runOk ls $
+                "return tostring(" <> significantCall SlotX "3" <> ")"
+            r `shouldBe` q "true"
+            after ← observeSignificant env ws
+            sigGround after `shouldNotBe` sigGround before
+            case sigBinding after of
+                Just (Just _, False) → pure ()
+                other → expectationFailure
+                    ("expected the slot bound and untaken, got "
+                     ⧺ show other)
+
+      describe "blood.spawn geometry" $ do
+
+        forM_ bloodGeometryFields $ \field →
+          forM_ bloodNonFiniteExprs $ \(label, expr) →
+            it ("refuses a " ⧺ T.unpack field ⧺ " that is " ⧺ label
+                ⧺ ", names it in the reason, and leaves the whole store \
+                  \untouched") $ \env → do
+                ws ← resetScene env
+                ls ← newBareLuaBackend env
+                before ← readIORef (wsBloodStoreRef ws)
+                r ← bloodResult ls (bloodSpawnCall field expr)
+                r `shouldSatisfy` T.isInfixOf "nil|blood.spawn: "
+                -- The reason names the field that was actually
+                -- poisoned, so a guard that checked the wrong one
+                -- cannot pass.
+                r `shouldSatisfy` T.isInfixOf (field <> " = ")
+                readIORef (wsBloodStoreRef ws) `shouldReturn` before
+
+        forM_ [ ("scale",   "zero",     "0")
+              , ("scale",   "negative", "-1")
+              , ("opacity", "below 0",  "-0.0001")
+              , ("opacity", "above 1",  "2") ] $ \(field, label, expr) →
+            it ("refuses a " ⧺ T.unpack field ⧺ " " ⧺ label
+                ⧺ ", leaving the whole store untouched") $ \env → do
+                ws ← resetScene env
+                ls ← newBareLuaBackend env
+                before ← readIORef (wsBloodStoreRef ws)
+                r ← bloodResult ls (bloodSpawnCall field expr)
+                r `shouldSatisfy`
+                    T.isInfixOf ("nil|blood.spawn: " <> field <> " = ")
+                readIORef (wsBloodStoreRef ws) `shouldReturn` before
+
+        it "accepts a positive finite scale and BOTH opacity endpoints, \
+           \storing each unchanged" $ \env → do
+            ws ← resetScene env
+            ls ← newBareLuaBackend env
+            r ← runOk ls $ luaLines
+                [ "local a = blood.spawn(1, 2, 'cut', 'minor',"
+                , "  {scale = 0.5, opacity = 0});"
+                , "local b = blood.spawn(3, 4, 'cut', 'moderate',"
+                , "  {scale = 2, opacity = 1});"
+                , "return string.format('%s,%s', tostring(a ~= nil),"
+                , "  tostring(b ~= nil))"
+                ]
+            r `shouldBe` q "true,true"
+            store ← readIORef (wsBloodStoreRef ws)
+            -- The closed opacity interval, and the values arriving
+            -- exactly as named: requirement 4's no-accepted-call-changes
+            -- clause is what forbids clamping these instead.
+            map (\d → (bdeScale d, bdeOpacity d))
+                (allDecals (bstDecals store))
+                `shouldBe` [(0.5, 0), (2, 1)]
+
+        it "leaves an absent or unconvertible control on its documented \
+           \default, exactly as before" $ \env → do
+            ws ← resetScene env
+            ls ← newBareLuaBackend env
+            r ← runOk ls $ luaLines
+                [ "local a = blood.spawn(1, 2, 'cut', 'minor',"
+                , "  {scale = 'not a number', opacity = {}});"
+                , "return tostring(a ~= nil)"
+                ]
+            r `shouldBe` q "true"
+            store ← readIORef (wsBloodStoreRef ws)
+            map (\d → (bdeScale d, bdeOpacity d))
+                (allDecals (bstDecals store))
+                `shouldBe` [(1, 1)]
+
+      -- Requirement 3. Every example here stages through the real
+      -- 'stageSession', which 'stagePoisoned' makes fail loudly on a
+      -- 'StageError' — so each one is also the assertion that a
+      -- poisoned save still LOADS.
+      describe "a staged load" $ do
+
+        -- The pure half first: 'stagePoisoned' below drives ONE
+        -- poisoned entry through the real boundary, which cannot on its
+        -- own distinguish a filter that checks both axes from one that
+        -- checks only x.
+        it "the filter rejects on EITHER axis, for NaN and both \
+           \infinities, and keeps every finite position a Float holds" $
+          \_ → do
+            let at x y = GroundItem (mkItem "ration" 1 100) x y
+                nonFinite = [0 / 0, 1 / 0, -1 / 0]
+            map (\v → groundPositionIsFinite (at v 4)) nonFinite
+                `shouldBe` replicate 3 False
+            map (\v → groundPositionIsFinite (at 3 v)) nonFinite
+                `shouldBe` replicate 3 False
+            map (\(x, y) → groundPositionIsFinite (at x y))
+                [(0, 0), (-1e38, 1e38), (3.5, -2.5)]
+                `shouldBe` replicate 3 True
+
+        it "sanitizeGroundItems drops exactly those entries, leaves \
+           \every surviving id where it was, never rewinds the \
+           \allocator, and reports in ascending id order" $ \_ → do
+            let at x y = GroundItem (mkItem "ration" 1 100) x y
+                gis = GroundItems
+                    { gisNextId = 40
+                    , gisItems  = HM.fromList
+                        [ (5, at 1 2), (2, at (0 / 0) 2)
+                        , (9, at 3 (1 / 0)), (7, at 4 5) ] }
+                (kept, dropped) = sanitizeGroundItems gis
+            sort (HM.keys (gisItems kept)) `shouldBe` [5, 7]
+            gisNextId kept `shouldBe` 40
+            map fst dropped `shouldBe` [2, 9]
+
+        it "drops the entry stored at a non-finite position, keeps every \
+           \other, preserves gisNextId and the global item cursor, and \
+           \warns exactly once naming the page and the page-local id" $
+          \env → do
+            (staged, ws, entries) ← stagePoisoned env
+            gis ← readIORef (wsGroundItemsRef ws)
+            sort (HM.keys (gisItems gis)) `shouldBe` [goodGidA, goodGidB]
+            sort (map (iiInstanceId ∘ giInst) (HM.elems (gisItems gis)))
+                `shouldBe` [goodIidA, goodIidB]
+            -- Dropping an entry retires an id; it never rewinds the
+            -- allocator, and never touches the process-wide cursor.
+            gisNextId gis `shouldBe` savedGroundNextId
+            ssNextItemId staged `shouldBe` savedNextItemId
+
+            let poisoned = HM.lookup poisonedGid (gisItems savedGroundItems)
+            case (poisoned, warningsMentioning "ground item" entries) of
+                (Just gi, [entry]) → do
+                    leCategory entry `shouldBe` CatWorld
+                    -- The facts the warning has to carry, spelled out
+                    -- HERE rather than read back out of the renderer:
+                    -- an expectation built only from
+                    -- 'stagedGroundItemWarning' agrees with whatever
+                    -- that function says, including a wrong id.
+                    let msg = leMessage entry
+                    msg `shouldSatisfy`
+                        T.isInfixOf (unWorldPageId stagedPageId)
+                    msg `shouldSatisfy`
+                        T.isInfixOf ("ground item " <> tshow poisonedGid)
+                    -- …and it names THAT entry, not a surviving sibling.
+                    forM_ [goodGidA, goodGidB] $ \gid →
+                        msg `shouldNotSatisfy`
+                            T.isInfixOf ("ground item " <> tshow gid)
+                    msg `shouldSatisfy` T.isInfixOf "worn_tool"
+                    msg `shouldSatisfy` T.isInfixOf "NaN"
+                    -- The whole line, once those facts are pinned, so
+                    -- the rendering itself cannot drift silently.
+                    msg `shouldBe`
+                        stagedGroundItemWarning stagedPageId
+                                                (poisonedGid, gi)
+                (Nothing, _) → expectationFailure
+                    "the fixture lost its poisoned entry"
+                (_, other) → expectationFailure
+                    ("expected exactly one sanitation warning, got "
+                     ⧺ show (map leMessage other))
+
+        it "resolves the durable-order diagnostic against the SANITIZED \
+           \map — the dropped item's reference dangles, the surviving \
+           \one does not — and keeps the order verbatim" $ \env → do
+            (_, ws, entries) ← stagePoisoned env
+            -- Retained, not pruned: a dangling order is tolerated
+            -- gameplay, exactly as #1246 already has it.
+            readIORef (wsTransferOrdersRef ws) `shouldReturn` savedOrders
+            let diagnostics =
+                    [ leMessage e
+                    | e ← entries
+                    , "transfer-order integrity diagnostic"
+                          `T.isInfixOf` leMessage e ]
+                mentions iid = any (T.isInfixOf (tshow iid)) diagnostics
+            -- Had staging built its entity set from the DECODED map,
+            -- the dropped item would still have resolved and nothing
+            -- would be reported for it.
+            mentions poisonedIid `shouldBe` True
+            mentions goodIidA `shouldBe` False
+
+        it "hands Lua a reconciliation context describing the RESTORED \
+           \session, not the save as decoded: the dropped entry's \
+           \ground id and item-instance id are both absent from it" $
+          \env → do
+            (staged, _, _) ← stagePoisoned env
+            let rc = ssReconcile staged
+            -- What @onSaveLoaded@ receives. A dropped id left in here
+            -- tells @scripts/unit_ai_reconcile.lua@ that a repair job,
+            -- pickup order or forage target still points at something.
+            fmap sort (lookup (unWorldPageId stagedPageId)
+                              (lrcGroundItemsByPage rc))
+                `shouldBe` Just [goodGidA, goodGidB]
+            sort (lrcItemInstances rc)
+                `shouldBe` sort (map fromIntegral [goodIidA, goodIidB])
+
+        it "reports a durable Lua ground_item or item_instance reference \
+           \to the dropped entry as no longer resolving — tolerated and \
+           \cleared, never a load failure — while a reference to a \
+           \surviving entry still resolves" $ \_ → do
+            -- The same 'KnownEntities' the reconciliation context is
+            -- projected from, so this pins the shared derivation #1589
+            -- exists to keep single rather than a second copy of it.
+            let known = knownEntitiesFromSaveData savedWithOwner
+                errors = luaReferenceErrors HM.empty known
+                    [ refEdge "ground_item"   "dropped.ground"     poisonedGid
+                    , refEdge "ground_item"   "surviving.ground"   goodGidA
+                    , refEdge "item_instance" "dropped.instance"
+                          (fromIntegral poisonedIid)
+                    , refEdge "item_instance" "surviving.instance"
+                          (fromIntegral goodIidA)
+                    ]
+            map iePath errors
+                `shouldBe` ["dropped.ground", "dropped.instance"]
+            forM_ errors $ \e →
+                ieMessage e `shouldSatisfy`
+                    T.isInfixOf "tolerated: cleared at reconcile time"
+
+        it "leaves a significant obligation bound to the dropped item \
+           \exactly as the save recorded it: dangling, never rebound, \
+           \never latched taken" $ \env → do
+            (_, ws, _) ← stagePoisoned env
+            mParams ← readIORef (wsGenParamsRef ws)
+            let entry = do
+                    p    ← mParams
+                    inst ← lookupLocationInstance significantIid
+                               (wgpLocationInstances p)
+                    find ((≡ significantSlot) ∘ lsiSlot) (liSignificant inst)
+            (lsiInstanceId ⊚ entry) `shouldBe` Just (Just poisonedIid)
+            (lsiTaken ⊚ entry) `shouldBe` Just False
+            (lsiItemDefName ⊚ entry) `shouldBe` Just "worn_tool"
 
 -- | A weapon so 'resolveStrike' has geometry to resolve; only the
 --   instance's condition varies between the cases below.
