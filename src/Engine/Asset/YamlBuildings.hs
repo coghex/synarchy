@@ -455,8 +455,9 @@ defMaterials name v = case KM.lookup "materials" v of
 --      Taking the whole 'Aeson.Value' is what lets the wrong-type
 --      branch still name the building, the key and the authored value,
 --      instead of failing with aeson\'s own JSON-path error. This is
---      exactly the boundary 'Engine.Asset.YamlFlora.requireRegrowthTime'
---      documents for the required-field case.
+--      exactly the boundary @Engine.Asset.YamlFlora.requireRegrowthTime@
+--      documents for the required-field case (it is module-private, so
+--      this names it as a code span rather than a link).
 optionalFloat ∷ Text            -- ^ message context (building, animation)
               → Text            -- ^ the YAML key
               → Text            -- ^ the domain phrase, for the message
