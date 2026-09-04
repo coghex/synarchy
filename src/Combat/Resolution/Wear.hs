@@ -10,7 +10,7 @@ module Combat.Resolution.Wear
     , applyArmorWear
     , staminaCostFraction
     , staminaDrainStats
-    , applyStaminaDrain
+    , spendStrikeCost
     ) where
 
 import UPrelude
@@ -143,7 +143,7 @@ staminaCostFraction ∷ AttackMode → Float
 staminaCostFraction Quick = 0.05
 staminaCostFraction Heavy = 0.25
 
--- | Pure core of 'applyStaminaDrain' — the attacker's post-swing
+-- | Pure core of 'spendStrikeCost' — the attacker's post-swing
 --   stamina/stance, drained by `cost × max_stamina` and the mode's
 --   flat stance cost. Floors at 0 each — the collapse / kill
 --   thresholds are enforced by unit_resources.lua (the same tick path
@@ -173,17 +173,23 @@ staminaDrainStats now mode inst =
         stance'   = max 0.0 (stance - stanceAttackCost mode)
     in HM.insert "stance" stance' $ HM.insert "stamina" new (uiStats inst)
 
--- | Drain the attacker's stamina + stance from one swing (hit or
---   miss). See 'staminaDrainStats' for the pure formula. @now@ is the
---   resolution's own game-time sample, not a fresh read, so this and
---   damage's stamina fraction size the pool against the same instant.
-applyStaminaDrain ∷ EngineEnv → Double → Word32 → AttackMode → IO ()
-applyStaminaDrain env now atkRaw mode =
-    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
-        let uid = UnitId atkRaw
-        in case HM.lookup uid (umInstances um) of
-            Nothing → (um, ())
-            Just inst →
-                let inst' = inst { uiStats = staminaDrainStats now mode inst }
-                    ins   = HM.insert uid inst' (umInstances um)
-                in (um { umInstances = ins }, ())
+-- | Charge the attacker for one swing (hit or miss): its stamina +
+--   stance drained by 'staminaDrainStats'. @now@ is the resolution's
+--   own game-time sample, not a fresh read, so this and damage's
+--   stamina fraction size the pool against the same instant.
+--
+--   PURE, and manager-shaped rather than 'IORef'-shaped, because since
+--   #2328 the charge is not applied on its own: it is one of the writes
+--   'Combat.Resolution.Admission.commitIfAdmitted' applies inside the
+--   SAME transaction that re-checks the strike's preconditions, so a
+--   swing refused at commit cannot be charged for and a swing that
+--   commits cannot pay against a stance some other writer moved after
+--   the check. An attacker that vanished mid-resolution is left alone.
+spendStrikeCost ∷ Double → AttackMode → Word32 → UnitManager → UnitManager
+spendStrikeCost now mode atkRaw um =
+    let uid = UnitId atkRaw
+    in case HM.lookup uid (umInstances um) of
+        Nothing → um
+        Just inst →
+            let inst' = inst { uiStats = staminaDrainStats now mode inst }
+            in um { umInstances = HM.insert uid inst' (umInstances um) }

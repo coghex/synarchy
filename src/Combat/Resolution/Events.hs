@@ -5,6 +5,7 @@
 --   module's haddock for the overall resolution flow that pushes these.
 module Combat.Resolution.Events
     ( missEvent
+    , refusedEvent
     , hitEvent
     , deathEvent
     , pushEvent
@@ -18,6 +19,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Sequence as Seq
 import Data.IORef (atomicModifyIORef')
 import Combat.Types (CombatEvent(..), AttackMode(..), attackModeText)
+import Combat.Resolution.Admission (AttackRefusal, refusalReason)
 import Engine.Core.State (EngineEnv)
 import qualified Engine.Core.Queue as Q
 import Unit.Types (UnitId(..))
@@ -33,6 +35,28 @@ missEvent gt atk tgt mode isLunge isDodge = CombatEvent
         [ ("mode", attackModeText mode) ]
         <> [ ("lunge", "1") | isLunge ]   -- a missed lunge → "lunges but…"
         <> [ ("dodge", "1") | isDodge ]   -- defender evaded → "X dodges…"
+    }
+
+-- | A queued strike that was REFUSED at commit (#2328) — the
+--   preconditions the AI admitted it on no longer hold, so nothing
+--   resolved. Its own kind, never "miss": a strike that never happened
+--   is not a swing that missed, and a consumer that conflated the two
+--   would report a dodge-less whiff the defender never earned.
+--
+--   `reason` carries the stable token from
+--   'Combat.Resolution.Admission.refusalReason'; `mode` matches the
+--   miss/hit events so a consumer can render the swing that was not
+--   thrown.
+refusedEvent ∷ Double → Word32 → Word32 → AttackMode → AttackRefusal → CombatEvent
+refusedEvent gt atk tgt mode refusal = CombatEvent
+    { ceTs       = gt
+    , ceKind     = "refused"
+    , ceAttacker = Just atk
+    , ceTarget   = Just tgt
+    , cePayload  = HM.fromList
+        [ ("mode",   attackModeText mode)
+        , ("reason", refusalReason refusal)
+        ]
     }
 
 hitEvent

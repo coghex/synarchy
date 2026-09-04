@@ -165,6 +165,15 @@ end
 -- Multi-tick: issue the leap, wait for the airborne→land transition,
 -- then strike. Returns true if it handled this tick (caller skips normal
 -- attack/pursue).
+--
+-- The reach this passes to `combat.attack` is ADVISORY at admission and
+-- LOAD-BEARING at commit (#2328): Combat.Resolution.Admission validates
+-- the landing strike's horizontal separation against the attacker's
+-- `unit.getAttackRange` PLUS this stored reach bonus, so a lunge that
+-- declares its extended strike still lands while a stale one does not.
+-- A lunge that stopped declaring its reach would be refused as out of
+-- reach — the short-reach species this path exists for are far inside
+-- their base range only after the leap's bonus is counted.
 function M.tryLunge(uid, s, target, me, you, chebyshev)
     local range = unit.getAttackRange(uid) or 1.0
     local now = engine.gameTime()

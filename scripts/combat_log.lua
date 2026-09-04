@@ -617,6 +617,31 @@ function combatLog.formatEvent(ev)
         end
         return string.format("[%s] %s", ts, up1(missText)),
             {0.7, 0.7, 0.7, 1.0}
+    elseif ev.kind == "refused" then
+        -- A queued strike the engine REFUSED at commit (#2328): the
+        -- preconditions the AI admitted it on no longer held, so
+        -- nothing resolved. Deliberately never routed through the miss
+        -- branch above — a strike that never happened is not a swing
+        -- that missed, and reading it as one would credit the defender
+        -- with an evasion it never made. Each reason gets its own line
+        -- so the log distinguishes them; an unrecognised reason still
+        -- says the strike did not happen rather than falling through.
+        local refusedText
+        if payload.reason == "different_page" then
+            refusedText = string.format(
+                "%s's strike at %s never lands — they are worlds apart", atk, tgt)
+        elseif payload.reason == "out_of_reach" then
+            refusedText = string.format(
+                "%s swings at %s but has moved out of reach", atk, tgt)
+        elseif payload.reason == "insufficient_stance" then
+            refusedText = string.format(
+                "%s is too off-balance to strike %s", atk, tgt)
+        else
+            refusedText = string.format(
+                "%s's strike at %s does not happen", atk, tgt)
+        end
+        return string.format("[%s] %s", ts, up1(refusedText)),
+            {0.6, 0.6, 0.75, 1.0}
     elseif ev.kind == "hit" then
         -- Rich, clinical per-layer narration (scripts/injury_log.lua).
         local injuryLog = require("scripts.injury_log")

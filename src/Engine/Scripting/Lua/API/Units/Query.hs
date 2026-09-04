@@ -28,6 +28,7 @@ import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv)
 import Unit.Types
 import Unit.Thread.Movement (jumpMaxTiles, maxJumpHeight, lungeImpactSpeed)
+import Combat.Resolution.Admission (attackRangeTiles)
 import Unit.LineOfSight (unitVisibleTiles)
 import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..), ItemManager(..), lookupItemDef)
 
@@ -36,8 +37,12 @@ import Item.Types (ItemInstance(..), ItemDef(..), ItemWeapon(..), ItemManager(..
 --
 --   Computes melee reach as `(height / 2.4) + (blade_length / 100)`
 --   where height is in metres (read from `uiStats["height"]`) and
---   blade_length is in centimetres. Looks up the blade length from
---   (in priority order):
+--   blade_length is in centimetres. The formula itself is
+--   'Combat.Resolution.Admission.attackRangeTiles', shared with the
+--   commit-time revalidation in "Combat.Resolution" (#2328) so the
+--   range the AI admits a swing on and the range that swing is
+--   re-checked against can never drift apart. Looks up the blade
+--   length from (in priority order):
 --     1. equipped right_hand weapon
 --     2. equipped left_hand weapon
 --     3. unit-def's natural_weapon.effective_blade_length
@@ -60,9 +65,8 @@ unitGetAttackRangeFn env = do
                     Just inst → case HM.lookup "height" (uiStats inst) of
                         Nothing → return Nothing
                         Just h  →
-                            let armReach = h / 2.4
-                                blade    = resolveBladeLength im um inst
-                            in return (Just (armReach + blade / 100.0))
+                            let blade = resolveBladeLength im um inst
+                            in return (Just (attackRangeTiles h blade))
             case mRange of
                 Just r  → Lua.pushnumber (Lua.Number (realToFrac r))
                                 >> return 1

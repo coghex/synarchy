@@ -81,7 +81,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import qualified Data.Text as T
 import qualified Data.HashMap.Strict as HM
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef)
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Data.List (maximumBy)
 import qualified System.Random as Random
@@ -101,6 +101,9 @@ import Unit.Injury (penetrate, woundFactor)
 import Unit.LineOfSight (unitAwareness)
 import Blood.Impact (pickImpactWound, spawnImpactBlood)
 import Combat.Resolution.Constants (kindStanceFactor)
+import Combat.Resolution.Admission
+    ( AttackRefusal, StrikeCommit(..), attackRangeTiles, noHeightAttackRange
+    , checkAdmission, commitIfAdmitted, refusalReason )
 import Combat.Resolution.Common
     ( painFor, isAlreadyDead, bodyPartIndex, mentalEffectiveness )
 import Combat.Resolution.Strike
@@ -109,17 +112,58 @@ import Combat.Resolution.Strike
 import Combat.Resolution.Damage
     ( ResolvedStrike(..), swingKinematics, weaponPenetration, computeSeverity )
 import Combat.Resolution.Wear
-    ( weaponWear, applyWeaponWear, applyArmorWear, applyStaminaDrain )
+    ( weaponWear, applyWeaponWear, applyArmorWear, spendStrikeCost )
 import Combat.Resolution.Events
-    ( missEvent, hitEvent, deathEvent, pushEvent, setDead )
+    ( missEvent, refusedEvent, hitEvent, deathEvent, pushEvent, setDead )
 
 -- ----- Entry point -----
 
 -- | Resolve one attack. No-ops cleanly if either unit is missing,
 --   either side's def isn't registered, or either side is already
 --   dead (the AI shouldn't be issuing swings then but races happen).
-resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → Float → Float → IO ()
-resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
+--
+--   Past those liveness checks the strike is REVALIDATED (#2328): same
+--   world page, still in horizontal reach, and enough stance to pay the
+--   requested mode. `combat.attack` only enqueues, so the Lua gates
+--   that admitted this swing are up to a combat tick stale by now — see
+--   "Combat.Resolution.Admission" for why these three and not the
+--   others.
+--
+--   The check happens at TWO points, and they are not redundant:
+--
+--     * HERE, on the snapshot read above. Cheap, and it is what makes
+--       the common stale-request case cost no RNG draw at all. It is
+--       not the authority: the unit thread keeps publishing positions
+--       into the same 'IORef' while the awareness lookup and the RNG
+--       transaction below run.
+--     * At the COMMIT, inside 'Combat.Resolution.Admission.commitIfAdmitted'
+--       — one 'atomicModifyIORef'' holding the re-check together with
+--       every unit-manager write the swing makes. That is the
+--       authority, because no other writer of that ref can land
+--       between the two.
+--
+--   Either way a refusal publishes one 'refusedEvent' and mutates
+--   nothing else: no wound, blood, equipment wear, death command,
+--   last-attacker stamp, victim stance, or attacker stamina/stance
+--   charge. A refusal at the first point additionally draws no RNG; one
+--   at the commit has already drawn the swing's roll, which is a read
+--   of a shared stream rather than an effect on either unit.
+--   The swing's RANDOMNESS follows the same all-or-nothing rule as its
+--   effects. The strike stream is carried by the combat worker
+--   ('Combat.Thread'), and this reserves from it the way #2297's
+--   treatment rolls reserve theirs: a PURE split, the kept half
+--   returned only once the strike has actually committed. A refusal at
+--   either point returns the generator it was handed, untouched, so a
+--   strike that never happened cannot shift what the next one rolls.
+--   That is only sound because this stream has ONE consumer — this
+--   function, on the combat worker, never re-entrant. The four-writer
+--   'ucStatRNGRef' could not give it: claiming atomically IS advancing
+--   it, and a refusal would then have to unwind against concurrent
+--   draws. Resolution therefore never touches that pool at all.
+resolveAttack
+    ∷ EngineEnv → Random.StdGen → Word32 → Word32 → AttackMode
+    → Float → Float → IO Random.StdGen
+resolveAttack env gen0 atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Weapon/armor item defs + their worked-material properties are
@@ -133,6 +177,12 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     gt ← readIORef (wsGameTimeRef (toWorldSimCapability env))
     let atkId = UnitId atkRaw
         tgtId = UnitId tgtRaw
+        -- The reservation. `local` is what this strike rolls from;
+        -- `kept` is what the worker carries on if it commits.
+        (kept, local) = Random.splitGen gen0
+        -- Every path that does not commit returns the stream exactly as
+        -- it was handed over.
+        unspent = pure gen0
     case (HM.lookup atkId (umInstances um),
           HM.lookup tgtId (umInstances um)) of
         (Just atk, Just tgt) →
@@ -148,24 +198,53 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
                     -- moment of the kill.
                     | not (isAlreadyDead atk adef)
                     , not (isAlreadyDead tgt tdef) →
-                        runResolution env logger im sm gt
-                            atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef
-                _ → pure ()
-        _ → pure ()
+                        -- EARLY check, on the snapshot above. It is not
+                        -- the authority — 'commitIfAdmitted' inside
+                        -- runResolution is, against the value actually
+                        -- being written — but it is what makes the
+                        -- common stale-request case cost no RNG draw
+                        -- and no work at all.
+                        --
+                        -- Horizontal reach is measured against the SAME
+                        -- number `unit.getAttackRange` reports to the AI
+                        -- (height/2.4 + blade/100, blade resolved right
+                        -- hand → left hand → natural weapon), so the
+                        -- commit gate can never be tighter than the
+                        -- admission gate it re-checks.
+                        case checkAdmission (attackRangeOf im adef atk)
+                                            reachBonus mode atk tgt of
+                            Just refusal → do
+                                refuse env logger gt atkRaw tgtRaw mode refusal
+                                unspent
+                            Nothing → do
+                                committed ← runResolution env logger im sm gt
+                                    local atkRaw tgtRaw mode reachBonus
+                                    lungeSpeed atk adef tgt tdef
+                                if committed then pure kept else unspent
+                _ → unspent
+        _ → unspent
 
+-- | The swing itself, rolled from the RESERVED generator and reporting
+--   whether it committed — which is what tells 'resolveAttack' whether
+--   the reservation is spent or handed back.
 runResolution
     ∷ EngineEnv → LoggerState → ItemManager → SubstanceManager → Double
+    → Random.StdGen
     → Word32 → Word32 → AttackMode → Float → Float
     → UnitInstance → UnitDef
     → UnitInstance → UnitDef
-    → IO ()
-runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef = do
+    → IO Bool
+runResolution env logger im sm gt rngIn atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef = do
     let mEquipped = firstEquippedWeapon im (uiEquipment atk)
         mWeapon   = (\(_, _, w) → w) ⊚ mEquipped
         natW      = udNaturalWeapon adef
         bladeCm  = case mWeapon of
             Just w  → iwBladeLength w
             Nothing → maybe 0.0 nwEffectiveBladeLength natW
+        -- The HORIZONTAL admission measure, recomputed from whatever
+        -- attacker instance the commit transaction finds live. Distinct
+        -- from the VERTICAL band below, which selects body parts.
+        rangeOf  = attackRangeOf im adef
         atkH     = HM.lookupDefault 1.8 "height" (uiStats atk)
         reachLo  = atkH * 0.1
         -- reachBonus (metres) lifts the top of the reach for a LUNGE — the
@@ -210,46 +289,67 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
     let pDodge = awareness
                * defenderDodgeChance defEff tgt (lungeSpeed > 0) pTgt
 
-    -- Single RNG transaction: draw hit-roll + (if hit) the joint
-    -- body-part + wound-kind decision from the same generator,
-    -- atomically. The joint picker (pickPartKind) blends a random
-    -- score by area_weight × weapon.eff against a "smart" score by
+    -- One roll budget, drawn PURELY off the reserved generator: the
+    -- hit roll, then (if it lands) the dodge save, then the joint
+    -- body-part + wound-kind decision, then the subpart allocation.
+    -- The joint picker (pickPartKind) blends a random score by
+    -- area_weight × weapon.eff against a "smart" score by
     -- tactical_value × resistance-bypass × bleed_factor, using the
     -- attacker's intelligence as the blend coefficient. High-int
-    -- attackers naturally target vital low-resistance combos; low-
-    -- int attackers flail at whatever's biggest with whatever motion
-    -- the weapon supports.
-    rngOut ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \rng0 →
-        let (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rng0
-        in if roll > pHit
-            then (rng1, Left False)            -- whiff (attacker missed)
-            else
-                -- The strike was on target — does the defender slip it?
-                let (dodgeRoll, rngD) = Random.uniformR (0.0 ∷ Float, 1.0) rng1
-                in if dodgeRoll < pDodge
-                    then (rngD, Left True)      -- dodged (defender evaded)
-                    else
-                        let (partKind, rng2) =
-                                pickPartKind rngD atk tdef mWeapon natW
-                                    candidateParts
-                            -- One extra roll for subpart allocation (the
-                            -- 50/50 skull/jaw etc.) — drawn here in the
-                            -- same atomic transaction so the whole
-                            -- resolution is one RNG step.
-                            (alloc, rng3) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
-                        in (rng3, Right (partKind, alloc))
+    -- attackers naturally target vital low-resistance combos; low-int
+    -- attackers flail at whatever's biggest with whatever motion the
+    -- weapon supports.
+    --
+    -- No shared pool is touched (#2328): the generator is a value the
+    -- combat worker carries, reserved by 'resolveAttack' and spent only
+    -- if this swing commits. The trailing generator is discarded for
+    -- exactly that reason — the reservation's OTHER half is what the
+    -- worker carries on, so a refused swing rolls nothing away.
+    let rngOut =
+            let (roll, rng1) = Random.uniformR (0.0 ∷ Float, 1.0) rngIn
+            in if roll > pHit
+                then Left False                 -- whiff (attacker missed)
+                else
+                    -- The strike was on target — does the defender slip it?
+                    let (dodgeRoll, rngD) = Random.uniformR (0.0 ∷ Float, 1.0) rng1
+                    in if dodgeRoll < pDodge
+                        then Left True          -- dodged (defender evaded)
+                        else
+                            let (partKind, rng2) =
+                                    pickPartKind rngD atk tdef mWeapon natW
+                                        candidateParts
+                                -- One extra roll for subpart allocation
+                                -- (the 50/50 skull/jaw etc.), drawn off
+                                -- the same reserved generator so the
+                                -- whole resolution is one budget.
+                                (alloc, _) = Random.uniformR (0.0 ∷ Float, 1.0) rng2
+                            in Right (partKind, alloc)
 
     case rngOut of
         Left isDodge → do
-            pushEvent env (missEvent gt atkRaw tgtRaw mode
-                                     (lungeSpeed > 0) isDodge)
-            logDebug logger CatThread $
-                (if isDodge then "dodge (" else "miss (")
-                          <> attackModeText mode <> "): "
-                          <> tshow atkRaw <> " → "
-                          <> tshow tgtRaw
-                          <> " (p_hit=" <> tshow pHit
-                          <> " p_dodge=" <> tshow pDodge <> ")"
+            -- A whiff still costs the swing, and that charge is the
+            -- miss's whole unit-manager commit — so it goes through the
+            -- same gated transaction a landed hit does. A strike the
+            -- world invalidated while this one resolved is refused
+            -- here and charges nothing (#2328).
+            committed ← commitStrike env reachBonus mode atkRaw tgtRaw rangeOf
+                            (\_ _ um' → spendStrikeCost gt mode atkRaw um')
+            case committed of
+                CommitVanished → pure False
+                CommitRefused refusal → do
+                    refuse env logger gt atkRaw tgtRaw mode refusal
+                    pure False
+                CommitApplied → do
+                    pushEvent env (missEvent gt atkRaw tgtRaw mode
+                                             (lungeSpeed > 0) isDodge)
+                    logDebug logger CatThread $
+                        (if isDodge then "dodge (" else "miss (")
+                                  <> attackModeText mode <> "): "
+                                  <> tshow atkRaw <> " → "
+                                  <> tshow tgtRaw
+                                  <> " (p_hit=" <> tshow pHit
+                                  <> " p_dodge=" <> tshow pDodge <> ")"
+                    pure True
         Right ((partId, kind), allocRoll) → do
             let -- Resolve the swing into one or more (kind, energy-fraction)
                 -- COMPONENTS. A natural "paw" (combo_attack) fuses
@@ -333,106 +433,161 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
             -- scalar `severity` (total tissue destruction), unchanged by
             -- the distribution — so combat lethality is exactly preserved.
             let stanceHit = clamp 0.0 1.0 (severity * kindStanceFactor headKind)
-            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
-                let upd inst = inst
-                        { uiWounds          = wounds <> uiWounds inst
-                        , uiLastAttackerUid = Just atkRaw
-                        , uiLastAttackerAt  = gt
-                        , uiStats           =
-                            let s = HM.lookupDefault 1.0 "stance" (uiStats inst)
-                            in HM.insert "stance" (max 0.0 (s - stanceHit))
-                                                  (uiStats inst)
-                        }
-                    ins = HM.adjust upd (UnitId tgtRaw)
-                                          (umInstances um')
-                in (um' { umInstances = ins }, ())
-            pushEvent env (hitEvent gt atkRaw tgtRaw partId headKind
-                                     severity rawDmg effDmg mode
-                                     limbName weaponName detailStr
-                                     (lungeSpeed > 0))
+                woundTarget um' =
+                    let upd inst = inst
+                            { uiWounds          = wounds <> uiWounds inst
+                            , uiLastAttackerUid = Just atkRaw
+                            , uiLastAttackerAt  = gt
+                            , uiStats           =
+                                let s = HM.lookupDefault 1.0 "stance" (uiStats inst)
+                                in HM.insert "stance" (max 0.0 (s - stanceHit))
+                                                      (uiStats inst)
+                            }
+                        ins = HM.adjust upd (UnitId tgtRaw) (umInstances um')
+                    in um' { umInstances = ins }
+            -- EVERY unit-manager write this hit makes — the wound, the
+            -- last-attacker stamp, the victim's stance, and the
+            -- attacker's own charge for the swing — goes in ONE gated
+            -- transaction with the re-check (#2328). The RNG above is
+            -- already spent by this point, so what this buys is that no
+            -- EFFECT lands on a pair the world invalidated while this
+            -- swing resolved: refused here, nothing at all is written
+            -- and the blood, the wear and the death check below are all
+            -- skipped along with the hit event.
+            committed ← commitStrike env reachBonus mode atkRaw tgtRaw rangeOf
+                            (\_ _ um' → spendStrikeCost gt mode atkRaw
+                                            (woundTarget um'))
+            case committed of
+              CommitVanished → pure False
+              CommitRefused refusal → do
+                refuse env logger gt atkRaw tgtRaw mode refusal
+                pure False
+              CommitApplied → do
+                pushEvent env (hitEvent gt atkRaw tgtRaw partId headKind
+                                         severity rawDmg effDmg mode
+                                         limbName weaponName detailStr
+                                         (lungeSpeed > 0))
 
-            -- Impact blood (#607): ONE mark per landed hit, chosen from
-            -- the ACTUAL per-wound kinds this hit produced — NOT the
-            -- swing's headline mechanism. A tissue layer can register as
-            -- "fracture"/"internal"/"arterial" even under a "blunt"/
-            -- "slash" swing (Unit.Injury.tissueInjuryKind), so the
-            -- headline kind/severity alone could both mask a catastrophic
-            -- fracture buried in `wounds` and wrongly draw blood for a
-            -- swing whose headline reads "blunt" but whose only wound is
-            -- "internal". pickImpactWound resolves which single wound
-            -- represents the hit (requirement 9: bounded per event, not
-            -- per wound). Direction is the real attacker→target vector
-            -- (always available here, unlike a fall or a debug
-            -- unit.injure call).
-            let dx = uiGridX tgt - uiGridX atk
-                dy = uiGridY tgt - uiGridY atk
-                impactAngle = atan2 dy dx
-                impactSeed  = round (impactAngle * 1000.0) ∷ Int
-            case pickImpactWound [ (woundKind w, woundSeverity w) | w ← wounds ] of
-                Nothing → pure ()
-                Just (kind, sev, _) →
-                    spawnImpactBlood (toWorldSimCapability env) (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
-                        (uiGridZ tgt) kind sev impactAngle impactSeed
-                        (Just (UnitId tgtRaw)) gt
+                -- Impact blood (#607): ONE mark per landed hit, chosen from
+                -- the ACTUAL per-wound kinds this hit produced — NOT the
+                -- swing's headline mechanism. A tissue layer can register as
+                -- "fracture"/"internal"/"arterial" even under a "blunt"/
+                -- "slash" swing (Unit.Injury.tissueInjuryKind), so the
+                -- headline kind/severity alone could both mask a catastrophic
+                -- fracture buried in `wounds` and wrongly draw blood for a
+                -- swing whose headline reads "blunt" but whose only wound is
+                -- "internal". pickImpactWound resolves which single wound
+                -- represents the hit (requirement 9: bounded per event, not
+                -- per wound). Direction is the real attacker→target vector
+                -- (always available here, unlike a fall or a debug
+                -- unit.injure call).
+                let dx = uiGridX tgt - uiGridX atk
+                    dy = uiGridY tgt - uiGridY atk
+                    impactAngle = atan2 dy dx
+                    impactSeed  = round (impactAngle * 1000.0) ∷ Int
+                case pickImpactWound [ (woundKind w, woundSeverity w) | w ← wounds ] of
+                    Nothing → pure ()
+                    Just (kind, sev, _) →
+                        spawnImpactBlood (toWorldSimCapability env) (uiPage tgt) (uiGridX tgt) (uiGridY tgt)
+                            (uiGridZ tgt) kind sev impactAngle impactSeed
+                            (Just (UnitId tgtRaw)) gt
 
-            -- Landed hit ⇒ the weapon takes wear (dulls, fractures, can
-            -- break). Natural weapons don't wear.
-            applyWeaponWear env logger im sm atkRaw hitLoad
-            -- ...and any armour the blow struck takes wear too.
-            applyArmorWear env logger im sm tgtRaw partId rawDmg wHard
+                -- Landed hit ⇒ the weapon takes wear (dulls, fractures, can
+                -- break). Natural weapons don't wear.
+                applyWeaponWear env logger im sm atkRaw hitLoad
+                -- ...and any armour the blow struck takes wear too.
+                applyArmorWear env logger im sm tgtRaw partId rawDmg wHard
 
-            -- Instant-death check, keyed PURELY off the struck part's
-            -- engine `bpVital` flag (severity ≥ 1 on a vital part = outright
-            -- kill). The distribution carries the subpart each wound landed
-            -- in, so we scan it for a lethal vital injury; the macro
-            -- `severity` scalar covers the no-subpart fallback.
-            --
-            -- DESIGN — NOT A BUG (don't "fix" by flagging brain/neck vital):
-            -- for the acolyte ONLY the `heart` is `vital: true`. Destroying
-            -- the brain, severing the neck, etc. is deliberately NOT an
-            -- instant kill — the unit SURVIVES the moment (the sci-fi
-            -- treatment-window conceit) and dies a few seconds later via the
-            -- delayed failure meters (neuro / shock / suffocation / organ in
-            -- unit_resources.lua) unless treated. Only a destroyed heart
-            -- stops the pump immediately. Other body plans (a robot, say)
-            -- may legitimately flag several parts vital — this rule is
-            -- data-driven precisely so they can, without code changes.
-            let isVitalId pid = maybe False bpVital
-                                  (HM.lookup pid (bodyPartIndex tdef))
-                lethalHit =
-                    [ (pid, k) | (pid, k, s) ← dist, s ≥ 1.0, isVitalId pid ]
-                macroLethal = isVitalId partId ∧ severity ≥ 1.0 ∧ null dist
-            if not (null lethalHit) ∨ macroLethal
-                then do
-                    setDead env tgtRaw
-                    let (cpart, ckind) = case lethalHit of
-                            ((p, k) : _) → (p, k)
-                            []           → (partId, kind)
-                        cause = ckind <> "_" <> cpart
-                    pushEvent env (deathEvent gt atkRaw tgtRaw
-                                                cause cpart ckind)
-                    logDebug logger CatThread $
-                        "death: " <> tshow tgtRaw
-                            <> " by " <> cause
-                else
-                    logDebug logger CatThread $
-                        "hit (" <> attackModeText mode <> "): "
-                            <> tshow atkRaw
-                            <> " → " <> tshow tgtRaw
-                            <> " " <> kind <> "@" <> partId
-                            <> " sev=" <> tshow severity
-                            <> " injuries=" <> tshow dist
+                -- Instant-death check, keyed PURELY off the struck part's
+                -- engine `bpVital` flag (severity ≥ 1 on a vital part = outright
+                -- kill). The distribution carries the subpart each wound landed
+                -- in, so we scan it for a lethal vital injury; the macro
+                -- `severity` scalar covers the no-subpart fallback.
+                --
+                -- DESIGN — NOT A BUG (don't "fix" by flagging brain/neck vital):
+                -- for the acolyte ONLY the `heart` is `vital: true`. Destroying
+                -- the brain, severing the neck, etc. is deliberately NOT an
+                -- instant kill — the unit SURVIVES the moment (the sci-fi
+                -- treatment-window conceit) and dies a few seconds later via the
+                -- delayed failure meters (neuro / shock / suffocation / organ in
+                -- unit_resources.lua) unless treated. Only a destroyed heart
+                -- stops the pump immediately. Other body plans (a robot, say)
+                -- may legitimately flag several parts vital — this rule is
+                -- data-driven precisely so they can, without code changes.
+                let isVitalId pid = maybe False bpVital
+                                      (HM.lookup pid (bodyPartIndex tdef))
+                    lethalHit =
+                        [ (pid, k) | (pid, k, s) ← dist, s ≥ 1.0, isVitalId pid ]
+                    macroLethal = isVitalId partId ∧ severity ≥ 1.0 ∧ null dist
+                if not (null lethalHit) ∨ macroLethal
+                    then do
+                        setDead env tgtRaw
+                        let (cpart, ckind) = case lethalHit of
+                                ((p, k) : _) → (p, k)
+                                []           → (partId, kind)
+                            cause = ckind <> "_" <> cpart
+                        pushEvent env (deathEvent gt atkRaw tgtRaw
+                                                    cause cpart ckind)
+                        logDebug logger CatThread $
+                            "death: " <> tshow tgtRaw
+                                <> " by " <> cause
+                    else
+                        logDebug logger CatThread $
+                            "hit (" <> attackModeText mode <> "): "
+                                <> tshow atkRaw
+                                <> " → " <> tshow tgtRaw
+                                <> " " <> kind <> "@" <> partId
+                                <> " sev=" <> tshow severity
+                                <> " injuries=" <> tshow dist
+                pure True
 
-    -- Drain stamina on EVERY swing (hit or miss). The motion costs
-    -- the same; landing the blow is a separate roll. Cost is a
-    -- fraction of max_stamina so endurance drives absolute capacity
-    -- without changing the per-swing fraction. `gt` is this
-    -- resolution's own game-time sample (#1735), shared with
-    -- computeSeverity's stamina fraction so both size the pool — and
-    -- resolve every modifier expiry on it — at the same instant.
-    applyStaminaDrain env gt atkRaw mode
 
 -- ----- Helpers -----
+
+-- | The attacker's melee reach in tiles, exactly as
+--   `unit.getAttackRange` reports it to the AI: height / 2.4 + blade /
+--   100, with the Lua call sites' own `or 1.0` fallback for a unit
+--   carrying no rolled height. Partially applied over the item manager
+--   and the attacker's def, so the commit transaction can recompute it
+--   from a LIVE instance without carrying either.
+attackRangeOf ∷ ItemManager → UnitDef → UnitInstance → Float
+attackRangeOf im adef inst = case HM.lookup "height" (uiStats inst) of
+    Just h  → attackRangeTiles h (bladeLengthCm im adef inst)
+    Nothing → noHeightAttackRange
+
+-- | 'commitIfAdmitted' with this module's argument order, so the two
+--   call sites read as "commit these writes if the strike still
+--   holds" rather than re-spelling the parameter list.
+commitStrike
+    ∷ EngineEnv → Float → AttackMode → Word32 → Word32
+    → (UnitInstance → Float)
+    → (UnitInstance → UnitInstance → UnitManager → UnitManager)
+    → IO StrikeCommit
+commitStrike env reachBonus mode atkRaw tgtRaw rangeOf =
+    commitIfAdmitted env rangeOf reachBonus mode atkRaw tgtRaw
+
+-- | Publish one refusal: the event a consumer distinguishes from a
+--   miss, plus the debug line. The ONLY thing a refused strike does.
+refuse
+    ∷ EngineEnv → LoggerState → Double → Word32 → Word32
+    → AttackMode → AttackRefusal → IO ()
+refuse env logger gt atkRaw tgtRaw mode refusal = do
+    pushEvent env (refusedEvent gt atkRaw tgtRaw mode refusal)
+    logDebug logger CatThread $
+        "refused (" <> attackModeText mode <> "): "
+            <> tshow atkRaw <> " → " <> tshow tgtRaw
+            <> " " <> refusalReason refusal
+
+-- | The wielded blade length in centimetres: equipped right hand →
+--   equipped left hand → the def's natural weapon → 0. The same
+--   precedence 'Engine.Scripting.Lua.API.Units.Query' resolves for
+--   `unit.getAttackRange`, so the reach the AI admitted on and the
+--   reach revalidated at commit are one number.
+bladeLengthCm ∷ ItemManager → UnitDef → UnitInstance → Float
+bladeLengthCm im adef inst =
+    case firstEquippedWeapon im (uiEquipment inst) of
+        Just (_, _, w) → iwBladeLength w
+        Nothing        → maybe 0.0 nwEffectiveBladeLength (udNaturalWeapon adef)
 
 -- | The first equipped weapon, with its instance (for quality /
 --   condition / weight) and def (for the material substance) — the

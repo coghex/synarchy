@@ -240,6 +240,17 @@ local function attackTargetExecute(uid, s, params)
     -- sequence over several ticks; if it acted, skip the normal path.
     if lunge.tryLunge(uid, s, target, me, you, chebyshev) then return end
 
+    -- ADVISORY, NOT AUTHORITATIVE (#2328). This range gate and the
+    -- stance gate below are the ADMISSION and animation drivers: they
+    -- decide whether to throw a swing this tick and which one. They do
+    -- not decide whether it lands. `combat.attack` only enqueues, and
+    -- the combat worker drains the queue on its own tick, so the world
+    -- can move underneath a queued strike. Combat.Resolution.Admission
+    -- re-checks page, this same horizontal reach, and this same stance
+    -- against the LIVE units immediately before the strike commits, and
+    -- refuses it outright otherwise. Keep the two in step: both sides
+    -- measure Chebyshev separation against `unit.getAttackRange` and
+    -- both spend the same per-mode stance costs.
     if chebyshev <= range then
         -- In range. If we were mid-walk, stop so the next AI tick
         -- sees activity == "idle" and we can settle into the

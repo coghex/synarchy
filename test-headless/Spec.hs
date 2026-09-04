@@ -108,6 +108,7 @@ import qualified Test.Headless.World.Spoil as Spoil
 import qualified Test.Headless.World.RenderedSurface as RenderedSurface
 import qualified Test.Headless.World.IslandColumns as IslandColumns
 import qualified Test.Headless.World.ChunkCoordinates as ChunkCoordinates
+import qualified Test.Headless.Combat.Admission as CombatAdmission
 import qualified Test.Headless.Combat.Damage as CombatDamage
 import qualified Test.Headless.Combat.MaxStamina as CombatMaxStamina
 import qualified Test.Headless.Combat.MentalEffectiveness as CombatMentalEffectiveness
@@ -327,6 +328,7 @@ import qualified Test.Headless.Lua.TutorialProgress as LuaTutorialProgress
 import qualified Test.Headless.Lua.TutorialEvaluation as LuaTutorialEvaluation
 import qualified Test.Headless.Lua.UnitAiLocations as LuaUnitAiLocations
 import qualified Test.Headless.Lua.UnitAiHold as LuaUnitAiHold
+import qualified Test.Headless.Lua.CombatLogRefusal as LuaCombatLogRefusal
 import qualified Test.Headless.Lua.UnitAiCombatMove as LuaUnitAiCombatMove
 import qualified Test.Headless.Lua.UnitAiEncounter as LuaUnitAiEncounter
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
@@ -772,6 +774,7 @@ main = hspec $ do
     LuaTutorialEvaluation.spec
     LuaUnitAiLocations.spec
     LuaUnitAiHold.spec
+    LuaCombatLogRefusal.spec
     LuaUnitAiCombatMove.spec
     LuaUnitAiEncounter.spec
     LuaUnitAiStall.spec
@@ -795,6 +798,7 @@ main = hspec $ do
     describe "WorldGen.SoilGate" SoilGate.spec
     describe "WorldGen.SoilShed" SoilShed.spec
     describe "WorldGen.SoilRedistribution" SoilRedistribution.spec
+    CombatAdmission.spec
     describe "Combat.Damage" CombatDamage.spec
     CombatMaxStamina.spec
     CombatMentalEffectiveness.spec
