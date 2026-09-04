@@ -223,6 +223,31 @@ data WorldState = WorldState
       -- ^ Items lying in the world (see Item.Ground — float x/y,
       --   height derived from current terrain at render). Persisted
       --   in saves (sdGroundItems, v32).
+    , wsGroundItemLock ∷ MVar ()
+      -- ^ Held while this page's ground-item MAP and the ground-item
+      --   SELECTION in 'wsCursorRef' are decided together (#2300).
+      --
+      --   Same shape as 'wsInitQueueLock', for the same reason: the two
+      --   are separate 'IORef's, so no ordering of an existence lookup
+      --   in 'wsGroundItemsRef' and a write to 'wsCursorRef' makes the
+      --   pair consistent on its own. @item.select@ has to answer \"does
+      --   this gid exist\" and install the selection as ONE step, or a
+      --   removal landing between the two commits a selection for an
+      --   item that is already gone — which is exactly the stale
+      --   selection #2300 is about, arrived at from the other side.
+      --
+      --   Every writer that REMOVES a ground item takes it
+      --   ('World.GroundItems.takeGroundItemOnPage'), so a removal can
+      --   never interleave with a selection's read-decide-write however
+      --   many threads ever gain one. Spawns and in-place edits do not:
+      --   neither can invalidate a gid that a selection just validated,
+      --   and ids are never reused ('Item.Ground.gisNextId' only ever
+      --   counts up). READERS do not take it either — a lone read may
+      --   be a moment stale, which is inherent to any single read and
+      --   is not the inconsistency this closes.
+      --
+      --   Runtime-only, never persisted: it protects a transient map
+      --   and a transient selection, and a fresh page gets a fresh one.
     , wsSpoilRef ∷ IORef SpoilPiles
       -- ^ Spoil mounds from digging, keyed by tile vertex (see
       --   World.Spoil.Types). Written by the world thread's dig
@@ -489,6 +514,7 @@ emptyWorldState = do
     wsOreSurveyRef ← newIORef HM.empty
     wsMineDesignationsRef ← newIORef HM.empty
     wsGroundItemsRef ← newIORef emptyGroundItems
+    wsGroundItemLock ← newMVar ()
     wsSpoilRef ← newIORef emptySpoilPiles
     wsStructureStageRef ← newIORef emptyStructureStage
     wsConstructDesignationsRef ← newIORef HM.empty
@@ -527,7 +553,8 @@ emptyWorldState = do
                         wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
                         wsChunkEditGenRef
                         wsOreSurveyRef wsMineDesignationsRef
-                        wsGroundItemsRef wsSpoilRef wsStructureStageRef
+                        wsGroundItemsRef wsGroundItemLock
+                        wsSpoilRef wsStructureStageRef
                         wsConstructDesignationsRef wsConstructAttemptRef
                         wsFloraHarvestsRef
                         wsChopDesignationsRef
