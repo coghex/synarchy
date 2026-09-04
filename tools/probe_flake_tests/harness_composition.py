@@ -32,6 +32,14 @@ the migration side, where no such re-entry exists. The subprocess cases
 assert on the script's STDOUT rather than on its exit status, because a
 facade that lost its `if __name__ == "__main__"` entry point exits 0
 having printed nothing.
+
+That last guard has one honest limit, and it is not new here: a gate
+whose entry point is gone never starts, so it cannot fail itself, and
+that is true of every `tools/test_*.py` rather than of this split. What
+the guard does cover is every path that can actually run -- the
+aggregate, `--only harness`, and any in-process driver calling `main`
+-- each of which reports `the script's entry point is reachable` by
+name the moment the guard is gone.
 """
 from __future__ import annotations
 
