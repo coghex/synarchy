@@ -48,6 +48,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (sort, sortOn)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..), emptyItemManager)
@@ -406,7 +407,7 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
             resetPages env
             um ← readIORef (unitManagerRef env)
             commitInReach medicUid patientUid supplierUid wipeEverything um
-                `shouldBe` (wipeEverything um, Right ())
+                `shouldBe` (fst (wipeEverything um), Right "applied")
 
         -- The other half of the staleness: the change must land on the
         -- value the transaction actually checked, never on the snapshot
@@ -461,18 +462,28 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
                             spin (n + 1)
                 in spin (0 ∷ Int)
             outcomes ← forM [1 .. 300 ∷ Int] $ \_ → do
+                -- restock also clears the medic's cached intelligence,
+                -- so EVERY call starts with the stat unrolled: a roll
+                -- that escaped the transaction would show up below as a
+                -- refusal whose fingerprint moved.
                 restock env
-                r ← treatResult ls (bleed patientUid Nothing)
-                b ← bandagesIn env medicUid
-                w ← worstSeep env patientUid
-                pure (r, b, w)
+                b4 ← untouched env
+                r  ← treatResult ls (bleed patientUid Nothing)
+                af ← untouched env
+                pure (r, b4, af)
             writeIORef stop True
             takeMVar done
 
             let refused = [ o | o@(r, _, _) ← outcomes, isReachRefusal r ]
                 treated = [ o | o@(r, _, _) ← outcomes, r ≡ q "true|treated" ]
-            [ (b, w) | (_, b, w) ← refused, b ≢ 3 ∨ w ≢ 1.0 ] `shouldBe` []
-            [ (b, w) | (_, b, w) ← treated, b ≡ 3 ∨ w ≡ 1.0 ] `shouldBe` []
+            -- Every reach refusal — whether the snapshot caught it or
+            -- the commit did — left the session EXACTLY as it found it:
+            -- supplies, wound, knowledge, the rolled-stat cache and the
+            -- shared stat RNG all identical across the call.
+            [ (b4, af) | (_, b4, af) ← refused, b4 ≢ af ] `shouldBe` []
+            -- The control: a treatment that committed did move all of
+            -- that, so the comparison above is not comparing constants.
+            [ (b4, af) | (_, b4, af) ← treated, b4 ≡ af ] `shouldBe` []
             -- Nothing else may come back: a third outcome would mean a
             -- call neither refused for reach nor dressed the wound.
             length refused + length treated `shouldBe` length outcomes
@@ -669,8 +680,8 @@ rowState ls label =
 --   pass because the real mutation happened to be a no-op: it empties
 --   the whole roster. A transaction that refuses must return its input
 --   manager, not this.
-wipeEverything ∷ UnitManager → UnitManager
-wipeEverything um = um { umInstances = HM.empty }
+wipeEverything ∷ UnitManager → (UnitManager, Text)
+wipeEverything um = (um { umInstances = HM.empty }, "applied")
 
 -- | The same manager with one unit standing somewhere else — what an
 --   interleaved @Unit.Thread@ position update leaves behind.
@@ -699,20 +710,44 @@ isReachRefusal r = or
 --   state without disturbing anyone's position.
 restock ∷ EngineEnv → IO ()
 restock env = atomicModifyIORef' (unitManagerRef env) $ \um →
-    ( withUnit (withUnit um medicUid (\i → i { uiInventory = [stockedKit 100] }))
+    ( withUnit (withUnit um medicUid
+                    (\i → i { uiInventory = [stockedKit 100]
+                            , uiStats = uiStats (acolyte pageHome (0, 0) [] [] []) }))
                patientUid (\i → i { uiWounds = [openInfectedWound] })
     , () )
+
+-- | Everything a refused treatment must leave alone, minus the
+--   positions the interleaving writer is deliberately churning: the
+--   medic's supplies and knowledge, the patient's wound, WHICH stats
+--   have been rolled and cached, and the shared stat RNG.
+data Untouched = Untouched
+    { unBandages  ∷ ![Word64]
+    , unFills     ∷ ![(Text, Float)]
+    , unWounds    ∷ ![(Text, Float, Float, Bool)]
+    , unKnowledge ∷ ![(Text, Float)]
+    , unRolled    ∷ ![Text]
+    , unStatRNG   ∷ !Text
+    } deriving (Eq, Show)
+
+untouched ∷ EngineEnv → IO Untouched
+untouched env = do
+    um ← readIORef (unitManagerRef env)
+    g  ← readIORef (statRNGRef env)
+    let med = HM.lookup medicUid (umInstances um)
+        pat = HM.lookup patientUid (umInstances um)
+        contents i = [ c | it ← uiInventory i, c ← iiContents it ]
+    pure Untouched
+        { unBandages = maybe [] (\i → [ iiInstanceId c | c ← contents i
+                                      , iiDefName c ≡ "bandage" ]) med
+        , unFills = maybe [] (\i → sortOn fst
+                        [ (iiDefName c, iiCurrentFill c) | c ← contents i ]) med
+        , unWounds = maybe [] (\i →
+                        [ ( woundPart w, woundBandage w, woundInfection w
+                          , woundClean w ) | w ← uiWounds i ]) pat
+        , unKnowledge = maybe [] (sortOn fst ∘ HM.toList ∘ uiKnowledge) med
+        , unRolled = maybe [] (sort ∘ HM.keys ∘ uiStats) med
+        , unStatRNG = T.pack (show g) }
 
 place ∷ EngineEnv → UnitId → (Float, Float) → IO ()
 place env u xy = atomicModifyIORef' (unitManagerRef env) $ \um →
     (movedTo um u xy, ())
-
--- | The unit's worst wound seep: 1.0 is undressed.
-worstSeep ∷ EngineEnv → UnitId → IO Float
-worstSeep env u = do
-    um ← readIORef (unitManagerRef env)
-    pure $ case HM.lookup u (umInstances um) of
-        Nothing → -1
-        Just inst → case map woundBandage (uiWounds inst) of
-            [] → -1
-            xs → maximum xs

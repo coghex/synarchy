@@ -118,11 +118,17 @@ withinTreatmentRange a b =
 --   taken against the value the write actually lands on, so a late
 --   refusal returns the manager untouched rather than a partially
 --   applied treatment.
+--
+--   @change@ computes the treatment as well as applying it, so the
+--   medic's capability roll and the whole attempt cycle happen inside
+--   this transaction too. That is what makes a late refusal leave NO
+--   trace: there is no rolled-and-cached stat and no half-run loop
+--   sitting outside the decision that rejected them.
 commitInReach ∷ UnitId → UnitId → UnitId
-              → (UnitManager → UnitManager)
+              → (UnitManager → (UnitManager, α))
               → UnitManager
-              → (UnitManager, Either TreatReachRefusal ())
+              → (UnitManager, Either TreatReachRefusal α)
 commitInReach medic patient owner change um =
     case checkTreatReach um medic patient owner of
         Left refusal → (um, Left refusal)
-        Right _      → (change um, Right ())
+        Right _      → case change um of (um', a) → (um', Right a)
