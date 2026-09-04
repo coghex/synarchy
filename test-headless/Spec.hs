@@ -44,6 +44,7 @@ import qualified Test.Headless.Unit.Transfer as UnitTransfer
 import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
 import qualified Test.Headless.Unit.CargoApi as UnitCargoApi
+import qualified Test.Headless.Unit.MedicalReach as UnitMedicalReach
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.ArenaSeed as ArenaSeed
@@ -160,6 +161,7 @@ import qualified Test.Headless.Construct.PendingRefusal as ConstructPendingRefus
 import qualified Test.Headless.Craft.Execute as CraftExecute
 import qualified Test.Headless.Craft.Bills as CraftBills
 import qualified Test.Headless.Craft.OutputIdentity as CraftOutputIdentity
+import qualified Test.Headless.Craft.BillPageBinding as CraftBillPageBinding
 import qualified Test.Headless.Craft.BillReconcile as CraftBillReconcile
 import qualified Test.Headless.Power.Types as PowerTypes
 import qualified Test.Headless.Power.Placement as PowerPlacement
@@ -546,6 +548,10 @@ main = hspec $ do
     -- manager, so like the two specs above they cannot share the
     -- worldgen engine.
     aroundAll withHeadlessEngine UnitCargoApi.spec
+    -- Own engine (#2297): the medical reach spec WRITES the unit
+    -- manager ref and installs its own two-page world manager, for the
+    -- same reason as the cargo spec above.
+    aroundAll withHeadlessEngine UnitMedicalReach.spec
     -- Own engine (#1205): the live power.placeNode path WRITES the
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
@@ -705,6 +711,12 @@ main = hspec $ do
     -- manager refs, exactly like the ItemCondition gate above. It needs
     -- no world -- craft.execute reads none.
     aroundAll withHeadlessEngineNoWorld CraftOutputIdentity.spec
+    -- Own engine (#2325): the bill page-binding gate installs its own
+    -- TWO-page world manager (each page carrying a bill numbered 1) and
+    -- rewrites the item, recipe, unit and building manager refs, so it
+    -- cannot share the worldgen engine. Both pages are in-memory
+    -- emptyWorldStates -- the craft-bill verbs read no terrain.
+    aroundAll withHeadlessEngineNoWorld CraftBillPageBinding.spec
     -- Own engine (#1716): the live unit.feed gate WRITES the item and
     -- unit manager refs, so it cannot share the worldgen engine. It
     -- needs no world at all -- unit.feed reads neither.

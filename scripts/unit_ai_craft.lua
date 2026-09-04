@@ -18,6 +18,20 @@
 -- working (still fetching/walking) → abort + release now. Already
 -- working → finish this cycle; completeBillCycle then drops the claim
 -- itself instead of chaining into another one.
+--
+-- Page binding (#2325): a craft job holds one numeric billId across many
+-- ticks, and bill ids are PER PAGE (every page's allocator starts at 1),
+-- while the applied visible page moves on the WORLD thread. So every
+-- bill call below passes the ACTING UNIT and the engine resolves the id
+-- on that unit's own page -- craft.getBill(uid, id),
+-- craft.releaseBill(uid, id), craft.setBillWorking(uid, id, flag),
+-- craft.addBillProgress(uid, id, delta), craft.completeBillCycle(uid, id)
+-- and craft.claimBill(id, uid, timeout), plus the billId handed to
+-- craft.executeAt. The #1673 station guard below is NOT a substitute: it
+-- is not atomic with the calls that follow it, and releaseCraftJob is
+-- reachable on paths that never run it. craft.getBills() is the one
+-- deliberate exception -- an ACTIVE-page discovery listing whose every
+-- candidate findCraftBill re-checks against the actor's own page.
 -----------------------------------------------------------
 
 local core = require("scripts.unit_ai_core")
@@ -113,6 +127,11 @@ local function findCraftBill(uid, fromX, fromY, params)
     -- #1673: craft.getBills reads the ACTIVE page's bill store on its
     -- own, independently of the page the actor was selected from, so
     -- every station is re-checked against the ACTOR's page below.
+    -- #2325 keeps it that way deliberately -- this is discovery, and a
+    -- bill whose station passes the page check below necessarily came
+    -- from the actor's own page's store (craft.addBill only ever queues a
+    -- bill on the page its station stands on), which is what makes the
+    -- id safe to hand to the actor-qualified verbs afterwards.
     local myPage = page.ofUnit(uid)
     if not myPage then return nil end
     local bills = craft.getBills()
@@ -156,7 +175,10 @@ end
 -- is already gone (completed / cancelled) or owned by someone else.
 local function releaseCraftJob(s, uid, toPending)
     if s.craftJob and toPending then
-        craft.releaseBill(s.craftJob.billId)
+        -- #2325: uid binds the release to the crafter's OWN page. Every
+        -- caller of this helper has one, including craftUtility's
+        -- vanished-bill path, which runs no page check of its own.
+        craft.releaseBill(uid, s.craftJob.billId)
     end
     s.craftJob = nil
     s.craftCandidate = nil
@@ -172,7 +194,7 @@ local function craftUtility(uid, s, params)
     -- bill vanishes (player cancelled / finished by whoever took our
     -- expired claim) or when someone else legally owns it now.
     if s.craftJob then
-        local bill = craft.getBill(s.craftJob.billId)
+        local bill = craft.getBill(uid, s.craftJob.billId)
         if bill and (not bill.claimant or bill.claimant == uid) then
             return params.craft_lock_utility
         end
@@ -258,7 +280,7 @@ local function craftExecute(uid, s, params)
     local job = s.craftJob
     -- The bill can vanish (player cancel) or pass to another crafter
     -- (our claim expired while preempted) at any point — bail cleanly.
-    local bill = craft.getBill(job.billId)
+    local bill = craft.getBill(uid, job.billId)
     if not bill then
         releaseCraftJob(s, uid)
         return
@@ -328,7 +350,7 @@ local function craftExecute(uid, s, params)
         -- and walking (above) never drew power; standing at the
         -- station about to pour progress does. craftOnExit/completion/
         -- release all clear this back off.
-        craft.setBillWorking(job.billId, true)
+        craft.setBillWorking(uid, job.billId, true)
         return
     end
 
@@ -361,7 +383,8 @@ local function craftExecute(uid, s, params)
             local delta = params.craft_rate * (0.5 + level / 100.0)
                         * (unit.getMentalEffectiveness(uid) or 1.0)
                         * elapsed / job.work
-            progress = craft.addBillProgress(job.billId, delta) or progress
+            progress = craft.addBillProgress(uid, job.billId, delta)
+                       or progress
         end
         if job.work <= 0 then progress = 1.0 end
         if progress >= 1.0 then
@@ -381,7 +404,7 @@ local function craftExecute(uid, s, params)
                 unit.dropItemById(uid, iid)
             end
             grantWorkXP(uid, job.skill, params.craft_xp_per_craft or 0)
-            local remaining = craft.completeBillCycle(job.billId)
+            local remaining = craft.completeBillCycle(uid, job.billId)
             if remaining and remaining ~= 0
                and not (bill.paused or untilStockSatisfied(bill)) then
                 job.phase = "fetch"      -- next cycle: source again
@@ -403,7 +426,7 @@ local function craftOnExit(uid, s, params)
     local job = s.craftJob
     if job and job.phase == "working" then
         job.phase = "walking"
-        craft.setBillWorking(job.billId, false)
+        craft.setBillWorking(uid, job.billId, false)
     end
 end
 

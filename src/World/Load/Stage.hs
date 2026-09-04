@@ -208,7 +208,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         -- in the load transaction that has one, which is why a pure
         -- component migration could only carry a pre-name payload's
         -- ordinals forward rather than resolve them
-        -- ("World.Save.Component.Page"'s @migrateWorldEditDTOv2@).
+        -- ("World.Save.Component.PageEdits"'s @migrateWorldEditDTOv2@).
         --
         -- Resolved for the WHOLE session up here rather than per page
         -- inside 'stagePage', on exactly the terms the map-image plans
@@ -392,7 +392,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         -- settings are repaired here, at the one boundary every decoded
         -- page passes through -- the current @world-pages@ component and
         -- every migrated historical one alike, since each version's
-        -- decoder converges on 'World.Save.Component.Page.blankPageSnapshot'
+        -- decoder converges on
+        -- 'World.Save.Component.PageCore.blankPageSnapshot'
         -- and from there on this staging step. Each out-of-domain
         -- setting takes the shipped default and is warned about with the
         -- page it came from; every sibling setting, and everything else

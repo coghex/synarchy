@@ -229,7 +229,8 @@ function M.tryUnitMenu(x, y)
     -- dresses the target's worst bleeding wound, drawing
     -- bandages from a first-aid kit carried by the medic OR
     -- any other selected unit (e.g. the technomule standing
-    -- by). Greyed until both a kit and a bleeding wound exist.
+    -- by). Greyed until a kit, a bleeding wound and the
+    -- engine's own reach (unit.canTreat, #2297) all agree.
     do
         local medic
         for _, uid in ipairs(selectedUids) do
@@ -270,7 +271,8 @@ function M.tryUnitMenu(x, y)
             end
             table.insert(items, {
                 label   = "Treat bleeding",
-                enabled = (kitOwner ~= nil) and bleeding,
+                enabled = (kitOwner ~= nil) and bleeding
+                          and unit.canTreat(medic, targetUid, kitOwner),
                 callback = function()
                     local res = unit.treatBleeding(
                         medic, targetUid, kitOwner)
@@ -301,8 +303,8 @@ function M.tryUnitMenu(x, y)
             })
             -- Treat infection: administer antibiotics (the CURE)
             -- to an infected wound. Greyed until the target has an
-            -- infected wound AND a kit with antibiotics is on the
-            -- medic or another selected unit.
+            -- infected wound, a kit with antibiotics on the medic
+            -- or another selected unit, and both within reach (#2297).
             local function hasAntibiotics(uid)
                 for _, it in ipairs(unit.getInventory(uid) or {}) do
                     if it.kind == "container" then
@@ -345,7 +347,8 @@ function M.tryUnitMenu(x, y)
             table.insert(items, {
                 label   = "Treat infection",
                 enabled = (infMedic ~= nil) and (abOwner ~= nil)
-                          and infected,
+                          and infected
+                          and unit.canTreat(infMedic, targetUid, abOwner),
                 callback = function()
                     local res = unit.treatInfection(
                         infMedic, targetUid, abOwner)

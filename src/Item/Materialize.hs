@@ -12,7 +12,8 @@
 --   'ItemInstance' has exactly one place to be filled in.
 --
 --   The only production 'ItemInstance' record construction outside this
---   module is @fromItemInstanceDTO@ in "World.Save.Component.Page",
+--   module is @fromItemInstanceDTO@ in
+--   "World.Save.Component.PageActivity",
 --   which REBUILDS a previously materialised instance from its saved
 --   fields rather than minting a new one; the structural guard in
 --   @Test.Headless.Item.Materialize@ allows exactly those two.

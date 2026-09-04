@@ -82,6 +82,15 @@ prelude = lns
     , "GROUND = {}"
     , "MOVES, STOPS = 0, 0"
     , "DEPOSITS, WITHDRAWS, TO_UNIT, TO_BUILDING = 0, 0, 0, 0"
+    -- #2297: the medic ladder's own surface. WOUNDS is what makes a
+    -- unit a patient, KNOW is per-uid so one medic can genuinely
+    -- outrank another, and TREAT_RANGE stands in for the engine's
+    -- unit.treatmentRange() so a case can move the reach and watch the
+    -- shipped arrival check follow it.
+    , "WOUNDS, KNOW = {}, {}"
+    , "TREAT_RANGE = 1.5"
+    , "TREATS, INFECT_TREATS = 0, 0"
+    , "faction = { areAllies = function() return true end }"
     , "function unitRow(uid, defName, x, y, pg, inv)"
     , "  UNITS[uid] = { uid = uid, defName = defName, gridX = x, gridY = y,"
     , "                 page = pg, inv = inv or {}, contents = {} }"
@@ -138,10 +147,20 @@ prelude = lns
     , "    if STATS[k] ~= nil then return STATS[k] end"
     , "    return 1.0 end,"
     , "  getSkill = function() return 25.0 end,"
-    , "  getKnowledge = function() return true end,"
+    -- A LEVEL, not a flag: unit_ai_medic multiplies it by intelligence
+    -- to rank medics, so a boolean could not model two of them.
+    , "  getKnowledge = function(uid) return KNOW[uid] or 50.0 end,"
+    , "  getFaction = function() return 'player' end,"
+    , "  getWounds = function(uid) return WOUNDS[uid] or {} end,"
+    , "  treatBleeding = function()"
+    , "    TREATS = TREATS + 1; return { ok = true } end,"
+    , "  treatInfection = function()"
+    , "    INFECT_TREATS = INFECT_TREATS + 1; return { ok = true } end,"
+    , "  treatmentRange = function() return TREAT_RANGE end,"
     , "  getMentalEffectiveness = function() return 1.0 end,"
     , "  getPose = function() return 'standing' end,"
     , "  dropItemById = function() end,"
+    , "  addXP = function() end,"
     , "  pickup = function() end,"
     , "  moveTo = function() MOVES = MOVES + 1 end,"
     , "  stop = function() STOPS = STOPS + 1 end,"
@@ -194,17 +213,51 @@ prelude = lns
     , "  getFood = function(defName)"
     , "    if defName == 'berry' then return { calories = 100 } end end,"
     , "  listDefs = function() return { { name = 'plate_steel', weight = 1 } } end }"
+    -- #2325: every bill verb an AI job drives is ACTOR-QUALIFIED — the
+    -- acting unit comes first (claimBill keeps its original
+    -- (billId, uid, timeout) order) and the engine resolves the id on
+    -- THAT unit's own page. These stubs record the (verb, uid, id) triple
+    -- of every such call so a case can assert the acting uid really
+    -- crossed the boundary; a stub with the old arity would silently make
+    -- `id` nil and read as "no such bill".
+    , "BILL_CALLS = {}"
+    , "COMPLETE_REMAINING = 0"
+    , "local function billCall(verb, uid, id, extra)"
+    , "  BILL_CALLS[#BILL_CALLS + 1] ="
+    , "    { verb = verb, uid = uid, id = id, extra = extra }"
+    , "end"
     , "craft = {"
     , "  getBills = function() return BILLS end,"
-    , "  getBill = function(id)"
+    , "  getBill = function(uid, id)"
+    , "    billCall('getBill', uid, id)"
     , "    for _, b in ipairs(BILLS) do if b.id == id then return b end end end,"
     , "  get = function(rid) return { id = rid, work = 0, inputs = {} } end,"
-    , "  claimBill = function() return true end,"
-    , "  releaseBill = function() end,"
-    , "  setBillWorking = function() end,"
-    , "  addBillProgress = function() return 1.0 end,"
-    , "  completeBillCycle = function() return 0 end,"
-    , "  executeAt = function() return true, {} end }"
+    , "  claimBill = function(id, uid)"
+    , "    billCall('claimBill', uid, id); return true end,"
+    , "  releaseBill = function(uid, id) billCall('releaseBill', uid, id) end,"
+    , "  setBillWorking = function(uid, id, flag)"
+    , "    billCall('setBillWorking', uid, id, flag) end,"
+    , "  addBillProgress = function(uid, id, delta)"
+    , "    billCall('addBillProgress', uid, id, delta); return 1.0 end,"
+    , "  completeBillCycle = function(uid, id)"
+    , "    billCall('completeBillCycle', uid, id)"
+    , "    return COMPLETE_REMAINING end,"
+    , "  executeAt = function(uid, _rid, _bid, billId)"
+    , "    billCall('executeAt', uid, billId); return true, {} end }"
+    -- Every recorded call must name the acting unit AND a real bill id.
+    -- Returns the verbs seen, in order, so a case can also show WHICH
+    -- paths it actually reached rather than passing on an empty log.
+    , "function billCallsBy(wantUid, wantId)"
+    , "  local seen = {}"
+    , "  for _, c in ipairs(BILL_CALLS) do"
+    , "    assert(c.uid == wantUid, c.verb .. ' got uid ' .. tostring(c.uid)"
+    , "      .. ', expected the acting unit ' .. tostring(wantUid))"
+    , "    assert(c.id == wantId, c.verb .. ' got bill id ' .. tostring(c.id)"
+    , "      .. ', expected ' .. tostring(wantId))"
+    , "    seen[#seen + 1] = c.verb"
+    , "  end"
+    , "  return table.concat(seen, ',')"
+    , "end"
     , "power = { isStationPoweredForRecipe = function() return true end }"
     , "repair = { get = function(rid)"
     , "             return { id = rid,"
@@ -231,10 +284,20 @@ prelude = lns
     , "local ACTOR = unitRow(1, 'acolyte', 0, 0, HOME,"
     , "                      { { defName = 'plate_steel', category = 'Materials' } })"
     , "local function newState() return { currentAction = nil } end"
+    -- One bleeding ally at (3, 0) on the given page: seeping above
+    -- treat_min_seep and unclotted, which is all needsTreatment reads.
+    , "function woundedAlly(uid, pg, x)"
+    , "  unitRow(uid, 'acolyte', x or 3, 0, pg)"
+    , "  WOUNDS[uid] = { { kind = 'slash', bandage = 1.0, clot = 0 } }"
+    , "end"
+    , "function clearUnit(uid) UNITS[uid] = nil; WOUNDS[uid] = nil end"
     ]
 
 spec ∷ Spec
-spec = describe "AI page pairing" $ do
+spec = pageSpec >> reachSpec
+
+pageSpec ∷ Spec
+pageSpec = describe "AI page pairing" $ do
 
     describe "store_materials" $ do
         it "ignores a cargo on another page, and takes the same one on its own" $
@@ -471,6 +534,82 @@ spec = describe "AI page pairing" $ do
                 , "craftAi.craftExecute(1, t, PARAMS)"
                 , "assert(PICKUPS == 1,"
                 , "  'a same-page craft job must still source from the ground')"
+                ]
+
+        it "passes the ACTING unit to every bill verb it drives" $
+            runsOk $ lns
+                [ prelude
+                -- #2325: bill ids are per-page and every page's allocator
+                -- starts at 1, so a retained job.billId names a real bill
+                -- on whatever page happens to be visible. Nothing here
+                -- switches pages -- the two-page consequence is
+                -- Test.Headless.Craft.BillPageBinding's job. What this
+                -- case pins is the precondition that gate needs: the AI
+                -- actually HANDS the engine an acting unit, at every call
+                -- site, including the two release paths that run no page
+                -- check of their own.
+                , "buildingRow('store', 42, 1, HOME)"   -- adjacent to the actor
+                , "BILLS = { { id = 1, station = 42, recipe = 'r',"
+                , "            mode = 'count', progress = 0 } }"
+                -- (a) walking -> working sets the #590 flag.
+                , "local s = newState()"
+                , "s.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 10,"
+                , "               skill = 'smithing', need = {}, fromGround = {},"
+                , "               fromMule = {}, fromCargo = {}, phase = 'walking' }"
+                , "craftAi.craftExecute(1, s, PARAMS)"
+                , "assert(s.craftJob.phase == 'working',"
+                , "  'an adjacent same-page station must reach the working phase')"
+                , "assert(billCallsBy(1, 1) == 'getBill,claimBill,setBillWorking',"
+                , "  'walking->working drove ' .. billCallsBy(1, 1))"
+                , "assert(BILL_CALLS[#BILL_CALLS].extra == true,"
+                , "  'entering the working phase must set the flag TRUE')"
+                -- (b) one working tick: pour, craft, complete the cycle.
+                , "BILL_CALLS = {}"
+                , "NOW = 5"
+                , "s.lastCraftAt = 4"
+                , "craftAi.craftExecute(1, s, PARAMS)"
+                , "assert(billCallsBy(1, 1) =="
+                , "  'getBill,claimBill,addBillProgress,executeAt,completeBillCycle',"
+                , "  'a working tick drove ' .. billCallsBy(1, 1))"
+                -- (c) craftOnExit clears the flag for the SAME unit.
+                , "BILL_CALLS = {}"
+                , "local x = newState()"
+                , "x.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 10,"
+                , "               skill = 'smithing', phase = 'working' }"
+                , "craftAi.craftOnExit(1, x, PARAMS)"
+                , "assert(billCallsBy(1, 1) == 'setBillWorking',"
+                , "  'craftOnExit drove ' .. billCallsBy(1, 1))"
+                , "assert(BILL_CALLS[1].extra == false,"
+                , "  'leaving the working phase must CLEAR the flag')"
+                -- (d) the paused-not-working release, which fires BEFORE
+                --     the #1673 station page check and so is the one
+                --     mutating path with no page guard of its own.
+                , "BILL_CALLS = {}"
+                , "BILLS[1].paused = true"
+                , "BILLS[1].working = false"
+                , "local r = newState()"
+                , "r.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 10,"
+                , "               skill = 'smithing', need = {}, fromGround = {},"
+                , "               fromMule = {}, fromCargo = {}, phase = 'fetch' }"
+                , "craftAi.craftExecute(1, r, PARAMS)"
+                , "assert(r.craftJob == nil,"
+                , "  'a paused not-yet-working job must be released')"
+                , "assert(billCallsBy(1, 1) == 'getBill,releaseBill',"
+                , "  'the release path drove ' .. billCallsBy(1, 1))"
+                -- (e) craftUtility's vanished-bill drop: the READ whose
+                --     answer decides it is actor-qualified too, so a
+                --     page-B bill numbered the same can never stand in for
+                --     the job this unit is holding.
+                , "BILL_CALLS = {}"
+                , "BILLS = {}"
+                , "local v = newState()"
+                , "v.craftJob = { billId = 1, bid = 42, recipeId = 'r', work = 10,"
+                , "               skill = 'smithing', phase = 'working' }"
+                , "local u = craftAi.craftUtility(1, v, PARAMS)"
+                , "assert(v.craftJob == nil, 'a vanished bill must drop the job')"
+                , "assert(u == -math.huge, 'and score nothing, got ' .. tostring(u))"
+                , "assert(billCallsBy(1, 1) == 'getBill',"
+                , "  'craftUtility drove ' .. billCallsBy(1, 1))"
                 ]
 
         it "releases a PERSISTED job naming a station on another page" $
@@ -804,3 +943,166 @@ spec = describe "AI page pairing" $ do
                 , "assert(h and h.uid == 2 and h.kit == 'medkit',"
                 , "  'a same-page kit holder must still be selected')"
                 ]
+
+    describe "treat_ally (#2297)" $ do
+        it "ignores a bleeding ally on another page, and takes the same one on its own" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, AWAY)"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u == -math.huge,"
+                , "  'an off-page patient must not score, got ' .. tostring(u))"
+                , "assert(s.treatPending == nil,"
+                , "  'an off-page patient must leave no pending target')"
+                , "-- The SAME ally, same coordinates and same wound, on"
+                , "-- the medic's own page."
+                , "clearUnit(2)"
+                , "woundedAlly(2, HOME)"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v > 0,"
+                , "  'a same-page patient must still score, got ' .. tostring(v))"
+                , "assert(t.treatPending and t.treatPending.uid == 2,"
+                , "  'a same-page patient must still be nominated')"
+                ]
+
+        -- The nearest-wins scan is the part that has to be page-aware,
+        -- not just the ladder around it: a NEARER off-page ally that
+        -- still gets picked wins the slot and is then dropped by the
+        -- medic ranking, so the on-page ally standing further out is
+        -- never treated at all. Only the on-page ally must be seen.
+        it "never lets a nearer off-page ally beat the on-page one to the slot" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, AWAY, 1)   -- one tile out, wrong world"
+                , "woundedAlly(3, HOME, 3)   -- three tiles out, right one"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'the on-page ally must still be treatable, got ' .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 3,"
+                , "  'the on-page ally must be the one nominated, got '"
+                , "  .. tostring(s.treatPending and s.treatPending.uid))"
+                ]
+
+        -- The squad rule reads across the whole roster: only the best
+        -- AVAILABLE medic takes a patient, and every other one stands
+        -- down. A ranked medic on another page therefore does not just
+        -- fail to help -- it silences the one that could.
+        it "never ranks a medic on another page, and still stands down for an on-page one" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, HOME)"
+                , "-- A far more capable medic, standing ON the patient."
+                , "unitRow(3, 'acolyte', 3, 0, AWAY)"
+                , "KNOW[3] = 100.0"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'an off-page rival must not outrank the on-page medic, got '"
+                , "  .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 2,"
+                , "  'the on-page medic must still take the patient')"
+                , "-- Control: the SAME rival on the patient's own page"
+                , "-- does outrank it, so the case above is about the"
+                , "-- page and not about the ranking failing outright."
+                , "clearUnit(3)"
+                , "unitRow(3, 'acolyte', 3, 0, HOME)"
+                , "KNOW[3] = 100.0"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v == -math.huge,"
+                , "  'a same-page better medic must take the patient, got '"
+                , "  .. tostring(v))"
+                ]
+
+        -- aiState is global across pages but only the LOADED page is
+        -- ticked, so an off-page claimer never reaches treatExecute to
+        -- release its claim. Left holding the slot it would pin the
+        -- patient forever against a medic standing right beside them --
+        -- a suppression no engine-side refusal can undo, because
+        -- nothing is ever attempted.
+        it "never lets a claim held by a medic on another page suppress an on-page one" $
+            runsOk $ lns
+                [ prelude
+                , "local core = require('scripts.unit_ai_core')"
+                , "woundedAlly(2, HOME)"
+                , "unitRow(3, 'acolyte', 5, 0, AWAY)"
+                , "core.aiState[3] = { treatClaim = { patient = 2 } }"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'an off-page claimer must not hold the patient, got '"
+                , "  .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 2,"
+                , "  'the on-page medic must still take the patient')"
+                , "-- Control: the SAME claimer, same claim, on the"
+                , "-- patient's own page still reserves it (#306)."
+                , "UNITS[3] = nil"
+                , "unitRow(3, 'acolyte', 5, 0, HOME)"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v == -math.huge,"
+                , "  'a same-page claimer must still hold the patient, got '"
+                , "  .. tostring(v))"
+                ]
+
+        -- A claim OUTLIVES the tick that made it, so the page it was
+        -- made on can move underneath it. Releasing it late -- after
+        -- the kit fetch, or at the walk -- would already have moved an
+        -- item and steered a sprint at another world's coordinates.
+        it "releases a stored claim on an off-page patient before any walk, fetch or treat" $
+            runsOk $ lns
+                [ prelude
+                , "woundedAlly(2, AWAY)"
+                , "local s = newState()"
+                , "s.treatClaim = { patient = 2 }"
+                , "medic.treatExecute(1, s, PARAMS)"
+                , "assert(s.treatClaim == nil,"
+                , "  'an off-page claim must be released')"
+                , "assert(MOVES == 0 and STOPS == 0,"
+                , "  'an off-page claim must steer neither a walk nor a stop')"
+                , "assert(TO_UNIT == 0,"
+                , "  'an off-page claim must not fetch a kit')"
+                , "assert(TREATS == 0 and INFECT_TREATS == 0,"
+                , "  'an off-page claim must not treat')"
+                , "clearUnit(2)"
+                , "woundedAlly(2, HOME)"
+                , "local t = newState()"
+                , "t.treatClaim = { patient = 2 }"
+                , "medic.treatExecute(1, t, PARAMS)"
+                , "assert(t.treatClaim ~= nil,"
+                , "  'a same-page claim must be kept')"
+                , "assert(MOVES == 1,"
+                , "  'a same-page claim must still draw the walk')"
+                ]
+
+-- The other half of #2297's "one authority": the shipped arrival
+-- check must READ unit.treatmentRange() rather than restate 1.5, so
+-- the AI can never walk to a distance the engine then refuses. Moving
+-- the stubbed reach either way is the only thing that separates the
+-- two.
+reachSpec ∷ Spec
+reachSpec = describe "AI medic treat reach" $ do
+    it "walks or treats by the engine's reach, not by a copied number" $
+        runsOk $ lns
+            [ prelude
+            , "woundedAlly(2, HOME)   -- three tiles from the medic"
+            , "TREAT_RANGE = 5.0"
+            , "local s = newState()"
+            , "s.treatClaim = { patient = 2 }"
+            , "medic.treatExecute(1, s, PARAMS)"
+            , "assert(MOVES == 0,"
+            , "  'a patient inside the engine reach must not be walked to')"
+            , "assert(TREATS == 1,"
+            , "  'a patient inside the engine reach must be treated')"
+            , "TREAT_RANGE = 1.5"
+            , "local t = newState()"
+            , "t.treatClaim = { patient = 2 }"
+            , "medic.treatExecute(1, t, PARAMS)"
+            , "assert(MOVES == 1,"
+            , "  'a patient beyond the engine reach must be walked to')"
+            , "assert(TREATS == 1,"
+            , "  'a patient beyond the engine reach must not be treated')"
+            ]

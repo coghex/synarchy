@@ -81,10 +81,19 @@ def main():
     try:
         bootstrap(port)
         # medic (acolyte, knows bleed_control), mule (carries first-aid kit),
-        # patient (acolyte). Spaced on flat ground.
+        # patient (acolyte), each on its own flat-ground tile.
+        #
+        # All three stand ONE tile apart because #2297 gave the treatment
+        # verbs a reach: a medic may only dress a patient, and only spend
+        # a third party's supplies, within unit.treatmentRange() (1.5
+        # tiles). The old 0 / 2 / 4 spacing put both the mule and the
+        # patient outside it, so every treatment below would now be
+        # correctly refused. Nothing walks during this run -- the AI tick
+        # is stubbed out in bootstrap() -- so these spawn positions are
+        # also the positions every treat call sees.
         send(port, "_MED = unit.spawn('acolyte', 0, 0); return _MED")
-        send(port, "_MULE = unit.spawn('technomule', 2, 0); return _MULE")
-        send(port, "_PAT = unit.spawn('acolyte', 4, 0); return _PAT")
+        send(port, "_MULE = unit.spawn('technomule', 1, 0); return _MULE")
+        send(port, "_PAT = unit.spawn('acolyte', 0, 1); return _PAT")
         time.sleep(0.8)
         med = send(port, "return _MED")
         mule = send(port, "return _MULE")

@@ -69,7 +69,7 @@ WIRE_ROOT_EXTRA = {
 # appearing in a component module fails too — which is what stops a real
 # wire type from being left out of the roots silently.
 NON_WIRE_COMPONENT_DECLS = {
-    "World.Save.Component.Page.WorldPages":
+    "World.Save.Component.PageCore.WorldPages":
         "the canonical decode TARGET `worldPagesCodec` migrates into, not "
         "a wire shape — its own `WorldPagesDTO*` are the wire",
 }

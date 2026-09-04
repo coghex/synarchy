@@ -486,7 +486,7 @@ local config = {
         treat_scan_range     = 60.0,
         treat_base_utility   = 8.0,
         treat_lock_utility   = 8.0,
-        treat_arrival        = 1.5,   -- tiles to the patient to treat
+        -- treat reach: unit.treatmentRange(), engine-owned (#2297)
         treat_min_seep       = 0.6,   -- a wound dressed below this seep
                                       -- is "good enough" — not re-treated
     },

@@ -495,6 +495,7 @@ library
                      Unit.Selection
                      Unit.HitTest
                      Unit.LineOfSight
+                     Unit.Medical.Reach
                      Unit.Pathing.Config
                      Unit.Pathing.Hazard
                      Unit.Pathing.Cost
@@ -884,6 +885,9 @@ library
                      World.Save.Component.WorldGenCurrent
                      World.Save.Component.WorldGenHistory
                      World.Save.Component.Session
+                     World.Save.Component.PageCore
+                     World.Save.Component.PageEdits
+                     World.Save.Component.PageActivity
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component.EntitySnapshots
@@ -1222,6 +1226,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.TransferOrderApi
                    Test.Headless.Unit.CargoApi
+                   Test.Headless.Unit.MedicalReach
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership
@@ -1352,6 +1357,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Craft.Bills
                    Test.Headless.Craft.BillReconcile
                    Test.Headless.Craft.OutputIdentity
+                   Test.Headless.Craft.BillPageBinding
                    Test.Headless.Power.Types
                    Test.Headless.Power.Placement
                    Test.Headless.Power.Demolition

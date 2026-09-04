@@ -54,7 +54,8 @@ import World.Plate (worldWidthTiles)
 --
 --   The same rule over an 'AbsBounds' has a SECOND implementation, and
 --   deliberately so (#1668): 'Location.Instance.locationInstanceBoundsErrors',
---   run by "World.Save.Component.Page" 's @validatePages@. A persisted
+--   run by "World.Save.Component.PageCore" 's @validatePages@. A
+--   persisted
 --   location instance's box is rebuilt by
 --   'World.Save.Component.WorldGenNaming.fromAbsBoundsDTO' from four
 --   unrestricted wire 'Int's — the one 'AbsBounds' construction site
