@@ -27,12 +27,17 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingManager(..)
     , emptyBuildingManager )
 import Building.Command.Types (BuildingCommand(..))
+import Building.Thread.Command (processAllBuildingCommands)
+import Engine.Core.Capability.Building (toBuildingCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (toContentRegistriesViewCapability)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -373,6 +378,7 @@ spec ∷ SpecWith EngineEnv
 spec = do
     ownershipSpec
     placeabilitySpec
+    footprintClaimSpec
 
 ownershipSpec ∷ SpecWith EngineEnv
 ownershipSpec = describe "power placement page ownership (#1205)" $ do
@@ -500,6 +506,106 @@ placeabilitySpec =
         inv `shouldBe` startingInventory
         nodesOn wsHidden `shouldReturn` ([], 1)
         expectNoBuildingQueued env
+
+-- | #2326: @power.placeNode@ is the OTHER producer of a queued
+--   @BuildingSpawn@, and the only one with irreversible side effects of
+--   its own — it pops an exact item instance out of a unit's inventory
+--   and allocates a 'Power.Types.PowerNode' before the building
+--   commits. Footprint authority therefore has to answer BEFORE either
+--   of those becomes final, which is what these two examples pin from
+--   both directions.
+--
+--   Run just this gate: @cabal test synarchy-test-headless
+--   --test-options='--match "power placement footprint claim"'@.
+footprintClaimSpec ∷ SpecWith EngineEnv
+footprintClaimSpec =
+  describe "power placement footprint claim (#2326)" $ do
+
+    it "refuses a node whose tile a queued building already claimed, \
+       \leaving the inventory and the node registry untouched" $ \env → do
+        (wsActive, wsHidden) ← resetScene env
+        ls ← newBareLuaBackend env
+        -- An ordinary spawn takes the tile and is left QUEUED, exactly
+        -- as it would be between the Lua thread and the unit thread's
+        -- drain. `shed` is 1x1 on the same tile the node wants.
+        claimed ← executeDebugLua (lbsLuaState ls) $ T.concat
+            [ "return _G.__pn(building.spawn('shed', "
+            , T.pack (show placeX), ", ", T.pack (show placeY)
+            , ", 'pwr_hidden'))" ]
+        -- `__pn` folds two returns: an accepted spawn answers with its
+        -- id and no reason.
+        claimed `shouldBe` q "ok|1|nil"
+        r ← placeNode ls (Just hiddenPage)
+        r `shouldBe` q "nil|tile already occupied"
+        -- The refusal is the ORDINARY rejection path: the panel is back
+        -- at its original index, no node exists on either page, and the
+        -- only id spent is the shed's.
+        inv ← inventoryOf env
+        inv `shouldBe` startingInventory
+        nodesOn wsHidden `shouldReturn` ([], 1)
+        nodesOn wsActive `shouldReturn` ([], 1)
+        (_, nextBid) ← buildingsIn env
+        nextBid `shouldBe` 2
+        -- Exactly the shed's spawn was ever queued.
+        queued ← drainBuildingQueue env
+        case queued of
+            [BuildingSpawn bid defName _ _ _ _] → do
+                bid `shouldBe` BuildingId 1
+                defName `shouldBe` "shed"
+            other → expectationFailure $
+                "expected only the shed's BuildingSpawn, got: " <> show other
+
+    it "leaves NO power node behind when the spawn it queued is later \
+       \refused at commit" $ \env → do
+        (_, wsHidden) ← resetScene env
+        ls ← newBareLuaBackend env
+        r ← placeNode ls (Just hiddenPage)
+        r `shouldBe` q "ok|1|1"
+        nodesOn wsHidden `shouldReturn` ([(1, 1)], 2)
+        -- The claim disappears under the queued spawn, exactly as
+        -- `BuildingClearAll` and a load replacement drop every
+        -- outstanding claim (#2326). The page stays live, so this is
+        -- the state in which a surviving node WOULD still be reachable
+        -- through `power.getNodeForBuilding` -- and therefore the state
+        -- that can tell a real retirement from one the teardown did
+        -- anyway.
+        atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            (bm { bmReservations = HM.empty }, ())
+        applyQueuedBuildings env
+        -- The spawn was refused ...
+        (bids, _) ← buildingsIn env
+        bids `shouldBe` []
+        -- ... and nothing is left referencing the id it was promised.
+        nodesOn wsHidden `shouldReturn` ([], 2)
+
+    it "claims the tile itself, so a later building spawn is refused" $
+        \env → do
+            (_, wsHidden) ← resetScene env
+            ls ← newBareLuaBackend env
+            r ← placeNode ls (Just hiddenPage)
+            r `shouldBe` q "ok|1|1"
+            -- The node's building has not committed, but its footprint
+            -- is taken: nothing else may be admitted onto it.
+            blocked ← executeDebugLua (lbsLuaState ls) $ T.concat
+                [ "return _G.__pn(building.spawn('shed', "
+                , T.pack (show placeX), ", ", T.pack (show placeY)
+                , ", 'pwr_hidden'))" ]
+            blocked `shouldBe` q "nil|tile already occupied"
+            -- The node placement itself is untouched by the refusal.
+            nodesOn wsHidden `shouldReturn` ([(1, 1)], 2)
+            (_, nextBid) ← buildingsIn env
+            nextBid `shouldBe` 2
+
+-- | Run the REAL building-command drain, the same
+--   'processAllBuildingCommands' the unit thread runs, so a spawn
+--   `power.placeNode` queued is committed or refused by production code
+--   rather than by anything reimplemented here.
+applyQueuedBuildings ∷ EngineEnv → IO ()
+applyQueuedBuildings env =
+    processAllBuildingCommands (loggerRef env)
+        (toWorldSimCapability env)
+        (toContentRegistriesViewCapability env)
+        (toBuildingCapability env)
 
 -- | @power.isPlaceable(name)@ through the registered production API.
 isPlaceable ∷ LuaBackendState → Text → IO Text

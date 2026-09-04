@@ -19,13 +19,12 @@ import Test.Hspec
 import Data.IORef (readIORef)
 
 import Building.Command.Types (BuildingCommand(..))
-import Building.Types (BuildingId(..))
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.Types (LuaBackendState)
 import Test.Headless.Building.PageBinding.Support
-    ( applyQueuedBuildings, clearStubs, designationKeys
+    ( admitPlacement, applyQueuedBuildings, clearStubs, designationKeys
     , drainBuildingQueue, occupiedA, occupiedB, pageA, pageB, placeTile
     , placedBuildings, portalName, resetScene, runWorldQueue
     , selectionGen, shedName, terrainZA )
@@ -55,8 +54,9 @@ applyTimeSpec =
         gen ← selectionGen env
         logger ← readIORef (loggerRef env)
         let wsc = toWorldSimCapability env
+        bid ← admitPlacement env pageA portalName placeTile
         Q.writeQueue (worldQueue env) $
-            WorldSpawnBoundBuilding (BuildingId 9) portalName
+            WorldSpawnBoundBuilding bid portalName
                 (fst placeTile) (snd placeTile) terrainZA pageA gen
         -- Selection moves AFTER the command was enqueued — exactly the
         -- window a Lua-thread check cannot cover — and it moves through
@@ -81,8 +81,9 @@ applyTimeSpec =
         _ ← resetScene env
         _ ← clearStubs ls
         gen ← selectionGen env
+        bid ← admitPlacement env pageA portalName placeTile
         Q.writeQueue (worldQueue env) $
-            WorldSpawnBoundBuilding (BuildingId 9) portalName
+            WorldSpawnBoundBuilding bid portalName
                 (fst placeTile) (snd placeTile) terrainZA pageA gen
         runWorldQueue env
         -- Placed already, before any building-queue drain runs.
@@ -102,8 +103,9 @@ applyTimeSpec =
             gen ← selectionGen env
             logger ← readIORef (loggerRef env)
             let wsc = toWorldSimCapability env
+            bid ← admitPlacement env pageA portalName placeTile
             Q.writeQueue (worldQueue env) $
-                WorldSpawnBoundBuilding (BuildingId 9) portalName
+                WorldSpawnBoundBuilding bid portalName
                     (fst placeTile) (snd placeTile) terrainZA pageA gen
             runWorldQueue env
             -- pageA stays REGISTERED, so the drain's own world-gone
@@ -129,8 +131,9 @@ applyTimeSpec =
         -- placement carry no click binding: they go straight to the
         -- building queue and keep landing on their explicit page
         -- however selection moves.
+        bid ← admitPlacement env pageA portalName placeTile
         Q.writeQueue (buildingQueue env) $
-            BuildingSpawn (BuildingId 9) portalName
+            BuildingSpawn bid portalName
                 (fst placeTile) (snd placeTile) terrainZA pageA
         handleWorldHideCommand wsc logger pageA
         handleWorldShowCommand wsc logger pageB

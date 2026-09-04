@@ -11,6 +11,7 @@ module Building.Types
     , BuildingGhost(..)
     , DestructionClip(..)
     , DestructionEffect(..)
+    , FootprintReservation(..)
     , BuildingManager(..)
     , emptyBuildingManager
     , nextBuildingId
@@ -333,6 +334,30 @@ data DestructionEffect = DestructionEffect
       --   same monotonic, pause-frozen clock as 'biSpawnedAt'.
     } deriving (Show, Eq)
 
+-- | One admitted-but-uncommitted building footprint (#2326).
+--
+--   @building.spawn@ and @power.placeNode@ validate a placement and then
+--   QUEUE it; the insertion happens later, on another thread. A
+--   reservation is what makes the tiles that request was admitted on
+--   unavailable to every later admission in between, so two requests
+--   reading the same pre-commit snapshot can no longer both be told yes.
+--   It is taken in the SAME manager transition that allocates the
+--   'BuildingId', and consumed by the transition that inserts the
+--   instance ('Building.Reservation').
+--
+--   Page-scoped like occupancy itself (#76): the same anchor on two
+--   different pages is two independent reservations. The rectangle is
+--   stored raw (anchor + tile size, exactly as 'BuildingInstance'
+--   stores it) and compared in the canonical frame (#1175), so a seam
+--   alias of a reserved tile conflicts with it.
+data FootprintReservation = FootprintReservation
+    { frPage    ∷ !WorldPageId
+    , frAnchorX ∷ !Int
+    , frAnchorY ∷ !Int
+    , frTileW   ∷ !Int
+    , frTileH   ∷ !Int
+    } deriving (Show, Eq)
+
 data BuildingManager = BuildingManager
     { bmDefs      ∷ !(HM.HashMap Text BuildingDef)
     , bmInstances ∷ !(HM.HashMap BuildingId BuildingInstance)
@@ -341,6 +366,15 @@ data BuildingManager = BuildingManager
       -- ^ Single-select for now. Units use a HashSet; buildings stay
       --   single until there's a real multi-select use case. Cleared
       --   automatically when the selected building is destroyed.
+    , bmReservations ∷ !(HM.HashMap BuildingId FootprintReservation)
+      -- ^ Footprints admitted but not yet committed (#2326), keyed by
+      --   the 'BuildingId' the admitting transaction allocated for
+      --   them. Session-transient by design: never persisted, empty in
+      --   every constructed manager (boot, load replacement,
+      --   'BuildingClearAll'), and CONSUMABLE rather than merely
+      --   bounded — each entry is removed by the transition that
+      --   commits its spawn, or released outright by every path that
+      --   drops one instead ("Building.Reservation").
     , bmDestructions ∷ !(HM.HashMap BuildingId DestructionEffect)
       -- ^ Every destruction presentation still playing (#2091), keyed
       --   by the demolished building's id. Session-transient by design:
@@ -355,6 +389,7 @@ emptyBuildingManager = BuildingManager
     , bmInstances    = HM.empty
     , bmNextId       = 1
     , bmSelected     = Nothing
+    , bmReservations = HM.empty
     , bmDestructions = HM.empty
     }
 

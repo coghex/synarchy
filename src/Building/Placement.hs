@@ -12,12 +12,13 @@ module Building.Placement
     ) where
 
 import UPrelude
-import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector.Unboxed as VU
 import Building.Types
+import Building.Reservation
+    (footprintClear, instanceTiles, occupancyConflictReason)
 import World.Tile.Types (WorldTileData, lookupChunk)
 import World.Chunk.Types (LoadedChunk(..), columnIndex)
-import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
+import World.Generate.Coordinates (canonicalTileFrame)
 import Location.Instance (LocationInstances)
 import Location.Placement (placedLocationBounds, nearestLocationDistance)
 import Location.Bounds (AbsBounds(..), boundsIntersect, remotePortalThresholdTiles)
@@ -73,12 +74,20 @@ checkFlatGround bm wtd instances worldSize def gx gy =
     -- Identity away from the seam and for non-wrapping worlds.
     let tiles = footprintTiles gx gy (bdTileW def) (bdTileH def)
         zs    = traverse (lookupSurfaceZ worldSize wtd) tiles
+        -- #2326: one canonical-frame occupancy primitive, shared with
+        -- the reservation transaction that actually decides. `bm` is
+        -- already page-scoped by every caller (#76), so the page it is
+        -- asked about is whichever page these instances are on;
+        -- reservations are deliberately NOT consulted here — this check
+        -- is the advisory one.
+        occupied = not $ footprintClear worldSize gx gy
+                            (bdTileW def) (bdTileH def)
+                            (instanceTiles worldSize (bmInstances bm))
     in case zs of
         Nothing → NotPlaceable "chunk not loaded"
         Just (z0:rest)
             | any (≢ z0) rest → NotPlaceable "ground is uneven"
-            | any (tileHasBuilding worldSize bm) tiles →
-                NotPlaceable "tile already occupied"
+            | occupied → NotPlaceable occupancyConflictReason
             | bdIsStarting def ∧ overlapsAnyLocation worldSize instances def gx gy →
                 NotPlaceable "inside a location's bounds"
             | otherwise → Placeable
@@ -164,24 +173,3 @@ lookupSurfaceZ worldSize wtd (gx, gy) =
     in case lookupChunk chunkCoord wtd of
         Nothing → Nothing
         Just lc → Just (lcSurfaceMap lc VU.! columnIndex lx ly)
-
--- | True if any existing building's footprint covers this tile.
---   Linear scan — fine for the handful of buildings expected in early
---   game; if this grows, switch to a per-chunk occupancy set.
---
---   #1175: compared in the CANONICAL frame on both sides. A placed
---   building's own footprint is stepped off its anchor the same way, so
---   at the seam its far columns are aliases; comparing raw would let a
---   new building land on top of one.
-tileHasBuilding ∷ Int → BuildingManager → (Int, Int) → Bool
-tileHasBuilding worldSize bm tile =
-    any inFootprint (HM.elems (bmInstances bm))
-  where
-    canon = canonicalTile worldSize
-    (cgx, cgy) = uncurry canon tile
-    inFootprint inst =
-        let ax = biAnchorX inst
-            ay = biAnchorY inst
-        in or [ canon x y ≡ (cgx, cgy)
-              | x ← [ax .. ax + biTileW inst - 1]
-              , y ← [ay .. ay + biTileH inst - 1] ]
