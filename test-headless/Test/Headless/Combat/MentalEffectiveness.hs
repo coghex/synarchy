@@ -317,7 +317,7 @@ spec = describe "Mental effectiveness" $ do
             severityOf calm `shouldBe` severityOf distracted
 
         -- The Haskell-side resource-cost analogue of "recovery": the
-        -- stamina pool applyStaminaDrain (Combat.Resolution.Wear) draws
+        -- stamina pool spendStrikeCost (Combat.Resolution.Wear) draws
         -- against is maxStaminaFor, and its cost fraction
         -- (staminaCostFraction) is a plain function of AttackMode
         -- alone — it doesn't even take a UnitInstance, so it structurally
@@ -334,13 +334,13 @@ spec = describe "Mental effectiveness" $ do
                     HM.empty
             maxStaminaFor 0 calm `shouldBe` maxStaminaFor 0 euphoric
 
-        -- Combat.Resolution.Wear.applyStaminaDrain's actual post-swing
+        -- Combat.Resolution.Wear.spendStrikeCost's actual post-swing
         -- stamina/stance UPDATE (not just the max_stamina pool it draws
         -- against): staminaDrainStats is its pure core (#353), reading
         -- only "stamina"/"stance" plus maxStaminaFor's own inputs —
         -- never concentration/mental_state — so the resulting stat map
         -- must be identical for two attackers differing ONLY in those.
-        it "staminaDrainStats (applyStaminaDrain's real update) is unaffected by concentration/mental_state" $ do
+        it "staminaDrainStats (spendStrikeCost's real update) is unaffected by concentration/mental_state" $ do
             let base = HM.fromList
                     [ ("endurance", 1.4), ("stamina", 8.0), ("stance", 1.0) ]
                 calm       = mkInst base HM.empty

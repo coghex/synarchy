@@ -26,8 +26,10 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Data.Foldable (toList)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (readIORef, writeIORef, atomicModifyIORef', newIORef)
 import qualified System.Random as Random
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Init (EngineInitResult(..))
@@ -35,9 +37,9 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Combat.Resolution.Admission
-    ( AttackRefusal(..), refusalReason, attackRangeTiles
+    ( AttackRefusal(..), StrikeCommit(..), refusalReason, attackRangeTiles
     , noHeightAttackRange, chebyshevSeparation, attackerStance
-    , checkAdmission )
+    , checkAdmission, commitIfAdmitted )
 import Combat.Resolution.Constants (stanceAttackCost)
 import Combat.Thread (processAllCommands)
 import Combat.Types (AttackMode(..), CombatCommand(..), CombatEvent(..))
@@ -400,3 +402,166 @@ spec = beforeAll initEnv $ do
             reasons o `shouldBe` [refusalReason RefusedInsufficientStance]
             o' ← drive env Quick 0 atk (testUnit pageA 10 10 startStance)
             kinds o' `shouldNotContain` ["refused"]
+
+    -- The early check in resolveAttack reads a snapshot; the awareness
+    -- lookup and the RNG transaction happen after it, and the unit
+    -- thread publishes uiGridX/uiGridY into the same IORef the whole
+    -- time. These cases are about the AUTHORITY that closes that
+    -- window: commitIfAdmitted, which re-checks against the very
+    -- manager value the strike's writes are applied to, in one
+    -- transaction.
+    describe "the commit transaction (invalidation after the snapshot)" $ do
+
+        let range _ = baseRange
+            -- A write with a visible signature, so "applied" and "not
+            -- applied" are distinguishable without inferring it from
+            -- some other effect.
+            markStruck _ _ um = um
+                { umInstances = HM.adjust
+                    (\i → i { uiName = "struck" }) (UnitId targetUid)
+                    (umInstances um) }
+            struck env = do
+                um ← readIORef (unitManagerRef env)
+                pure (maybe "" uiName
+                        (HM.lookup (UnitId targetUid) (umInstances um)))
+            put env atk tgt = writeIORef (unitManagerRef env) emptyUnitManager
+                { umDefs = HM.singleton "admission_dummy" testDef
+                , umInstances = HM.fromList
+                    [ (UnitId attackerUid, atk), (UnitId targetUid, tgt) ] }
+
+        it "applies the writes when the policy still holds" $ \env → do
+            put env (testUnit pageA 0 0 startStance)
+                    (testUnit pageA 0 0 startStance)
+            r ← commitIfAdmitted env range 0 Quick attackerUid targetUid
+                    markStruck
+            r `shouldBe` CommitApplied
+            struck env `shouldReturn` "struck"
+
+        -- One row per condition: the strike was admitted against a
+        -- snapshot in which it held, and the LIVE manager it is about
+        -- to write to no longer satisfies it.
+        forM_
+            [ ( "the target moved out of reach"
+              , testUnit pageA (baseRange + 0.01) 0 startStance
+              , Quick, RefusedOutOfReach )
+            , ( "the target crossed to another page"
+              , testUnit pageB 0 0 startStance
+              , Quick, RefusedDifferentPage )
+            ] $ \(label, liveTarget, mode, expected) →
+            it ("refuses and writes nothing when " <> label) $ \env → do
+                put env (testUnit pageA 0 0 startStance) liveTarget
+                r ← commitIfAdmitted env range 0 mode attackerUid targetUid
+                        markStruck
+                r `shouldBe` CommitRefused expected
+                struck env `shouldReturn` ""
+
+        it "refuses and writes nothing when the attacker's stance was spent" $
+          \env → do
+            put env (testUnit pageA 0 0 (stanceAttackCost Heavy - 0.01))
+                    (testUnit pageA 0 0 startStance)
+            r ← commitIfAdmitted env range 0 Heavy attackerUid targetUid
+                    markStruck
+            r `shouldBe` CommitRefused RefusedInsufficientStance
+            struck env `shouldReturn` ""
+
+        it "recomputes reach from the LIVE attacker, not a captured one" $
+          \env → do
+            -- The separation is inside a TALL attacker's reach and
+            -- outside a short one's. Passing the real per-instance
+            -- range function is what makes the live instance decide;
+            -- a captured constant would answer for the wrong unit.
+            let liveRange inst = attackRangeTiles
+                    (HM.lookupDefault 0 "height" (uiStats inst)) 0
+                shortAtk = testUnit pageA 0 0 startStance
+                tallAtk  = shortAtk
+                    { uiStats = HM.insert "height" 4.8 (uiStats shortAtk) }
+                tgt = testUnit pageA (baseRange + 0.25) 0 startStance
+            put env shortAtk tgt
+            r1 ← commitIfAdmitted env liveRange 0 Quick attackerUid targetUid
+                    markStruck
+            r1 `shouldBe` CommitRefused RefusedOutOfReach
+            put env tallAtk tgt
+            r2 ← commitIfAdmitted env liveRange 0 Quick attackerUid targetUid
+                    markStruck
+            r2 `shouldBe` CommitApplied
+
+        it "is silent, not a refusal, when a unit left the manager" $ \env → do
+            writeIORef (unitManagerRef env) emptyUnitManager
+                { umDefs = HM.singleton "admission_dummy" testDef
+                , umInstances = HM.singleton (UnitId attackerUid)
+                    (testUnit pageA 0 0 startStance) }
+            r ← commitIfAdmitted env range 0 Quick attackerUid targetUid
+                    markStruck
+            r `shouldBe` CommitVanished
+
+        it "cannot be interleaved: the write sees the value the check passed" $
+          \env → do
+            -- The property IS the transaction, so the fixture is a real
+            -- interleaving, and it races the value the write actually
+            -- consumes. A competing thread hammers the SAME IORef,
+            -- alternating the attacker's stance just above and just
+            -- below a heavy swing's cost, while this thread commits
+            -- strikes whose write RECORDS the stance it was handed.
+            --
+            -- One transaction means the instance the write sees is the
+            -- instance the check passed, so every recorded value is at
+            -- or above the cost. Split the check and the write into two
+            -- transactions — which is what a snapshot check plus a
+            -- later effect is — and the competitor lands between them,
+            -- handing the write a stance the check would have refused.
+            let cost  = stanceAttackCost Heavy
+                above = cost + 0.05
+                below = cost - 0.05
+                rounds = 400 ∷ Int
+                -- The write records what it was handed, on the TARGET,
+                -- which the competitor never touches.
+                recordSeen atkLive _ um = um
+                    { umInstances = HM.adjust
+                        (\i → i { uiStats = HM.insert "seen"
+                                    (attackerStance atkLive) (uiStats i) })
+                        (UnitId targetUid) (umInstances um) }
+                readSeen = do
+                    um ← readIORef (unitManagerRef env)
+                    pure (maybe (-1) (HM.lookupDefault (-1) "seen" ∘ uiStats)
+                            (HM.lookup (UnitId targetUid) (umInstances um)))
+            put env (testUnit pageA 0 0 above) (testUnit pageA 0 0 startStance)
+            stop ← newIORef False
+            done ← newEmptyMVar
+            _ ← forkIO $
+                let loop lo = do
+                        halt ← readIORef stop
+                        if halt then putMVar done () else do
+                            atomicModifyIORef' (unitManagerRef env) $ \um →
+                                ( um { umInstances = HM.adjust
+                                        (\i → i { uiStats = HM.insert "stance"
+                                                    (if lo then below else above)
+                                                    (uiStats i) })
+                                        (UnitId attackerUid) (umInstances um) }
+                                , () )
+                            loop (not lo)
+                in loop True
+            applied ← newIORef (0 ∷ Int)
+            refused ← newIORef (0 ∷ Int)
+            worst   ← newIORef (1 / 0 ∷ Float)
+            replicateM_ rounds $ do
+                r ← commitIfAdmitted env range 0 Heavy attackerUid targetUid
+                        recordSeen
+                case r of
+                    CommitApplied → do
+                        seen ← readSeen
+                        atomicModifyIORef' worst (\w → (min w seen, ()))
+                        atomicModifyIORef' applied (\n → (n + 1, ()))
+                    CommitRefused _ → atomicModifyIORef' refused (\n → (n + 1, ()))
+                    CommitVanished  → pure ()
+                threadDelay 20
+            writeIORef stop True
+            takeMVar done
+            nApplied ← readIORef applied
+            nRefused ← readIORef refused
+            lowest   ← readIORef worst
+            -- The interleaving really happened: neither outcome is
+            -- vacuous, so the window this asserts about was open.
+            nApplied `shouldSatisfy` (> 0)
+            nRefused `shouldSatisfy` (> 0)
+            -- …and no write was ever handed a stance the check refused.
+            lowest `shouldSatisfy` (≥ cost)
