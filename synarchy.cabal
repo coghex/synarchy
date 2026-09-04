@@ -1290,6 +1290,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkIdentity
+                   Test.Headless.World.ChunkPageBinding
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.Chop.Selection

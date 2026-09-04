@@ -12,8 +12,11 @@ import Engine.Scripting.Lua.DebugServer
     ( DebugCommand(..), claimDebugCommand, completeDebugCommand
     , pollDebugCommand )
 import Engine.Scripting.Lua.API.Shell (luaValueToText)
-import Engine.Core.State (EngineEnv(..), EngineLifecycle(..), activeWorldState)
-import World.State.Types (wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
+import Engine.Scripting.Lua.API.WorldQuery.Chunk (chunkWaitTimeoutSec)
+import Engine.Core.State
+    (EngineEnv(..), EngineLifecycle(..), activeWorldState, chunkTargetWorld)
+import World.Page.Types (WorldPageId(..))
+import World.State.Types (WorldState, wsLoadPhaseRef, wsInitQueueRef, LoadPhase(..))
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
@@ -80,26 +83,88 @@ debugBuiltin env cmd =
        then writeIORef (lifecycleRef env) CleaningUp ≫ return (Just "shutting down")
        else case matchCall "world.waitForInit" t2 of
            Just arg → Just <$> runWaitForInit env (fromMaybe 600 arg)
-           Nothing  → case matchCall "world.waitForChunks" t2 of
-               Just arg → Just <$> runWaitForChunks env (fromMaybe 120 arg)
+           Nothing  → case matchWaitForChunks t2 of
+               Just (arg, mPage) →
+                   Just <$> runWaitForChunks env arg mPage
                Nothing  → return Nothing
+
+-- | Match @<fn>(<args>)@ exactly, handing back the raw argument text.
+--   @Nothing@ = not this call at all → fall through to the Lua thread.
+matchArgs ∷ Text → Text → Maybe Text
+matchArgs fn t = case T.stripPrefix fn t of
+    Nothing → Nothing
+    Just rest →
+        let r = T.strip rest
+        in if not (T.null r) ∧ T.head r ≡ '(' ∧ T.last r ≡ ')'
+           then Just (T.strip (T.init (T.drop 1 r)))
+           else Nothing
 
 -- | Match @<fn>(<int?>)@ exactly. @Just Nothing@ = no/empty arg (use the
 --   caller's default); @Just (Just n)@ = explicit timeout; @Nothing@ =
 --   not this call, or a non-integer arg → fall through to Lua.
 matchCall ∷ Text → Text → Maybe (Maybe Int)
-matchCall fn t = case T.stripPrefix fn t of
-    Nothing → Nothing
-    Just rest →
-        let r = T.strip rest
-        in if not (T.null r) ∧ T.head r ≡ '(' ∧ T.last r ≡ ')'
-           then let inner = T.strip (T.init (T.drop 1 r))
-                in if T.null inner
-                   then Just Nothing
-                   else case T.decimal inner of
-                          Right (n, rm) | T.null (T.strip rm) → Just (Just n)
-                          _                                   → Nothing
-           else Nothing
+matchCall fn t = matchArgs fn t ⌦ decimalArg
+
+-- | Match @world.waitForChunks(<int?>[, '<page>'])@ exactly (#2310), so
+--   the optional page argument the Lua binding accepts is served by this
+--   off-Lua-thread fast path too rather than falling through to the
+--   single Lua thread and blocking it for the whole wait.
+--
+--   Deliberately conservative: only a bare decimal (or @nil@, or
+--   nothing) for the timeout, and only an unescaped single- or
+--   double-quoted literal for the page. Anything else — an expression, a
+--   variable, an escape — is not this call, and Lua's own parser
+--   handles it.
+matchWaitForChunks ∷ Text → Maybe (Maybe Int, Maybe WorldPageId)
+matchWaitForChunks t = matchArgs "world.waitForChunks" t ⌦ \inner →
+    case T.breakOn "," inner of
+        (only, rest) | T.null rest → (\n → (n, Nothing)) ⊚ decimalArg only
+        (before, rest) → do
+            n   ← firstOfTwo before
+            pid ← quotedPageArg (T.drop 1 rest)
+            pure (n, Just pid)
+  where
+    -- The timeout slot when a SECOND argument follows it. An explicit
+    -- page with the timeout left to the default is spelled 'nil' in
+    -- Lua, and belongs on the fast path like any other recognised form
+    -- -- but 'decimalArg' alone must not learn that spelling, because
+    -- it also serves 'world.waitForInit', whose accepted spellings are
+    -- not this issue's to widen.
+    --
+    -- An EMPTY slot is rejected outright rather than defaulted:
+    -- @world.waitForChunks(, 'p')@ is not valid Lua, and answering it
+    -- with a real 120-second wait would hide a syntax error the Lua
+    -- thread reports properly. That is only true with a comma present;
+    -- a bare @world.waitForChunks()@ is valid and still defaults.
+    firstOfTwo raw
+        | slot ≡ "nil"  = Just Nothing
+        | T.null slot   = Nothing
+        | otherwise     = decimalArg slot
+      where slot = T.strip raw
+
+-- | A timeout argument slot: empty means "use the caller's default", a
+--   bare decimal names one, anything else is not this call.
+decimalArg ∷ Text → Maybe (Maybe Int)
+decimalArg raw
+    | T.null s  = Just Nothing
+    | otherwise = case T.decimal s of
+        Right (n, rm) | T.null (T.strip rm) → Just (Just n)
+        _                                   → Nothing
+  where s = T.strip raw
+
+-- | A single- or double-quoted Lua string literal with no escapes and no
+--   embedded quote, read as a page id. Anything else is 'Nothing', which
+--   sends the whole command to Lua rather than guessing at its meaning.
+quotedPageArg ∷ Text → Maybe WorldPageId
+quotedPageArg raw
+    | T.length s ≥ 2 ∧ (q ≡ '\'' ∨ q ≡ '"') ∧ T.last s ≡ q
+    , body ← T.init (T.drop 1 s)
+    , not (T.any (\c → c ≡ '\\' ∨ c ≡ q) body)
+    = Just (WorldPageId body)
+    | otherwise = Nothing
+  where
+    s = T.strip raw
+    q = if T.null s then ' ' else T.head s
 
 -- | Poll the active world's load phase until done (or timeout), then
 --   return the same tab-joined progress 'world.getInitProgress' yields.
@@ -118,22 +183,37 @@ runWaitForInit env timeoutSec = loop (timeoutSec * 4) ⌦ \_ → fmtInitProgress
                     _        → threadDelay 250000 ≫ loop (n - 1)
             Nothing → threadDelay 250000 ≫ loop (n - 1)
 
--- | Poll the active world's init queue until empty (or timeout); return
---   the remaining chunk count (matches 'world.waitForChunks').
-runWaitForChunks ∷ EngineEnv → Int → IO Text
-runWaitForChunks env timeoutSec = T.pack ∘ show ⊚ loop (timeoutSec * 4)
+-- | Poll ONE page's init queue until empty (or timeout); return the
+--   remaining chunk count (matches 'world.waitForChunks' exactly,
+--   including its #2310 page binding).
+--
+--   The timeout comes from 'chunkWaitTimeoutSec', the Lua binding's own
+--   rule, so the two paths cannot disagree about what a command means —
+--   including @world.waitForChunks(0, 'p')@, which means the 120-second
+--   default on both and never \"answer straight away\".
+--
+--   The target is resolved once, here, and every poll then reads that
+--   page's queue. This used to call 'activeWorldState' inside the loop,
+--   so a @WorldShow@ landing mid-wait moved the wait onto the incoming
+--   page and let it report completion against an empty queue while the
+--   outgoing page was still generating — the defect, on the very path
+--   the probes actually take (their exact @world.waitForChunks(...)@
+--   commands are recognised here and never reach the Lua thread).
+runWaitForChunks ∷ EngineEnv → Maybe Int → Maybe WorldPageId → IO Text
+runWaitForChunks env timeoutArg mPage = do
+    mTarget ← chunkTargetWorld mPage env
+    case mTarget of
+        Nothing      → return "0"
+        Just (_, ws) →
+            T.pack ∘ show ⊚ loop ws (4 * chunkWaitTimeoutSec timeoutArg)
   where
-    remaining ∷ IO Int
-    remaining = do
-        mWs ← activeWorldState env
-        case mWs of
-            Just ws → length ⊚ readIORef (wsInitQueueRef ws)
-            Nothing → return 0
-    loop ∷ Int → IO Int
-    loop 0 = remaining
-    loop n = do
-        r ← remaining
-        if r ≡ 0 then return 0 else threadDelay 250000 ≫ loop (n - 1)
+    remaining ∷ WorldState → IO Int
+    remaining ws = length ⊚ readIORef (wsInitQueueRef ws)
+    loop ∷ WorldState → Int → IO Int
+    loop ws 0 = remaining ws
+    loop ws n = do
+        r ← remaining ws
+        if r ≡ 0 then return 0 else threadDelay 250000 ≫ loop ws (n - 1)
 
 -- | Format the active world's load phase as the four tab-separated
 --   values 'world.getInitProgress' returns: phase, current, total, stage.
