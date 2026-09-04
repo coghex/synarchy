@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.WorldQuery.Chunk
     ( worldGetChunkInfoFn
     , worldLoadChunksInRegionFn
     , worldWaitForChunksFn
+    , chunkWaitTimeoutSec
     ) where
 
 import UPrelude
@@ -163,10 +164,8 @@ worldWaitForChunksFn wsc = do
             Lua.pushnil
             return 1
         Just pageArg → do
-            let timeoutSec = case timeoutArg of
-                    Just t | t > 0 → fromIntegral t ∷ Int
-                    _              → 120
-                maxIter = timeoutSec * 4  -- poll at 250ms intervals
+            let maxIter = 4 * chunkWaitTimeoutSec (fromIntegral ⊚ timeoutArg)
+                -- poll at 250ms intervals
             remaining ← Lua.liftIO $ do
                 mPage ← chunkTargetWorldFrom pageArg (wsWorldManagerRef wsc)
                 case mPage of
@@ -184,6 +183,25 @@ worldWaitForChunksFn wsc = do
                 threadDelay 250000
                 waitLoop ws (n - 1)
     remainingOn ws = length ⊚ readIORef (wsInitQueueRef ws)
+
+-- | The wait's timeout in seconds, from whatever the caller supplied.
+--
+--   ONE rule, exported, because two paths apply it: this binding and the
+--   debug console's off-Lua-thread fast path
+--   (@Engine.Scripting.Lua.Thread.Console@), which serves the probes'
+--   exact @world.waitForChunks(...)@ commands. They must not disagree
+--   about what a given command means, and since #2310 the console
+--   recognises the explicit-page forms that used to fall through to
+--   here — so a divergence would now be observable on a call that
+--   previously could not reach it.
+--
+--   A non-positive timeout is the DEFAULT, not \"return immediately\":
+--   @world.waitForChunks(0)@ has always meant \"wait the usual 120
+--   seconds\" through this binding, and a wait that answers before its
+--   target queue drains is the very failure mode #2310 is about.
+chunkWaitTimeoutSec ∷ Maybe Int → Int
+chunkWaitTimeoutSec (Just t) | t > 0 = t
+chunkWaitTimeoutSec _                = 120
 
 -- | The optional trailing page-id argument both verbs above accept
 --   (#2310), read off the given stack index.

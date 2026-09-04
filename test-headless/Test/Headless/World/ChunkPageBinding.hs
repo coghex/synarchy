@@ -336,6 +336,11 @@ spec = describe "chunk work binds to its own page" $ do
             ls ← newBackend env
             captureOnce env wsB (waitLua ls ("2, " <> luaId pageB))
 
+        it "reads a zero timeout as the default, not as 'answer now'" $ \env → do
+            (_, wsB) ← installPages env
+            ls ← newBackend env
+            drainsWhileWaiting wsB (waitLua ls ("0, " <> luaId pageB))
+
     describe "the debug console's own fast path" $ do
         it "watches the projected page while a show is unapplied" $ \env → do
             _ ← installPages env
@@ -367,6 +372,24 @@ spec = describe "chunk work binds to its own page" $ do
             _ ← newBackend env
             captureOnce env wsB (waitConsole env "2, 'chunk_page_projected'")
 
+        it "reads a zero timeout as the default, not as 'answer now'" $ \env → do
+            (_, wsB) ← installPages env
+            _ ← newBackend env
+            -- The regression this guards: before the explicit-page forms
+            -- were recognised here, world.waitForChunks(0, 'p') fell
+            -- through to the Lua binding, where a non-positive timeout
+            -- has always meant the 120-second default. Serving it on the
+            -- fast path with a literal 0 would answer before the target
+            -- queue drained -- the exact failure mode #2310 is about.
+            drainsWhileWaiting wsB
+                (waitConsole env "0, 'chunk_page_projected'")
+
+        it "reads a zero timeout as the default with no page named either" $ \env → do
+            (wsA, _) ← installPages env
+            _ ← newBackend env
+            -- Nothing outstanding, so the target is the applied page.
+            drainsWhileWaiting wsA (waitConsole env "0")
+
         it "leaves an argument list it cannot parse to the Lua thread" $ \env → do
             _ ← installPages env
             _ ← newBackend env
@@ -392,6 +415,24 @@ spec = describe "chunk work binds to its own page" $ do
             queued `shouldBe` Just regionArea
             queueLengths wsA wsB
                 `shouldReturn` (seededA + regionArea, seededB)
+
+-- | Drive one zero-timeout example: empty the target page's queue while
+--   the wait is running, and require the wait to have OBSERVED that.
+--
+--   A wait that took the 0 literally returns the queue's current length
+--   the moment it starts — 'seededA' or 'seededB', never 0 — because
+--   nothing has drained yet. Returning 0 means it kept polling past the
+--   drain, which is what the shared 'chunkWaitTimeoutSec' rule buys.
+--
+--   The drain lands at 300 ms, one poll interval in, and the default
+--   timeout is 120 seconds, so the example finishes in about a third of
+--   a second rather than sitting out a real timeout.
+drainsWhileWaiting ∷ WorldState → IO (Maybe Int) → Expectation
+drainsWhileWaiting ws runWait = do
+    before ← length ⊚ readIORef (wsInitQueueRef ws)
+    before `shouldSatisfy` (> 0)
+    _ ← forkIO $ threadDelay 300000 ≫ writeIORef (wsInitQueueRef ws) []
+    runWait `shouldReturn` Just 0
 
 -- | Drive one capture-once example: start a wait against B, flip the
 --   whole session onto a DIFFERENT live page while it is running, and

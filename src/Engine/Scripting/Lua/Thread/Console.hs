@@ -12,6 +12,7 @@ import Engine.Scripting.Lua.DebugServer
     ( DebugCommand(..), claimDebugCommand, completeDebugCommand
     , pollDebugCommand )
 import Engine.Scripting.Lua.API.Shell (luaValueToText)
+import Engine.Scripting.Lua.API.WorldQuery.Chunk (chunkWaitTimeoutSec)
 import Engine.Core.State
     (EngineEnv(..), EngineLifecycle(..), activeWorldState, chunkTargetWorld)
 import World.Page.Types (WorldPageId(..))
@@ -84,7 +85,7 @@ debugBuiltin env cmd =
            Just arg → Just <$> runWaitForInit env (fromMaybe 600 arg)
            Nothing  → case matchWaitForChunks t2 of
                Just (arg, mPage) →
-                   Just <$> runWaitForChunks env (fromMaybe 120 arg) mPage
+                   Just <$> runWaitForChunks env arg mPage
                Nothing  → return Nothing
 
 -- | Match @<fn>(<args>)@ exactly, handing back the raw argument text.
@@ -176,6 +177,11 @@ runWaitForInit env timeoutSec = loop (timeoutSec * 4) ⌦ \_ → fmtInitProgress
 --   remaining chunk count (matches 'world.waitForChunks' exactly,
 --   including its #2310 page binding).
 --
+--   The timeout comes from 'chunkWaitTimeoutSec', the Lua binding's own
+--   rule, so the two paths cannot disagree about what a command means —
+--   including @world.waitForChunks(0, 'p')@, which means the 120-second
+--   default on both and never \"answer straight away\".
+--
 --   The target is resolved once, here, and every poll then reads that
 --   page's queue. This used to call 'activeWorldState' inside the loop,
 --   so a @WorldShow@ landing mid-wait moved the wait onto the incoming
@@ -183,12 +189,13 @@ runWaitForInit env timeoutSec = loop (timeoutSec * 4) ⌦ \_ → fmtInitProgress
 --   outgoing page was still generating — the defect, on the very path
 --   the probes actually take (their exact @world.waitForChunks(...)@
 --   commands are recognised here and never reach the Lua thread).
-runWaitForChunks ∷ EngineEnv → Int → Maybe WorldPageId → IO Text
-runWaitForChunks env timeoutSec mPage = do
+runWaitForChunks ∷ EngineEnv → Maybe Int → Maybe WorldPageId → IO Text
+runWaitForChunks env timeoutArg mPage = do
     mTarget ← chunkTargetWorld mPage env
     case mTarget of
         Nothing      → return "0"
-        Just (_, ws) → T.pack ∘ show ⊚ loop ws (timeoutSec * 4)
+        Just (_, ws) →
+            T.pack ∘ show ⊚ loop ws (4 * chunkWaitTimeoutSec timeoutArg)
   where
     remaining ∷ WorldState → IO Int
     remaining ws = length ⊚ readIORef (wsInitQueueRef ws)
