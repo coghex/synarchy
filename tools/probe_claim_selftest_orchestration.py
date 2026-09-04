@@ -23,14 +23,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import probe_census  # type: ignore  # noqa: E402
-import probe_claim  # type: ignore  # noqa: E402
+import probe_claim as facade  # type: ignore  # noqa: E402
+import probe_claim_lease as claim_lease  # type: ignore  # noqa: E402
+import probe_claim_orchestration as claim_orchestration  # noqa: E402
+import probe_claim_storage as claim_storage  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 from probe_claim_selftest_support import (  # noqa: E402
-    CONTENDER, claim_root, expect, expect_raises, fake_measurement, registry,
-    scratch, scratch_repo, seeded_census, skip)
+    CONTENDER, TOOLS, claim_root, expect, expect_raises, fake_measurement,
+    registry, scratch, scratch_repo, seeded_census, skip)
 
 
 def test_orchestration_happy_path() -> None:
@@ -44,7 +47,7 @@ def test_orchestration_happy_path() -> None:
             def measure(probe, runs, **kwargs):
                 # While the measurement runs, the claim is HELD and the
                 # acquisition is already recorded.
-                seen["claim"] = probe_claim.read_claim(probe, root=root)
+                seen["claim"] = claim_lease.read_claim(probe, root=root)
                 document = json.loads(census.read_text(encoding="utf-8"))
                 seen["claims"] = probe_census.find_entry(
                     document, probe)["census"]["claims"]
@@ -52,11 +55,11 @@ def test_orchestration_happy_path() -> None:
                     document, probe)["census"]["attempts"]
                 return fake_measurement(probe, runs)
 
-            outcome = probe_claim.run_claimed_measurement(
+            outcome = claim_orchestration.run_claimed_measurement(
                 "alpha", 2, root=root, census_path=census, measure=measure,
                 repo_root=str(main_wt), renew_interval=0.05)
 
-        expect(outcome.exit_code == probe_claim.EXIT_OK
+        expect(outcome.exit_code == claim_orchestration.EXIT_OK
                and outcome.outcome == "measured",
                "a completed measurement reports success")
         expect(seen["claim"] is not None
@@ -85,14 +88,15 @@ def test_orchestration_denied_creates_nothing() -> None:
     with registry(), scratch_repo() as (main_wt, _other, census):
         seeded_census(census)
         with claim_root() as root:
-            holder = probe_claim.acquire("alpha", root=root, lease_seconds=600)
+            holder = claim_lease.acquire("alpha", root=root, lease_seconds=600)
             before = census.read_bytes()
             ran = []
-            outcome = probe_claim.run_claimed_measurement(
+            outcome = claim_orchestration.run_claimed_measurement(
                 "alpha", 2, root=root, census_path=census,
                 measure=lambda *a, **k: ran.append(1) or fake_measurement(),
                 repo_root=str(main_wt))
-            expect(outcome.exit_code == probe_claim.EXIT_ALREADY_CLAIMED,
+            expect(outcome.exit_code
+                   == claim_orchestration.EXIT_ALREADY_CLAIMED,
                    "the run reports the already-claimed exit code")
             expect(outcome.denied is not None
                    and outcome.denied.token == holder.token,
@@ -100,7 +104,7 @@ def test_orchestration_denied_creates_nothing() -> None:
             expect(not ran, "the probe was never executed")
             expect(census.read_bytes() == before,
                    "the census is byte-for-byte unchanged")
-            expect(probe_claim.read_claim("alpha", root=root)["token"]
+            expect(claim_lease.read_claim("alpha", root=root)["token"]
                    == holder.token,
                    "and the holder's claim is untouched")
 
@@ -114,15 +118,15 @@ def test_orchestration_claim_audit_failure() -> None:
         with claim_root() as root:
             ran = []
             expect_raises(
-                probe_claim.ClaimAuditFailed,
-                lambda: probe_claim.run_claimed_measurement(
+                claim_orchestration.ClaimAuditFailed,
+                lambda: claim_orchestration.run_claimed_measurement(
                     "alpha", 2, root=root, census_path=census,
                     measure=lambda *a, **k: ran.append(1) or fake_measurement(),
                     repo_root=str(main_wt)),
                 "an unrecordable acquisition refuses the measurement",
                 "could not be recorded", "released")
             expect(not ran, "the probe was never executed")
-            expect(probe_claim.read_claim("alpha", root=root) is None,
+            expect(claim_lease.read_claim("alpha", root=root) is None,
                    "and the claim was released, not left wedged")
 
         # The same, with the docs worktree itself unreachable.
@@ -131,16 +135,17 @@ def test_orchestration_claim_audit_failure() -> None:
             probe_engine.REPO_ROOT = str(elsewhere)
             try:
                 expect_raises(
-                    (probe_claim.ClaimAuditFailed, probe_census.DocsWorktreeMissing,
-                     probe_claim.ClaimError),
-                    lambda: probe_claim.run_claimed_measurement(
+                    (claim_orchestration.ClaimAuditFailed,
+                     probe_census.DocsWorktreeMissing,
+                     claim_storage.ClaimError),
+                    lambda: claim_orchestration.run_claimed_measurement(
                         "alpha", 2, root=root,
                         measure=lambda *a, **k: fake_measurement(),
                         repo_root=str(elsewhere)),
                     "an unreachable docs-wip census refuses the measurement too")
             finally:
                 probe_engine.REPO_ROOT = saved
-            expect(probe_claim.read_claim("alpha", root=root) is None,
+            expect(claim_lease.read_claim("alpha", root=root) is None,
                    "...leaving no claim behind")
 
 
@@ -150,15 +155,15 @@ def test_orchestration_harness_error_is_still_ingested() -> None:
     with registry(), scratch_repo() as (main_wt, _other, census):
         seeded_census(census)
         with claim_root() as root:
-            outcome = probe_claim.run_claimed_measurement(
+            outcome = claim_orchestration.run_claimed_measurement(
                 "alpha", 2, root=root, census_path=census,
                 measure=lambda p, r, **k: fake_measurement(p, r,
                                                            harness_error=True),
                 repo_root=str(main_wt), renew_interval=0.05)
-            expect(probe_claim.read_claim("alpha", root=root) is None
+            expect(claim_lease.read_claim("alpha", root=root) is None
                    and outcome.claim.released,
                    "the claim is released once the harness error is durable")
-        expect(outcome.exit_code == probe_claim.EXIT_HARNESS_ERROR
+        expect(outcome.exit_code == claim_orchestration.EXIT_HARNESS_ERROR
                and outcome.outcome == "harness-error",
                "the harness error is reported as its own outcome")
         row = probe_census.find_entry(
@@ -185,24 +190,26 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
         seeded_census(census)
         with claim_root() as root:
             ran = []
-            for lease in (0.1, 1.0, 30.0,
-                          probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS - 1):
+            floor = claim_orchestration.MIN_ORCHESTRATION_LEASE_SECONDS
+            for lease in (0.1, 1.0, 30.0, floor - 1):
                 expect_raises(
-                    probe_claim.ClaimError,
-                    lambda s=lease: probe_claim.run_claimed_measurement(
-                        "alpha", 2, root=root, census_path=census,
-                        lease_seconds=s,
-                        measure=lambda *a, **k: ran.append(1) or fake_measurement(),
-                        repo_root=str(main_wt)),
+                    claim_storage.ClaimError,
+                    lambda s=lease: (
+                        claim_orchestration.run_claimed_measurement(
+                            "alpha", 2, root=root, census_path=census,
+                            lease_seconds=s,
+                            measure=lambda *a, **k: (ran.append(1)
+                                                     or fake_measurement()),
+                            repo_root=str(main_wt))),
                     f"a {lease}s lease is refused with the floor named",
-                    str(int(probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS)))
-                expect(probe_claim.read_claim("alpha", root=root) is None,
+                    str(int(floor)))
+                expect(claim_lease.read_claim("alpha", root=root) is None,
                        f"...and a {lease}s lease claimed nothing")
             expect(not ran, "no refused lease ever executed the probe")
-            expect(probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS
+            expect(claim_orchestration.MIN_ORCHESTRATION_LEASE_SECONDS
                    >= 2 * probe_runner_registry.DEFAULT_TIMEOUT
-                   and probe_claim.LEASE_SECONDS
-                   >= probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS,
+                   and claim_lease.LEASE_SECONDS
+                   >= claim_orchestration.MIN_ORCHESTRATION_LEASE_SECONDS,
                    "the floor covers a full-timeout run and the default "
                    "clears the floor")
 
@@ -218,7 +225,7 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
             out, err = io.StringIO(), io.StringIO()
             try:
                 with redirect_stdout(out), redirect_stderr(err):
-                    code = probe_claim.main(["--probe", "alpha", "--runs", "2",
+                    code = facade.main(["--probe", "alpha", "--runs", "2",
                                              "--lease-seconds", text])
             except SystemExit as exit_code:
                 code = exit_code.code if isinstance(exit_code.code, int) else 1
@@ -227,7 +234,8 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
             return code, err.getvalue()
 
         code, err = cli_lease("0.1")
-        expect(code == probe_claim.EXIT_REJECTED and "--lease-seconds" in err,
+        expect(code == claim_orchestration.EXIT_REJECTED
+               and "--lease-seconds" in err,
                "`--lease-seconds 0.1` is rejected by the CLI too")
         # A lease can also be finite, positive and still unusable: big
         # enough and `timedelta` overflows, which is the same traceback
@@ -235,9 +243,9 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
         # cap sits, so a lease that is accepted is one the acquisition
         # record can hold too.
         for text in ("nan", "inf", "-inf", "infinity", "-1", "1e100",
-                     "1e300", str(probe_claim.MAX_LEASE_SECONDS + 1)):
+                     "1e300", str(claim_storage.MAX_LEASE_SECONDS + 1)):
             code, err = cli_lease(text)
-            expect(code == probe_claim.EXIT_REJECTED,
+            expect(code == claim_orchestration.EXIT_REJECTED,
                    f"`--lease-seconds {text}` is a controlled refusal, not a "
                    f"traceback (got {code!r}: {err.strip()[:120]})")
         for text in ("nan", "inf", "infinity"):
@@ -246,7 +254,7 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
                    f"...and `--lease-seconds {text}` says it must be finite")
         for text in ("1e100", "1e300"):
             _code, err = cli_lease(text)
-            expect(str(int(probe_claim.MAX_LEASE_SECONDS)) in err,
+            expect(str(int(claim_storage.MAX_LEASE_SECONDS)) in err,
                    f"...and `--lease-seconds {text}` names the maximum")
 
         # The same values through the low-level API, which #1436 and any
@@ -254,38 +262,38 @@ def test_orchestration_refuses_a_lease_that_cannot_survive_a_run() -> None:
         with claim_root() as root:
             for value in (float("nan"), float("inf"), float("-inf"), 0, -1,
                           True, None, "600", 1e100, 1e300,
-                          probe_claim.MAX_LEASE_SECONDS + 1):
+                          claim_storage.MAX_LEASE_SECONDS + 1):
                 expect_raises(
-                    probe_claim.ClaimError,
-                    lambda v=value: probe_claim.acquire("alpha", root=root,
+                    claim_storage.ClaimError,
+                    lambda v=value: claim_lease.acquire("alpha", root=root,
                                                         lease_seconds=v),
                     f"acquire refuses a {value!r} lease",
                     "lease")
-                expect(probe_claim.read_claim("alpha", root=root) is None,
+                expect(claim_lease.read_claim("alpha", root=root) is None,
                        f"...and a {value!r} lease claimed nothing")
             # The bound is inclusive, and a lease at it really works —
             # a refusal that also rejected every usable value would be
             # a different bug wearing this one's clothes.
-            edge = probe_claim.acquire(
+            edge = claim_lease.acquire(
                 "gamma", root=root,
-                lease_seconds=probe_claim.MAX_LEASE_SECONDS)
-            expect(probe_claim.read_claim("gamma", root=root)["token"]
+                lease_seconds=claim_storage.MAX_LEASE_SECONDS)
+            expect(claim_lease.read_claim("gamma", root=root)["token"]
                    == edge.token,
-                   f"a lease of exactly {probe_claim.MAX_LEASE_SECONDS:.0f} "
+                   f"a lease of exactly {claim_storage.MAX_LEASE_SECONDS:.0f} "
                    f"is accepted and really claims the probe")
             # The bound and the census's own cap must not drift: a lease
             # this accepts has to be one the acquisition RECORD can hold,
             # or the refusal simply moves to after the probe is claimed.
             declared = probe_census.load_schema()["$defs"]["claim"][
                 "properties"]["lease_seconds"]["maximum"]
-            expect(declared == probe_claim.MAX_LEASE_SECONDS,
+            expect(declared == claim_storage.MAX_LEASE_SECONDS,
                    f"the lease bound is exactly the census `claim` schema's "
-                   f"own cap (tool {probe_claim.MAX_LEASE_SECONDS!r}, schema "
-                   f"{declared!r})")
+                   f"own cap (tool {claim_storage.MAX_LEASE_SECONDS!r}, "
+                   f"schema {declared!r})")
             expect_raises(
-                probe_claim.ClaimError,
-                lambda: probe_claim.Renewer(
-                    probe_claim.Claim("alpha", "t", root / "x", root, {}, 600),
+                claim_storage.ClaimError,
+                lambda: claim_lease.Renewer(
+                    claim_lease.Claim("alpha", "t", root / "x", root, {}, 600),
                     interval=float("nan")),
                 "and a non-finite renewal interval is refused rather than "
                 "spun on", "finite")
@@ -302,49 +310,50 @@ def test_a_short_lease_means_what_it_says() -> None:
     """
     print("\n-- a short lease is not rounded away --")
     with registry(), claim_root() as root:
-        claim = probe_claim.acquire("alpha", root=root, lease_seconds=0.5)
-        stored = probe_claim.read_claim("alpha", root=root)
+        claim = claim_lease.acquire("alpha", root=root, lease_seconds=0.5)
+        stored = claim_lease.read_claim("alpha", root=root)
         expect("." in stored["expires_at"],
                "the stored expiry carries sub-second precision")
-        acquired = probe_claim.parse_stamp(stored["acquired_at"])
-        expires = probe_claim.parse_stamp(stored["expires_at"])
+        acquired = claim_storage.parse_stamp(stored["acquired_at"])
+        expires = claim_storage.parse_stamp(stored["expires_at"])
         expect(abs((expires - acquired).total_seconds() - 0.5) < 0.001,
                "the stored lease is exactly the one that was asked for")
-        expect(probe_claim.utc_now() < expires,
+        expect(claim_storage.utc_now() < expires,
                "and a fresh sub-second claim is not already expired")
-        expect_raises(probe_claim.ClaimDenied,
-                      lambda: probe_claim.acquire("alpha", root=root,
+        expect_raises(claim_lease.ClaimDenied,
+                      lambda: claim_lease.acquire("alpha", root=root,
                                                   lease_seconds=0.5),
                       "so a competitor is still denied immediately after it")
         time.sleep(0.6)
-        taken = probe_claim.acquire("alpha", root=root, lease_seconds=0.5)
+        taken = claim_lease.acquire("alpha", root=root, lease_seconds=0.5)
         expect(taken.token != claim.token,
                "and it really does lapse once that half-second is gone")
 
         # A second-precision claim from an older build still reads, and
         # its timestamps still agree with its lease to within the
         # rounding that precision carries.
-        moment = probe_claim.utc_now()
+        moment = claim_storage.utc_now()
         legacy = {**stored, "probe": "beta", "token": "legacy-token",
                   "lease_seconds": 600.0,
-                  "acquired_at": probe_claim.stamp_second(moment),
-                  "renewed_at": probe_claim.stamp_second(moment),
-                  "expires_at": probe_claim.stamp_second(
+                  "acquired_at": claim_storage.stamp_second(moment),
+                  "renewed_at": claim_storage.stamp_second(moment),
+                  "expires_at": claim_storage.stamp_second(
                       moment + timedelta(seconds=600))}
-        probe_claim.claim_path("beta", root).write_text(
+        claim_storage.claim_path("beta", root).write_text(
             json.dumps(legacy), encoding="utf-8")
-        expect_raises(probe_claim.ClaimDenied,
-                      lambda: probe_claim.acquire("beta", root=root,
+        expect_raises(claim_lease.ClaimDenied,
+                      lambda: claim_lease.acquire("beta", root=root,
                                                   lease_seconds=600),
                       "a second-precision claim file is still honoured")
-        expect(probe_claim.read_claim("beta", root=root) is not None,
+        expect(claim_lease.read_claim("beta", root=root) is not None,
                "...as a live claim, not aged out as malformed: the "
                "consistency check tolerates exactly that rounding")
 
         # The renewer's own cadence must sit INSIDE the lease it renews.
-        for lease in (0.3, 2.0, 600.0, probe_claim.LEASE_SECONDS):
-            probe = probe_claim.Claim("alpha", "t", root / "x", root, {}, lease)
-            interval = probe_claim.Renewer(probe).interval
+        for lease in (0.3, 2.0, 600.0, claim_lease.LEASE_SECONDS):
+            probe = claim_lease.Claim("alpha", "t", root / "x", root, {},
+                                      lease)
+            interval = claim_lease.Renewer(probe).interval
             expect(interval < lease,
                    f"a {lease}s lease renews every {interval}s, inside it")
 
@@ -367,17 +376,17 @@ def test_orchestration_aborts_when_the_claim_is_lost() -> None:
             def measure(probe, runs, **kwargs):
                 # Exactly what a stalled agent meets: its lease elapsed
                 # and somebody legitimately reclaimed the probe.
-                thief["claim"] = probe_claim.acquire(
+                thief["claim"] = claim_lease.acquire(
                     probe, root=root,
-                    lease_seconds=probe_claim.LEASE_SECONDS,
-                    now=probe_claim.utc_now()
-                    + timedelta(seconds=2 * probe_claim.LEASE_SECONDS))
+                    lease_seconds=claim_lease.LEASE_SECONDS,
+                    now=claim_storage.utc_now()
+                    + timedelta(seconds=2 * claim_lease.LEASE_SECONDS))
                 return fake_measurement(probe, runs)
 
             before = census.read_bytes()
             expect_raises(
-                probe_claim.ClaimLostDuringRun,
-                lambda: probe_claim.run_claimed_measurement(
+                claim_orchestration.ClaimLostDuringRun,
+                lambda: claim_orchestration.run_claimed_measurement(
                     "alpha", 2, root=root, census_path=census, measure=measure,
                     repo_root=str(main_wt), renew_interval=3600),
                 "a measurement that lost its claim refuses to ingest",
@@ -391,7 +400,7 @@ def test_orchestration_aborts_when_the_claim_is_lost() -> None:
                    "only the acquisition itself was ever recorded")
             expect(census.read_bytes() != before,
                    "...which is the one write this run made")
-            survivor = probe_claim.read_claim("alpha", root=root)
+            survivor = claim_lease.read_claim("alpha", root=root)
             expect(survivor is not None
                    and survivor["token"] == thief["claim"].token,
                    "and the successor's claim survived the loser's unwind")
@@ -401,17 +410,17 @@ def test_orchestration_aborts_when_the_claim_is_lost() -> None:
             import io
             from contextlib import redirect_stdout, redirect_stderr
             out, err = io.StringIO(), io.StringIO()
-            saved = probe_claim.probe_flake.measure
-            probe_claim.probe_flake.measure = measure
-            saved_root = probe_claim.repository_claim_root
-            probe_claim.repository_claim_root = lambda *a, **k: root
+            saved = claim_orchestration.probe_flake.measure
+            claim_orchestration.probe_flake.measure = measure
+            saved_root = claim_storage.repository_claim_root
+            claim_storage.repository_claim_root = lambda *a, **k: root
             try:
                 with redirect_stdout(out), redirect_stderr(err):
-                    code = probe_claim.main(["--probe", "alpha", "--runs", "2"])
+                    code = facade.main(["--probe", "alpha", "--runs", "2"])
             finally:
-                probe_claim.probe_flake.measure = saved
-                probe_claim.repository_claim_root = saved_root
-            expect(code == probe_claim.EXIT_CLAIM_LOST,
+                claim_orchestration.probe_flake.measure = saved
+                claim_storage.repository_claim_root = saved_root
+            expect(code == claim_orchestration.EXIT_CLAIM_LOST,
                    "the CLI reports its own exit code for a lost claim")
             expect("lost while the probe was running" in err.getvalue(),
                    "...and says so")
@@ -428,16 +437,17 @@ def test_orchestration_rejects_before_claiming() -> None:
             for probe, why in (("beta", "CI-eligible"), ("gamma", "legacy")):
                 expect_raises(
                     probe_flake.Rejection,
-                    lambda p=probe: probe_claim.run_claimed_measurement(
-                        p, 2, root=root, census_path=census,
-                        measure=lambda *a, **k: fake_measurement(),
-                        repo_root=str(main_wt)),
+                    lambda p=probe: (
+                        claim_orchestration.run_claimed_measurement(
+                            p, 2, root=root, census_path=census,
+                            measure=lambda *a, **k: fake_measurement(),
+                            repo_root=str(main_wt))),
                     f"a {why} probe is rejected before anything is claimed")
-                expect(probe_claim.read_claim(probe, root=root) is None,
+                expect(claim_lease.read_claim(probe, root=root) is None,
                        f"...and no claim exists for the {why} probe")
             expect_raises(
-                probe_claim.ClaimError,
-                lambda: probe_claim.run_claimed_measurement(
+                claim_storage.ClaimError,
+                lambda: claim_orchestration.run_claimed_measurement(
                     "alpha", 0, root=root, census_path=census,
                     measure=lambda *a, **k: fake_measurement(),
                     repo_root=str(main_wt)),
@@ -474,7 +484,7 @@ def test_ingestion_cannot_be_overtaken() -> None:
                 contender = subprocess.Popen(
                     [sys.executable, "-c", CONTENDER, str(root), "alpha",
                      str(barrier), "600",
-                     "0", str(4 * probe_claim.LEASE_SECONDS)],
+                     "0", str(4 * claim_lease.LEASE_SECONDS)],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 observed["contender"] = contender
                 barrier.write_text("go", encoding="utf-8")
@@ -486,11 +496,11 @@ def test_ingestion_cannot_be_overtaken() -> None:
                 # It has reached the lock; give it every chance to win.
                 time.sleep(0.5)
                 observed["still_waiting"] = contender.poll() is None
-                observed["owner_at_commit"] = probe_claim.read_claim(
+                observed["owner_at_commit"] = claim_lease.read_claim(
                     "alpha", root=root)
                 return probe_census.record_result(target, document)
 
-            outcome = probe_claim.run_claimed_measurement(
+            outcome = claim_orchestration.run_claimed_measurement(
                 "alpha", 2, root=root, census_path=census,
                 measure=lambda p, r, **k: fake_measurement(p, r),
                 repo_root=str(main_wt), renew_interval=3600,
@@ -508,7 +518,7 @@ def test_ingestion_cannot_be_overtaken() -> None:
         expect(observed["owner_at_commit"] is not None
                and observed["owner_at_commit"]["token"] == outcome.claim.token,
                "so the claim is still ours at the instant of the commit")
-        expect(outcome.exit_code == probe_claim.EXIT_OK,
+        expect(outcome.exit_code == claim_orchestration.EXIT_OK,
                "and the measurement it protected was ingested")
         row = probe_census.find_entry(
             json.loads(census.read_text(encoding="utf-8")), "alpha")["census"]
@@ -523,24 +533,25 @@ def test_commit_while_held_renews_and_refuses() -> None:
     """The commit hold renews the lease, and a lost claim never commits."""
     print("\n-- commit_while_held: renew, then commit, or refuse --")
     with registry(), claim_root() as root:
-        claim = probe_claim.acquire("alpha", root=root, lease_seconds=600)
-        before = probe_claim.read_claim("alpha", root=root)["expires_at"]
+        claim = claim_lease.acquire("alpha", root=root, lease_seconds=600)
+        before = claim_lease.read_claim("alpha", root=root)["expires_at"]
         committed = []
         expect(claim.commit_while_held(
             lambda: committed.append("done") or "value",
-            now=probe_claim.utc_now() + timedelta(seconds=300)) == "value",
+            now=claim_storage.utc_now() + timedelta(seconds=300)) == "value",
             "a held claim runs the commit and returns its value")
-        after = probe_claim.read_claim("alpha", root=root)["expires_at"]
+        after = claim_lease.read_claim("alpha", root=root)["expires_at"]
         expect(committed == ["done"], "the commit ran exactly once")
         expect(after > before,
                "and the lease was renewed inside the hold, so it cannot "
                "elapse however long the commit takes")
 
-        lapsed = probe_claim.acquire("beta", root=root, lease_seconds=1)
-        probe_claim.acquire("beta", root=root, lease_seconds=600,
-                            now=probe_claim.utc_now() + timedelta(seconds=60))
+        lapsed = claim_lease.acquire("beta", root=root, lease_seconds=1)
+        claim_lease.acquire(
+            "beta", root=root, lease_seconds=600,
+            now=claim_storage.utc_now() + timedelta(seconds=60))
         ran = []
-        expect_raises(probe_claim.ClaimLost,
+        expect_raises(claim_lease.ClaimLost,
                       lambda: lapsed.commit_while_held(
                           lambda: ran.append(1)),
                       "a claim taken over refuses to commit at all",
@@ -595,7 +606,7 @@ def test_a_delayed_audit_cannot_be_overtaken() -> None:
                 return probe_census.record_claim(target, probe, record)
 
             ran = []
-            outcome = probe_claim.run_claimed_measurement(
+            outcome = claim_orchestration.run_claimed_measurement(
                 "alpha", 2, root=root, census_path=census,
                 measure=lambda p, r, **k: ran.append(1) or fake_measurement(p, r),
                 record_claim=audit_slowly, repo_root=str(main_wt),
@@ -609,7 +620,7 @@ def test_a_delayed_audit_cannot_be_overtaken() -> None:
         expect(observed.get("still_waiting") is True,
                "a competing acquisition CANNOT proceed while the acquisition "
                "is being recorded")
-        expect(ran == [1] and outcome.exit_code == probe_claim.EXIT_OK,
+        expect(ran == [1] and outcome.exit_code == claim_orchestration.EXIT_OK,
                "and the probe this run still owned did run")
         expect(json.loads(observed["contender_outcome"])["outcome"] == "denied",
                "the contender was DENIED once it got the lock, because the "
@@ -627,15 +638,15 @@ def test_a_delayed_audit_cannot_be_overtaken() -> None:
 
             def audit_then_lose(target, probe, record):
                 result = probe_census.record_claim(target, probe, record)
-                stolen = dict(probe_claim.read_claim(probe, root=root))
+                stolen = dict(claim_lease.read_claim(probe, root=root))
                 stolen["token"] = "somebody-else"
-                probe_claim.claim_path(probe, root).write_text(
+                claim_storage.claim_path(probe, root).write_text(
                     json.dumps(stolen), encoding="utf-8")
                 return result
 
             expect_raises(
-                probe_claim.ClaimLostDuringRun,
-                lambda: probe_claim.run_claimed_measurement(
+                claim_orchestration.ClaimLostDuringRun,
+                lambda: claim_orchestration.run_claimed_measurement(
                     "beta", 2, root=root, census_path=census,
                     measure=lambda *a, **k: ran.append(1) or fake_measurement("beta"),
                     record_claim=audit_then_lose, repo_root=str(main_wt),
@@ -652,7 +663,7 @@ def test_a_delayed_audit_cannot_be_overtaken() -> None:
                    "and no result reached the census")
             expect(census.read_bytes() != before and len(row["claims"]) == 1,
                    "only the acquisition the audit itself wrote is recorded")
-            expect(probe_claim.read_claim("beta", root=root)["token"]
+            expect(claim_lease.read_claim("beta", root=root)["token"]
                    == "somebody-else",
                    "and the new owner's claim was left alone on the way out")
 
@@ -684,13 +695,13 @@ def test_a_completed_measurement_is_never_lost() -> None:
             wanted = out / "nested" / "role.json"
             error = None
             try:
-                probe_claim.run_claimed_measurement(
+                claim_orchestration.run_claimed_measurement(
                     "alpha", 2, root=root, census_path=census,
                     result_path=wanted,
                     measure=lambda p, r, **k: fake_measurement(p, r),
                     record_result=refusing, repo_root=str(main_wt),
                     renew_interval=3600)
-            except probe_claim.ResultIngestionFailed as raised:
+            except claim_orchestration.ResultIngestionFailed as raised:
                 error = raised
             expect(error is not None,
                    "a census that refuses the measurement is its own failure")
@@ -737,15 +748,15 @@ def test_a_completed_measurement_is_never_lost() -> None:
             made = fake_measurement("alpha", 2, artifact_root=artifacts)
             error = None
             try:
-                probe_claim.run_claimed_measurement(
+                claim_orchestration.run_claimed_measurement(
                     "alpha", 2, root=root, census_path=census,
                     measure=lambda *a, **k: made,
                     record_result=refusing, repo_root=str(main_wt),
                     renew_interval=3600)
-            except probe_claim.ResultIngestionFailed as raised:
+            except claim_orchestration.ResultIngestionFailed as raised:
                 error = raised
             fallback = (Path(made.invocation_dir)
-                        / probe_claim.RETAINED_RESULT_NAME)
+                        / claim_orchestration.RETAINED_RESULT_NAME)
             expect(error is not None and fallback.exists(),
                    "a measurement nobody asked for a copy of is retained "
                    "beside its own artifacts")
@@ -765,16 +776,16 @@ def test_a_completed_measurement_is_never_lost() -> None:
             wanted = out / "lost.json"
 
             def steal(probe, runs, **kwargs):
-                probe_claim.acquire(
+                claim_lease.acquire(
                     probe, root=root,
-                    lease_seconds=probe_claim.LEASE_SECONDS,
-                    now=probe_claim.utc_now()
-                    + timedelta(seconds=2 * probe_claim.LEASE_SECONDS))
+                    lease_seconds=claim_lease.LEASE_SECONDS,
+                    now=claim_storage.utc_now()
+                    + timedelta(seconds=2 * claim_lease.LEASE_SECONDS))
                 return fake_measurement(probe, runs)
 
             expect_raises(
-                probe_claim.ClaimLostDuringRun,
-                lambda: probe_claim.run_claimed_measurement(
+                claim_orchestration.ClaimLostDuringRun,
+                lambda: claim_orchestration.run_claimed_measurement(
                     "alpha", 2, root=root, census_path=census,
                     result_path=wanted, measure=steal,
                     repo_root=str(main_wt), renew_interval=3600),
@@ -819,23 +830,24 @@ def test_a_completed_measurement_is_never_lost() -> None:
             for target, why in cases:
                 ran = []
                 expect_raises(
-                    probe_claim.ClaimError,
-                    lambda p=target: probe_claim.run_claimed_measurement(
-                        "alpha", 2, root=root, census_path=census,
-                        result_path=p,
-                        measure=lambda *a, **k: (ran.append(1)
-                                                 or fake_measurement()),
-                        repo_root=str(main_wt)),
+                    claim_storage.ClaimError,
+                    lambda p=target: (
+                        claim_orchestration.run_claimed_measurement(
+                            "alpha", 2, root=root, census_path=census,
+                            result_path=p,
+                            measure=lambda *a, **k: (ran.append(1)
+                                                     or fake_measurement()),
+                            repo_root=str(main_wt))),
                     f"{why} is refused up front, not after an hour of engine "
                     f"time", "result document cannot be written")
                 expect(not ran
-                       and probe_claim.read_claim("alpha", root=root) is None,
+                       and claim_lease.read_claim("alpha", root=root) is None,
                        f"...having run nothing and claimed nothing ({why})")
             # And an ordinary writable existing file is still fine: a
             # rule that refused every target would be a different bug.
             reusable = out / "reusable.json"
             reusable.write_text("{}", encoding="utf-8")
-            expect(probe_claim.check_result_path(reusable) == reusable,
+            expect(claim_orchestration.check_result_path(reusable) == reusable,
                    "an existing writable file is still a usable destination")
 
     # (e) The happy path writes it too, and says so.
@@ -843,11 +855,11 @@ def test_a_completed_measurement_is_never_lost() -> None:
         seeded_census(census)
         with claim_root() as root, scratch() as out:
             wanted = out / "ok.json"
-            outcome = probe_claim.run_claimed_measurement(
+            outcome = claim_orchestration.run_claimed_measurement(
                 "alpha", 2, root=root, census_path=census, result_path=wanted,
                 measure=lambda p, r, **k: fake_measurement(p, r),
                 repo_root=str(main_wt), renew_interval=3600)
-            expect(outcome.exit_code == probe_claim.EXIT_OK
+            expect(outcome.exit_code == claim_orchestration.EXIT_OK
                    and wanted.exists() and outcome.result_path == wanted
                    and outcome.result_problem is None,
                    "a successful run writes the requested result document")
@@ -856,47 +868,75 @@ def test_a_completed_measurement_is_never_lost() -> None:
 
 
 def test_cli() -> None:
-    """The CLI's outcomes, exit codes and read-only status view."""
+    """The CLI's outcomes, exit codes and read-only status view.
+
+    Every case below drives `main(argv)` in process, because the
+    fixtures need to substitute the registry and the claim root. That
+    helper structurally cannot observe whether the SCRIPT still has an
+    entry point, so the last assertion runs it as a real subprocess and
+    reads its STDOUT -- a module that lost its
+    `if __name__ == "__main__"` guard exits 0 having written nothing,
+    and every other check here would stay green (#2148).
+    """
     print("\n-- the command line --")
     import io
+    import subprocess
     from contextlib import redirect_stdout, redirect_stderr
 
     def cli(*argv):
         out, err = io.StringIO(), io.StringIO()
         try:
             with redirect_stdout(out), redirect_stderr(err):
-                code = probe_claim.main(list(argv))
+                code = facade.main(list(argv))
         except SystemExit as exit_code:
             code = exit_code.code if isinstance(exit_code.code, int) else 1
         return code, out.getvalue(), err.getvalue()
 
     with registry(), scratch_repo() as (main_wt, _other, _census):
         code, out, _err = cli("--status", "--json")
-        expect(code == probe_claim.EXIT_OK and json.loads(out)["claims"] == [],
+        expect(code == claim_orchestration.EXIT_OK
+               and json.loads(out)["claims"] == [],
                "--status on an unclaimed repository reports no claims")
 
-        claim = probe_claim.acquire("alpha", lease_seconds=600,
+        claim = claim_lease.acquire("alpha", lease_seconds=600,
                                     repo_root=str(main_wt))
         try:
             code, out, _err = cli("--status", "--json")
             rows = json.loads(out)["claims"]
-            expect(code == probe_claim.EXIT_OK and len(rows) == 1
+            expect(code == claim_orchestration.EXIT_OK and len(rows) == 1
                    and rows[0]["probe"] == "alpha" and rows[0]["state"] == "held",
                    "--status reports a held claim and its owner")
 
             code, _out, err = cli("--probe", "alpha", "--runs", "2")
-            expect(code == probe_claim.EXIT_ALREADY_CLAIMED
+            expect(code == claim_orchestration.EXIT_ALREADY_CLAIMED
                    and "already claimed" in err,
                    "a denied run exits with the already-claimed code")
         finally:
             claim.release()
 
         code, _out, err = cli("--probe", "nonesuch", "--runs", "2")
-        expect(code == probe_claim.EXIT_REJECTED and "nonesuch" in err,
+        expect(code == claim_orchestration.EXIT_REJECTED and "nonesuch" in err,
                "an unknown probe is rejected")
         code, _out, err = cli("--runs", "2")
-        expect(code != probe_claim.EXIT_OK,
+        expect(code != claim_orchestration.EXIT_OK,
                "--runs without --probe is a usage error")
+
+    # The one observation an in-process driver cannot make. `--status`
+    # is chosen because it is the only read-only argv the command
+    # accepts, and STDOUT is the assertion because an entry point that
+    # never ran exits 0 in silence.
+    done = subprocess.run(
+        [sys.executable, str(Path(TOOLS, "probe_claim.py")), "--status",
+         "--json"], capture_output=True, text=True, timeout=120)
+    expect(done.returncode == claim_orchestration.EXIT_OK,
+           f"the script itself runs and exits cleanly ({done.stderr[-200:]})")
+    try:
+        claims = json.loads(done.stdout)["claims"]
+    except (ValueError, KeyError, TypeError):
+        claims = None
+    expect(isinstance(claims, list),
+           f"...and its entry point actually WROTE the status document "
+           f"({done.stdout[:200]!r})")
 
 
 #: This owner's inventory, in the relative order these cases hold within

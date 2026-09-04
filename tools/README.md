@@ -1992,6 +1992,30 @@ python3 tools/probe_claim.py --status            # every claim in this repositor
 python3 tools/probe_claim.py --status --json
 ```
 
+Those commands, their flags, defaults, diagnostics and exit codes are
+unchanged by #2148, which split the implementation behind them into three
+owners. `probe_claim.py` is now the COMMAND and nothing else — argument
+parsing, status rendering, owner invocation, JSON or text presentation, and
+the process status:
+
+| Owner module | Owns |
+|---|---|
+| `probe_claim_storage.py` | the filesystem LEAF: the repository-common claim root, claim and sidecar-lock paths, directory and file modes, timestamp formatting and parsing, payload encoding, the completeness/consistency/filesystem-age decode, durable staged replacement, `O_CREAT\|O_EXCL` creation, and the sidecar `flock`. It decides nothing about ownership and imports neither of the others |
+| `probe_claim_lease.py` | OWNERSHIP: canonical probe-key and lease validation, claim payload construction, `Claim`, `ClaimDenied`, acquisition, renewal, reassertion, token-safe release, takeover, `Renewer`, and the read-only `status_rows` query. It consumes storage and the probe registry |
+| `probe_claim_orchestration.py` | the CLAIMED MEASUREMENT: `--result` validation, the acquisition audit, the pre-run ownership reassertion, measurement under renewal, retention of the completed result, serialized ingestion, `Outcome`, the lease floor and the exit-code table. It consumes both owners below it plus `probe_census` and `probe_flake` |
+
+Dependencies run one way — storage is the leaf, the lease owner builds on it,
+orchestration builds on both, and the command builds on all three — and the
+command re-exports NONE of their names, so a tool or test reaching for
+`acquire`, `LEASE_SECONDS`, `repository_claim_root` or `retain_measurement`
+imports the owner that defines it and assigning to it changes the state the
+implementation actually reads. The invariant documentation lives with the
+owner that ENFORCES each invariant; the command keeps the overview and the
+exit-code contract. `tools/deflake.py` consumes the owners directly for the
+same reason. The `--only census` self-test case
+`test_owner_dependencies_run_one_way` checks both claims mechanically rather
+than by inspection.
+
 The claim is a FILE, created `O_CREAT|O_EXCL` at
 `<git-common-dir>/probe-claims/<probe>.json`, carrying its owner, its
 acquisition token and its lease. **The file is the lock**, which is the
@@ -2105,19 +2129,19 @@ them, because a claim that must hold between OS processes cannot be proved by
 threads.
 
 That bare invocation is the whole gate and the only one CI or `make ci` runs.
-Its 29 cases live with three independently changing contract owners, and
+Its 30 cases live with three independently changing contract owners, and
 `--only` runs one owner's cases for iteration (#2100):
 
 ```bash
 python3 tools/test_probe_claim.py --only claim          # 12 cases, ~7 s
-python3 tools/test_probe_claim.py --only census         #  4 cases
+python3 tools/test_probe_claim.py --only census         #  5 cases
 python3 tools/test_probe_claim.py --only orchestration  # 13 cases
 ```
 
 | Owner module | `--only` | Owns |
 |---|---|---|
 | `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
-| `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, and `probe_flake` staying usable with no `docs-wip` worktree |
+| `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, `probe_flake` staying usable with no `docs-wip` worktree, and (#2148) the one-way direction the three claim owners depend in plus the command re-exporting none of their names |
 | `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI |
 
 `probe_claim_selftest_support.py` is the single source of everything the three
@@ -2487,7 +2511,8 @@ equal. That apparatus is a CLOSED inventory (`HARNESS_MODULES`), pinned
 exactly by the self-test rather than spot-checked, and stated there rather
 than counted here — a hand-written total is the drift #1584 already cost
 this file once: `probe_flake`, `probe_protocol`, `probe_census`,
-`probe_claim`, `probe_resource_lock`, `probe_select`, `probe_engine`,
+`probe_claim` and its three `probe_claim_*` owners, `probe_resource_lock`,
+`probe_select`, `probe_engine`,
 `probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
 and `deflake_diagnosis`, each of which owns probe selection, launch, port
 or resource leasing, protocol reconciliation, measurement timing and

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Census and collaborator-boundary cases (#1434), split out by #2100.
 
-The four cases covering acquisition recording, the separation of the
-claim log from the measurement log, lossless schema migration, and
+The five cases covering acquisition recording, the separation of the
+claim log from the measurement log, lossless schema migration,
 `probe_flake` staying usable with no `docs-wip` worktree and no census
-dependency at all.
+dependency at all, and the direction the claim's own three owners
+depend in (#2148).
 
-That last one is a BOUNDARY case rather than a census case in the
-narrow sense: it is what keeps the mandatory claim in the orchestration
-path instead of leaking into the low-level measurement API, so it
-belongs to the owner that also owns the census collaborator.
+The last two are BOUNDARY cases rather than census cases in the narrow
+sense. One keeps the mandatory claim in the orchestration path instead
+of letting it leak into the low-level measurement API; the other keeps
+storage a filesystem leaf and the command a command. Both belong to the
+owner that also owns the census collaborator.
 
 Not a gate of its own. Run through the aggregate:
 
@@ -17,6 +19,7 @@ Not a gate of its own. Run through the aggregate:
 """
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -30,9 +33,23 @@ import probe_census_records as census_records  # type: ignore  # noqa: E402
 import probe_engine  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
+import probe_claim as facade  # type: ignore  # noqa: E402
+import probe_claim_lease  # type: ignore  # noqa: E402
+import probe_claim_orchestration  # type: ignore  # noqa: E402
+import probe_claim_storage  # type: ignore  # noqa: E402
 from probe_claim_selftest_support import (  # noqa: E402
-    COMMIT_A, COMMIT_B, SYNTHETIC, expect, expect_raises, fake_measurement,
-    registry, scratch, scratch_repo, seeded_census)
+    COMMIT_A, COMMIT_B, SYNTHETIC, TOOLS, expect, expect_raises,
+    fake_measurement, registry, scratch, scratch_repo, seeded_census)
+
+#: The claim's own modules, lowest owner first. The index of a module in
+#: this tuple is how far up the stack it sits, so an import edge is
+#: legal exactly when it points at a STRICTLY lower index.
+OWNER_ORDER = (
+    "probe_claim_storage",
+    "probe_claim_lease",
+    "probe_claim_orchestration",
+    "probe_claim",
+)
 
 
 def test_census_claim_collection() -> None:
@@ -293,13 +310,105 @@ def test_probe_flake_needs_no_docs_worktree() -> None:
             probe_engine.REPO_ROOT = saved
 
 
+def _imported_claim_modules(module_name: str) -> set:
+    """Every claim-family module `module_name` names at module level.
+
+    Both spellings count -- `import probe_claim_storage as storage` and
+    `from probe_claim_storage import ...` -- because either one creates
+    the dependency requirement 11 constrains, and the WHOLE tree is
+    walked rather than its top level, because a deferred import in a
+    function body, or one hidden behind `if TYPE_CHECKING:`, is the same
+    edge written where a top-level scan would not look. Only import
+    nodes are collected, so the module's own docstring -- which names
+    its siblings deliberately -- contributes nothing.
+    """
+    source = Path(TOOLS, f"{module_name}.py").read_text(encoding="utf-8")
+    named = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            named.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            named.add(node.module)
+    return named & set(OWNER_ORDER)
+
+
+def test_owner_dependencies_run_one_way() -> None:
+    """Storage is the leaf, the command is the root, and nothing loops.
+
+    Requirement 11's acyclic direction is the one structural claim the
+    split rests on, and inspection is not a gate: a `from
+    probe_claim_orchestration import EXIT_OK` added to storage to save a
+    line would compile, pass every behavioral case, and silently make
+    the leaf depend on the whole stack.
+
+    The companion claim is that the command re-exports NOTHING. A
+    facade alias -- `acquire = lease.acquire` -- would still work for a
+    reader, but assigning to it would no longer reach the state the
+    implementation reads, which is exactly the dead seam #2074 avoided
+    and this split must not reintroduce.
+    """
+    print("\n-- the claim's owners depend one way, and the command "
+          "re-exports nothing --")
+    edges = {name: _imported_claim_modules(name) for name in OWNER_ORDER}
+    # Non-vacuity first: an AST scan that found nothing would satisfy
+    # every exclusion below while inspecting an empty set.
+    expect(sum(len(found) for found in edges.values()) >= 6,
+           f"the scan found the family's own import edges ({edges})")
+    for consumer, found in edges.items():
+        rank = OWNER_ORDER.index(consumer)
+        upward = sorted(name for name in found
+                        if OWNER_ORDER.index(name) >= rank)
+        expect(not upward,
+               f"{consumer} imports only owners below it "
+               f"(it also names {upward})")
+    expect(edges["probe_claim_storage"] == set(),
+           "storage is the filesystem LEAF: it imports neither of the "
+           "other two")
+    expect(edges["probe_claim_lease"] == {"probe_claim_storage"},
+           "the lease owner consumes storage and nothing above it")
+    expect(edges["probe_claim_orchestration"]
+           == {"probe_claim_storage", "probe_claim_lease"},
+           "orchestration consumes both owners below it")
+    expect(edges["probe_claim"] == {"probe_claim_storage",
+                                    "probe_claim_lease",
+                                    "probe_claim_orchestration"},
+           "and the command consumes all three")
+
+    defined = {}
+    for name in OWNER_ORDER[:-1]:
+        source = Path(TOOLS, f"{name}.py").read_text(encoding="utf-8")
+        names = set()
+        for node in ast.parse(source).body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                names.update(target.id for target in node.targets
+                             if isinstance(target, ast.Name))
+        defined[name] = {value for value in names
+                         if not value.startswith("_")}
+    expect(all(len(names) >= 5 for names in defined.values()),
+           f"every owner declares a surface worth checking "
+           f"({ {key: len(value) for key, value in defined.items()} })")
+    for name, names in defined.items():
+        leaked = sorted(names & set(vars(facade)))
+        expect(not leaked,
+               f"the command re-exports none of {name}'s names "
+               f"(found {leaked})")
+    expect(facade.storage is probe_claim_storage
+           and facade.lease is probe_claim_lease
+           and facade.orchestration is probe_claim_orchestration,
+           "the command reaches each owner as the module OBJECT, so a seam "
+           "patched on an owner is the one the command calls")
+
+
 #: This owner's inventory, in the relative order these cases hold within
 #: the aggregate's run sequence -- which is NOT contiguous there: the
-#: first three run early and `test_probe_flake_needs_no_docs_worktree`
-#: runs second-to-last, immediately before the CLI case.
+#: first three run early, then the two boundary cases run near the end,
+#: immediately before the CLI case.
 CASES = (
     test_census_claim_collection,
     test_claims_are_not_measurements,
     test_schema_migration_is_lossless,
     test_probe_flake_needs_no_docs_worktree,
+    test_owner_dependencies_run_one_way,
 )

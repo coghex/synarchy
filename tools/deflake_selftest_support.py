@@ -65,7 +65,9 @@ import probe_census  # type: ignore  # noqa: E402
 # `os.fsync` -- are reached through the STORAGE owner, which is the
 # module that stages and fsyncs a census write since #2131.
 import probe_census_storage as census_storage  # type: ignore  # noqa: E402
-import probe_claim  # type: ignore  # noqa: E402
+import probe_claim_lease  # type: ignore  # noqa: E402
+import probe_claim_orchestration  # type: ignore  # noqa: E402
+import probe_claim_storage  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
@@ -178,17 +180,18 @@ def measurement(scratch: Scratch, *, probe: str = PROBE, outcomes=None,
 
 
 class FakeClaim:
-    """A `probe_claim.Claim` stand-in with the same ownership surface."""
+    """A `probe_claim_lease.Claim` stand-in with the same ownership surface."""
 
     def __init__(self, probe: str = PROBE, *, token: str = "token-1",
                  lose_on: str = "", release_error: str = "") -> None:
         self.probe = probe
         self.token = token
-        # Read by the REAL `probe_claim.Renewer`, which the orchestrator
+        # Read by the REAL `probe_claim_lease.Renewer`, which the orchestrator
         # runs around the measurement: the renewer is not faked, so a
         # fake claim has to answer the same lease question a real one
         # does. Long enough that its first tick never fires inside a test.
-        self.lease_seconds = probe_claim.MIN_ORCHESTRATION_LEASE_SECONDS
+        self.lease_seconds = (
+            probe_claim_orchestration.MIN_ORCHESTRATION_LEASE_SECONDS)
         self.lose_on = lose_on
         self.release_error = release_error
         self.released = False
@@ -207,19 +210,19 @@ class FakeClaim:
         stage = "audit" if not self.commits else "record"
         self.commits.append(stage)
         if self.lose_on == stage:
-            raise probe_claim.ClaimLost(
+            raise probe_claim_lease.ClaimLost(
                 f"the claim on {self.probe!r} is no longer ours")
         return commit()
 
     def reassert(self, now=None) -> None:
         self.reasserted += 1
         if self.lose_on == "reassert":
-            raise probe_claim.ClaimLost(
+            raise probe_claim_lease.ClaimLost(
                 f"the claim on {self.probe!r} is no longer ours")
 
     def release(self) -> bool:
         if self.release_error:
-            raise probe_claim.ClaimError(self.release_error)
+            raise probe_claim_storage.ClaimError(self.release_error)
         self.released = True
         return True
 

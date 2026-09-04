@@ -199,7 +199,8 @@ sys.path.insert(0, {TOOLS!r})
 import probe_runner_registry
 probe_runner_registry.PROBES = [(k, k + '_probe.py', k)
                                 for k in ('alpha', 'beta', 'gamma')]
-import probe_claim
+import probe_claim_lease
+import probe_claim_storage
 
 root, probe, barrier, lease = sys.argv[1], sys.argv[2], sys.argv[3], float(sys.argv[4])
 hold = float(sys.argv[5]) if len(sys.argv) > 5 else 0.0
@@ -213,13 +214,15 @@ while not os.path.exists(barrier):
 # the lock yet would make a still-running assertion vacuous.
 open(barrier + '.ready', 'w').close()
 try:
-    when = probe_claim.utc_now() + __import__('datetime').timedelta(seconds=skew)
-    claim = probe_claim.acquire(probe, root=__import__('pathlib').Path(root),
-                                lease_seconds=lease, now=when)
-except probe_claim.ClaimDenied as denied:
+    when = (probe_claim_storage.utc_now()
+            + __import__('datetime').timedelta(seconds=skew))
+    claim = probe_claim_lease.acquire(
+        probe, root=__import__('pathlib').Path(root),
+        lease_seconds=lease, now=when)
+except probe_claim_lease.ClaimDenied as denied:
     print(json.dumps({{"outcome": "denied", "detail": denied.describe()}}))
     sys.exit(0)
-except probe_claim.ClaimError as error:
+except probe_claim_storage.ClaimError as error:
     print(json.dumps({{"outcome": "error", "detail": str(error)}}))
     sys.exit(0)
 print(json.dumps({{"outcome": "won", "token": claim.token}}), flush=True)
@@ -235,11 +238,11 @@ sys.path.insert(0, {TOOLS!r})
 import probe_runner_registry
 probe_runner_registry.PROBES = [(k, k + '_probe.py', k)
                                 for k in ('alpha', 'beta', 'gamma')]
-import probe_claim
+import probe_claim_storage
 from pathlib import Path
 
 root, probe, held, ready = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
-with probe_claim._serialized(probe, Path(root)):
+with probe_claim_storage.serialized(probe, Path(root)):
     open(ready, 'w').close()
     time.sleep(held)
 """

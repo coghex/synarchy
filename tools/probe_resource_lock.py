@@ -79,9 +79,10 @@ tracked `config/` tree through the same build directory, which is the
 conflict the resource declarations exist to describe. The namespace is
 therefore the repository's COMMON git directory, which every linked
 worktree of one repository resolves identically and no worktree of
-another repository can collide with. `probe_claim.repository_claim_root`
-resolves the same `--git-common-dir` for the same reason; again the two
-cannot share a helper without a cycle.
+another repository can collide with.
+`probe_claim_storage.repository_claim_root` resolves the same
+`--git-common-dir` for the same reason; again the two cannot share a
+helper without a cycle.
 
 The path is hashed rather than embedded, so a lock file name is a fixed
 length whatever the checkout is called and holds no path separators.
@@ -327,8 +328,9 @@ def repository_common_dir(repo_root=None) -> Path:
     """The repository's common git directory, absolute and resolved.
 
     `--git-common-dir` rather than `--git-dir` is the load-bearing
-    choice, and it is the one `probe_claim.repository_claim_root` makes
-    too: in a linked worktree the latter names that worktree's private
+    choice, and it is the one
+    `probe_claim_storage.repository_claim_root` makes too: in a linked
+    worktree the latter names that worktree's private
     `.git/worktrees/<name>`, so every worktree would namespace
     separately and the lock would coordinate nobody.
 
