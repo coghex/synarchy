@@ -1290,6 +1290,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkIdentity
+                   Test.Headless.World.ChunkPageBinding
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.Chop.Selection
@@ -1498,6 +1499,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Building.WorkbenchConstruction
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Lua.SaveModules.Support
+                   Test.Headless.Lua.SaveModules.DataCodec
+                   Test.Headless.Lua.SaveModules.Registry
+                   Test.Headless.Lua.SaveModules.EntityApplication
+                   Test.Headless.Lua.SaveModules.Components
                    Test.Headless.Lua.SharedHelpers
                    Test.Headless.Lua.SaveBridge
                    Test.Headless.Lua.TutorialProgress

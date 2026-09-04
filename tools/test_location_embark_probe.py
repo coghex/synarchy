@@ -46,6 +46,14 @@ console responses (no engine, no port) and pin:
     rather than letting the missing file resurface as a load timeout in
     a later session.
 
+Since #2164 the probe is a facade over `tools/location_embark/`, so a
+name this file stubs may be resolved in one of those owner modules
+rather than in the facade. Every stub therefore goes through `patched`
+below, which refuses to replace a name the target module does not
+already define, and every fixture additionally proves its stub was
+really reached — a patch that lands where nothing reads it leaves these
+tests passing while asserting nothing.
+
 No engine, no world, no GPU: every test here runs against temporary
 directories in well under a second.
 
@@ -66,9 +74,47 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 import location_embark_probe as probe  # type: ignore  # noqa: E402
+from location_embark import invocation  # type: ignore  # noqa: E402
 
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
+
+
+@contextlib.contextmanager
+def patched(module, **replacements):
+    """Replace named attributes on the module that DEFINES them, failing
+    loudly when one is not there to replace.
+
+    A Python function resolves its globals in its OWN module, so once
+    #2164 moved `RunArtifacts.build` and `save_and_wait` out of the
+    facade, patching `location_embark_probe.REPO` or
+    `location_embark_probe.send` would create an attribute nothing
+    reads: the stub would stop intercepting, and every test built on it
+    would keep passing while asserting nothing at all. The read-only
+    checkout is the dangerous one —
+    `test_a_read_only_checkout_still_yields_a_removable_tree` would then
+    build against the REAL checkout and still report a pass.
+
+    The `hasattr` gate turns a later move into a failure at the moment
+    the name leaves the module. It is only half the proof, so every
+    fixture below also asserts that its stub was actually CALLED, or
+    that the run really observed the stand-in it was handed.
+    """
+    missing = sorted(name for name in replacements
+                     if not hasattr(module, name))
+    if missing:
+        raise AssertionError(
+            f"{module.__name__} defines no {', '.join(missing)} to patch: "
+            f"the stub would land somewhere nothing reads and silently "
+            f"stop intercepting")
+    originals = {name: getattr(module, name) for name in replacements}
+    for name, value in replacements.items():
+        setattr(module, name, value)
+    try:
+        yield
+    finally:
+        for name, value in originals.items():
+            setattr(module, name, value)
 
 
 @contextlib.contextmanager
@@ -113,16 +159,21 @@ def run_main(argv: list[str], body) -> tuple[int, str, str]:
         body(art)
 
     probe.failures.clear()
-    original_run, original_argv = probe.run_probe, sys.argv
-    probe.run_probe = wrapper
+    original_argv = sys.argv
     sys.argv = ["location_embark_probe.py", *argv]
     try:
-        with captured() as out:
+        # `main` calls `run_probe` through this module's own globals, so
+        # the facade is the module that defines it and the one to patch.
+        with patched(probe, run_probe=wrapper), captured() as out:
             code = probe.main()
     finally:
-        probe.run_probe, sys.argv = original_run, original_argv
+        sys.argv = original_argv
         probe.failures.clear()
-    return code, out.getvalue(), seen["base"]
+    # Without this the substitution could stop taking effect and every
+    # caller below would assert about a directory no run ever owned.
+    expect("base" in seen,
+           "probe.main() really reached the substituted run_probe")
+    return code, out.getvalue(), seen.get("base", "")
 
 
 # ---------------------------------------------------------------------
@@ -135,15 +186,17 @@ def test_root_symlinks_content_and_copies_config() -> None:
             path = os.path.join(art.root, family)
             expect(os.path.islink(path)
                    and os.path.realpath(path)
-                   == os.path.realpath(os.path.join(probe.REPO, family)),
+                   == os.path.realpath(
+                       os.path.join(invocation.REPO, family)),
                    f"{family}/ is a symlink to the checkout's own")
         config = os.path.join(art.root, "config")
         expect(os.path.isdir(config) and not os.path.islink(config),
                "config/ is a real copy, so the engine's writes stay in this run")
         expect(not [f for f in os.listdir(config) if f.endswith(".local.yaml")],
                "config/ copy excludes the developer's *.local.yaml overrides")
-        tracked = sorted(f for f in os.listdir(os.path.join(probe.REPO, "config"))
-                         if not f.endswith(".local.yaml"))
+        tracked = sorted(
+            f for f in os.listdir(os.path.join(invocation.REPO, "config"))
+            if not f.endswith(".local.yaml"))
         expect(sorted(os.listdir(config)) == tracked,
                "config/ copy keeps every tracked default")
         saves = os.path.join(art.root, "saves")
@@ -154,7 +207,8 @@ def test_root_symlinks_content_and_copies_config() -> None:
 @contextlib.contextmanager
 def read_only_checkout():
     """A stand-in checkout whose `config/` (and a subdirectory of it) is
-    mode 0555, with `probe.REPO` pointed at it.
+    mode 0555, with `location_embark.invocation.REPO` — the name
+    `RunArtifacts.build` actually resolves — pointed at it.
 
     `shutil.copytree` reproduces the source's mode bits, so this is what
     a read-only checkout hands the run: a private `config/` whose entries
@@ -173,12 +227,15 @@ def read_only_checkout():
         os.chmod(path, 0o444)
     os.chmod(os.path.join(config, "nested"), 0o555)
     os.chmod(config, 0o555)
-    original = probe.REPO
-    probe.REPO = repo
+    # `RunArtifacts.build` reads `REPO` from the module that DEFINES it
+    # (#2164 moved both into `location_embark.invocation`), so that is
+    # the module this stand-in has to replace. Patching the facade's own
+    # name instead would leave the builder reading the REAL checkout,
+    # and this fixture would prove nothing while still passing.
     try:
-        yield repo
+        with patched(invocation, REPO=repo):
+            yield repo
     finally:
-        probe.REPO = original
         for path, dirs, _files in os.walk(repo):
             os.chmod(path, 0o755)
             for name in dirs:
@@ -188,11 +245,15 @@ def read_only_checkout():
 
 def test_a_read_only_checkout_still_yields_a_removable_tree() -> None:
     print("\ntest_a_read_only_checkout_still_yields_a_removable_tree")
-    with read_only_checkout():
+    with read_only_checkout() as repo:
         probe.failures.clear()
         art = probe.RunArtifacts(tempfile.mkdtemp(prefix="test_embark_ro_"))
         try:
             art.build()
+            expect(os.path.realpath(os.path.join(art.root, "scripts"))
+                   == os.path.realpath(os.path.join(repo, "scripts")),
+                   "the builder really read the read-only stand-in, not the "
+                   "checkout — the REPO stub intercepted")
             config = os.path.join(art.root, "config")
             expect(os.access(config, os.W_OK | os.X_OK),
                    "the private config/ is writable by this run even though "
@@ -272,12 +333,13 @@ def test_two_invocations_share_no_path() -> None:
 def test_release_removes_the_tree_without_following_symlinks() -> None:
     print("\ntest_release_removes_the_tree_without_following_symlinks")
     with fresh_run() as art:
-        before = sorted(os.listdir(os.path.join(probe.REPO, "scripts")))
+        before = sorted(os.listdir(os.path.join(invocation.REPO, "scripts")))
         probe.release_artifacts(art, keep=False)
         expect(not os.path.exists(art.base), "the run's own tree is gone")
         expect(not probe.failures,
                f"a clean removal records no failure (got {probe.failures})")
-        expect(sorted(os.listdir(os.path.join(probe.REPO, "scripts"))) == before,
+        expect(sorted(os.listdir(os.path.join(invocation.REPO, "scripts")))
+               == before,
                "the real scripts/ is untouched — rmtree unlinked the symlink")
 
 
@@ -503,7 +565,6 @@ def stub_save(accepted: str, request_id, completion):
     never captured is the specific mistake being ruled out.
     """
     calls: dict[str, list] = {"send": [], "capture": [], "wait": []}
-    original = (probe.send, probe.capture_request_id, probe.wait_save_complete)
 
     def fake_send(port, lua):
         calls["send"].append(lua)
@@ -517,16 +578,22 @@ def stub_save(accepted: str, request_id, completion):
         calls["wait"].append(rid)
         return completion
 
-    probe.send = fake_send
-    probe.capture_request_id = fake_capture
-    probe.wait_save_complete = fake_wait
     probe.failures.clear()
     probe.set_log("/nonexistent/engine_stub.log")
     try:
-        yield calls
+        # `save_and_wait` composes these three through
+        # `location_embark.invocation`'s own globals (#2164), so that is
+        # where the stubs go. `calls["send"]` below is what PROVES they
+        # landed: an unintercepted `save_and_wait` would reach a real
+        # console and record nothing here.
+        with patched(invocation, send=fake_send,
+                     capture_request_id=fake_capture,
+                     wait_save_complete=fake_wait):
+            yield calls
     finally:
-        (probe.send, probe.capture_request_id,
-         probe.wait_save_complete) = original
+        expect(calls["send"],
+               "the console stubs intercepted save_and_wait — it issued its "
+               "engine.saveWorld through the patched module")
         probe.failures.clear()
         probe.set_log(None)
 
@@ -535,7 +602,7 @@ def test_a_refused_save_fails_and_never_waits() -> None:
     print("\ntest_a_refused_save_fails_and_never_waits")
     with stub_save("false", 7, (True, {"id": 7, "phase": "SaveCaptureComplete"})) as calls:
         with captured() as out:
-            ok = probe.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
+            ok = invocation.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
         text = out.getvalue()
         expect(ok is False, "a refused engine.saveWorld returns False")
         expect(len(probe.failures) == 1,
@@ -554,7 +621,7 @@ def test_a_missing_request_id_fails_without_waiting() -> None:
     print("\ntest_a_missing_request_id_fails_without_waiting")
     with stub_save("true", None, (True, {"phase": "SaveCaptureComplete"})) as calls:
         with captured():
-            ok = probe.save_and_wait(9420, "ew", probe.SAVE_LOCAL, "session b")
+            ok = invocation.save_and_wait(9420, "ew", probe.SAVE_LOCAL, "session b")
         expect(ok is False, "no request id is a failure, not a pass")
         expect(len(probe.failures) == 1
                and "request id" in probe.failures[0]
@@ -574,7 +641,7 @@ def test_a_failed_or_timed_out_save_fails_with_what_was_observed() -> None:
     failed = {"id": 11, "phase": "SaveFailed", "message": "disk full"}
     with stub_save("true", 11, (False, failed)) as calls:
         with captured():
-            ok = probe.save_and_wait(9420, "ew", probe.SAVE_LOCAL, "session b")
+            ok = invocation.save_and_wait(9420, "ew", probe.SAVE_LOCAL, "session b")
         expect(ok is False, "a SaveFailed terminal phase is a failure")
         expect(calls["wait"] == [11],
                f"the wait is tied to THIS request id (got {calls['wait']})")
@@ -589,7 +656,7 @@ def test_a_failed_or_timed_out_save_fails_with_what_was_observed() -> None:
     # never reported a status for the request at all before its deadline.
     with stub_save("true", 12, (False, None)):
         with captured():
-            ok = probe.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
+            ok = invocation.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
         expect(ok is False, "a wait timeout is a failure, not a pass")
         expect(len(probe.failures) == 1
                and "12" in probe.failures[0]
@@ -603,7 +670,7 @@ def test_a_completed_save_reports_its_request_and_phase() -> None:
     done = {"id": 4, "phase": "SaveCaptureComplete"}
     with stub_save("true", 4, (True, done)) as calls:
         with captured() as out:
-            ok = probe.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
+            ok = invocation.save_and_wait(9420, "ew", probe.SAVE_BASE, "phase 0")
         text = out.getvalue()
         expect(ok is True, "a completed save returns True")
         expect(not probe.failures,
@@ -634,22 +701,26 @@ class _Args:
 @contextlib.contextmanager
 def stub_sessions(prepare):
     """Run `run_probe` with its engine boots and its three sessions
-    replaced, recording which sessions ran.
+    replaced, recording which sessions ran and how many engines the run
+    booted for them.
 
     `prepare` stands in for `prepare_fixture` and returns its
     `(seed, ruins)` pair. Everything the sessions themselves do needs a
     GPU; what these tests are about is which of them the run REACHES.
     """
     ran: list[str] = []
-    original = (probe.prepare_fixture, probe.boot, probe.quit_engine,
-                probe.session_ghost_and_remote,
-                probe.session_local_and_discovery,
-                probe.session_reload_check)
+    engines: list[object] = []
     state: dict[str, object] = {"local_result": True}
 
-    probe.prepare_fixture = lambda *a, **k: prepare()
-    probe.boot = lambda *a, **k: object()
-    probe.quit_engine = lambda *a, **k: None
+    def fake_boot(*_a, **_k):
+        engine = object()
+        engines.append(engine)
+        return engine
+
+    def fake_quit(_port, engine, *_a, **_k):
+        expect(engine in engines,
+               "the run quits an engine this fixture handed it, so the boot "
+               "stub really intercepted")
 
     def ghost(*_a, **_k):
         ran.append("a")
@@ -661,16 +732,20 @@ def stub_sessions(prepare):
     def reload_check(*_a, **_k):
         ran.append("c")
 
-    probe.session_ghost_and_remote = ghost
-    probe.session_local_and_discovery = local
-    probe.session_reload_check = reload_check
     probe.failures.clear()
     try:
-        yield ran, state
+        # `run_probe` stayed in the facade, so these six ARE resolved in
+        # `probe`'s globals and this is the module to patch. The
+        # engine-count assertion in `_drive_run_probe` is what proves it:
+        # an unintercepted `boot` would try to launch a real engine.
+        with patched(probe,
+                     prepare_fixture=lambda *a, **k: prepare(),
+                     boot=fake_boot, quit_engine=fake_quit,
+                     session_ghost_and_remote=ghost,
+                     session_local_and_discovery=local,
+                     session_reload_check=reload_check):
+            yield ran, state, engines
     finally:
-        (probe.prepare_fixture, probe.boot, probe.quit_engine,
-         probe.session_ghost_and_remote, probe.session_local_and_discovery,
-         probe.session_reload_check) = original
         probe.failures.clear()
 
 
@@ -685,10 +760,17 @@ def _drive_run_probe(prepare, local_result=True):
     """
     art = probe.RunArtifacts(tempfile.mkdtemp(prefix="test_embark_gate_"))
     try:
-        with stub_sessions(prepare) as (ran, state):
+        with stub_sessions(prepare) as (ran, state, engines):
             state["local_result"] = local_result
             with captured() as out:
                 probe.run_probe(_Args(), 1280, 720, art)
+            # One booted engine per session the run reached, and no
+            # engine booted for a session it suppressed: the facade owns
+            # the process lifecycle, so a session that "ran" without a
+            # boot of its own would mean an owner opened its own.
+            expect(len(engines) == len(ran),
+                   f"each session the run reached got exactly one engine of "
+                   f"its own (booted {len(engines)} for {ran})")
             return list(ran), out.getvalue(), list(probe.failures)
     finally:
         shutil.rmtree(art.base, ignore_errors=True)
