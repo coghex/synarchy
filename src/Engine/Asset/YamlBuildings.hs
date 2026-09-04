@@ -5,6 +5,7 @@ module Engine.Asset.YamlBuildings
     , BuildingYamlTileSize(..)
     , BuildingYamlFile(..)
     , parseBuildingAnim
+    , parseBuildingTileSize
     , loadBuildingYaml
     , loadBuildingYamlOutcome
     ) where
@@ -17,7 +18,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Types as Aeson (Parser)
+import qualified Data.Aeson.Types as Aeson (Parser, parseMaybe)
 import Building.Schema
 import Engine.Core.Log (LoggerState)
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -57,7 +58,7 @@ instance FromJSON BuildingYamlAnim where
 parseBuildingAnim ∷ Text → Text → Aeson.Value → Aeson.Parser BuildingYamlAnim
 parseBuildingAnim building animName =
     withObject "BuildingYamlAnim" $ \v → BuildingYamlAnim
-        ⊚ v .:? "fps"  .!= 8.0
+        ⊚ optionalFloat ctx "fps" strictlyPositive (> 0) 8.0 v
         ⊛ v .:? "loop" .!= False
         ⊛ animFrames ctx v
   where
@@ -68,10 +69,33 @@ data BuildingYamlTileSize = BuildingYamlTileSize
     , bytsY ∷ !Int
     } deriving (Show, Eq, Generic)
 
+-- | The context-free instance, for the same reason 'BuildingYamlAnim'
+--   has one: a consumer decoding a tile size without a surrounding
+--   definition gets the game's own defaults and domain, just without a
+--   building name in the rejection. 'parseBuildingTileSize' is what the
+--   game's decoder calls, and it does name one.
 instance FromJSON BuildingYamlTileSize where
-    parseJSON = withObject "BuildingYamlTileSize" $ \v → BuildingYamlTileSize
-        ⊚ v .:? "x" .!= 1
-        ⊛ v .:? "y" .!= 1
+    parseJSON = parseBuildingTileSize "<building>"
+
+-- | @tile_size@ as a footprint the placement grid can actually stamp:
+--   each dimension is a whole number of tiles and at least 1 (#2347).
+--
+--   Taking the whole 'Aeson.Value' rather than reading the two keys
+--   through @.:?@ is what makes @tile_size: null@ — an explicitly
+--   authored empty block — a rejection rather than a silent 1x1: aeson
+--   reads @key: null@ as ABSENT, so only an omitted key may select the
+--   documented default.
+parseBuildingTileSize ∷ Text → Aeson.Value → Aeson.Parser BuildingYamlTileSize
+parseBuildingTileSize building val = case val of
+    Aeson.Object o → BuildingYamlTileSize ⊚ dim o "x" ⊛ dim o "y"
+    _ → failT $ ctx <> ": `tile_size` must be a block declaring whole `x` \
+                \and `y` tile counts of at least 1, got " <> tshow val
+  where
+    ctx = "building " <> quoted building
+    dim o k = case KM.lookup (Key.fromText k) o of
+        Nothing → pure 1
+        Just v  → checkInt (ctx <> ": `tile_size." <> k <> "`")
+                           atLeastOne (≥ 1) v
 
 data BuildingYamlDef = BuildingYamlDef
     { bydName         ∷ !Text
@@ -124,9 +148,10 @@ data BuildingYamlDef = BuildingYamlDef
 instance FromJSON BuildingYamlDef where
     parseJSON = withObject "BuildingYamlDef" $ \v → do
         name ← v .: "name"
+        let defCtx = "building " <> quoted name
         -- `build_work` is read before the lifecycle block because it is
         -- what a legacy `appearing` mapping resolves against.
-        buildWork ← v .:? "build_work" .!= 0.0
+        buildWork ← optionalFloat defCtx "build_work" nonNegative (≥ 0) 0.0 v
         sprites ← defSprites name v
         vClass ← defVisualClass name v
         roles ← defRoleAnims name buildWork v
@@ -134,15 +159,16 @@ instance FromJSON BuildingYamlDef where
         displayName ← v .:? "display_name"     .!= ""
         category ← v .:? "category"            .!= "Misc"
         description ← v .:? "description"      .!= ""
-        tileSize ← v .:? "tile_size"           .!= BuildingYamlTileSize 1 1
+        tileSize ← defTileSize name v
         placement ← v .:? "placement"          .!= "flat_ground"
         isStarting ← v .:? "is_starting"       .!= False
         race ← v .:? "race"                    .!= ""
         spriteAnchor ← v .:? "sprite_anchor"   .!= "diamond_bottom"
-        materials ← v .:? "materials"          .!= Map.empty
-        storageCapacity ← v .:? "storage_capacity" .!= 0.0
+        materials ← defMaterials name v
+        storageCapacity ←
+            optionalFloat defCtx "storage_capacity" nonNegative (≥ 0) 0.0 v
         operations ← v .:? "operations"        .!= []
-        powerDrain ← v .:? "power_drain"       .!= 0.0
+        powerDrain ← optionalFloat defCtx "power_drain" nonNegative (≥ 0) 0.0 v
         node ← powerNode v
         pure BuildingYamlDef
             { bydName            = name
@@ -375,6 +401,118 @@ defAnimations name v = do
     Map.fromList ⊚ forM (Map.toList raw)
         (\(animName, val) →
             (,) animName ⊚ parseBuildingAnim name animName val)
+
+-- * Numeric domains (#2347)
+
+-- | @tile_size@, with the owning building's name in scope so a rejected
+--   dimension is diagnosed by building rather than by list index.
+defTileSize ∷ Text → Aeson.Object → Aeson.Parser BuildingYamlTileSize
+defTileSize name v = case KM.lookup "tile_size" v of
+    Nothing  → pure (BuildingYamlTileSize 1 1)
+    Just val → parseBuildingTileSize name val
+
+-- | @materials@ as a build COST every entry of which can actually be
+--   paid: each count is a whole number and at least 1 (#2347).
+--
+--   The diagnostic names the MATERIAL key as well as the building,
+--   because @materials@ is a map and one bad entry among several is
+--   otherwise unfindable from the message.
+--
+--   An omitted @materials@ is the documented free build; an explicit
+--   @materials: null@ or a non-block scalar is a rejection, and an
+--   empty block is the same free build spelled out.
+defMaterials ∷ Text → Aeson.Object → Aeson.Parser (Map.Map Text Int)
+defMaterials name v = case KM.lookup "materials" v of
+    Nothing → pure Map.empty
+    Just (Aeson.Object o) → Map.fromList ⊚ forM (KM.toList o) (\(k, val) →
+        let key = Key.toText k
+        in (,) key ⊚ checkInt
+               (ctx <> ": `materials` count for " <> quoted key)
+               atLeastOne (≥ 1) val)
+    Just val → failT $
+        ctx <> ": `materials` must be a block mapping each material name \
+        \to a whole count of at least 1, got " <> tshow val
+  where ctx = "building " <> quoted name
+
+-- | Read an OPTIONAL numeric key as the 'Float' the engine will
+--   actually store, rejecting anything outside @domain@ (#2347).
+--
+--   Three properties this has that a @.:? key .!= def@ does not:
+--
+--   1. The check runs on the NARROWED 'Float', not on the authored
+--      'Data.Scientific.Scientific'. An ordinary @1.0e+100@ is a
+--      perfectly valid number that becomes @Infinity@ in a 32-bit
+--      'Float' field, and a strictly-positive @1.0e-50@ becomes @0@ —
+--      both would pass a check made before narrowing and then reach
+--      gameplay as the very values the domain excludes.
+--   2. Only an OMITTED key selects the default. Aeson reads an explicit
+--      @key: null@ as absent, so a definition authoring @fps: null@
+--      would silently get 8; here it is a present, invalid value and is
+--      named as one.
+--   3. YAML\'s @.nan@\/@.inf@ resolve to STRINGS (the yaml package\'s
+--      scalar resolver only recognizes ordinary numeric syntax), so
+--      they arrive as a wrong TYPE rather than a non-finite number.
+--      Taking the whole 'Aeson.Value' is what lets the wrong-type
+--      branch still name the building, the key and the authored value,
+--      instead of failing with aeson\'s own JSON-path error. This is
+--      exactly the boundary 'Engine.Asset.YamlFlora.requireRegrowthTime'
+--      documents for the required-field case.
+optionalFloat ∷ Text            -- ^ message context (building, animation)
+              → Text            -- ^ the YAML key
+              → Text            -- ^ the domain phrase, for the message
+              → (Float → Bool)  -- ^ the domain itself
+              → Float           -- ^ the documented default
+              → Aeson.Object
+              → Aeson.Parser Float
+optionalFloat ctx key domain inDomain deflt v =
+    case KM.lookup (Key.fromText key) v of
+        Nothing  → pure deflt
+        Just val → checkFloat (ctx <> ": " <> quoted key) domain inDomain val
+
+-- | The value-level half of 'optionalFloat', shared with every caller
+--   that reads its number out of something other than an object key.
+checkFloat ∷ Text → Text → (Float → Bool) → Aeson.Value → Aeson.Parser Float
+checkFloat label domain inDomain val = case val of
+    Aeson.Number _ → case Aeson.parseMaybe floatParser val of
+        Nothing → wrongType
+        Just f
+            | isNaN f ∨ isInfinite f → failT $
+                label <> " must be finite, got " <> tshow val
+            | not (inDomain f) → failT $
+                label <> " must be " <> domain <> ", got " <> tshow f
+            | otherwise → pure f
+    _ → wrongType
+  where
+    floatParser = parseJSON ∷ Aeson.Value → Aeson.Parser Float
+    wrongType = failT $
+        label <> " must be a finite " <> domain <> " number, got "
+            <> tshow val
+
+-- | 'checkFloat' for a WHOLE-number field. A fractional or
+--   'Int'-overflowing literal is rejected here rather than through
+--   aeson\'s own "either floating or will cause over or underflow"
+--   message, which names neither the building nor the key.
+checkInt ∷ Text → Text → (Int → Bool) → Aeson.Value → Aeson.Parser Int
+checkInt label domain inDomain val = case val of
+    Aeson.Number _ → case Aeson.parseMaybe intParser val of
+        Nothing → wrongType
+        Just n
+            | not (inDomain n) → failT $
+                label <> " must be " <> domain <> ", got " <> tshow n
+            | otherwise → pure n
+    _ → wrongType
+  where
+    intParser = parseJSON ∷ Aeson.Value → Aeson.Parser Int
+    wrongType = failT $
+        label <> " must be a whole number " <> domain <> ", got "
+            <> tshow val
+
+-- | The two domain phrases every numeric key above reads from, so the
+--   rule and the message it prints cannot drift apart.
+strictlyPositive, nonNegative, atLeastOne ∷ Text
+strictlyPositive = "strictly positive"
+nonNegative      = "non-negative"
+atLeastOne       = "at least 1"
 
 -- * Message helpers
 
