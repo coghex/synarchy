@@ -169,6 +169,55 @@ tryReadQueue q = STM.atomically $ do
           STM.modifyTVar' (queueCounters q) (countDequeue 1)
           return (Just (tsValue ts))
 
+-- | 'tryReadQueue', but the head is removed only if @accept@ takes it.
+--   A refused head stays exactly where it was and NOTHING is counted —
+--   neither an enqueue nor a dequeue — so a consumer that declines a
+--   message leaves no trace in the telemetry at all.
+--
+--   That neutrality is the point, not a detail. This exists for a drain
+--   that cannot decide whether it may run a message until it has looked
+--   at it ("World.Thread"\'s Exit-to-Menu fence, #2291), and such a
+--   drain looks at the same head on every tick until it may proceed.
+--   Counting each look would inflate @enqueued@ and @dequeued@ without
+--   bound while the queue stood still, breaking the module header's
+--   @depth == enqueued - dequeued@ contract in spirit — the counters
+--   name messages a producer ACCEPTED and a consumer DRAINED, and a
+--   deferral is neither.
+--
+--   Order and the enqueue stamp survive untouched: the refusal path
+--   puts the very same 'Timestamped' back at the FRONT inside the SAME
+--   transaction that took it, so no producer can interleave, nothing
+--   behind it moves, and a withheld message's reported age keeps
+--   counting from when the queue actually accepted it rather than
+--   restarting each time it is looked at.
+--
+--   @accept@ runs inside the transaction and must be cheap and pure —
+--   a constructor test, not a traversal. It sees the message already in
+--   WHNF ('writeQueue''s binder forced it on the producer's thread), so
+--   matching on it adds nothing to the transaction beyond what
+--   'tryReadTQueue' had already done. A decision that needs @IO@ (this
+--   fence reads an 'Data.IORef.IORef' first) resolves it BEFORE the
+--   call and passes the answer in.
+--
+--   'Nothing' means "no message is available to this consumer now",
+--   which covers both an empty queue and a refused head. A caller that
+--   stops draining on either — as the fence does, deliberately — needs
+--   no finer answer.
+tryReadQueueWhen ∷ Queue α → (α → Bool) → IO (Maybe α)
+tryReadQueueWhen q accept = STM.atomically $ do
+    mts ← tryReadTQueue (queueTQueue q)
+    case mts of
+      Nothing  → return Nothing
+      Just ~ts → do
+          let val = tsValue ts
+          if accept val
+          then do
+              STM.modifyTVar' (queueCounters q) (countDequeue 1)
+              return (Just val)
+          else do
+              unGetTQueue (queueTQueue q) ts
+              return Nothing
+
 -- | Read with a timeout (microseconds). Don't wrap 'readQueue' in
 --   'System.Timeout.timeout' instead: its exception can arrive after
 --   the STM dequeue commits, silently dropping the message. Here the

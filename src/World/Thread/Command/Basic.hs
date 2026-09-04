@@ -111,7 +111,18 @@ handleWorldDestroyAllCommand env logger = do
         let m' = completeSelectionChange m
         in ((if isJust (selectionHead (wmVisible m'))
                then bumpSelectionGen else id)
-            m' { wmWorlds = [], wmVisible = [] }, ())
+            -- This boundary joins 'wmTeardownsPending' HERE, in the
+            -- same atomic update that empties the page set, and leaves
+            -- it only when the unit thread has finished the teardown
+            -- queued below (#2291). While the count is non-zero the
+            -- NEXT session cannot be registered on this thread, which
+            -- is what keeps the clears and the epoch reset ahead of any
+            -- state they would otherwise corrupt. A COUNT because two
+            -- destroy-alls can be accepted before the unit thread ticks
+            -- once, each queuing its own pair — see the field's own doc
+            -- and @World.Thread.processAllCommands@.
+            m' { wmWorlds = [], wmVisible = []
+               , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:
@@ -120,6 +131,23 @@ handleWorldDestroyAllCommand env logger = do
     -- them re-insert orphans afterwards. Enqueuing the clears makes them
     -- run in order, AFTER every pending spawn (#58). The wmWorlds clear
     -- above also makes the spawn handlers drop late spawns outright.
-    Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitClearAll
+    --
+    -- Each clear is followed by its session-boundary MARKER (#2291), and
+    -- the BUILDING pair is enqueued first. The unit thread drains the
+    -- unit queue and then the building queue inside one tick (buildings
+    -- have no thread of their own) and stops each drain at its marker,
+    -- then resets the session's game clock and event ring
+    -- (@Unit.Thread.endSessionEpoch@, which carries the argument in
+    -- full). Enqueueing the building pair first is what makes that reset
+    -- provably later than BOTH clears: reaching @UnitEndSession@ in a
+    -- tick's unit drain means all four messages were queued before that
+    -- tick's building drain, so FIFO order had already run
+    -- @BuildingClearAll@ by then. The opposite enqueue order would let a
+    -- tick reset the clock with the building clear still queued, leaving
+    -- destruction effects stamped on the old epoch to be measured
+    -- against the new one.
     Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) BuildingClearAll
+    Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) BuildingEndSession
+    Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitClearAll
+    Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitEndSession
     logInfo logger CatWorld "All worlds destroyed"

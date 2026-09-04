@@ -123,16 +123,71 @@ worldTickWith clock env lastTimeRef = do
     threadDelay 16666
     pure (Just lastTimeRef)
 
--- | Drain all pending commands from the queue
+-- | Drain all pending commands from the queue, except while an
+--   Exit-to-Menu teardown is still outstanding, in which case the drain
+--   stops at the first command that would register a page (#2291).
+--
+--   The teardown spans two threads: the destroy-all handler runs here,
+--   but the clears it queues and the epoch reset that follows them run
+--   on the unit thread (@Unit.Thread.endSessionEpoch@). The queue
+--   markers order that reset against the unit and building queues and
+--   say nothing about THIS thread — which is where pages are registered
+--   and, since #1602, where a bound building placement is committed
+--   directly rather than through the building queue. A @world.init@
+--   drained inside that window would give the next session a page while
+--   the outgoing one's clock is still live, so a placement onto it would
+--   record @biSpawnedAt@ from a clock that is about to move backwards.
+--
+--   So a page-registering command is left QUEUED rather than run, with
+--   everything behind it, and the drain resumes on a later tick.
+--   Nothing else is fenced and nothing is discarded: each outstanding
+--   teardown lasts one unit tick, and the count is decremented by that
+--   reset itself ('World.State.Types.wmTeardownsPending').
+--
+--   Withholding goes through 'Engine.Core.Queue.tryReadQueueWhen',
+--   which refuses the head inside the SAME transaction that took it:
+--   the message goes straight back to the front, the rest of the queue
+--   never moves, and neither counter advances, so a fence that looks at
+--   the same command on many ticks leaves the queue's telemetry exactly
+--   as it found it. Taking the command out and re-enqueuing it would be
+--   wrong twice over — a producer appending in that window would be
+--   re-accepted AHEAD of a command it was accepted after, and every
+--   look would be counted as fresh traffic.
+--
+--   The fence is read from the world manager BEFORE the queue call,
+--   because the decision needs 'IO' and the predicate does not. Reading
+--   it one step early is safe in the only direction that matters: this
+--   thread is where the count RISES (the destroy-all handler runs
+--   here), so a value read before a command cannot miss a boundary that
+--   command's predecessor opened, and a value that has since fallen
+--   only defers one extra tick.
 processAllCommands ∷ EngineEnv → LoggerState → IO ()
 processAllCommands env logger = do
-    mCmd ← Q.tryReadQueue (wsWorldQueue (toWorldSimCapability env))
+    fenced ← (> 0) ∘ wmTeardownsPending
+                 <$> readIORef (wsWorldManagerRef worldSim)
+    mCmd ← Q.tryReadQueueWhen queue (\cmd → not (fenced ∧ beginsSession cmd))
     case mCmd of
+        -- Either the queue is empty or its head is fenced. Both mean
+        -- this tick is done with it.
+        Nothing  → return ()
         Just cmd → do
             handleWorldCommand env logger cmd
             settleSelection env
             processAllCommands env logger
-        Nothing → return ()
+  where
+    worldSim = toWorldSimCapability env
+    queue    = wsWorldQueue worldSim
+
+-- | The commands that put a page into 'World.State.Types.wmWorlds', and
+--   so bring the next session into existence on the world thread. Both
+--   register through the same @atomicModifyIORef'@ shape in
+--   "World.Thread.Command.Init"; the load path registers its own
+--   replacement manager instead and is deliberately not one of these
+--   (see 'World.State.Types.wmSessionTeardown').
+beginsSession ∷ WorldCommand → Bool
+beginsSession (WorldInit _ _ _ _ _) = True
+beginsSession (WorldInitArena _)    = True
+beginsSession _                     = False
 
 -- | The capture lock admits only its queued WorldSave / WorldLoadPublish
 -- command. A load's WorldLoadPublish reaches this window only after every

@@ -419,6 +419,7 @@ library
                      Engine.Core.Resource
                      Engine.Core.Queue
                      Engine.Core.Clock
+                     Engine.Core.SessionEpoch
                      Engine.Core.Yaml.Scalar
                      Engine.Scene.Base
                      Engine.Scene.Batch
@@ -1255,6 +1256,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
+                   Test.Headless.World.SessionEpoch
                    Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.GenConfigDomain
                    Test.Headless.World.Save.Compat

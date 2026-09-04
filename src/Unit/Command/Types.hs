@@ -110,6 +110,18 @@ data UnitCommand
         --   any in-flight UnitSpawns already on this queue — clearing the
         --   manager from the world thread instead would race those spawns,
         --   which would re-insert orphans right after teardown (#58).
+    | UnitEndSession
+        -- ^ The Exit-to-Menu session boundary (#2291). Carries no
+        --   payload: it is a POSITION in this queue, not work. Enqueued
+        --   by world.destroyAll immediately behind its 'UnitClearAll',
+        --   and consumed by 'Unit.Thread.Command.processAllUnitCommands',
+        --   which STOPS draining the moment it takes this off the queue.
+        --   Stopping is the point — everything queued behind it belongs
+        --   to whatever comes after the session, so it must not run
+        --   until the tick has finished the teardown and reset the
+        --   clock. "Unit.Thread" performs that reset; see its
+        --   'endSessionEpoch' for why the tick, and not a handler here,
+        --   is where it happens.
     deriving (Show)
 
 -- | The domain a motion command's COORDINATE must already be in: a
