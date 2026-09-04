@@ -354,13 +354,19 @@ spec = describe "chunk work binds to its own page" $ do
             waitConsole env "1" `shouldReturn` Just seededA
 
         it "accepts an explicit page, quoted either way" $ \env → do
-            _ ← installPages env
+            (wsA, wsB) ← installPages env
             _ ← newBackend env
             waitConsole env "1, 'chunk_page_projected'" `shouldReturn` Just seededB
             waitConsole env "1, \"chunk_page_projected\"" `shouldReturn` Just seededB
             -- The timeout may be left to the default while still naming
-            -- a page, and that spelling stays on the fast path.
-            waitConsole env "nil, 'chunk_page_projected'" `shouldReturn` Just seededB
+            -- a page, and that spelling stays on the fast path. Proven
+            -- WITHOUT sitting out the two-minute default: B's queue is
+            -- emptied 300 ms in, so a wait that reached B reports 0
+            -- while one that fell through or fell back to A would
+            -- report seededA.
+            drainsWhileWaiting wsB
+                (waitConsole env "nil, 'chunk_page_projected'")
+            length ⊚ readIORef (wsInitQueueRef wsA) `shouldReturn` seededA
 
         it "reports nothing remaining for an unregistered explicit page" $ \env → do
             _ ← installPages env
@@ -399,6 +405,14 @@ spec = describe "chunk work binds to its own page" $ do
             debugBuiltin env "return world.waitForChunks(t)" `shouldReturn` Nothing
             debugBuiltin env "return world.waitForChunks(1, pid)"
                 `shouldReturn` Nothing
+            -- An EMPTY first slot is not valid Lua. Defaulting it here
+            -- would answer a syntax error with a real two-minute wait
+            -- instead of letting the Lua thread report it.
+            debugBuiltin env "return world.waitForChunks(, 'chunk_page_projected')"
+                `shouldReturn` Nothing
+            -- ...but a bare call, which IS valid, still defaults.
+            debugBuiltin env "return world.waitForChunks(1)"
+                `shouldNotReturn` Nothing
 
     describe "the shared resolution rule" $
         it "prefers an explicit page over both applied and projected" $ \env → do

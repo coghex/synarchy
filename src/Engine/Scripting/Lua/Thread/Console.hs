@@ -120,17 +120,27 @@ matchWaitForChunks t = matchArgs "world.waitForChunks" t ⌦ \inner →
     case T.breakOn "," inner of
         (only, rest) | T.null rest → (\n → (n, Nothing)) ⊚ decimalArg only
         (before, rest) → do
-            -- An explicit page with the timeout left to the default is
-            -- spelled 'nil' in Lua, and belongs on the fast path like
-            -- any other recognised form. 'decimalArg' alone does not
-            -- accept it, and must not start to: it also serves
-            -- 'world.waitForInit', whose accepted spellings are not this
-            -- issue's to widen.
-            n   ← if T.strip before ≡ "nil"
-                    then Just Nothing
-                    else decimalArg before
+            n   ← firstOfTwo before
             pid ← quotedPageArg (T.drop 1 rest)
             pure (n, Just pid)
+  where
+    -- The timeout slot when a SECOND argument follows it. An explicit
+    -- page with the timeout left to the default is spelled 'nil' in
+    -- Lua, and belongs on the fast path like any other recognised form
+    -- -- but 'decimalArg' alone must not learn that spelling, because
+    -- it also serves 'world.waitForInit', whose accepted spellings are
+    -- not this issue's to widen.
+    --
+    -- An EMPTY slot is rejected outright rather than defaulted:
+    -- @world.waitForChunks(, 'p')@ is not valid Lua, and answering it
+    -- with a real 120-second wait would hide a syntax error the Lua
+    -- thread reports properly. That is only true with a comma present;
+    -- a bare @world.waitForChunks()@ is valid and still defaults.
+    firstOfTwo raw
+        | slot ≡ "nil"  = Just Nothing
+        | T.null slot   = Nothing
+        | otherwise     = decimalArg slot
+      where slot = T.strip raw
 
 -- | A timeout argument slot: empty means "use the caller's default", a
 --   bare decimal names one, anything else is not this call.
