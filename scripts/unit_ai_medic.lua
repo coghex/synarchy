@@ -121,21 +121,30 @@ end
 -- or nil if nobody can help. `params` supplies treat_scan_range.
 local function bestMedicFor(patientUid, params)
     local pinfo = unit.getInfo(patientUid)
+    -- #2297: a patient whose own projection cannot be read has no page
+    -- to rank against, so nobody is ranked for it -- fail closed, the
+    -- same rule findKitHolder already applies to its actor.
+    if not pinfo then return nil end
     local range = (params and params.treat_scan_range) or 60.0
     local bestUid, bestScore = nil, 0
     for _, uid in ipairs(unit.getAllIds() or {}) do
         if uid ~= patientUid and canActAsMedic(uid)
            and isAlly(patientUid, unit.getFaction(uid))
            and medicAvailable(uid, patientUid) then
-            local cap = medicCapability(uid)
-            if cap > 0 then
-                local minfo = unit.getInfo(uid)
-                local d = (pinfo and minfo)
-                    and distance(pinfo.gridX, pinfo.gridY,
-                                 minfo.gridX, minfo.gridY) or 0
-                local score = cap * (1 - 0.5 * math.min(1, d / range))
-                if score > bestScore then
-                    bestUid, bestScore = uid, score
+            local minfo = unit.getInfo(uid)
+            -- #2297: rank only medics standing on the PATIENT's own
+            -- page. unit.getAllIds reads the ACTIVE page, which is not
+            -- necessarily either one's, and the distance discount below
+            -- is meaningless between two worlds.
+            if minfo and page.same(pinfo.page, minfo.page) then
+                local cap = medicCapability(uid)
+                if cap > 0 then
+                    local d = distance(pinfo.gridX, pinfo.gridY,
+                                       minfo.gridX, minfo.gridY)
+                    local score = cap * (1 - 0.5 * math.min(1, d / range))
+                    if score > bestScore then
+                        bestUid, bestScore = uid, score
+                    end
                 end
             end
         end
@@ -168,13 +177,19 @@ end
 -- Nearest treatable, currently-unclaimed bleeding ally, or nil.
 local function findPatient(uid, info, params)
     local myFaction = unit.getFaction(uid)
+    -- #2297: page-qualified against the scanning medic, same rule and
+    -- same reason as findKitHolder below. `info` is the medic's own
+    -- projection, and page.same is false whenever either side is
+    -- unknown, so an unreadable actor selects nobody.
+    local myPage = info and info.page
     local best, bestD = nil, params.treat_scan_range
     for _, pid in ipairs(unit.getAllIds() or {}) do
         if pid ~= uid and isAlly(pid, myFaction)
            and needsTreatment(pid, params.treat_min_seep)
            and not patientClaimed(pid, uid) then
             local pinfo = unit.getInfo(pid)
-            if pinfo and unit.getPose(pid) ~= "dead" then
+            if pinfo and page.same(myPage, pinfo.page)
+               and unit.getPose(pid) ~= "dead" then
                 local d = distance(info.gridX, info.gridY,
                                    pinfo.gridX, pinfo.gridY)
                 if d <= bestD then
@@ -268,8 +283,15 @@ local function treatExecute(uid, s, params)
     local info = unit.getInfo(uid)
     if not info then s.treatClaim = nil; return end
 
-    -- Patient vanished / died / fully dressed → release.
-    if not unit.getInfo(patient) or unit.getPose(patient) == "dead"
+    -- Patient vanished / died / fully dressed → release. #2297 adds
+    -- the page to that list, and checks it HERE — before the kit fetch
+    -- and before the walk — because a stored claim outlives the tick
+    -- that made it: the active page can move underneath it, and an
+    -- off-page claim would otherwise transfer a kit and steer a sprint
+    -- toward another world's coordinates.
+    local pinfo = unit.getInfo(patient)
+    if not pinfo or unit.getPose(patient) == "dead"
+       or not page.same(info.page, pinfo.page)
        or not needsTreatment(patient, params.treat_min_seep) then
         s.treatClaim = nil
         return
@@ -302,12 +324,13 @@ local function treatExecute(uid, s, params)
     -- Phase 2: rush to the patient. Target a tile ~1 away (toward me),
     -- not the patient's own tile — a collapsed patient OCCUPIES its
     -- tile, and pathing onto a blocked tile fails outright, leaving the
-    -- medic frozen. treat_arrival (1.5) still lets us dress the wound
-    -- from the neighbouring tile. (Same "approach the obstacle, don't
-    -- stand on it" rule the deliver action uses for build sites.)
-    local pinfo = unit.getInfo(patient)
+    -- medic frozen. unit.treatmentRange() -- the engine's own reach,
+    -- the same one treatBleeding refuses beyond (#2297) -- still lets
+    -- us dress the wound from the neighbouring tile. (Same "approach
+    -- the obstacle, don't stand on it" rule the deliver action uses
+    -- for build sites.)
     local d = distance(info.gridX, info.gridY, pinfo.gridX, pinfo.gridY)
-    if d > params.treat_arrival then
+    if d > unit.treatmentRange() then
         local dx, dy = info.gridX - pinfo.gridX, info.gridY - pinfo.gridY
         local len = math.max(0.001, math.sqrt(dx * dx + dy * dy))
         local tx = pinfo.gridX + (dx / len)

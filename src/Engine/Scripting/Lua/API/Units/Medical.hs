@@ -3,6 +3,8 @@ module Engine.Scripting.Lua.API.Units.Medical
   ( unitFrostbiteFn
   , unitTreatInfectionFn
   , unitTreatBleedingFn
+  , unitTreatmentRangeFn
+  , unitCanTreatFn
   )
     where
 
@@ -24,6 +26,8 @@ import Infection.Types (InfectionDef(..), lookupInfection)
 import Unit.Types
 import Combat.Wounds (kindBleedFactor)
 import Unit.Stats (applySkillXP)
+import Unit.Medical.Reach
+    (checkTreatReach, reachRefusalMessage, treatmentRange)
 import Item.Types (ItemInstance(..))
 import Engine.Scripting.Lua.API.Units.Stats (getEffectiveStat)
 
@@ -67,10 +71,14 @@ treatBleedingIO ∷ EngineEnv → UnitId → UnitId → Maybe UnitId → IO Trea
 treatBleedingIO env medic patient mOwner = do
     um0 ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     let owner = fromMaybe medic mOwner
-    case ( HM.lookup medic   (umInstances um0)
-         , HM.lookup patient (umInstances um0)
-         , HM.lookup owner   (umInstances um0) ) of
-      (Just med, Just pat, Just own) →
+    -- #2297: existence, PAGE and RANGE first, before the knowledge and
+    -- wound reads below and before anything that could touch the unit
+    -- manager or the stat RNG. getEffectiveStat lazily caches a rolled
+    -- stat and advances ucStatRNGRef, so a spatial refusal that ran
+    -- after it would not have left the session as it found it.
+    case checkTreatReach um0 medic patient owner of
+      Left refusal → pure (treatFail (reachRefusalMessage refusal))
+      Right (med, pat, own) →
         case HM.lookup "bleed_control" (uiKnowledge med) of
           Nothing → pure (treatFail "medic lacks bleed-control knowledge")
           Just level → do
@@ -186,7 +194,6 @@ treatBleedingIO env medic patient mOwner = do
                         in (um2, ())
                     pure (TreatResult True tqSeep 0 1 (woundPart worst)
                             (woundKind worst) "makeshift tourniquet" "tourniquet")
-      _ → pure (treatFail "medic, patient, or kit owner not found")
 
 -- | Drop the first `n` bandage instances from the first inventory item
 --   (kit) that holds any. Leaves tools / other contents untouched.
@@ -407,9 +414,14 @@ treatInfectionIO env medic patient mOwner = do
             Just inf → antibioticsItemName `elem` infCurableBy inf
         cureRateW w = maybe 1.0 infCureRate
                         (lookupInfection (woundInfectionType w) infMgr)
-    case ( HM.lookup medic   (umInstances um0)
-         , HM.lookup patient (umInstances um0) ) of
-      (Just med, Just pat) →
+    -- #2297: the same spatial floor treatBleeding holds, and the first
+    -- time this verb resolves the SUPPLYING unit as a live entity at
+    -- all -- it used to reach straight into kitHasFill / consumeKitFill
+    -- with a uid it had never looked up, so a vanished owner read as
+    -- "no antibiotics in kit".
+    case checkTreatReach um0 medic patient owner of
+      Left refusal → pure (treatFail (reachRefusalMessage refusal))
+      Right (med, pat, _own) →
         case HM.lookup "infection_control" (uiKnowledge med) of
           Nothing → pure (treatFail "medic lacks infection-control knowledge")
           Just level →
@@ -449,7 +461,6 @@ treatInfectionIO env medic patient mOwner = do
                     pure (TreatResult True newInf 1 1 (woundPart worst)
                             (woundKind worst) "antibiotics administered"
                             "antibiotics")
-      _ → pure (treatFail "medic or patient not found")
 
 -- | unit.treatInfection(medicUid, patientUid [, kitOwnerUid]) →
 --     { ok, infection, part, kind, message, method } | nil
@@ -517,3 +528,51 @@ unitTreatBleedingFn env = do
             Lua.setfield (-2) "method"
             return 1
         _ → Lua.pushnil >> return 1
+
+-- | unit.treatmentRange() → number. The ONE authoritative treatment
+--   reach, handed to Lua so the autonomous medic's arrival check and
+--   the engine's own refusal cannot drift apart: @unit_ai_medic@ walks
+--   until it is within this, and 'checkTreatReach' refuses beyond it.
+--   Constant, so it takes no arguments and reads no state.
+unitTreatmentRangeFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitTreatmentRangeFn _ = do
+    Lua.pushnumber (Lua.Number (realToFrac treatmentRange))
+    return 1
+
+-- | unit.canTreat(medicUid, patientUid [, kitOwnerUid]) → bool, message
+--
+--   The treatment verbs' OWN spatial gate, asked without treating: the
+--   same 'checkTreatReach' both of them run, over the same three units,
+--   returning the refusal message the verb would have returned. The
+--   context menu greys its two medical rows on this rather than
+--   restating the rule, so an entry can never be enabled into a
+--   refusal.
+--
+--   Reads nothing but the unit manager and mutates nothing. It answers
+--   ONLY the spatial question — knowledge, wound state and supplies are
+--   the rows' own separate conditions, exactly as before.
+unitCanTreatFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+unitCanTreatFn env = do
+    medicArg ← Lua.tointeger 1
+    patArg   ← Lua.tointeger 2
+    ownerArg ← Lua.tointeger 3
+    case (medicArg, patArg) of
+        (Just m, Just p) → do
+            let medic   = UnitId (fromIntegral m)
+                patient = UnitId (fromIntegral p)
+                owner   = maybe medic (UnitId . fromIntegral) ownerArg
+            um ← Lua.liftIO $
+                readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+            case checkTreatReach um medic patient owner of
+                Right _ → do
+                    Lua.pushboolean True
+                    Lua.pushstring (TE.encodeUtf8 "")
+                    return 2
+                Left refusal → do
+                    Lua.pushboolean False
+                    Lua.pushstring (TE.encodeUtf8 (reachRefusalMessage refusal))
+                    return 2
+        _ → do
+            Lua.pushboolean False
+            Lua.pushstring (TE.encodeUtf8 "medic or patient id missing")
+            return 2

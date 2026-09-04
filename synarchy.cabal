@@ -494,6 +494,7 @@ library
                      Unit.Selection
                      Unit.HitTest
                      Unit.LineOfSight
+                     Unit.Medical.Reach
                      Unit.Pathing.Config
                      Unit.Pathing.Hazard
                      Unit.Pathing.Cost
@@ -1218,6 +1219,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.TransferOrderApi
                    Test.Headless.Unit.CargoApi
+                   Test.Headless.Unit.MedicalReach
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership
