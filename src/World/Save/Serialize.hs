@@ -352,7 +352,7 @@ data SaveListing = SaveListing
 --   * A generation file that cannot be READ at all — a permission
 --     failure, a special file, a file removed between the existence
 --     check and the read — is classified exactly as the LOAD path
---     classifies it ('World.Save.Storage.decodeGenerationFile' returns
+--     classifies it (@World.Save.Storage.decodeGenerationFile@ returns
 --     @GenerationCorrupt \"cannot read: …\"@): recoverable, so the
 --     previous generation is tried and the slot lists as 'slRecovered'
 --     when that succeeds. Only when neither generation yields metadata
@@ -361,7 +361,7 @@ data SaveListing = SaveListing
 --   * A failure to enumerate @saves\/@ ITSELF is a different kind of
 --     failure — nothing was surveyed, so \"no saves\" would be a lie —
 --     and is reported as 'Left' rather than as an empty listing. The
---     distinction is load-bearing at 'World.Save.Autosave.readSlotStates',
+--     distinction is load-bearing at @World.Save.Autosave.readSlotStates@,
 --     which must never read an unenumerable directory as \"those slots
 --     are free\". The two public consumers turn it into one logged
 --     diagnostic apiece: an empty table at @engine.listSaves()@, and
