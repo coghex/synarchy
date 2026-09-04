@@ -19,7 +19,7 @@
 --       which made a cross-page strike UNDODGEABLE rather than
 --       impossible; refusing admission is the other half of that fix.
 --     * HORIZONTAL REACH — the vertical reach band inside
---       'Combat.Resolution.runResolution' only picks which body parts
+--       @Combat.Resolution.runResolution@ only picks which body parts
 --       are targetable; nothing ever consulted the separation.
 --     * STANCE — 'Combat.Resolution.Wear.spendStrikeCost' SPENDS stance
 --       at resolution and floors it at 0, so two swings admitted
