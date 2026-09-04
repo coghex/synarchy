@@ -51,11 +51,11 @@ import World.Flora.Placement (computeChunkFlora, speciesFitnessDetail)
 import World.Flora.Render (resolveFloraTexture)
 import World.Flora.Identity (floraInstanceIdNone)
 import World.Flora.Types
-    ( AnnualCycleKey(..), AnnualStage(..), FloraCatalog(..)
-    , FloraChunkData(..)
+    ( AnnualCycleKey(..), AnnualStage(..), AnnualStageTag(..)
+    , FloraCatalog(..), FloraChunkData(..)
     , FloraId(..), FloraInstance(..), FloraSpecies(..), FloraWorldGen(..)
-    , LifePhase(..), LifecycleType(..), emptyFloraCatalog, findSpeciesByName
-    , insertSpecies, insertWorldGen, newFloraSpecies )
+    , LifePhase(..), LifePhaseTag(..), LifecycleType(..), emptyFloraCatalog
+    , findSpeciesByName, insertSpecies, insertWorldGen, newFloraSpecies )
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Material
     (MaterialId(..), MaterialRegistry, materialIdByName)
@@ -342,7 +342,7 @@ assertSaguaro registry def = do
     fydName def `shouldBe` "saguaro"
     fydType def `shouldBe` "cactus"
     fydTexDir def `shouldBe` "assets/textures/flora/saguaro"
-    fydLifecycle def `shouldBe` "perennial"
+    fydLifecycle def `shouldBe` LifecyclePerennial
     fydMinLife def `shouldBe` Just 18000
     fydMaxLife def `shouldBe` Just 54000
     fydDeathChance def `shouldBe` Just 0.01
@@ -350,28 +350,30 @@ assertSaguaro registry def = do
 
     map (\p → (fypTag p, fypTexture p, fypAge p)) (fydPhases def)
         `shouldBe`
-            [ ("sprout", "sprout.png", 0)
-            , ("matured", "matured.png", 1800)
-            , ("dead", "dead.png", 54000)
+            [ (PhaseSprout, "sprout.png", 0)
+            , (PhaseMatured, "matured.png", 1800)
+            , (PhaseDead, "dead.png", 54000)
             ]
 
     map (\c → (fycsTag c, fycsStartDay c, fycsTexture c))
             (fydAnnualCycle def)
         `shouldBe`
-            [ ("dormant", 0, "matured.png")
-            , ("budding", 90, "matured.png")
-            , ("flowering", 120, "matured_flowering.png")
-            , ("fruiting", 150, "matured_fruiting.png")
-            , ("senescing", 240, "matured.png")
+            [ (CycleDormant, 0, "matured.png")
+            , (CycleBudding, 90, "matured.png")
+            , (CycleFlowering, 120, "matured_flowering.png")
+            , (CycleFruiting, 150, "matured_fruiting.png")
+            , (CycleSenescing, 240, "matured.png")
             ]
 
     map (\o → (fycoPhase o, fycoCycle o, fycoTexture o))
             (fydCycleOverrides def)
         `shouldBe`
             [ (phase, cycle, texture)
-            | phase ← ["sprout", "dead"]
-            , cycle ← ["dormant", "budding", "flowering", "fruiting", "senescing"]
-            , let texture = if phase ≡ "sprout" then "sprout.png" else "dead.png"
+            | phase ← [PhaseSprout, PhaseDead]
+            , cycle ← [ CycleDormant, CycleBudding, CycleFlowering
+                      , CycleFruiting, CycleSenescing ]
+            , let texture = if phase ≡ PhaseSprout then "sprout.png"
+                                                   else "dead.png"
             ]
 
     let wg = fydWorldGen def
@@ -439,36 +441,36 @@ assertTomatoFlora def = do
     fydName def `shouldBe` "tomato_plant"
     fydType def `shouldBe` "row_crop"
     fydTexDir def `shouldBe` "assets/textures/flora/tomato_plant"
-    fydLifecycle def `shouldBe` "annual"
+    fydLifecycle def `shouldBe` LifecycleAnnual
     (fydMinLife def, fydMaxLife def, fydDeathChance def)
         `shouldBe` (Nothing, Nothing, Nothing)
 
     map (\p → (fypTag p, fypTexture p, fypAge p)) (fydPhases def)
         `shouldBe`
-            [ ("sprout", "sprout.png", 0)
-            , ("matured", "matured.png", 60)
-            , ("dead", "dead.png", 360)
+            [ (PhaseSprout, "sprout.png", 0)
+            , (PhaseMatured, "matured.png", 60)
+            , (PhaseDead, "dead.png", 360)
             ]
     map (\c → (fycsTag c, fycsStartDay c, fycsTexture c))
             (fydAnnualCycle def)
         `shouldBe`
-            [ ("dormant", 0, "matured_dormant.png")
-            , ("budding", 30, "matured_budding.png")
-            , ("flowering", 60, "matured_flowering.png")
-            , ("fruiting", 90, "matured_fruiting.png")
-            , ("senescing", 240, "matured_senescing.png")
+            [ (CycleDormant, 0, "matured_dormant.png")
+            , (CycleBudding, 30, "matured_budding.png")
+            , (CycleFlowering, 60, "matured_flowering.png")
+            , (CycleFruiting, 90, "matured_fruiting.png")
+            , (CycleSenescing, 240, "matured_senescing.png")
             ]
     map (\o → (fycoPhase o, fycoCycle o, fycoTexture o))
             (fydCycleOverrides def)
         `shouldBe`
-            [ ("sprout", "dormant", "sprout_dormant.png")
-            , ("sprout", "budding", "sprout_budding.png")
-            , ("sprout", "senescing", "sprout_senescing.png")
-            , ("dead", "dormant", "dead.png")
-            , ("dead", "budding", "dead.png")
-            , ("dead", "flowering", "dead.png")
-            , ("dead", "fruiting", "dead.png")
-            , ("dead", "senescing", "dead.png")
+            [ (PhaseSprout, CycleDormant, "sprout_dormant.png")
+            , (PhaseSprout, CycleBudding, "sprout_budding.png")
+            , (PhaseSprout, CycleSenescing, "sprout_senescing.png")
+            , (PhaseDead, CycleDormant, "dead.png")
+            , (PhaseDead, CycleBudding, "dead.png")
+            , (PhaseDead, CycleFlowering, "dead.png")
+            , (PhaseDead, CycleFruiting, "dead.png")
+            , (PhaseDead, CycleSenescing, "dead.png")
             ]
 
     case fydHarvest def of
@@ -541,7 +543,7 @@ assertCattail registry def = do
     fydName def `shouldBe` "common_cattail"
     fydType def `shouldBe` "perennial_wetland_herb"
     fydTexDir def `shouldBe` "assets/textures/flora/common_cattail"
-    fydLifecycle def `shouldBe` "perennial"
+    fydLifecycle def `shouldBe` LifecyclePerennial
     fydMinLife def `shouldBe` Just 1800
     fydMaxLife def `shouldBe` Just 7200
     fydDeathChance def `shouldBe` Just 0.05
@@ -549,33 +551,33 @@ assertCattail registry def = do
 
     map (\p → (fypTag p, fypTexture p, fypAge p)) (fydPhases def)
         `shouldBe`
-            [ ("sprout", "sprout.png", 0)
-            , ("matured", "matured.png", 180)
-            , ("dead", "dead.png", 7200)
+            [ (PhaseSprout, "sprout.png", 0)
+            , (PhaseMatured, "matured.png", 180)
+            , (PhaseDead, "dead.png", 7200)
             ]
 
     map (\c → (fycsTag c, fycsStartDay c, fycsTexture c))
             (fydAnnualCycle def)
         `shouldBe`
-            [ ("dormant", 0, "matured_dormant.png")
-            , ("budding", 60, "matured.png")
-            , ("flowering", 120, "matured_flowering.png")
-            , ("fruiting", 180, "matured_fruiting.png")
-            , ("senescing", 260, "matured_senescing.png")
+            [ (CycleDormant, 0, "matured_dormant.png")
+            , (CycleBudding, 60, "matured.png")
+            , (CycleFlowering, 120, "matured_flowering.png")
+            , (CycleFruiting, 180, "matured_fruiting.png")
+            , (CycleSenescing, 260, "matured_senescing.png")
             ]
 
     map (\o → (fycoPhase o, fycoCycle o, fycoTexture o))
             (fydCycleOverrides def)
         `shouldBe`
-            [ ("sprout", "dormant", "sprout_dormant.png")
-            , ("sprout", "budding", "sprout_budding.png")
-            , ("sprout", "flowering", "sprout_budding.png")
-            , ("sprout", "fruiting", "sprout_budding.png")
-            , ("sprout", "senescing", "sprout_senescing.png")
+            [ (PhaseSprout, CycleDormant, "sprout_dormant.png")
+            , (PhaseSprout, CycleBudding, "sprout_budding.png")
+            , (PhaseSprout, CycleFlowering, "sprout_budding.png")
+            , (PhaseSprout, CycleFruiting, "sprout_budding.png")
+            , (PhaseSprout, CycleSenescing, "sprout_senescing.png")
             ]
-            ⧺ [ ("dead", cycle, "dead.png")
-              | cycle ← ["dormant", "budding", "flowering", "fruiting"
-                        , "senescing"] ]
+            ⧺ [ (PhaseDead, cycle, "dead.png")
+              | cycle ← [ CycleDormant, CycleBudding, CycleFlowering
+                        , CycleFruiting, CycleSenescing ] ]
 
     let wg = fydWorldGen def
     fywCategory wg `shouldBe` "wildflower"
@@ -666,21 +668,22 @@ assertCattailTextures def = do
             zip cattailTextures (map TextureHandle [1..])
         handleFor texture = fromMaybe (TextureHandle 999) $
             HM.lookup texture handles
+        -- Every tag is already the parsed constructor: since #2315 the
+        -- decoder refuses the file rather than handing back a token
+        -- that would have to be filtered out here.
         phaseRows =
-            [ (tag, LifePhase tag (fypAge phase) (handleFor (fypTexture phase)))
-            | phase ← fydPhases def
-            , Just tag ← [parsePhaseTag (fypTag phase)] ]
+            [ (fypTag phase
+              , LifePhase (fypTag phase) (fypAge phase)
+                    (handleFor (fypTexture phase)))
+            | phase ← fydPhases def ]
         cycleRows =
-            [ AnnualStage tag (fycsStartDay stage)
+            [ AnnualStage (fycsTag stage) (fycsStartDay stage)
                 (handleFor (fycsTexture stage))
-            | stage ← fydAnnualCycle def
-            , Just tag ← [parseCycleTag (fycsTag stage)] ]
+            | stage ← fydAnnualCycle def ]
         overrideRows =
-            [ ( AnnualCycleKey phaseTag cycleTag
+            [ ( AnnualCycleKey (fycoPhase override) (fycoCycle override)
               , handleFor (fycoTexture override) )
-            | override ← fydCycleOverrides def
-            , Just phaseTag ← [parsePhaseTag (fycoPhase override)]
-            , Just cycleTag ← [parseCycleTag (fycoCycle override)] ]
+            | override ← fydCycleOverrides def ]
         fid = FloraId 1
         species = FloraSpecies
             { fsName = fydName def

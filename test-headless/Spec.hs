@@ -68,6 +68,7 @@ import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.FloraContent as FloraContent
 import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
+import qualified Test.Headless.Asset.FloraVocabularySchema as FloraVocabularySchema
 import qualified Test.Headless.Asset.InfectionSchema as InfectionSchema
 import qualified Test.Headless.Asset.UnitBodyGraph as AssetUnitBodyGraph
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
@@ -694,6 +695,7 @@ main = hspec $ do
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
+    describe "Asset.FloraVocabularySchema" FloraVocabularySchema.spec
     describe "Asset.InfectionSchema" InfectionSchema.spec
     describe "Asset.UnitBodyGraph" AssetUnitBodyGraph.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
