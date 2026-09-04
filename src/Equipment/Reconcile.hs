@@ -8,7 +8,7 @@
 --   and change the item kind it accepts. Equipping at runtime checks
 --   both ('Engine.Scripting.Lua.API.Equipment.Slot'); until this,
 --   LOADING checked neither, because the save gate walks the map's
---   VALUES ('World.Save.Types.unitItemContainers') and never its keys.
+--   VALUES (@World.Save.Types.unitItemContainers@) and never its keys.
 --
 --   A drifted key is invisible and mechanically live at once. The
 --   inventory UI enumerates the CURRENT class's slots and looks up only
@@ -88,7 +88,7 @@ data EquipmentOrphan = EquipmentOrphan
 --   Ordering is deterministic and preserves what the save stored. The
 --   existing loose inventory keeps its order and its position, and the
 --   migrated entries are appended in SLOT-ID order — the order
---   'Engine.Scripting.Lua.API.Units.Inventory.unitHeldItems' already
+--   @Engine.Scripting.Lua.API.Units.Inventory.unitHeldItems@ already
 --   presents equipped slots in — so a direct 'HM.HashMap' traversal
 --   never decides what the next save writes.
 --
@@ -104,7 +104,7 @@ data EquipmentOrphan = EquipmentOrphan
 --   left where it is rather than treated as a kind mismatch. That
 --   reference is a hard load rejection
 --   ('World.Save.Types.missingItemDefReferences', run by
---   'Engine.Scripting.Lua.API.Save.continueLoad' before staging is ever
+--   @Engine.Scripting.Lua.API.Save.continueLoad@ before staging is ever
 --   queued), and silently migrating it here would be this non-blocking
 --   repair quietly absorbing a case that must stay fatal. A retired
 --   SLOT is decided without the definition, so such an entry still
