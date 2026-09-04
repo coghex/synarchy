@@ -324,6 +324,27 @@ data EngineEnv = EngineEnv
     -- ^ Runtime RNG for stat rolls. Seeded from system entropy at
     --   startup; not tied to the world seed (stats are non-deterministic
     --   across runs by design).
+  , treatRNGRef         ∷ IORef StdGen
+    -- ^ Runtime RNG for MEDICAL TREATMENT rolls, and nothing else
+    --   (#2297): the dressing attempt cycle and, when it has not been
+    --   rolled yet, the medic's capability stat.
+    --
+    --   Separate from 'statRNGRef' because a treatment is decided and
+    --   applied in ONE unit-manager transaction that can still refuse
+    --   at commit time (the endpoints may have walked apart), so its
+    --   generator has to be claimed without advancing anything a
+    --   refusal would then have to unwind. On the four-writer
+    --   'statRNGRef' that is impossible: claiming atomically IS
+    --   advancing it, and claiming without advancing lets a concurrent
+    --   @Random.splitGen@ consumer (@Combat.Wounds.Tick@) receive the
+    --   very generator the treatment is using. A generator whose only
+    --   consumer is 'Engine.Scripting.Lua.API.Units.Medical' — one
+    --   caller, on the Lua thread, never re-entrant — has neither
+    --   problem: it is claimed by a plain read and advanced only once
+    --   the treatment has committed.
+    --
+    --   Seeded from system entropy at startup like 'statRNGRef', and
+    --   non-deterministic across runs for the same reason.
   , buildingManagerRef  ∷ IORef BuildingManager
   , texPaletteRef       ∷ IORef TexPalette
     -- ^ Save-level texture PALETTE (path↔id). Structure edits store palette

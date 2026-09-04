@@ -49,7 +49,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (sort, sortOn)
-import System.Random (StdGen, mkStdGen, newStdGen)
+import System.Random (splitGen)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..), emptyItemManager)
@@ -221,6 +221,7 @@ resetPages env = do
 data Session = Session
     { sesUnits     ∷ !UnitManager
     , sesStatRNG   ∷ !Text
+    , sesTreatRNG  ∷ !Text
     , sesIntRolled ∷ !Bool
     } deriving (Eq, Show)
 
@@ -228,9 +229,11 @@ snapshot ∷ EngineEnv → IO Session
 snapshot env = do
     um ← readIORef (unitManagerRef env)
     g  ← readIORef (statRNGRef env)
+    t  ← readIORef (treatRNGRef env)
     pure Session
         { sesUnits = um
         , sesStatRNG = T.pack (show g)
+        , sesTreatRNG = T.pack (show t)
         , sesIntRolled = maybe False (HM.member "intelligence" ∘ uiStats)
                                (HM.lookup medicUid (umInstances um)) }
 
@@ -494,14 +497,35 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
             null refused `shouldBe` False
             null treated `shouldBe` False
 
-        -- The pool the treatment draws from has four writer threads
-        -- (unit, combat, world, Lua), so "the refused call put it back"
-        -- is not a guarantee anyone can make: a restore that ran after
-        -- somebody else's draw would either clobber theirs or give up.
-        -- The reservation makes the refusal path write to that ref at
-        -- all, which is what this pins with a SECOND writer churning it
-        -- underneath.
-        it "writes nothing to the stat RNG while another thread churns it" $ \env → do
+        -- #2297 round 6: the shared stat pool has four writer threads,
+        -- and Combat.Wounds.Tick claims from it with the very
+        -- `atomicModifyIORef' splitGen` a treatment would otherwise
+        -- have used. Treatment therefore draws from its OWN generator
+        -- and the shared pool stops being an input at all, which is
+        -- what makes it impossible for the two to be handed the same
+        -- stream.
+        it "leaves the shared stat RNG alone entirely, even when it commits" $ \env → do
+            resetPages env
+            ls ← newBareLuaBackend env
+            before ← readIORef (statRNGRef env)
+            results ← forM [1 .. 20 ∷ Int] $ \_ → do
+                restock env
+                place env patientUid (11, 10)
+                treatResult ls (bleed patientUid Nothing)
+            after ← readIORef (statRNGRef env)
+            results `shouldBe` replicate 20 (q "true|treated")
+            T.pack (show after) `shouldBe` T.pack (show before)
+            -- ...while the treatment's own generator DID move, so the
+            -- assertion above is about the pool and not about a
+            -- treatment that quietly rolled nothing.
+            (sesTreatRNG <$> snapshot env)
+                `shouldNotReturn` T.pack (show before)
+
+        -- And the interleaving the review asked for: a REAL
+        -- `Random.splitGen` consumer -- Combat.Wounds.Tick's own claim
+        -- -- churning the shared pool while treatments run against a
+        -- patient another thread is moving.
+        it "holds the invariant against a real splitGen consumer and a moving patient" $ \env → do
             resetPages env
             ls ← newBareLuaBackend env
             stop ← newIORef False
@@ -516,39 +540,32 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
                                     (if even n then 11 else 20, 10), () )
                             spin (n + 1)
                 in spin (0 ∷ Int)
-            -- The rival RNG consumer. It writes only values drawn from a
-            -- small fixed palette, so anything else sitting in the ref
-            -- afterwards can only have been written by the verb.
             _ ← forkIO $
-                let spin n = do
+                let spin = do
                         halt ← readIORef stop
                         if halt then putMVar rngDone () else do
-                            writeIORef (statRNGRef env)
-                                (rngPalette !! (n `mod` length rngPalette))
-                            spin (n + 1)
-                in spin (0 ∷ Int)
+                            _ ← atomicModifyIORef' (statRNGRef env) splitGen
+                            spin
+                in spin
             outcomes ← forM [1 .. 300 ∷ Int] $ \_ → do
                 restock env
                 b4 ← untouched env
                 r  ← treatResult ls (bleed patientUid Nothing)
                 af ← untouched env
-                g  ← readIORef (statRNGRef env)
-                pure (r, b4, af, T.pack (show g))
+                pure (r, b4, af)
             writeIORef stop True
             takeMVar movesDone
             takeMVar rngDone
-            newStdGen ⌦ writeIORef (statRNGRef env)
 
-            let refused = [ o | o@(r, _, _, _) ← outcomes, isReachRefusal r ]
-                treated = [ o | o@(r, _, _, _) ← outcomes, r ≡ q "true|treated" ]
-                palette = map (T.pack ∘ show) rngPalette
-            -- Everything the verb owns is untouched by a refusal, even
-            -- though the RNG itself is moving for reasons of its own.
-            [ (b4, af) | (_, b4, af, _) ← refused
-                       , b4 { unStatRNG = "" } ≢ af { unStatRNG = "" } ]
-                `shouldBe` []
-            -- ...and the ref still holds a value only the rival wrote.
-            [ g | (_, _, _, g) ← refused, g `notElem` palette ] `shouldBe` []
+            let refused = [ o | o@(r, _, _) ← outcomes, isReachRefusal r ]
+                treated = [ o | o@(r, _, _) ← outcomes, r ≡ q "true|treated" ]
+                -- The rival owns the shared pool for the duration, so
+                -- that one field is its business, not the verb's.
+                ownFields u = u { unStatRNG = "" }
+            [ (b4, af) | (_, b4, af) ← refused
+                       , ownFields b4 ≢ ownFields af ] `shouldBe` []
+            [ (b4, af) | (_, b4, af) ← treated
+                       , ownFields b4 ≡ ownFields af ] `shouldBe` []
             null refused `shouldBe` False
             null treated `shouldBe` False
 
@@ -786,12 +803,14 @@ data Untouched = Untouched
     , unKnowledge ∷ ![(Text, Float)]
     , unRolled    ∷ ![Text]
     , unStatRNG   ∷ !Text
+    , unTreatRNG  ∷ !Text
     } deriving (Eq, Show)
 
 untouched ∷ EngineEnv → IO Untouched
 untouched env = do
     um ← readIORef (unitManagerRef env)
     g  ← readIORef (statRNGRef env)
+    t  ← readIORef (treatRNGRef env)
     let med = HM.lookup medicUid (umInstances um)
         pat = HM.lookup patientUid (umInstances um)
         contents i = [ c | it ← uiInventory i, c ← iiContents it ]
@@ -805,14 +824,10 @@ untouched env = do
                           , woundClean w ) | w ← uiWounds i ]) pat
         , unKnowledge = maybe [] (sortOn fst ∘ HM.toList ∘ uiKnowledge) med
         , unRolled = maybe [] (sort ∘ HM.keys ∘ uiStats) med
-        , unStatRNG = T.pack (show g) }
+        , unStatRNG = T.pack (show g)
+        , unTreatRNG = T.pack (show t) }
 
 place ∷ EngineEnv → UnitId → (Float, Float) → IO ()
 place env u xy = atomicModifyIORef' (unitManagerRef env) $ \um →
     (movedTo um u xy, ())
 
-
--- | The rival RNG consumer's whole vocabulary. Small and fixed so a
---   sample can be attributed: a value outside it is one the verb wrote.
-rngPalette ∷ [StdGen]
-rngPalette = [ mkStdGen k | k ← [90001 .. 90008] ]

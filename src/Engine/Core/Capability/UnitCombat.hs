@@ -86,14 +86,15 @@ import Unit.Sim.Types (UnitThreadState)
 import Unit.Pathing.Config (PathingConfig)
 import Engine.Core.State
   ( EngineEnv
-  , unitManagerRef, unitQueue, utsRef, statRNGRef, combatQueue
+  , unitManagerRef, unitQueue, utsRef, statRNGRef, treatRNGRef, combatQueue
   , combatEventsRef, injuryEventsRef, thoughtEventsRef, actionOutcomeRef
   , pathingConfigRef
   )
 
 -- | The units-and-combat slice of @units-buildings-combat@: the unit
 --   roster, the unit and combat command queues, the sim-side per-unit
---   thread state, the runtime stat RNG, the three @CombatEvent@-shaped
+--   thread state, the runtime stat RNG, the medical-treatment RNG,
+--   the three @CombatEvent@-shaped
 --   event streams, the F4 action-outcome tap, and the pathing
 --   tunables. See 'docs/engineenv_capability_inventory.md' §5
 --   @units-buildings-combat@ and §7.5.
@@ -132,6 +133,15 @@ data UnitCombatCapability = UnitCombatCapability
     --   individual roll's own atomicity. World-side consumers take it
     --   as an explicit narrow parameter instead of adopting this
     --   record — see this module's header.
+  , ucTreatRNGRef      ∷ IORef StdGen
+    -- ^ Runtime RNG for MEDICAL TREATMENT rolls and nothing else
+    --   (#2297), seeded from system entropy at startup exactly like
+    --   'ucStatRNGRef'. Single-writer by contract: only
+    --   @LuaThread@'s @Engine.Scripting.Lua.API.Units.Medical@ touches
+    --   it, so its claim-then-advance protocol cannot hand the same
+    --   generator to two consumers the way sharing 'ucStatRNGRef'
+    --   would. See the field's own note on 'EngineEnv' for why a
+    --   treatment cannot claim from the four-writer pool.
   , ucCombatQueue      ∷ Q.Queue Combat.Types.CombatCommand
     -- ^ Lua \/ AI → combat thread, drained at the combat thread's 60 Hz
     --   tick by @Combat.Thread.processAllCommands@; produced by
@@ -186,6 +196,7 @@ toUnitCombatCapability env = UnitCombatCapability
   , ucUnitQueue        = unitQueue env
   , ucUtsRef           = utsRef env
   , ucStatRNGRef       = statRNGRef env
+  , ucTreatRNGRef      = treatRNGRef env
   , ucCombatQueue      = combatQueue env
   , ucCombatEventsRef  = combatEventsRef env
   , ucInjuryEventsRef  = injuryEventsRef env

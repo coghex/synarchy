@@ -420,10 +420,17 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Combat.Resolution",
         "Combat.Wounds.Tick",
         "Engine.Scripting.Lua.API.Forage.Harvest",
-        "Engine.Scripting.Lua.API.Units.Medical",
         "Engine.Scripting.Lua.API.Units.Stats",
         "Unit.Thread.Command.Spawn",
         "Unit.Thread.Movement.Climb",
+    }),
+    # #2297: medical treatment draws from its OWN generator, not the
+    # shared stat pool -- a treatment commits or refuses in one
+    # unit-manager transaction, so it has to claim a generator without
+    # advancing anything a refusal would then have to unwind. One
+    # writer by contract; the inventory row says why.
+    "treatRNGRef": frozenset({
+        "Engine.Scripting.Lua.API.Units.Medical",
     }),
     "buildingManagerRef": frozenset({
         "Building.Thread.Command",

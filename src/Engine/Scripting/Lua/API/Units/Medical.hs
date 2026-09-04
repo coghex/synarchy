@@ -215,31 +215,35 @@ treatBleedingIO env medic patient mOwner = do
 --   computes with.
 --
 --   #2297: nothing is written here, so a treatment refused at EITHER
---   check leaves @ucStatRNGRef@ exactly as it found it — whatever else
---   is drawing from that shared pool at the time. Advancing first and
---   putting it back afterwards cannot give the same guarantee: the pool
---   has four writer threads, so a restore that ran after somebody
---   else's draw would either clobber theirs or (being conditional)
---   silently give up and leave the refused call's advance behind.
+--   check leaves @ucTreatRNGRef@ exactly as it found it. That is only
+--   safe because this generator has ONE consumer — this module, on the
+--   Lua thread, never re-entrant — so no other reader can be handed the
+--   half this treatment is computing with while the claim is open. On
+--   the four-writer @ucStatRNGRef@ neither half of that is available:
+--   claiming atomically IS advancing it (and a refusal would then have
+--   to unwind, which cannot be done safely against a concurrent draw),
+--   while claiming by a plain read hands @Combat.Wounds.Tick@'s own
+--   @splitGen@ the very generator this treatment is using.
 reserveTreatGen ∷ EngineEnv
                 → IO (Random.StdGen, Random.StdGen, Random.StdGen)
 reserveTreatGen env = do
-    g0 ← readIORef (ucStatRNGRef (toUnitCombatCapability env))
+    g0 ← readIORef (ucTreatRNGRef (toUnitCombatCapability env))
     let (kept, local) = Random.splitGen g0
     pure (g0, kept, local)
 
 -- | Spend the reservation, once the treatment has actually committed.
 --
---   The pool advances exactly once per committed treatment, atomically,
---   which is the shared-pool rule 'Combat.Wounds.Tick' states: never
---   hand the same generator out twice. If nothing else drew while this
---   treatment was being computed, the half the reservation left behind
---   is published, so the half it used is provably gone from the stream.
---   If another consumer DID draw, that draw stands — this advances from
---   what is actually there rather than rewinding to a stale value.
+--   The generator advances exactly once per committed treatment, so it
+--   never hands the same value out twice — the rule
+--   'Combat.Wounds.Tick' states for the shared pool, kept here. The
+--   half the claim left behind is published, so the half the treatment
+--   used is gone from the stream. The comparison is belt and braces: on
+--   a single-consumer ref nothing else can have moved it, and if
+--   something ever did, this advances from what is actually there
+--   rather than rewinding to a stale value.
 publishTreatGen ∷ EngineEnv → Random.StdGen → Random.StdGen → IO ()
 publishTreatGen env reservedFrom kept =
-    atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) $ \cur →
+    atomicModifyIORef' (ucTreatRNGRef (toUnitCombatCapability env)) $ \cur →
         ( if cur ≡ reservedFrom then kept else fst (Random.splitGen cur)
         , () )
 
