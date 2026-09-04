@@ -92,6 +92,14 @@ data EquipmentOrphan = EquipmentOrphan
 --   presents equipped slots in — so a direct 'HM.HashMap' traversal
 --   never decides what the next save writes.
 --
+--   Slot ids are NOT guaranteed unique — the YAML decoder accepts
+--   @slots@ as a plain list and validates nothing about its ids — so an
+--   entry is judged against EVERY declaration sharing its id and is a
+--   mismatch only when none of them accepts the item's kind. That keeps
+--   both live producers whole (the equip gate resolves first-match, unit
+--   spawn last-match), and collapses to the equip gate's own rule for
+--   every class whose ids are in fact unique.
+--
 --   An entry whose item DEFINITION does not resolve is deliberately
 --   left where it is rather than treated as a kind mismatch. That
 --   reference is a hard load rejection
@@ -118,23 +126,42 @@ reconcileUnitEquipment ecm im mClassName uid equipped inventory =
     , [ EquipmentOrphan uid slotId (iiDefName it) (iiInstanceId it) cause
       | (slotId, it, Just cause) ← classified ] )
   where
-    -- Slot id → the kind that slot accepts today. Empty when the unit
-    -- declares no class or its class is gone, which is what makes every
-    -- entry a retired-slot orphan.
-    slotKinds = case mClassName ⌦ (`lookupEquipmentClass` ecm) of
-        Nothing  → HM.empty
-        Just cls → HM.fromList [ (esId s, esKind s) | s ← ecSlots cls ]
+    mClass = mClassName ⌦ (`lookupEquipmentClass` ecm)
+    -- Every kind the class accepts under this slot id, in DECLARATION
+    -- order. A list rather than a map lookup because @slots@ is a plain
+    -- list and nothing validates its ids for uniqueness
+    -- ('Engine.Asset.YamlEquipment' decodes @slots@ with no such check),
+    -- so a class may legitimately declare the id more than once and the
+    -- shipped consumers already disagree about which one wins:
+    -- 'Engine.Scripting.Lua.API.Equipment.Slot.equipmentEquipFn' takes
+    -- the FIRST match and 'Unit.Thread.Command.Spawn' builds a map, so
+    -- the LAST. Empty when the unit declares no class or its class is
+    -- gone, which is what makes every entry a retired-slot orphan.
+    declaredKinds slotId = case mClass of
+        Nothing  → []
+        Just cls → [ esKind s | s ← ecSlots cls, esId s ≡ slotId ]
     classified =
         [ (slotId, it, verdict slotId it)
         | (slotId, it) ← L.sortOn fst (HM.toList equipped) ]
-    verdict slotId it = case HM.lookup slotId slotKinds of
-        Nothing       → Just EquipmentSlotRetired
-        Just slotKind → case lookupItemDef (iiDefName it) im of
+    -- An entry is a kind mismatch only when NO slot declared under its
+    -- id accepts the item. That subsumes both live rules rather than
+    -- picking one: an item the equip gate accepted against the first
+    -- declaration, and one spawn materialized against the last, are
+    -- BOTH kept, so this repair can never migrate out something the
+    -- running game legitimately put there — while a genuine drift, where
+    -- no declaration under that id accepts the kind, is still caught.
+    -- Where ids are unique, which is every shipped class, it is exactly
+    -- the equip gate's rule. The DIAGNOSTIC still names the first
+    -- declaration's kind, because that is the one @equipment.equip@
+    -- would judge a re-equip against.
+    verdict slotId it = case declaredKinds slotId of
+        []                  → Just EquipmentSlotRetired
+        kinds@(firstKind:_) → case lookupItemDef (iiDefName it) im of
             Nothing → Nothing
             Just iDef
-                | idKind iDef ≢ slotKind →
-                    Just (EquipmentKindMismatch (idKind iDef) slotKind)
-                | otherwise → Nothing
+                | idKind iDef `elem` kinds → Nothing
+                | otherwise →
+                    Just (EquipmentKindMismatch (idKind iDef) firstKind)
 
 -- | One migrated entry, as the load says it. Names the unit, the page,
 --   the affected slot, the item's definition and physical instance id,

@@ -77,6 +77,30 @@ humanoidClass = EquipmentClass
 classMgr ∷ EquipmentClassManager
 classMgr = EquipmentClassManager (HM.singleton "humanoid" humanoidClass)
 
+-- | A class declaring one slot id TWICE with different kinds, which the
+--   YAML decoder accepts and nothing validates against. The shipped
+--   consumers disagree about which declaration wins — @equipment.equip@
+--   resolves first-match, unit spawn builds a map and so resolves
+--   last-match — so both orderings are exercised below.
+duplicateSlotClass ∷ Text → Text → EquipmentClassManager
+duplicateSlotClass firstKind secondKind =
+    EquipmentClassManager $ HM.singleton "humanoid" humanoidClass
+        { ecSlots =
+            [ EquipmentSlot { esId = "hand", esName = "Hand"
+                            , esKind = firstKind
+                            , esX = 0, esY = 0, esW = 32, esH = 32 }
+            , EquipmentSlot { esId = "hand", esName = "Hand (alt)"
+                            , esKind = secondKind
+                            , esX = 0, esY = 32, esW = 32, esH = 32 } ] }
+
+-- | Reconcile one @hand@ entry against a class declaring that id twice.
+reconcileDuplicate
+    ∷ Text → Text → ItemInstance
+    → (HM.HashMap Text ItemInstance, [ItemInstance], [EquipmentOrphan])
+reconcileDuplicate firstKind secondKind it =
+    reconcileUnitEquipment (duplicateSlotClass firstKind secondKind) itemMgr
+        (Just "humanoid") uid1 (HM.singleton "hand" it) []
+
 itemDef ∷ Text → Text → ItemDef
 itemDef name kind = ItemDef
     { idName = name, idDisplayName = name
@@ -250,6 +274,41 @@ pureSpec = describe "saved equipment slot reconciliation (#2307)" $ do
         eq'  `shouldBe` HM.empty
         map iiInstanceId inv' `shouldBe` [31]
         map eqoCause orphs `shouldBe` [EquipmentSlotRetired]
+
+  -- Slot ids are not validated for uniqueness, and the two live
+  -- producers resolve a duplicated id differently. This repair must
+  -- never migrate out an item either of them legitimately placed, so it
+  -- accepts an entry that ANY declaration under its id accepts.
+  describe "a class declaring one slot id twice" $ do
+
+    it "keeps an item the FIRST declaration accepts, which is the \
+       \declaration equipment.equip resolves to" $ do
+        let (eq', inv', orphs) =
+                reconcileDuplicate "weapon" "headwear"
+                    (itemOf "steel_dagger" 40)
+        HM.keys eq' `shouldBe` ["hand"]
+        inv'  `shouldBe` []
+        orphs `shouldBe` []
+
+    it "keeps an item the LAST declaration accepts, which is the \
+       \declaration unit spawn resolves to" $ do
+        let (eq', inv', orphs) =
+                reconcileDuplicate "headwear" "weapon"
+                    (itemOf "steel_dagger" 41)
+        HM.keys eq' `shouldBe` ["hand"]
+        inv'  `shouldBe` []
+        orphs `shouldBe` []
+
+    it "still migrates an item NO declaration under that id accepts, \
+       \and names the FIRST declaration's kind in the diagnostic" $ do
+        let (eq', inv', orphs) =
+                reconcileDuplicate "weapon" "accessory"
+                    (itemOf "steel_helmet" 42)
+        eq' `shouldBe` HM.empty
+        map iiInstanceId inv' `shouldBe` [42]
+        orphs `shouldBe`
+            [ EquipmentOrphan uid1 "hand" "steel_helmet" 42
+                  (EquipmentKindMismatch "headwear" "weapon") ]
 
   describe "the migration diagnostic" $ do
 
