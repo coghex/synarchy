@@ -135,6 +135,7 @@ import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.World.SessionEpoch as SessionEpoch
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
+import qualified Test.Headless.Equipment.Reconcile as EquipmentReconcile
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
@@ -635,6 +636,15 @@ main = hspec $ do
     -- worlds engine's pages. Its page is an arena page, so staging
     -- rebuilds flat chunks instead of generating a world.
     aroundAll withHeadlessEngineNoWorld GenConfigDomain.stagingSpec
+    -- #2307: the saved-equipment-slot reconciliation, split the same
+    -- way. The pure half needs no engine; the staging half gets its OWN
+    -- world-thread-free engine for the same reason the gen-domain one
+    -- above does -- it rewrites the item/equipment-class/unit-def
+    -- registries and drives stageSession against a forged one-page
+    -- arena save, so it must not gain or disturb the shared engine's
+    -- pages.
+    EquipmentReconcile.pureSpec
+    aroundAll withHeadlessEngineNoWorld EquipmentReconcile.stagingSpec
     -- Own engine for the same reason (#1593): the unit-simulation
     -- page-ownership gate installs its own three-page world manager and
     -- rewrites the unit manager to put a unit on each. WORLD-THREAD-FREE
