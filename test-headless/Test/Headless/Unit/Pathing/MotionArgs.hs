@@ -239,7 +239,14 @@ runCall env ls prefix expr = do
             r ← evalDebug ls ("return " <> expr)
             q ← Q.flushQueue queue
             mapM_ (Q.writeQueue queue) q
-            processAllUnitCommands env utsRef
+            -- The drain answers whether it stopped at a session
+            -- boundary (#2291). No motion verb may ever queue one, so
+            -- this is asserted rather than discarded: a `True` here
+            -- would mean the pass stopped early and every "the
+            -- simulation did not move" assertion below had simply not
+            -- run the commands yet.
+            endedSession ← processAllUnitCommands env utsRef
+            endedSession `shouldBe` False
             pure (r, q)
     warns ← warningsWith prefix entriesRef
     sim ← HM.lookup movedUid ∘ utsSimStates <$> readIORef utsRef
