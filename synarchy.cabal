@@ -1543,6 +1543,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.SessionTeardown
                    Test.Headless.Lua.BuildingSpawnSentinel
                    Test.Headless.Lua.WorkClaimCapacity
+                   Test.Headless.Lua.WorkClockBounds
                    Test.Headless.Capability.Building
                    Test.Headless.Capability.ContentRegistriesView
                    Test.Headless.Capability.Events

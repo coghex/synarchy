@@ -342,6 +342,7 @@ import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
 import qualified Test.Headless.Lua.BuildingSpawnSentinel as LuaBuildingSpawnSentinel
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
+import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
@@ -789,6 +790,7 @@ main = hspec $ do
     LuaSessionTeardown.spec
     LuaBuildingSpawnSentinel.spec
     LuaWorkClaimCapacity.spec
+    LuaWorkClockBounds.spec
     LuaFaction.spec
     describe "World.CursorInfo" CursorInfo.spec
     CursorTextureDispatch.spec

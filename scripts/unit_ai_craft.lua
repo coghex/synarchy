@@ -52,6 +52,9 @@ local loadFeasible         = fetch.loadFeasible
 
 local roles = require("scripts.unit_roles")
 local page = require("scripts.unit_ai_page")
+-- The shared work-clock bound (#2332). unit_ai_stall requires nothing,
+-- so naming it here is cycle-free -- the same import auto-harvest makes.
+local stall = require("scripts.unit_ai_stall")
 
 local M = {}
 
@@ -349,7 +352,9 @@ local function craftExecute(uid, s, params)
         -- #590: mark the bill as ACTIVELY worked only now — fetching
         -- and walking (above) never drew power; standing at the
         -- station about to pour progress does. craftOnExit/completion/
-        -- release all clear this back off.
+        -- release all clear this back off, and since #2332 so does
+        -- unit_ai_stall.suspendOrders, for a crafter knocked down at
+        -- the station on a path that fires no onExit at all.
         craft.setBillWorking(uid, job.billId, true)
         return
     end
@@ -373,7 +378,12 @@ local function craftExecute(uid, s, params)
             s.lastCraftAt = now
             return
         end
-        local elapsed = now - (s.lastCraftAt or now)
+        -- #2332: the pour is charged only for one uninterrupted
+        -- stretch of AI ticking. Every path that swallows a tick drops
+        -- the stamp (unit_ai_stall.suspendOrders, and the phase resets
+        -- above), and an interval past the shared bound -- a gap no
+        -- path could announce -- charges ZERO rather than the bound.
+        local elapsed = stall.workInterval(s.lastCraftAt, now)
         s.lastCraftAt = now
         local progress = bill.progress or 0
         if elapsed > 0 and job.work > 0 then

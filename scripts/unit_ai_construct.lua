@@ -47,6 +47,7 @@ local mv = require("scripts.movement_speed")
 local roles = require("scripts.unit_roles")
 local claimsLib = require("scripts.unit_ai_claims")
 local site = require("scripts.unit_ai_construct_site")
+local stall = require("scripts.unit_ai_stall")   -- work-clock bound (#2332)
 
 local M = {}
 
@@ -434,7 +435,9 @@ local function constructExecute(uid, s, params)
             s.lastConstructAt = now
             return
         end
-        local elapsed = now - (s.lastConstructAt or now)
+        -- #2332: charged only for one uninterrupted stretch of AI
+        -- ticking -- see unit_ai_stall.workInterval.
+        local elapsed = stall.workInterval(s.lastConstructAt, now)
         s.lastConstructAt = now
         if elapsed > 0 then
             -- Construction skill scales the pour rate the same way
