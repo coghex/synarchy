@@ -673,6 +673,7 @@ library
                      World.Chunk.Residency
                      World.Chunk.Admit
                      World.Cursor.Types
+                     World.GroundItems
                      World.Edit.Types
                      World.Edit.Apply
                      World.Types
@@ -1239,6 +1240,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership
+                   Test.Headless.Item.GroundSelection
                    Test.Headless.Item.Materialize
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
@@ -1253,8 +1255,10 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.FloraContent
                    Test.Headless.Asset.FloraRegrowthSchema
+                   Test.Headless.Asset.FloraVocabularySchema
                    Test.Headless.Asset.InfectionSchema
                    Test.Headless.Asset.Types
+                   Test.Headless.Asset.UnitBodyGraph
                    Test.Headless.Asset.UnitInventory
                    Test.Headless.Asset.MaterialMoveCost
                    Test.Headless.Asset.YamlList
@@ -1399,6 +1403,7 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.InputOwnership
                    Test.Headless.UI.ZoomBandInputGate
                    Test.Headless.UI.HudHoverGate
+                   Test.Headless.UI.ItemInfoRowSelection
                    Test.Headless.UI.UnitInfoRowSelection
                    Test.Headless.UI.ElementInputPolicy
                    Test.Headless.UI.ControlActivation

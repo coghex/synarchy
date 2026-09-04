@@ -52,6 +52,7 @@ import qualified Test.Headless.World.ArenaSeed as ArenaSeed
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
+import qualified Test.Headless.Item.GroundSelection as GroundSelection
 import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
 import qualified Test.Headless.Lua.UnitAiRepairGround as LuaUnitAiRepairGround
 import qualified Test.Headless.Item.Temperature as ItemTemp
@@ -68,7 +69,9 @@ import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.FloraContent as FloraContent
 import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
+import qualified Test.Headless.Asset.FloraVocabularySchema as FloraVocabularySchema
 import qualified Test.Headless.Asset.InfectionSchema as InfectionSchema
+import qualified Test.Headless.Asset.UnitBodyGraph as AssetUnitBodyGraph
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
@@ -188,6 +191,7 @@ import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
 import qualified Test.Headless.UI.HudHoverGate as UIHudHoverGate
+import qualified Test.Headless.UI.ItemInfoRowSelection as UIItemInfoRowSelection
 import qualified Test.Headless.UI.UnitInfoRowSelection as UIUnitInfoRowSelection
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
@@ -705,7 +709,9 @@ main = hspec $ do
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
+    describe "Asset.FloraVocabularySchema" FloraVocabularySchema.spec
     describe "Asset.InfectionSchema" InfectionSchema.spec
+    describe "Asset.UnitBodyGraph" AssetUnitBodyGraph.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
     StartupAssetLogging.spec
@@ -895,6 +901,8 @@ main = hspec $ do
     describe "zoom-band entity input gate" UIZoomBandInputGate.spec
     describe "hud hover gameplay-input gate" UIHudHoverGate.spec
     describe "Unit Info row selection gate" UIUnitInfoRowSelection.spec
+    describe "Item Info row selection gate" UIItemInfoRowSelection.spec
+    describe "ground item selection" GroundSelection.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
