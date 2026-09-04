@@ -1481,6 +1481,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.MonotonicClock
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
+                   Test.Headless.Camera.Finite
                    Test.Headless.Camera.GotoClamp
                    Test.Headless.Camera.GotoLoad
                    Test.Headless.Camera.ZoomScroll
