@@ -157,7 +157,7 @@ def _make_owner_writable(top: str) -> None:
     entries can be unlinked, so `remove_isolated_root` would report
     residue on a run that did nothing wrong. Only THIS invocation's copy
     is relaxed; the source's own mode bits are never touched (#1729; the
-    tools/location_embark_probe.py pattern from #1569).
+    tools/location_embark/invocation.py pattern from #1569).
     """
     for path, dirs, files in os.walk(top):
         for name in [None, *dirs, *files]:

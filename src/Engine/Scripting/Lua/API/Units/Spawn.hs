@@ -45,6 +45,8 @@ import Unit.Pathing.Hazard
 import World.Types (WorldManager(..))
 import Engine.Scripting.Lua.API.PageBinding
     (bindingStale, pageBindingStaleReason)
+import Engine.Scripting.Lua.API.Units.MotionArgs
+    (defaultingSpeed, readMotionArg, requiredCoordinate, requiredSpeed)
 import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
 
 
@@ -286,12 +288,36 @@ unitDestroyFn env = do
             Lua.pushboolean True
             return 1
 
+-- | Warn and return false without enqueueing anything — the refusal
+--   shape @unit.moveTo@\'s hazard-token check already had (#1217) and
+--   #2290 extended to every numeric argument of every motion verb.
+--
+--   'CatAsset' matches that sibling refusal deliberately: one
+--   @ENGINE_DEBUG@ category shows every reason a motion verb turned a
+--   call down, rather than splitting them across two.
+refuseMotionArg ∷ EngineEnv → Text → Lua.LuaE Lua.Exception Lua.NumResults
+refuseMotionArg env why = do
+    logger ← Lua.liftIO $ readIORef (loggerRef env)
+    Lua.liftIO $ logWarn logger CatAsset why
+    Lua.pushboolean False
+    return 1
+
 -- | Teleport a unit. If gridZ is omitted, looks up surface elevation.
+--
+--   X and Y must be finite numbers (#2290). A missing, non-numeric,
+--   NaN or infinite one refuses the call — nothing is queued and the
+--   verb returns false — rather than substituting the 0.0 it used to,
+--   which turned a dropped argument into a silent teleport to the world
+--   origin and a @math.huge@ into one to an unloaded coordinate.
+--
+--   Z keeps its integer handling: it is optional by design (absent =
+--   look the surface up) and 'Lua.tointeger' cannot yield a non-finite
+--   'Int'.
 unitSetPosFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSetPosFn env = do
     idArg ← Lua.tointeger 1
-    xArg  ← Lua.tonumber 2
-    yArg  ← Lua.tonumber 3
+    xArg  ← readMotionArg 2
+    yArg  ← readMotionArg 3
     zArg  ← Lua.tointeger 4
 
     case idArg of
@@ -300,23 +326,32 @@ unitSetPosFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-                gx = case xArg of
-                         Just (Lua.Number v) → realToFrac v
-                         _                   → 0.0
-                gy = case yArg of
-                         Just (Lua.Number v) → realToFrac v
-                         _                   → 0.0
                 mGz = case zArg of
                          Just z  → Just (fromIntegral z)
                          Nothing → Nothing
-            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
-                UnitTeleport uid gx gy mGz
-            Lua.pushboolean True
-            return 1
+                checked = (,) <$> requiredCoordinate "unit.setPos" "x" xArg
+                              ⊛ requiredCoordinate "unit.setPos" "y" yArg
+            case checked of
+                Left why → refuseMotionArg env why
+                Right (gx, gy) → do
+                    Lua.liftIO $ Q.writeQueue
+                        (ucUnitQueue (toUnitCombatCapability env)) $
+                        UnitTeleport uid gx gy mGz
+                    Lua.pushboolean True
+                    return 1
 
 -- | Order a unit to walk to a target. Speed defaults to 2.0 tiles/sec.
 --
 --   Signature: @unit.moveTo(uid, gx, gy, [speed], [hazardPolicy])@
+--
+--   @gx@\/@gy@ are REQUIRED finite numbers and @speed@, when supplied,
+--   is a finite non-negative one (#2290); a violation joins the
+--   hazard-token refusal below in returning false, warning, and
+--   enqueueing nothing. A NaN in any of the three used to reach the
+--   mover, where it makes every step NaN and the arrival test never
+--   true — the unit sticks \"moving\" at a position no tile lookup can
+--   map, and that position is then persisted verbatim. A negative
+--   speed walked the unit away from its own target.
 --
 --   @hazardPolicy@ (#1217) is the route's damaging-drop policy, stated
 --   EXPLICITLY per request: @"allow_falls"@ (the default, and every
@@ -336,9 +371,9 @@ unitSetPosFn env = do
 unitMoveToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitMoveToFn env = do
     idArg     ← Lua.tointeger 1
-    xArg      ← Lua.tonumber 2
-    yArg      ← Lua.tonumber 3
-    speedArg  ← Lua.tonumber 4
+    xArg      ← readMotionArg 2
+    yArg      ← readMotionArg 3
+    speedArg  ← readMotionArg 4
     hazardArg ← Lua.tostring 5
 
     case idArg of
@@ -347,20 +382,26 @@ unitMoveToFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-                tx = case xArg of
-                         Just (Lua.Number v) → realToFrac v
-                         _                   → 0.0
-                ty = case yArg of
-                         Just (Lua.Number v) → realToFrac v
-                         _                   → 0.0
-                speed = case speedArg of
-                            Just (Lua.Number v) → realToFrac v
-                            _                   → 2.0
+                -- The target must be finite and the speed, when one is
+                -- supplied at all, finite and non-negative (#2290). An
+                -- OMITTED speed still keeps the documented 2.0 — the
+                -- argument has always been optional — but a supplied
+                -- one that is not a number is a caller bug and is
+                -- refused rather than silently defaulted.
+                checked = do
+                    tx ← requiredCoordinate "unit.moveTo" "x" xArg
+                    ty ← requiredCoordinate "unit.moveTo" "y" yArg
+                    speed ← defaultingSpeed "unit.moveTo" "speed" 2.0 speedArg
+                    pure (tx, ty, speed)
                 mHazard = case hazardArg of
                     Nothing  → Just defaultMoveHazardPolicy
                     Just raw → parseMoveHazardPolicy (TE.decodeUtf8Lenient raw)
-            case mHazard of
-                Nothing → do
+            case (checked, mHazard) of
+                -- The numeric domains are checked FIRST so a call that
+                -- is wrong in both ways names the argument the author
+                -- can act on rather than only the token.
+                (Left why, _) → refuseMotionArg env why
+                (_, Nothing) → do
                     logger ← Lua.liftIO $ readIORef (loggerRef env)
                     Lua.liftIO $ logWarn logger CatAsset $
                         "unit.moveTo: unrecognized hazard policy '"
@@ -369,7 +410,7 @@ unitMoveToFn env = do
                         <> " — move refused"
                     Lua.pushboolean False
                     return 1
-                Just hazard → do
+                (Right (tx, ty, speed), Just hazard) → do
                     Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
                         UnitMoveTo uid tx ty speed hazard
                     Lua.pushboolean True
@@ -379,10 +420,15 @@ unitMoveToFn env = do
 --   in-flight move (see UnitSetMoveSpeed) without resetting its
 --   destination or computed local path. A no-op (still returns true —
 --   the command enqueues regardless) if the unit isn't currently moving.
+--
+--   @speed@ is REQUIRED and must be finite and non-negative (#2290).
+--   The no-op-for-a-still-unit case is unchanged: it is the HANDLER
+--   that finds no target and does nothing, which is a different
+--   question from whether the argument named a usable speed.
 unitSetMoveSpeedFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitSetMoveSpeedFn env = do
     idArg    ← Lua.tointeger 1
-    speedArg ← Lua.tonumber 2
+    speedArg ← readMotionArg 2
 
     case idArg of
         Nothing → do
@@ -390,13 +436,18 @@ unitSetMoveSpeedFn env = do
             return 1
         Just n → do
             let uid = UnitId (fromIntegral n)
-                speed = case speedArg of
-                            Just (Lua.Number v) → realToFrac v
-                            _                   → 0.0
-            Lua.liftIO $ Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
-                UnitSetMoveSpeed uid speed
-            Lua.pushboolean True
-            return 1
+            -- REQUIRED here, unlike @unit.moveTo@'s optional slot: this
+            -- verb exists only to change the speed, so an omitted one
+            -- names no retarget at all and the 0.0 it used to substitute
+            -- silently froze the unit mid-route (#2290).
+            case requiredSpeed "unit.setMoveSpeed" "speed" speedArg of
+                Left why → refuseMotionArg env why
+                Right speed → do
+                    Lua.liftIO $ Q.writeQueue
+                        (ucUnitQueue (toUnitCombatCapability env)) $
+                        UnitSetMoveSpeed uid speed
+                    Lua.pushboolean True
+                    return 1
 
 -- | unit.jump(uid, gx, gy) — order a unit to LEAP to target tile (gx,gy).
 --   The unit thread launches a gravity arc if the gap is within reach

@@ -109,9 +109,21 @@ def bootstrap(port: int) -> None:
             send(port, f"{fn}('{path}'); return 'ok'")
     send(port,
          "return require('scripts.movement_arena').buildCourse('flat').name")
-    # world.show is queued on the world thread — wait until the arena is
-    # actually the active world before designating (a designate against a
-    # not-yet-active page id is a silent no-op).
+    # buildCourse queues world.initArena, world.initArenaDone and
+    # world.show together, so the arena page does not merely become
+    # VISIBLE a tick later — it does not EXIST until the world thread
+    # runs the init. Wait for it to be applied before designating: a
+    # designate against a not-yet-active page id is a silent no-op, and
+    # every helper below reads world.getActiveWorldId().
+    #
+    # This is NOT the chunk-page binding #2310 fixed, and the fix does
+    # not remove the need for it. That one is about which page bulk
+    # chunk work is ADMITTED to while a world.show sits queued, and
+    # world.loadChunksInRegion now resolves the projected page itself.
+    # A page that is only projected has no WorldState yet, so it queues
+    # nothing and reports 0 rather than falling back — which is exactly
+    # this window. Arena registration and application still have to
+    # finish first.
     if not poll_until(port, 30, lambda: wid(port)):
         sys.exit("arena page never became the active world")
     # Make sure the chunks around the test sites exist before designating
@@ -127,9 +139,10 @@ def bootstrap(port: int) -> None:
 
 
 def wid(port: int) -> str | None:
-    """Active world page id, or None while world.show is still queued.
-    The console JSON-encodes strings (quotes included) and prints null
-    for nil — both need unwrapping before the id is re-usable in Lua."""
+    """APPLIED world page id, or None while the arena's init/show burst
+    is still queued on the world thread. The console JSON-encodes strings
+    (quotes included) and prints null for nil — both need unwrapping
+    before the id is re-usable in Lua."""
     raw = send(port, "return world.getActiveWorldId()")
     raw = raw.strip().strip('"')
     return raw if raw and raw not in ("null", "nil") else None

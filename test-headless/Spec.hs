@@ -24,6 +24,7 @@ import qualified Test.Headless.WorldGen.FluidSurfaceFold as FluidSurfaceFold
 import qualified Test.Headless.WorldGen.ConfigLoad as WorldGenConfigLoad
 import qualified Test.Headless.Unit.Pathing.Cost as PathingCost
 import qualified Test.Headless.Unit.Pathing.Hazard as PathingHazard
+import qualified Test.Headless.Unit.Pathing.MotionArgs as PathingMotionArgs
 import qualified Test.Headless.Unit.Pathing.MoveToApi as PathingMoveToApi
 import qualified Test.Headless.Unit.SimPageOwnership as SimPageOwnership
 import qualified Test.Headless.Unit.Pathing.AStar as PathingAStar
@@ -100,6 +101,7 @@ import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispa
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
 import qualified Test.Headless.World.SelectChunk as SelectChunk
 import qualified Test.Headless.World.ChunkIdentity as ChunkIdentity
+import qualified Test.Headless.World.ChunkPageBinding as ChunkPageBinding
 import qualified Test.Headless.World.ChunkQueueFrame as ChunkQueueFrame
 import qualified Test.Headless.World.ActionOutcome as ActionOutcome
 import qualified Test.Headless.World.Spoil as Spoil
@@ -526,6 +528,12 @@ main = hspec $ do
     -- engine's logger to capture the warning it emits and drains the
     -- unit command queue, so it cannot share the worldgen engine.
     aroundAll withHeadlessEngine PathingMoveToApi.spec
+    -- Own engine for the same reasons (#2290): the motion-argument
+    -- domain gate swaps the logger, drains and refills the unit command
+    -- queue, and REWRITES the unit manager to install its own def and
+    -- instance, so it can share neither the worldgen engine nor
+    -- another spec's managers.
+    aroundAll withHeadlessEngine PathingMotionArgs.spec
     -- Own engine for the same reason (#1247): the order executor writes
     -- the unit/building manager refs AND installs its own two-page world
     -- manager so each page brings its own live wsTransferOrdersRef.
@@ -594,6 +602,13 @@ main = hspec $ do
     -- installs its own single-page manager and finishes each accepted
     -- call by invoking the production command handler directly.
     aroundAll withHeadlessEngineNoWorld TimeScaleDomain.spec
+    -- #2310: which PAGE bulk chunk work is admitted to, and which page
+    -- the wait watches. The defect lives entirely in the window between
+    -- a world.show being enqueued and being applied, so this spec needs
+    -- an engine with no world worker draining worldQueue: the show then
+    -- sits unapplied for as long as an example needs, and each page's
+    -- init queue is exactly what a producer left there.
+    aroundAll withHeadlessEngineNoWorld ChunkPageBinding.spec
     -- #2288: the world-generation float domain. The pure half -- the
     -- shared leaf tables, the YAML resolution and the save-side repair --
     -- needs no engine at all. The Lua half gets its OWN engine, and is

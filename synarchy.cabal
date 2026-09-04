@@ -337,6 +337,7 @@ library
                      Engine.Scripting.Lua.API.UI.Presentation
                      Engine.Scripting.Lua.API.Faction
                      Engine.Scripting.Lua.API.Units
+                     Engine.Scripting.Lua.API.Units.MotionArgs
                      Engine.Scripting.Lua.API.Units.Page
                      Engine.Scripting.Lua.API.Units.Yaml
                      Engine.Scripting.Lua.API.Units.Spawn
@@ -512,6 +513,7 @@ library
                      Unit.Thread.Command.Spawn
                      Unit.Thread.Command.Lifecycle
                      Unit.Thread.Command.Motion
+                     Unit.Thread.Command.MotionGuard
                      Unit.Thread.Command.Pose
                      Unit.Thread.Movement
                      Unit.Thread.Movement.Types
@@ -882,6 +884,9 @@ library
                      World.Save.Component.WorldGenCurrent
                      World.Save.Component.WorldGenHistory
                      World.Save.Component.Session
+                     World.Save.Component.PageCore
+                     World.Save.Component.PageEdits
+                     World.Save.Component.PageActivity
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component.EntitySnapshots
@@ -1192,6 +1197,7 @@ test-suite synarchy-test-headless
                    Test.Headless.WorldGen.ConfigLoad
                    Test.Headless.Unit.Pathing.Cost
                    Test.Headless.Unit.Pathing.Hazard
+                   Test.Headless.Unit.Pathing.MotionArgs
                    Test.Headless.Unit.Pathing.MoveToApi
                    Test.Headless.Unit.SimPageOwnership
                    Test.Headless.Unit.Pathing.AStar
@@ -1289,6 +1295,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.SelectChunk
                    Test.Headless.World.ActionOutcome
                    Test.Headless.World.ChunkIdentity
+                   Test.Headless.World.ChunkPageBinding
                    Test.Headless.World.ChunkQueueFrame
                    Test.Headless.World.DesignationSeam
                    Test.Headless.World.Chop.Selection
@@ -1403,6 +1410,11 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.ClickCorrelation
                    Test.Headless.UI.TransferContextMenu
                    Test.Headless.UI.ItemList
+                   Test.Headless.UI.ItemList.Support
+                   Test.Headless.UI.ItemList.Model
+                   Test.Headless.UI.ItemList.Rows
+                   Test.Headless.UI.ItemList.Invalidation
+                   Test.Headless.UI.ItemList.Tabbar
                    Test.Headless.UI.ContainerWindowStack
                    Test.Headless.UI.TransferGestures
                    Test.Headless.UI.ConsumableGesture
@@ -1492,6 +1504,11 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Building.WorkbenchConstruction
                    Test.Headless.Lua.SaveModules
+                   Test.Headless.Lua.SaveModules.Support
+                   Test.Headless.Lua.SaveModules.DataCodec
+                   Test.Headless.Lua.SaveModules.Registry
+                   Test.Headless.Lua.SaveModules.EntityApplication
+                   Test.Headless.Lua.SaveModules.Components
                    Test.Headless.Lua.SharedHelpers
                    Test.Headless.Lua.SaveBridge
                    Test.Headless.Lua.TutorialProgress

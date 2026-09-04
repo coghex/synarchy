@@ -72,6 +72,7 @@ import LootTable.Types (LootTableRegistry)
 import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible
+                   , wmProjectedVisible, wmSelectionPending
                    , BloodTextureHandles)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
@@ -923,6 +924,86 @@ activeWorldPageFrom ref = resolveActiveWorld <$> readIORef ref
 --   that don't need the page id.
 activeWorldStateFrom ∷ IORef WorldManager → IO (Maybe WorldState)
 activeWorldStateFrom ref = fmap snd <$> activeWorldPageFrom ref
+
+-- | The page BULK CHUNK WORK is admitted to, and the page a chunk wait
+--   watches (#2310). Deliberately NOT 'resolveActiveWorld': that rule
+--   answers with the APPLIED selection, and these two verbs run on the
+--   Lua/console thread while the world thread is still holding the
+--   @WorldShow@ that moves it.
+--
+--   The sequence this exists for is the probe suite's standard opening,
+--   issued as three separate console evaluations:
+--
+--   > world.show('probe')
+--   > world.loadChunksInRegion(-4, -4, 4, 4)
+--   > world.waitForChunks(120)
+--
+--   Under 'resolveActiveWorld' the load admits its region to the
+--   OUTGOING page (the show is still queued, so @wmVisible@ has not
+--   moved), the wait then re-resolves and — once the show lands — polls
+--   the INCOMING page's empty queue, and reports completion while the
+--   outgoing page is still generating. Nothing cancels the misdirected
+--   work either: 'World.Thread.ChunkLoading.drainInitQueues' serves
+--   every page, deliberately.
+--
+--   The rule, from ONE 'WorldManager' snapshot so the two halves cannot
+--   disagree:
+--
+--     * an EXPLICIT page selects only that live entry of @wmWorlds@ —
+--       including a HIDDEN one, which is the point of naming it — and
+--       never falls back. A page that is absent, or merely projected
+--       and not yet live, yields 'Nothing' so the caller queues nothing
+--       and says so;
+--     * an OMITTED page with nothing outstanding
+--       (@wmSelectionPending ≡ 0@) is exactly 'resolveActiveWorld',
+--       which is what keeps the ~47 existing probe call sites behaving
+--       as they always have;
+--     * an OMITTED page with a selection change in flight resolves the
+--       head of @wmProjectedVisible@ — the same state
+--       @selectionRequestEffect@ already judges a placement against
+--       (#1602) — looked up in the SAME snapshot's live @wmWorlds@. An
+--       empty or not-yet-live projected head yields 'Nothing' rather
+--       than falling back to the applied page: a @world.init@ still
+--       queued ahead of its @world.show@ has no 'WorldState' to admit
+--       to, and admitting to the outgoing page instead is the bug.
+--
+--   The COUNT, not 'selectionChangeInFlight', is the pending test. An
+--   ineffective request still pairs with a handler and still moves the
+--   projection fields, and this is choosing a target rather than
+--   invalidating a binding: over-consulting the projection when it
+--   equals the applied state costs nothing, while under-consulting it
+--   is the defect.
+resolveChunkTargetWorld
+    ∷ Maybe WorldPageId → WorldManager → Maybe (WorldPageId, WorldState)
+resolveChunkTargetWorld (Just pid) mgr = pageEntry pid mgr
+resolveChunkTargetWorld Nothing mgr
+    | wmSelectionPending mgr ≡ 0 = resolveActiveWorld mgr
+    | otherwise = case wmProjectedVisible mgr of
+        (pid:_) → pageEntry pid mgr
+        []      → Nothing
+
+-- | One page id resolved against a manager's LIVE page set, paired back
+--   up with the id. Shared by both 'resolveChunkTargetWorld' branches so
+--   "named" and "projected" cannot drift apart on what counts as live.
+pageEntry ∷ WorldPageId → WorldManager → Maybe (WorldPageId, WorldState)
+pageEntry pid mgr = (\ws → (pid, ws)) ⊚ lookup pid (wmWorlds mgr)
+
+-- | 'resolveChunkTargetWorld' over a live world-manager ref, for the
+--   capability-narrowed chunk verbs in
+--   "Engine.Scripting.Lua.API.WorldQuery.Chunk".
+--
+--   ONE 'readIORef': the admission and the wait each take a single
+--   snapshot and answer from it, which is what makes the two verbs agree
+--   about which page they are talking about.
+chunkTargetWorldFrom ∷ Maybe WorldPageId → IORef WorldManager
+                     → IO (Maybe (WorldPageId, WorldState))
+chunkTargetWorldFrom mPid ref = resolveChunkTargetWorld mPid ⊚ readIORef ref
+
+-- | 'chunkTargetWorldFrom' over the live 'worldManagerRef', for the
+--   debug console's off-Lua-thread @world.waitForChunks@ fast path.
+chunkTargetWorld ∷ Maybe WorldPageId → EngineEnv
+                 → IO (Maybe (WorldPageId, WorldState))
+chunkTargetWorld mPid env = chunkTargetWorldFrom mPid (worldManagerRef env)
 
 -- | 'resolveActiveWorld' over the live 'worldManagerRef', returning the
 --   active world's page id together with its state.

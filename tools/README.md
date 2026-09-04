@@ -550,6 +550,7 @@ instance, defaulting to its own historical fixed port when unset (#723).
 | `item_instance_probe.py` | #67 | worldgen | Per-instance item identity. |
 | `item_temp_probe.py` | #344 | worldgen | Item temperature model. |
 | `location_content_probe.py` | #90, #91, #915, #1101, #1230, #917 | worldgen + arena | Location content spawning + ruin probe; also the player-wide discovery layer (sight-based since #1230 — a location is revealed when a player-owned unit's night-aware visible tiles touch its stored bounds, so the negative cases are derived from the sight radius rather than a discovery halo, which no longer exists), the per-unit location-knowledge layer beside it, and (#1101) each placed location's name rendered in its world's own generated language — generated name + English gloss on a provenance-bearing world, the `ldLabel` fallback with no gloss on the same seed without one, both surviving save/load and reproduced by regenerating the same seed + language in a fresh process. Since #917 it also covers guaranteed SIGNIFICANT contents and the compound clearance predicate: every ruin owes exactly one `processing_unit` bound at spawn to its own physical `iiInstanceId` (distinct across obligations), no ruin is clearance-satisfied while that item is still on the floor — including a zero-nomad roll, whose encounter half is already complete — and a NON-PLAYER faction's pickup latches the same durable `taken` state without clearing a ruin whose roster is still alive. The file itself is the façade (CLI, artifact guard, the eight-process sequence, the helpers other probes import); the scenario owners — content/persistence, discovery/knowledge, content dispatch/rejection, naming — live under `tools/location_content/` beside the shared invocation infrastructure (#2095). |
+| `location_embark_probe.py` | #782, #1230, #1569, #1746, #1770, #1982 | worldgen fixture + `--offscreen` x3 (needs-gpu, manual-only) | **The embark-to-discovery arc's integrated gate.** One headless phase generates a world holding at least two `ruin_small` locations — trying `--seed` then each `--alt-seeds` candidate in turn, every rejected seed discarded with its own headless process — and publishes it as the durable `SAVE_BASE` every later session loads. Three OFFSCREEN sessions then run in order against it, each in its own booted-and-quit engine: (a) both ruins' shared unknown markers before any portal exists, ghost validity over an ordinary and an overlapping position, and both branches of the remote-settlement modal — never saved back, so (b) starts from the same clean fixture; (b) canonical local placement, the portal's own roster, and discovery driven by a REAL click-select plus right-click move order (never `unitAi.commandMove`/`unit.setPos`), the leave-and-return no-duplicate-event check, the lifecycle-icon comparisons against (a)'s own baselines, and a durable `SAVE_LOCAL`; (c) a genuinely fresh process that loads only that save and proves the location count, both discovery states and the restored icons survived. A save that never reaches `SaveCaptureComplete` suppresses every session that would read it, rather than resurfacing as a load timeout later (#1746). Every artifact — four engine logs, two save slots, the screenshots — lives under ONE invocation-owned directory with its own resource root, removed on every exit path unless `--keep-artifacts` (#1569). The file itself is the façade (CLI, the ordered process lifecycle, phase dispatch, the single aggregate result and cleanup); the phase owners — the invocation's failure ledger, artifact tree and save publication, the shared engine/real-input support, the fallback-seed fixture, and sessions (a), (b) and (c) — live under `tools/location_embark/` (#2164), which registers no probe of its own. |
 | `location_overlay_probe.py` | #89 | worldgen + arena | World-gen location-overlay placement. |
 | `location_stamp_idempotent_probe.py` | #424, #1575 | worldgen | Geometry-stamp idempotency survives clearing the anchor floor + save/restart/reload; a never-visited location still stamps on first load; and the 5x5 footprint under the tested room really materialized level, with no levelling edit the engine refused. |
 | `lua_orphan_prune_probe.py` | #195, #1589 | worldgen | Lua per-id AI state is pruned (not inherited by id reuse) after a save load, and a stale reference from EVERY declared `unit_ai` family — planted before the save — is cleared by the automatic post-load reconcile. |
@@ -1119,7 +1120,8 @@ checkout still yields a REMOVABLE tree, with the source's own modes
 untouched (`copytree` reproduces the source's mode bits, so a read-only
 `config/` would otherwise give this run a private copy whose entries
 cannot be unlinked — residue from a source it only read; the
-`_make_owner_writable` treatment is `location_embark_probe.py`'s, #1569);
+`_make_owner_writable` treatment is `location_embark/invocation.py`'s,
+#1569);
 and an outside directory holding same-named decoys comes through
 byte-identical. It also pins what the
 probe still proves after the move: the registration ORDER the fixtures
@@ -1231,7 +1233,7 @@ rather than descending it — then left them there. A personal `*.local.yaml`
 was visible to the run in the same breath, so a local override could decide
 what the probe observed. Each builder now COPIES `config/` with
 `shutil.ignore_patterns("*.local.yaml")` and makes the copy owner-writable,
-the `location_embark_probe.py` pattern from #1569.
+the `location_embark/invocation.py` pattern from #1569.
 
 `python3 tools/test_location_probe_config_isolation.py` pins that for all
 three distinct builders, and asserts rather than assumes that
@@ -1307,6 +1309,25 @@ python3 tools/probe_flake.py --probe role --runs 10
 python3 tools/probe_flake.py --probe role --runs 10 --result /tmp/role.json
 python3 tools/test_probe_flake.py     # the focused self-test (no engine)
 ```
+
+The self-test is the aggregate CI runs, and it composes owners under
+`tools/probe_flake_tests/` (#2087): `harness_*` for the generic harness
+contracts, and one `migration_<key>.py` per key in
+`probe_flake.PROTOCOL_PROBES`. Either side can be run on its own, from the
+same composed order the aggregate uses:
+
+```bash
+python3 tools/test_probe_flake.py --only harness
+python3 tools/test_probe_flake.py --only migration:thermo_altitude
+python3 tools/test_probe_flake.py --list --only harness   # select, run nothing
+```
+
+An unrecognized `--only` is refused before anything runs, naming the token
+and listing every valid selector, and the aggregate refuses to run at all if
+the migration contracts and `probe_flake.PROTOCOL_PROBES` ever disagree in
+either direction. So a probe-result migration adds `migration_<key>.py` and
+one line to the facade's `SEQUENCE`, and changing one migrated probe's
+contract touches neither the harness modules nor another probe's module.
 
 Only probes that implement the shared `probe-result/v1` protocol
 (`tools/probe_protocol.py`) can be measured; everything else is `legacy` and
@@ -1971,6 +1992,29 @@ python3 tools/probe_claim.py --status            # every claim in this repositor
 python3 tools/probe_claim.py --status --json
 ```
 
+`probe_claim.py` is the COMMAND and nothing else since #2148: argument
+parsing, status rendering, JSON/text presentation and the process exit. The
+implementation lives in three owners beside it, each importable on its own and
+each carrying the invariants it enforces.
+
+| Owner | Owns |
+|---|---|
+| `probe_claim_storage.py` | the namespace under the repository-common git directory, the claim-file codec, completeness/consistency/filesystem-age handling, durable staged replacement and exclusive creation, and the sidecar `flock` that serializes one read-decide-write |
+| `probe_claim_lease.py` | canonical probe-key and lease validation, the acquisition token, `Claim`, `ClaimDenied`, acquisition, renewal, reassertion, token-safe release, takeover, `Renewer`, and the status query behind `--status` |
+| `probe_claim_orchestration.py` | `run_claimed_measurement` and its ordering, `--result` validation, retention of a completed measurement, `Outcome`, the acquisition audit, the pre-run reassertion, serialized ingestion, and the whole `EXIT_*` table |
+
+Dependencies run one way — storage is the filesystem leaf, lease builds on
+storage and the probe registry, orchestration builds on both plus `probe_flake`
+and `probe_census`, and the command builds on the three. A facility has exactly
+ONE owner and the command re-exports none of them, so a tool or test that
+reaches for `acquire`, `Claim`, `read_claim`, `retain_measurement`,
+`LEASE_SECONDS` or an exit constant imports the owner and assigning to it
+changes the state the implementation reads. Owners reach one another's seams
+module-qualified at call time (`storage.read_payload(...)`), never through a
+`from ... import`, for the same reason. That direction is asserted
+mechanically by the `claim` self-test owner rather than left to inspection.
+`tools/deflake.py` consumes the owners directly.
+
 The claim is a FILE, created `O_CREAT|O_EXCL` at
 `<git-common-dir>/probe-claims/<probe>.json`, carrying its owner, its
 acquisition token and its lease. **The file is the lock**, which is the
@@ -2095,7 +2139,7 @@ python3 tools/test_probe_claim.py --only orchestration  # 13 cases
 
 | Owner module | `--only` | Owns |
 |---|---|---|
-| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
+| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, the three owners' one-way import direction (#2148), exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
 | `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, and `probe_flake` staying usable with no `docs-wip` worktree |
 | `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI |
 
@@ -2240,7 +2284,8 @@ live while its own flock is held, never by the pid it records.
 ### `deflake.py` — one bounded census measurement, end to end (#1436)
 
 The orchestration that puts the five components in order: `probe_select`
-(#1435) picks a probe, `probe_claim` (#1434) makes it this agent's,
+(#1435) picks a probe, the `probe_claim_*` owners (#1434, #2148) make it this
+agent's,
 `probe_resource_lock` keeps a foreign engine out of the tracked files it
 touches, `probe_flake` (#1425) measures it, and `probe_census` (#1428/#1429)
 records the result.
@@ -2466,7 +2511,8 @@ equal. That apparatus is a CLOSED inventory (`HARNESS_MODULES`), pinned
 exactly by the self-test rather than spot-checked, and stated there rather
 than counted here — a hand-written total is the drift #1584 already cost
 this file once: `probe_flake`, `probe_protocol`, `probe_census`,
-`probe_claim`, `probe_resource_lock`, `probe_select`, `probe_engine`,
+`probe_claim` and its three `probe_claim_*` owners, `probe_resource_lock`,
+`probe_select`, `probe_engine`,
 `probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
 and `deflake_diagnosis`, each of which owns probe selection, launch, port
 or resource leasing, protocol reconciliation, measurement timing and

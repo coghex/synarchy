@@ -91,14 +91,29 @@ prelude = lns
     , "XP = 0"
     , "CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
     , "          stop = 0, setSkill = 0, tags = {} }"
+    -- The capacity model the collecting phase gates on (#2293), and the
+    -- ground rows it weighs. TAKEN is what makes "the refused yield is
+    -- still on the ground" answerable: a successful pickup REMOVES the
+    -- row and adds its live weight to the carried load, exactly as the
+    -- engine would, so a row that still resolves afterwards is one that
+    -- was genuinely left behind. MISSING is the separate raced case --
+    -- a gid that never resolves at all.
+    , "CARRIED, CAPACITY, ROW_WEIGHT = 0.0, 1000.0, 1.0"
+    , "TAKEN, MISSING = {}, {}"
+    , "PICKUP_CALLS = 0"
+    , "WARNINGS = {}"
     , "FLORA = { ['10,0'] = { { gid = 1 }, { gid = 2 } } }"
     , "local function key(x, y) return string.format('%d,%d', x, y) end"
     , "engine = { gameTime = function() return NOW end,"
-    , "           logWarn = function() end, logInfo = function() end }"
+    , "           logWarn = function(m) WARNINGS[#WARNINGS + 1] = m end,"
+    , "           logInfo = function() end }"
     , "unit = {"
     , "  getInfo = function() return POS end,"
     , "  exists = function() return true end,"
-    , "  getStat = function() return 1.0 end,"
+    , "  getCarryingWeight = function() return CARRIED end,"
+    , "  getStat = function(_, name)"
+    , "    if name == 'carrying_capacity' then return CAPACITY end"
+    , "    return 1.0 end,"
     , "  getSkill = function(_, name)"
     , "    if name ~= 'farming' then return 0.0 end"
     , "    return SKILL end,"
@@ -113,9 +128,17 @@ prelude = lns
     , "    ACTIVITY = 'idle' end,"
     , "  setAnimOverride = function() end,"
     , "  clearAnimOverride = function() end }"
-    , "item = { pickupGround = function(_, gid)"
-    , "           GROUND[#GROUND + 1] = gid; return true end,"
-    , "         listDefs = function() return {} end }"
+    , "item = {"
+    , "  getGroundForUnit = function(_, gid)"
+    , "    if TAKEN[gid] or MISSING[gid] then return nil, true end"
+    , "    return { id = gid, defName = 'crop', weight = ROW_WEIGHT }, true end,"
+    , "  pickupGround = function(_, gid)"
+    , "    PICKUP_CALLS = PICKUP_CALLS + 1"
+    , "    if TAKEN[gid] or MISSING[gid] then return false end"
+    , "    TAKEN[gid] = true"
+    , "    CARRIED = CARRIED + ROW_WEIGHT"
+    , "    GROUND[#GROUND + 1] = gid; return true end,"
+    , "  listDefs = function() return {} end }"
     , "world = {"
     , "  getActiveWorldId = function() return 1 end,"
     , "  findHarvestableFlora = function(ux, uy, range, tag)"
@@ -378,6 +401,131 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "  'and only then does the ordinary scan resume')"
                 ]
 
+    describe "collection is gated on carrying capacity (#2293)" $ do
+        it "a picker that cannot fit the next yield leaves it on the \
+           \ground, ends the collection, and warns exactly once" $
+            runsOk $ lns
+                [ prelude
+                -- Room for the FIRST yield and nothing after it: the
+                -- 4 kg row fits under the 5 kg cap on an empty picker,
+                -- and taking it puts the second one 3 kg over. The
+                -- refusal is therefore reached by ordinary collecting,
+                -- not by staging a unit that was already full.
+                , "CAPACITY, ROW_WEIGHT = 5.0, 4.0"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 1, 2 }"
+                , "execOnly()"
+                , "assert(#GROUND == 1 and GROUND[1] == 2,"
+                , "  'the first yield must still be collected normally')"
+                , "assert(S.harvestPhase == 'collecting',"
+                , "  'and the collection must still be pending')"
+                , "local callsBefore = PICKUP_CALLS"
+                , "execOnly()"
+                -- Requirement 1: the pickup does not happen at all.
+                , "assert(PICKUP_CALLS == callsBefore,"
+                , "  'a refused yield must not reach item.pickupGround')"
+                , "assert(#GROUND == 1, 'and must not land in the inventory')"
+                -- Requirement 2: the row is untouched and still there.
+                , "local left = item.getGroundForUnit(1, 1)"
+                , "assert(left and left.id == 1,"
+                , "  'the refused yield must remain on the ground')"
+                , "assert(left.weight == ROW_WEIGHT,"
+                , "  'and must be neither deleted nor partially moved')"
+                -- Requirement 3: the phase ends, and says so once.
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'a refusal must end the collection phase')"
+                , "assert(#WARNINGS == 1,"
+                , "  'a refusal must warn exactly once, got ' .. #WARNINGS)"
+                , "assert(WARNINGS[1]:find('leaving ground', 1, true),"
+                , "  'the warning must carry the leaving ground outcome')"
+                , "assert(WARNINGS[1]:find('unit 1', 1, true),"
+                , "  'and must name the worker')"
+                , "assert(WARNINGS[1]:find('crop', 1, true),"
+                , "  'and must name the ground item')"
+                -- ...and does not retry it every tick, which is what
+                -- ending the phase rather than re-offering the yield
+                -- buys.
+                , "execOnly()"
+                , "assert(PICKUP_CALLS == callsBefore and #WARNINGS == 1,"
+                , "  'the refused yield must not be retried the next tick')"
+                ]
+
+        it "weighs the LIVE row on the picker's own page, not a static \
+           \def weight, and re-reads the load it just took on" $
+            runsOk $ lns
+                [ prelude
+                -- Two identical fixtures differing only in the live row
+                -- weight the owning-page lookup reports. Deleting the
+                -- getGroundForUnit read, or weighing anything but that
+                -- row, makes these two agree.
+                , "CAPACITY, ROW_WEIGHT = 10.0, 3.0"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 1, 2, 3 }"
+                , "execOnly(); execOnly(); execOnly()"
+                , "assert(#GROUND == 3,"
+                , "  'three 3 kg yields must all fit under a 10 kg cap')"
+                , "assert(#WARNINGS == 0, 'and must draw no capacity warning')"
+                -- The same three gids, the same cap, a heavier live row.
+                , "CARRIED, TAKEN, GROUND = 0.0, {}, {}"
+                , "PICKUP_CALLS, WARNINGS = 0, {}"
+                , "ROW_WEIGHT = 6.0"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 1, 2, 3 }"
+                , "execOnly()"
+                , "assert(#GROUND == 1, 'the first 6 kg yield still fits')"
+                , "execOnly()"
+                -- 6 + 6 > 10: the carried load the FIRST pickup added
+                -- is what refuses the second, so the check re-reads
+                -- unit.getCarryingWeight rather than gating once.
+                , "assert(#GROUND == 1,"
+                , "  'the second must be refused against the load just taken')"
+                , "assert(S.harvestPhase == nil,"
+                , "  'and must end the collection')"
+                , "assert(#WARNINGS == 1, 'with one capacity warning')"
+                ]
+
+        it "an unresolvable yield ends the collection with no capacity \
+           \warning: a raced row is not a refusal" $
+            runsOk $ lns
+                [ prelude
+                -- Nothing about this unit is near its capacity; the gid
+                -- simply does not resolve on its page any more.
+                , "CAPACITY, ROW_WEIGHT = 1000.0, 1.0"
+                , "MISSING[2] = true"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 1, 2 }"
+                , "execOnly()"
+                , "assert(#GROUND == 0,"
+                , "  'a vanished row must not be picked up')"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'and must not reach item.pickupGround')"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'but must still end the collection cleanly')"
+                , "assert(#WARNINGS == 0,"
+                , "  'and must NOT be reported as a capacity refusal')"
+                ]
+
+        it "a pickup that loses its race after the check ends the \
+           \collection with no capacity warning either" $
+            runsOk $ lns
+                [ prelude
+                -- The row resolves and weighs in fine; the pickup then
+                -- fails anyway. That is the raced commit, not a
+                -- capacity decision.
+                , "CAPACITY, ROW_WEIGHT = 1000.0, 1.0"
+                , "item.pickupGround = function()"
+                , "  PICKUP_CALLS = PICKUP_CALLS + 1; return false end"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 1, 2 }"
+                , "execOnly()"
+                , "assert(PICKUP_CALLS == 1,"
+                , "  'an admitted yield must still be attempted')"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'and a lost race must end the collection')"
+                , "assert(#WARNINGS == 0,"
+                , "  'a lost race is not a capacity refusal')"
+                ]
+
     describe "the farming skill decides how long the pick takes" $ do
         it "a farming-100 worker completes while an otherwise identical \
            \farming-0 worker is still working, and the low-skill one \
@@ -389,6 +537,11 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- 0.5 * (0.5 +   0/100) = 0.25/s → 4 s charged.
                 , "local function run(skill, seconds)"
                 , "  NOW = 0; SKILL = skill; XP = 0; GROUND = {}"
+                -- The two runs re-use gid 1, so the load model resets
+                -- with the rest of the fixture or the second run's
+                -- pickup would race against the first run's row.
+                , "  CARRIED = 0.0; TAKEN = {}; MISSING = {}"
+                , "  PICKUP_CALLS = 0; WARNINGS = {}"
                 , "  CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
                 , "            stop = 0, setSkill = 0, tags = {} }"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"

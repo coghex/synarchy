@@ -57,6 +57,9 @@ module World.Save.Types
     , MissingInfectionRef(..)
     , renderMissingInfectionRef
     , missingInfectionReferences
+    , ImmunityScrub(..)
+    , emptyImmunityScrub
+    , renderImmunityScrub
     ) where
 
 import UPrelude
@@ -807,33 +810,68 @@ toUnitInstanceSnapshot ui = UnitInstanceSnapshot
 --   'Unit.Faction.fallbackFaction' — a bad tag never fails a load — and
 --   the list exists so the caller can warn once per distinct tag instead
 --   of once per unit, however many units share it.
-fromUnitSnapshot ∷ WorldPageId → HM.HashMap Text UnitDef → UnitSnapshot
-                 → (UnitManager, [UnitId], [Text])
-fromUnitSnapshot page defs snap =
+--
+--   The fourth is the 'ImmunityScrub' diagnostic for the acquired-immunity
+--   entries this restore dropped against @infMgr@ (#2305). The scrub lives
+--   HERE, inside the one pure restore every load goes through, so no
+--   caller can publish a unit carrying immunity to an infection that no
+--   longer exists; @infMgr@ is one immutable catalogue view for the whole
+--   staging attempt, never re-read per page, so a single load cannot
+--   reconcile two of its pages against different definition sets.
+fromUnitSnapshot ∷ WorldPageId → HM.HashMap Text UnitDef → InfectionManager
+                 → UnitSnapshot
+                 → (UnitManager, [UnitId], [Text], ImmunityScrub)
+fromUnitSnapshot page defs infMgr snap =
     let pairs = HM.toList (usnInstances snap)
-        resolved = [ (uid, fromUnitInstanceSnapshot page d s)
+        -- Everything below is derived from the units that actually made
+        -- it in: an orphan's whole instance is discarded, so neither its
+        -- faction tag nor its immunity map is a live unit's problem.
+        kept     = [ (uid, d, s)
                    | (uid, s) ← pairs
                    , Just d ← [HM.lookup (uisDefName s) defs]
+                   ]
+        resolved = [ (uid, fromUnitInstanceSnapshot page d (scrubbed s))
+                   | (uid, d, s) ← kept
                    ]
         orphans  = [ uid
                    | (uid, s) ← pairs
                    , not (HM.member (uisDefName s) defs)
                    ]
-        -- Only the units that actually made it in: a dropped orphan's
-        -- tag is not a live unit's problem.
         unknownFactions = L.sort $ HS.toList $ HS.fromList
                    [ uisFactionId s
-                   | (_, s) ← pairs
-                   , HM.member (uisDefName s) defs
+                   | (_, _, s) ← kept
                    , isNothing (parseFaction (uisFactionId s))
                    ]
+        -- #2305: acquired immunity is keyed by infection definition id
+        -- and restored verbatim before this. An entry whose def has been
+        -- removed from the catalogue has no surface but the raw key
+        -- 'Engine.Scripting.Lua.API.Units.Combat.unitGetImmunitiesFn'
+        -- would print in the Status tab, and 'Combat.Wounds.Tick' would
+        -- resume honouring it for a DIFFERENT infection if the id were
+        -- ever reintroduced. It is dropped here on #1087's terms —
+        -- diagnosed, never a load failure — rather than added to
+        -- 'missingInfectionReferences': see that function's haddock for
+        -- why the two halves of an infection reference part company.
+        resolves k = isJust (lookupInfection k infMgr)
+        scrubbed s = s { uisImmunities =
+                           HM.filterWithKey (\k _ → resolves k)
+                                            (uisImmunities s) }
+        dropped  = [ k
+                   | (_, _, s) ← kept
+                   , k ← HM.keys (uisImmunities s)
+                   , not (resolves k)
+                   ]
+        immScrub = ImmunityScrub
+                     { iscRemoved = length dropped
+                     , iscIds     = L.sort (HS.toList (HS.fromList dropped))
+                     }
         um = UnitManager
                 { umDefs      = defs
                 , umInstances = HM.fromList resolved
                 , umSelected  = mempty
                 , umNextId    = usnNextId snap
                 }
-    in (um, orphans, unknownFactions)
+    in (um, orphans, unknownFactions, immScrub)
 
 fromUnitInstanceSnapshot ∷ WorldPageId → UnitDef → UnitInstanceSnapshot
                          → UnitInstance
@@ -1365,7 +1403,8 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
         , unresolved (ptCrop pd) ]
     -- Only the #2243 constructor can appear here: a decoded page's
     -- planting edits are named, whatever version the payload was
-    -- written at ('World.Save.Component.Page.applyWorldEdits' rewrites
+    -- written at
+    -- ('World.Save.Component.PageEdits.applyWorldEdits' rewrites
     -- the two legacy numeric forms into it), and a captured page's are
     -- named by 'World.Thread.Command.Save.WriteWorld'. The two legacy
     -- constructors are matched anyway rather than falling into the
@@ -1399,7 +1438,8 @@ renderUnnamedFloraRef r =
 --   handle the catalog could not name.
 --
 --   This is where a save acquires its species names, and the only
---   place: 'World.Save.Component.Page''s encoders see a
+--   place: the page-scoped components' encoders (behind
+--   "World.Save.Component.Page") see a
 --   'World.Save.Snapshot.SessionSnapshot' that already holds
 --   'World.Flora.Reference.FloraRef's and never consult live catalog
 --   state, so an encode cannot fail and cannot invent a name. A handle
@@ -1501,7 +1541,8 @@ resolveFloraReferences catalog pid edits crops plants =
         WePlaceFloraRef gx gy ref day w iid →
             (\fid → WePlaceFloraWithId gx gy fid day w iid) <$> resolve ref
         -- A decoded page carries no numeric planting edit —
-        -- 'World.Save.Component.Page.migrateWorldEditDTOv2' names both
+        -- @World.Save.Component.PageEdits.migrateWorldEditDTOv2@ names
+        -- both
         -- legacy forms — so this crosses whatever a caller handed in
         -- unchanged rather than re-deriving an id it already has.
         _ → Just e
@@ -1641,9 +1682,26 @@ renderMissingInfectionRef r =
         <> ") on page '" <> unWorldPageId (mirPage r)
         <> "' references unknown infection id '" <> mirInfType r <> "'"
 
--- | Every saved wound-infection reference, across all pages, that does
+-- | Every saved WOUND-infection reference, across all pages, that does
 --   not resolve against the currently-registered infection catalogue.
 --   Empty ⇒ every reference resolves and the load may proceed.
+--
+--   Wound references are the whole of this detector's scope, and
+--   deliberately so (#2305). A saved unit carries a SECOND kind of
+--   infection-id reference — the 'Unit.Types.uiImmunities' keys of the
+--   acquired immunity it has earned — and those are NOT inventoried
+--   here: an unresolved one is scrubbed during staging by
+--   'fromUnitSnapshot' and logged, never rejected. The asymmetry is the
+--   blast radius. A wound reference names an infection a unit is
+--   CURRENTLY carrying, so rejecting the load is the only way not to
+--   silently change that wound's treatment and progression after
+--   publication; an immunity key is a memory of content the unit has
+--   already survived, and inventorying it here would make removing one
+--   infection definition reject every save in which any surviving unit
+--   still holds un-decayed immunity to it. #1087's container-knowledge
+--   scrub set the precedent for that second case: a memory of removed
+--   content has no surface of its own, so it is dropped and diagnosed
+--   rather than treated as corruption.
 missingInfectionReferences
     ∷ InfectionManager
     → [(WorldPageId, WorldPageSave)]
@@ -1657,5 +1715,34 @@ missingInfectionReferences infMgr pages = concatMap pageRefs pages
         , let infType = woundInfectionType wd
         , not (T.null infType)
         , not (isJust (lookupInfection infType infMgr)) ]
-    isJust (Just _) = True
-    isJust Nothing  = False
+
+-- Acquired-immunity reconciliation (issue #2305) ---------------------
+
+-- | What one page's 'fromUnitSnapshot' dropped from the units it
+--   restored, because the acquired-immunity entry's key names an
+--   infection definition that is no longer registered.
+--
+--   'iscRemoved' counts immunity-map ENTRIES actually removed, so a
+--   page on which four units each carried the same dead id reports 4;
+--   'iscIds' is the DISTINCT unresolved ids those removals represent,
+--   sorted, so the same page names it once. A page that dropped nothing
+--   is 'emptyImmunityScrub' and produces no diagnostic at all.
+data ImmunityScrub = ImmunityScrub
+    { iscRemoved ∷ !Int
+    , iscIds     ∷ ![Text]
+    } deriving (Show, Eq)
+
+emptyImmunityScrub ∷ ImmunityScrub
+emptyImmunityScrub = ImmunityScrub { iscRemoved = 0, iscIds = [] }
+
+-- | The staging diagnostic for one page's scrub, or 'Nothing' when that
+--   page dropped nothing. Non-blocking by construction: there is no
+--   error value to return, only a line to log.
+renderImmunityScrub ∷ WorldPageId → ImmunityScrub → Maybe Text
+renderImmunityScrub pid s
+    | iscRemoved s ≡ 0 = Nothing
+    | otherwise = Just $
+        "dropping " <> tshow (iscRemoved s) <> " acquired-immunity entr"
+        <> (if iscRemoved s ≡ 1 then "y" else "ies") <> " on page '"
+        <> unWorldPageId pid <> "' whose infection definition no longer \
+           \exists (" <> T.intercalate ", " (iscIds s) <> ")"

@@ -27,6 +27,7 @@ import Unit.Faction
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
     , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
+import Infection.Types (emptyInfectionManager)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Component (saveComponentRegistry)
 import World.Save.Component.Entities
@@ -34,8 +35,8 @@ import World.Save.Component.Entities
 import World.Save.Component.Types (RegisteredComponent(..))
 import World.Save.Envelope.Types (ComponentId(..))
 import World.Save.Types
-    ( UnitInstanceSnapshot(..), UnitSnapshot(..), fromUnitSnapshot
-    , toUnitSnapshot )
+    ( ImmunityScrub, UnitInstanceSnapshot(..), UnitSnapshot(..)
+    , fromUnitSnapshot, toUnitSnapshot )
 
 -- * Fixtures
 
@@ -93,7 +94,7 @@ instWith f = UnitInstance
 --   what the load side produced. Overriding 'uisFactionId' after the
 --   snapshot adapter is what lets a tag OUTSIDE the vocabulary be fed in:
 --   a live 'UnitInstance' can no longer hold one.
-loadTags ∷ [(UnitId, Text)] → (UnitManager, [UnitId], [Text])
+loadTags ∷ [(UnitId, Text)] → (UnitManager, [UnitId], [Text], ImmunityScrub)
 loadTags tagged =
     let um0   = emptyUnitManager
                   { umDefs = defs
@@ -106,7 +107,7 @@ loadTags tagged =
                           HM.mapWithKey retag (usnInstances snap0) }
         snap1 = wire { usnInstances =
                          HM.map throughComponent (usnInstances wire) }
-    in fromUnitSnapshot pageA defs snap1
+    in fromUnitSnapshot pageA defs emptyInfectionManager snap1
 
 -- | One instance snapshot through the units component's own DTO and its
 --   derived cereal layout — the bytes a @world.synworld@ actually holds.
@@ -243,7 +244,7 @@ spec = describe "Unit faction model" $ do
     describe "units-component save path (the wire stays Text)" $ do
         it "all five recognized tags survive the real component path \
            \unchanged, with nothing reported" $ do
-            let (um, orphans, unknowns) = loadTags allTags
+            let (um, orphans, unknowns, _) = loadTags allTags
             orphans  `shouldBe` []
             unknowns `shouldBe` []
             map (factionOf um . fst) allTags
@@ -261,7 +262,7 @@ spec = describe "Unit faction model" $ do
 
         it "unrecognized tags load as the fallback and are reported ONCE \
            \per distinct tag, however many units carry them" $ do
-            let (um, orphans, unknowns) = loadTags
+            let (um, orphans, unknowns, _) = loadTags
                     [ (UnitId 1, "player")
                     , (UnitId 2, "made_up")
                     , (UnitId 3, "made_up")
@@ -278,7 +279,7 @@ spec = describe "Unit faction model" $ do
 
         it "a unit loaded from an unrecognized tag re-serializes as the \
            \fallback's canonical tag" $ do
-            let (um, _, _) = loadTags [(UnitId 1, "made_up")]
+            let (um, _, _, _) = loadTags [(UnitId 1, "made_up")]
                 back = toUnitSnapshot pageA um { umDefs = defs }
             map uisFactionId (HM.elems (usnInstances back))
                 `shouldBe` [factionTag fallbackFaction]
@@ -295,7 +296,7 @@ spec = describe "Unit faction model" $ do
             [ rcInputVers c
               | c ← saveComponentRegistry
               , rcId c ≡ ComponentId "units" ] `shouldBe` [[1, 2]]
-            let (um, _, _) = loadTags [(UnitId 1, "player")]
+            let (um, _, _, _) = loadTags [(UnitId 1, "player")]
                 back = toUnitSnapshot pageA um { umDefs = defs }
             map uisFactionId (HM.elems (usnInstances back))
                 `shouldBe` [factionTag FactionPlayer]

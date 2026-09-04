@@ -129,6 +129,22 @@ worldSize 256 generates in about two minutes; 512 takes much longer.
 Prefer `loadChunksInRegion` + `waitForChunks` over camera movement for
 bulk tile loading.
 
+Both take an optional trailing `pageId` (#2310):
+`world.loadChunksInRegion(cx1, cy1, cx2, cy2 [, pageId])` and
+`world.waitForChunks([timeoutSeconds [, pageId]])`. Omit it and each
+resolves the page the caller's own preceding `world.show` named — the
+projected visible head while a selection change is still queued, the
+applied one when nothing is outstanding — so the usual
+`world.show(p)` → `loadChunksInRegion(...)` → `waitForChunks(...)`
+sequence stays on one page even though the show is applied a world tick
+later. Name it explicitly and neither resolution applies: an explicit
+page reaches even a HIDDEN one, and a page that is not live queues
+nothing and returns 0 rather than falling back to another page. The wait
+binds its target ONCE, when it begins, so a `world.show` landing
+mid-wait cannot move it onto a different queue; it does not remember an
+earlier `loadChunksInRegion`, so a caller that needs to be independent
+of intervening selection requests passes the same `pageId` to both.
+
 ## Query API (returns JSON)
 
 ```bash
@@ -143,6 +159,8 @@ echo 'return world.getSurfaceAt(gx, gy)' | nc -w 2 localhost 9008
 echo 'return world.getAreaFluid(gx, gy, radius)' | nc -w 5 localhost 9008  # max radius 64
 echo 'return world.loadChunksInRegion(cx1, cy1, cx2, cy2)' | nc -w 5 localhost 9008
 echo 'return world.waitForChunks(120)' | nc -w 120 localhost 9008
+echo "return world.loadChunksInRegion(cx1, cy1, cx2, cy2, 'pageId')" | nc -w 5 localhost 9008
+echo "return world.waitForChunks(120, 'pageId')" | nc -w 120 localhost 9008
 echo 'return camera.getPosition()' | nc -w 2 localhost 9008
 echo 'camera.goToTile(gx, gy)' | nc -w 2 localhost 9008
 echo 'engine.quit()' | nc -w 2 localhost 9008                     # shutdown

@@ -363,9 +363,29 @@ end
 
 local function forageExecute(uid, s, params)
     -- Collecting: pull the harvested yield off the ground, one item
-    -- per tick. A failed pickup (capacity refusal / item gone) ends
-    -- the collection cleanly; whatever landed in the inventory is
-    -- eaten by eat_from_inventory on the next decisions.
+    -- per tick; whatever landed in the inventory is eaten by
+    -- eat_from_inventory on the next decisions.
+    --
+    -- Deliberately UNGATED on carrying capacity (#2293), and alone in
+    -- that among the pickup ladders -- fetch, repair and auto-harvest
+    -- all weigh the live row immediately before item.pickupGround, and
+    -- the player pickup order gates twice. This is #94's emergency
+    -- hunger ladder (inventory → flora → ground food) and eating
+    -- requires POSSESSION: eat_from_inventory consumes from the
+    -- inventory, so food a full unit may not pick up is food it may not
+    -- eat. A hard gate here would leave a unit at capacity with
+    -- non-food starving beside a meal. The over-capacity state this
+    -- admits is priced rather than free -- scripts/movement_speed.lua's
+    -- steep OVER_K band slows the unit hard until the load is dealt
+    -- with.
+    --
+    -- A false result is therefore never a capacity refusal:
+    -- item.pickupGround cannot produce one (it reads no weight at all,
+    -- src/Engine/Scripting/Lua/API/Items/Ground.hs). It means the row
+    -- raced away, or this unit has no live page. Ending the collection
+    -- is the right answer to both -- the stale gids are retired rather
+    -- than retried every tick, and the next decision re-finds whatever
+    -- is actually still there.
     if s.foragePhase == "collecting" then
         local loot = s.forageLoot or {}
         local nextGid = table.remove(loot)
@@ -412,7 +432,20 @@ local function forageExecute(uid, s, params)
             end
         else
             unit.pickup(uid)
-            item.pickupGround(uid, tgt.gid)
+            -- The direct ground-food rung, and the same reading of a
+            -- false result (#2293): a raced or vanished row, never a
+            -- capacity refusal, which is why this rung takes the item
+            -- whatever the unit is already carrying. Either way the
+            -- stale gid is RETIRED -- the target is cleared and
+            -- arbitration re-decides next tick rather than walking back
+            -- to a row that is not there -- and the loss is logged
+            -- instead of discarded, so a picker that keeps losing the
+            -- race is visible.
+            if not item.pickupGround(uid, tgt.gid) then
+                engine.logInfo("forage: unit " .. tostring(uid)
+                    .. " lost ground food " .. tostring(tgt.gid)
+                    .. " before pickup — retiring the target")
+            end
             s.forageTarget = nil
         end
         return

@@ -221,8 +221,10 @@ constructionAllowlist =
     [ -- The one mint boundary.
       "src/Item/Materialize.hs"
       -- Save reconstruction: rebuilds an instance that was already
-      -- materialized once, from its own persisted fields.
-    , "src/World/Save/Component/Page.hs"
+      -- materialized once, from its own persisted fields. #2135 split
+      -- the page components into owners; the ground-item DTO tree that
+      -- does the rebuilding is the @"world-activity"@ owner's.
+    , "src/World/Save/Component/PageActivity.hs"
     ]
 
 -- | Every production module that must reach the boundary — the six
