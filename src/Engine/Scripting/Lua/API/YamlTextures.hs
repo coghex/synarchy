@@ -343,7 +343,7 @@ registerFloraSpecies env backendState lteq catRef def = do
 
     -- Build lifecycle. Total over the four authored spellings, with no
     -- catch-all: an unrecognized one never reaches here because
-    -- 'Engine.Asset.YamlFlora.requireLifecycle' refuses the whole file
+    -- @Engine.Asset.YamlFlora.requireLifecycle@ refuses the whole file
     -- at decode time (#2315), and 'FloraLifecycle' has no fifth
     -- constructor for one to arrive as.
     let lifecycle = case fydLifecycle def of
