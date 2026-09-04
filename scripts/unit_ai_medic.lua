@@ -162,11 +162,21 @@ end
 -- every other action's locked state) so the fighter resumes this patient
 -- once combat ends; if a lesser medic finished it first, treatExecute
 -- sees no remaining need and drops the redundant claim.
+-- #2297: a claimer on ANOTHER page does not hold the slot either, and
+-- for a sharper reason than the combat one above. aiState is global
+-- across every page, but the AI only ticks the loaded one, so an
+-- off-page claimer never reaches treatExecute and never releases its
+-- claim -- it would pin the patient forever against a medic standing
+-- right beside them. Unknown on either side reads as "not this
+-- claimer's", which fails toward letting the on-page medic work.
 local function patientClaimed(patientUid, excludeUid)
+    local pinfo = unit.getInfo(patientUid)
     for otherUid, st in pairs(aiState) do
         if otherUid ~= excludeUid and st.treatClaim
            and st.treatClaim.patient == patientUid then
-            if unit.getInfo(otherUid) and not medicBusyInCombat(otherUid) then
+            local oinfo = unit.getInfo(otherUid)
+            if oinfo and page.same(pinfo and pinfo.page, oinfo.page)
+               and not medicBusyInCombat(otherUid) then
                 return true
             end
         end

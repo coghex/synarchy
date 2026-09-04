@@ -824,6 +824,37 @@ pageSpec = describe "AI page pairing" $ do
                 , "  .. tostring(v))"
                 ]
 
+        -- aiState is global across pages but only the LOADED page is
+        -- ticked, so an off-page claimer never reaches treatExecute to
+        -- release its claim. Left holding the slot it would pin the
+        -- patient forever against a medic standing right beside them --
+        -- a suppression no engine-side refusal can undo, because
+        -- nothing is ever attempted.
+        it "never lets a claim held by a medic on another page suppress an on-page one" $
+            runsOk $ lns
+                [ prelude
+                , "local core = require('scripts.unit_ai_core')"
+                , "woundedAlly(2, HOME)"
+                , "unitRow(3, 'acolyte', 5, 0, AWAY)"
+                , "core.aiState[3] = { treatClaim = { patient = 2 } }"
+                , "local s = newState()"
+                , "local u = medic.treatAllyUtility(1, s, PARAMS)"
+                , "assert(u > 0,"
+                , "  'an off-page claimer must not hold the patient, got '"
+                , "  .. tostring(u))"
+                , "assert(s.treatPending and s.treatPending.uid == 2,"
+                , "  'the on-page medic must still take the patient')"
+                , "-- Control: the SAME claimer, same claim, on the"
+                , "-- patient's own page still reserves it (#306)."
+                , "UNITS[3] = nil"
+                , "unitRow(3, 'acolyte', 5, 0, HOME)"
+                , "local t = newState()"
+                , "local v = medic.treatAllyUtility(1, t, PARAMS)"
+                , "assert(v == -math.huge,"
+                , "  'a same-page claimer must still hold the patient, got '"
+                , "  .. tostring(v))"
+                ]
+
         -- A claim OUTLIVES the tick that made it, so the page it was
         -- made on can move underneath it. Releasing it late -- after
         -- the kit fetch, or at the walk -- would already have moved an
