@@ -90,6 +90,7 @@ import World.Save.Integrity
 -- answer and the reconcile-time "should this reference be cleared?"
 -- answer cannot drift apart (issue #1589).
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
+import Infection.Types (InfectionManager)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
@@ -153,6 +154,11 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         catalog ← readIORef (floraCatalogRef env)
         buildingDefs ← bmDefs <$> readIORef (buildingManagerRef env)
         unitDefs     ← umDefs <$> readIORef (unitManagerRef env)
+        -- #2305: ONE immutable catalogue view for every page in this
+        -- staging attempt. 'infectionManagerRef' is mutable and the page
+        -- loop below is sequential, so re-reading it per page could
+        -- reconcile one save's pages against different definition sets.
+        infMgr       ← readIORef (infectionManagerRef env)
         -- #1844: the registered structure art/build catalogue and the
         -- item-minting dependencies a self-clear's refund needs, read
         -- ONCE here and passed down as values. 'stagePage' deliberately
@@ -240,7 +246,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                               [ flora | (_, Right flora) ← resolvedFlora ]) $
             \(wps, flora) →
               stagePage logger registry palette catalog
-                        buildingDefs unitDefs artCatalog refundDeps
+                        buildingDefs unitDefs infMgr artCatalog refundDeps
                         mapCeiling activeWpsId flora wps
 
           let buildingOrphans = concatMap psrBuildingOrphans results
@@ -356,6 +362,10 @@ stagedGenParamsWarning pid (r, dflt) =
 stagePage
     ∷ LoggerState → MaterialRegistry → ZoomColorPalette
     → FloraCatalog → HM.HashMap Text BuildingDef → HM.HashMap Text UnitDef
+    → InfectionManager
+      -- ^ #2305: the ONE catalogue view 'stageSession' read for this
+      --   whole attempt, so every page's acquired-immunity scrub sees
+      --   the same registered definitions.
     → StructureArtCatalog → ConstructRefundDeps
     → MapImageCeiling → WorldPageId
     → (WorldEdits, CropPlots, PlantDesignations)
@@ -368,7 +378,7 @@ stagePage
       --   is that a page always stages.
     → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
-          artCatalog refundDeps mapCeiling activeWpsId
+          infMgr artCatalog refundDeps mapCeiling activeWpsId
           (liveEdits, liveCropPlots, livePlantDesignations) wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
@@ -786,11 +796,22 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             worldState ConstructWholePage
 
     let (restoredBm, bOrphans) = fromBuildingSnapshot pid buildingDefs (wpsBuildings wps)
-        (restoredUm, uOrphans, uUnknownFactions) =
-            fromUnitSnapshot pid unitDefs (wpsUnits wps)
+        (restoredUm, uOrphans, uUnknownFactions, immScrub) =
+            fromUnitSnapshot pid unitDefs infMgr (wpsUnits wps)
         liveUids   = HM.keysSet (umInstances restoredUm)
         simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
                                       (wpsUnitSimStates wps)
+
+    -- #2305: acquired immunity to an infection definition that no longer
+    -- exists is the same kind of memory the container-knowledge scrub
+    -- above drops, and gets the same treatment — 'fromUnitSnapshot' has
+    -- already removed those entries from the units this page restored,
+    -- and this says so. Non-blocking: an immunity key is never a load
+    -- failure, unlike the WOUND infection reference
+    -- 'World.Save.Types.missingInfectionReferences' rejects before
+    -- staging is ever queued.
+    forM_ (renderImmunityScrub pid immScrub) $ \m →
+        logInfo logger CatWorld $ "Save load: " <> m
 
     pure PageStageResult
         { psrPage = StagedPage
