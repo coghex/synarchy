@@ -419,6 +419,7 @@ initializeEngineWith logBackend = do
   unitQueue ← Q.newQueue
   utsRef ← newIORef emptyUnitThreadState
   statRNGRef ← Random.newStdGen ⌦ newIORef
+  treatRNGRef ← Random.newStdGen ⌦ newIORef
   buildingManagerRef ← newIORef emptyBuildingManager
   texPaletteRef ← newIORef emptyTexPalette
   structureWallCatalogRef ← newIORef emptyStructureWallCatalog
@@ -538,6 +539,7 @@ initializeEngineWith logBackend = do
         , unitQueue          = unitQueue
         , utsRef             = utsRef
         , statRNGRef         = statRNGRef
+        , treatRNGRef        = treatRNGRef
         , buildingManagerRef = buildingManagerRef
         , texPaletteRef      = texPaletteRef
         , structureWallCatalogRef = structureWallCatalogRef

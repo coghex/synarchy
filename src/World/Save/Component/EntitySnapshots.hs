@@ -36,7 +36,7 @@
 --   unrelated change to any of those without the component's OWN version
 --   dispatch noticing. The transitive freeze closes that: the
 --   'Item.Types.ItemInstance' fields reuse
---   "World.Save.Component.Page"'s shared 'ItemInstanceDTO';
+--   "World.Save.Component.PageActivity"'s shared 'ItemInstanceDTO';
 --   'StatModifier'/'Wound'/'Scar' get 'StatModifierDTO'/'WoundDTO'/
 --   'ScarDTO' here. Leaf enums ('Unit.Sim.Types.Pose' and friends) and
 --   durable id newtypes ('BuildingId'/'UnitId') are reused as-is —
@@ -50,7 +50,7 @@
 --   v2 for a real SHAPE change: #1233 appended the recursive item tree's
 --   physical values, so the pre-#1233 trees are frozen as
 --   'BuildingInstanceDTOv1'/'UnitInstanceDTOv1' and the shared item DTO
---   carries them (see "World.Save.Component.Page").
+--   carries them (see "World.Save.Component.PageActivity").
 --
 --   The @"buildings"@/@"units"@ components carry ONLY the per-page
 --   instance maps — NOT the per-page @bsnNextId@/@usnNextId@ counters.

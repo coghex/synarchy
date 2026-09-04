@@ -122,7 +122,8 @@ import World.Save.Reference (SamePageRef(..))
 
 -- | Frozen mirror of 'Language.Semantic.Types.NameExpr'. Its OWN
 --   constructor order is the wire contract, decoupled from the live
---   sum's, exactly like 'World.Save.Component.Page.WorldEditDTO':
+--   sum's, exactly like
+--   'World.Save.Component.PageEdits.WorldEditDTO':
 --   adding a live constructor makes 'toNameExprDTO' non-exhaustive (a
 --   compile error under @-Werror@) rather than silently shifting every
 --   stored expression's tag.
@@ -159,7 +160,8 @@ fromNameExprDTO (PossessiveD o h) = Possessive o h
 --   half of the component graph having to import the other's leaf.
 --   Seed and version still travel together in ONE optional record, so a
 --   decode can never produce a seed without a version — the same
---   invariant "World.Save.Component.Page"'s 'LanguageProvenanceDTO'
+--   invariant "World.Save.Component.PageCore"'s
+--   'LanguageProvenanceDTO'
 --   protects.
 data EtymologySourceDTO = EtymologySourceDTO
     { esdExpr    ∷ !NameExprDTO

@@ -1992,6 +1992,29 @@ python3 tools/probe_claim.py --status            # every claim in this repositor
 python3 tools/probe_claim.py --status --json
 ```
 
+`probe_claim.py` is the COMMAND and nothing else since #2148: argument
+parsing, status rendering, JSON/text presentation and the process exit. The
+implementation lives in three owners beside it, each importable on its own and
+each carrying the invariants it enforces.
+
+| Owner | Owns |
+|---|---|
+| `probe_claim_storage.py` | the namespace under the repository-common git directory, the claim-file codec, completeness/consistency/filesystem-age handling, durable staged replacement and exclusive creation, and the sidecar `flock` that serializes one read-decide-write |
+| `probe_claim_lease.py` | canonical probe-key and lease validation, the acquisition token, `Claim`, `ClaimDenied`, acquisition, renewal, reassertion, token-safe release, takeover, `Renewer`, and the status query behind `--status` |
+| `probe_claim_orchestration.py` | `run_claimed_measurement` and its ordering, `--result` validation, retention of a completed measurement, `Outcome`, the acquisition audit, the pre-run reassertion, serialized ingestion, and the whole `EXIT_*` table |
+
+Dependencies run one way — storage is the filesystem leaf, lease builds on
+storage and the probe registry, orchestration builds on both plus `probe_flake`
+and `probe_census`, and the command builds on the three. A facility has exactly
+ONE owner and the command re-exports none of them, so a tool or test that
+reaches for `acquire`, `Claim`, `read_claim`, `retain_measurement`,
+`LEASE_SECONDS` or an exit constant imports the owner and assigning to it
+changes the state the implementation reads. Owners reach one another's seams
+module-qualified at call time (`storage.read_payload(...)`), never through a
+`from ... import`, for the same reason. That direction is asserted
+mechanically by the `claim` self-test owner rather than left to inspection.
+`tools/deflake.py` consumes the owners directly.
+
 The claim is a FILE, created `O_CREAT|O_EXCL` at
 `<git-common-dir>/probe-claims/<probe>.json`, carrying its owner, its
 acquisition token and its lease. **The file is the lock**, which is the
@@ -2116,7 +2139,7 @@ python3 tools/test_probe_claim.py --only orchestration  # 13 cases
 
 | Owner module | `--only` | Owns |
 |---|---|---|
-| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
+| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, the three owners' one-way import direction (#2148), exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
 | `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, and `probe_flake` staying usable with no `docs-wip` worktree |
 | `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI |
 
@@ -2261,7 +2284,8 @@ live while its own flock is held, never by the pid it records.
 ### `deflake.py` — one bounded census measurement, end to end (#1436)
 
 The orchestration that puts the five components in order: `probe_select`
-(#1435) picks a probe, `probe_claim` (#1434) makes it this agent's,
+(#1435) picks a probe, the `probe_claim_*` owners (#1434, #2148) make it this
+agent's,
 `probe_resource_lock` keeps a foreign engine out of the tracked files it
 touches, `probe_flake` (#1425) measures it, and `probe_census` (#1428/#1429)
 records the result.
@@ -2487,7 +2511,8 @@ equal. That apparatus is a CLOSED inventory (`HARNESS_MODULES`), pinned
 exactly by the self-test rather than spot-checked, and stated there rather
 than counted here — a hand-written total is the drift #1584 already cost
 this file once: `probe_flake`, `probe_protocol`, `probe_census`,
-`probe_claim`, `probe_resource_lock`, `probe_select`, `probe_engine`,
+`probe_claim` and its three `probe_claim_*` owners, `probe_resource_lock`,
+`probe_select`, `probe_engine`,
 `probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
 and `deflake_diagnosis`, each of which owns probe selection, launch, port
 or resource leasing, protocol reconciliation, measurement timing and

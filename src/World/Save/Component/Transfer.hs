@@ -13,7 +13,7 @@
 --   queued" — which is TRUE of every one of those sessions rather than
 --   invented, because until this slice landed there was nowhere for an
 --   order to be stored at all. A page therefore keeps
---   'World.Save.Component.Page.blankPageSnapshot''s
+--   'World.Save.Component.PageCore.blankPageSnapshot''s
 --   'Unit.Transfer.Orders.emptyTransferOrders' default, allocator and
 --   all. A PRESENT payload that is malformed, truncated, or encoded at a
 --   version this reader does not accept remains a hard load error
