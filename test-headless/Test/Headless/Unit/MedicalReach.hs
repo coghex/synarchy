@@ -43,9 +43,11 @@ module Test.Headless.Unit.MedicalReach (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..), emptyItemManager)
@@ -418,6 +420,68 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
                 `shouldReturn` q "true|treated"
             (sesIntRolled <$> snapshot env) `shouldReturn` True
 
+    -- The full verb, run against a manager another thread is writing
+    -- positions into — what `Unit.Thread` does to this very ref while a
+    -- treatment is in flight. The three phases are deliberately
+    -- separated: the first two pin BOTH outcomes with the writer idle,
+    -- so the third can assert only the invariant and never depend on
+    -- winning a race.
+    describe "an interleaved position update never half-applies a treatment" $ do
+
+        it "holds the invariant while a writer moves the patient underneath it" $ \env → do
+            resetPages env
+            ls ← newBareLuaBackend env
+
+            -- Phase 1 and 2, writer idle: in reach commits, out of
+            -- reach refuses. Both outcomes are reached deterministically
+            -- here so phase 3 does not have to produce them.
+            restock env
+            place env patientUid (11, 10)
+            treatResult ls (bleed patientUid Nothing)
+                `shouldReturn` q "true|treated"
+            restock env
+            place env patientUid (20, 10)
+            treatResult ls (bleed patientUid Nothing)
+                `shouldReturn` q "false|patient is out of treatment range"
+
+            -- Phase 3: a writer thread flips the patient in and out of
+            -- reach as fast as it can, in the same ref the commit lands
+            -- on. Whichever side each call lands on, it must be all or
+            -- nothing: a reach refusal spends no bandage and dresses no
+            -- wound, and a dressing always spent one.
+            stop ← newIORef False
+            done ← newEmptyMVar
+            _ ← forkIO $
+                let spin n = do
+                        halt ← readIORef stop
+                        if halt then putMVar done () else do
+                            atomicModifyIORef' (unitManagerRef env) $ \um →
+                                ( movedTo um patientUid
+                                    (if even n then 11 else 20, 10), () )
+                            spin (n + 1)
+                in spin (0 ∷ Int)
+            outcomes ← forM [1 .. 300 ∷ Int] $ \_ → do
+                restock env
+                r ← treatResult ls (bleed patientUid Nothing)
+                b ← bandagesIn env medicUid
+                w ← worstSeep env patientUid
+                pure (r, b, w)
+            writeIORef stop True
+            takeMVar done
+
+            let refused = [ o | o@(r, _, _) ← outcomes, isReachRefusal r ]
+                treated = [ o | o@(r, _, _) ← outcomes, r ≡ q "true|treated" ]
+            [ (b, w) | (_, b, w) ← refused, b ≢ 3 ∨ w ≢ 1.0 ] `shouldBe` []
+            [ (b, w) | (_, b, w) ← treated, b ≡ 3 ∨ w ≡ 1.0 ] `shouldBe` []
+            -- Nothing else may come back: a third outcome would mean a
+            -- call neither refused for reach nor dressed the wound.
+            length refused + length treated `shouldBe` length outcomes
+            -- ...and the writer really did land on both sides, so the
+            -- two invariants above are not vacuously satisfied by a run
+            -- that only ever saw one of them.
+            null refused `shouldBe` False
+            null treated `shouldBe` False
+
     describe "the reach is one number, and it is the boundary" $ do
 
         it "unit.treatmentRange() reports the engine's own constant" $ \env → do
@@ -621,3 +685,34 @@ withUnit ∷ UnitManager → UnitId → (UnitInstance → UnitInstance) → Unit
 withUnit um u f = case HM.lookup u (umInstances um) of
     Nothing → um
     Just inst → um { umInstances = HM.insert u (f inst) (umInstances um) }
+
+-- | Every refusal the reach can produce, as the verb reports it.
+isReachRefusal ∷ Text → Bool
+isReachRefusal r = or
+    [ r ≡ q ("false|" <> m)
+    | m ← [ "patient is on another world page"
+          , "kit owner is on another world page"
+          , "patient is out of treatment range"
+          , "kit owner is out of treatment range" ] ]
+
+-- | Put the medic's kit and the patient's wound back to their fixture
+--   state without disturbing anyone's position.
+restock ∷ EngineEnv → IO ()
+restock env = atomicModifyIORef' (unitManagerRef env) $ \um →
+    ( withUnit (withUnit um medicUid (\i → i { uiInventory = [stockedKit 100] }))
+               patientUid (\i → i { uiWounds = [openInfectedWound] })
+    , () )
+
+place ∷ EngineEnv → UnitId → (Float, Float) → IO ()
+place env u xy = atomicModifyIORef' (unitManagerRef env) $ \um →
+    (movedTo um u xy, ())
+
+-- | The unit's worst wound seep: 1.0 is undressed.
+worstSeep ∷ EngineEnv → UnitId → IO Float
+worstSeep env u = do
+    um ← readIORef (unitManagerRef env)
+    pure $ case HM.lookup u (umInstances um) of
+        Nothing → -1
+        Just inst → case map woundBandage (uiWounds inst) of
+            [] → -1
+            xs → maximum xs

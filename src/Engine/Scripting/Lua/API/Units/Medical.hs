@@ -112,109 +112,123 @@ treatBleedingIO env medic patient mOwner = do
                         (\a@(_, sa) b@(_, sb) → if sb > sa then b else a)
                         bleeders
                     targetKey = (woundPart worst, woundKind worst, woundAt worst)
-                mIntel ← getEffectiveStat env medic "intelligence"
-                let intel    = fromMaybe 1.0 mIntel
-                    nLevel   = max 0 (min 1 (level / 100))
-                    baseComp = nLevel * intel   -- skill × intelligence (no tools)
-                    kits = [ it | it ← uiInventory own
+                let kits = [ it | it ← uiInventory own
                                 , any ((≡ bandageItemName) . iiDefName)
                                       (iiContents it) ]
-                case kits of
-                  (kit:_) → do
-                    -- PROPER DRESSING from the kit (the C-MVP attempt cycle).
-                    let bandageCount = length
-                            [ () | c ← iiContents kit, iiDefName c ≡ bandageItemName ]
-                        toolConds = [ iiCondition c | c ← iiContents kit
-                                    , iiDefName c ≡ "tweezers"
-                                      ∨ iiDefName c ≡ "scissors" ]
-                        toolCond01 = if null toolConds
-                            then 0.5
-                            else (sum toolConds / fromIntegral (length toolConds)) / 100
-                        toolFactor = 0.7 + 0.3 * toolCond01
-                        competence = max 0 (min 1.1 (baseComp * toolFactor))
-                        pSucc      = max 0.05 (min 0.99 (0.15 + competence))
-                        capClamp   = min 1 competence
-                        seepBase   = 0.6 * (1 - capClamp) * (1 - capClamp)
-                        maxAttempts = 8 ∷ Int
-                    localGen ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) Random.splitGen
-                    let go gen attemptsLeft used
-                          | used >= bandageCount = (False, used, gen)
-                          | attemptsLeft ≤ 0     = (False, used, gen)
-                          | otherwise =
-                              let (r, gen') = Random.randomR (0, 1) gen
-                                                ∷ (Float, Random.StdGen)
-                                  used' = used + 1
-                              in if r < pSucc
-                                   then (True,  used', gen')
-                                   else go gen' (attemptsLeft - 1) used'
-                        (success, consumed, gen2) = go localGen maxAttempts 0
-                        (jr, _) = Random.randomR (0, 1) gen2
-                                    ∷ (Float, Random.StdGen)
-                        seep = if success
-                                 then max 0 (min 0.6 (seepBase * (0.9 + 0.2 * jr)))
-                                 else 1.0
-                        treatXp = if consumed ≤ 0 then 0
-                                  else if success then 2.0 else 1.0
-                    -- #2297: the reach is re-held INSIDE the
-                    -- transaction that spends the supplies. um0 is a
-                    -- snapshot and the unit thread writes positions
-                    -- into this same ref, so a late refusal here
-                    -- returns the manager untouched rather than
-                    -- dressing a wound the endpoints have walked out
-                    -- of. Same rule the four lax verbs hold (#1673).
-                    committed ← atomicModifyIORef'
-                        (ucUnitManagerRef (toUnitCombatCapability env)) $
-                        commitInReach medic patient owner $ \um →
-                        let um1 = consumeBandages owner consumed um
-                            um2 = if success
-                                    then setWoundDressing patient targetKey
-                                             seep "bandage" um1
-                                    else um1
-                            um3 = grantKnowledgeXP medic "bleed_control"
-                                                   treatXp um2
-                            -- PREVENTION: if the kit holds antiseptic, a
-                            -- successful dressing also disinfects the wound —
-                            -- it won't accumulate infection. Consumes a dose.
-                            um4 = if success
-                                     ∧ kitHasFill owner antisepticItemName
-                                                  antisepticDose um3
-                                    then setWoundClean patient targetKey True
-                                             (consumeKitFill owner
-                                                antisepticItemName
-                                                antisepticDose um3)
-                                    else um3
-                        in um4
-                    case committed of
-                      Left refusal → pure (treatFail (reachRefusalMessage refusal))
-                      Right () → do
-                        let msg = if success then "treated"
-                                             else "failed — out of material"
-                        pure (TreatResult success seep consumed
-                                (max consumed 1) (woundPart worst)
-                                (woundKind worst) msg "bandage")
-                  [] → do
-                    -- NO SUPPLIES → improvise a makeshift tourniquet. Crude
-                    -- but better than nothing: it always goes on, consumes
-                    -- no material, and stops the bleed only "somewhat" — a
-                    -- poor seep (~0.4–0.58, a touch better with skill). Still
-                    -- trains the medic a little.
-                    let tqSeep = max 0.4 (min 0.58 (0.58 - 0.2 * min 1 baseComp))
-                    -- The tourniquet spends no material, but it still
-                    -- dresses a wound, so it holds the reach in its own
-                    -- transaction for the same reason as the kit path.
-                    committed ← atomicModifyIORef'
-                        (ucUnitManagerRef (toUnitCombatCapability env)) $
-                        commitInReach medic patient owner $ \um →
-                        let um1 = setWoundDressing patient targetKey
-                                      tqSeep "tourniquet" um
-                            um2 = grantKnowledgeXP medic "bleed_control" 1.0 um1
-                        in um2
-                    case committed of
-                      Left refusal → pure (treatFail (reachRefusalMessage refusal))
-                      Right () →
-                        pure (TreatResult True tqSeep 0 1 (woundPart worst)
-                                (woundKind worst) "makeshift tourniquet"
-                                "tourniquet")
+                -- #2297: everything past this point can mutate -- the
+                -- next two steps roll and CACHE the medic's
+                -- intelligence and split the treat RNG -- so the reach
+                -- is re-read LIVE immediately before them, and a pair
+                -- that walked apart while the wounds were ranked is
+                -- refused with the session still untouched. What is
+                -- left is the compare-and-swap window commitInReach
+                -- closes for the manager itself; closing that one too
+                -- would take a lock spanning ucStatRNGRef and
+                -- ucUnitManagerRef, which the engine does not have.
+                fresh ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                case checkTreatReach fresh medic patient owner of
+                  Left stale → pure (treatFail (reachRefusalMessage stale))
+                  Right _ → do
+                    mIntel ← getEffectiveStat env medic "intelligence"
+                    let intel    = fromMaybe 1.0 mIntel
+                        nLevel   = max 0 (min 1 (level / 100))
+                        baseComp = nLevel * intel  -- skill × intelligence
+                    case kits of
+                      (kit:_) → do
+                        -- PROPER DRESSING from the kit (the C-MVP attempt cycle).
+                        let bandageCount = length
+                                [ () | c ← iiContents kit, iiDefName c ≡ bandageItemName ]
+                            toolConds = [ iiCondition c | c ← iiContents kit
+                                        , iiDefName c ≡ "tweezers"
+                                          ∨ iiDefName c ≡ "scissors" ]
+                            toolCond01 = if null toolConds
+                                then 0.5
+                                else (sum toolConds / fromIntegral (length toolConds)) / 100
+                            toolFactor = 0.7 + 0.3 * toolCond01
+                            competence = max 0 (min 1.1 (baseComp * toolFactor))
+                            pSucc      = max 0.05 (min 0.99 (0.15 + competence))
+                            capClamp   = min 1 competence
+                            seepBase   = 0.6 * (1 - capClamp) * (1 - capClamp)
+                            maxAttempts = 8 ∷ Int
+                        localGen ← atomicModifyIORef' (ucStatRNGRef (toUnitCombatCapability env)) Random.splitGen
+                        let go gen attemptsLeft used
+                              | used >= bandageCount = (False, used, gen)
+                              | attemptsLeft ≤ 0     = (False, used, gen)
+                              | otherwise =
+                                  let (r, gen') = Random.randomR (0, 1) gen
+                                                    ∷ (Float, Random.StdGen)
+                                      used' = used + 1
+                                  in if r < pSucc
+                                       then (True,  used', gen')
+                                       else go gen' (attemptsLeft - 1) used'
+                            (success, consumed, gen2) = go localGen maxAttempts 0
+                            (jr, _) = Random.randomR (0, 1) gen2
+                                        ∷ (Float, Random.StdGen)
+                            seep = if success
+                                     then max 0 (min 0.6 (seepBase * (0.9 + 0.2 * jr)))
+                                     else 1.0
+                            treatXp = if consumed ≤ 0 then 0
+                                      else if success then 2.0 else 1.0
+                        -- #2297: the reach is re-held INSIDE the
+                        -- transaction that spends the supplies. um0 is a
+                        -- snapshot and the unit thread writes positions
+                        -- into this same ref, so a late refusal here
+                        -- returns the manager untouched rather than
+                        -- dressing a wound the endpoints have walked out
+                        -- of. Same rule the four lax verbs hold (#1673).
+                        committed ← atomicModifyIORef'
+                            (ucUnitManagerRef (toUnitCombatCapability env)) $
+                            commitInReach medic patient owner $ \um →
+                            let um1 = consumeBandages owner consumed um
+                                um2 = if success
+                                        then setWoundDressing patient targetKey
+                                                 seep "bandage" um1
+                                        else um1
+                                um3 = grantKnowledgeXP medic "bleed_control"
+                                                       treatXp um2
+                                -- PREVENTION: if the kit holds antiseptic, a
+                                -- successful dressing also disinfects the wound —
+                                -- it won't accumulate infection. Consumes a dose.
+                                um4 = if success
+                                         ∧ kitHasFill owner antisepticItemName
+                                                      antisepticDose um3
+                                        then setWoundClean patient targetKey True
+                                                 (consumeKitFill owner
+                                                    antisepticItemName
+                                                    antisepticDose um3)
+                                        else um3
+                            in um4
+                        case committed of
+                          Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                          Right () → do
+                            let msg = if success then "treated"
+                                                 else "failed — out of material"
+                            pure (TreatResult success seep consumed
+                                    (max consumed 1) (woundPart worst)
+                                    (woundKind worst) msg "bandage")
+                      [] → do
+                        -- NO SUPPLIES → improvise a makeshift tourniquet. Crude
+                        -- but better than nothing: it always goes on, consumes
+                        -- no material, and stops the bleed only "somewhat" — a
+                        -- poor seep (~0.4–0.58, a touch better with skill). Still
+                        -- trains the medic a little.
+                        let tqSeep = max 0.4 (min 0.58 (0.58 - 0.2 * min 1 baseComp))
+                        -- The tourniquet spends no material, but it still
+                        -- dresses a wound, so it holds the reach in its own
+                        -- transaction for the same reason as the kit path.
+                        committed ← atomicModifyIORef'
+                            (ucUnitManagerRef (toUnitCombatCapability env)) $
+                            commitInReach medic patient owner $ \um →
+                            let um1 = setWoundDressing patient targetKey
+                                          tqSeep "tourniquet" um
+                                um2 = grantKnowledgeXP medic "bleed_control" 1.0 um1
+                            in um2
+                        case committed of
+                          Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                          Right () →
+                            pure (TreatResult True tqSeep 0 1 (woundPart worst)
+                                    (woundKind worst) "makeshift tourniquet"
+                                    "tourniquet")
 
 -- | Drop the first `n` bandage instances from the first inventory item
 --   (kit) that holds any. Leaves tools / other contents untouched.
@@ -459,34 +473,41 @@ treatInfectionIO env medic patient mOwner = do
                                     then b else a) (filter curableW infected)
                         targetKey = ( woundPart worst, woundKind worst
                                     , woundAt worst )
-                    mIntel ← getEffectiveStat env medic "intelligence"
-                    let intel     = fromMaybe 1.0 mIntel
-                        nLevel    = max 0 (min 1 (level / 100))
-                        cap       = max 0 (min 1.1 (nLevel * intel))
-                        -- cure strength scales with capability AND the
-                        -- infection's own cure_rate (some bugs resist more).
-                        reduction = max 0.15 (min 0.85 (0.2 + 0.6 * cap))
-                                    * cureRateW worst
-                        newInf    = max 0 (woundInfection worst - reduction)
-                    committed ← atomicModifyIORef'
-                        (ucUnitManagerRef (toUnitCombatCapability env)) $
-                        commitInReach medic patient owner $ \um →
-                        let um1 = consumeKitFill owner antibioticsItemName
-                                                 antibioticsDose um
-                            um2 = setWoundInfection patient targetKey newInf um1
-                            um3 = setWoundClean patient targetKey True um2
-                            um4 = grantKnowledgeXP medic "infection_control" 1.5 um3
-                            -- Antibiotics also speed up the systemic immune
-                            -- response (helps clear other bacterial foci).
-                            um5 = bumpImmuneResponse patient
-                                    (min 0.5 (0.3 * cap)) um4
-                        in um5
-                    case committed of
-                      Left refusal → pure (treatFail (reachRefusalMessage refusal))
-                      Right () →
-                        pure (TreatResult True newInf 1 1 (woundPart worst)
-                                (woundKind worst) "antibiotics administered"
-                                "antibiotics")
+                    -- #2297: the same live re-read, for the same
+                    -- reason -- the stat roll below caches into the
+                    -- manager and can advance the stat RNG.
+                    fresh ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                    case checkTreatReach fresh medic patient owner of
+                      Left stale → pure (treatFail (reachRefusalMessage stale))
+                      Right _ → do
+                        mIntel ← getEffectiveStat env medic "intelligence"
+                        let intel     = fromMaybe 1.0 mIntel
+                            nLevel    = max 0 (min 1 (level / 100))
+                            cap       = max 0 (min 1.1 (nLevel * intel))
+                            -- cure strength scales with capability AND the
+                            -- infection's own cure_rate (some bugs resist more).
+                            reduction = max 0.15 (min 0.85 (0.2 + 0.6 * cap))
+                                        * cureRateW worst
+                            newInf    = max 0 (woundInfection worst - reduction)
+                        committed ← atomicModifyIORef'
+                            (ucUnitManagerRef (toUnitCombatCapability env)) $
+                            commitInReach medic patient owner $ \um →
+                            let um1 = consumeKitFill owner antibioticsItemName
+                                                     antibioticsDose um
+                                um2 = setWoundInfection patient targetKey newInf um1
+                                um3 = setWoundClean patient targetKey True um2
+                                um4 = grantKnowledgeXP medic "infection_control" 1.5 um3
+                                -- Antibiotics also speed up the systemic immune
+                                -- response (helps clear other bacterial foci).
+                                um5 = bumpImmuneResponse patient
+                                        (min 0.5 (0.3 * cap)) um4
+                            in um5
+                        case committed of
+                          Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                          Right () →
+                            pure (TreatResult True newInf 1 1 (woundPart worst)
+                                    (woundKind worst) "antibiotics administered"
+                                    "antibiotics")
 
 -- | unit.treatInfection(medicUid, patientUid [, kitOwnerUid]) →
 --     { ok, infection, part, kind, message, method } | nil
