@@ -70,7 +70,7 @@ def _make_owner_writable(top: str) -> None:
     run's fixtures and engine log as well as its saves. The copy is THIS
     invocation's, so it is made writable regardless of what the source
     happened to be; the source itself is never touched. Same treatment
-    `tools/location_embark_probe.py` gives its own copy (#1569).
+    `tools/location_embark/invocation.py` gives its own copy (#1569).
     """
     for path, dirs, files in os.walk(top):
         for name in [None, *dirs, *files]:
