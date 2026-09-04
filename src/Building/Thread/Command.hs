@@ -58,9 +58,17 @@ processAllBuildingCommands logRef sim reg bld = do
     -- though the player had just watched it go up.
     sweepPendingSeeds (containerObserver bld sim reg)
   where
+    -- Stops at the Exit-to-Menu boundary marker (#2291) rather than
+    -- draining past it, for the same reason the unit drain does
+    -- ('Unit.Thread.Command.processAllUnitCommands'): the tick resets
+    -- the game clock right after this pass, so a command queued BEHIND
+    -- the boundary must not be applied — and stamped with the outgoing
+    -- session's clock — on the near side of that reset. The marker
+    -- carries no work, so consuming it is the whole of handling it.
     drain = do
         mCmd ← Q.tryReadQueue (bcBuildingQueue bld)
         case mCmd of
+            Just BuildingEndSession → return ()
             Just cmd → handleBuildingCommand logRef sim reg bld cmd >> drain
             Nothing  → return ()
     -- #2091: expire destruction presentations HERE, against the game
@@ -148,6 +156,11 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
              , bmDestructions = HM.empty }
         , () )
     forgetAllContainers (wsWorldManagerRef sim)
+
+-- The session boundary (#2291) is a queue POSITION, not work: 'drain'
+-- takes it off the queue and stops there, so it never reaches this
+-- dispatch. Matched anyway, and only to keep the dispatch total.
+handleBuildingCommand _ _ _ _ BuildingEndSession = return ()
 
 -- | Insert one spawned building into the manager. Shared by the drain
 --   above and by 'World.Thread.Command.BoundSpawn' (#1602): a PAGE-BOUND

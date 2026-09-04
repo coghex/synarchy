@@ -32,6 +32,7 @@ import Engine.PlayerEvent (emptyEventStore)
 import Engine.Asset.TextureNameRegistry (emptyTextureNameRegistry)
 import Engine.Core.ConfigWrite (copyConfigFile, writeConfigBytes)
 import Engine.Core.Defaults
+import Engine.Core.SessionEpoch (freshSessionGameTime)
 import Engine.Core.Log (initLogger, defaultLogConfig, LogConfig(..)
                        , LogBackend(..), LoggerState, logInfo, logWarn
                        , LogCategory(..))
@@ -442,7 +443,10 @@ initializeEngineWith logBackend = do
   -- #1730: the same shape for pause assertions the engine makes on its
   -- own behalf, read only under the mutex above.
   enginePauseGenRef ← newIORef (0 ∷ Word64)
-  gameTimeRef     ← newIORef (0 ∷ Double)
+  -- #2291: the fresh-session epoch, shared with the Exit-to-Menu
+  -- reset in "Unit.Thread" so a world created after a session
+  -- teardown starts from the same reading the first one did.
+  gameTimeRef     ← newIORef freshSessionGameTime
   saveBarrierRef  ← newSaveBarrier
   inputThreadActiveRef ← newIORef False
   -- Seeded to the POSIX epoch so the first save uses the real wall

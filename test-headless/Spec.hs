@@ -126,6 +126,7 @@ import qualified Test.Headless.Lua.RenderQueue as LuaRenderQueue
 import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
+import qualified Test.Headless.World.SessionEpoch as SessionEpoch
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
@@ -725,6 +726,11 @@ main = hspec $ do
     MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Save.OwnerPark" SaveOwnerPark.spec
+    -- Own engine per example, world-thread-FREE (#2291): each case
+    -- installs its own single-page session and drives the destroy-all
+    -- handler plus the real unit tick directly, so a world worker
+    -- draining worldQueue beside it would buy nothing.
+    SessionEpoch.spec
     describe "Load.Status" LoadStatus.spec
     describe "Load.Terminalize" LoadTerminalize.spec
     describe "Save.Snapshot" SaveSnapshot.spec

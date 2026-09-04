@@ -135,11 +135,14 @@ data StoredEvent = StoredEvent
 --   Rows and counter share ONE 'Control.Concurrent.STM.TVar.TVar' so
 --   that assignment and the store mutation are the same atomic write,
 --   and so that the counter survives operations that discard rows.
---   'World.Load.Publish.resetTransientState' clears the rows on a load
---   publish ('clearEventStoreRows'); the counter deliberately keeps
---   counting, so a row emitted after that load is still NEWER than any
---   cursor an observer retained from before it, and no sequence is ever
---   handed out twice in one engine process.
+--   Rows are discarded at each of the two session boundaries, both
+--   through 'clearEventStoreRows':
+--   'World.Load.Publish.resetTransientState' on a load publish, and
+--   @Unit.Thread.endSessionEpoch@ when Exit to Menu destroys every world
+--   (#2291). The counter deliberately keeps counting across BOTH, so a
+--   row emitted after either is still NEWER than any cursor an observer
+--   retained from before it, and no sequence is ever handed out twice in
+--   one engine process.
 data EventStore = EventStore
     { esRows         ∷ !(Seq StoredEvent)
       -- ^ Oldest-first, capped at 'eventStoreCap'; oldest dropped.
@@ -157,18 +160,23 @@ emptyEventStore = EventStore { esRows = Seq.empty, esNextSequence = 1 }
 --
 --   Read separately from the rows because the two can disagree, and
 --   only in one direction: 'clearEventStoreRows' removes rows without
---   touching the counter, so after a load publish the ring can be empty
---   while mutations newer than an observer's cursor have genuinely been
+--   touching the counter, so after either session boundary that calls it
+--   — a load publish, or an Exit to Menu — the ring can be empty while
+--   mutations newer than an observer's cursor have genuinely been
 --   committed. An observer that inferred the high-water mark from the
 --   rows alone would see \"nothing here\" and report no loss at all —
 --   permanently, if no later row happens to arrive.
 eventStoreHighWater ∷ EventStore → Int
 eventStoreHighWater st = esNextSequence st - 1
 
--- | Discard every row but KEEP the sequence counter — the load-publish
---   reset ('World.Load.Publish.resetTransientState'). Resetting the
---   counter here would reissue sequences an observer had already seen,
---   which is exactly the silent-loss failure #1714 exists to remove.
+-- | Discard every row but KEEP the sequence counter. Two callers, one
+--   per session boundary: 'World.Load.Publish.resetTransientState' on a
+--   load publish, and @Unit.Thread.endSessionEpoch@ on Exit to Menu
+--   (#2291) — a session the player left must not leave clickable rows
+--   behind for the next one, whose pages can reuse its page ids.
+--   Resetting the counter here would reissue sequences an observer had
+--   already seen, which is exactly the silent-loss failure #1714 exists
+--   to remove.
 clearEventStoreRows ∷ EventStore → EventStore
 clearEventStoreRows st = st { esRows = Seq.empty }
 

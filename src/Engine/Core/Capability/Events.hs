@@ -47,9 +47,14 @@
 --   'ecEventStoreRef' and 'ecPopupQueueRef' are @session-replaced@ and
 --   ARE emptied of rows by a load publish
 --   (@World.Load.Publish.resetTransientState@) — a loaded session
---   starts with no event history and no pending popups. The event
---   store's sequence counter deliberately survives that reset (#1714),
---   so a post-load row still outranks any pre-load cursor. 'ecNotificationCfgRef' and 'ecNotificationOrder' are
+--   starts with no event history and no pending popups. 'ecEventStoreRef'
+--   is emptied at the OTHER session boundary too, when Exit to Menu
+--   destroys every world (@Unit.Thread.endSessionEpoch@, #2291); until
+--   that issue only the load half existed, so the previous session's
+--   rows stayed renderable — and clickable — in the next game. The event
+--   store's sequence counter deliberately survives BOTH resets (#1714),
+--   so a row emitted after either still outranks any cursor held from
+--   before it. 'ecNotificationCfgRef' and 'ecNotificationOrder' are
 --   @boot-process@: both come from the boot-time notification registry
 --   merge and survive a load untouched (the player's per-category
 --   preferences are a setting, not session state).
@@ -86,10 +91,11 @@ data EventsCapability = EventsCapability
     --   in one 'Engine.PlayerEvent.EventStore' (#1714). Multi-writer
     --   STM: @WorldThread@ and @LuaThread@ push through
     --   'Engine.PlayerEvent.Emit'; @LuaThread@ reads it for
-    --   @engine.getEventLog()@. @session-replaced@ — a load publish
-    --   clears its ROWS ('Engine.PlayerEvent.clearEventStoreRows')
-    --   while the counter keeps counting, so no sequence is reissued
-    --   within one engine process. Never serialized to a save.
+    --   @engine.getEventLog()@. @session-replaced@ — a load publish and
+    --   an Exit to Menu (#2291) each clear its ROWS
+    --   ('Engine.PlayerEvent.clearEventStoreRows') while the counter
+    --   keeps counting, so no sequence is reissued within one engine
+    --   process. Never serialized to a save.
     ecEventStoreRef      ∷ TVar EventStore
     -- | Resolved notification settings keyed by category id, merged
     --   at boot from @data/notification_categories.yaml@ +
