@@ -190,12 +190,12 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
     let mPage     = lookup pageId (wmWorlds wmgr)
         worldGone = isNothing mPage
     case HM.lookup defName (bmDefs bm) of
-        -- #2326: every path that drops the spawn retires its footprint
-        -- reservation on the way out, so a claim can outlive the request
-        -- that took it only for as long as that request is in flight.
-        _ | worldGone → releaseClaim
+        -- #2326: every path that drops the spawn retires what that
+        -- request left behind — its footprint claim, and any power node
+        -- already allocated against the id it was promised.
+        _ | worldGone → dropRequest
         Nothing → do
-            releaseClaim
+            dropRequest
             logWarn logger CatThread $
                 "BuildingSpawn: unknown def '" <> defName <> "'"
         Just def → do
@@ -244,8 +244,19 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
                    -- claimed for a building that will never appear.
                    else (retired, False)
             -- A rejected commit performs NO winner-only follow-up: no
-            -- instance, and none of the container seeding below.
-            unless committed $
+            -- instance, and none of the container seeding below. It
+            -- also UNDOES what the admission already did on this id's
+            -- behalf (#2326), which is what keeps "no power node
+            -- references a building that failed to commit" true of the
+            -- code rather than only of the paths one can reach today.
+            unless committed $ do
+                -- The CLAIM is not touched here: 'commitFootprint' has
+                -- already retired it if it was this placement's, and
+                -- deliberately left it alone if it was not — a replayed
+                -- or mis-addressed command must not cancel a live claim.
+                -- Only the power node, which no earlier step could have
+                -- known to retire, is cleaned up.
+                retirePowerNodeEverywhere (wsWorldManagerRef sim) bid
                 logDebug logger CatThread $
                     "BuildingSpawn dropped: footprint no longer claimed by "
                     <> "building id " <> tshow (unBuildingId bid) <> " ('"
@@ -266,9 +277,29 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
             when (committed ∧ seedTriggerFor def ≡ SeedWhenBuilt) $
                 markPendingSeed (containerObserver bld sim reg) bid
   where
-    -- #2326: retire this request's footprint claim. Spelled out here,
-    -- through the capability accessor, rather than behind a helper
-    -- taking the handle: that is what keeps the write attributable to
-    -- this module in the SS5 writing-module map.
-    releaseClaim = atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
-        (releaseReservation bid bm', ())
+    -- #2326: retire everything this request holds, for the two arms
+    -- that refuse it BEFORE the commit transition runs. Those never
+    -- reach 'commitFootprint', so the claim is this request's own to
+    -- release; the refused-commit path above deliberately does not
+    -- reuse this, because there the claim has already been decided.
+    --
+    -- @power.placeNode@ is the reason the node half exists. It is the
+    -- one admission with irreversible side effects of its own: it
+    -- allocates a 'Power.Types.PowerNode' against the id it was
+    -- promised and queues the spawn separately, so a spawn refused
+    -- afterwards would leave that node pointing at a building nobody
+    -- can demolish — the permanent, uncancellable row #1206 made the
+    -- building manager the authority for. This is the same
+    -- 'retirePowerNodeEverywhere' the @BuildingDestroy@ arm runs for
+    -- exactly that reason, and running it on every refusal makes a
+    -- spawn that never commits indistinguishable from one demolished
+    -- immediately.
+    --
+    -- The claim release is spelled out through the capability accessor,
+    -- rather than behind a helper taking the handle, because that is
+    -- what keeps the write attributable to this module in the SS5
+    -- writing-module map.
+    dropRequest = do
+        atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+            (releaseReservation bid bm', ())
+        retirePowerNodeEverywhere (wsWorldManagerRef sim) bid

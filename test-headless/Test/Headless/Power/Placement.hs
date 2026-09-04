@@ -27,12 +27,17 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Building.Schema
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingManager(..)
     , emptyBuildingManager )
 import Building.Command.Types (BuildingCommand(..))
+import Building.Thread.Command (processAllBuildingCommands)
+import Engine.Core.Capability.Building (toBuildingCapability)
+import Engine.Core.Capability.ContentRegistriesView
+    (toContentRegistriesViewCapability)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
@@ -550,6 +555,29 @@ footprintClaimSpec =
             other → expectationFailure $
                 "expected only the shed's BuildingSpawn, got: " <> show other
 
+    it "leaves NO power node behind when the spawn it queued is later \
+       \refused at commit" $ \env → do
+        (_, wsHidden) ← resetScene env
+        ls ← newBareLuaBackend env
+        r ← placeNode ls (Just hiddenPage)
+        r `shouldBe` q "ok|1|1"
+        nodesOn wsHidden `shouldReturn` ([(1, 1)], 2)
+        -- The claim disappears under the queued spawn, exactly as
+        -- `BuildingClearAll` and a load replacement drop every
+        -- outstanding claim (#2326). The page stays live, so this is
+        -- the state in which a surviving node WOULD still be reachable
+        -- through `power.getNodeForBuilding` -- and therefore the state
+        -- that can tell a real retirement from one the teardown did
+        -- anyway.
+        atomicModifyIORef' (buildingManagerRef env) $ \bm →
+            (bm { bmReservations = HM.empty }, ())
+        applyQueuedBuildings env
+        -- The spawn was refused ...
+        (bids, _) ← buildingsIn env
+        bids `shouldBe` []
+        -- ... and nothing is left referencing the id it was promised.
+        nodesOn wsHidden `shouldReturn` ([], 2)
+
     it "claims the tile itself, so a later building spawn is refused" $
         \env → do
             (_, wsHidden) ← resetScene env
@@ -567,6 +595,17 @@ footprintClaimSpec =
             nodesOn wsHidden `shouldReturn` ([(1, 1)], 2)
             (_, nextBid) ← buildingsIn env
             nextBid `shouldBe` 2
+
+-- | Run the REAL building-command drain, the same
+--   'processAllBuildingCommands' the unit thread runs, so a spawn
+--   `power.placeNode` queued is committed or refused by production code
+--   rather than by anything reimplemented here.
+applyQueuedBuildings ∷ EngineEnv → IO ()
+applyQueuedBuildings env =
+    processAllBuildingCommands (loggerRef env)
+        (toWorldSimCapability env)
+        (toContentRegistriesViewCapability env)
+        (toBuildingCapability env)
 
 -- | @power.isPlaceable(name)@ through the registered production API.
 isPlaceable ∷ LuaBackendState → Text → IO Text
