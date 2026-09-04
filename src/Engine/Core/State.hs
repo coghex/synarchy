@@ -468,7 +468,7 @@ data EngineEnv = EngineEnv
     --   It is one PROCESS-wide counter, not a per-world one, so it has
     --   three transitions and no others: seeded at boot with
     --   'Engine.Core.SessionEpoch.freshSessionGameTime'; restored to
-    --   that same value by 'Unit.Thread.endSessionEpoch' when Exit to
+    --   that same value by @Unit.Thread.endSessionEpoch@ when Exit to
     --   Menu destroys every world (#2291), so the next game does not
     --   inherit the previous session's accumulated total; and REPLACED
     --   by the save's own @sdGameTime@ on a load publish
@@ -568,7 +568,7 @@ data EngineEnv = EngineEnv
     --   'Engine.PlayerEvent.clearEventStoreRows'. The rows are reset at
     --   BOTH session boundaries: a load publish
     --   ('World.Load.Publish.resetTransientState') and an Exit to Menu
-    --   ('Unit.Thread.endSessionEpoch', #2291). \"Per-session only\"
+    --   (@Unit.Thread.endSessionEpoch@, #2291). \"Per-session only\"
     --   above is that promise; before #2291 only the load half of it
     --   was kept, and the previous session's rows stayed renderable and
     --   clickable in the next game.

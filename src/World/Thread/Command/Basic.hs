@@ -120,7 +120,7 @@ handleWorldDestroyAllCommand env logger = do
             -- state they would otherwise corrupt. A COUNT because two
             -- destroy-alls can be accepted before the unit thread ticks
             -- once, each queuing its own pair — see the field's own doc
-            -- and 'World.Thread.processAllCommands'.
+            -- and @World.Thread.processAllCommands@.
             m' { wmWorlds = [], wmVisible = []
                , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
@@ -137,7 +137,7 @@ handleWorldDestroyAllCommand env logger = do
     -- unit queue and then the building queue inside one tick (buildings
     -- have no thread of their own) and stops each drain at its marker,
     -- then resets the session's game clock and event ring
-    -- ('Unit.Thread.endSessionEpoch', which carries the argument in
+    -- (@Unit.Thread.endSessionEpoch@, which carries the argument in
     -- full). Enqueueing the building pair first is what makes that reset
     -- provably later than BOTH clears: reaching @UnitEndSession@ in a
     -- tick's unit drain means all four messages were queued before that

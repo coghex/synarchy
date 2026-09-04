@@ -236,7 +236,7 @@ unitTickWith seams env lastTimeRef utsRef = do
 --   outgoing clock and then have that clock move backwards underneath
 --   it. 'World.State.Types.wmTeardownsPending' closes that: the
 --   destroy-all handler joins the count in the same atomic update that
---   empties the page set, 'World.Thread.processAllCommands' refuses to
+--   empties the page set, @World.Thread.processAllCommands@ refuses to
 --   register a page while it is non-zero, and LEAVING the count below is
 --   this function's last act — after both the rows and the clock — so
 --   the world thread can never observe the fence lifted while any part

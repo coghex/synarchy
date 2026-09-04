@@ -129,7 +129,7 @@ worldTickWith clock env lastTimeRef = do
 --
 --   The teardown spans two threads: the destroy-all handler runs here,
 --   but the clears it queues and the epoch reset that follows them run
---   on the unit thread ('Unit.Thread.endSessionEpoch'). The queue
+--   on the unit thread (@Unit.Thread.endSessionEpoch@). The queue
 --   markers order that reset against the unit and building queues and
 --   say nothing about THIS thread — which is where pages are registered
 --   and, since #1602, where a bound building placement is committed

@@ -138,7 +138,7 @@ data StoredEvent = StoredEvent
 --   Rows are discarded at each of the two session boundaries, both
 --   through 'clearEventStoreRows':
 --   'World.Load.Publish.resetTransientState' on a load publish, and
---   'Unit.Thread.endSessionEpoch' when Exit to Menu destroys every world
+--   @Unit.Thread.endSessionEpoch@ when Exit to Menu destroys every world
 --   (#2291). The counter deliberately keeps counting across BOTH, so a
 --   row emitted after either is still NEWER than any cursor an observer
 --   retained from before it, and no sequence is ever handed out twice in
@@ -171,7 +171,7 @@ eventStoreHighWater st = esNextSequence st - 1
 
 -- | Discard every row but KEEP the sequence counter. Two callers, one
 --   per session boundary: 'World.Load.Publish.resetTransientState' on a
---   load publish, and 'Unit.Thread.endSessionEpoch' on Exit to Menu
+--   load publish, and @Unit.Thread.endSessionEpoch@ on Exit to Menu
 --   (#2291) — a session the player left must not leave clickable rows
 --   behind for the next one, whose pages can reuse its page ids.
 --   Resetting the counter here would reissue sequences an observer had

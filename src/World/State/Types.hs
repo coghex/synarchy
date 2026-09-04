@@ -678,7 +678,7 @@ data WorldManager = WorldManager
       --   completed (#2291). 'World.Thread.Command.Basic'\'s
       --   @handleWorldDestroyAllCommand@ increments it in the same
       --   atomic update that empties the page set;
-      --   'Unit.Thread.endSessionEpoch' decrements it as its last act,
+      --   @Unit.Thread.endSessionEpoch@ decrements it as its last act,
       --   once it has drained that boundary's @UnitClearAll@ and
       --   @BuildingClearAll@ and reset the epoch. Non-zero means at
       --   least one boundary is still outstanding.
@@ -706,7 +706,7 @@ data WorldManager = WorldManager
       --   and the reset would then move that clock backwards underneath
       --   the new session's own record.
       --
-      --   'World.Thread.processAllCommands' is the only reader: while
+      --   @World.Thread.processAllCommands@ is the only reader: while
       --   this is non-zero it stops the drain at a page-registering command
       --   rather than running it, leaving it and everything behind it
       --   queued in order for a later tick. Nothing else is deferred,

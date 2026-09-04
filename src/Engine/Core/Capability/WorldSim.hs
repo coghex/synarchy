@@ -105,7 +105,7 @@ data WorldSimCapability = WorldSimCapability
     --   monotonic WITHIN a session, that is: the two session boundaries
     --   replace the value outright. Written by @UnitThread@ (once per
     --   unpaused tick, and once more at the Exit-to-Menu boundary, where
-    --   'Unit.Thread.endSessionEpoch' restores
+    --   @Unit.Thread.endSessionEpoch@ restores
     --   'Engine.Core.SessionEpoch.freshSessionGameTime' — #2291) and
     --   @WorldThread@ (load publish, which installs the save's own
     --   @sdGameTime@); read by a concrete, enumerated
