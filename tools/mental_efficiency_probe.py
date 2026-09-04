@@ -317,10 +317,14 @@ def craft_progress_via_ai(port, uid, sleep_s):
     if bill_id_raw in ("nil", ""):
         return None, None, None
     bill_id = int(float(bill_id_raw))
-    before = (send_json(port, f"return craft.getBill({bill_id})") or {}).get("progress")
+    # #2325: getBill is actor-qualified — uid is the crafter whose job
+    # this is, and the id resolves on that unit's own page.
+    before = (send_json(port,
+        f"return craft.getBill({uid}, {bill_id})") or {}).get("progress")
     time.sleep(sleep_s)
     _craft_ai_tick(port, uid)   # phase "working" -> real progress pour
-    after = (send_json(port, f"return craft.getBill({bill_id})") or {}).get("progress")
+    after = (send_json(port,
+        f"return craft.getBill({uid}, {bill_id})") or {}).get("progress")
     return bill_id, before, after
 
 

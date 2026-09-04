@@ -437,7 +437,7 @@ def main():
         bill1, msg = add_bill(port, bid_f, "bill_probe_smelt", 3)
         passed = check(passed, bill1 is not None and bill1 >= 1,
                        "addBill ok returns an id", msg or f"id={bill1}")
-        shape = send_json(port, f"return craft.getBill({bill1})")
+        shape = send_json(port, f"return craft.getBill({uid}, {bill1})")
         ok = (isinstance(shape, dict) and shape.get("station") == bid_f
               and shape.get("recipe") == "bill_probe_smelt"
               and shape.get("remaining") == 3
@@ -459,7 +459,7 @@ def main():
         ok = send(port, f"return craft.claimBill({bill1}, {uid2}, 30) "
                         f"and 'y' or 'n'").strip('"') == "n"
         passed = check(passed, ok, "rival claim against a fresh holder refused")
-        claimant = send_json(port, f"return craft.getBill({bill1})").get("claimant")
+        claimant = send_json(port, f"return craft.getBill({uid}, {bill1})").get("claimant")
         passed = check(passed, claimant == uid, "claimant observable via getBill",
                        f"claimant={claimant}")
         ok = send(port, f"return craft.claimBill({bill1}, {uid}, 30) "
@@ -470,42 +470,42 @@ def main():
                         f"and 'y' or 'n'").strip('"') == "y"
         passed = check(passed, ok, "expired claim taken over (timeout 0.1s)")
 
-        prog = send_json(port, f"return craft.addBillProgress({bill1}, 0.6)")
+        prog = send_json(port, f"return craft.addBillProgress({uid}, {bill1}, 0.6)")
         passed = check(passed, abs(float(prog) - 0.6) < 1e-6,
                        "addBillProgress 0.6", prog)
-        prog = send_json(port, f"return craft.addBillProgress({bill1}, 0.6)")
+        prog = send_json(port, f"return craft.addBillProgress({uid}, {bill1}, 0.6)")
         passed = check(passed, abs(float(prog) - 1.0) < 1e-6,
                        "progress clamps at 1.0", prog)
-        ok = send(port, f"return craft.releaseBill({bill1}) and 'y' or 'n'"
+        ok = send(port, f"return craft.releaseBill({uid}, {bill1}) and 'y' or 'n'"
                   ).strip('"') == "y"
-        after = send_json(port, f"return craft.getBill({bill1})")
+        after = send_json(port, f"return craft.getBill({uid}, {bill1})")
         ok = (ok and isinstance(after, dict) and "claimant" not in after
               and abs(after.get("progress", 0) - 1.0) < 1e-6)
         passed = check(passed, ok, "release keeps progress, clears claimant",
                        after)
 
-        rem = send_json(port, f"return craft.completeBillCycle({bill1})")
+        rem = send_json(port, f"return craft.completeBillCycle({uid}, {bill1})")
         passed = check(passed, rem == 2, "completeBillCycle → remaining 2", rem)
-        after = send_json(port, f"return craft.getBill({bill1})")
+        after = send_json(port, f"return craft.getBill({uid}, {bill1})")
         ok = (isinstance(after, dict) and after.get("remaining") == 2
               and after.get("progress") == 0)
         passed = check(passed, ok, "cycle reset progress + decremented", after)
-        send_json(port, f"return craft.completeBillCycle({bill1})")
-        rem = send_json(port, f"return craft.completeBillCycle({bill1})")
-        gone = send(port, f"return craft.getBill({bill1}) and 'y' or 'n'"
+        send_json(port, f"return craft.completeBillCycle({uid}, {bill1})")
+        rem = send_json(port, f"return craft.completeBillCycle({uid}, {bill1})")
+        gone = send(port, f"return craft.getBill({uid}, {bill1}) and 'y' or 'n'"
                     ).strip('"')
         passed = check(passed, rem == 0 and gone == "n",
                        "count exhausted removes the bill",
                        f"rem={rem} exists={gone}")
 
         bill2, _ = add_bill(port, bid_f, "bill_probe_smelt")   # repeat mode
-        shape = send_json(port, f"return craft.getBill({bill2})")
+        shape = send_json(port, f"return craft.getBill({uid}, {bill2})")
         passed = check(passed,
                        isinstance(shape, dict) and shape.get("remaining") == -1,
                        "count omitted → repeat forever (-1)", shape)
         ok = send(port, f"return craft.cancelBill({bill2}) and 'y' or 'n'"
                   ).strip('"') == "y"
-        gone = send(port, f"return craft.getBill({bill2}) and 'y' or 'n'"
+        gone = send(port, f"return craft.getBill({uid}, {bill2}) and 'y' or 'n'"
                     ).strip('"')
         passed = check(passed, ok and gone == "n", "cancelBill removes")
 
@@ -635,14 +635,14 @@ def main():
         clear_find_water(port, uid)
 
         claimed = poll(port, 30, lambda: send_json(
-            port, f"return craft.getBill({bill3})") in ("nil", "", None, "null")
+            port, f"return craft.getBill({uid}, {bill3})") in ("nil", "", None, "null")
             or send_json(port,
-                         f"local b = craft.getBill({bill3}); "
+                         f"local b = craft.getBill({uid}, {bill3}); "
                          f"return b and b.claimant or -1") == uid)
         passed = check(passed, claimed, "AI claims the bill (or already done)")
 
         done = poll(port, 150, lambda: send(
-            port, f"return craft.getBill({bill3}) and 'y' or 'n'"
+            port, f"return craft.getBill({uid}, {bill3}) and 'y' or 'n'"
             ).strip('"') == "n")
         passed = check(passed, done, "2-count bill worked to completion")
 
@@ -669,13 +669,13 @@ def main():
         passed = check(passed, bill4 is not None, "gated bill queued", msg)
         poll(port, 8, lambda: False)   # let the AI tick, unpaused
         untouched = send(port,
-            f"local b = craft.getBill({bill4}); "
+            f"local b = craft.getBill({uid}, {bill4}); "
             f"return (b and not b.claimant) and 'y' or 'n'").strip('"') == "y"
         passed = check(passed, untouched,
                        "unknowing acolyte leaves the gated bill alone")
         send(port, f"unit.setKnowledge({uid}, 'metallurgy', 50); return 'ok'")
         done = poll(port, 90, lambda: send(
-            port, f"return craft.getBill({bill4}) and 'y' or 'n'"
+            port, f"return craft.getBill({uid}, {bill4}) and 'y' or 'n'"
             ).strip('"') == "n")
         passed = check(passed, done, "granted knowledge unlocks the bill")
 
@@ -706,7 +706,7 @@ def main():
                        msg)
         ai_on(port)
         done = poll(port, 150, lambda: send(
-            port, f"return craft.getBill({bill5}) and 'y' or 'n'"
+            port, f"return craft.getBill({uid}, {bill5}) and 'y' or 'n'"
             ).strip('"') == "n")
         emptied = int(float(send(port,
             f"local n=0; for _,it in ipairs(building.getStorage({bid_c}) "
@@ -729,14 +729,14 @@ def main():
                        "#796 pause-during-work bill queued (3-count)", msg)
 
         reached_working = poll(port, 60, lambda: send(port,
-            f"local b=craft.getBill({bill6}); "
+            f"local b=craft.getBill({uid}, {bill6}); "
             f"return (b and b.working) and 'y' or 'n'").strip('"') == "y")
         passed = check(passed, reached_working,
                        "AI reaches the working phase on the new bill")
 
         send(port, f"craft.setBillPaused({bill6}, true); return 'ok'")
         cycle_done = poll(port, 30, lambda: send(port,
-            f"local b=craft.getBill({bill6}); "
+            f"local b=craft.getBill({uid}, {bill6}); "
             f"return (b and b.remaining==2 and not b.claimant) and 'y' or 'n'"
             ).strip('"') == "y")
         passed = check(passed, cycle_done,
@@ -746,7 +746,7 @@ def main():
         # should start while still paused.
         poll(port, 8, lambda: False)
         still_idle = send(port,
-            f"local b=craft.getBill({bill6}); "
+            f"local b=craft.getBill({uid}, {bill6}); "
             f"return (b and b.remaining==2 and not b.claimant "
             f"and not b.working) and 'y' or 'n'").strip('"') == "y"
         passed = check(passed, still_idle,
@@ -754,7 +754,7 @@ def main():
 
         send(port, f"craft.setBillPaused({bill6}, false); return 'ok'")
         finished = poll(port, 90, lambda: send(
-            port, f"return craft.getBill({bill6}) and 'y' or 'n'"
+            port, f"return craft.getBill({uid}, {bill6}) and 'y' or 'n'"
             ).strip('"') == "n")
         passed = check(passed, finished,
                        "unpausing lets a fresh claim finish the remaining cycles")
@@ -785,7 +785,7 @@ def main():
                        "#796 pause-during-fetch/walk bill queued", msg)
 
         claimed_not_working = poll(port, 30, lambda: send(port,
-            f"local b=craft.getBill({bill7}); "
+            f"local b=craft.getBill({uid4}, {bill7}); "
             f"return (b and b.claimant=={uid4} and not b.working) "
             f"and 'y' or 'n'").strip('"') == "y")
         passed = check(passed, claimed_not_working,
@@ -793,7 +793,7 @@ def main():
 
         send(port, f"craft.setBillPaused({bill7}, true); return 'ok'")
         released = poll(port, 30, lambda: send(port,
-            f"local b=craft.getBill({bill7}); "
+            f"local b=craft.getBill({uid4}, {bill7}); "
             f"return (b and not b.claimant and not b.working) "
             f"and 'y' or 'n'").strip('"') == "y")
         passed = check(passed, released,
@@ -811,7 +811,7 @@ def main():
 
         send(port, f"craft.setBillPaused({bill7}, false); return 'ok'")
         finished7 = poll(port, 90, lambda: send(
-            port, f"return craft.getBill({bill7}) and 'y' or 'n'"
+            port, f"return craft.getBill({uid4}, {bill7}) and 'y' or 'n'"
             ).strip('"') == "n")
         passed = check(passed, finished7,
                        "unpausing lets bill7 finish once reclaimed")
@@ -832,7 +832,7 @@ def main():
         bill_u1, msg = add_until_bill(port, bid_f, "bill_probe_until", 5)
         passed = check(passed, bill_u1 is not None,
                        "#795 until-stock bill queued", msg)
-        shape = send_json(port, f"return craft.getBill({bill_u1})")
+        shape = send_json(port, f"return craft.getBill({uid4}, {bill_u1})")
         ok = (isinstance(shape, dict) and shape.get("mode") == "until"
               and shape.get("target") == 5
               and shape.get("outputItem") == "bronze_bar"
@@ -852,7 +852,7 @@ def main():
                        "exactly 3 cycles run (2/cycle) -- stops at 6, not fewer/more",
                        f"stock={stock_at_target}")
         idled = poll(port, 20, lambda: send_json(
-            port, f"return craft.getBill({bill_u1})").get("claimant") is None)
+            port, f"return craft.getBill({uid5}, {bill_u1})").get("claimant") is None)
         passed = check(passed, idled,
                        "bill goes idle (claim released) once condition-satisfied")
         poll(port, 8, lambda: False)   # observation window, no player action
@@ -885,7 +885,7 @@ def main():
         passed = check(passed, bill_u4 is not None,
                        "already-satisfied until-bill queued", msg)
         poll(port, 8, lambda: False)   # let the AI tick, unpaused
-        untouched = send_json(port, f"return craft.getBill({bill_u4})")
+        untouched = send_json(port, f"return craft.getBill({uid5}, {bill_u4})")
         passed = check(passed,
                        isinstance(untouched, dict)
                        and untouched.get("claimant") is None,
@@ -914,8 +914,8 @@ def main():
         clear_find_water(port, uid7)
 
         def both_idle():
-            bA = send_json(port, f"return craft.getBill({bill_u2})")
-            bB = send_json(port, f"return craft.getBill({bill_u3})")
+            bA = send_json(port, f"return craft.getBill({uid6}, {bill_u2})")
+            bB = send_json(port, f"return craft.getBill({uid6}, {bill_u3})")
             return (isinstance(bA, dict) and bA.get("claimant") is None
                     and isinstance(bB, dict) and bB.get("claimant") is None)
 
@@ -981,7 +981,7 @@ def main():
         passed = check(passed, claimed == "not-claimed",
                        "claim (craftExecute) refuses the now-stale candidate",
                        claimed)
-        after = send_json(port, f"return craft.getBill({bill_u5})")
+        after = send_json(port, f"return craft.getBill({uid8}, {bill_u5})")
         passed = check(passed,
                        isinstance(after, dict) and after.get("claimant") is None,
                        "the bill itself was never actually claimed engine-side",
@@ -1045,8 +1045,10 @@ def main():
             f"return craft.claimBill({bill_pw}, {uid_dead}, 600)").strip('"')
         passed = check(passed, claimed == "true",
                        "the soon-to-die crafter claims it", claimed)
-        send(port, f"craft.setBillWorking({bill_pw}, true); return 'ok'")
-        send(port, f"craft.addBillProgress({bill_pw}, 0.4); return 'ok'")
+        send(port, f"craft.setBillWorking({uid_dead}, {bill_pw}, true); "
+                   f"return 'ok'")
+        send(port, f"craft.addBillProgress({uid_dead}, {bill_pw}, 0.4); "
+                   f"return 'ok'")
         # PAUSED on purpose: while paused, claimAvailable refuses even a
         # dead-claimant takeover, so nothing but the #1680 sweep can
         # repair this bill. An unpaused one could be cleared by an
@@ -1063,14 +1065,14 @@ def main():
                        "the claimant is actually gone from the unit registry")
 
         def reconciled():
-            b = send_json(port, f"return craft.getBill({bill_pw})")
+            b = send_json(port, f"return craft.getBill({uid_pw}, {bill_pw})")
             return (isinstance(b, dict) and b.get("claimant") is None
                     and b.get("working") is False and drain_of(port) == 0)
 
         passed = check(passed, poll(port, 30, reconciled, interval=0.5),
                        "the orphaned bill is disowned and the station's "
                        "draw returns to 0",
-                       send_json(port, f"return craft.getBill({bill_pw})"))
+                       send_json(port, f"return craft.getBill({uid_pw}, {bill_pw})"))
 
         # ... and STAYS there: nothing re-claims it, and no drain creeps
         # back over an observation window.
@@ -1081,7 +1083,7 @@ def main():
         passed = check(passed, all(d == 0 for d in drains),
                        "drain stays at 0 across the observation window",
                        drains)
-        after = send_json(port, f"return craft.getBill({bill_pw})")
+        after = send_json(port, f"return craft.getBill({uid_pw}, {bill_pw})")
         passed = check(passed,
                        isinstance(after, dict) and after.get("claimant") is None
                        and after.get("working") is False,
@@ -1096,7 +1098,7 @@ def main():
                        "progress/remaining/pause survive the reconciliation",
                        after)
         refused = send(port,
-            f"return craft.claimBill({bill_pw}, {uid}, 600)").strip('"')
+            f"return craft.claimBill({bill_pw}, {uid_pw}, 600)").strip('"')
         passed = check(passed, refused == "false",
                        "the disowned PAUSED bill still refuses a fresh claim "
                        "(#796 unchanged)", refused)

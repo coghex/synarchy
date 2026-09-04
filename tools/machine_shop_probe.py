@@ -435,7 +435,7 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
 
         claimed = send(port, f"return craft.claimBill({bill_id}, {uid_s}, 60)")
         passed = check(passed, claimed == "true", "manual claim succeeds", claimed)
-        send(port, f"craft.setBillWorking({bill_id}, true); return 'ok'")
+        send(port, f"craft.setBillWorking({uid_s}, {bill_id}, true); return 'ok'")
         passed = check(passed,
             drain_of(port, panel_s) == 120.0,
             "drainW reads machine_wiring's 120W once marked working", drain_of(port, panel_s))
@@ -446,7 +446,7 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
         passed = check(passed, gate_midnight == "false",
                        "isStationPoweredForRecipe false at midnight (the AI's own pour gate)",
                        gate_midnight)
-        stalled = send_json(port, f"local b = craft.getBill({bill_id}); return b and b.progress or -1")
+        stalled = send_json(port, f"local b = craft.getBill({uid_s}, {bill_id}); return b and b.progress or -1")
         passed = check(passed, stalled == 0,
                        "progress stays 0 -- the (mirrored) AI gate blocks the pour while browned out",
                        stalled)
@@ -455,13 +455,13 @@ def _run(port: int, rep: probe_protocol.Reporter) -> int:
         gate_noon = poll_until(10, lambda: send(port,
             f"return power.isStationPoweredForRecipe({bid_shop}, 'machine_wiring', {bill_id})") == "true")
         passed = check(passed, bool(gate_noon), "isStationPoweredForRecipe true at noon")
-        send(port, f"craft.addBillProgress({bill_id}, 1.0); return 'ok'")
+        send(port, f"craft.addBillProgress({uid_s}, {bill_id}, 1.0); return 'ok'")
         r = send_json(port,
             f"local ok,err = craft.executeAt({uid_s}, 'machine_wiring', {bid_shop}, {bill_id}); "
             f"return {{ok = ok, err = err}}")
         passed = check(passed, isinstance(r, dict) and r.get("ok") is True,
                        "craft.executeAt fires the cycle once progress hits 1.0 while powered", r)
-        remaining = send(port, f"return craft.completeBillCycle({bill_id})")
+        remaining = send(port, f"return craft.completeBillCycle({uid_s}, {bill_id})")
         passed = check(passed, remaining == "0",
                        "completeBillCycle finishes the one-shot bill (remaining=0)", remaining)
 
