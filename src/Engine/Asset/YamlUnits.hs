@@ -439,8 +439,12 @@ instance FromJSON UnitYamlDef where
 -- | Read a unit def's optional @max_speed@ as a FINITE, STRICTLY
 --   POSITIVE number of tiles per second, diagnosing every rejection by
 --   the unit's own name (#2290) — the shape
---   'Engine.Asset.YamlLootTables.requireLootWeight' and
---   'Engine.Asset.YamlFlora.requireRegrowthTime' already use.
+--   @Engine.Asset.YamlLootTables.requireLootWeight@ and
+--   @Engine.Asset.YamlFlora.requireRegrowthTime@ already use. Both are
+--   module-private, so these are code spans rather than Haddock links
+--   (@tools\/haddock_link_audit.py@; widening an export list to make a
+--   link resolve is what @docs\/haddock_link_resolution_design.md@ D-2
+--   forbids).
 --
 --   Naming the unit is why this is a named parser rather than a
 --   @.:? "max_speed" .!= 3.0@ plus a check: 'loadUnitYaml' supplies the
