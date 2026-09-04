@@ -30,6 +30,7 @@ import Engine.Core.Capability.WorldSim
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
+import GHC.Float (double2Float)
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
@@ -63,6 +64,48 @@ resolveItemPage env (Just pid) = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     pure $ lookup (WorldPageId pid) (wmWorlds mgr)
 resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
+
+-- | Accept one Lua ground-spawn coordinate iff the value
+--   'Item.Ground.GroundItem' would STORE is finite (#2336).
+--
+--   The domain is asserted on the narrowed 'Float', not on the incoming
+--   'Double', because that narrowing is itself a way to leave the
+--   domain: @1e39@ is a perfectly finite Lua number and an infinite
+--   @Float@. 'GHC.Float.double2Float' rather than @realToFrac@ — the
+--   latter routes through 'Rational' unless a rewrite rule fires, which
+--   does not preserve NaN or the infinities, and this conversion is
+--   exactly where a finite source becomes an infinity.
+--
+--   NaN and both infinities fail by the ordinary comparisons rather
+--   than needing a domain of their own, the same way
+--   'Item.Roll.mkGroundConditionBase' refuses a non-finite condition.
+--
+--   Refusing is the only honest answer, and nothing downstream can
+--   substitute for it: 'floor' on a non-finite coordinate is 0 in GHC,
+--   so "World.Render.GroundItemQuads" resolves tile (0, 0) and computes
+--   NaN sub-tile offsets, producing a quad the GPU discards. The item
+--   is then invisible, unhittable and unpickable (every distance
+--   comparison against NaN is False) — and its position round-trips
+--   through the page DTO exactly, so one scripted call would leave a
+--   permanent phantom in every later save.
+groundSpawnCoord ∷ Double → Maybe Float
+groundSpawnCoord d
+    | isNaN f ∨ isInfinite f = Nothing
+    | otherwise              = Just f
+  where f = double2Float d
+
+-- | Both coordinates of a ground spawn, accepted only together.
+--
+--   'Nothing' for a missing or unconvertible argument — whatever
+--   'HsLua.tonumber' itself refuses, which still coerces a numeric
+--   STRING exactly as it always did — and for either coordinate outside
+--   'groundSpawnCoord''s domain, so an x-only guard cannot satisfy the
+--   contract.
+groundSpawnCoords ∷ Maybe Lua.Number → Maybe Lua.Number → Maybe (Float, Float)
+groundSpawnCoords mx my = do
+    Lua.Number x ← mx
+    Lua.Number y ← my
+    (,) <$> groundSpawnCoord x <*> groundSpawnCoord y
 
 -- | item.spawnGround(defName, x, y [, props] [, pageId]) → gid | nil
 --   Spawns an item into the world at float tile coords. Optional
@@ -118,7 +161,17 @@ resolveItemPage env Nothing = activeWorldStateFrom (wsWorldManagerRef (toWorldSi
 --   and turns a non-finite base into a 0 or a 100 no downstream range
 --   check can tell from a real roll.
 --
---   That check runs BEFORE the definition lookup, before EITHER roll,
+--   @x@ and @y@ are REFUSED the same way and for the same reason
+--   (#2336): each is accepted only when it is a number
+--   ('HsLua.tonumber' still coercing a numeric string as it always did)
+--   whose narrowing to the 'Float' a 'Item.Ground.GroundItem' stores is
+--   finite — so NaN, either infinity, and a finite Lua number such as
+--   @1e39@ that overflows a @Float@ are all outside the domain. Both
+--   coordinates are checked, so an x-only or y-only poison is refused
+--   alike. 'groundSpawnCoord' says what a stored non-finite coordinate
+--   would do to the item.
+--
+--   Both checks run BEFORE the definition lookup, before EITHER roll,
 --   and before any id is allocated, so a refused spawn spends no draw
 --   from the shared stat RNG (quality is rolled first, so a check
 --   sitting with the condition roll would already be too late) and
@@ -152,8 +205,8 @@ itemSpawnGroundFn env = do
         mBase = case mCondition of
             Nothing → Just Nothing
             Just c  → Just <$> mkGroundConditionBase c
-    case (nameArg, xArg, yArg, mBase) of
-        (Just nameBS, Just x, Just y, Just base) → do
+    case (nameArg, groundSpawnCoords xArg yArg, mBase) of
+        (Just nameBS, Just (x, y), Just base) → do
             let name = TE.decodeUtf8Lenient nameBS
             im ← Lua.liftIO $ readReadOnlyRef
                 (crvItemManagerRef (toContentRegistriesViewCapability env))
@@ -161,7 +214,7 @@ itemSpawnGroundFn env = do
             case (HM.lookup name (imDefs im), mWs) of
                 (Just iDef, Just ws) → do
                     mSpawned ← Lua.liftIO $ spawnSalvageOnPage env ws iDef
-                        name (realToFrac x) (realToFrac y)
+                        name x y
                         mFill mQuality base mTemp
                     case mSpawned of
                         Nothing → Lua.pushnil >> return 1
@@ -246,6 +299,16 @@ spawnSalvageOnPage env ws iDef name x y mFill mQuality base mTemp = do
 --   materialization failure. Nothing is spawned when the binding
 --   cannot be made — the obligation is checked BEFORE the item exists,
 --   so a refused call leaves no orphan on the ground.
+--
+--   …and false, too, for an x or a y outside 'groundSpawnCoord''s
+--   domain (#2336): a missing or unconvertible argument, NaN, either
+--   infinity, or a finite Lua number that becomes an infinite 'Float'
+--   when stored. That check sits with the argument decode, so it runs
+--   before the obligation is read, before the definition lookup, before
+--   either salvage roll and before any id is allocated — a refused call
+--   leaves the ground map, @gisNextId@, the item-instance counter, the
+--   shared stat RNG and the slot's binding exactly as they were, which
+--   is precisely what @item.spawnGround@ guarantees for the same input.
 worldSpawnLocationSignificantItemFn
     ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldSpawnLocationSignificantItemFn env = do
@@ -254,8 +317,8 @@ worldSpawnLocationSignificantItemFn env = do
     xArg    ← Lua.tonumber 3
     yArg    ← Lua.tonumber 4
     pageArg ← Lua.tostring 5
-    filled ← case (idArg, slotArg, xArg, yArg) of
-        (Just rawId, Just slot, Just (Lua.Number x), Just (Lua.Number y))
+    filled ← case (idArg, slotArg, groundSpawnCoords xArg yArg) of
+        (Just rawId, Just slot, Just (x, y))
             | rawId ≥ 0 → Lua.liftIO $ do
                 mWs ← resolveItemPage env (TE.decodeUtf8Lenient <$> pageArg)
                 case mWs of
@@ -273,7 +336,7 @@ worldSpawnLocationSignificantItemFn env = do
                             Nothing → pure False
                             Just (defName, iDef) → do
                                 mSpawned ← spawnSalvageOnPage env ws iDef
-                                    defName (realToFrac x) (realToFrac y)
+                                    defName x y
                                     Nothing Nothing Nothing Nothing
                                 case mSpawned of
                                     Nothing → pure False

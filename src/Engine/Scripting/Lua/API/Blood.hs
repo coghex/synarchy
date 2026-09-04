@@ -29,6 +29,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map as Map
 import Data.IORef (readIORef, atomicModifyIORef')
+import GHC.Float (double2Float)
 import qualified HsLua as Lua
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
@@ -58,6 +59,73 @@ resolveBloodPage env (Just pid) = do
     pure $ (\ws → (target, ws)) <$> lookup target (wmWorlds wm)
 resolveBloodPage env Nothing = activeWorldPageFrom (wsWorldManagerRef (toWorldSimCapability env))
 
+-- * The geometry domain (#2336)
+
+-- | What one @blood.spawn@ geometry value may be once narrowed to the
+--   'Float' 'Blood.Types.BloodDecalSpec' stores it as.
+--
+--   Every constructor excludes NaN and both infinities; they differ
+--   only in what they additionally require of a finite value.
+data BloodFloatDomain
+  = BloodFinite
+    -- ^ A coordinate or an offset or a rotation: meaningful at any
+    --   finite magnitude, of either sign.
+  | BloodPositive
+    -- ^ @scale@: a multiplier, for which zero collapses the quad and a
+    --   negative value mirrors it — neither is a mark anything asks for.
+  | BloodUnitInterval
+    -- ^ @opacity@: a blend weight, on the CLOSED interval, so a fully
+    --   transparent 0 and a fully opaque 1 both stay legal.
+  deriving (Eq, Show)
+
+-- | The domain, in the words a refusal quotes.
+describeBloodFloatDomain ∷ BloodFloatDomain → Text
+describeBloodFloatDomain BloodFinite       = "a finite number"
+describeBloodFloatDomain BloodPositive     = "a finite number above 0"
+describeBloodFloatDomain BloodUnitInterval = "a finite number from 0 to 1"
+
+-- | 'Nothing' for a value inside the domain, the refusal reason
+--   otherwise.
+--
+--   Hand this the value the decal would STORE — the result of
+--   'narrowBloodFloat' — never the source 'Double'. The narrowing is
+--   itself a way out of the domain: @1e39@ is a finite Lua number and
+--   an infinite @Float@, and the decal keeps the @Float@.
+--
+--   NaN and the infinities fail by the ordinary comparisons rather than
+--   by a test of their own, except for 'BloodFinite', which has no
+--   bound to fail against and so names them directly.
+checkBloodFloat ∷ Text → BloodFloatDomain → Float → Maybe Text
+checkBloodFloat field domain x
+    | isNaN x ∨ isInfinite x = reject
+    | inside                 = Nothing
+    | otherwise              = reject
+  where
+    inside = case domain of
+        BloodFinite       → True
+        BloodPositive     → x > 0
+        BloodUnitInterval → x ≥ 0 ∧ x ≤ 1
+    reject = Just $ "blood.spawn: " <> field <> " = " <> tshow x
+                <> " is outside the domain ("
+                <> describeBloodFloatDomain domain <> ")"
+
+-- | 'checkBloodFloat' in the shape the geometry sequence consumes:
+--   the accepted value on the right, the refusal reason on the left.
+checkedBloodFloat ∷ Text → BloodFloatDomain → Float → Either Text Float
+checkedBloodFloat field domain x =
+    maybe (Right x) Left (checkBloodFloat field domain x)
+
+-- | Narrow a Lua 'Double' to the 'Float' the decal stores.
+--
+--   'GHC.Float.double2Float' rather than @realToFrac@: the latter
+--   routes through 'Rational' unless a rewrite rule fires, which does
+--   not preserve NaN or the infinities — and this conversion is exactly
+--   where a finite source turns into an infinity, so it must be the
+--   faithful one. Every finite in-domain value narrows identically
+--   either way, so no accepted call changes.
+narrowBloodFloat ∷ Double → Float
+narrowBloodFloat = double2Float
+
 -- | blood.spawn(gx, gy, woundKind, severity [, props]) → decalId,
 --   textureId, isNewTexture on success, or nil, reason on failure.
 --   gx/gy are world tile-space floats (Item.Ground convention).
@@ -80,6 +148,30 @@ resolveBloodPage env Nothing = activeWorldPageFrom (wsWorldManagerRef (toWorldSi
 --   unrecognised fails the call outright (nil, reason) rather than
 --   silently substituting a default — a typo in an explicit bucket
 --   should not masquerade as a different, valid mark.
+--
+--   __The geometry domain (#2336).__ Every value the decal keeps as a
+--   'Float' is checked at the value it would STORE, so a finite Lua
+--   number such as @1e39@ that narrows to an infinity is refused along
+--   with NaN and the infinities themselves:
+--
+--   * @gx@, @gy@, @offsetX@, @offsetY@, @rotation@ — any finite number.
+--   * @scale@ — finite and above 0: a zero collapses the quad and a
+--     negative one mirrors it.
+--   * @opacity@ — finite and within the CLOSED @[0, 1]@, so a fully
+--     transparent 0 and a fully opaque 1 both stay legal.
+--
+--   Out of the domain answers @nil, reason@ before the texture request
+--   is built and before any decal or texture id is allocated, so a
+--   refused call leaves the whole 'Blood.Types.BloodStore' untouched.
+--   An ABSENT or unconvertible optional property still takes its
+--   documented default exactly as before, and @wetness@ keeps its
+--   pre-existing clamp rather than gaining a refusal — every accepted
+--   call behaves as it always did.
+--
+--   Non-finite geometry cannot be tolerated and corrected downstream:
+--   it reaches "World.Render.BloodQuads"' vertex and tint arithmetic as
+--   NaN without anything raising. Blood is transient by design (#884),
+--   so unlike a ground item's position this never reaches a save.
 bloodSpawnFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 bloodSpawnFn env = do
     xArg    ← Lua.tonumber 1
@@ -102,11 +194,27 @@ bloodSpawnFn env = do
                 mv ← Lua.tonumber Lua.top
                 Lua.pop 1
                 pure $ case mv of
-                    Just (Lua.Number n) → Just (realToFrac n)
+                    -- Unwrapped, not @realToFrac@'d: 'HsLua.Number'
+                    -- already wraps this exact 'Double', and a
+                    -- same-type @realToFrac@ is only the identity while
+                    -- its rewrite rule fires — otherwise it routes a
+                    -- NaN through 'Rational', which is precisely the
+                    -- value the domain check below has to see (#2336).
+                    Just (Lua.Number n) → Just n
                     _ → Nothing
             _ → pure Nothing
-        getFloatProp ∷ Lua.Name → Float → Lua.LuaE Lua.Exception Float
-        getFloatProp key def = maybe def realToFrac ⊚ getNumProp key
+        -- An ABSENT or unconvertible property still takes its
+        -- documented default, exactly as it always did (#2336). Only a
+        -- property the caller really did name a number for is held to
+        -- the domain, and it is held to it AFTER narrowing, because the
+        -- decal keeps the narrowed value.
+        getFloatProp ∷ Text → Float → BloodFloatDomain
+                     → Lua.LuaE Lua.Exception (Either Text Float)
+        getFloatProp field def domain = do
+            mv ← getNumProp (Lua.Name (TE.encodeUtf8 field))
+            pure $ case mv of
+                Nothing → Right def
+                Just d  → checkedBloodFloat field domain (narrowBloodFloat d)
         getIntProp ∷ Lua.Name → Int → Lua.LuaE Lua.Exception Int
         getIntProp key def = maybe def round ⊚ getNumProp key
     mStyleStr ← getStrProp "style"
@@ -115,17 +223,20 @@ bloodSpawnFn env = do
     mEdgeStr  ← getStrProp "edge"
     seedI     ← getIntProp "seed" 0
     surfaceZ  ← getIntProp "surfaceZ" 0
-    offX      ← getFloatProp "offsetX" 0
-    offY      ← getFloatProp "offsetY" 0
-    rot       ← getFloatProp "rotation" 0
-    scl       ← getFloatProp "scale" 1
-    opac      ← getFloatProp "opacity" 1
-    wet       ← getFloatProp "wetness" 1
+    eOffX     ← getFloatProp "offsetX"  0 BloodFinite
+    eOffY     ← getFloatProp "offsetY"  0 BloodFinite
+    eRot      ← getFloatProp "rotation" 0 BloodFinite
+    eScl      ← getFloatProp "scale"    1 BloodPositive
+    eOpac     ← getFloatProp "opacity"  1 BloodUnitInterval
+    -- Wetness was already clamped to [0, 1] before #2336 and stays
+    -- clamped: it is the one control with a documented correction, so
+    -- refusing it now would change an accepted call.
+    wet       ← maybe 1 narrowBloodFloat ⊚ getNumProp "wetness"
     mUnitN    ← getNumProp "sourceUnit"
     mPageStr  ← getStrProp "pageId"
     let fail_ msg = Lua.pushnil >> Lua.pushstring msg >> return 2
     case (xArg, yArg, windArg, sevArg) of
-        (Just xN, Just yN, Just windBS, Just sevBS) → do
+        (Just (Lua.Number xN), Just (Lua.Number yN), Just windBS, Just sevBS) → do
             let woundKind = TE.decodeUtf8Lenient windBS
                 parsedSeverity  = parseSeverity (TE.decodeUtf8Lenient sevBS)
                 parsedStyle     = maybe (Just (defaultStyleForWound woundKind))
@@ -133,8 +244,30 @@ bloodSpawnFn env = do
                 parsedFootprint = maybe (Just FootprintMedium) parseFootprint mFootStr
                 parsedAniso     = maybe (Just AnisotropyNone) parseAnisotropy mAnisoStr
                 parsedEdge      = maybe (Just EdgeModerate) parseEdge mEdgeStr
-            case (parsedSeverity, parsedStyle, parsedFootprint, parsedAniso, parsedEdge) of
-                (Just severity, Just style, Just footprint, Just aniso, Just edge) → do
+                -- Every Float-backed geometry value, the positional
+                -- coordinates included, checked at the value the decal
+                -- would STORE (#2336). Sequenced through Either in one
+                -- place so the refusal reported is the first named here
+                -- and a control added later cannot be left unchecked.
+                eGeometry = do
+                    x  ← checkedBloodFloat "x" BloodFinite (narrowBloodFloat xN)
+                    y  ← checkedBloodFloat "y" BloodFinite (narrowBloodFloat yN)
+                    ox ← eOffX
+                    oy ← eOffY
+                    r  ← eRot
+                    s  ← eScl
+                    o  ← eOpac
+                    pure (x, y, ox, oy, r, s, o)
+            -- Geometry is decided in the SAME match as the buckets, so
+            -- nothing nests: the first alternative is the only one that
+            -- spawns, and a refusal falls through to the branch that
+            -- names what was wrong. Geometry is reported ahead of an
+            -- unrecognised bucket only because its alternative comes
+            -- first; both refuse before anything is allocated.
+            case (eGeometry, parsedSeverity, parsedStyle, parsedFootprint
+                 , parsedAniso, parsedEdge) of
+                ( Right (gx, gy, offX, offY, rot, scl, opac), Just severity
+                 , Just style, Just footprint, Just aniso, Just edge) → do
                     let req = BloodTextureRequest
                             { btrStyle      = style
                             , btrWoundKind  = woundKind
@@ -154,8 +287,8 @@ bloodSpawnFn env = do
                                 let mkSpec tid = BloodDecalSpec
                                         { bspTexture    = tid
                                         , bspPage       = pid
-                                        , bspX          = realToFrac xN
-                                        , bspY          = realToFrac yN
+                                        , bspX          = gx
+                                        , bspY          = gy
                                         , bspSurfaceZ   = surfaceZ
                                         , bspOffsetX    = offX
                                         , bspOffsetY    = offY
@@ -180,6 +313,7 @@ bloodSpawnFn env = do
                             Lua.pushboolean isNew
                             return 3
                         Nothing → fail_ "blood.spawn: no active world"
+                (Left reason, _, _, _, _, _) → fail_ (TE.encodeUtf8 reason)
                 _ → fail_ "blood.spawn: unknown style/severity/footprint/\
                           \anisotropy/edge value"
         _ → fail_ "blood.spawn: expected (gx, gy, woundKind, severity\
