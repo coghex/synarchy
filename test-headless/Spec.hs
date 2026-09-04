@@ -297,6 +297,7 @@ import qualified Test.Headless.Building.WorkbenchConstruction
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.AutosaveRotation as AutosaveRotation
+import qualified Test.Headless.Save.ListingFailureBoundary as ListingFailureBoundary
 import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Save.OwnerPark as SaveOwnerPark
@@ -750,6 +751,7 @@ main = hspec $ do
     describe "persistence contract" SaveContract.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
     describe "autosave rotation durability (#2229)" AutosaveRotation.spec
+    ListingFailureBoundary.spec
     MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Save.OwnerPark" SaveOwnerPark.spec
