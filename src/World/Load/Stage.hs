@@ -23,6 +23,8 @@ module World.Load.Stage
     , renderStageError
     , stagedGenParamsWarning
     , stagedGroundItemWarning
+    , repairSavedCameraView
+    , stagedCameraWarning
     ) where
 
 import UPrelude
@@ -38,7 +40,7 @@ import Control.DeepSeq (force)
 import Control.Exception (evaluate)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Log (logInfo, logWarn, logError, LogCategory(..), LoggerState)
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), defaultCamera, repairCameraView)
 import World.Types
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import Structure.Types (emptyChunkStructures)
@@ -365,6 +367,41 @@ stagedGenParamsWarning pid (r, dflt) =
       <> describeWorldGenRejection r
       <> "; using the default " <> dflt
 
+-- | #2337: a saved page whose stored camera x, y or zoom is not finite,
+--   with that whole view replaced by the shipped default's. Reports
+--   whether it repaired anything, so the caller warns exactly once per
+--   repaired page however many of the three were poisoned.
+--
+--   Only the three view fields move. @wpsCameraFacing@ is a
+--   'Engine.Graphics.Camera.CameraFacing' constructor, which has no
+--   out-of-domain value to carry, and every other field of the page is
+--   returned untouched.
+repairSavedCameraView ∷ WorldPageSave → (WorldPageSave, Bool)
+repairSavedCameraView wps =
+    ( wps { wpsCameraX = x, wpsCameraY = y, wpsCameraZoom = zoom }
+    , repaired )
+  where
+    ((x, y, zoom), repaired) = repairCameraView
+        (wpsCameraX wps, wpsCameraY wps, wpsCameraZoom wps)
+
+-- | The warning one repaired camera view produces (#2337): the page it
+--   came from, the three values the save stored, and the default view
+--   that replaced them. Exposed for the same reason its gen-params and
+--   ground-item siblings are — a spec pins the whole line without
+--   staging a save.
+stagedCameraWarning ∷ WorldPageId → WorldPageSave → Text
+stagedCameraWarning pid wps =
+    "Saved page '" <> unWorldPageId pid
+      <> "': camera view stored a non-finite value (x " <> tshow (wpsCameraX wps)
+      <> ", y " <> tshow (wpsCameraY wps)
+      <> ", zoom " <> tshow (wpsCameraZoom wps)
+      <> "); using the default view (x " <> tshow dx
+      <> ", y " <> tshow dy <> ", zoom " <> tshow dzoom
+      <> ") so the loaded session has somewhere to look"
+  where
+    (dx, dy) = camPosition defaultCamera
+    dzoom    = camZoom defaultCamera
+
 -- | The warning one dropped ground item produces (#2336): the page it
 --   came from, its PAGE-LOCAL ground-item id, what it was, and the
 --   position the save stored. Exposed for the same reason its
@@ -446,8 +483,19 @@ stagePage
     → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
           infMgr artCatalog refundDeps mapCeiling activeWpsId
-          (liveEdits, liveCropPlots, livePlantDesignations) wps = do
-    let pid      = wpsPageId wps
+          (liveEdits, liveCropPlots, livePlantDesignations) savedWps = do
+    -- #2337: the saved camera view is repaired HERE, before @wps@ is
+    -- bound at all, so no consumer below can reach an unrepaired value
+    -- -- not the 'wsCameraRef' write, not 'cameraChunkCoord', not
+    -- 'worldToGrid', and neither 'Camera2D' constructor. Rebinding the
+    -- page rather than threading three repaired numbers through is what
+    -- makes that structural instead of a rule to remember.
+    --
+    -- A repair, never a load failure, for the same reason the sibling
+    -- repairs below are: the rest of the save is perfectly good, and a
+    -- blank view is not worth costing the player everything else in it.
+    let (wps, cameraRepaired) = repairSavedCameraView savedWps
+        pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
         -- #2288 requirement 4: a save's STORED floating-point generation
         -- settings are repaired here, at the one boundary every decoded
@@ -482,6 +530,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
 
     logInfo logger CatWorld $ "Staging saved page: " <> unWorldPageId pid
     forM_ genRejections $ logWarn logger CatWorld . stagedGenParamsWarning pid
+    when cameraRepaired $
+        logWarn logger CatWorld (stagedCameraWarning pid savedWps)
     forM_ droppedGroundItems $
         logWarn logger CatWorld . stagedGroundItemWarning pid
 

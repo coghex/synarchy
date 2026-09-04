@@ -6,6 +6,7 @@ module Engine.Graphics.Camera
     , rotateCCW
     , UICamera(..)
     , defaultCamera
+    , repairCameraView
     , defaultUICamera
     , createViewMatrix
     , createProjectionMatrix
@@ -62,6 +63,28 @@ defaultCamera = Camera2D
     , camZSlice = 0
     , camZTracking = True
     }
+
+-- | Replace a restored camera view whose x, y or zoom is not finite
+--   with 'defaultCamera''s, reporting whether it did (#2337).
+--
+--   All three move together. A view with one poisoned component is not
+--   somewhere the player was ever looking — @wrapCoord@ and @clampF@
+--   both pass a NaN through unchanged, so a saved non-finite coordinate
+--   is the blank view the session was saved in — and keeping the two
+--   survivors would frame a place they never chose. Taking the shipped
+--   default for the whole view is the one answer that is a position.
+--
+--   The caller owns the rest of the camera: the saved facing and every
+--   value staging derives (z-slice, the zeroed velocities) are untouched
+--   here, and a finite view is returned byte-for-byte with @False@, so a
+--   healthy save is silent.
+repairCameraView ∷ (Float, Float, Float) → ((Float, Float, Float), Bool)
+repairCameraView view@(x, y, zoom)
+    | all finite [x, y, zoom] = (view, False)
+    | otherwise               = ((dx, dy, camZoom defaultCamera), True)
+  where
+    finite v = not (isNaN v ∨ isInfinite v)
+    (dx, dy) = camPosition defaultCamera
 
 data UICamera = UICamera
     { uiCamWidth  ∷ Float

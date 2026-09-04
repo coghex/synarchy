@@ -26,9 +26,10 @@ import Engine.Core.Capability.WorldSim
 import Data.IORef (readIORef, atomicModifyIORef', writeIORef)
 import qualified Data.Vector.Unboxed as VU
 import Engine.Core.State (EngineEnv
-  , resolveActiveWorld )
+  , resolveActiveWorld, loggerRef )
 import Engine.Core.Capability.RenderView
   (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Core.Log (LogCategory(..), logWarn)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..), rotateCW, rotateCCW)
 import Engine.Loop.Camera (applyLimits, scrollZoomImpulse)
 import World.Grid
@@ -39,18 +40,73 @@ import World.Generate (globalToChunk, applyTimelineFast, viewDepth)
 import qualified Data.Vector as V
 import qualified HsLua as Lua
 
+-- | A Lua number that is usable as a camera world coordinate, narrowed
+--   to the 'Float' the camera actually stores (#2337).
+--
+--   Both halves matter. A NaN or infinite @Double@ arrives from Lua
+--   arithmetic (@0/0@, @math.huge@) and is rejected outright; a FINITE
+--   @Double@ larger than 'Float' can hold — @1e39@ — becomes an
+--   infinity only in the narrowing, which is why the check is on the
+--   narrowed value and not the argument.
+finiteCoord ∷ Double → Maybe Float
+finiteCoord d
+    | isNaN d ∨ isInfinite d = Nothing
+    | isInfinite narrowed    = Nothing
+    | otherwise              = Just narrowed
+  where narrowed = realToFrac d ∷ Float
+
+-- | 'finiteCoord''s test, for a value already narrowed: what the
+--   camera may hold. Applied to a candidate a verb DERIVED from
+--   accepted arguments, which the argument check cannot have seen.
+finiteF ∷ Float → Bool
+finiteF x = not (isNaN x ∨ isInfinite x)
+
+-- | The one refusal an out-of-domain camera coordinate produces:
+--   exactly one warning naming the verb, and no camera write (#2337).
+--
+--   Refusing is the only recoverable answer. Once a coordinate is NaN
+--   or infinite the main loop cannot repair it — 'wrapCoord' subtracts
+--   @w * floor (shifted / w)@ and 'floor' of a non-finite value is 0,
+--   while 'clampF' returns its input because neither @x < lo@ nor
+--   @x > hi@ holds of a NaN — so the view stays blank and chunk
+--   selection resolves the origin on every tick until some other script
+--   happens to set a finite position.
+--
+--   The one message covers both refusals a verb can make: an argument
+--   that is missing, non-numeric or non-finite, and (for
+--   'cameraMoveFn') a position derived from acceptable arguments that
+--   is not itself finite.
+refuseCameraCoords ∷ EngineEnv → Text → IO ()
+refuseCameraCoords env verb = do
+    logger ← readIORef (loggerRef env)
+    logWarn logger CatLua $
+        verb <> ": refused, because it would not leave the camera at a"
+             <> " finite position; the camera is unchanged"
+
 -- | camera.move(dx, dy)
 cameraMoveFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 cameraMoveFn env = do
     dxArg ← Lua.tonumber 1
     dyArg ← Lua.tonumber 2
     case (dxArg, dyArg) of
-        (Just (Lua.Number dx), Just (Lua.Number dy)) → Lua.liftIO $ do
-            atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
+        (Just (Lua.Number dx), Just (Lua.Number dy))
+          | Just dxF ← finiteCoord dx
+          , Just dyF ← finiteCoord dy → Lua.liftIO $ do
+            -- The SUM is what lands in the camera, and two finite
+            -- 'Float' operands can still overflow to an infinity when
+            -- added, so the candidate is validated inside the same
+            -- atomic update that would install it. Refusing leaves the
+            -- whole record — position included — exactly as it was.
+            applied ← atomicModifyIORef'
+                          (rvCameraRef (toRenderViewCapability env)) $ \cam →
                 let (cx, cy) = camPosition cam
-                in (cam { camPosition = ( cx + realToFrac dx
-                                        , cy + realToFrac dy ) }, ())
-        _ → pure ()
+                    nx = cx + dxF
+                    ny = cy + dyF
+                in if finiteF nx ∧ finiteF ny
+                     then (cam { camPosition = (nx, ny) }, True)
+                     else (cam, False)
+            unless applied $ refuseCameraCoords env "camera.move"
+        _ → Lua.liftIO $ refuseCameraCoords env "camera.move"
     return 0
 
 -- | camera.getPosition() → x, y
@@ -69,10 +125,15 @@ cameraSetPositionFn env = do
     xArg ← Lua.tonumber 1
     yArg ← Lua.tonumber 2
     case (xArg, yArg) of
-        (Just (Lua.Number x), Just (Lua.Number y)) → Lua.liftIO $
+        (Just (Lua.Number x), Just (Lua.Number y))
+          | Just xF ← finiteCoord x
+          , Just yF ← finiteCoord y → Lua.liftIO $
+            -- Both accepted arguments ARE the new position, so there is
+            -- no derived candidate to re-check the way 'cameraMoveFn'
+            -- has.
             atomicModifyIORef' (rvCameraRef (toRenderViewCapability env)) $ \cam →
-                (cam { camPosition = (realToFrac x, realToFrac y) }, ())
-        _ → pure ()
+                (cam { camPosition = (xF, yF) }, ())
+        _ → Lua.liftIO $ refuseCameraCoords env "camera.setPosition"
     return 0
 
 -- | camera.getZoom() → zoom
