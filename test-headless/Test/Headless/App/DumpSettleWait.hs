@@ -21,7 +21,9 @@ module Test.Headless.App.DumpSettleWait (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Concurrent.MVar (MVar, newEmptyMVar, newMVar, putMVar)
+import Control.Concurrent.MVar
+    (MVar, newEmptyMVar, newMVar, putMVar, tryReadMVar)
+import Control.Exception (ErrorCall(..), throwIO, try)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (nub, sort)
 import System.Timeout (timeout)
@@ -32,9 +34,9 @@ import App.Dump
 import Engine.Core.Clock (monotonicSeconds)
 import Engine.Core.Error.Exception (SystemError(..))
 import Engine.Core.State (EngineLifecycle(..))
-import Sim.Command.Types (FastSettleOutcome(..))
+import Sim.Command.Types (FastSettleOutcome(..), FastSettleRequest(..))
 import Sim.State.Types (SimWorldState, emptySimWorldState)
-import Sim.Thread (awaitFastSettleAcks)
+import Sim.Thread (completeFastSettleWith)
 import World.Command.Types (FluidAckOutcome(..))
 import World.Page.Types (WorldPageId(..))
 
@@ -96,45 +98,73 @@ specTimeoutMicros = 3 * 1000 * 1000
 bounded ∷ IO α → IO (Maybe α)
 bounded = timeout specTimeoutMicros
 
-simAckSpec ∷ Spec
-simAckSpec = describe "the sim's per-world acknowledgement wait" $ do
+-- | Drive the settle handler's whole tail exactly as 'Sim.Thread' does,
+--   and return what it PUBLISHED to the request's completion.
+--
+--   Every example below reads 'fsrDone' rather than the acknowledgement
+--   wait's return value, because 'fsrDone' is the only thing the dump
+--   ever reads: an outcome computed correctly and then never published
+--   strands the dump just as completely as one never computed.
+--
+--   'Nothing' means the handler either never returned inside the bound
+--   or returned without publishing — both of which are the stranding
+--   this issue is about.
+settleVia
+    ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
+    → IO Double → Double → [(WorldPageId, SimWorldState)]
+    → IO (Maybe FastSettleOutcome)
+settleVia emit clock deadline worlds = do
+    done ← newEmptyMVar
+    let req = FastSettleRequest { fsrDone = done, fsrDeadline = deadline }
+    ran ← bounded $ completeFastSettleWith emit clock discardReport req worlds
+    case ran of
+        Nothing → pure Nothing
+        Just () → tryReadMVar done
 
-    it "reports every world applied once each one acknowledges, having \
+-- | The report a settle makes when the example is not about reporting.
+discardReport ∷ Text → IO ()
+discardReport _ = pure ()
+
+simAckSpec ∷ Spec
+simAckSpec = describe "the settle handler's published completion" $ do
+
+    it "publishes every world applied once each one acknowledges, having \
        \emitted all of them in order" $ do
         emitted ← newIORef []
         clock ← scriptedClock [0]
-        outcome ← bounded $ awaitFastSettleAcks
+        published ← settleVia
             (recordingEmit emitted (const (Just FluidAckApplied)))
             clock 1000 threeWorlds
-        outcome `shouldBe` Just FastSettleApplied
+        published `shouldBe` Just FastSettleApplied
         readIORef emitted `shouldReturn` [pageA, pageB, pageC]
 
-    it "turns a failed acknowledgement into the settle's own outcome, \
+    it "publishes a failed acknowledgement as the settle's own outcome, \
        \naming the world that failed and carrying its cause" $ do
         emitted ← newIORef []
         clock ← scriptedClock [0]
         let reply pid | pid ≡ pageB = Just (FluidAckFailed "handler blew up")
                       | otherwise   = Just FluidAckApplied
-        outcome ← bounded $ awaitFastSettleAcks
-            (recordingEmit emitted reply) clock 1000 threeWorlds
-        outcome `shouldBe`
+        published ← settleVia (recordingEmit emitted reply) clock 1000
+                              threeWorlds
+        published `shouldBe`
             Just (FastSettleWorldFailed pageB "handler blew up")
         -- Stopped at the failure: the third world's batch was never
         -- emitted, because the settle has already failed and nothing
         -- downstream may read the tiles it would have produced.
         readIORef emitted `shouldReturn` [pageA, pageB]
 
-    it "gives up at the deadline on an acknowledgement that never \
-       \arrives, naming the world it was waiting on" $ do
+    it "publishes the deadline outcome for an acknowledgement that never \
+       \arrives, naming the world it was waiting on, within the \
+       \deadline it was given" $ do
         emitted ← newIORef []
         -- A real clock, and a deadline a fraction of a second out: this
         -- is the wait actually elapsing, not the arithmetic being
         -- scripted around it.
         now ← realClock
-        outcome ← bounded $ awaitFastSettleAcks
-            (recordingEmit emitted (const Nothing))
-            realClock (now + 0.2) [(pageA, emptySimWorldState)]
-        outcome `shouldBe` Just (FastSettleAckDeadline pageA)
+        published ← settleVia (recordingEmit emitted (const Nothing))
+                              realClock (now + 0.2)
+                              [(pageA, emptySimWorldState)]
+        published `shouldBe` Just (FastSettleAckDeadline pageA)
 
     it "spends ONE budget across the worlds instead of restarting it for \
        \each, so N worlds cannot multiply the caller's total wait" $ do
@@ -147,10 +177,9 @@ simAckSpec = describe "the sim's per-world acknowledgement wait" $ do
         clock ← scriptedClock [0, 100]
         let reply pid | pid ≡ pageA = Just FluidAckApplied
                       | otherwise   = Nothing
-        outcome ← bounded $ awaitFastSettleAcks
-            (recordingEmit emitted reply) clock 30
+        published ← settleVia (recordingEmit emitted reply) clock 30
             [(pageA, emptySimWorldState), (pageB, emptySimWorldState)]
-        outcome `shouldBe` Just (FastSettleAckDeadline pageB)
+        published `shouldBe` Just (FastSettleAckDeadline pageB)
         readIORef emitted `shouldReturn` [pageA, pageB]
 
     it "treats an already-expired deadline as no budget at all rather \
@@ -160,10 +189,35 @@ simAckSpec = describe "the sim's per-world acknowledgement wait" $ do
         -- NEGATIVE argument as "wait forever": dropping it would turn
         -- the expired case back into the unbounded wait this replaces.
         clock ← scriptedClock [100]
-        outcome ← bounded $ awaitFastSettleAcks
-            (recordingEmit emitted (const Nothing))
-            clock 30 [(pageA, emptySimWorldState)]
-        outcome `shouldBe` Just (FastSettleAckDeadline pageA)
+        published ← settleVia (recordingEmit emitted (const Nothing))
+                              clock 30 [(pageA, emptySimWorldState)]
+        published `shouldBe` Just (FastSettleAckDeadline pageA)
+
+    it "reports the outcome BEFORE publishing it, so a failing report \
+       \leaves the completion empty rather than handing the caller a \
+       \success it is about to die behind" $ do
+        emitted ← newIORef []
+        clock ← scriptedClock [0]
+        done ← newEmptyMVar
+        let req = FastSettleRequest { fsrDone = done, fsrDeadline = 1000 }
+            failingReport _ = throwIO (ErrorCall "reporting blew up")
+        raised ← bounded ∘ try $ completeFastSettleWith
+            (recordingEmit emitted (const (Just FluidAckApplied)))
+            clock failingReport req threeWorlds
+
+        -- The report is reached, and its failure still leaves the
+        -- handler so the sim worker fail-stops on it.
+        case raised of
+            Just (Left (ErrorCall msg)) →
+                msg `shouldBe` "reporting blew up"
+            Just (Right ()) → expectationFailure
+                "the failing report did not reach the caller"
+            Nothing → expectationFailure
+                "the settle handler never returned"
+
+        -- …and nothing was published, because the publication comes
+        -- after every fallible step and this one did not survive.
+        tryReadMVar done `shouldReturn` Nothing
 
 -- * The dump's decision
 

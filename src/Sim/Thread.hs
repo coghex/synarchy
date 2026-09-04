@@ -1,7 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Sim.Thread
     ( startSimThread
-    , awaitFastSettleAcks
+    , completeFastSettleWith
     ) where
 
 import UPrelude
@@ -248,17 +248,43 @@ handleSimCommand env logger simStateRef cmd = do
             -- Emit each world's batch and WAIT for the world thread to apply
             -- it before signalling done — the dump reads wsTilesRef right
             -- after. One ack per world (dump worlds are typically just one).
-            outcome ← awaitFastSettleAcks
+            completeFastSettleWith
                 (\pid sws ack → emitWorldDirtyFluids env pid sws (Just ack))
-                monotonicSeconds (fsrDeadline req) (HM.toList dirtied)
-            -- The completion is published LAST, after every step of this
-            -- handler that can raise (#2334). Filling it ahead of the log
-            -- below would let a logging failure kill this worker in the
-            -- window where the caller has already read success and is
-            -- about to emit output derived from a half-dead engine.
-            logDebug logger CatWorld $
-                "Sim: fast-settled and paused (" <> tshow outcome <> ")"
-            putMVar (fsrDone req) outcome
+                monotonicSeconds (logDebug logger CatWorld) req
+                (HM.toList dirtied)
+
+-- | The whole tail of the 'SimFastSettleAll' handler: wait out every
+--   world's acknowledgement, report, and publish the outcome to the
+--   request's completion (#2334).
+--
+--   The publication is the last statement, AFTER the report, and that
+--   ordering is the point of keeping the two together in one tested
+--   function. Filling 'fsrDone' first would let a failure in the report
+--   kill this worker in the window where the caller has already read
+--   success and is about to emit output derived from a half-dead
+--   engine; the caller has no way to take that reading back. So the
+--   completion is only ever published once nothing fallible is left.
+--
+--   Both the emit step and the report are parameters so the headless
+--   gate can drive this without a world thread to acknowledge anything
+--   and without a logger that can be made to fail. Production supplies
+--   'emitWorldDirtyFluids' and @'logDebug' logger 'CatWorld'@, which is
+--   exactly what ran here before the seam existed.
+completeFastSettleWith
+    ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
+      -- ^ Emit one world's batch, to be acknowledged through this MVar.
+    → IO Double
+      -- ^ Monotonic clock; production passes
+      --   'Engine.Core.Clock.monotonicSeconds'.
+    → (Text → IO ())
+      -- ^ Report the settle's outcome.
+    → FastSettleRequest
+    → [(WorldPageId, SimWorldState)]
+    → IO ()
+completeFastSettleWith emit clock report req worlds = do
+    outcome ← awaitFastSettleAcks emit clock (fsrDeadline req) worlds
+    report ("Sim: fast-settled and paused (" <> tshow outcome <> ")")
+    putMVar (fsrDone req) outcome
 
 -- | Emit one 'WorldApplyFluids' batch per world and wait for each to be
 --   acknowledged, against ONE end-to-end deadline (#2334).
@@ -275,9 +301,10 @@ handleSimCommand env logger simStateRef cmd = do
 --   remaining worlds' batches are never emitted, because the settle has
 --   already failed and nothing downstream may read the tiles.
 --
---   The emit step is a parameter so the headless gate can drive this
---   with an acknowledgement that fails, or one that never arrives,
---   without a world thread to arrange either.
+--   Reached only through 'completeFastSettleWith', which is what the
+--   headless gate drives: an outcome computed correctly and then never
+--   published strands the caller just as completely as one never
+--   computed, so the two are gated together.
 awaitFastSettleAcks
     ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
       -- ^ Emit one world's batch, to be acknowledged through this MVar.
