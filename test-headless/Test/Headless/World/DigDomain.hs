@@ -258,7 +258,11 @@ spec = do
       digTileCoordinate maxD `shouldBe` Just 9223372036854774784
       digTileCoordinate overD `shouldBe` Nothing
       digTileCoordinate minD `shouldBe` Just (minBound ∷ Int)
-      digTileCoordinate (minD - 4096) `shouldBe` Nothing
+      -- The next representable Double below -2^63 is -2^63 - 2048, and
+      -- it is already past minBound; searching down against the guard
+      -- rather than settling for a round number is what keeps the
+      -- bound tight at BOTH ends.
+      digTileCoordinate (-9223372036854777856) `shouldBe` Nothing
 
     it "rejects a finite coordinate that is merely absurd" $
       digTileCoordinate 1e30 `shouldBe` Nothing
@@ -743,6 +747,26 @@ stagingSpec = describe "restored mine designations stay finite (#2338)" $ do
         , (healthyTile, 7, (0.25, 1, 0.5, 1), 0.75) ]
     length (filter (isInfixOf "mine designation" . T.unpack) warnings)
         `shouldBe` 1
+
+  describe "any ONE poisoned corner is enough, whichever it is" $
+    -- Four separate examples rather than one all-NaN designation: a
+    -- finiteness check that forgot a single slot would still pass the
+    -- all-NaN case, and the corner tuple is positional.
+    forM_ [ (0 ∷ Int, "NW", (0 / 0, 0.5, 0.5, 0.5))
+          , (1, "NE", (0.5, 0 / 0, 0.5, 0.5))
+          , (2, "SE", (0.5, 0.5, 0 / 0, 0.5))
+          , (3, "SW", (0.5, 0.5, 0.5, 0 / 0)) ] $
+      \(_slot, name, corners) →
+        it name $ \env → do
+            (desigs, warnings) ← stagedDesignations env
+                (saveWith [ (digTile, MineDesignation zSlice corners 0.4)
+                          , (healthyTile, healthyDesignation) ])
+            desigs `shouldBe` sort
+                [ (digTile, zSlice, (1, 1, 1, 1), 0)
+                , (healthyTile, 7, (0.25, 1, 0.5, 1), 0.75) ]
+            length (filter (isInfixOf "mine designation" . T.unpack)
+                           warnings)
+                `shouldBe` 1
 
   it "repairs an INFINITE corner and an infinite progress alike" $
     \env → do
