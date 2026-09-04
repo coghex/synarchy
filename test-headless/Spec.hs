@@ -285,6 +285,8 @@ import qualified Test.Headless.Render.PanMargin as PanMargin
 import qualified Test.Headless.Location.Bounds as LocationBounds
 import qualified Test.Headless.Building.PageBinding as BuildingPageBinding
 import qualified Test.Headless.Building.PortalSpawnBinding as BuildingPortalSpawnBinding
+import qualified Test.Headless.Building.FootprintExclusivity
+    as BuildingFootprintExclusivity
 import qualified Test.Headless.Building.Placement as BuildingPlacement
 import qualified Test.Headless.Building.RemoteWarning as BuildingRemoteWarning
 import qualified Test.Headless.Building.AssetSchema as BuildingAssetSchema
@@ -298,6 +300,7 @@ import qualified Test.Headless.Building.WorkbenchConstruction
 import qualified Test.Headless.Save.AutosaveGuards as AutosaveGuards
 import qualified Test.Headless.Save.AutosaveListing as AutosaveListing
 import qualified Test.Headless.Save.AutosaveRotation as AutosaveRotation
+import qualified Test.Headless.Save.ListingFailureBoundary as ListingFailureBoundary
 import qualified Test.Headless.Save.MenuListingOrder as MenuListingOrder
 import qualified Test.Headless.Save.Barrier as SaveBarrier
 import qualified Test.Headless.Save.OwnerPark as SaveOwnerPark
@@ -751,6 +754,7 @@ main = hspec $ do
     describe "persistence contract" SaveContract.spec
     describe "autosave staging slots (#1413)" AutosaveListing.spec
     describe "autosave rotation durability (#2229)" AutosaveRotation.spec
+    ListingFailureBoundary.spec
     MenuListingOrder.spec
     describe "Save.Barrier" SaveBarrier.spec
     describe "Save.OwnerPark" SaveOwnerPark.spec
@@ -956,6 +960,10 @@ main = hspec $ do
     -- "nothing was committed" is asserted on the queue itself.
     BuildingPageBinding.spec
     BuildingPortalSpawnBinding.spec
+    -- #2326: its own headless engine for the same reason — an admitted
+    -- spawn must sit in its queue until an example drains it, so
+    -- "against one pre-commit snapshot" is a controlled state.
+    BuildingFootprintExclusivity.spec
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec

@@ -454,8 +454,9 @@ def test_pointer_reached_managers_parse_from_their_real_sources():
     from persistence_inventory_audit import _load_repo_state  # type: ignore
     record_sources, _, _, _, _ = _load_repo_state()
     # BuildingManager: bmDefs, bmInstances, bmNextId, bmSelected, plus
-    # #2091's session-transient bmDestructions.
-    expected_counts = {"UnitManager": 4, "BuildingManager": 5,
+    # #2326's session-transient bmReservations and #2091's
+    # session-transient bmDestructions.
+    expected_counts = {"UnitManager": 4, "BuildingManager": 6,
                        "UnitThreadState": 1}
     for label, relpath, pattern in POINTER_REACHED_MANAGERS:
         expect(relpath in record_sources,

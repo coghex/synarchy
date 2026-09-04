@@ -532,6 +532,7 @@ library
                      Building.Render
                      Building.Visual
                      Building.Placement
+                     Building.Reservation
                      Building.HitTest
                      Structure.Types
                      Structure.ArtCatalog
@@ -1281,6 +1282,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Save.AutosaveGuards
                    Test.Headless.Save.AutosaveListing
                    Test.Headless.Save.AutosaveRotation
+                   Test.Headless.Save.ListingFailureBoundary
                    Test.Headless.Save.MenuListingOrder
                    Test.Headless.Save.Barrier
                    Test.Headless.Save.OwnerPark
@@ -1507,6 +1509,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Building.PageBinding.Support
                    Test.Headless.Building.PageBinding.SynchronousStaleness
                    Test.Headless.Building.PortalSpawnBinding
+                   Test.Headless.Building.FootprintExclusivity
                    Test.Headless.Building.Placement
                    Test.Headless.Building.RemoteWarning
                    Test.Headless.Building.WorkbenchConstruction

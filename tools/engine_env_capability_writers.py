@@ -441,6 +441,10 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Power",
         "Engine.Scripting.Lua.API.Units.Cargo",
         "Engine.Scripting.Lua.API.Units.Transfer",
+        # #2326: a page-bound placement whose binding went stale is
+        # dropped on the world thread, and that drop retires the
+        # footprint claim `building.spawn` took for it.
+        "World.Thread.Command.BoundSpawn",
         "World.Thread.ItemTemp",
     }),
     "texPaletteRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),

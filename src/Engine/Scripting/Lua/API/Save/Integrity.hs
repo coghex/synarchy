@@ -14,7 +14,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import Building.Types (BuildingId(..))
 import Craft.Bills (CraftBills(..), BillId(..))
-import Item.Ground (GroundItems(..))
+import Item.Ground (GroundItems(..), sanitizeGroundItems)
 import Item.Types (ItemInstance(..))
 import Location.Instance
     (LocationInstance(..), LocationInstanceId(..), instancesToList)
@@ -50,7 +50,7 @@ knownEntitiesFromSaveData sd = KnownEntities
         | w ← pages ]
     , keItemInstances = HS.fromList (map fromIntegral (concatMap pageItemIds pages))
     , keGroundItemsByPage = HM.fromList
-        [ (wpsPageId w, HS.fromList (HM.keys (gisItems (wpsGroundItems w))))
+        [ (wpsPageId w, HS.fromList (HM.keys (gisItems (liveGroundItems w))))
         | w ← pages ]
     , keLocationsByPage = HM.fromList
         [ (wpsPageId w, HS.fromList
@@ -68,14 +68,32 @@ knownEntitiesFromSaveData sd = KnownEntities
     }
   where
     pages = sdWorlds sd
+    -- #2336: the entries load staging is about to DROP are not part of
+    -- the restored session, so they are not known entities either.
+    -- 'World.Load.Stage' sanitizes the very same 'wpsGroundItems' with
+    -- this very same function, so the two cannot disagree about which
+    -- entries survive — which is the whole reason #1589 has the
+    -- load-time "does this edge resolve?" answer and the reconcile-time
+    -- "should this reference be cleared?" answer come from ONE
+    -- 'KnownEntities'. Leaving a dropped id in would tell
+    -- @scripts/unit_ai_reconcile.lua@ that a repair job, pickup order or
+    -- forage target still points at something, when staging installed
+    -- no such item.
+    --
+    -- Neither consumer refuses the load over it: 'luaReferenceErrors'
+    -- is a logged diagnostic at both boundaries, so a Lua edge naming a
+    -- dropped item is reported and cleared, never fatal.
+    liveGroundItems = fst ∘ sanitizeGroundItems ∘ wpsGroundItems
     -- The save system's single item walk (#1090), over the legacy
     -- 'SaveData'/'WorldPageSave' page shape this module still works
     -- with rather than a 'World.Save.Snapshot.SessionSnapshot' — the
     -- same enumeration 'World.Save.Snapshot.allItemInstanceIds' and
-    -- 'World.Save.Types.missingItemDefReferences' walk.
+    -- 'World.Save.Types.missingItemDefReferences' walk, with the same
+    -- ground substitution as above so a dropped entry's instance id is
+    -- not session-wide "known" either.
     pageItemIds w =
         [ iiInstanceId i
         | (_, insts) ← pageItemContainers ItemsGroundFirst
-                           wpsGroundItems wpsUnits wpsBuildings w
+                           liveGroundItems wpsUnits wpsBuildings w
         , inst ← insts
         , i    ← flattenItemInstances inst ]

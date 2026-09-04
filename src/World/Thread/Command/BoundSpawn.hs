@@ -21,10 +21,12 @@ module World.Thread.Command.BoundSpawn
     ) where
 
 import UPrelude
-import Data.IORef (readIORef)
+import Data.IORef (atomicModifyIORef', readIORef)
 import Building.Thread.Command (applyBuildingSpawn)
+import Building.Reservation (releaseReservation)
 import Building.Types (BuildingId(..))
-import Engine.Core.Capability.Building (toBuildingCapability)
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistriesView
     (toContentRegistriesViewCapability)
 import Engine.Core.Capability.WorldSim
@@ -53,7 +55,10 @@ import World.Types
 --   pending-container seeding).
 --
 --   A stale binding writes nothing, so the placement lands on neither
---   the captured page nor the newly selected one.
+--   the captured page nor the newly selected one — and it releases the
+--   footprint reservation @building.spawn@ took for it (#2326), because
+--   a request that will never commit must not keep tiles claimed against
+--   the next placement the player makes.
 handleWorldSpawnBoundBuildingCommand
     ∷ EngineEnv → LoggerState → BuildingId → Text
     → Int → Int → Int → WorldPageId → Word64 → IO ()
@@ -61,9 +66,17 @@ handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
                                      pageId bindGen = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     if wmSelectionGen mgr ≢ bindGen
-    then logDebug logger CatWorld $
-        "Bound building placement dropped: page selection moved since the "
-        <> "click (" <> defName <> " on " <> unWorldPageId pageId <> ")"
+    then do
+        -- #2326: the claim @building.spawn@ took for this placement is
+        -- retired here, through the capability accessor, so the write
+        -- stays attributable to this module.
+        atomicModifyIORef'
+            (bcBuildingManagerRef (toBuildingCapability env)) $ \bm →
+                (releaseReservation bid bm, ())
+        logDebug logger CatWorld $
+            "Bound building placement dropped: page selection moved since "
+            <> "the click (" <> defName <> " on " <> unWorldPageId pageId
+            <> ")"
     else applyBuildingSpawn logger
             (toWorldSimCapability env)
             (toContentRegistriesViewCapability env)

@@ -663,6 +663,9 @@ fromBuildingSnapshot page defs snap =
                 , bmInstances = HM.fromList resolved
                 , bmNextId    = bsnNextId snap
                 , bmSelected  = Nothing
+                  -- Footprint reservations are session-transient
+                  -- (#2326): never in the snapshot, never restored.
+                , bmReservations = HM.empty
                   -- Destruction presentations are session-transient
                   -- (#2091): never in the snapshot, never restored.
                 , bmDestructions = HM.empty

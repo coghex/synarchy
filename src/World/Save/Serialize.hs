@@ -4,6 +4,9 @@ module World.Save.Serialize
     , writeSaveFiles
     , loadWorld
     , listSaves
+    , listSavesWithSeams
+    , ListingSeams(..)
+    , productionListingSeams
     , saveListingOrder
     , SaveListing(..)
     , savesDirectory
@@ -16,6 +19,7 @@ import UPrelude
 import qualified Data.ByteString as BS
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
+import Control.Exception (IOException, evaluate, try)
 import Data.Char (isControl)
 import Data.List (sortBy)
 import Data.Ord (comparing, Down(..))
@@ -271,6 +275,29 @@ loadPhaseFor (ReachedComponents phases)
   where
     migrated p = p ≡ AssemblePhase ∨ p ≡ ValidatePhase
 
+-- | The two I\/O operations 'listSaves' reaches the filesystem through,
+--   bundled so a test can replace one of them (issue #2333).
+--
+--   Both are expected to signal failure the way the production
+--   operations they stand in for do — by throwing an 'IOException' —
+--   and 'listSavesWithSeams' contains each one at a different
+--   granularity: a generation read is blamed on its own slot, an
+--   enumeration failure on the whole survey.
+data ListingSeams = ListingSeams
+    { lsReadGeneration ∷ FilePath → IO BS.ByteString
+      -- ^ read one generation file (authoritative, previous, or legacy
+      --   flat). Production: 'BS.readFile'.
+    , lsEnumerateSaves ∷ FilePath → IO [FilePath]
+      -- ^ enumerate the saves root. Production: 'listDirectory'.
+    }
+
+-- | What 'listSaves' itself uses.
+productionListingSeams ∷ ListingSeams
+productionListingSeams = ListingSeams
+    { lsReadGeneration = BS.readFile
+    , lsEnumerateSaves = listDirectory
+    }
+
 -- | One entry in 'listSaves''s result. 'slRecovered' is 'True' when the
 --   listed metadata came from a slot's PREVIOUS generation because its
 --   authoritative generation had recoverable storage corruption (issue
@@ -316,14 +343,80 @@ data SaveListing = SaveListing
 --   predicting loadability during listing would mean decoding every
 --   component (buildings, units, world-pages, ...) for every listed
 --   save — the per-save cost #759 explicitly designed listing to avoid.
-listSaves ∷ LoggerState → HS.HashSet Text → IO [SaveListing]
-listSaves logger luaKnownNames = do
-    createDirectoryIfMissing True savesDirectory
-    entries ← listDirectory savesDirectory
-    results ← mapM tryEntry entries
-    let oks = concat results
-    pure $ saveListingOrder oks
+--   == Containment (issue #2333)
+--
+--   Listing is a best-effort, read-only survey of a directory the engine
+--   does not own exclusively, so a failure is CONTAINED to the smallest
+--   thing it can be blamed on:
+--
+--   * A generation file that cannot be READ at all — a permission
+--     failure, a special file, a file removed between the existence
+--     check and the read — is classified exactly as the LOAD path
+--     classifies it (@World.Save.Storage.decodeGenerationFile@ returns
+--     @GenerationCorrupt \"cannot read: …\"@): recoverable, so the
+--     previous generation is tried and the slot lists as 'slRecovered'
+--     when that succeeds. Only when neither generation yields metadata
+--     is the slot skipped, with one warning naming the failed path and
+--     the underlying error. Every OTHER slot is still listed.
+--   * A failure to enumerate @saves\/@ ITSELF is a different kind of
+--     failure — nothing was surveyed, so \"no saves\" would be a lie —
+--     and is reported as 'Left' rather than as an empty listing. The
+--     distinction is load-bearing at @World.Save.Autosave.readSlotStates@,
+--     which must never read an unenumerable directory as \"those slots
+--     are free\". The two public consumers turn it into one logged
+--     diagnostic apiece: an empty table at @engine.listSaves()@, and
+--     @false, reason@ from the autosave slot verbs.
+--
+--   Only synchronous 'IOException's are contained. An asynchronous
+--   exception, and any other exception type, still propagates.
+listSaves ∷ LoggerState → HS.HashSet Text → IO (Either Text [SaveListing])
+listSaves = listSavesWithSeams productionListingSeams
+
+-- | 'listSaves' with its two I\/O seams supplied by the caller. Exists
+--   so the headless gate can fail one exact generation path, or the
+--   enumeration of @saves\/@ itself, deterministically (issue #2333) —
+--   the same reason 'World.Save.Storage.publishGenerationWithSeams' has
+--   a reader seam (#2227), and for the same reason: filesystem mode bits
+--   are ignored by CI's root containers, and a directory standing in for
+--   an unreadable file never reaches 'BS.readFile' at all (the
+--   'doesFileExist' guard sends it down the missing-generation path
+--   instead).
+listSavesWithSeams
+    ∷ ListingSeams → LoggerState → HS.HashSet Text
+    → IO (Either Text [SaveListing])
+listSavesWithSeams seams logger luaKnownNames = do
+    rootResult ← try $ do
+        createDirectoryIfMissing True savesDirectory
+        found ← lsEnumerateSaves seams savesDirectory
+        -- Force the spine inside the handler's scope: a seam (or a
+        -- future enumerator) that produces entries lazily must not
+        -- escape containment by throwing at the first 'mapM' step.
+        _ ← evaluate (length found)
+        pure found
+    case rootResult of
+        Left (e ∷ IOException) → pure (Left (rootFailure e))
+        Right entries → do
+            results ← mapM tryEntry entries
+            pure (Right (saveListingOrder (concat results)))
   where
+    -- Names the directory and carries the underlying error, because
+    -- this text IS the reason the autosave verbs return and the sole
+    -- diagnostic each public consumer logs.
+    rootFailure e =
+        "the saves directory '" <> T.pack savesDirectory
+            <> "' could not be read: " <> tshow e
+
+    -- The load path's own classification of an unreadable generation,
+    -- mirrored: a reason string, never an escaping exception. The path
+    -- is part of the reason so every message built from it names the
+    -- file that actually failed.
+    readGeneration path = do
+        result ← try (lsReadGeneration seams path)
+        pure $ case result of
+            Left (e ∷ IOException) →
+                Left ("cannot read " <> T.pack path <> ": " <> tshow e)
+            Right bytes → Right bytes
+
     tryEntry entry = do
         let fullPath = savesDirectory </> entry
         -- Check if it's a directory (new format)
@@ -366,21 +459,33 @@ listSaves logger luaKnownNames = do
                             then tryPreviousListing name prevPath
                                     "authoritative save file is missing"
                             else do
-                                bytes ← BS.readFile authPath
-                                -- Envelope-aware: skip files whose magic/
-                                -- version/manifest/checksums don't
-                                -- validate. A pre-#759 flat file fails
-                                -- the envelope version check and is
-                                -- skipped with a logged warning so the
-                                -- user has a chance of noticing.
-                                case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
-                                    Right meta → return [mkListing name meta False]
-                                    Left (GenerationIncompatible _ err) → do
-                                        logWarn logger CatWorld $
-                                            "listSaves: skipping " <> name <> ": " <> err
-                                        return []
-                                    Left (GenerationCorrupt err) →
-                                        tryPreviousListing name prevPath err
+                                -- #2333: an unreadable authoritative
+                                -- generation is the load path's
+                                -- 'GenerationCorrupt "cannot read: …"',
+                                -- so it takes the same fallback the
+                                -- corrupt-bytes case below takes.
+                                readAuth ← readGeneration authPath
+                                case readAuth of
+                                    Left reason →
+                                        tryPreviousListing name prevPath reason
+                                    Right bytes → classifyAuth name prevPath bytes
+
+    -- Envelope-aware: skip files whose magic/version/manifest/checksums
+    -- don't validate. A pre-#759 flat file fails the envelope version
+    -- check and is skipped with a logged warning so the user has a
+    -- chance of noticing.
+    classifyAuth name prevPath bytes =
+        case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
+            Right meta → return [mkListing name meta False]
+            -- Requirement 7: an INCOMPATIBLE authoritative generation is
+            -- dropped outright. The previous generation is never even
+            -- read, let alone listed.
+            Left (GenerationIncompatible _ err) → do
+                logWarn logger CatWorld $
+                    "listSaves: skipping " <> name <> ": " <> err
+                return []
+            Left (GenerationCorrupt err) →
+                tryPreviousListing name prevPath err
 
     tryPreviousListing name prevPath authErr = do
         prevLinkSafe ← Storage.rejectSymlinkedPath prevPath
@@ -404,24 +509,37 @@ listSaves logger luaKnownNames = do
                         <> authErr <> ") and no previous generation exists"
                 return []
             else do
-                bytes ← BS.readFile prevPath
-                case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
-                    Right meta → do
-                        logWarn logger CatWorld $
-                            "listSaves: '" <> name
-                                <> "': authoritative generation unreadable ("
-                                <> authErr
-                                <> "), listing from previous generation"
-                        return [mkListing name meta True]
-                    Left prevErr → do
+                readPrev ← readGeneration prevPath
+                case readPrev of
+                    -- #2333: the fallback completes as UNUSABLE — one
+                    -- warning, this slot skipped, every other slot still
+                    -- listed.
+                    Left reason → do
                         logWarn logger CatWorld $
                             "listSaves: skipping " <> name
                                 <> ": authoritative generation unreadable ("
                                 <> authErr
                                 <> ") and previous generation is also \
-                                   \unusable ("
-                                <> renderGenerationFailure prevErr <> ")"
+                                   \unusable (" <> reason <> ")"
                         return []
+                    Right bytes →
+                        case decodeSaveEnvelopeMetadataClassified luaKnownNames bytes of
+                            Right meta → do
+                                logWarn logger CatWorld $
+                                    "listSaves: '" <> name
+                                        <> "': authoritative generation unreadable ("
+                                        <> authErr
+                                        <> "), listing from previous generation"
+                                return [mkListing name meta True]
+                            Left prevErr → do
+                                logWarn logger CatWorld $
+                                    "listSaves: skipping " <> name
+                                        <> ": authoritative generation unreadable ("
+                                        <> authErr
+                                        <> ") and previous generation is also \
+                                           \unusable ("
+                                        <> renderGenerationFailure prevErr <> ")"
+                                return []
 
     loadLegacyEntry name path = do
         -- Requirement 12: a legacy flat file's OWN listing path never
@@ -435,13 +553,23 @@ listSaves logger luaKnownNames = do
                     "listSaves: skipping " <> T.pack path <> ": " <> reason
                 return []
             Right () → do
-                bytes ← BS.readFile path
-                case decodeSaveEnvelopeMetadata luaKnownNames bytes of
-                    Left err → do
+                -- #2333: a legacy flat file has no previous generation
+                -- to fall back to, so an unreadable one is skipped the
+                -- same way an undecodable one already was.
+                readLegacy ← readGeneration path
+                case readLegacy of
+                    Left reason → do
                         logWarn logger CatWorld $
-                            "listSaves: skipping " <> T.pack path <> ": " <> err
+                            "listSaves: skipping legacy save file: " <> reason
                         return []
-                    Right meta → return [mkListing name meta False]
+                    Right bytes →
+                        case decodeSaveEnvelopeMetadata luaKnownNames bytes of
+                            Left err → do
+                                logWarn logger CatWorld $
+                                    "listSaves: skipping " <> T.pack path
+                                        <> ": " <> err
+                                return []
+                            Right meta → return [mkListing name meta False]
 
     mkListing name meta recovered = SaveListing
         { slName      = name
