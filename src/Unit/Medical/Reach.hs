@@ -20,6 +20,7 @@ module Unit.Medical.Reach
   , TreatReachRefusal(..)
   , reachRefusalMessage
   , checkTreatReach
+  , commitInReach
   , withinTreatmentRange
   ) where
 
@@ -99,3 +100,29 @@ withinTreatmentRange a b =
     let dx = uiGridX a - uiGridX b
         dy = uiGridY a - uiGridY b
     in sqrt (dx * dx + dy * dy) ≤ treatmentRange
+
+-- | Hold the reach a second time, INSIDE the transaction that performs
+--   the treatment, and apply @change@ only if it still holds.
+--
+--   The verbs check 'checkTreatReach' up front against a snapshot, and
+--   that check is what keeps a refusal from rolling the medic's stats
+--   or drawing from the treat RNG. It cannot be the check that protects
+--   the STATE, though: the unit thread writes @uiGridX@ \/ @uiGridY@
+--   into the very ref the commit runs against, so a medic, patient or
+--   supplier can step out of reach — or onto another page — between the
+--   snapshot and the commit, and a stale approval would then spend
+--   supplies at a distance anyway.
+--
+--   Passing this to @atomicModifyIORef'@ closes that window the way the
+--   four lax item verbs already close theirs (#1673): the decision is
+--   taken against the value the write actually lands on, so a late
+--   refusal returns the manager untouched rather than a partially
+--   applied treatment.
+commitInReach ∷ UnitId → UnitId → UnitId
+              → (UnitManager → UnitManager)
+              → UnitManager
+              → (UnitManager, Either TreatReachRefusal ())
+commitInReach medic patient owner change um =
+    case checkTreatReach um medic patient owner of
+        Left refusal → (um, Left refusal)
+        Right _      → (change um, Right ())

@@ -50,7 +50,8 @@ import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 import Item.Types (ItemInstance(..), emptyItemManager)
 import Unit.Faction (Faction(..))
-import Unit.Medical.Reach (treatmentRange)
+import Unit.Medical.Reach
+    (TreatReachRefusal(..), commitInReach, treatmentRange)
 import Unit.Types
     ( UnitDef(..), UnitId(..), UnitInstance(..), UnitManager(..), Wound(..)
     , emptyUnitManager )
@@ -375,6 +376,48 @@ spec = describe "Unit medical reach (page + range, #2297)" $ do
             worstInfection env patientUid `shouldReturn` 0
             (sesIntRolled <$> snapshot env) `shouldReturn` True
 
+    -- The up-front check runs against a SNAPSHOT, which is what keeps
+    -- a refusal from rolling a stat or drawing from the treat RNG. It
+    -- cannot be what protects the state: the unit thread writes
+    -- positions into the very ref the commit lands on. So the reach is
+    -- re-held inside the transaction, and these drive that transaction
+    -- wrapper directly with a manager whose endpoints have MOVED --
+    -- the state an interleaved position update leaves behind, without
+    -- a race to reproduce it.
+    describe "the reach is re-held inside the committing transaction" $ do
+
+        it "refuses, unchanged, when the patient has walked out of reach" $ \env → do
+            resetPages env
+            um ← readIORef (unitManagerRef env)
+            let moved = movedTo um patientUid (20, 10)
+            commitInReach medicUid patientUid medicUid wipeEverything moved
+                `shouldBe` (moved, Left ReachPatientTooFar)
+
+        it "refuses, unchanged, when the kit owner has stepped onto another page" $ \env → do
+            resetPages env
+            um ← readIORef (unitManagerRef env)
+            let moved = onPage um supplierUid pageAway
+            commitInReach medicUid patientUid supplierUid wipeEverything moved
+                `shouldBe` (moved, Left ReachOwnerOffPage)
+
+        it "applies the change when the live manager still agrees" $ \env → do
+            resetPages env
+            um ← readIORef (unitManagerRef env)
+            commitInReach medicUid patientUid supplierUid wipeEverything um
+                `shouldBe` (wipeEverything um, Right ())
+
+        -- The other half of the staleness: the change must land on the
+        -- value the transaction actually checked, never on the snapshot
+        -- read before it. getEffectiveStat caches the medic's rolled
+        -- intelligence into the manager BETWEEN the two, so a commit
+        -- that wrote its snapshot back would silently drop that cache.
+        it "commits onto the live manager, not the snapshot read before it" $ \env → do
+            resetPages env
+            ls ← newBareLuaBackend env
+            treatResult ls (bleed patientUid Nothing)
+                `shouldReturn` q "true|treated"
+            (sesIntRolled <$> snapshot env) `shouldReturn` True
+
     describe "the reach is one number, and it is the boundary" $ do
 
         it "unit.treatmentRange() reports the engine's own constant" $ \env → do
@@ -557,3 +600,24 @@ menuSetup target selection stocked = T.concat
 rowState ∷ LuaBackendState → Text → IO Text
 rowState ls label =
     evalDebug ls ("return tostring(_G.__rows and _G.__rows['" <> label <> "'])")
+
+-- | A change no in-range treatment would ever make, so a case cannot
+--   pass because the real mutation happened to be a no-op: it empties
+--   the whole roster. A transaction that refuses must return its input
+--   manager, not this.
+wipeEverything ∷ UnitManager → UnitManager
+wipeEverything um = um { umInstances = HM.empty }
+
+-- | The same manager with one unit standing somewhere else — what an
+--   interleaved @Unit.Thread@ position update leaves behind.
+movedTo ∷ UnitManager → UnitId → (Float, Float) → UnitManager
+movedTo um u (x, y) = withUnit um u (\inst → inst { uiGridX = x, uiGridY = y })
+
+-- | The same manager with one unit on a different world page.
+onPage ∷ UnitManager → UnitId → WorldPageId → UnitManager
+onPage um u pg = withUnit um u (\inst → inst { uiPage = pg })
+
+withUnit ∷ UnitManager → UnitId → (UnitInstance → UnitInstance) → UnitManager
+withUnit um u f = case HM.lookup u (umInstances um) of
+    Nothing → um
+    Just inst → um { umInstances = HM.insert u (f inst) (umInstances um) }

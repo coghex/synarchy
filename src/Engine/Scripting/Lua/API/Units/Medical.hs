@@ -27,7 +27,7 @@ import Unit.Types
 import Combat.Wounds (kindBleedFactor)
 import Unit.Stats (applySkillXP)
 import Unit.Medical.Reach
-    (checkTreatReach, reachRefusalMessage, treatmentRange)
+    ( checkTreatReach, commitInReach, reachRefusalMessage, treatmentRange )
 import Item.Types (ItemInstance(..))
 import Engine.Scripting.Lua.API.Units.Stats (getEffectiveStat)
 
@@ -155,7 +155,16 @@ treatBleedingIO env medic patient mOwner = do
                                  else 1.0
                         treatXp = if consumed ≤ 0 then 0
                                   else if success then 2.0 else 1.0
-                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                    -- #2297: the reach is re-held INSIDE the
+                    -- transaction that spends the supplies. um0 is a
+                    -- snapshot and the unit thread writes positions
+                    -- into this same ref, so a late refusal here
+                    -- returns the manager untouched rather than
+                    -- dressing a wound the endpoints have walked out
+                    -- of. Same rule the four lax verbs hold (#1673).
+                    committed ← atomicModifyIORef'
+                        (ucUnitManagerRef (toUnitCombatCapability env)) $
+                        commitInReach medic patient owner $ \um →
                         let um1 = consumeBandages owner consumed um
                             um2 = if success
                                     then setWoundDressing patient targetKey
@@ -174,12 +183,15 @@ treatBleedingIO env medic patient mOwner = do
                                                 antisepticItemName
                                                 antisepticDose um3)
                                     else um3
-                        in (um4, ())
-                    let msg = if success then "treated"
-                                         else "failed — out of material"
-                    pure (TreatResult success seep consumed
-                            (max consumed 1) (woundPart worst)
-                            (woundKind worst) msg "bandage")
+                        in um4
+                    case committed of
+                      Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                      Right () → do
+                        let msg = if success then "treated"
+                                             else "failed — out of material"
+                        pure (TreatResult success seep consumed
+                                (max consumed 1) (woundPart worst)
+                                (woundKind worst) msg "bandage")
                   [] → do
                     -- NO SUPPLIES → improvise a makeshift tourniquet. Crude
                     -- but better than nothing: it always goes on, consumes
@@ -187,13 +199,22 @@ treatBleedingIO env medic patient mOwner = do
                     -- poor seep (~0.4–0.58, a touch better with skill). Still
                     -- trains the medic a little.
                     let tqSeep = max 0.4 (min 0.58 (0.58 - 0.2 * min 1 baseComp))
-                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                    -- The tourniquet spends no material, but it still
+                    -- dresses a wound, so it holds the reach in its own
+                    -- transaction for the same reason as the kit path.
+                    committed ← atomicModifyIORef'
+                        (ucUnitManagerRef (toUnitCombatCapability env)) $
+                        commitInReach medic patient owner $ \um →
                         let um1 = setWoundDressing patient targetKey
                                       tqSeep "tourniquet" um
                             um2 = grantKnowledgeXP medic "bleed_control" 1.0 um1
-                        in (um2, ())
-                    pure (TreatResult True tqSeep 0 1 (woundPart worst)
-                            (woundKind worst) "makeshift tourniquet" "tourniquet")
+                        in um2
+                    case committed of
+                      Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                      Right () →
+                        pure (TreatResult True tqSeep 0 1 (woundPart worst)
+                                (woundKind worst) "makeshift tourniquet"
+                                "tourniquet")
 
 -- | Drop the first `n` bandage instances from the first inventory item
 --   (kit) that holds any. Leaves tools / other contents untouched.
@@ -447,7 +468,9 @@ treatInfectionIO env medic patient mOwner = do
                         reduction = max 0.15 (min 0.85 (0.2 + 0.6 * cap))
                                     * cureRateW worst
                         newInf    = max 0 (woundInfection worst - reduction)
-                    atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+                    committed ← atomicModifyIORef'
+                        (ucUnitManagerRef (toUnitCombatCapability env)) $
+                        commitInReach medic patient owner $ \um →
                         let um1 = consumeKitFill owner antibioticsItemName
                                                  antibioticsDose um
                             um2 = setWoundInfection patient targetKey newInf um1
@@ -457,10 +480,13 @@ treatInfectionIO env medic patient mOwner = do
                             -- response (helps clear other bacterial foci).
                             um5 = bumpImmuneResponse patient
                                     (min 0.5 (0.3 * cap)) um4
-                        in (um5, ())
-                    pure (TreatResult True newInf 1 1 (woundPart worst)
-                            (woundKind worst) "antibiotics administered"
-                            "antibiotics")
+                        in um5
+                    case committed of
+                      Left refusal → pure (treatFail (reachRefusalMessage refusal))
+                      Right () →
+                        pure (TreatResult True newInf 1 1 (woundPart worst)
+                                (woundKind worst) "antibiotics administered"
+                                "antibiotics")
 
 -- | unit.treatInfection(medicUid, patientUid [, kitOwnerUid]) →
 --     { ok, infection, part, kind, message, method } | nil
