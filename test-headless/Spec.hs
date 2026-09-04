@@ -281,6 +281,7 @@ import qualified Test.Headless.App.ChunkRegion as AppChunkRegion
 import qualified Test.Headless.App.DumpSettleWait as DumpSettleWait
 import qualified Test.Headless.App.PreviewConfig as PreviewConfig
 import qualified Test.Headless.App.ResourceRoot as AppResourceRoot
+import qualified Test.Headless.Camera.Finite as CameraFinite
 import qualified Test.Headless.Camera.GotoClamp as GotoClamp
 import qualified Test.Headless.Camera.GotoLoad as GotoLoad
 import qualified Test.Headless.Camera.ZoomScroll as ZoomScroll
@@ -1012,6 +1013,17 @@ main = hspec $ do
     describe "App.Preview.Config" PreviewConfig.spec
     describe "Camera.GotoClamp" GotoClamp.spec
     describe "Camera.ZoomScroll" ZoomScroll.spec
+    -- #2337: non-finite camera coordinates, refused at both boundaries.
+    -- The pure half -- the load-time repair and its warning -- needs no
+    -- engine. The Lua half rewrites the engine's own camera ref under
+    -- every example, and the staging half drives stageSession against a
+    -- forged one-page save, so each gets its OWN world-thread-free
+    -- engine rather than moving the shared worlds engine's camera or
+    -- adding a page to it. Its page is an arena page, so staging
+    -- rebuilds flat chunks instead of generating a world.
+    CameraFinite.pureSpec
+    aroundAll withHeadlessEngineNoWorld CameraFinite.spec
+    aroundAll withHeadlessEngineNoWorld CameraFinite.stagingSpec
     describe "Scene.BatchMerge" BatchMerge.spec
     describe "Render.PanMargin" PanMargin.spec
     LocationBounds.spec
