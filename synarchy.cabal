@@ -643,6 +643,7 @@ library
                      Combat.Types
                      Combat.Thread
                      Combat.Resolution
+                     Combat.Resolution.Admission
                      Combat.Resolution.Constants
                      Combat.Resolution.Common
                      Combat.Resolution.Strike
@@ -1310,6 +1311,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.IslandColumns
                    Test.Headless.World.ChunkCoordinates
                    Test.Headless.World.LocationDiscovery
+                   Test.Headless.Combat.Admission
                    Test.Headless.Combat.Damage
                    Test.Headless.Combat.MaxStamina
                    Test.Headless.Combat.MentalEffectiveness
@@ -1552,6 +1554,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.WidthTruncation
                    Test.Headless.Lua.ShellInput
                    Test.Headless.Lua.RandomStream
+                   Test.Headless.Lua.CombatLogRefusal
                    Test.Headless.Lua.ConsoleTableKeys
                    Test.Headless.Lua.LogSource
                    Test.Headless.Lua.InjuryNarration

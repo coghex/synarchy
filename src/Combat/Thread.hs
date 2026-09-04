@@ -13,6 +13,7 @@
 -- snappy when commands arrive.
 module Combat.Thread
     ( startCombatThread
+    , processAllCommands
     ) where
 
 import UPrelude
@@ -113,6 +114,12 @@ combatTick env tick = do
 
 -- | Drain the command queue and dispatch each command to
 --   'handleCommand' for resolution.
+--
+--   Exported so a headless spec can drive the REAL drain — the same
+--   queue, the same dispatch, the same 'resolveAttack' — after
+--   mutating the world between admission and commit (#2328), which is
+--   the window the whole admission contract is about. Nothing in
+--   production calls it outside 'combatTick'.
 processAllCommands ∷ EngineEnv → IO ()
 processAllCommands env = go
   where

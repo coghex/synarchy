@@ -101,6 +101,8 @@ import Unit.Injury (penetrate, woundFactor)
 import Unit.LineOfSight (unitAwareness)
 import Blood.Impact (pickImpactWound, spawnImpactBlood)
 import Combat.Resolution.Constants (kindStanceFactor)
+import Combat.Resolution.Admission
+    ( attackRangeTiles, noHeightAttackRange, checkAdmission, refusalReason )
 import Combat.Resolution.Common
     ( painFor, isAlreadyDead, bodyPartIndex, mentalEffectiveness )
 import Combat.Resolution.Strike
@@ -111,13 +113,23 @@ import Combat.Resolution.Damage
 import Combat.Resolution.Wear
     ( weaponWear, applyWeaponWear, applyArmorWear, applyStaminaDrain )
 import Combat.Resolution.Events
-    ( missEvent, hitEvent, deathEvent, pushEvent, setDead )
+    ( missEvent, refusedEvent, hitEvent, deathEvent, pushEvent, setDead )
 
 -- ----- Entry point -----
 
 -- | Resolve one attack. No-ops cleanly if either unit is missing,
 --   either side's def isn't registered, or either side is already
 --   dead (the AI shouldn't be issuing swings then but races happen).
+--
+--   Past those liveness checks the strike is REVALIDATED against the
+--   live instances before it commits anything (#2328): same world
+--   page, still in horizontal reach, and enough stance to pay the
+--   requested mode. `combat.attack` only enqueues, so the Lua gates
+--   that admitted this swing are up to a combat tick stale by now —
+--   see "Combat.Resolution.Admission" for why these three and not the
+--   others. A refusal publishes one 'refusedEvent' and mutates nothing
+--   else: no RNG is drawn, no wound, blood, wear, death command, last-
+--   attacker stamp, or attacker stamina/stance drain.
 resolveAttack ∷ EngineEnv → Word32 → Word32 → AttackMode → Float → Float → IO ()
 resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
     logger ← readIORef (loggerRef env)
@@ -148,8 +160,27 @@ resolveAttack env atkRaw tgtRaw mode reachBonus lungeSpeed = do
                     -- moment of the kill.
                     | not (isAlreadyDead atk adef)
                     , not (isAlreadyDead tgt tdef) →
-                        runResolution env logger im sm gt
-                            atkRaw tgtRaw mode reachBonus lungeSpeed atk adef tgt tdef
+                        -- Horizontal reach is measured against the SAME
+                        -- number `unit.getAttackRange` reports to the AI
+                        -- (height/2.4 + blade/100, blade resolved right
+                        -- hand → left hand → natural weapon), so the
+                        -- commit gate can never be tighter than the
+                        -- admission gate it re-checks.
+                        let atkRange = case HM.lookup "height" (uiStats atk) of
+                                Just h  → attackRangeTiles h (bladeLengthCm im adef atk)
+                                Nothing → noHeightAttackRange
+                        in case checkAdmission atkRange reachBonus mode atk tgt of
+                            Just refusal → do
+                                pushEvent env
+                                    (refusedEvent gt atkRaw tgtRaw mode refusal)
+                                logDebug logger CatThread $
+                                    "refused (" <> attackModeText mode <> "): "
+                                        <> tshow atkRaw <> " → " <> tshow tgtRaw
+                                        <> " " <> refusalReason refusal
+                            Nothing →
+                                runResolution env logger im sm gt
+                                    atkRaw tgtRaw mode reachBonus lungeSpeed
+                                    atk adef tgt tdef
                 _ → pure ()
         _ → pure ()
 
@@ -433,6 +464,17 @@ runResolution env logger im sm gt atkRaw tgtRaw mode reachBonus lungeSpeed atk a
     applyStaminaDrain env gt atkRaw mode
 
 -- ----- Helpers -----
+
+-- | The wielded blade length in centimetres: equipped right hand →
+--   equipped left hand → the def's natural weapon → 0. The same
+--   precedence 'Engine.Scripting.Lua.API.Units.Query' resolves for
+--   `unit.getAttackRange`, so the reach the AI admitted on and the
+--   reach revalidated at commit are one number.
+bladeLengthCm ∷ ItemManager → UnitDef → UnitInstance → Float
+bladeLengthCm im adef inst =
+    case firstEquippedWeapon im (uiEquipment inst) of
+        Just (_, _, w) → iwBladeLength w
+        Nothing        → maybe 0.0 nwEffectiveBladeLength (udNaturalWeapon adef)
 
 -- | The first equipped weapon, with its instance (for quality /
 --   condition / weight) and def (for the material substance) — the
