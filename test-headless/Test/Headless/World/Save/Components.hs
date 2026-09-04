@@ -84,6 +84,9 @@ import World.Save.Types
     , MissingFloraRef(..), renderMissingFloraRef
     , MissingLocationRef(..), renderMissingLocationRef
     , MissingInfectionRef(..), renderMissingInfectionRef
+    , missingInfectionReferences
+    , ImmunityScrub(..), emptyImmunityScrub, renderImmunityScrub
+    , fromUnitSnapshot, toUnitSnapshot
     , WorldPageSave(..), SaveData(..), resolveLegacyLocationParams )
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.River.Naming (RiverNames(..))
@@ -117,7 +120,13 @@ import Power.Types
     ( emptyPowerNodes, PowerNode(..), PowerNodes(..), PowerNodeId(..)
     , PowerRole(..) )
 import Building.Types (BuildingId(..))
-import Unit.Types (UnitId(..))
+import Engine.Asset.Handle (TextureHandle(..))
+import Infection.Types
+    (InfectionDef(..), InfectionManager(..), emptyInfectionManager)
+import qualified Data.Map.Strict as Map
+import Unit.Types
+    ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
+    , UnitManager(..), Wound(..), defaultNaturalResistance )
 import Unit.Sim.Types
     (UnitSimState(..), MoveTarget(..), Pose(..), UnitActivity(..)
     , MoveHazardPolicy(..))
@@ -369,6 +378,57 @@ minimalUnitInstance inv = UnitInstanceSnapshot
     , uisEquipped = HM.empty, uisAccessories = [], uisFactionId = ""
     , uisWounds = [], uisScars = [], uisImmuneResponse = 0
     , uisImmunities = HM.empty, uisBlood = 5, uisName = "" }
+
+-- | #2305 fixtures. Two registered infections and nothing else:
+--   @ghost_rot@ and @zeta_pox@ are the ids every case uses for content
+--   that has been REMOVED, so neither may ever appear here.
+liveInfections ∷ InfectionManager
+liveInfections = InfectionManager $ HM.fromList
+    [ (i, immunityInfectionDef i) | i ← ["staph", "gas_gangrene"] ]
+
+immunityInfectionDef ∷ Text → InfectionDef
+immunityInfectionDef iid = InfectionDef
+    { infId = iid, infName = "Display " <> iid, infIcon = ""
+    , infCategory = "bacterial", infSites = ["surface"], infBaseWeight = 1
+    , infTempMin = 0, infTempMax = 40, infMoistMin = 0, infMoistMax = 1
+    , infAggressiveness = 1, infInfectability = 1
+    , infCurableBy = ["antibiotics"], infCureRate = 1
+    , infWoundInfectable = True, infEffects = []
+    , infTransmissibility = 0, infTransmission = [] }
+
+-- | The def set 'minimalUnitInstance' resolves against. Mirrors
+--   'Test.Headless.Unit.Faction.minimalDef' — only the fields
+--   'fromUnitSnapshot' re-resolves carry any weight.
+immunityUnitDefs ∷ HM.HashMap Text UnitDef
+immunityUnitDefs = HM.singleton "test_unit" UnitDef
+    { udName = "test_unit", udNamePool = Nothing, udDisplayName = Nothing
+    , udTexture = TextureHandle 0, udPortrait = Nothing
+    , udDirSprites = Map.empty
+    , udBaseWidth = 0, udMaxSpeed = 1.0, udRunThreshold = 0.6
+    , udAnimations = HM.empty, udStateAnims = HM.empty, udEagerStats = False
+    , udStatTemplates = HM.empty, udBodyTemplates = HM.empty
+    , udSkillTemplates = HM.empty, udKnowledgeTemplates = HM.empty
+    , udStartingInventory = []
+    , udEquipmentClass = Nothing, udStartingEquipment = HM.empty
+    , udStartingAccessories = []
+    , udBodyParts =
+        [ BodyPart
+            { bpId = "torso", bpName = "torso", bpParent = Nothing
+            , bpVital = False, bpAreaWeight = 1.0, bpTacticalValue = 0.5
+            , bpBleedFactor = 1.0, bpHeightLow = 0, bpHeightHigh = 1
+            , bpLayers = [], bpTargetable = True, bpDepth = 0.0
+            , bpAffectsLocomotion = False, bpAffectsBalance = False } ]
+    , udNaturalResistance = defaultNaturalResistance
+    , udNaturalWeapon = Nothing, udModifiers = [] }
+
+-- | A wound whose infection type is @iid@ — the reference
+--   'missingInfectionReferences' does inventory.
+infectedWound ∷ Text → Wound
+infectedWound iid = Wound
+    { woundPart = "torso", woundKind = "slash", woundSeverity = 0.6
+    , woundAt = 0, woundBandage = 0, woundClot = 0, woundHeal = 0
+    , woundDressing = "", woundInfection = 0.4, woundClean = False
+    , woundInfectionType = iid, woundNecrosis = 0 }
 
 minimalBuildingInstance ∷ [ItemInstance] → BuildingInstanceSnapshot
 minimalBuildingInstance storage = BuildingInstanceSnapshot
@@ -3022,6 +3082,165 @@ spec = do
                         { wpsConstructDesignations = designation "ghost_bldg" })]
             map mcdDefName missing `shouldBe` ["ghost_bldg"]
             map mcdTile missing `shouldBe` [(1, 2)]
+
+    -- #2305: 'uiImmunities' is acquired immunity keyed by infection
+    -- DEFINITION id, and until this it round-tripped a save verbatim. An
+    -- entry whose definition has since been removed from
+    -- data/infections/ has no legitimate surface —
+    -- 'Engine.Scripting.Lua.API.Units.Combat.unitGetImmunitiesFn' prints
+    -- the raw key where a disease name belongs, and 'Combat.Wounds.Tick'
+    -- would resume honouring it for whatever content later reclaimed
+    -- that id — so 'fromUnitSnapshot' drops it while the session is
+    -- still being staged, on #1087's container-knowledge terms:
+    -- diagnosed with a count and the ids, never a load failure.
+    --
+    -- The scrub lives INSIDE that one pure restore rather than beside
+    -- it, so these exercise the production path directly and resnapshot
+    -- its output, which is what requirement 4 ("a session loaded this
+    -- way saves back clean") actually asks.
+    describe "acquired-immunity scrub (#2305)" $ do
+        let uid1 = UnitId 1
+            immUnit imm = (minimalUnitInstance [])
+                { uisImmunities = HM.fromList imm }
+            woundedUnit imm wounds = (immUnit imm) { uisWounds = wounds }
+            snapshotOf us = UnitSnapshot (HM.fromList us) 99
+            restore infMgr snap =
+                fromUnitSnapshot page1 immunityUnitDefs infMgr snap
+            restored infMgr snap uid =
+                let (um, _, _, _) = restore infMgr snap
+                in uiImmunities <$> HM.lookup uid (umInstances um)
+            scrubOf infMgr snap = let (_, _, _, sc) = restore infMgr snap in sc
+            -- Restore, then take the save the resulting session would
+            -- write, through the same two adapters 'World.Load.Stage'
+            -- and 'World.Thread.Command.Save.WriteWorld' use.
+            resnapshotted infMgr snap uid =
+                let (um, _, _, _) = restore infMgr snap
+                in uisImmunities
+                     <$> HM.lookup uid (usnInstances (toUnitSnapshot page1 um))
+            pageWith us = (minimalWorldPageSave page1) { wpsUnits = us }
+            mixed = snapshotOf
+                [ (uid1, immUnit [("staph", 0.75), ("ghost_rot", 0.9)]) ]
+
+        it "drops an immunity key whose infection definition is gone" $
+            (HM.member "ghost_rot" <$> restored liveInfections mixed uid1)
+                `shouldBe` Just False
+
+        it "preserves a resolving key's EXACT level, untouched by the \
+           \scrub beside it" $
+            (HM.lookup "staph" =≪ restored liveInfections mixed uid1)
+                `shouldBe` Just 0.75
+
+        it "leaves an all-resolving map completely alone" $
+            restored liveInfections
+                (snapshotOf [(uid1, immUnit [("staph", 0.2), ("gas_gangrene", 1)])])
+                uid1
+                `shouldBe` Just (HM.fromList [("staph", 0.2), ("gas_gangrene", 1)])
+
+        it "drops EVERY entry when nothing is registered, and keeps the \
+           \unit itself" $
+            restored emptyInfectionManager mixed uid1 `shouldBe` Just HM.empty
+
+        it "the scrubbed key is gone from the save this session writes \
+           \back, so the orphan cannot reappear in a later generation \
+           \(requirement 4)" $ do
+            resnapshotted liveInfections mixed uid1
+                `shouldBe` Just (HM.singleton "staph" 0.75)
+            case resnapshotted liveInfections mixed uid1 of
+                Nothing   → expectationFailure "unit vanished across the round trip"
+                Just imm2 → scrubOf liveInfections
+                                (snapshotOf [(uid1, immUnit (HM.toList imm2))])
+                                `shouldBe` emptyImmunityScrub
+
+        it "the diagnostic is empty, and renders nothing, when every key \
+           \resolves" $ do
+            let sc = scrubOf liveInfections
+                        (snapshotOf [(uid1, immUnit [("staph", 0.5)])])
+            sc `shouldBe` emptyImmunityScrub
+            renderImmunityScrub page1 sc `shouldBe` Nothing
+
+        it "counts ENTRIES removed, not distinct ids: four units carrying \
+           \one dead id report 4 removals and a single id" $ do
+            let sc = scrubOf liveInfections $ snapshotOf
+                        [ (UnitId n, immUnit [("ghost_rot", 0.5), ("staph", 0.5)])
+                        | n ← [1 .. 4] ]
+            iscRemoved sc `shouldBe` 4
+            iscIds sc `shouldBe` ["ghost_rot"]
+
+        it "names every DISTINCT unresolved id, sorted, however many \
+           \units carried each" $ do
+            let sc = scrubOf liveInfections $ snapshotOf
+                        [ (UnitId 1, immUnit [("zeta_pox", 0.1), ("ghost_rot", 0.2)])
+                        , (UnitId 2, immUnit [("ghost_rot", 0.3), ("staph", 0.4)]) ]
+            iscRemoved sc `shouldBe` 3
+            iscIds sc `shouldBe` ["ghost_rot", "zeta_pox"]
+
+        it "renders the count and the ids for the page it happened on" $
+            renderImmunityScrub page1 (ImmunityScrub 3 ["ghost_rot", "zeta_pox"])
+                `shouldBe` Just
+                    "dropping 3 acquired-immunity entries on page 'page1' \
+                    \whose infection definition no longer exists \
+                    \(ghost_rot, zeta_pox)"
+
+        it "renders the singular for exactly one removal" $
+            renderImmunityScrub page1 (ImmunityScrub 1 ["ghost_rot"])
+                `shouldBe` Just
+                    "dropping 1 acquired-immunity entry on page 'page1' \
+                    \whose infection definition no longer exists \
+                    \(ghost_rot)"
+
+        it "ignores a unit dropped as a DEF orphan: its whole instance \
+           \goes, so the scrub removed nothing" $
+            scrubOf liveInfections (snapshotOf
+                [ (uid1, (immUnit [("ghost_rot", 0.5)])
+                            { uisDefName = "ghost_unit" }) ])
+                `shouldBe` emptyImmunityScrub
+
+        it "scrubs a DEAD unit, whose wound tick would never decay the \
+           \entry (review correction)" $ do
+            let snap = snapshotOf
+                    [ (uid1, (immUnit [("ghost_rot", 1.0)]) { uisPose = "dead" }) ]
+            iscRemoved (scrubOf liveInfections snap) `shouldBe` 1
+            restored liveInfections snap uid1 `shouldBe` Just HM.empty
+
+        -- Requirement 6: the OTHER half of an infection reference stays
+        -- a hard load rejection, and the two halves must not bleed into
+        -- each other. A wound reference names an infection a unit is
+        -- CURRENTLY carrying; an immunity key is a memory of content it
+        -- already survived, and inventorying it here would refuse every
+        -- save in which any surviving unit still holds un-decayed
+        -- immunity to a removed definition.
+        it "missingInfectionReferences does NOT report an immunity-only \
+           \orphan — that one belongs to the staging scrub" $
+            missingInfectionReferences liveInfections
+                [ (page1, pageWith (snapshotOf
+                      [(uid1, immUnit [("ghost_rot", 0.9)])])) ]
+                `shouldBe` []
+
+        it "missingInfectionReferences still reports an unresolved \
+           \woundInfectionType, which stays a load rejection" $ do
+            let refs = missingInfectionReferences liveInfections
+                    [ (page1, pageWith (snapshotOf
+                          [ (UnitId 7
+                            , woundedUnit [] [infectedWound "ghost_rot"]) ])) ]
+            map mirInfType refs `shouldBe` ["ghost_rot"]
+            map mirUnitId refs `shouldBe` [7]
+
+        it "reports the wound and NOT the immunity when one unit carries \
+           \both halves of the same dead id" $ do
+            let refs = missingInfectionReferences liveInfections
+                    [ (page1, pageWith (snapshotOf
+                          [ (UnitId 7
+                            , woundedUnit [("ghost_rot", 0.9)]
+                                          [infectedWound "ghost_rot"]) ])) ]
+            length refs `shouldBe` 1
+            map mirWoundPart refs `shouldBe` ["torso"]
+
+        it "missingInfectionReferences still ignores the empty-string \
+           \no-infection sentinel" $
+            missingInfectionReferences liveInfections
+                [ (page1, pageWith (snapshotOf
+                      [(uid1, woundedUnit [] [infectedWound ""])])) ]
+                `shouldBe` []
 
     -- #760 round 8: the "texture-palette" component no longer rides on
     -- TexPalette's own live Serialize instance.

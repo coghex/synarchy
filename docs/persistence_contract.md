@@ -269,6 +269,26 @@ dropping the in-progress stamp.
   an item with an unknown def) — that would violate publish-after-
   validate (§1) by producing a session that quietly diverges from what
   was saved.
+- One deliberate exception, and its boundary (#2305). A saved unit
+  references infection definitions in **two** places, and the two are
+  handled differently. A wound's `woundInfectionType` names an infection
+  the unit is *currently* carrying, and drives its treatment and
+  progression, so an unresolved one is a missing gameplay definition in
+  the full sense above: `World.Save.Types.missingInfectionReferences`
+  inventories it and the load is rejected. A `uiImmunities` key is a
+  *memory* of an infection the unit already survived; an unresolved one
+  has no surface but the raw id the Status tab would print, and no
+  gameplay meaning until the id is reclaimed by different content. It is
+  therefore **scrubbed during staging** — dropped from the units the load
+  publishes, logged with the count of entries removed and the
+  unresolved ids, never a reconciliation failure and never a load
+  rejection — on the same terms as the container-knowledge scrub of
+  #1087 (`World.Load.Stage`). Entries whose keys resolve are
+  restored with their exact levels; a session loaded this way saves back
+  without the orphan. The asymmetry is blast radius: inventorying an
+  immunity key would make removing one infection definition reject every
+  save in which any surviving unit still holds un-decayed immunity to
+  it, while the wound case needs a unit that is infected right now.
 - Producing placeholder textures and changing renderer fallback
   behavior are tracked separately (out of scope here); this contract
   only defines their effect on load *validity*, which is: none, for
