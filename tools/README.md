@@ -1308,6 +1308,25 @@ python3 tools/probe_flake.py --probe role --runs 10 --result /tmp/role.json
 python3 tools/test_probe_flake.py     # the focused self-test (no engine)
 ```
 
+The self-test is the aggregate CI runs, and it composes owners under
+`tools/probe_flake_tests/` (#2087): `harness_*` for the generic harness
+contracts, and one `migration_<key>.py` per key in
+`probe_flake.PROTOCOL_PROBES`. Either side can be run on its own, from the
+same composed order the aggregate uses:
+
+```bash
+python3 tools/test_probe_flake.py --only harness
+python3 tools/test_probe_flake.py --only migration:thermo_altitude
+python3 tools/test_probe_flake.py --list --only harness   # select, run nothing
+```
+
+An unrecognized `--only` is refused before anything runs, naming the token
+and listing every valid selector, and the aggregate refuses to run at all if
+the migration contracts and `probe_flake.PROTOCOL_PROBES` ever disagree in
+either direction. So a probe-result migration adds `migration_<key>.py` and
+one line to the facade's `SEQUENCE`, and changing one migrated probe's
+contract touches neither the harness modules nor another probe's module.
+
 Only probes that implement the shared `probe-result/v1` protocol
 (`tools/probe_protocol.py`) can be measured; everything else is `legacy` and
 is rejected BY NAME before execution, without running the probe at all —
