@@ -67,12 +67,53 @@ where it applies the animation, the direction, and the stage:
 | a missing or unrecognized `visual_class` | see §4 |
 | an unknown `state_animations` key | see §3 |
 | legacy `appearing` beside the role it resolves to | see §3 |
+| a numeric field outside its domain | see §2.1 |
 
 The distinctness rules are CANONICAL-only — a legacy declaration
 reaching all four views is the compatibility branch's whole job — and
 the animation one is per stage, deliberately: one path recurring at a
 LATER stage of the same clip is an ordinary repeated frame, not a
 collapsed declaration.
+
+### 2.1 Numeric domains (#2347)
+
+Every number a definition authors is checked at THIS boundary, against
+the value the engine will actually store:
+
+| Field | Domain | Default when omitted |
+|---|---|---|
+| an animation's `fps` | finite, strictly positive | `8` |
+| `build_work` | finite, non-negative | `0` |
+| `storage_capacity` | finite, non-negative | `0` |
+| `power_drain` | finite, non-negative | `0` |
+| `tile_size.x`, `tile_size.y` | whole, at least 1 | `1` |
+| each `materials` count | whole, at least 1 | — (an omitted or empty `materials` block is a free build) |
+
+Four properties of that check are load-bearing:
+
+- **Whole-file rejection.** A violation refuses the file through the
+  ordinary `Engine.Asset.YamlList` contract (§6): no definition in it
+  loads, and the warning names the file. The message names the building,
+  the animation where one applies, the field, and the authored value —
+  and for a `materials` count, the material key too, since one bad entry
+  in a map is otherwise unfindable.
+- **The domain is checked AFTER narrowing to the engine's `Float`.** An
+  ordinary `1.0e+100` is a valid YAML number that becomes `Infinity` in
+  a 32-bit field, and a strictly-positive `1.0e-50` becomes `0`; both are
+  rejected as the values they become, not the values they were written
+  as.
+- **Only an OMITTED key selects the default.** `fps: null`,
+  `tile_size: null` and `materials: null` are present-and-invalid, not
+  absent. (YAML's `.nan` / `.inf` resolve to *strings*, so they arrive as
+  a wrong type — and still get the same contextual diagnostic.)
+- **No consumer gained a clamp.** `Building.Visual.pickBuildingFrame` is
+  unchanged: its non-looping time index has only an upper bound, and a
+  negative `fps` on a `built` animation would still index a vector out of
+  bounds. What changed is that such a definition can no longer be
+  authored. `Building.Destruction.resolveDestructionClip` keeps its own
+  finite-positive fps check for the same reason in reverse: `BuildingDef`
+  is a public constructor a hand-built definition reaches without the
+  decoder.
 
 ## 3. Lifecycle roles
 
@@ -84,7 +125,7 @@ collapsed declaration.
 | `construction` | worker-driven build, indexed by `build_progress / build_work` |
 | `appearance` | timed materialisation, indexed by elapsed game time |
 | `built` | the finished loop |
-| `destruction` | played once, forward, by the transient presentation a demolition captures (BDA-3, #2091) — never by a live instance; must declare `loop: false` and a finite positive `fps`, or the demolition is silent and the declaration is reported |
+| `destruction` | played once, forward, by the transient presentation a demolition captures (BDA-3, #2091) — never by a live instance; must declare `loop: false`, or the demolition is silent and the declaration is reported. Its `fps` is finite and positive by §2.1, like every animation's; the resolver re-checks it anyway because a hand-built `BuildingDef` never passed the decoder |
 
 The derived activity (`Building.Types.currentActivity`) splits with it:
 a positive-`build_work` instance short of its target is `Constructing`,
@@ -175,7 +216,7 @@ from the manager.
   hit-test geometry follow the active camera through `Building.Visual`.
   The committed building DESIGNATION consumes that same boundary since
   #1845 replaced its generic marker with the building's own sprite.
-- **Destruction.** `destruction` is played by `Building.Destruction` (BDA-3, #2091): the `BuildingDestroy` drain captures a render-only effect from the declared clip in the same transition that removes the instance, plays it once from the game clock, and prunes it at `frameCount / fps`. No fallback: a definition without the role is removed with no visual, and a looping, zero-, negative- or non-finite-fps declaration is reported with building/animation context and plays nothing.
+- **Destruction.** `destruction` is played by `Building.Destruction` (BDA-3, #2091): the `BuildingDestroy` drain captures a render-only effect from the declared clip in the same transition that removes the instance, plays it once from the game clock, and prunes it at `frameCount / fps`. No fallback: a definition without the role is removed with no visual, and a looping, zero-, negative- or non-finite-fps declaration is reported with building/animation context and plays nothing — a fps outside that domain now reaches the resolver only from a hand-built definition, since #2347 refuses it in the YAML decoder (§2.1).
 - **Preview direction/lifecycle controls.** The preview keeps decoding
   both forms — its static hint reads canonical `sprites.south` and falls
   back to legacy `sprite`, so an art slice's migration cannot silently
