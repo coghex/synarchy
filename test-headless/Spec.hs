@@ -70,6 +70,7 @@ import qualified Test.Headless.Asset.FloraContent as FloraContent
 import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
 import qualified Test.Headless.Asset.FloraVocabularySchema as FloraVocabularySchema
 import qualified Test.Headless.Asset.InfectionSchema as InfectionSchema
+import qualified Test.Headless.Asset.UnitBodyGraph as AssetUnitBodyGraph
 import qualified Test.Headless.Asset.UnitInventory as AssetUnitInventory
 import qualified Test.Headless.Asset.Types as AssetTypes
 import qualified Test.Headless.Asset.YamlList as AssetYamlList
@@ -696,6 +697,7 @@ main = hspec $ do
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
     describe "Asset.FloraVocabularySchema" FloraVocabularySchema.spec
     describe "Asset.InfectionSchema" InfectionSchema.spec
+    describe "Asset.UnitBodyGraph" AssetUnitBodyGraph.spec
     describe "Asset.UnitInventory" AssetUnitInventory.spec
     describe "Asset.YamlList" AssetYamlList.spec
     StartupAssetLogging.spec
