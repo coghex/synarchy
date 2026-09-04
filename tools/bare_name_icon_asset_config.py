@@ -87,11 +87,18 @@ REPO_CONFIG = {
         {"file": COMBAT, "name": "the immunity row's pushed `icon`",
          "pattern": r'pushstring\s*\([^\n"]*"(?P<name>[A-Za-z0-9_]+)"\s*\)'
                     r'\s*\n\s*Lua\.setfield\s*\(-2\)\s*"icon"'},
-        # v .:? "icon" .!= "bacterial_infection" -- the basename an infection
-        # def that declares no `icon:` silently gets, so it is authoritative
-        # even though no YAML file spells it.
+        # optionalText ident "icon" "bacterial_infection" v -- the basename
+        # an infection def that declares no `icon:` silently gets, so it is
+        # authoritative even though no YAML file spells it. It was authored
+        # as `v .:? "icon" .!= "bacterial_infection"` until #2346 replaced
+        # aeson's `.:?` with a named parser that tells an ABSENT key from a
+        # present-but-null one; the default itself is unchanged. Anchored on
+        # the field name followed by its literal rather than on the helper,
+        # so the site survives a rename of the helper -- and a default that
+        # stops being a literal stops matching, which is a refusal, not a
+        # silently smaller reference set.
         {"file": YAML_INFECTION, "name": "the `icon:` decoder default",
-         "pattern": r'"icon"\s*\.!=\s*"(?P<name>[A-Za-z0-9_]+)"'},
+         "pattern": r'"icon"\s+"(?P<name>[A-Za-z0-9_]+)"'},
     ],
     "haskell_forwarding_allowlist": [
         {"file": INFECTION_API, "pattern": r'putS\s+"icon"\s+\(infIcon d\)',
