@@ -30,7 +30,7 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Types as Aeson (Parser)
 import qualified Data.Text as T
-import Data.List (intercalate)
+import Data.List (intercalate, nub)
 import Engine.Core.Log (LoggerState)
 import Engine.Asset.YamlList (loadYamlList, loadYamlListOutcome)
 import Unit.Types.Combat (BodyPart(..))
@@ -431,7 +431,7 @@ instance FromJSON UnitYamlDef where
         ⊛ v .:? "equipment_class"
         ⊛ v .:? "starting_equipment"  .!= Map.empty
         ⊛ v .:? "starting_accessories".!= []
-        ⊛ v .:? "body_parts"          .!= []
+        ⊛ requireBodyParts v
         ⊛ v .:? "natural_resistance"  .!= defaultUnitYamlNaturalResistance
         ⊛ v .:? "natural_weapon"
         ⊛ v .:? "modifiers"           .!= []
@@ -501,6 +501,159 @@ requireMaxSpeed v = do
   where
     bad unitName why = fail ∘ T.unpack $
         "unit '" <> unitName <> "': 'max_speed' " <> why
+
+-- | Read a unit def's @body_parts@ and require the authored list to be
+--   a well-formed part FOREST before anything registers it (#2348),
+--   diagnosing every rejection by the unit's own name the way
+--   @requireMaxSpeed@ above does. A failure here fails the whole file
+--   through the "Engine.Asset.YamlList" contract, so 'loadUnitYamlOutcome'
+--   hands back 'Nothing' and no definition in the file is registered.
+--
+--   Three relational properties, none of which any consumer can defend
+--   itself against:
+--
+--     * __ids are unique__. Target selection scores every authored
+--       ENTRY ("Combat.Resolution.Strike" pairs each part with each
+--       attack kind), while damage resolution looks the chosen id up in
+--       a @HashMap@ built by @bodyPartIndex@ in
+--       "Combat.Resolution.Common", which keeps the LAST entry. Two
+--       entries sharing an id therefore split one part in half: the hit
+--       is drawn with one duplicate's @area_weight@ and
+--       @tactical_value@ and then resolved against the other's tissue,
+--       vital flag and layers.
+--
+--     * __every @parent@ resolves, and every chain reaches a root__.
+--       No walk can hang — severing, fall allocation and subpart
+--       allocation are single-level filters and the Lua macro-part
+--       climb is capped at the part count — but a part whose chain
+--       never terminates at a parentless root is unreachable from the
+--       macro-part it claims to hang off, and one naming a parent that
+--       is not in the list is never allocated damage and never severed
+--       while startup still reports the unit loaded.
+--
+--     * __a subpart has a parent__. Only targetable parts are aimed at;
+--       a @targetable: false@ part is reached ONLY as a direct child
+--       during allocation, so a parentless one is dead weight in the
+--       list.
+--
+--   Nothing stricter is checked. The shipped humanoids author targetable
+--   parts under targetable parents, targetable parts under
+--   NON-targetable parents, and non-targetable parts under
+--   non-targetable parents; all three shapes stay accepted.
+requireBodyParts ∷ Aeson.Object → Aeson.Parser [UnitYamlBodyPart]
+requireBodyParts v = do
+    unitName ← v .:? "name" .!= ("<unnamed>" ∷ Text)
+    parts    ← v .:? "body_parts" .!= []
+    case bodyPartFault parts of
+        Nothing  → pure parts
+        Just why → fail ∘ T.unpack $
+            "unit '" <> unitName <> "': 'body_parts' " <> why
+
+-- | The FIRST fault in an authored part list, or 'Nothing' when the
+--   list is a well-formed forest. Written as an explicit chain rather
+--   than an alternative fold because the ORDER is load-bearing:
+--   uniqueness is decided first, and while ids are ambiguous the
+--   graph is not walked at all. Walking it would mean silently picking
+--   one of the duplicates as \"the\" part with that id and then
+--   reporting a chain the author cannot act on, since the chain would
+--   depend on which duplicate was picked.
+bodyPartFault ∷ [UnitYamlBodyPart] → Maybe Text
+bodyPartFault parts = case duplicateIdFault parts of
+    Just why → Just why
+    Nothing  → case parentChainFault parts of
+        Just why → Just why
+        Nothing  → parentlessSubpartFault parts
+
+-- | Every id that appears more than once, in first-appearance order.
+--   ALL of them are named: a file that repeats three ids is three
+--   separate edits, and reporting one at a time makes the author
+--   re-run the loader for each.
+duplicateIdFault ∷ [UnitYamlBodyPart] → Maybe Text
+duplicateIdFault parts
+    | null repeated = Nothing
+    | otherwise     = Just $
+        "repeats the part id " <> commaList repeated
+        <> "; each id must appear exactly once, because targeting scores \
+           \every authored entry while damage resolution indexes parts by \
+           \id and keeps only the last"
+  where
+    ids      = map uybpId parts
+    repeated = nub [i | i ← ids, length (filter (≡ i) ids) > 1]
+
+-- | The first part, in authored order, whose @parent@ chain does not
+--   terminate at a parentless root — either because it runs off the end
+--   of the list or because it closes on itself.
+--
+--   Called only once ids are known unique, so the map below is a
+--   faithful index of the authored list and every lookup in it means
+--   what it reads as.
+--
+--   A missing parent reports the WHOLE followed chain, since the author
+--   has to see which of several hops is the broken one. A cycle instead
+--   reports the chain from the repeated id onward, so the rendered
+--   chain is exactly the closed loop (@\'a\' -> \'b\' -> \'a\'@, or
+--   @\'a\' -> \'a\'@ for a self-parent) rather than that loop plus
+--   however many parts happened to hang off it earlier in the file.
+parentChainFault ∷ [UnitYamlBodyPart] → Maybe Text
+parentChainFault parts =
+    listToMaybe (catMaybes (map (faultFrom ∘ uybpId) parts))
+  where
+    parentOf ∷ Map.Map Text (Maybe Text)
+    parentOf = Map.fromList [(uybpId p, uybpParent p) | p ← parts]
+
+    faultFrom start = go start [start] start
+
+    -- @chain@ is the walk so far, in order, ending at @cur@.
+    go start chain cur = case Map.lookup cur parentOf of
+        -- Unreachable: the walk starts at an authored id and only ever
+        -- steps to one the guard below has already found in the map.
+        Nothing         → Nothing
+        -- A root. The chain terminates, which is the whole requirement.
+        Just Nothing    → Nothing
+        Just (Just par)
+          | par ∈ chain → Just (cycleWhy par chain)
+          | Map.notMember par parentOf → Just (missingWhy start chain par)
+          | otherwise   → go start (chain ⧺ [par]) par
+
+    cycleWhy par chain =
+        "part " <> quoted par
+        <> " has a parent chain that never reaches a root: "
+        <> renderChain (dropWhile (≢ par) chain ⧺ [par])
+
+    missingWhy start chain par =
+        "part " <> quoted start
+        <> " names a parent that is not a part of this unit: "
+        <> renderChain (chain ⧺ [par])
+        <> " ends at the missing id " <> quoted par
+
+-- | Every @targetable: false@ part authored without a @parent@, in
+--   authored order. All of them, for the reason @duplicateIdFault@
+--   names all its duplicates.
+parentlessSubpartFault ∷ [UnitYamlBodyPart] → Maybe Text
+parentlessSubpartFault parts
+    | null orphans = Nothing
+    | otherwise    = Just $
+        "part " <> commaList orphans
+        <> " sets 'targetable: false' with no 'parent'; a non-targetable \
+           \part is reached only as a direct child of its parent, so a \
+           \parentless one can never be allocated damage or severed"
+  where
+    orphans = [ uybpId p | p ← parts
+                         , not (uybpTargetable p)
+                         , isNothing (uybpParent p) ]
+
+-- | @\'a\' -> \'b\' -> \'c\'@. Single quotes throughout, deliberately:
+--   the message reaches a reader through @show@ on a
+--   @Data.Yaml.ParseException@, which escapes a double quote and leaves
+--   a single one alone.
+renderChain ∷ [Text] → Text
+renderChain = T.intercalate " -> " ∘ map quoted
+
+commaList ∷ [Text] → Text
+commaList = T.intercalate ", " ∘ map quoted
+
+quoted ∷ Text → Text
+quoted t = "'" <> t <> "'"
 
 -- | An ASSET-ONLY unit declaration (#1257): the authoritative inventory
 --   entry for a shipped @assets\/textures\/units\/\<name\>\/@ tree that
