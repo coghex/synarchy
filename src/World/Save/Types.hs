@@ -729,6 +729,13 @@ data UnitInstanceSnapshot = UnitInstanceSnapshot
       -- ^ v8: slot id → equipped item. Empty map is legal (no gear).
       --   Serialize roundtrip is positional, not name-keyed, so any
       --   future addition must go after this field; bump again if so.
+      --   The KEY is a content reference like the value's def name is,
+      --   and since #2307 'fromUnitSnapshot' reconciles it against the
+      --   equipment class the unit's definition declares today before
+      --   any of it reaches a live 'Unit.Types.Instance.UnitInstance' —
+      --   so a restored map is a subset of this one, never a superset,
+      --   and what it drops has moved into 'uisInventory' rather than
+      --   disappearing ('Equipment.Reconcile').
     , uisAccessories ∷ ![ItemInstance]
       -- ^ v10: items worn off the silhouette (robes, goggles, rings…).
       --   Order preserved. An item container added to this record must
@@ -940,6 +947,10 @@ fromUnitInstanceSnapshot page def s = UnitInstance
     , uiModifiers   = uisModifiers s
     , uiSkills      = uisSkills s
     , uiKnowledge   = uisKnowledge s
+    -- #2307: both of these arrive ALREADY reconciled against the
+    -- unit's current equipment class -- 'fromUnitSnapshot' repairs the
+    -- snapshot before calling this -- so an entry under a retired slot
+    -- id can never reach a live instance from here.
     , uiInventory   = uisInventory s
     , uiEquipment   = uisEquipped s
     , uiAccessories = uisAccessories s
