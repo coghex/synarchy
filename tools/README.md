@@ -3050,7 +3050,7 @@ hand-assembled, and the census they append to is a real seeded one in a
 temporary directory. Like #1437's, it is deliberately not wired into `make ci`
 or GitHub CI.
 
-### `deflake_issue.py` — file an issue when the bug is in the engine (#1438)
+### `deflake_issue.py` — file an issue when the bug is in the engine (#1438, #2157)
 
 The second outcome of diagnosis, and the one that must not be skipped. When
 #1437 routes an attempt to `production-defect` — the diagnosis is that
@@ -3072,6 +3072,35 @@ Both boundaries are injected parameters consulted through `CHANGES_THE_PROBE`
 and `OPENS_PULL_REQUEST`, so the silence is a branch a gate exercises rather
 than a call nobody happened to write — flipping either entry makes the
 injected spy fire.
+
+Since #2157 `deflake_issue.py` is the route's public import FAÇADE, its
+admission gate and its ORDERING AUTHORITY — the `production-defect` ownership
+and role policy, the two boundary tables, the shared-handoff and diagnosis
+validation, the combined accepted `Defect`, `render`'s composition, `publish`'s
+exact statement order, and the command line — over four owners beside it. None
+of them imports the façade or the sibling consumer, and the only edge between
+two of them is tracker → document:
+
+| Owner | What it defines |
+|---|---|
+| `deflake_issue_evidence.py` | The secure evidence walk: failing-run discovery in role order, the descriptor-relative traversal below each declared artifact root, the bounded tail reads, the run and engine-log excerpts, every evidence bound, and the refusal when no reviewable retained evidence remains. A leaf — it renders nothing and publishes nothing. |
+| `deflake_issue_document.py` | The issue itself: the publication-key schema and its derivation, the two markers and their construction and recognition, the fence-aware prose scan, the neutralization funnel, the title, the measurement, diagnosis and evidence sections, `MAX_BODY_CHARS` and the diagnosis bounds, the evidence trimming, and the final body. Also a leaf; the evidence it renders arrives as data the evidence owner produced. |
+| `deflake_issue_tracker.py` | The tracker boundary: the `Publication` interface, the `gh`-backed implementation, publication-key search, issue creation, the JSON and URL parsing, and the created- and reconciled-issue identity validators. It CALLS the document owner's `carries_key` and `body_origin` rather than restating them — a second spelling of the standalone-marker rule would let a search-index match be recorded as this attempt's publication — and touches no artifact and no census. |
+| `deflake_issue_record.py` | The durable ending: the production-defect census outcome document, the stored-record lookup, the stored-publication reconciler, the `Published` result and its resume metadata, and `require_supported`, the route qualification a record cannot be written without. It performs no tracker I/O and renders no issue. |
+
+`MAX_BODY_CHARS` is the one public name of the four owners the façade does NOT
+re-export. It is the constant the gate substitutes to exercise the
+unfittable-body refusal, `issue_body` reads it out of the document owner's own
+globals, and a façade binding would accept that assignment and change nothing.
+Every other compatibility export is the canonical object its owner defines, so
+`except deflake_issue.PublicationFailed` catches what the tracker raises and a
+fake subclassing `deflake_issue.Publication` subclasses the real interface.
+That holds under BOTH import spellings: `tools/` is an implicit namespace
+package, so `tools.deflake_issue` and the bare `deflake_issue` a caller with
+`tools/` on `sys.path` gets are different modules to Python, and resolving an
+owner by bare name from the package spelling would load a second copy of it and
+make every identity above false. Each module therefore resolves its
+dependencies through `_sibling()`, under whichever spelling loaded it.
 
 "Engine" means production Haskell under `src/`/`app/` and shipped Lua under
 `scripts/`; probe implementation under `tools/*_probe.py` is explicitly not
