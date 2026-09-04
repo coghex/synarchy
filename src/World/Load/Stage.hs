@@ -22,6 +22,7 @@ module World.Load.Stage
     , StageError(..)
     , renderStageError
     , stagedGenParamsWarning
+    , stagedGroundItemWarning
     ) where
 
 import UPrelude
@@ -44,6 +45,8 @@ import Structure.Types (emptyChunkStructures)
 import World.Generate (generateChunk, cameraChunkCoord)
 import World.Flora.Designation (admitChunkFlora)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
+import Item.Ground (GroundItem(..), sanitizeGroundItems)
+import Item.Types (ItemInstance(..))
 import World.Generate.Config
     ( WorldGenFieldRejection, describeWorldGenRejection
     , repairWorldGenParams )
@@ -88,7 +91,10 @@ import World.Save.Integrity
 -- cross-validator already runs for this same load (issue #764). Reused
 -- here rather than re-derived so the load-time "does this edge resolve?"
 -- answer and the reconcile-time "should this reference be cleared?"
--- answer cannot drift apart (issue #1589).
+-- answer cannot drift apart (issue #1589). It applies #2336's
+-- 'Item.Ground.sanitizeGroundItems' to each page's ground map for that
+-- same reason, so the context this module hands Lua describes the
+-- session actually restored below rather than the save as decoded.
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import Infection.Types (InfectionManager)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
@@ -350,6 +356,22 @@ stagedGenParamsWarning pid (r, dflt) =
       <> describeWorldGenRejection r
       <> "; using the default " <> dflt
 
+-- | The warning one dropped ground item produces (#2336): the page it
+--   came from, its PAGE-LOCAL ground-item id, what it was, and the
+--   position the save stored. Exposed for the same reason its
+--   gen-params sibling is — a spec pins the whole line without staging
+--   a save.
+--
+--   Unlike a repaired setting there is no corrected value to name: a
+--   position is not a knob with a shipped default, and inventing one
+--   would put a real item at a real place nothing asked for.
+stagedGroundItemWarning ∷ WorldPageId → (Int, GroundItem) → Text
+stagedGroundItemWarning pid (gid, gi) =
+    "Saved page '" <> unWorldPageId pid <> "': ground item " <> tshow gid
+      <> " ('" <> iiDefName (giInst gi) <> "') is stored at the non-finite \
+         \position (" <> tshow (giX gi) <> ", " <> tshow (giY gi)
+      <> "); dropping it from the loaded page"
+
 -- | Stage one saved page: gen params + mutable game state (own fresh
 --   IORefs), zoom cache + center chunk + queued remainder (or the arena
 --   rebuild special case), and the resolved building/unit slices. Mirrors
@@ -398,9 +420,25 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         (params, genRejections) = repairWorldGenParams (wpsGenParams wps)
         seed      = wgpSeed params
         worldSize = wgpWorldSize params
+        -- #2336: an entry whose stored position is not finite is
+        -- dropped HERE, at the one boundary every decoded page passes
+        -- through, so no staging consumer can see it. The wire DTO
+        -- ('World.Save.Component.Page.PageActivityDTO.padGroundItems',
+        -- the @world-activity@ component) is untouched and unversioned
+        -- by this: what is repaired is the canonical decoded value, the
+        -- same way an out-of-domain generation setting is above.
+        --
+        -- Never a load failure. A phantom item is tolerated gameplay
+        -- damage from a build that let one be spawned, not corruption,
+        -- so it is warned about and dropped — the judgement a dangling
+        -- transfer order already gets below.
+        (stagedGroundItems, droppedGroundItems) =
+            sanitizeGroundItems (wpsGroundItems wps)
 
     logInfo logger CatWorld $ "Staging saved page: " <> unWorldPageId pid
     forM_ genRejections $ logWarn logger CatWorld . stagedGenParamsWarning pid
+    forM_ droppedGroundItems $
+        logWarn logger CatWorld . stagedGroundItemWarning pid
 
     worldState ← emptyWorldState
     let phaseRef   = wsLoadPhaseRef worldState
@@ -452,7 +490,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         (wpsConstructDesignations wps)
     writeIORef (wsConstructAttemptRef worldState)
         (wpsConstructNextAttempt wps)
-    writeIORef (wsGroundItemsRef worldState) (wpsGroundItems wps)
+    writeIORef (wsGroundItemsRef worldState) stagedGroundItems
     -- #1844: reconcile the saved structure designations against the
     -- CURRENTLY registered content before anything is visible. It runs
     -- here — after the designations and this page's own ground items are
@@ -507,7 +545,13 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- resolution set comes from this page's OWN restored entities via
     -- the same 'pageEntitiesFrom' the pre-save boundary uses, so the two
     -- boundaries cannot disagree about what counts as present.
-    let orderEntities = pageEntitiesFrom wpsGroundItems wpsUnits
+    --
+    -- It resolves against the SANITIZED ground map (#2336), not the
+    -- decoded one, so this diagnostic sees exactly the items the staged
+    -- page holds. An order referencing a dropped item is therefore
+    -- dangling, which is what it now is — and it is KEPT, like every
+    -- other dangling order, rather than pruned to tidy the report.
+    let orderEntities = pageEntitiesFrom (const stagedGroundItems) wpsUnits
                                          wpsBuildings wps
         danglingOrders = danglingOrderRefErrors pid orderEntities
                              (wpsTransferOrders wps)
@@ -516,17 +560,18 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             "Save load: transfer-order integrity diagnostic: " <> m
     writeIORef (wsTransferOrdersRef worldState) (wpsTransferOrders wps)
 
-    -- #1087: container knowledge is the ONE page-scoped layer that is
-    -- deliberately NOT restored verbatim. A bill or node whose building
-    -- is gone stays visible and cancellable, so keeping it is the
-    -- player-facing right answer; a MEMORY of a container that no
-    -- longer exists has no surface at all and nothing would ever clear
-    -- it, so it is scrubbed here against this page's own restored
-    -- building set. That is a tolerated, non-blocking DIAGNOSTIC — a
-    -- demolished cargo's lingering memory is gameplay, not corruption
-    -- (the same judgement "World.Save.Integrity" applies to a dangling
-    -- reference) — never a load failure, so it is logged and dropped
-    -- rather than reported.
+    -- #1087: container knowledge is the SECOND of the two page-scoped
+    -- layers deliberately not restored verbatim (#2336's non-finite
+    -- ground positions above are the other), and it is dropped for a
+    -- different reason. A bill or node whose building is gone stays
+    -- visible and cancellable, so keeping it is the player-facing right
+    -- answer; a MEMORY of a container that no longer exists has no
+    -- surface at all and nothing would ever clear it, so it is scrubbed
+    -- here against this page's own restored building set. That is a
+    -- tolerated, non-blocking DIAGNOSTIC — a demolished cargo's
+    -- lingering memory is gameplay, not corruption (the same judgement
+    -- "World.Save.Integrity" applies to a dangling reference) — never a
+    -- load failure, so it is logged and dropped rather than reported.
     let liveBuildings = HM.keysSet (bsnInstances (wpsBuildings wps))
         staleKnowledge = prunedContainerIds liveBuildings
                              (wpsContainerKnowledge wps)
