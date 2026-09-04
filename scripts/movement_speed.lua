@@ -25,9 +25,21 @@ local clamp = require("scripts.lib.numeric").clamp
 --                carrying a tool and a canteen isn't visibly slowed).
 --   IN_CAP_K   — gentle penalty slope from FREE_FRAC up to full capacity.
 --   OVER_K     — a much steeper slope once OVER capacity, so an overloaded
---                unit slows hard. The hard pickup gate still holds (a unit
---                only ends up over capacity from worn gear / a forced load),
---                so this just makes that state visibly costly to move in.
+--                unit slows hard. Ordinary work admission keeps a unit out
+--                of this band — fetch, repair, auto-harvest (#2293) and the
+--                player pickup order each weigh the live row immediately
+--                before item.pickupGround — but that is caller-side
+--                admission, not a universal gate, and several paths still
+--                land here. Among them, non-exhaustively: #94's emergency
+--                foraging, which deliberately admits food a full unit could
+--                not otherwise eat; a spawn loadout whose un-sheddable
+--                remainder already exceeds capacity (Unit.Thread.Command.
+--                Spawn's ShedOverCapacity case); worn gear and other forced
+--                inventory changes nothing weighed on the way in; and the
+--                four lax AI transfer verbs, whose unchecked unit-to-unit
+--                capacity is documented design (docs/engine_contracts.md
+--                §Player transfers). So this band prices a state that
+--                remains reachable rather than one assumed away.
 --   FLOOR      — never slower than this fraction of the base band, so a
 --                pinned-down unit still inches along rather than freezing.
 local ENC_FREE_FRAC = 0.25

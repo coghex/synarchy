@@ -151,6 +151,44 @@ function unitAi.harvest.utility(uid, s, params)
          * roles.weight(s, "auto_harvest")
 end
 
+-- Capacity admission for one queued yield (#2293), the same
+-- last-moment check unit_ai_fetch.lua and unit_ai_repair_target.lua
+-- make immediately before their own item.pickupGround. The verb itself
+-- reads no weight and no carrying_capacity -- a missing unit, a unit
+-- with no live page, a malformed argument or an absent gid are the only
+-- ways it returns false (src/Engine/Scripting/Lua/API/Items/Ground.hs)
+-- -- so admission is the CALLER's, deliberately, and an autonomous
+-- picker working a field is the one caller that can repeat the pickup
+-- indefinitely and walk a unit arbitrarily far over its capacity.
+--
+-- The row is re-resolved through item.getGroundForUnit on the picker's
+-- OWN page, which is the same page resolution item.pickupGround commits
+-- through, so the weight gated on is the live total mass of the exact
+-- instance that would move -- fill and nested contents included -- and
+-- not a static def weight.
+--
+-- Returns whether the yield may be taken. An UNRESOLVABLE gid is not a
+-- capacity refusal: the row raced away, or this picker has no live
+-- page, and there is no weight to compare, so it ends the collection
+-- silently. Only carried + live > capacity warns, and it warns exactly
+-- ONCE because the caller clears the phase in the same tick rather than
+-- re-offering the same yield next tick.
+local function admitYield(uid, gid)
+    local owned = item.getGroundForUnit(uid, gid)
+    if not owned then return false end
+    local carried = unit.getCarryingWeight(uid) or 0
+    local maxW    = unit.getStat(uid, "carrying_capacity") or math.huge
+    local w       = owned.weight or 0
+    if carried + w > maxW then
+        engine.logWarn("harvest: unit " .. tostring(uid)
+            .. " at capacity (" .. string.format("%.1f", carried + w)
+            .. " > " .. string.format("%.1f", maxW)
+            .. " kg) — leaving ground " .. tostring(owned.defName))
+        return false
+    end
+    return true
+end
+
 function unitAi.harvest.execute(uid, s, params)
     -- Collecting: pull the harvested yield off the ground, one item
     -- per tick (mirrors forageExecute's collecting phase). No work
@@ -158,14 +196,24 @@ function unitAi.harvest.execute(uid, s, params)
     -- ordinary arbitration since #1743: utility above scores this same
     -- phase rather than returning -math.huge, so the branch no longer
     -- depends on some other ripe plant keeping auto_harvest alive.
+    --
+    -- Every exit that is not a completed pickup ends the phase in THIS
+    -- tick (#2293): an exhausted list, an unresolvable row, a refused
+    -- weight, or a pickup that lost its race. The yields were
+    -- materialized as ordinary ground items before collection began
+    -- (World.Forage.Harvest), so whatever is left simply stays where it
+    -- lies -- collectable by another worker, or by this one once it has
+    -- unloaded -- and nothing is deleted or half-moved.
     if s.harvestPhase == "collecting" then
         s.lastHarvestAt = nil
         local loot = s.harvestLoot or {}
         local nextGid = table.remove(loot)
-        if not nextGid or not item.pickupGround(uid, nextGid) then
-            s.harvestPhase = nil
-            s.harvestLoot  = nil
+        if nextGid and admitYield(uid, nextGid)
+                   and item.pickupGround(uid, nextGid) then
+            return
         end
+        s.harvestPhase = nil
+        s.harvestLoot  = nil
         return
     end
 
