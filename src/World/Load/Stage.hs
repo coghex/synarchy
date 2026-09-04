@@ -100,6 +100,9 @@ import World.Save.Integrity
 -- session actually restored below rather than the save as decoded.
 import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 import Infection.Types (InfectionManager)
+import Equipment.Types (EquipmentClassManager)
+import Equipment.Reconcile (renderEquipmentOrphan)
+import Item.Types (ItemManager)
 import Unit.Types (UnitManager(..), UnitId, UnitDef)
 import Unit.Faction (fallbackFaction, factionTag)
 import Unit.Sim.Types (UnitSimState)
@@ -168,6 +171,13 @@ stageSession env logger saveData registry = case sdWorlds saveData of
         -- loop below is sequential, so re-reading it per page could
         -- reconcile one save's pages against different definition sets.
         infMgr       ← readIORef (infectionManagerRef env)
+        -- #2307: the same ONE-view-per-attempt rule, for the two
+        -- catalogues the equipment reconciliation resolves against. Both
+        -- refs are mutable and the page loop below is sequential, so
+        -- re-reading either per page could reconcile one save's pages
+        -- against different slot schemas.
+        ecMgr        ← readIORef (equipmentClassManagerRef env)
+        itemMgr      ← readIORef (itemManagerRef env)
         -- #1844: the registered structure art/build catalogue and the
         -- item-minting dependencies a self-clear's refund needs, read
         -- ONCE here and passed down as values. 'stagePage' deliberately
@@ -255,7 +265,8 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                               [ flora | (_, Right flora) ← resolvedFlora ]) $
             \(wps, flora) →
               stagePage logger registry palette catalog
-                        buildingDefs unitDefs infMgr artCatalog refundDeps
+                        buildingDefs unitDefs infMgr ecMgr itemMgr
+                        artCatalog refundDeps
                         mapCeiling activeWpsId flora wps
 
           let buildingOrphans = concatMap psrBuildingOrphans results
@@ -433,6 +444,9 @@ stagePage
       -- ^ #2305: the ONE catalogue view 'stageSession' read for this
       --   whole attempt, so every page's acquired-immunity scrub sees
       --   the same registered definitions.
+    → EquipmentClassManager → ItemManager
+      -- ^ #2307: the same, for the equipment-class schema and the item
+      --   kinds every page's saved equipment map is reconciled against.
     → StructureArtCatalog → ConstructRefundDeps
     → MapImageCeiling → WorldPageId
     → (WorldEdits, CropPlots, PlantDesignations)
@@ -445,7 +459,7 @@ stagePage
       --   is that a page always stages.
     → WorldPageSave → IO PageStageResult
 stagePage logger registry palette catalog buildingDefs unitDefs
-          infMgr artCatalog refundDeps mapCeiling activeWpsId
+          infMgr ecMgr itemMgr artCatalog refundDeps mapCeiling activeWpsId
           (liveEdits, liveCropPlots, livePlantDesignations) wps = do
     let pid      = wpsPageId wps
         isActive = pid ≡ activeWpsId
@@ -895,8 +909,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
             worldState ConstructWholePage
 
     let (restoredBm, bOrphans) = fromBuildingSnapshot pid buildingDefs (wpsBuildings wps)
-        (restoredUm, uOrphans, uUnknownFactions, immScrub) =
-            fromUnitSnapshot pid unitDefs infMgr (wpsUnits wps)
+        (restoredUm, uOrphans, uUnknownFactions, immScrub, eqOrphans) =
+            fromUnitSnapshot pid unitDefs infMgr ecMgr itemMgr (wpsUnits wps)
         liveUids   = HM.keysSet (umInstances restoredUm)
         simStates' = HM.filterWithKey (\uid _ → uid `HS.member` liveUids)
                                       (wpsUnitSimStates wps)
@@ -911,6 +925,23 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- staging is ever queued.
     forM_ (renderImmunityScrub pid immScrub) $ \m →
         logInfo logger CatWorld $ "Save load: " <> m
+
+    -- #2307: a saved equipment entry whose slot the unit's current
+    -- class no longer declares, or whose item kind that slot no longer
+    -- accepts, is the same kind of stranded content reference — with
+    -- one difference that decides the treatment: it is a real item
+    -- instance, so 'fromUnitSnapshot' has MOVED it into the unit's
+    -- loose inventory rather than dropping it, and the unit's carried
+    -- mass is unchanged. Reported one line PER MIGRATED ENTRY, naming
+    -- the unit, the affected slot, the item and the cause, because the
+    -- actionable fact is which content edit stranded which item — not
+    -- how many did. Non-blocking, like the two above: a slot key is
+    -- never a load failure, unlike the item DEFINITION reference
+    -- 'World.Save.Types.missingItemDefReferences' rejects before
+    -- staging is ever queued.
+    forM_ eqOrphans $ \o →
+        logInfo logger CatWorld $
+            "Save load: " <> renderEquipmentOrphan pid o
 
     pure PageStageResult
         { psrPage = StagedPage
