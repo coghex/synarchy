@@ -18,6 +18,8 @@ module World.Mine.Types
     , drainCorners
     , cornersDone
     , digSlopeMask
+    , mineDesignationFinite
+    , repairMineDesignation
     ) where
 
 import UPrelude hiding (get)
@@ -72,6 +74,40 @@ designationFromSlope z slopeMask =
         , corner (edgeS ∨ edgeW)   -- SW
         )
         0.0
+
+-- | Whether every number a designation stores is finite (#2338).
+--
+--   The question a RESTORED designation has to answer: a corner or a
+--   chunk remainder that is NaN or infinite is state no live path can
+--   produce any more, but saves written before the boundary existed can
+--   hold one, and it is not recoverable in play — 'cornersDone' can
+--   never hold for a NaN corner, so the tile is designated forever and
+--   the poison is copied into every later save.
+mineDesignationFinite ∷ MineDesignation → Bool
+mineDesignationFinite md =
+    let (a, b, c, d) = mdCorners md
+    in all finite [a, b, c, d, mdChunkProgress md]
+  where finite v = not (isNaN v ∨ isInfinite v)
+
+-- | Reset a designation's dig progress to "nothing has been dug here"
+--   while keeping WHAT it designates (#2338).
+--
+--   'mdZ' is deliberately untouched: it is the surface z the player
+--   picked and the level the tile will be removed at, and it is an
+--   'Int' that no arithmetic here can have poisoned. Only the progress
+--   is lost, and only for a designation that had already stopped being
+--   diggable — the digger simply starts the tile over.
+--
+--   Undug is 1.0 per corner, matching 'designationFromSlope''s
+--   untouched corner and the value 'World.Thread.Command.Cursor'
+--   designates a level tile with. A partially-dug corner CANNOT be
+--   preserved alongside a poisoned sibling: 'drainCorners' pours into
+--   whichever corner is nearest the digger and stops at the first that
+--   is not yet empty, so a mix of restored and reset corners would
+--   render a slope the remaining material does not match.
+repairMineDesignation ∷ MineDesignation → MineDesignation
+repairMineDesignation md = md { mdCorners = (1, 1, 1, 1)
+                              , mdChunkProgress = 0 }
 
 -- | A corner below this counts as "dug out" for slope-variant
 --   selection (completion still requires corners to reach 0).

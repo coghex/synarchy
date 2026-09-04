@@ -240,6 +240,7 @@ import qualified Test.Headless.World.Render.SceneStats as SceneStats
 import qualified Test.Headless.World.Render.SolarAttribution as SolarAttribution
 import qualified Test.Headless.World.Render.DesignationFaceMap as DesignationFaceMap
 import qualified Test.Headless.World.DesignationSeam as DesignationSeam
+import qualified Test.Headless.World.DigDomain as DigDomain
 import qualified Test.Headless.World.Chop.Selection as ChopSelection
 import qualified Test.Headless.World.Chop.Authority as ChopAuthority
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
@@ -793,6 +794,7 @@ main = hspec $ do
     CursorTextureDispatch.spec
     describe "World.SelectChunk" SelectChunk.spec
     describe "World.Spoil" Spoil.spec
+    describe "World.DigDomain" DigDomain.spec
     describe "rendered fluid surface rule (#1112)" RenderedSurface.spec
     describe "dry island-column fluid smoothing (#1131)" IslandColumns.spec
     describe "shared chunk-coordinate derivation" ChunkCoordinates.spec
@@ -939,6 +941,7 @@ main = hspec $ do
     ChopAuthority.spec
     LuaChopGesture.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
+    describe "World.DigDomain (engine)" DigDomain.engineSpec
     FloraIdentity.spec
     FloraIdentity.engineSpec
     describe "World.CropPlant" CropPlant.spec
