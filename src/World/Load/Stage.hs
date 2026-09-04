@@ -73,6 +73,9 @@ import World.Edit.Types (canonicalizeWorldEdits, WorldEdits)
 import World.Flora.CropPlot (CropPlots)
 import World.Plant.Types (PlantDesignations)
 import World.Mine.Apply (applyDigSlopes)
+import World.Mine.Types
+    ( MineDesignation(..), MineDesignations, mineDesignationFinite
+    , repairMineDesignation )
 import World.Construct.Apply (applyConstructSlopes)
 import World.Construct.Reconcile
     (ConstructReconcileError(..), reconcileStagedConstructDesignations)
@@ -378,6 +381,42 @@ stagedGroundItemWarning pid (gid, gi) =
          \position (" <> tshow (giX gi) <> ", " <> tshow (giY gi)
       <> "); dropping it from the loaded page"
 
+-- | Repair every restored mine designation whose stored numbers are not
+--   finite, warning once per repaired tile (#2338).
+--
+--   A NaN or infinite corner is state no live path can produce since
+--   @world.digTile@ and the @WorldDigTile@ handler both refuse the
+--   arguments that made one, but a save written before those boundaries
+--   existed can hold it, and it is not recoverable in play:
+--   'World.Mine.Types.cornersDone' can never hold for a NaN corner, so
+--   the tile is designated forever, no digger can finish it, and the
+--   value is copied into every later save. A non-finite chunk remainder
+--   is quieter and just as permanent — the tile never yields another
+--   chunk.
+--
+--   Repaired to "nothing has been dug here" rather than dropped: the
+--   PLAYER's decision to mine this tile is not the thing that was
+--   corrupted, and dropping the designation would silently cancel a job
+--   they still want. What is lost is the progress, which was already
+--   unusable. A designation that is entirely finite is returned
+--   untouched and logs nothing, so a healthy save is silent.
+repairStagedMineDesignations
+    ∷ LoggerState → WorldPageId → MineDesignations → IO MineDesignations
+repairStagedMineDesignations logger pid desigs = do
+    forM_ (HM.toList desigs) $ \((gx, gy), md) →
+        unless (mineDesignationFinite md) $
+            logWarn logger CatWorld $
+                "Saved page '" <> unWorldPageId pid
+                  <> "': mine designation at " <> tshow gx <> ","
+                  <> tshow gy <> " stored non-finite dig progress (corners "
+                  <> tshow (mdCorners md) <> ", chunk progress "
+                  <> tshow (mdChunkProgress md)
+                  <> "); reset to undug so the tile can be mined again"
+    pure $ HM.map repair desigs
+  where
+    repair md | mineDesignationFinite md = md
+              | otherwise                = repairMineDesignation md
+
 -- | Stage one saved page: gen params + mutable game state (own fresh
 --   IORefs), zoom cache + center chunk + queued remainder (or the arena
 --   rebuild special case), and the resolved building/unit slices. Mirrors
@@ -491,7 +530,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     -- every page away from the seam.
     writeIORef (wsEditsRef worldState)
         (canonicalizeWorldEdits (canonicalChunkCoord params) liveEdits)
-    writeIORef (wsMineDesignationsRef worldState) (wpsMineDesignations wps)
+    -- #2338: a designation whose corners or chunk remainder are not
+    -- finite is repaired HERE, at the one boundary every decoded page
+    -- passes through, so current and migrated payloads alike are
+    -- covered by one pass and the live session never sees the poison.
+    -- It is a repair, never a load failure: the state is unrecoverable
+    -- in play but the rest of the save is perfectly good, and refusing
+    -- the load would cost the player everything else in it.
+    writeIORef (wsMineDesignationsRef worldState)
+        =≪ repairStagedMineDesignations logger pid (wpsMineDesignations wps)
     writeIORef (wsConstructDesignationsRef worldState)
         (wpsConstructDesignations wps)
     writeIORef (wsConstructAttemptRef worldState)

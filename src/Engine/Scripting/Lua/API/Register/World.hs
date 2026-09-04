@@ -88,7 +88,8 @@ registerWorldAPI env backendState = do
   registerLuaFunction "debugTileQuads" (worldDebugTileQuadsFn env)
   registerLuaFunction "addTile"       (worldAddTileFn (toWorldSimCapability env))
   registerLuaFunction "listMaterials" (worldListMaterialsFn env)
-  registerLuaFunction "digTile" (worldDigTileFn (toWorldSimCapability env))
+  registerLuaFunction "digTile"
+    (worldDigTileFn (toCoreCapability env) (toWorldSimCapability env))
   registerLuaFunction "getMineDesignationAt"
     (worldGetMineDesignationAtFn (toWorldSimCapability env))
   registerLuaFunction "getInitProgress" (worldGetInitProgressFn env)
