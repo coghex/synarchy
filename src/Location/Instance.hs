@@ -1108,7 +1108,8 @@ resolveLegacyLocationInstances registry overlay lis =
 -- * Validation -------------------------------------------------------
 
 -- | Component-local invariants for a decoded table (mirrors the
---   ground-item allocator check @World.Save.Component.Page@ already
+--   ground-item allocator check @World.Save.Component.PageActivity@
+--   already
 --   runs): the allocator itself sits at or above
 --   'firstLocationInstanceId', every id sits at or above that same
 --   floor and strictly below the allocator, and every map key matches

@@ -412,7 +412,8 @@ def frozen_dto_fingerprint(source_path: Path | None = None) -> str:
     World.Save.Compat.SessionV90 -- every `data ... = ...` block up to
     its closing `deriving` line -- PLUS every leaf DTO type those
     declarations embed, transitively resolved wherever it's actually
-    defined (World.Save.Component.Page/.Entities/.Session/.WorldGen, per
+    defined (the World.Save.Component.Page* owners/.Entities/.Session/
+    .WorldGen, per
     SessionV90's own module docstring: "every non-global-allocator field
     composes EXISTING frozen leaf/component DTOs ... rather than
     re-freezing them"). Round-16 review: SessionV90.hs's own blocks

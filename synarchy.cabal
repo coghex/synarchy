@@ -883,6 +883,9 @@ library
                      World.Save.Component.WorldGenCurrent
                      World.Save.Component.WorldGenHistory
                      World.Save.Component.Session
+                     World.Save.Component.PageCore
+                     World.Save.Component.PageEdits
+                     World.Save.Component.PageActivity
                      World.Save.Component.Page
                      World.Save.Component.Entities
                      World.Save.Component.EntitySnapshots

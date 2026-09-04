@@ -122,18 +122,22 @@ ratchets. It is recognised as a RELOCATION rather than reported as the
 deletion it superficially resembles, because nothing on the wire
 changed: the type is still guarded, still reached through the same
 codec, and every tag still means what it meant. Only the baseline's
-ownership metadata (the qualified key and `source`) goes stale, so it
-fails until `--update-baseline` records the new owner. `relocations()`
-states every clause of that recognition and why each one is narrow; the
-short version is that a rename, an ambiguous pairing, a constructor
-change alongside the move, a change to the type's save-wire attribution,
-and a genuine deletion are all still INCOMPATIBLE, and the self-test
-proves each of them. The attribution clause is the one that is not
-obvious: attribution is walked by bare TYPE NAME, so without it a
-persisted enum could be deleted from its DTO and an unrelated off-wire
-enum of the same name introduced elsewhere, and the ratchet would
-rewrite the entry to `onSaveWire: false` — erasing the component
-attribution that a later deletion's diagnostic reads back.
+ownership metadata goes stale — the qualified key, the `source` path,
+and (since #2135, where the codecs themselves moved into owner modules)
+the module named inside a carrier LABEL — so it fails until
+`--update-baseline` records the new owner. `relocations()` states every
+clause of that recognition and why each one is narrow; the short version
+is that a rename, an ambiguous pairing, a constructor change alongside
+the move, a change to the type's save-wire attribution, and a genuine
+deletion are all still INCOMPATIBLE, and the self-test proves each of
+them. The attribution clause is the one that is not obvious: attribution
+is walked by bare TYPE NAME, so without it a persisted enum could be
+deleted from its DTO and an unrelated off-wire enum of the same name
+introduced elsewhere, and the ratchet would rewrite the entry to
+`onSaveWire: false` — erasing the component attribution that a later
+deletion's diagnostic reads back. Only the label's MODULE is elided
+there: the component set, the on-wire status and every `via` path are
+still compared exactly.
 
 === Which gate owns what
 

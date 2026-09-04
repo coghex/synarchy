@@ -2,7 +2,8 @@
 -- | "Location instance identity" (#911): the pure allocator, lifecycle,
 --   and pre-#911 chunk-set → instance migration that
 --   'Location.Instance' owns, plus the @world-pages@ v1→v2 component
---   migration ('World.Save.Component.Page.migrateWorldPagesV1') that
+--   migration ('World.Save.Component.PageCore.migrateWorldPagesV1')
+--   that
 --   feeds it. No engine needed — mirrors
 --   'Test.Headless.Location.Discovery' fixture style; the IO-level
 --   discovery coverage lives in 'Test.Headless.World.LocationDiscovery'.

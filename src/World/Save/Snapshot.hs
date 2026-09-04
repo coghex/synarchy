@@ -299,7 +299,8 @@ buildSessionSnapshot globals pages = SessionSnapshot
 --   function's either: since #1668 a persisted location instance's
 --   stored 'Location.Bounds.AbsBounds' IS checked for axis inversion,
 --   at the component boundary by
---   "World.Save.Component.Page" 's @validatePages@, because the save
+--   "World.Save.Component.PageCore" 's @validatePages@, because the
+--   save
 --   decode path builds that box from unrestricted wire integers rather
 --   than downstream of the YAML loader's gate. What IS checked below
 --   are invariants that should ALWAYS hold by construction; a violation

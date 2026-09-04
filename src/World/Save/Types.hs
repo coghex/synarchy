@@ -1403,7 +1403,8 @@ missingFloraReferences catalog pages = concatMap pageRefs pages
         , unresolved (ptCrop pd) ]
     -- Only the #2243 constructor can appear here: a decoded page's
     -- planting edits are named, whatever version the payload was
-    -- written at ('World.Save.Component.Page.applyWorldEdits' rewrites
+    -- written at
+    -- ('World.Save.Component.PageEdits.applyWorldEdits' rewrites
     -- the two legacy numeric forms into it), and a captured page's are
     -- named by 'World.Thread.Command.Save.WriteWorld'. The two legacy
     -- constructors are matched anyway rather than falling into the
@@ -1437,7 +1438,8 @@ renderUnnamedFloraRef r =
 --   handle the catalog could not name.
 --
 --   This is where a save acquires its species names, and the only
---   place: 'World.Save.Component.Page''s encoders see a
+--   place: the page-scoped components' encoders (behind
+--   "World.Save.Component.Page") see a
 --   'World.Save.Snapshot.SessionSnapshot' that already holds
 --   'World.Flora.Reference.FloraRef's and never consult live catalog
 --   state, so an encode cannot fail and cannot invent a name. A handle
@@ -1539,7 +1541,8 @@ resolveFloraReferences catalog pid edits crops plants =
         WePlaceFloraRef gx gy ref day w iid →
             (\fid → WePlaceFloraWithId gx gy fid day w iid) <$> resolve ref
         -- A decoded page carries no numeric planting edit —
-        -- 'World.Save.Component.Page.migrateWorldEditDTOv2' names both
+        -- @World.Save.Component.PageEdits.migrateWorldEditDTOv2@ names
+        -- both
         -- legacy forms — so this crosses whatever a caller handed in
         -- unchanged rather than re-deriving an id it already has.
         _ → Just e

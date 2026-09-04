@@ -239,7 +239,7 @@ migrateCraftBillsDTOv1 (CraftBillsDTOv1 ps) = CraftBillsDTO
     | p ← ps ]
 
 -- | Component-local invariant (#760, mirrors
---   "World.Save.Component.Page"'s @worldPagesCodec@ @validatePages@
+--   "World.Save.Component.PageCore"'s @worldPagesCodec@ @validatePages@
 --   precedent): every bill's own id must sit below that PAGE's queue
 --   allocator ('bqNextId') — 'BillId' is allocated per-page (see
 --   'Craft.Bills.emptyCraftBills'), unlike the item/building/unit
