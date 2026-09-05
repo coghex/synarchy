@@ -30,9 +30,19 @@ The owners, in the order `main` composes them
       `CAPABILITY_WRITER_MODULES`, `SHADOW_EXEMPTIONS`, the Haskell
       tokenizer and import resolver, the capability-accessor map and
       its #2059 fail-closed completeness audit, mutation-site
-      classification, the scan and its three blocking checks. It is
-      also the only owner with a self-test command of its own,
-      runnable alone for iteration.
+      classification, the scan and its three blocking checks. Since
+      issue #2230 it is documentation and re-exports over four one-way
+      implementation owners -- `..._writer_authority.py` (the
+      checked-in map, the exemptions, the recognized primitives and
+      the two checks that read them), `..._writer_syntax.py` (the
+      tokenizer, the import resolver and mutation-expression
+      classification), `..._writer_projections.py` (capability-record
+      and projection discovery) and `..._writer_scan.py` (the single
+      pass over the tree, the mutation-site check and the residue
+      report) -- but it is still ONE owner from here: this module
+      imports the facade and nothing below it. It is also the only
+      owner with a self-test command of its own, runnable alone for
+      iteration.
   `engine_env_capability_inventory.py`   the SS5 inventory-row contract
       (issue #876): one row per live field, under a known capability
       heading, with a valid lifecycle, a strict Readers/Writers role
@@ -64,11 +74,22 @@ the repository anchors, the live-field derivation, the one production
 tree walk, SS6.1's permanent set, the Haskell source and import
 helpers, the policy-free inventory-document primitives and the
 projection canonicalizer. The import graph is acyclic and one-way:
-common imports no owner, no owner imports another, and this file
-imports common and every owner. `python3 -m py_compile` does not
-execute imports and so proves nothing about that; the two run commands
-below do, because both load the full graph at run time, where a
-`from X import Y` cycle raises `ImportError`.
+common imports no owner, no contract owner imports another, and this
+file imports common and every owner. The one owner with an interior is
+the writer scanner: since issue #2230
+`engine_env_capability_writers.py` is a facade over four
+implementation owners that DO import each other, in the fixed order
+authority -> {syntax, projections} -> scan, and none of which imports
+the facade. That interior is invisible from here by construction --
+this file imports the facade and nothing below it, so the writer
+scanner is still exactly one owner at this level (issue #2230
+requirements 16 and 23), and adding an edge from here to a writer
+child is what would break the layering. `python3 -m py_compile` does
+not execute imports and so proves nothing about any of it; the two run
+commands below do, because both load the full graph at run time, where
+a `from X import Y` cycle raises `ImportError`, and
+`test_engine_env_capability_writers.py`'s conformance owner checks the
+writer family's interior edges directly.
 
 Single collection
 -----------------

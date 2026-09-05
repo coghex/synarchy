@@ -42,6 +42,11 @@ module World.Flora.Growth
     , activeStageTag
       -- * Harvest window
     , harvestOpen
+      -- * Authored tag policy (#2212)
+    , floraDayOfYear
+    , harvestTagUngated
+    , floraHarvestAdmits
+    , floraHarvestYield
       -- * Names (Lua-facing, match the YAML tag vocabulary)
     , lifePhaseText
     , annualStageText
@@ -189,6 +194,70 @@ harvestOpen sp dayOfYear g
         Just t  → t `elem` [PhaseSprout, PhaseSeedling, PhaseWithering, PhaseDead]
         Nothing → False
     hasFruiting = any ((≡ CycleFruiting) . asTag) (fsAnnualCycle sp)
+
+-- * Authored tag policy (#2212)
+
+-- | The calendar day-of-year an absolute world day falls on, given the
+--   calendar's year length.
+--
+--   The one derivation every consumer that holds a growth SNAPSHOT
+--   rather than the live 'World.Time.Types.WorldDate' shares — the
+--   render pass ('World.Flora.Render') and the Chop hit-test view,
+--   which both carry @(daysPerYear, absDay)@ and no date. It agrees
+--   with 'World.Time.Types.worldDateToDayOfYear' by construction:
+--   @worldAbsoluteDay@ is @(year - 1) * daysPerYear + dayOfYear@, so
+--   the remainder is the day-of-year back again.
+floraDayOfYear ∷ Int → Int → Int
+floraDayOfYear daysPerYear absDay = absDay `mod` max 1 daysPerYear
+
+-- | Does this species' harvest block exempt @tag@ from the growth
+--   window? False for a block that authors no exemption, which is the
+--   documented ABSENT default: growth-gated.
+harvestTagUngated ∷ FloraHarvest → Text → Bool
+harvestTagUngated fh tag = tag `elem` fhUngatedTags fh
+
+-- | THE shared harvest-eligibility predicate (#2212 requirement 3).
+--
+--   Every surface that decides "may this tag take this plant, in this
+--   growth state, right now" asks exactly this: the screen-space Chop
+--   hit test ('World.Flora.HitTest'), the world thread's designation
+--   re-check ('World.Thread.Command.Cursor.Chop'), both tagged harvest
+--   verbs and the tagged finder
+--   ("Engine.Scripting.Lua.API.Forage"). Splitting it is precisely how
+--   a plant became designatable that the @wood@ harvest then refused.
+--
+--   @Nothing@ is a BARE forage call and reduces to 'harvestOpen'
+--   unchanged. @Just tag@ additionally requires the species to carry
+--   that tag, and consults the window unless the block authors @tag@ as
+--   ungated.
+--
+--   Deliberately NOT included, because they are caller-specific rather
+--   than policy: the per-instance regrowth timer, the exact-identity
+--   filter of @world.harvestFloraInstance@, the edible-yield filter of
+--   a bare @world.findHarvestableFlora@, and the designation set an
+--   erase gesture reads.
+floraHarvestAdmits ∷ FloraSpecies → Maybe Text → Int → FloraGrowth → Bool
+floraHarvestAdmits sp mTag dayOfYear g = case fsHarvest sp of
+    Nothing → False
+    Just fh → case mTag of
+        Nothing  → harvestOpen sp dayOfYear g
+        Just tag → tag `elem` fhTags fh
+                 ∧ (harvestTagUngated fh tag ∨ harvestOpen sp dayOfYear g)
+
+-- | The yield an ACCEPTED harvest of a plant in this growth state
+--   spawns (#2212 requirement 4).
+--
+--   The plant's derived life phase selects the roll: an authored
+--   override wins, an unauthored phase inherits the block's own
+--   'fhYield'. An override authored as the EMPTY list is an accepted
+--   harvest that spawns nothing — a felled sprout — which is a
+--   different outcome from a REFUSED harvest and is why the verbs
+--   report it as an empty result rather than @nil@.
+floraHarvestYield ∷ FloraSpecies → FloraHarvest → FloraGrowth
+                  → [(Text, Int, Int)]
+floraHarvestYield sp fh g = case growthPhaseTag sp g of
+    Nothing  → fhYield fh
+    Just tag → HM.lookupDefault (fhYield fh) tag (fhPhaseYields fh)
 
 -- * Names
 

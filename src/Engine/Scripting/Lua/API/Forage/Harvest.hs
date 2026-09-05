@@ -27,13 +27,15 @@ import System.Random (randomR)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom, freshItemInstanceId)
 import World.Types
 import World.Generate.Coordinates (canonicalTile)
-import World.Flora.Growth (floraGrowth, harvestOpen)
+import World.Flora.Clock (growthClock)
+import World.Flora.Growth
+    (floraGrowth, floraHarvestAdmits, floraHarvestYield, harvestOpen)
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
                              cropPlotInstance)
 import Item.Types (lookupItemDef)
 import Item.Ground (spawnGroundItem)
 import Item.Materialize (materializeItem, pristineItem)
-import Engine.Scripting.Lua.API.Forage.Lookup (floraAt, growthClock)
+import Engine.Scripting.Lua.API.Forage.Lookup (floraAt)
 
 -- | world.harvestFlora(gx, gy [, tag]) → array of {id, gid} | nil
 --
@@ -46,11 +48,17 @@ import Engine.Scripting.Lua.API.Forage.Lookup (floraAt, growthClock)
 --   harvested — the chop AI passes "wood" so a shared tile can't trade
 --   its berry bush for the designated tree. A BARE call is a forage,
 --   additionally gated on the #332 growth window (skips dead plants,
---   juveniles, and fruiting species out of season); tagged calls
---   address designation flows and skip the window — a standing-dead
---   tree still chops. nil when the tile has nothing (matching)
---   harvestable — the codebase signals failure with nil rather than
---   raising.
+--   juveniles, and fruiting species out of season). A TAGGED call skips
+--   that window only where the species' @harvestable:@ block authors
+--   the tag as ungated (#2212's @ungated_tags@) — the three wood
+--   species do, so a standing-dead tree still chops, while a block that
+--   authors none is refused in exactly the states a bare call is.
+--
+--   nil when the tile has nothing (matching) harvestable — the codebase
+--   signals failure with nil rather than raising. An ACCEPTED harvest
+--   whose authored phase yield is empty (a felled sprout) returns an
+--   EMPTY table instead: it started the regrowth timer and the caller
+--   must be able to tell it apart from a refusal.
 worldHarvestFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldHarvestFloraFn env = do
     mGx ← Lua.tointeger 1
@@ -101,10 +109,18 @@ worldHarvestFloraFn env = do
                                 -- agree across all three query/action
                                 -- entry points.
                                 if harvestOpen sp doy g
-                                    then Just fh else Nothing
+                                    then Just (sp, fh, g) else Nothing
                         case mPlotHarvest of
-                            Just fh → do
-                                spawned ← spawnYields env ws gx gy (fhYield fh)
+                            Just (sp, fh, g) → do
+                                -- #2212: the same phase-aware roll the
+                                -- wild path uses. No shipped crop
+                                -- authors an override, so this is
+                                -- identity for the shipped corpus —
+                                -- but the yield rule is a property of
+                                -- the harvest BLOCK, and a plot reads
+                                -- the same block a wild instance does.
+                                spawned ← spawnYields env ws gx gy
+                                              (floraHarvestYield sp fh g)
                                 -- Annual, one-shot: harvesting clears
                                 -- the plot instead of starting a
                                 -- regrowth timer — the tile reverts to
@@ -136,9 +152,11 @@ worldHarvestFloraFn env = do
 --   break.
 --
 --   nil when the tile does not hold that instance, when the instance is
---   not a (matching) harvestable species, or when its own timer is
+--   not a (matching) harvestable species, when the tag does not admit
+--   it in its current growth state (#2212), or when its own timer is
 --   live — the same nil-on-failure signalling the rest of the family
---   uses.
+--   uses. An accepted fell whose authored yield is empty returns an
+--   empty table, never nil (see 'worldHarvestFloraFn').
 worldHarvestFloraInstanceFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldHarvestFloraInstanceFn env = do
     mGx ← Lua.tointeger 1
@@ -175,31 +193,41 @@ worldHarvestFloraInstanceFn env = do
 --   improvement that falls straight out of per-instance keying: a
 --   co-tenant with a live timer no longer suppresses the whole tile, it
 --   is simply skipped.
+--
+--   #2212: both the tag match and the window are now decided by
+--   'floraHarvestAdmits', the same predicate the Chop hit test and the
+--   world thread's designation commit ask — a plant this refuses can no
+--   longer be one the gesture happily designated.
 harvestWildFlora
     ∷ EngineEnv → WorldState → Int → Int → Maybe Text
     → Maybe FloraInstanceId → Int → Int → IO (Maybe [(Text, Int)])
 harvestWildFlora env ws gx gy tagFilter mWanted doy absDay = do
     insts ← floraAt (toWorldSimCapability env) ws gx gy
     harvests ← readIORef (wsFloraHarvestsRef ws)
-    let -- #332: only the BARE (forage) call checks the growth window; a
-        -- tagged call is a designation flow (chop "wood") and takes the
-        -- plant in any growth state.
-        windowOk i sp = case tagFilter of
-            Just _  → True
-            Nothing → harvestOpen sp doy (floraGrowth sp absDay i)
+    let -- #2212: the SHARED eligibility predicate — tag membership plus
+        -- the growth window, which a tagged call skips only where the
+        -- species' harvest block AUTHORS that tag as ungated. A bare
+        -- call reduces to the #332 window exactly as before. The
+        -- per-instance regrowth timer and the exact-identity filter
+        -- stay here because they are this caller's, not the policy's.
         picked = listToMaybe
-            [ (i, fh)
+            [ (i, sp, fh, g)
             | (i, sp) ← insts
             , maybe True (≡ fiInstanceId i) mWanted
             , Just fh ← [fsHarvest sp]
-            , maybe True (`elem` fhTags fh) tagFilter
-            , windowOk i sp
+            , let g = floraGrowth sp absDay i
+            , floraHarvestAdmits sp tagFilter doy g
             , HM.lookupDefault 0 (fiInstanceId i) harvests ≤ 0
             ]
     case picked of
         Nothing → pure Nothing
-        Just (i, fh) → do
-            spawned ← spawnYields env ws gx gy (fhYield fh)
+        Just (i, sp, fh, g) → do
+            -- #2212: the roll is the plant's own life phase's, falling
+            -- back to the block's default. An authored EMPTY override
+            -- (a felled sprout) spawns nothing and still lands here —
+            -- the timer starts and the caller sees an empty result, not
+            -- the nil that means "refused".
+            spawned ← spawnYields env ws gx gy (floraHarvestYield sp fh g)
             atomicModifyIORef' (wsFloraHarvestsRef ws) $ \hs →
                 (HM.insert (fiInstanceId i) (fhRegrowth fh) hs, ())
             bumpQuadCacheGen ws

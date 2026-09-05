@@ -54,8 +54,10 @@ berry = (newFloraSpecies "test_berry" (TextureHandle 1))
         , AnnualStage CycleFruiting  180 (TextureHandle 7)
         , AnnualStage CycleSenescing 270 (TextureHandle 8)
         ]
-    , fsHarvest = Just (FloraHarvest ["fruit"] [("wild_berries", 1, 3)]
-                                     86400 (TextureHandle 9))
+    , fsHarvest = Just FloraHarvest
+        { fhTags = ["fruit"], fhUngatedTags = []
+        , fhYield = [("wild_berries", 1, 3)], fhPhaseYields = HM.empty
+        , fhRegrowth = 86400, fhHarvestedTexture = TextureHandle 9 }
     }
 
 -- A clover-shaped species: harvestable, annual cycle WITHOUT a
@@ -71,8 +73,10 @@ clover = (newFloraSpecies "test_clover" (TextureHandle 1))
         [ AnnualStage CycleDormant   0   (TextureHandle 5)
         , AnnualStage CycleSenescing 200 (TextureHandle 8)
         ]
-    , fsHarvest = Just (FloraHarvest ["leaves"] [("wild_greens", 1, 2)]
-                                     43200 (TextureHandle 9))
+    , fsHarvest = Just FloraHarvest
+        { fhTags = ["leaves"], fhUngatedTags = []
+        , fhYield = [("wild_greens", 1, 2)], fhPhaseYields = HM.empty
+        , fhRegrowth = 43200, fhHarvestedTexture = TextureHandle 9 }
     }
 
 evergreen ∷ FloraSpecies
@@ -107,6 +111,50 @@ biennialRoot = (newFloraSpecies "test_biennial" (TextureHandle 1))
         , (PhaseMatured, LifePhase PhaseMatured 240 (TextureHandle 3))
         ]
     }
+
+-- A tree-shaped species modelling the three shipped wood species
+-- (#2212): wood-tagged, sprout → matured → dead, and it AUTHORS @wood@
+-- as ungated with a sprout that yields nothing.
+--
+-- Annual rather than perennial on purpose: 'instanceLifespan' answers
+-- Annual with the exact 360-day constant, so the dead-window boundary
+-- below is a fixture constant rather than a value rolled from the very
+-- placement mixer these examples must not depend on.
+oak ∷ FloraSpecies
+oak = (newFloraSpecies "test_oak" (TextureHandle 1))
+    { fsLifecycle = Annual
+    , fsPhases = HM.fromList
+        [ (PhaseSprout,  LifePhase PhaseSprout  0   (TextureHandle 2))
+        , (PhaseMatured, LifePhase PhaseMatured 60  (TextureHandle 3))
+        , (PhaseDead,    LifePhase PhaseDead    360 (TextureHandle 4))
+        ]
+    , fsHarvest = Just FloraHarvest
+        { fhTags = ["wood"], fhUngatedTags = ["wood"]
+        , fhYield = [("test_log", 3, 6)]
+        , fhPhaseYields = HM.fromList [(PhaseSprout, [])]
+        , fhRegrowth = 345600, fhHarvestedTexture = TextureHandle 5 }
+    }
+
+-- The SAME tree with no authored exemption and no phase override: the
+-- absent-schema default a species gets by saying nothing. Its tagged
+-- harvest must be gated in exactly the states a bare one is, and every
+-- phase must inherit the block's own roll.
+elm ∷ FloraSpecies
+elm = oak
+    { fsName = "test_elm"
+    , fsHarvest = (\fh → fh { fhUngatedTags = [], fhPhaseYields = HM.empty })
+                      ⊚ fsHarvest oak
+    }
+
+-- Ages that put an instance of either tree in each of the three states
+-- the chop tool must handle. Health is 1, so age advances one day per
+-- day and each is reached at absolute day 0 from the placement age
+-- alone: sprout (< 60), matured (≥ 60, < 360), and dead (past the
+-- 360-day annual lifespan, inside the 60-day dead window).
+oakSprout, oakMatured, oakDead ∷ FloraInstance
+oakSprout  = seedling { fiAge = 0.0 }
+oakMatured = seedling { fiAge = 100.0 }
+oakDead    = seedling { fiAge = 380.0 }
 
 -- A fresh instance: age 0 at the world epoch, full health.
 seedling ∷ FloraInstance
@@ -436,6 +484,106 @@ spec = do
                         Nothing → error "perennial must have a lifespan"
                 gDead = floraGrowth berry (ceiling l) seedling
             harvestOpen berry fruitingDay gDead `shouldBe` False
+
+    describe "harvestOpen tag policy: the authored window exemption \
+             \(#2212)" $ do
+        -- Every example goes through 'floraHarvestAdmits', the ONE
+        -- predicate the Chop hit test, the world-thread designation
+        -- commit, both harvest verbs and the tagged finder consult.
+        let admits sp tag i = floraHarvestAdmits sp tag dormantDay
+                                  (floraGrowth sp 0 i)
+        it "a species that AUTHORS the tag as ungated is taken in every \
+           \growth state — a sprout and a standing-dead tree both chop" $ do
+            admits oak (Just "wood") oakSprout  `shouldBe` True
+            admits oak (Just "wood") oakMatured `shouldBe` True
+            admits oak (Just "wood") oakDead    `shouldBe` True
+        it "the fixture's three ages really are three different states, \
+           \so the case above is not vacuously open" $ do
+            -- Without this the exemption could be passing because every
+            -- instance happens to be mature.
+            harvestOpen oak dormantDay (floraGrowth oak 0 oakSprout)
+                `shouldBe` False
+            harvestOpen oak dormantDay (floraGrowth oak 0 oakMatured)
+                `shouldBe` True
+            harvestOpen oak dormantDay (floraGrowth oak 0 oakDead)
+                `shouldBe` False
+            growthPhaseTag oak (floraGrowth oak 0 oakSprout)
+                `shouldBe` Just PhaseSprout
+            growthPhaseTag oak (floraGrowth oak 0 oakMatured)
+                `shouldBe` Just PhaseMatured
+            growthPhaseTag oak (floraGrowth oak 0 oakDead)
+                `shouldBe` Just PhaseDead
+            fgDead (floraGrowth oak 0 oakDead) `shouldBe` True
+        it "a species that authors NO exemption is refused in exactly the \
+           \states a BARE call is — the absent-schema default" $ do
+            -- The whole point of #2212: before it, ANY tagged call
+            -- skipped the window, so a future fruit/grain tag would have
+            -- silently disabled the #332 lifecycle gate.
+            admits elm (Just "wood") oakSprout  `shouldBe` False
+            admits elm (Just "wood") oakDead    `shouldBe` False
+            -- ... and accepted inside it, so the exemption is what the
+            -- rejections above turn on, not the tag itself.
+            admits elm (Just "wood") oakMatured `shouldBe` True
+        it "agrees with a bare call state for state on a non-declaring \
+           \species" $
+            forM_ [oakSprout, oakMatured, oakDead] $ \i →
+                admits elm (Just "wood") i
+                    `shouldBe` harvestOpen elm dormantDay (floraGrowth elm 0 i)
+        it "refuses a tag the species does not carry, exemption or not" $ do
+            admits oak (Just "fruit") oakMatured `shouldBe` False
+            admits elm (Just "fruit") oakMatured `shouldBe` False
+        it "an exemption cannot open a tag the species does not carry" $ do
+            -- The decoder rejects this shape, but the predicate must not
+            -- depend on the decoder for its own soundness.
+            let liar = oak { fsHarvest = (\fh → fh
+                              { fhTags = ["wood"]
+                              , fhUngatedTags = ["wood", "fruit"] })
+                                ⊚ fsHarvest oak }
+            admits liar (Just "fruit") oakSprout `shouldBe` False
+        it "leaves a decorative species (no harvest block) unharvestable" $ do
+            admits evergreen (Just "wood") oakMatured `shouldBe` False
+            admits evergreen Nothing oakMatured `shouldBe` False
+        it "a BARE call is harvestOpen unchanged, on both species" $
+            forM_ [(oak, oakSprout), (oak, oakMatured), (oak, oakDead)
+                  ,(elm, oakSprout), (elm, oakMatured), (elm, oakDead)] $
+                \(sp, i) →
+                    admits sp Nothing i
+                        `shouldBe` harvestOpen sp dormantDay (floraGrowth sp 0 i)
+        it "still gates a bare fruiting-window forage by the season" $ do
+            let mature = seedling { fiAge = 400.0 }
+            floraHarvestAdmits berry Nothing fruitingDay
+                (floraGrowth berry 0 mature) `shouldBe` True
+            floraHarvestAdmits berry Nothing dormantDay
+                (floraGrowth berry 0 mature) `shouldBe` False
+
+    describe "harvestOpen phase yields: what an accepted harvest pays \
+             \(#2212)" $ do
+        let yieldOf sp i = case fsHarvest sp of
+                Nothing → error "fixture species must author a harvest"
+                Just fh → floraHarvestYield sp fh (floraGrowth sp 0 i)
+        it "an authored EMPTY override pays nothing — a felled sprout" $
+            yieldOf oak oakSprout `shouldBe` []
+        it "an unauthored phase inherits the block's own roll" $ do
+            yieldOf oak oakMatured `shouldBe` [("test_log", 3, 6)]
+            yieldOf oak oakDead    `shouldBe` [("test_log", 3, 6)]
+        it "a block with no overrides at all inherits in EVERY phase, \
+           \the sprout included" $
+            forM_ [oakSprout, oakMatured, oakDead] $ \i →
+                yieldOf elm i `shouldBe` [("test_log", 3, 6)]
+        it "a non-empty override REPLACES the roll rather than adding to \
+           \it" $ do
+            let bushy = oak { fsHarvest = (\fh → fh { fhPhaseYields =
+                                HM.fromList [(PhaseMatured
+                                             , [("test_twig", 1, 1)])] })
+                                  ⊚ fsHarvest oak }
+            yieldOf bushy oakMatured `shouldBe` [("test_twig", 1, 1)]
+            yieldOf bushy oakSprout  `shouldBe` [("test_log", 3, 6)]
+        it "a species with no phases has no key to hit and always \
+           \inherits" $ do
+            let phaseless = oak { fsPhases = HM.empty }
+            growthPhaseTag phaseless (floraGrowth phaseless 0 oakSprout)
+                `shouldBe` Nothing
+            yieldOf phaseless oakSprout `shouldBe` [("test_log", 3, 6)]
 
     describe "growth stage naming" $ do
         it "annual stage tracks the day-of-year" $ do

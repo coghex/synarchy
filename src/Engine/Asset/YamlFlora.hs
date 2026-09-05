@@ -24,6 +24,7 @@ import UPrelude
 import GHC.Generics (Generic)
 import Control.Applicative ((<|>))
 import qualified Data.Text as T
+import qualified Data.HashMap.Strict as HM
 import Data.Aeson (FromJSON(..), (.:), (.:?), (.!=), withObject)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
@@ -38,12 +39,14 @@ import World.Flora.Growth (lifePhaseText, annualStageText)
 -- * Closed vocabularies (#2315)
 --
 --   This schema has THREE closed vocabularies — lifecycle, life phase
---   and annual stage — authored at FIVE distinct positions:
---   @lifecycle@, @phases[].tag@, @annualCycle[].tag@, and the
+--   and annual stage — authored at SIX distinct positions:
+--   @lifecycle@, @phases[].tag@, @annualCycle[].tag@, the
 --   @cycleOverrides[].phase@ / @cycleOverrides[].cycle@ pair, which
---   reuse the phase and stage vocabularies rather than adding two more.
---   Every one of those positions used to decode as unrestricted 'Text'
---   and be resolved — or quietly dropped — at registration.
+--   reuse the phase and stage vocabularies rather than adding two more,
+--   and (since #2212) the KEYS of @harvestable.phase_yield@, which
+--   reuse the phase vocabulary a third time. Every one of those
+--   positions used to decode as unrestricted 'Text' and be resolved —
+--   or quietly dropped — at registration.
 --
 --   The whole point of checking them HERE is that a dropped token is
 --   not a cosmetic loss. 'World.Flora.Growth.harvestOpen' gates the
@@ -286,7 +289,19 @@ instance FromJSON FloraYamlYield where
 --   strictly positive number — see 'requireRegrowthTime' (#1711).
 data FloraYamlHarvest = FloraYamlHarvest
     { fyhTags             ∷ [Text]
+    , fyhUngatedTags      ∷ [Text]
+      -- ^ @ungated_tags:@ (#2212) — the subset of @tags:@ whose harvest
+      --   may take this plant outside the #332 growth window. Absent =
+      --   the empty list = growth-gated, so a tagged call is refused in
+      --   exactly the states a bare one is. Every entry must appear in
+      --   @tags:@ ('requireUngatedTags').
     , fyhYield            ∷ [FloraYamlYield]
+    , fyhPhaseYield       ∷ HM.HashMap LifePhaseTag [FloraYamlYield]
+      -- ^ @phase_yield:@ (#2212) — per-life-phase overrides of
+      --   @yield:@. An ABSENT phase inherits @yield:@; a phase mapped
+      --   to the empty list yields nothing. The two are deliberately
+      --   distinguishable here, which is the only reason a felled
+      --   sprout can be authored to drop no logs.
     , fyhRegrowthTime     ∷ Float
     , fyhHarvestedTexture ∷ Maybe Text   -- ^ Relative to @texDir@; absent
                                          --   = plant hidden while regrowing
@@ -358,17 +373,97 @@ requireRegrowthTime species v = do
 --   'withObject' for the same reason: @harvestable: 23@ would otherwise
 --   fail with aeson’s own “expected Object, but encountered Number”,
 --   which names neither the species nor the block.
-parseFloraYamlHarvest ∷ Text → Aeson.Value → Aeson.Parser FloraYamlHarvest
-parseFloraYamlHarvest species val = case val of
-    Aeson.Object v → FloraYamlHarvest
-        ⊚ v .:? "tags" .!= []
-        ⊛ v .:? "yield" .!= []
-        ⊛ requireRegrowthTime species v
-        ⊛ v .:? "harvested_texture"
+parseFloraYamlHarvest ∷ Text → [LifePhaseTag] → Aeson.Value
+                      → Aeson.Parser FloraYamlHarvest
+parseFloraYamlHarvest species declaredPhases val = case val of
+    Aeson.Object v → do
+        tags ← v .:? "tags" .!= []
+        ungated ← requireUngatedTags species tags v
+        phaseYield ← requirePhaseYield species declaredPhases v
+        FloraYamlHarvest tags ungated
+            ⊚ v .:? "yield" .!= []
+            ⊛ pure phaseYield
+            ⊛ requireRegrowthTime species v
+            ⊛ v .:? "harvested_texture"
     _ → fail ∘ T.unpack $
         "flora species '" <> species <> "': harvestable must be a block \
         \authoring a finite, strictly positive regrowth_time (game \
         \seconds), got " <> tshow val
+
+-- | Read the optional @ungated_tags:@ list (#2212), requiring every
+--   entry to be one this block’s own @tags:@ declares.
+--
+--   The declared-set check is the same rule 'requireDeclared' applies
+--   to a @cycleOverrides@ selector, and it is here for the same reason:
+--   an exemption for a tag the species does not carry can never be
+--   selected, because 'World.Flora.Growth.floraHarvestAdmits' checks
+--   tag membership first. Dropping it silently would leave a
+--   misspelled @wodo@ looking authored while the chop stayed
+--   growth-gated — the exact silent re-gating this schema exists to
+--   make impossible.
+--
+--   Absent and @null@ both read as the empty list, matching @tags:@ one
+--   key over: for THIS field the two mean the same thing (no tag is
+--   exempt), so there is nothing for #1191’s present-but-malformed
+--   rule to protect.
+requireUngatedTags ∷ Text → [Text] → Aeson.Object → Aeson.Parser [Text]
+requireUngatedTags species tags v = do
+    ungated ← v .:? "ungated_tags" .!= []
+    forM_ ungated $ \t → when (t `notElem` tags) $
+        vocabularyFailure species "harvestable.ungated_tags" "ungated_tags" $
+            "names '" <> t <> "', which this species does not declare in \
+            \its harvestable tags — an ungated tag can only exempt a tag \
+            \this species can actually be harvested by. Declared tags: "
+            <> (if null tags then "(none)" else T.intercalate ", " tags)
+    pure ungated
+
+-- | Read the optional @phase_yield:@ block (#2212): a mapping from
+--   life-phase name to that phase’s own yield list.
+--
+--   Three rejections, each closing a way a misspelling would silently
+--   restore the inherited roll rather than override it:
+--
+--     * a @phase_yield:@ that is not a block (@null@ included — unlike
+--       @ungated_tags@, absent and empty-block are NOT the same
+--       statement here, so an authored null has no defensible reading);
+--     * a key outside the 'LifePhaseTag' vocabulary; and
+--     * a well-spelled key naming a phase this species never declares,
+--       which is unreachable for the same reason a @cycleOverrides@
+--       selector on an undeclared phase is.
+--
+--   An entry’s VALUE is an ordinary yield list, so the empty list
+--   is a legal authored statement and is exactly how a species declares
+--   that a phase yields nothing.
+requirePhaseYield ∷ Text → [LifePhaseTag] → Aeson.Object
+                  → Aeson.Parser (HM.HashMap LifePhaseTag [FloraYamlYield])
+requirePhaseYield species declaredPhases v =
+    case KM.lookup "phase_yield" v of
+        Nothing → pure HM.empty
+        Just (Aeson.Object entries) →
+            HM.fromList ⊚ traverse phaseEntry (KM.toList entries)
+        Just other → fail ∘ T.unpack $
+            "flora species '" <> species <> "': harvestable phase_yield \
+            \(key 'phase_yield') must be a block mapping life-phase \
+            \names to yield lists, got " <> authoredToken other
+  where
+    phaseEntry (key, entryVal) = do
+        let token = Key.toText key
+        tag ← case parsePhaseTag token of
+            Just t  → pure t
+            Nothing → vocabularyFailure species "harvestable.phase_yield[]"
+                          token $
+                          "must be one of "
+                          <> T.intercalate ", " lifePhaseVocabulary
+                          <> ", got " <> authoredToken (Aeson.String token)
+        requireDeclared species "harvestable.phase_yield[]" token
+            "phases[]" lifePhaseText declaredPhases tag
+        yields ← case entryVal of
+            Aeson.Array xs → traverse parseJSON (V.toList xs)
+            _ → fail ∘ T.unpack $
+                "flora species '" <> species <> "': harvestable \
+                \phase_yield (key '" <> token <> "') must be a list of \
+                \yield entries, got " <> authoredToken entryVal
+        pure (tag, yields)
 
 data FloraYamlWorldGen = FloraYamlWorldGen
     { fywCategory     ∷ Text
@@ -440,14 +535,6 @@ instance FromJSON FloraYamlDef where
         -- every diagnostic — the applicative chain cannot pass an
         -- already-parsed field to a later one.
         name ← v .: "name"
-        -- Looked up rather than read with `.:?` only so a present-but-
-        -- null key keeps meaning exactly what it meant before (#1711 is
-        -- about the block’s CONTENT, not its presence): aeson’s `.:?`
-        -- reads `harvestable: null` as absent, and this reproduces that.
-        harvest ← case KM.lookup "harvestable" v of
-            Nothing         → pure Nothing
-            Just Aeson.Null → pure Nothing
-            Just hv         → Just <$> parseFloraYamlHarvest name hv
         -- The five vocabulary positions (#2315) are read monadically
         -- for the same reason `name` is, and then for one more: the
         -- overrides are validated against THIS species' own declared
@@ -456,6 +543,19 @@ instance FromJSON FloraYamlDef where
         -- field to a later one.
         lifecycle ← requireLifecycle name v
         phases ← parseFloraList name "phases" (parseFloraYamlPhase name) v
+        -- Read AFTER `phases` since #2212, for that same reason: a
+        -- `phase_yield:` key is validated against the phases this
+        -- species actually declares.
+        --
+        -- Looked up rather than read with `.:?` only so a present-but-
+        -- null key keeps meaning exactly what it meant before (#1711 is
+        -- about the block’s CONTENT, not its presence): aeson’s `.:?`
+        -- reads `harvestable: null` as absent, and this reproduces that.
+        harvest ← case KM.lookup "harvestable" v of
+            Nothing         → pure Nothing
+            Just Aeson.Null → pure Nothing
+            Just hv         → Just <$> parseFloraYamlHarvest name
+                                           (map fypTag phases) hv
         cycleStages ← parseFloraList name "annualCycle"
                           (parseFloraYamlCycleStage name) v
         overrides ← parseFloraList name "cycleOverrides"

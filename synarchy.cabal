@@ -27,23 +27,72 @@ extra-doc-files:    CHANGELOG.md
                     CLAUDE.md
 -- The sdist is the source tree: besides the headers for the c-sources
 -- below (which sdist does not pick up from include-dirs on its own),
--- ship the runtime/test resources the engine and test suites load from
--- relative paths at run time — game-data YAML, image/font assets, the
--- Lua game scripts, and the versioned config templates. The config
--- entries are enumerated (not globbed) on purpose: config/ also holds
--- gitignored local runtime state (keybinds.local.yaml, video.local.yaml,
--- notifications.local.yaml, #638/#786) that a glob would leak into the
--- tarball. data/language/concept_id_baseline.json is named explicitly
--- because it is the one runtime resource under data/ that is not YAML:
+-- ship every tracked file a shipped runtime path or the headless suite
+-- READS from a relative path (#2175) — game-data YAML, image/font
+-- assets, the compiled unit atlas indexes, the Lua game scripts, the
+-- versioned config templates, the headless suite's own on-disk data,
+-- and the two save-compat documents plus the one playtest module the
+-- suite reads out of docs/ and tools/.
+--
+-- Three deliberate exclusions, each of which the completeness audit
+-- (tools/sdist_manifest_audit.py, run by CI and `make ci`) enforces as
+-- a POSITIVE rule rather than merely leaving unlisted:
+--
+--   * config/ is enumerated, never globbed, because it also holds
+--     gitignored local runtime state (keybinds.local.yaml,
+--     video.local.yaml, notifications.local.yaml,
+--     *.legacy-neutral.local.yaml, #638/#786) a glob would leak into
+--     the tarball.
+--   * The three tracked legacy config files (config/keybinds.yaml,
+--     config/video.yaml, config/notifications.yaml) stay OUT. They are
+--     one-time migration sources (#638/#786/#1937): a fresh install
+--     reading them would inherit a stale developer's settings, and
+--     Engine.Core.Init treats their absence as the ordinary case.
+--   * docs/ and tools/ are otherwise absent because nothing a shipped
+--     binary or the packaged headless suite runs reads them. The
+--     tarball is the buildable source tree, not the development
+--     workflow: the Python audits, probes and design documents are
+--     read only from a git checkout. The exceptions below are exactly
+--     three files -- the two a test example opens by relative path
+--     (docs/save_compat/manifest.json, whose fixtures the save-compat
+--     suite decodes, and tools/playtest/critic_click.py, which
+--     Test.Headless.UI.InteractiveBounds reads), and the one a shipped
+--     audit maintains as its baseline
+--     (docs/save_compat/enum_baseline.json).
+--
+-- cabal.project ships too, and is the one entry that is neither a
+-- runtime nor a test resource. It carries the index-state pin (#1354),
+-- and without it an unpacked tarball resolves against whatever Hackage
+-- looks like on the day it is built: vulkan moved 3.26.6 -> 3.27 while
+-- #2175 was open, and `cabal build all` in the unpacked tree then fails
+-- to compile Engine.Graphics.Vulkan.Command against the newer API. A
+-- tarball that cannot be built is not a source distribution, so the
+-- solver's view has to travel with the source it describes.
+--
+-- Everything else is a GLOB over a resource family rather than a list
+-- of names, so adding a texture, a save-compat fixture or an atlas
+-- index needs no edit here. That is also what the audit compares
+-- against: the tracked files matching each family, enumerated at run
+-- time, never a frozen count.
+--
+-- data/language/concept_id_baseline.json is named explicitly because it
+-- is the one runtime resource under data/ that is not YAML:
 -- Language.Semantic.Catalogue loads it beside concepts.yaml (#1868), so
 -- omitting it would ship a source distribution that cannot build a
 -- catalogue at all.
-extra-source-files: cbits/*.h
+extra-source-files: cabal.project
+                    cbits/*.h
                     data/**/*.yaml
                     data/language/concept_id_baseline.json
                     assets/**/*.png
                     assets/**/*.ttf
+                    assets/**/*.json
                     scripts/**/*.lua
+                    test-headless/data/**/*.bin
+                    test-headless/data/**/*.json
+                    test-headless/data/**/*.txt
+                    docs/save_compat/*.json
+                    tools/playtest/critic_click.py
                     config/keybinds_default.yaml
                     config/pathing.yaml
                     config/save_default.yaml
@@ -942,6 +991,7 @@ library
                      World.Flora.Designation
                      World.Flora.HitTest
                      World.Flora.Growth
+                     World.Flora.Clock
                      World.Flora.Placement
                      World.Flora.Render
                      World.Flora.Harvest
@@ -1256,6 +1306,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.FloraContent
                    Test.Headless.Asset.FloraRegrowthSchema
+                   Test.Headless.Asset.FloraHarvestPolicySchema
                    Test.Headless.Asset.FloraVocabularySchema
                    Test.Headless.Asset.InfectionSchema
                    Test.Headless.Asset.Types
@@ -1318,7 +1369,9 @@ test-suite synarchy-test-headless
                    Test.Headless.World.DigDomain
                    Test.Headless.World.Chop.Selection
                    Test.Headless.World.Chop.Authority
+                   Test.Headless.World.Chop.TagPolicy
                    Test.Headless.Lua.ChopGesture
+                   Test.Headless.Lua.ChopFellXp
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue

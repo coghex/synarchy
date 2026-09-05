@@ -20,7 +20,7 @@ import World.Types
 import World.Vegetation (isTilledSoil)
 import World.Flora.CropPlot (newCropPlot)
 import World.Generate.Coordinates (canonicalTileFrame)
-import Engine.Scripting.Lua.API.Forage.Lookup (growthClock)
+import World.Flora.Clock (growthClock)
 
 -- | The one YAML worldGen category tag (World.Flora.Placement) that
 --   marks a species as the ctVeg-tile-fill groundcover form (#334) —

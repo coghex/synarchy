@@ -203,9 +203,12 @@ local function chopExecute(uid, s, params)
         -- A just-felled tree's designation removal is a queued world
         -- command; the regrowth-timer check keeps us from re-claiming
         -- THIS TREE in that window (a regrowing stump is not choppable).
-        -- NOT the harvestable flag: that is the bare-forage signal,
-        -- gated on the #332 growth window — a designated sprout or
-        -- standing-dead tree must stay choppable.
+        -- NOT the harvestable flag: that is the bare-forage signal.
+        -- A designated sprout or standing-dead tree must stay
+        -- choppable, and since #2212 that is AUTHORED — the three wood
+        -- species declare `wood` in their `ungated_tags:`, and the
+        -- designation the loop is re-checking was itself admitted by
+        -- the same shared predicate the fell will apply.
         local regrowth = instanceRegrowth(cand.x, cand.y, cand.iid)
         if regrowth and regrowth > 0 then return end
         chopClaims[key] = { uid = uid, at = now }
@@ -301,9 +304,18 @@ local function chopExecute(uid, s, params)
             -- harvest so a raced species change can't trade the tree
             -- for a berry bush. A nil result (plant gone / raced) still
             -- completes.
-            world.harvestFloraInstance(job.x, job.y, iid, "wood")
+            local felled = world.harvestFloraInstance(job.x, job.y,
+                                                      iid, "wood")
             chop.cancelDesignation(job.x, job.y, iid)
-            grantWorkXP(uid, "woodcutting", params.chop_xp_per_fell or 0)
+            -- #2212: XP rides on what the fell actually PRODUCED, not
+            -- on having swung. The verb tells the two apart on purpose:
+            -- nil is a refusal or a raced-away target, an empty table
+            -- is an accepted fell whose authored phase yield is empty
+            -- — a sprout. Both earn nothing; a matured or standing-dead
+            -- tree spawns logs and earns the configured per-fell XP.
+            if felled and #felled > 0 then
+                grantWorkXP(uid, "woodcutting", params.chop_xp_per_fell or 0)
+            end
             chopComplete(wid, uid, s)
         end
         return

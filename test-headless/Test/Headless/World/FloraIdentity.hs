@@ -108,7 +108,8 @@ probeCatalog = emptyFloraCatalog
   where
     harvestable name tags = (newFloraSpecies name (TextureHandle 0))
         { fsHarvest = Just FloraHarvest
-            { fhTags = tags, fhYield = [("probe_log", 1, 1)]
+            { fhTags = tags, fhUngatedTags = []
+            , fhYield = [("probe_log", 1, 1)], fhPhaseYields = HM.empty
             , fhRegrowth = 100, fhHarvestedTexture = TextureHandle 0 } }
 
 speciesName ∷ FloraId → Text

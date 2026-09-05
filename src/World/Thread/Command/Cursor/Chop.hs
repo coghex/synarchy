@@ -35,6 +35,8 @@ import qualified Data.Vector.Unboxed as VU
 import World.Types
 import World.Generate (chunkToGlobal)
 import World.Chop.Types (chopDesignationTile)
+import World.Flora.Clock (growthClock)
+import World.Flora.Growth (floraGrowth, floraHarvestAdmits)
 import World.Flora.Designation
     (designateChopInstances, setChopDesignations
     , cancelChopAtTile, cancelChopForInstance)
@@ -46,12 +48,20 @@ import World.Thread.Command.Cursor.Common
 --   The list is the gesture's own answer ("World.Flora.HitTest" already
 --   applied the same predicate against the frame the player was looking
 --   at); re-checking it here is the live-state guard, not a second
---   selection rule. Eligibility is unchanged from the two-click
---   rectangle it replaces: a species with a harvest block whose tags
---   carry @tag@, and an instance with no live regrowth timer. It
---   deliberately does NOT consult the forage API's growth-window
---   @harvestable@ signal — a designated tree stays choppable as a
---   sprout or standing dead.
+--   selection rule.
+--
+--   #2212 made "the same predicate" literal: both halves call
+--   'World.Flora.Growth.floraHarvestAdmits' on the same tag and the
+--   same derived growth state, so a plant this commit drops can no
+--   longer be one the gesture happily offered. The instance's own
+--   regrowth timer stays a caller-side condition, as it is there.
+--
+--   It deliberately does NOT consult the forage API's growth-window
+--   @harvestable@ signal: the three shipped wood species author @wood@
+--   as an ungated tag, so a designated tree stays choppable as a sprout
+--   or standing dead. A wood-tagged species that authors NO exemption
+--   is now window-gated here and in the harvest verb together, which is
+--   the whole point of sharing the rule.
 --
 --   Idempotent: designating an already-designated plant rewrites the
 --   same entry (requirement 4's set/clear symmetry).
@@ -66,13 +76,14 @@ handleWorldDesignateChopInstancesCommand env logger pageId iids tag = do
             resident ← residentPlants env worldState
             harvests ← readIORef (wsFloraHarvestsRef worldState)
             cat ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
+            (doy, absDay) ← growthClock worldState
             let entries =
                     [ (iid, gx, gy, z)
                     | iid ← iids
                     , Just (inst, gx, gy, z) ← [HM.lookup iid resident]
                     , Just sp ← [lookupSpecies (fiSpecies inst) cat]
-                    , Just fh ← [fsHarvest sp]
-                    , tag `elem` fhTags fh
+                    , floraHarvestAdmits sp (Just tag) doy
+                          (floraGrowth sp absDay inst)
                     , HM.lookupDefault 0 iid harvests ≤ 0
                     ]
             designateChopInstances worldState entries

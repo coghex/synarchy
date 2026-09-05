@@ -145,10 +145,40 @@ instance Hashable AnnualCycleKey where
 --   the count is rolled uniformly in [min, max] per harvest.
 data FloraHarvest = FloraHarvest
     { fhTags             ∷ ![Text]
-      -- ^ Edible-part tags: fruit / nuts / leaves / roots. Informational
-      --   for now — season-gating on tags is future work.
+      -- ^ Harvest-part tags: fruit / nuts / leaves / roots / wood. A
+      --   TAGGED harvest verb ('world.harvestFlora' with a tag, the
+      --   chop AI's @"wood"@) only takes a species listing that tag.
+    , fhUngatedTags      ∷ ![Text]
+      -- ^ The subset of 'fhTags' whose harvests may take this plant
+      --   OUTSIDE 'World.Flora.Growth.harvestOpen''s window (#2212).
+      --
+      --   Before #2212 every tagged call skipped the window
+      --   unconditionally, which was a wood-removal policy written as
+      --   a property of "being tagged at all": a future @fruit@ or
+      --   @grain@ tag would have inherited it and silently disabled the
+      --   #332 lifecycle and seasonal gates. Now the exemption is
+      --   AUTHORED. Absent (the empty list) means growth-gated, so a
+      --   tagged call against a block that declares none is refused in
+      --   exactly the growth states a bare call is.
+      --
+      --   Every entry is required to appear in 'fhTags' at the
+      --   authoring boundary ('Engine.Asset.YamlFlora'): an exemption
+      --   for a tag the species does not carry could never be selected.
     , fhYield            ∷ ![(Text, Int, Int)]
-      -- ^ (item def name, min count, max count) per harvest.
+      -- ^ (item def name, min count, max count) per harvest — the
+      --   block's DEFAULT roll, inherited by every life phase that
+      --   authors no override of its own.
+    , fhPhaseYields      ∷ !(HM.HashMap LifePhaseTag [(Text, Int, Int)])
+      -- ^ Per-life-phase yield overrides (#2212). An ABSENT phase
+      --   inherits 'fhYield'; a phase mapped to the EMPTY list yields
+      --   nothing at all, which is what makes a felled sprout cost the
+      --   colony a fell without paying it a mature tree's logs.
+      --
+      --   Absent and explicitly-empty are therefore different authored
+      --   statements, and the decoder keeps them apart. The lookup key
+      --   is the plant's derived life phase
+      --   ('World.Flora.Growth.growthPhaseTag'), so a species with no
+      --   @phases:@ at all has no key to hit and always inherits.
     , fhRegrowth         ∷ !Float
       -- ^ GAME-seconds until the tile is harvestable again (86400 = one
       --   game-day ≈ 24 real-minutes at timeScale 1). Always finite and
