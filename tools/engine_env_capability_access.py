@@ -154,11 +154,12 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # hudActivePageRef, textBuffersRef) reaches them through
     # Engine.Core.Capability.Ui, and the two event-dominant modules
     # left (Engine.PlayerEvent.Emit,
-    # Engine.Scripting.Lua.API.PlayerEvent) now reach the four
-    # event/notification/popup fields (eventStoreRef,
-    # notificationCfgRef, notificationOrder, popupQueueRef) through
-    # Engine.Core.Capability.Events -- see SS7.7. Neither half has an
-    # unrestricted consumer left.
+    # Engine.Scripting.Lua.API.PlayerEvent) now reach the
+    # event/notification fields (eventStoreRef, notificationCfgRef,
+    # notificationOrder) through Engine.Core.Capability.Events -- see
+    # SS7.7. That slice was four fields until #2285 removed the
+    # write-only popupQueueRef. Neither half has an unrestricted
+    # consumer left.
     "ui-hud-events": frozenset(),
     # Never had a temporary consumer: every module whose dominant field
     # usage is save/load coordination is a permanent SS6.1 whole-session

@@ -112,10 +112,9 @@ data PlayerEvent = PlayerEvent
 --   'PlayerEvent'. That placement is the contract, not a style
 --   preference: the coalescing key
 --   ('Engine.PlayerEvent.Emit.pushBounded'\'s @sameEntry@) compares
---   'PlayerEvent' fields, the popup queue and the @LuaShowPopup@
---   broadcast carry bare 'PlayerEvent's, and none of them can grow a
---   sequence dependency by accident when the sequence is not a field
---   they can see.
+--   'PlayerEvent' fields and the @LuaShowPopup@ broadcast carries the
+--   same bare fields, and neither can grow a sequence dependency by
+--   accident when the sequence is not a field they can see.
 data StoredEvent = StoredEvent
     { seSequence ∷ !Int
       -- ^ The store's mutation sequence for THIS row. Positive,
