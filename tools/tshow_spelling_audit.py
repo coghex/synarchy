@@ -443,6 +443,32 @@ def _names_show(text: str, pos: int,
 # `h`, not to `pack` -- does not.
 _TRANSPARENT_CLOSE = re.compile(r"[\s\x00]*\)")
 
+# A TYPE ASCRIPTION on the packer. `(pack :: String -> Text) . show` is
+# the same function -- the ascription names the type `pack` already has
+# -- and the connector sits after the group's closing parenthesis
+# rather than after the name (PR #2404 review round 19). `∷` is the
+# spelling this tree writes.
+_ASCRIPTION = re.compile(r"[\s\x00]*(?:::|∷)")
+
+
+def _past_ascription(text: str, pos: int) -> int | None:
+    """The offset just past the `)` closing the group whose ascription
+    begins at `pos`, or `None` if it never closes.
+
+    Parenthesis depth is tracked, so a type spelling its own
+    (`(pack :: (String) -> Text)`) does not end the group early. The
+    type's text is not read: nothing about it changes what `pack` is."""
+    depth, i, n = 0, pos, len(text)
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            if depth == 0:
+                return i + 1
+            depth -= 1
+        i += 1
+    return None
+
 # An OPERATOR SECTION puts the connector at the edge of a parenthesised
 # expression instead of between its operands, and both halves of that
 # are still this wrapper (PR #2404 review round 11):
@@ -1412,6 +1438,25 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         # connector, and draws on the same budget.
         budget = _transparent_open_parens(scan_text, expression_start)
         cursor = match.end()
+        # An ascription lives inside the parentheses this expression
+        # opened, so it is read only when there is one to close -- and
+        # reading past it spends that one. Without the budget test,
+        # `g (T.pack :: …) . show` would read as a wrapper, when it is
+        # `(g (T.pack :: …)) . show`. An ascription that never closes is
+        # left alone rather than followed; the ordinary path then finds
+        # no connector after `pack` and reports nothing.
+        #
+        # No fixture claims an independent failure mode for the budget
+        # DECREMENT: the closer loop below stops at the first character
+        # that is not `)`, so an over-count can only be spent where
+        # more consecutive closers stand than this expression opened,
+        # which no balanced source has. It is here to keep the
+        # accounting honest.
+        ascription = _ASCRIPTION.match(scan_text, cursor)
+        if ascription is not None and budget:
+            closed = _past_ascription(scan_text, ascription.end())
+            if closed is not None:
+                cursor, budget = closed, budget - 1
         while budget:
             closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
             if closer is None:
@@ -1738,6 +1783,34 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "and the `$` right section, whose operand is the packer too",
         "module M where\n" + _T
         + "g x = ($ show x) T.pack\n",
+        [3],
+    ),
+    (
+        "a TYPE ASCRIPTION on the packer: the ascription names the "
+        "type it already has, and the connector sits after the "
+        "group's closing parenthesis rather than after the name "
+        "(PR #2404 review round 19)",
+        "module M where\n" + _T
+        + "f = (T.pack :: String -> T.Text) . show\n",
+        [3],
+    ),
+    (
+        "the same written with this tree's own `∷`",
+        "module M where\n" + _T
+        + "f = (T.pack ∷ String → T.Text) ∘ show\n",
+        [3],
+    ),
+    (
+        "an ascribed packer APPLIED to the shown value",
+        "module M where\n" + _T
+        + "f x = (T.pack :: String -> T.Text) (show x)\n",
+        [3],
+    ),
+    (
+        "a type spelling its own parentheses does not close the group "
+        "early",
+        "module M where\n" + _T
+        + "f = (T.pack :: (String) -> T.Text) . show\n",
         [3],
     ),
     (
@@ -2446,6 +2519,20 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "`format (T.pack .) show` applies `format` to both",
         "module M where\n" + _T
         + "f = format (T.pack .) show\n",
+    ),
+    (
+        "an ascribed packer that is somebody's ARGUMENT: "
+        "`g (T.pack :: …) . show` is `(g (T.pack :: …)) . show`, so "
+        "the ascription is read only when there is a parenthesis of "
+        "this expression's own to close",
+        "module M where\n" + _T
+        + "f = g (T.pack :: String -> T.Text) . show\n",
+    ),
+    (
+        "an ascribed packer composed with something that is not "
+        "`show` is a different function",
+        "module M where\n" + _T
+        + "f = (T.pack :: String -> T.Text) . g\n",
     ),
     (
         "`format T.pack . show` is `(format T.pack) . show`: "

@@ -141,7 +141,9 @@ does the **prefix** spelling, `(.) pack show` and `($) pack (show x)`,
 parenthesised either way round — `((.) pack) show` and
 `(.) (pack) show`. (The prefix form fixes where its operand sits, so
 the operand's own parentheses need no grouping test; the ones around
-the whole application do.)
+the whole application do.) A **type ascription** on the packer —
+`(pack :: String -> Text) . show` — is read past to the group's
+closing parenthesis: it names the type `pack` already has.
 Every one of these must be in FUNCTION position — the packer too:
 application binds tighter than any connector, so `format pack . show` is
 `(format pack) . show`, `g pack (show x)` is two arguments to `g`, and
@@ -307,7 +309,8 @@ against a wrapper that is the right operand of a masked operator, a
 a `UPrelude`-, `GHC.Show`- and `Text.Show`-qualified `show`, a
 quasiquote used as an applicand, and two unresolvable qualified
 `show`s that refuse; and three combining-mark and indented binder
-shapes against a reserved word introducing a wrapper. Every rule was mutation-tested against them: each is
+shapes against a reserved word introducing a wrapper; and four
+ascription spellings against two that are somebody's argument. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
