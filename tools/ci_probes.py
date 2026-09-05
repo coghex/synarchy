@@ -39,7 +39,11 @@ from dataclasses import dataclass
 from typing import Sequence
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from probe_runner_registry import PROBES  # noqa: E402
+from probe_runner_registry import (  # noqa: E402
+    PROBE_EXPECTED_SECONDS,
+    PROBES,
+    expected_duration_problems,
+)
 
 ALL_KEYS = {p[0] for p in PROBES}
 
@@ -998,6 +1002,51 @@ def _reason_cases() -> list[str]:
     return problems
 
 
+def missing_expectations(eligible=None, expectations=None) -> list[str]:
+    """CI-eligible probes carrying no expected-duration declaration (#2275).
+
+    `probe_runner_scheduler` dispatches a `--jobs` batch longest-expected
+    -first, reading `probe_runner_registry.PROBE_EXPECTED_SECONDS`; a probe
+    with no entry there sorts LAST among its peers and keeps its registry
+    position, which for the blocking gate's own set is the registry-order
+    dispatch this repository moved away from. So the table silently rotting
+    back to registry order looks exactly like nothing being wrong, and this
+    is what makes it look like a failing self-test instead.
+
+    Both arguments exist so `_expected_duration_cases` can drive this over
+    SYNTHETIC inputs: a completeness check with no proven failing case is
+    not a check.
+    """
+    keys = CI_ELIGIBLE if eligible is None else eligible
+    declared = PROBE_EXPECTED_SECONDS if expectations is None else expectations
+    return sorted(key for key in keys if key not in declared)
+
+
+def _expected_duration_cases() -> list[str]:
+    """Prove `missing_expectations` on SYNTHETIC eligible sets (#2275)."""
+    problems: list[str] = []
+    complete = {"a": 3.0, "b": 1.0}
+    cases: list[tuple[str, set[str], dict[str, float], list[str]]] = [
+        ("every eligible key declared", {"a", "b"}, complete, []),
+        ("one eligible key undeclared", {"a", "b", "c"}, complete, ["c"]),
+        ("several undeclared, reported sorted",
+         {"a", "z", "c"}, complete, ["c", "z"]),
+        ("no eligible keys at all", set(), complete, []),
+        ("nothing declared at all", {"a"}, {}, ["a"]),
+        # A declaration for a probe that is not CI-eligible is not this
+        # check's business: the manual-only sweep orders by the same table
+        # and benefits from the entry.
+        ("an extra declaration is not a gap", {"a"},
+         {"a": 3.0, "manual_only": 9.0}, []),
+    ]
+    for name, eligible, declared, want in cases:
+        got = missing_expectations(eligible=eligible, expectations=declared)
+        if got != want:
+            problems.append(f"expected-duration case {name!r}: "
+                            f"expected {want} got {got}")
+    return problems
+
+
 def _self_test() -> int:
     """Validate the mapping wiring — no engine needed."""
     problems = []
@@ -1035,6 +1084,16 @@ def _self_test() -> int:
         problems.append(f"probes with no CI status at all (add to CI_ELIGIBLE or "
                          f"MANUAL_ONLY_REASONS): {sorted(uncovered)}")
     problems += validate_manual_only_reasons(MANUAL_ONLY_REASONS)
+    # #2275: every CI-eligible probe must carry an expected duration, so
+    # the blocking gate's own `--jobs 2` batch really is dispatched
+    # longest-first rather than falling back to registry order for a probe
+    # nobody measured. A STALE value is not a failure — it costs a slightly
+    # worse order and nothing else — so only presence is required here.
+    problems += [f"CI-eligible probe declares no expected duration in "
+                 f"probe_runner_registry.PROBE_EXPECTED_SECONDS: {key}"
+                 for key in missing_expectations()]
+    problems += expected_duration_problems()
+    problems += _expected_duration_cases()
     problems += _reason_shape_cases()
     problems += _status_rendering_cases()
     problems += _reason_cases()

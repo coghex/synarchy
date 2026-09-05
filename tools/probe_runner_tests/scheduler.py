@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Orchestration: aggregate exits, conflicts, retries, Ctrl-C (#2130).
 
-Fourteen groups over `probe_runner_scheduler` and the aggregate command
+Nineteen groups over `probe_runner_scheduler` and the aggregate command
 it drives:
 
   the aggregate's exit codes and presentation are unchanged;
+  a `--jobs` batch is dispatched longest-EXPECTED-first, undeclared
+  probes keep registry order behind the declared ones, equal
+  expectations are stable, a blocked long probe never stalls a shorter
+  one, and none of it reaches `--list`, `--jobs 1` or the summary;
   a key-specific timeout reaches execution and a parallel retry reuses
   it;
   declared conflicts never overlap, a solo probe waits for work already
@@ -20,7 +24,9 @@ it drives:
   unrelated teardown failures.
 
 `DRIVER_SRC` and `run_driver` -- the out-of-process runner a real SIGINT
-is delivered to -- are this family's own fixture.
+is delivered to -- are this family's own fixture, as are
+`dispatched_keys`, `verdict_scripts` and `failed_scripts`, the three
+readings of a run's printed record the #2275 ordering cases assert on.
 """
 from __future__ import annotations
 
@@ -47,6 +53,7 @@ from .support import (
     wait_pid_gone,
 )
 
+import probe_runner_diagnostics  # noqa: E402
 from selftestlib import expect  # noqa: E402
 
 
@@ -575,6 +582,293 @@ def test_a_two_port_probe_never_takes_its_neighbours_base() -> None:
         tree.cleanup()
 
 
+# --------------------------------------------------------------------------
+# Dispatch order: longest EXPECTED first (#2275)
+# --------------------------------------------------------------------------
+# The three readings below are all taken from what a run PRINTED, not from
+# the scheduler's internals, because the three orders #2275 separates are
+# only distinguishable there: `dispatched_keys` is the order the parallel
+# path chose to submit in, `verdict_scripts` the order verdicts were
+# reported in, and `failed_scripts` the order the final summary listed.
+# Requirement 2 is precisely that the first may be reordered and the other
+# two may not.
+
+
+def dispatched_keys(out: str) -> list[str]:
+    """The probe keys a `--jobs` batch submitted, in submission order.
+
+    Read from the durable `begin` progress records (#1768) the dispatching
+    thread emits before each `submit`, through the shipped parser rather
+    than a hand-copied format. Solo retries emit `begin` too and are
+    excluded by their own detail: this is the BATCH's dispatch order.
+    """
+    keys = []
+    for line in out.splitlines():
+        record = probe_runner_diagnostics.parse_progress(line)
+        if record is None or record.kind != "begin":
+            continue
+        if record.detail != "dispatched":
+            continue
+        keys.append(record.identity.split(" ", 1)[0])
+    return keys
+
+
+def verdict_scripts(out: str) -> list[str]:
+    """The scripts named by the runner's `[i/n] <script> ...` lines, in order."""
+    scripts = []
+    for line in out.splitlines():
+        text = line.strip()
+        if not text.startswith("[") or " ... " not in text:
+            continue
+        head = text.split(" ... ", 1)[0]
+        if "] " not in head:
+            continue
+        scripts.append(head.split("] ", 1)[1])
+    return scripts
+
+
+def failed_scripts(out: str) -> list[str]:
+    """The scripts the final `FAILED:` block listed, in the order it listed them."""
+    lines = out.splitlines()
+    try:
+        start = lines.index("FAILED:")
+    except ValueError:
+        return []
+    scripts = []
+    for line in lines[start + 1:]:
+        parts = line.split()
+        if len(parts) != 2 or not line.startswith("  "):
+            break
+        scripts.append(parts[1])
+    return scripts
+
+
+def test_parallel_dispatch_takes_the_longest_expected_first() -> None:
+    print("\n-- --jobs dispatches the longest EXPECTED probe first, not the "
+          "first registered one")
+    tree = Tree()
+    try:
+        # Registry order is alpha..delta; the declared expectations are its
+        # exact REVERSE, and they are injected independently of how long
+        # each probe actually dwells (every probe here dwells the same
+        # 0.2 s). So an order matching the declarations cannot have come
+        # from the fixture finishing in that sequence, and cannot have come
+        # from registry order either.
+        for name in ("alpha", "beta", "gamma", "delta"):
+            tree.add(name, dwell=0.2, descendant=False)
+        rc, out = main_with(
+            tree, ["--jobs", "2"],
+            durations={"alpha": 100.0, "beta": 200.0,
+                       "gamma": 300.0, "delta": 400.0})
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        expect("4/4 passed" in out, "and the aggregate counts all four")
+
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["delta", "gamma", "beta", "alpha"],
+               f"the batch is dispatched longest-expected-first "
+               f"(got {dispatched})")
+        # Stated separately because it is the acceptance criterion's own
+        # claim: with two workers, the two probes that start are the two
+        # largest expectations, whatever comes after.
+        expect(dispatched[:2] == ["delta", "gamma"],
+               f"the first two dispatched are the two largest expectations "
+               f"(got {dispatched[:2]})")
+        for name in ("alpha", "beta", "gamma", "delta"):
+            expect(len(tree.intervals(name)) == 1,
+                   f"{name} still ran exactly once "
+                   f"(windows: {tree.intervals(name)})")
+    finally:
+        tree.cleanup()
+
+
+def test_probes_without_an_expectation_keep_registry_order() -> None:
+    print("\n-- an undeclared probe sorts behind every declared one and "
+          "keeps its registry position")
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma", "delta", "epsilon", "zeta"):
+            tree.add(name, dwell=0.2, descendant=False)
+        # Only two probes are measured, and they are the LAST two in
+        # registry order, so "declared first" and "registry order" disagree
+        # about every position.
+        rc, out = main_with(tree, ["--jobs", "2"],
+                            durations={"epsilon": 50.0, "zeta": 10.0})
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["epsilon", "zeta",
+                              "alpha", "beta", "gamma", "delta"],
+               f"the two declared probes go first, longest first, and the "
+               f"four undeclared ones follow in registry order "
+               f"(got {dispatched})")
+    finally:
+        tree.cleanup()
+
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma"):
+            tree.add(name, dwell=0.2, descendant=False)
+        # No expectation for anyone: the fallback is registry order whole,
+        # which is what a runner working an unmeasured selection gets.
+        rc, out = main_with(tree, ["--jobs", "2"], durations={})
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["alpha", "beta", "gamma"],
+               f"with nothing declared the batch keeps registry order "
+               f"(got {dispatched})")
+    finally:
+        tree.cleanup()
+
+
+def test_equal_expectations_keep_their_registry_order() -> None:
+    print("\n-- equal expectations are a STABLE tie, not an arbitrary one")
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma", "delta"):
+            tree.add(name, dwell=0.2, descendant=False)
+        rc, out = main_with(tree, ["--jobs", "2"],
+                            durations={"alpha": 42.0, "beta": 42.0,
+                                       "gamma": 42.0, "delta": 42.0})
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["alpha", "beta", "gamma", "delta"],
+               f"one expectation shared by every probe leaves registry "
+               f"order untouched (got {dispatched})")
+    finally:
+        tree.cleanup()
+
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma", "delta"):
+            tree.add(name, dwell=0.2, descendant=False)
+        # Two tied pairs, the SHORTER pair registered first: the pairs swap
+        # and the members of each keep their order relative to one another.
+        rc, out = main_with(tree, ["--jobs", "2"],
+                            durations={"alpha": 10.0, "beta": 10.0,
+                                       "gamma": 20.0, "delta": 20.0})
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["gamma", "delta", "alpha", "beta"],
+               f"the longer pair goes first and each pair stays in registry "
+               f"order within itself (got {dispatched})")
+    finally:
+        tree.cleanup()
+
+
+def test_a_blocked_long_probe_does_not_stall_shorter_ones() -> None:
+    print("\n-- a BLOCKED probe with the longest expectation is skipped, "
+          "and shorter unblocked probes still start")
+    tree = Tree()
+    try:
+        # `config_migration` is registered FIRST but declares the
+        # SECOND-largest expectation, so longest-first pulls `unrelated_a`
+        # ahead of it -- and `unrelated_a` then dwells long enough to hold
+        # its SHARED `repo-config` interest across the whole run.
+        # `config_migration` declares that resource EXCLUSIVELY (#1444), so
+        # every dispatch attempt after the first finds it blocked. Being
+        # second in line, a scheduler that waited on its turn rather than
+        # skipping it would leave the second worker idle for the whole run.
+        tree.add("config_migration", dwell=0.2, descendant=False)
+        tree.add("unrelated_a", dwell=1.5, descendant=False)
+        tree.add("unrelated_b", dwell=0.2, descendant=False)
+        tree.add("unrelated_c", dwell=0.2, descendant=False)
+        rc, out = main_with(
+            tree, ["--jobs", "2"],
+            durations={"unrelated_a": 900.0, "config_migration": 800.0,
+                       "unrelated_b": 10.0, "unrelated_c": 5.0})
+        expect(rc == 0, f"every probe still passes (exit {rc})")
+        expect("4/4 passed" in out, "and the aggregate counts all four")
+
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["unrelated_a", "unrelated_b", "unrelated_c",
+                              "config_migration"],
+               f"the blocked long probe was skipped over twice and both "
+               f"shorter probes started ahead of it (got {dispatched})")
+        expect(dispatched[0] == "unrelated_a",
+               f"and the run really was reordered -- registry order would "
+               f"have dispatched config_migration first (got {dispatched})")
+
+        first = tree.window("unrelated_a")
+        second = tree.window("unrelated_b")
+        third = tree.window("unrelated_c")
+        migration = tree.window("config_migration")
+        expect(overlaps(first, second),
+               f"the blocked probe cost nobody their concurrency "
+               f"(unrelated_a {first}, unrelated_b {second})")
+        expect(not overlaps(migration, first)
+               and not overlaps(migration, second)
+               and not overlaps(migration, third),
+               f"and the exclusive probe still overlapped nothing "
+               f"(migration {migration}, a {first}, b {second}, c {third})")
+        expect(migration[0] >= first[1],
+               f"it ran only once its blocker was reaped (migration start "
+               f"{migration[0]}, unrelated_a end {first[1]})")
+    finally:
+        tree.cleanup()
+
+
+def test_dispatch_order_reaches_neither_list_nor_sequential_nor_summary() -> None:
+    print("\n-- --list, --jobs 1 and the final summary all keep registry "
+          "order regardless of the expectations")
+    # The same declarations throughout: the exact reverse of registry
+    # order, so any surface that leaked the dispatch sort would be
+    # unmistakable rather than subtly off.
+    reversing = {"alpha": 100.0, "beta": 200.0, "gamma": 300.0}
+
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma"):
+            tree.add(name, dwell=0.05, descendant=False)
+        rc, out = main_with(tree, ["--list"], durations=reversing)
+        expect(rc == 0, f"--list still exits 0 (got {rc})")
+        listed = [line.split()[0] for line in out.splitlines()
+                  if line.startswith(("alpha", "beta", "gamma"))]
+        expect(listed == ["alpha", "beta", "gamma"],
+               f"--list keeps registry order (got {listed})")
+    finally:
+        tree.cleanup()
+
+    tree = Tree()
+    try:
+        for name in ("alpha", "beta", "gamma"):
+            tree.add(name, dwell=0.05, descendant=False)
+        rc, out = main_with(tree, ["--jobs", "1"], durations=reversing)
+        expect(rc == 0, f"the sequential run still exits 0 (got {rc})")
+        expect(dispatched_keys(out) == [],
+               "the sequential path emits no batch dispatch records at all")
+        ran = verdict_scripts(out)
+        expect(ran == ["alpha_probe.py", "beta_probe.py", "gamma_probe.py"],
+               f"--jobs 1 still executes in registry order (got {ran})")
+        starts = [tree.window(name)[0]
+                  for name in ("alpha", "beta", "gamma")]
+        expect(starts == sorted(starts),
+               f"and really ran in that order, not merely reported it "
+               f"(starts {starts})")
+    finally:
+        tree.cleanup()
+
+    tree = Tree()
+    try:
+        # Two failures, the FIRST and LAST registered: the summary must
+        # list them in registry order even though the batch dispatched
+        # gamma before alpha. --retries 0 keeps the solo-retry pass out of
+        # the printed record this reads.
+        tree.add("alpha", exit_code=1, tail_lines=2, descendant=False)
+        tree.add("beta", descendant=False)
+        tree.add("gamma", exit_code=1, tail_lines=2, descendant=False)
+        rc, out = main_with(tree, ["--jobs", "2", "--retries", "0"],
+                            durations=reversing)
+        expect(rc == 1, f"the failing selection still exits 1 (got {rc})")
+        expect("1/3 passed" in out, "and the aggregate counts the one pass")
+        dispatched = dispatched_keys(out)
+        expect(dispatched == ["gamma", "beta", "alpha"],
+               f"the batch itself was reordered (got {dispatched})")
+        expect(failed_scripts(out) == ["alpha_probe.py", "gamma_probe.py"],
+               f"but the FAILED list keeps registry order "
+               f"(got {failed_scripts(out)})")
+    finally:
+        tree.cleanup()
+
+
 #: The generated sources compile -- first in the aggregate, because a
 #: broken fixture invalidates everything after it.
 TESTS_FIXTURE_VALIDATION = (
@@ -598,6 +892,16 @@ TESTS_RESOURCE_SCHEDULING = (
     test_a_solo_probe_waits_for_work_already_running,
     test_conflict_is_released_after_a_failure,
     test_conflict_is_released_after_a_timeout,
+)
+
+#: Which pending probe a `--jobs` batch submits next (#2275), and the
+#: surfaces the answer must not reach.
+TESTS_DISPATCH_ORDER = (
+    test_parallel_dispatch_takes_the_longest_expected_first,
+    test_probes_without_an_expectation_keep_registry_order,
+    test_equal_expectations_keep_their_registry_order,
+    test_a_blocked_long_probe_does_not_stall_shorter_ones,
+    test_dispatch_order_reaches_neither_list_nor_sequential_nor_summary,
 )
 
 #: Teardown between retry attempts.
@@ -627,5 +931,6 @@ TESTS_NEIGHBOUR_ALLOCATION = (
 #: runs them in.
 TESTS = (TESTS_FIXTURE_VALIDATION + TESTS_AGGREGATE_EXIT
          + TESTS_KEY_TIMEOUTS + TESTS_RESOURCE_SCHEDULING
+         + TESTS_DISPATCH_ORDER
          + TESTS_RETRY_TEARDOWN + TESTS_INTERRUPTION
          + TESTS_PORT_REBINDING + TESTS_NEIGHBOUR_ALLOCATION)
