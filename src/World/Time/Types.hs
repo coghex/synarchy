@@ -10,6 +10,8 @@ module World.Time.Types
     , calendarDaysPerYearChecked
     , worldDateToDayOfYearChecked
     , defaultWorldDate
+    , canonicalWorldDate
+    , renderWorldDate
     , worldDateToDayOfYear
     , worldDateAddDays
     , worldAbsoluteDay
@@ -110,6 +112,10 @@ advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) date
 --     * 'wdMonth' is the month-of-year (@1 .. ccMonthsPerYear@).
 --     * 'wdDay'   is the day-of-/month/ (@1 .. ccDaysPerMonth@).
 --
+--   Those ranges are the type's contract and 'canonicalWorldDate' is
+--   what holds every ingress to them (#2339); a value that reaches this
+--   record from outside is put in that form before it is stored.
+--
 --   Anything that needs a year-relative \"ordinal day\" (e.g. flora
 --   annual-cycle stage selection) must convert through
 --   'worldDateToDayOfYear' — passing 'wdDay' directly aliases
@@ -128,6 +134,49 @@ defaultWorldDate = WorldDate
     , wdDay   = 1
     }
 
+-- | The one canonical form of a 'WorldDate' under a calendar (#2339):
+--   @wdYear ≥ 1@, @1 ≤ wdMonth ≤ ccMonthsPerYear@ and
+--   @1 ≤ wdDay ≤ ccDaysPerMonth@, each out-of-range component clamped
+--   into its range.
+--
+--   __One definition, three callers.__ Every ingress that can put a
+--   noncanonical date into a live 'World.State.Types.wsDateRef' passes
+--   through this: the @world.setDate@ handler
+--   ('World.Thread.Command.Time.handleWorldSetDateCommand') and load
+--   staging ('World.Load.Stage'). The two ordinal converters below read
+--   it too, so the bounds a stored date is repaired to and the bounds a
+--   derived reading is computed from cannot drift apart — which is the
+--   disagreement #2339 is about: @world.getDate@ used to report a raw
+--   @month = 14@ beside a @dayOfYear@ computed for month 12.
+--
+--   __Why the ceilings are floored at 1.__ 'CalendarConfig' arrives from
+--   world-gen data rather than a validated range
+--   ('World.Generate.Config.Validate' does not bound either field), so
+--   @ccMonthsPerYear@ or @ccDaysPerMonth@ can be zero or negative. Both
+--   ordinal converters already answer that with @max 1@, and the
+--   canonical form must agree with them: a ceiling below 1 would
+--   otherwise make the clamp's own lower and upper bounds cross, and no
+--   date could satisfy the form at all.
+--
+--   'wdYear' has no calendar-derived ceiling — a world can run for as
+--   many years as an 'Int' holds — so only its floor is enforced. Years
+--   below 1 predate the world epoch 'defaultWorldDate' names, which
+--   'worldAbsoluteDay' already clamps away at 0.
+canonicalWorldDate ∷ CalendarConfig → WorldDate → WorldDate
+canonicalWorldDate cc (WorldDate year month day) = WorldDate
+    { wdYear  = max 1 year
+    , wdMonth = max 1 (min (max 1 (ccMonthsPerYear cc)) month)
+    , wdDay   = max 1 (min (max 1 (ccDaysPerMonth cc)) day)
+    }
+
+-- | A date as the two clamp diagnostics name it: @year-month-day@.
+--   One spelling so the @world.setDate@ warning
+--   ('World.Thread.Command.Time.setDateClampWarning') and the load-staging
+--   warning ('World.Load.Stage.stagedWorldDateWarning') read alike (#2339).
+renderWorldDate ∷ WorldDate → Text
+renderWorldDate (WorldDate y mo d) =
+    tshow y <> "-" <> tshow mo <> "-" <> tshow d
+
 -- | Convert a 'WorldDate' to a zero-based ordinal day-of-year, using the
 --   calendar's fixed month length.
 --
@@ -141,16 +190,15 @@ defaultWorldDate = WorldDate
 --
 --   Zero-based to match how annual-cycle stage start days are authored
 --   (a stage beginning on the first day of the year uses start day 0).
---   'wdMonth' and 'wdDay' are clamped into their valid ranges first, so
---   an out-of-range 'WorldDate' can never produce a negative or
---   past-end-of-year result. 'wdYear' is ignored: the cycle repeats
---   every year.
+--   The date is put in 'canonicalWorldDate' form first, so an
+--   out-of-range 'WorldDate' can never produce a negative or
+--   past-end-of-year result — and so this reading agrees by construction
+--   with what the setter and load staging store (#2339). 'wdYear' is
+--   ignored: the cycle repeats every year.
 worldDateToDayOfYear ∷ CalendarConfig → WorldDate → Int
-worldDateToDayOfYear cc (WorldDate _ month day) =
+worldDateToDayOfYear cc date =
     let dpm = max 1 (ccDaysPerMonth cc)
-        mpy = max 1 (ccMonthsPerYear cc)
-        m   = max 1 (min mpy month)
-        d   = max 1 (min dpm day)
+        WorldDate _ m d = canonicalWorldDate cc date
     in (m - 1) * dpm + (d - 1)
 
 -- | Days in a calendar year (fixed month length), floored at 1.
@@ -214,13 +262,12 @@ calendarDaysPerYearChecked cc =
     mulCheckedNonNeg (max 1 (ccDaysPerMonth cc)) (max 1 (ccMonthsPerYear cc))
 
 -- | 'worldDateToDayOfYear' with its product and sum checked. The same
---   clamping, so an in-range calendar gives the identical answer.
+--   'canonicalWorldDate' form, so an in-range calendar gives the
+--   identical answer.
 worldDateToDayOfYearChecked ∷ CalendarConfig → WorldDate → Maybe Int
-worldDateToDayOfYearChecked cc (WorldDate _ month day) =
+worldDateToDayOfYearChecked cc date =
     let dpm = max 1 (ccDaysPerMonth cc)
-        mpy = max 1 (ccMonthsPerYear cc)
-        m   = max 1 (min mpy month)
-        d   = max 1 (min dpm day)
+        WorldDate _ m d = canonicalWorldDate cc date
     in mulCheckedNonNeg (m - 1) dpm ⌦ \whole → addChecked whole (d - 1)
 
 -- | Whole days elapsed since the world epoch (year 1, month 1, day 1 —

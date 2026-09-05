@@ -28,6 +28,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..))
 import Engine.Scene.Types (SortableQuad(..))
 import World.Render.GroundItemQuads (hitTestGroundItemAt
                                     , renderGroundItemQuads)
+import World.GroundItems (selectGroundItemOnPage)
 import World.Types (WorldState(..))
 import Item.Ground (GroundItems(..))
 
@@ -52,22 +53,44 @@ itemHitTestAtFn env = do
                     return 1
         _ → Lua.pushnil >> return 1
 
--- | item.select(gid) / item.deselect() / item.getSelected() — the
---   world-view ground-item selection (white outline + info panel).
+-- item.select(gid) / item.deselect() / item.getSelected() — the
+-- world-view ground-item selection (white outline + info panel).
+
+-- | item.select(gid) → bool. Select a ground item of the ACTIVE page,
+--   reporting whether it took — @unit.select@'s contract (#1929) in the
+--   item domain (#2300).
+--
+--   True only when @gid@ is an item the active page actually holds and
+--   the selection was committed to it. False — leaving the previous
+--   item selection untouched — for an argument that is not an integer,
+--   for no active page, and for a gid that page has no item for,
+--   including one that exists only on ANOTHER page (ground items are
+--   page-local, #1208, so a same-numbered gid elsewhere is a different
+--   item entirely).
+--
+--   Reporting is the point: @scripts/init_context_menu.lua@'s Info row
+--   captures a gid when the menu OPENS and fires this later, with
+--   simulation still running, so the item can be picked up or removed
+--   in between. Without a result the caller could only assume success
+--   and go on to clear the unit and building domains, ending with three
+--   empty domains and a selected id behind nothing.
+--
+--   The check and the commit are one step under the page's ground-item
+--   lock ('World.GroundItems.selectGroundItemOnPage'); an argument that
+--   is not usable never reaches the page at all.
 itemSelectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemSelectFn env = do
     idArg ← Lua.tointeger 1
-    case idArg of
+    ok ← case idArg of
         Just n → do
             mWs ← Lua.liftIO $ activeWorldStateFrom (wsWorldManagerRef (toWorldSimCapability env))
             case mWs of
                 Just ws → Lua.liftIO $
-                    atomicModifyIORef' (wsCursorRef ws) $ \cs →
-                        (cs { selectedGroundItem =
-                                Just (fromIntegral n) }, ())
-                Nothing → pure ()
-        _ → pure ()
-    return 0
+                    selectGroundItemOnPage ws (fromIntegral n)
+                Nothing → pure False
+        _ → pure False
+    Lua.pushboolean ok
+    return 1
 
 itemDeselectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemDeselectFn env = do
