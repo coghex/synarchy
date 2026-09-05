@@ -1208,9 +1208,19 @@ def self_test() -> int:
     # whole decision `require_loaded_surface` makes about a console
     # reply, so every reply shape is graded here with no engine.
     try:
-        surface_z(UNLOADED_REPLY, 0, 60, "timeout")
-    except FixtureFailure:
+        float(UNLOADED_REPLY)
+    except ValueError:
         pass
+    else:
+        failures.append(f"UNLOADED_REPLY ({UNLOADED_REPLY!r}) parses as a "
+                        "height, so a nil world.getSurfaceAt would be read as "
+                        "a resolved surface")
+    try:
+        surface_z(UNLOADED_REPLY, 0, 60, "timeout")
+    except FixtureFailure as exc:
+        if "footprint" not in str(exc):
+            failures.append("an unloaded spawn tile was refused, but not as an "
+                            f"out-of-footprint tile: {exc}")
     else:
         failures.append("a spawn tile on an unloaded chunk was accepted as "
                         "resolvable terrain — the #1909 defect")
@@ -1221,10 +1231,16 @@ def self_test() -> int:
     else:
         failures.append("a garbled world.getSurfaceAt reply was accepted as a "
                         "surface height")
-    if surface_z("0", 0, 0, "success") != 0:
-        failures.append("a resolved surface height of 0 was rejected")
-    if surface_z("12.0", 0, 0, "success") != 12:
-        failures.append("a resolved surface height was not decoded")
+    for reply, expected in (("0", 0), ("12.0", 12), ("-3", -3)):
+        try:
+            got = surface_z(reply, 0, 0, "success")
+        except FixtureFailure as exc:
+            failures.append(f"a resolved surface height {reply!r} was refused "
+                            f"as unusable: {exc}")
+        else:
+            if got != expected:
+                failures.append(f"surface_z({reply!r}) decoded to {got!r}, not "
+                                f"{expected}")
 
     # ...and that it runs BEFORE the spawn, so an unresolvable tile can
     # never reach unit.spawn's Z=0 fallback in the first place.
