@@ -215,17 +215,18 @@ def _is_quasiquoter_name(name: str) -> bool:
     quasiquoter: a varid, optionally module-qualified, that is not one
     of Template Haskell's quotation brackets.
 
-    A varid begins with a lowercase letter or `_` and a module segment
-    with an uppercase one, both tested with `str.islower()` /
-    `str.isupper()` rather than an ASCII class -- GHC accepts non-ASCII
+    A varid begins with a lowercase or other letter (or `_`) and a
+    module segment with an uppercase or titlecase one, decided by
+    `_is_varid_head` / `_is_conid_head` rather than by an ASCII class or
+    by `str.islower()` / `str.isupper()` -- GHC accepts non-ASCII
     identifiers, and a name this did not recognize would leave a real
     quasiquote unmasked, whose payload could then open a string that
     swallows the code after it."""
     segments = name.split(".")
     head, qualifier = segments[-1], segments[:-1]
-    if not head or not (head[0].islower() or head[0] == "_"):
+    if not head or not _is_varid_head(head[0]):
         return False
-    if not all(seg and seg[0].isupper() for seg in qualifier):
+    if not all(seg and _is_conid_head(seg[0]) for seg in qualifier):
         return False
     return bool(qualifier) or head not in _TH_QUOTATION_NAMES
 
@@ -369,17 +370,34 @@ def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
-def _is_module_path(candidate: str) -> bool:
-    """True if `candidate` (`P`, `Data.Text`) is a Haskell qualified
-    module path: dot-separated segments, each uppercase-led.
+# Report SS2.4 as GHC maps it (`GHC.Parser.Lexer`'s `adjustChar`): a
+# conid begins with an UPPERCASE or TITLECASE letter, a varid with a
+# LOWERCASE or OTHER letter (or `_`). `str.isupper()` is false for a
+# titlecase letter such as `ǅ`, and `str.islower()` is false for an
+# `Lo` letter such as `א`, so neither predicate states the rule on its
+# own (PR #2404 review round 10).
+_CONID_HEAD_CATEGORIES = frozenset({"Lu", "Lt"})
+_VARID_HEAD_CATEGORIES = frozenset({"Ll", "Lo"})
 
-    Unicode-aware via `str.isupper()` rather than an ASCII `[A-Z]`, for
-    the same reason `tools/unicode_operator_audit.py` resolves ITS
-    qualifiers that way: GHC accepts non-ASCII letters in module names,
-    and this codebase's own identifiers are not ASCII-limited."""
+
+def _is_conid_head(char: str) -> bool:
+    """True if `char` may begin a Haskell CONID -- a module name or a
+    constructor."""
+    return unicodedata.category(char) in _CONID_HEAD_CATEGORIES
+
+
+def _is_varid_head(char: str) -> bool:
+    """True if `char` may begin a Haskell VARID -- a function or
+    variable name, a quasiquoter among them."""
+    return char == "_" or unicodedata.category(char) in _VARID_HEAD_CATEGORIES
+
+
+def _is_module_path(candidate: str) -> bool:
+    """True if `candidate` (`P`, `Data.Text`, `ǅ`) is a Haskell
+    qualified module path: dot-separated segments, each conid-led."""
     if not candidate:
         return False
-    return all(seg and seg[0].isupper()
+    return all(seg and _is_conid_head(seg[0])
                and all(is_haskell_ident_char(ch) for ch in seg[1:])
                for seg in candidate.split("."))
 
@@ -412,17 +430,35 @@ def _qualifier_before(text: str, pos: int) -> tuple[str, int]:
     return stripped, pos - len(candidate) + (len(candidate) - 1 - len(stripped))
 
 
-def _transparent_open_parens(text: str, pos: int) -> int:
-    """How many `(` sit immediately before `pos` with only whitespace
-    between them.
+# What an opening parenthesis is an ARGUMENT to, if anything sits
+# directly before it. Juxtaposition is application in Haskell, so
+# `format (T.pack)` applies `format` -- the parentheses group the
+# argument, they do not wrap the whole expression, and
+# `format (T.pack) . show` is `(format T.pack) . show` rather than
+# `T.pack . show` (PR #2404 review round 10). A backtick closes an
+# infix application and makes the next parentheses its right operand
+# the same way.
+_APPLICAND_TAIL = frozenset(')]`"')
 
-    Each is a parenthesis the occurrence at `pos` may close again
+
+def _transparent_open_parens(text: str, pos: int) -> int:
+    """How many `(` sit immediately before `pos`, with only whitespace
+    between them, and GROUP rather than supply an argument.
+
+    Each such parenthesis is one the occurrence at `pos` may close again
     without changing what the expression means, which is what makes
     `(T.pack) . show` the same wrapper as `T.pack . show`. Counting
     them -- rather than skipping any `)` that happens to follow -- is
     what keeps `g (h (T.pack)) . show` out: those parentheses were
     opened by `g` and `h`, so only one of the two closers after `pack`
-    is transparent and the second is not the connector."""
+    is transparent and the second is not the connector.
+
+    Whatever sits before the outermost `(` decides whether they group at
+    all. An identifier, a closing bracket or a backtick means the
+    parentheses are somebody's ARGUMENT and the expression is not
+    standalone, so none of them is transparent and the count is zero;
+    an operator, a `=`, a `[`, or the start of the file leaves them
+    grouping."""
     count = 0
     i = pos - 1
     while i >= 0:
@@ -433,6 +469,14 @@ def _transparent_open_parens(text: str, pos: int) -> int:
             i -= 1
         else:
             break
+    if count == 0:
+        return 0
+    # The loop above already skipped whitespace, so it broke on the
+    # first character that is neither space nor `(` -- the applicand
+    # candidate itself.
+    if i >= 0 and (is_haskell_ident_char(text[i])
+                   or text[i] in _APPLICAND_TAIL):
+        return 0
     return count
 
 
@@ -923,6 +967,24 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "grouping parentheses after `$` are still transparent",
+        "module M where\n" + _T
+        + "f = id $ (T.pack) . show\n",
+        [3],
+    ),
+    (
+        "and inside a list, where nothing is being applied",
+        "module M where\n" + _T
+        + "fs = [(T.pack) . show]\n",
+        [3],
+    ),
+    (
+        "and in a lambda body",
+        "module M where\n" + _T
+        + "f = \\_ -> (T.pack) . show\n",
+        [3],
+    ),
+    (
         "two of them, closed twice",
         "module M where\n" + _T
         + "f = ((T.pack)) . show\n",
@@ -1286,6 +1348,15 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [4],
     ),
     (
+        "a TITLECASE module alias: GHC's conid head is uppercase OR "
+        "titlecase (`Lt`), and `str.isupper()` is false for `ǅ` "
+        "(PR #2404 review round 10)",
+        "module M where\n" + _T
+        + "import qualified Prelude as ǅ\n"
+        "f x = T.pack (ǅ.show x)\n",
+        [4],
+    ),
+    (
         "a module alias carrying a mark still qualifies `show`",
         "module M where\n" + _T
         + "import qualified Prelude as Ṕ́\n"
@@ -1516,6 +1587,39 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "Haskell",
         "module M where\n" + _T
         + "s = [tëxt| T.pack (show x) |]\n",
+    ),
+    (
+        "a TITLECASE quasiquoter qualifier names a module too, so the "
+        "payload is still a payload",
+        "module M where\n" + _T
+        + 's = [ǅ.e| T.pack (show x) |]\n',
+    ),
+    (
+        "a varid may begin with an `Lo` letter -- GHC maps OtherLetter "
+        "to `small`, and `str.islower()` is false for one",
+        "module M where\n" + _T
+        + 's = [אq| T.pack (show x) |]\n',
+    ),
+    (
+        "`format (T.pack) . show` is `(format T.pack) . show`: "
+        "juxtaposition is application, so those parentheses supply an "
+        "ARGUMENT and do not wrap the expression -- `format` may "
+        "transform the converter, so this is not the same function "
+        "(PR #2404 review round 10)",
+        "module M where\n" + _T
+        + "f = format (T.pack) . show\n",
+    ),
+    (
+        "a BACKTICK application binds the parentheses after it the "
+        "same way",
+        "module M where\n" + _T
+        + "f = x `fmt` (T.pack) . show\n",
+    ),
+    (
+        "and so does an applicand that itself ends in a closing "
+        "parenthesis",
+        "module M where\n" + _T
+        + "f = (g x) (T.pack) . show\n",
     ),
     (
         "`[Mod.e| … |]` names a quasiquoter called `e`, which is a "

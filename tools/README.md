@@ -122,9 +122,12 @@ Reported in `src/` and `app/`: a `Data.Text` `pack` applied directly to
 multiline wrap is the same hit. Redundant parentheses are transparent
 on both sides — `pack $ (show x)`, `pack ((show x))` and
 `(T.pack) . show` are the same functions byte for byte — and `$!` joins
-`$`. A parenthesis with something inside it is not redundant, so
-`pack (f (show x))` and `g (h (T.pack)) . show` are different functions
-and are not reported; neither is `pack . f . show`.
+`$`. Only parentheses that GROUP count: juxtaposition is application, so
+`format (T.pack) . show` is `(format T.pack) . show` and is left alone,
+as is `` x `fmt` (T.pack) . show ``. A parenthesis with something inside
+it is not redundant either, so `pack (f (show x))` and
+`g (h (T.pack)) . show` are different functions and are not reported;
+neither is `pack . f . show`.
 
 Resolution is by **binding**, never by the `T.` qualifier's spelling:
 this tree binds `T` to `Data.Text` in most modules, but `src/UPrelude.hs`
@@ -191,7 +194,10 @@ prime of `π` + U+0301 opens a char literal that eats the quote after it,
 with the same masking result. Every lexical matcher here reads
 identifiers through that one predicate rather than a character class,
 so a marked quasiquoter name (`[té̲xt|`) and a marked module alias
-(`Ṕ́.show`) resolve too. Both were live bugs in the shared lexer, so this
+(`Ṕ́.show`) resolve too. Identifier HEADS follow GHC's own category
+mapping rather than `str.isupper()` / `str.islower()`: a conid begins
+with an uppercase **or titlecase** letter (`ǅ` is a valid module alias),
+a varid with a lowercase **or other** letter. Both were live bugs in the shared lexer, so this
 branch fixes them there too — `is_haskell_ident_char` lives beside the
 lexer it serves — with their own fixtures in
 `test_unicode_operator_audit.py`. The same dash rule is documented on
@@ -247,9 +253,11 @@ lookalikes; and an import inside a quasiquote payload, a trailing
 import comment, a comment between `hiding` and its list, and a string
 gap before a quasiquote; and a Unicode identifier's trailing prime and
 a doubled prime before a string; and a combining mark in an
-identifier, in a quasiquoter name and in a module alias. Every rule was
-mutation-tested against them: each is removed one at a time and the
-self-test fails. The one exception is documented at its definition —
+identifier, in a quasiquoter name and in a module alias; a titlecase
+module alias and an `Lo`-headed quasiquoter; and every grouping
+position that keeps parentheses transparent against three applications
+that do not. Every rule was mutation-tested against them: each is
+removed one at a time and the self-test fails. The one exception is documented at its definition —
 `_PACK_LEXEME`'s leading lookaround has no reachable failure mode now
 that bare names are refused, and is kept because it is what the lexeme
 means.
