@@ -3336,6 +3336,30 @@ overrides; never 8008), spawn the real starting party — five acolytes plus
 one technomule, player faction, with each def's real `starting_inventory` —
 tear the engine down in a `finally`, and save nothing.
 
+The runner is a thin façade over three owners (#2151). `gameplay_scenarios.py`
+itself keeps only argument parsing, the missing/unknown-scenario diagnostics,
+selecting one scenario, anchoring cwd-relative resources to the repository
+root, translating `ScenarioError` into the setup/runtime-failure diagnostic,
+and the exit contract above. `gameplay_scenarios_support.py` is the single
+owner of everything the scenarios share — the catalog and script bootstrap,
+the installed unit-snapshot reader, the simulation hold and stopped-baseline
+plumbing, the starting roster, snapshots and checkpoint construction, the
+checkpoint/body/inventory/wound formatting, movement commands, polling and
+waypoint walking, and the capacity-gated transfer with its provisioning-load
+report — plus the one definition each of `ScenarioError`, the default port,
+the engine log path and the arrival tolerance. `gameplay_scenarios_expedition.py`
+owns the fixed-world constants, the deterministic camp search, route,
+report and `run_expedition`; `gameplay_scenarios_first_aid.py` owns the arena
+and ridge constants, kit inspection, the stopped pre-fall baseline, the
+real-fall observation, the medic-treatment observer, terminal evaluation,
+trajectory sampling, report and `run_first_aid`. Dependencies run one way:
+the façade imports both scenario owners, each owner imports shared support
+only, and shared support imports neither scenario nor the façade. The
+owners have no command line of their own, are not named `*_probe.py`, and
+are as absent from `run_probes.py` and `ci_probes.py` as the façade is.
+Each selected scenario still boots exactly one engine and tears it down
+through `quit_engine` in its own `finally`.
+
 - **`expedition`** (~5 min) generates a deterministic world (seed 42, size
   64, 3 plates), derives a base camp and a fixed out-and-back route from
   that world, provisions two acolytes off the STATIONARY mule through
@@ -3667,7 +3691,10 @@ tools/
 ├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine preflight)
 ├── probe_runner_lifecycle.py   (its one-probe launch and process-group teardown)
 ├── probe_runner_scheduler.py   (its sequential/--jobs orchestration, retries, summary)
-├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI)
+├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI; the façade)
+├── gameplay_scenarios_support.py     (its shared bootstrap/hold/roster/checkpoint/movement/transfer owner, #2151)
+├── gameplay_scenarios_expedition.py  (its `expedition` scenario owner)
+├── gameplay_scenarios_first_aid.py   (its `first-aid` scenario owner)
 ├── screenshot_check.py     (GUI-attached debug.captureScreenshot check — see above)
 ├── video_window_check.py   (GUI-attached video/window settings check, #891 — see above)
 ├── playtest/               (naive-player UX playtest harness — see above)
