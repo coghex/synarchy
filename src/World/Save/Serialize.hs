@@ -82,7 +82,7 @@ savesDirectory = "saves"
 --   every save is published as a slot DIRECTORY — but 'listSaves' still
 --   lists one and 'loadWorld' still loads one, so any code reasoning
 --   about whether a save NAME is occupied has to consider both forms:
---   'World.Save.Autosave.ownershipProblem' for an autosave cycle,
+--   @World.Save.Autosave.ownershipProblem@ for an autosave cycle,
 --   'checkSaveName' below for a manual save, and 'listSaves' when it
 --   decides which of the two forms a name's single row describes.
 saveExtension ∷ String
@@ -127,7 +127,7 @@ data SaveRequestKind
 --   'loadWorld' prefers a directory over a flat namesake. Publishing a
 --   directory over an occupied name therefore leaves the player's legacy
 --   generation on disk but unreachable BY NAME — the exact shadowing
---   'World.Save.Autosave.ownershipProblem' has refused since #913, for
+--   @World.Save.Autosave.ownershipProblem@ has refused since #913, for
 --   the same reason. Refusing here rather than at 'writeSaveFiles' is
 --   what makes it a refusal rather than a failed save: no barrier is
 --   opened, no snapshot is captured, and nothing on disk is touched.
