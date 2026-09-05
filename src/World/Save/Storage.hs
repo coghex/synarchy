@@ -11,27 +11,51 @@
 --   This module never reads live gameplay state and never participates in
 --   snapshot capture (issue #758's barrier already released by the time
 --   'publishGeneration' runs — see "World.Thread.Command.Save.WriteWorld").
---   It receives only already-encoded bytes, the metadata that encode
---   produced, a slot directory, and a slot name for diagnostics, and
---   performs a classic write-validate-publish-rotate transaction:
+--   Its six inputs are all already-derived values: a slot directory, a
+--   slot name for diagnostics, the metadata this candidate must decode
+--   back to, the complete already-encoded envelope bytes, the set of
+--   every Lua component NAME this encode included, and the subset of
+--   those the Lua registry marks required. The first of the two name
+--   sets is what step 2's requirement-9 refusal reads the slot's
+--   EXISTING generations against — a component id in neither the
+--   Haskell registry nor that set is data this build does not
+--   recognize; both sets are used again in step 6 to decode and
+--   validate the re-read candidate ('validateCandidate'). Given those,
+--   this module performs a classic write-validate-publish-rotate
+--   transaction:
 --
 --   1. Refuse to operate at all through a slot directory that is itself a
 --      symlink, OR whose immediate parent (in production, @saves/@
 --      itself) is (requirement 12) — see 'rejectSymlinkedSlotDir'.
---   2. Write the candidate to a UNIQUELY named temporary file in the SAME
+--   2. Refuse the whole publish — BEFORE the slot directory or any
+--      candidate file exists, so nothing on disk is touched — when the
+--      slot's EXISTING generations carry an optional component this
+--      build does not recognize (requirement 9, issue #766), or are
+--      present but unreadable (issue #2227). The data inspected is the
+--      bytes already on disk at @world.synworld@ and
+--      @world.synworld.prev@, never the components this candidate is
+--      about to write: unrecognized data is protected precisely by the
+--      original file never being overwritten, and a generation this
+--      transaction could not inspect is never destroyed on a verdict it
+--      never earned — see 'existingGenerationPreflight'.
+--   3. Create the slot directory if it is not already there and, only
+--      when this publication had to create it, durably sync the
+--      directories that OWN it (issue #2229 — see the durability
+--      boundary below).
+--   4. Write the candidate to a UNIQUELY named temporary file in the SAME
 --      slot directory (so the final publish step can use an atomic
 --      same-filesystem rename) — never a shared/predictable name two
 --      concurrent publishers could collide on
 --      ('System.IO.openBinaryTempFile' handles this).
---   3. Flush + durably sync the candidate ('fileSynchronise', POSIX
+--   5. Flush + durably sync the candidate ('fileSynchronise', POSIX
 --      @fsync@) before ever trusting it.
---   4. Re-read the candidate FROM DISK (not the in-memory bytes the
+--   6. Re-read the candidate FROM DISK (not the in-memory bytes the
 --      encoder produced) and fully decode + deep-force it, applying the
 --      same validation bar the load path enforces, PLUS confirming the
 --      re-read metadata is EXACTLY the metadata this publish intended —
 --      an in-memory encode success is never sufficient on its own to
 --      publish.
---   5. Only once validated: classify the slot's CURRENT authoritative
+--   7. Only once validated: classify the slot's CURRENT authoritative
 --      file with the loader's own 'decodeGenerationFile'
 --      ('classifyAuthoritative'), and rotate ONLY when that
 --      classification says a generation is there worth retaining
@@ -60,10 +84,10 @@
 --      rename" state to defend against. Syncing after EACH rename (not
 --      only the last) means every intermediate handoff is durable in
 --      its own right before the next step ever runs.
---   6. Report success only after that FINAL sync (following the publish
+--   8. Report success only after that FINAL sync (following the publish
 --      rename) confirms the new generation's own durability — never
 --      before.
---   7. Only now — past the durability boundary — remove the staged old
+--   9. Only now — past the durability boundary — remove the staged old
 --      generation and any other recognized stale transaction artifact.
 --
 --   === Documented durability boundary (requirement 4)
