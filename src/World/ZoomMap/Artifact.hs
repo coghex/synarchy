@@ -149,7 +149,7 @@ buildZoomArtifactKey params registry =
             , zakEntryCount = count
             }
       pure $ case (result ∷ Either IOException (Either Text ZoomArtifactKey)) of
-        Left e → Left ("cannot fingerprint zoom inputs: " <> T.pack (show e))
+        Left e → Left ("cannot fingerprint zoom inputs: " <> tshow e)
         Right value → value
 
 loadZoomArtifact ∷ ZoomArtifactKey → IO (Either Text ZoomArtifact)
@@ -179,7 +179,7 @@ loadZoomArtifactAt path key = do
                       then pure $ Left "artifact exceeds the 64 MiB limit"
                       else decodeZoomArtifact key ⊚ BS.readFile path
     pure $ case (result ∷ Either IOException (Either Text ZoomArtifact)) of
-        Left e → Left ("cannot read zoom artifact: " <> T.pack (show e))
+        Left e → Left ("cannot read zoom artifact: " <> tshow e)
         Right value → value
 
 -- | Write one complete candidate next to the destination, then replace the
@@ -218,7 +218,7 @@ publishZoomArtifactAt path key entries pixels =
                     renameFile candidate path
                     pure (Right (BS.length bytes))) `finally` cleanup
         pure $ case (result ∷ Either IOException (Either Text Int)) of
-            Left e → Left ("cannot publish zoom artifact: " <> T.pack (show e))
+            Left e → Left ("cannot publish zoom artifact: " <> tshow e)
             Right value → value
 
 encodeZoomArtifact

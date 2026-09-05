@@ -17,7 +17,7 @@ import Language.Generated.Types
 import Language.Generated.Hash (textSeed, fmix64)
 
 profileSignature ∷ Profile → Text
-profileSignature = T.pack ∘ show ∘ canonHash
+profileSignature = tshow ∘ canonHash
 
 canonHash ∷ Profile → Word64
 canonHash p = foldl' mix 0xcbf29ce484222325 (scalarFields <> shapeFields)

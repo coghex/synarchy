@@ -225,4 +225,4 @@ removeIfExists path = do
             Right () → pure []
             Left (e ∷ IOException) →
                 pure [ "failed to remove stale artifact " <> T.pack path
-                     <> ": " <> T.pack (show e) ]
+                     <> ": " <> tshow e ]

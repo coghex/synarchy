@@ -71,7 +71,7 @@ checkCount rid kind ing
     | otherwise = fail $ T.unpack $
         "recipe " <> rid <> ": " <> kind <> " count for \""
         <> ryiItem ing <> "\" must be positive, got "
-        <> T.pack (show (ryiCount ing))
+        <> tshow (ryiCount ing)
 
 instance FromJSON RecipeYamlDef where
     parseJSON = withObject "RecipeYamlDef" $ \v → do

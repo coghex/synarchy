@@ -11,7 +11,6 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Storable as VS
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
 import Data.IORef
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logAndThrowM, logDebugM, logDebugSM)
@@ -35,7 +34,7 @@ updateSceneForRender = do
     sceneMgr ← gets sceneManager
     
     logDebugSM CatRender "Updating scene"
-        [("activeScene", maybe "none" (T.pack . show) (smActiveScene sceneMgr))]
+        [("activeScene", maybe "none" tshow (smActiveScene sceneMgr))]
     
     -- Only called from drawFrame, never in headless or dump mode —
     -- windowed the live GLFW framebuffer size is queried (it changes
