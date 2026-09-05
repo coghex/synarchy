@@ -303,7 +303,15 @@ class CompileOutcome:
 
 @dataclass
 class BudgetTally:
-    """What the corpus actually costs, as the budget measures it."""
+    """What the COMPILED TREE holds, as the budget reads it.
+
+    Everything here is accounted from the stored `atlas/index.json`
+    documents and the entries beside them; nothing is observed in a
+    running engine. `images` counts the atlas-directory entries other
+    than the index, and `resident_bytes` is a PROJECTION from each
+    index's declared dimensions, named after the `resident_bytes` block
+    of `tools/unit_texture_budget.json` it is compared against.
+    """
     units: int = 0
     animations: int = 0
     images: int = 0

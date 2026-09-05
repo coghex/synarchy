@@ -208,7 +208,7 @@ authoritative roster:
 ```bash
 python3 tools/pack_atlas.py --validate-only --strict
 # OK — 7 unit declaration(s) (0 asset-only), 116 animation(s), 4620 frame(s); …
-# BUDGET — 116 resident animation image(s) for 116 animation(s) across 7 …
+# BUDGET — 116 generated atlas entr(ies) for 116 indexed animation(s) across 7 …
 ls -d assets/textures/units/*/            # the same seven trees
 ```
 
@@ -259,7 +259,7 @@ so it reports the real cause rather than a checksum mismatch. The usual ones:
 | `obsolete compiler-owned output` | an animation was renamed or deleted | `--compile --unit <name>` (it sweeps) |
 | `generated atlas directory has no index.json` | a partial copy or a bad merge | `--compile --unit <name>` |
 | `unclassified frame on disk` | a new frame nobody declared | declare it in `data/units/<unit>.yaml` |
-| `budget: expected N resident animation image(s)` | something put per-frame images where one per animation belongs | see below |
+| `budget: expected N generated atlas entr(ies)` | something put per-frame files in `atlas/` where one per animation belongs | see below |
 | `unit-texture memory budget exceeded` | the roster outgrew the recorded budget | see below |
 
 **Never hand-edit `index.json`, and never "bless" a digest by copying the
@@ -270,17 +270,37 @@ edited index cannot certify anything — it just moves the failure. Regenerate.
 The two budgets live in `tools/unit_texture_budget.json`, which is the single
 source the strict gate reads:
 
-- **Image/slot budget** — a hard error. One resident image and one bindless
-  registration per compiled animation (D-2), derived from the index's own
-  animation count. A breach means per-frame registrations are creeping back;
-  the diagnostic names the unit, the expected and actual counts, and the
-  offending files.
-- **Resident-memory budget** — a warning, so `--strict` (CI and `make ci`)
-  fails on it. Crossing it is D-10's precondition for resuming deferred
+- **Generated-atlas-entry budget** — a hard error. One entry besides
+  `index.json` in a unit's `atlas/` directory per compiled animation (D-2),
+  derived from the index's own animation count. A breach means generated
+  per-frame files are creeping back into the compiled tree; the diagnostic
+  names the unit, the expected and actual counts, and the offending entries.
+- **Projected-memory budget** — a warning, so `--strict` (CI and `make ci`)
+  fails on it. The decoded RGBA8 total is projected from each index's
+  declared `atlas_width × atlas_height × 4`, and it is that total scaled by
+  `roster_growth_factor` that the threshold compares — neither number is
+  measured on a GPU. Crossing it is D-10's precondition for resuming deferred
   TEX-5 (KTX2 atlas loading). It is a decision to escalate to the project
   owner, not a number to quietly raise: the recorded threshold carries the
   owner's confirmation. It is also **not** D-12's separate guardrail on
   tracked artifact bytes on disk.
+
+**Both budgets read the compiled tree and nothing else** — the stored
+`atlas/index.json` documents and the entries beside them. `pack_atlas.py`
+has no view of the loader, the texture request queue, the bindless table or
+a running engine, so a green strict run validates generated artifacts and a
+projection of their decoded size, and is not evidence about runtime
+uploads, handles or bindless slots. That bound belongs to the Hspec group
+`Unit.Atlas.Load — the real unit registration boundary`
+(`test-headless/Test/Headless/Unit/Atlas/Loader.hs`), which runs in the
+always-blocking headless suite and asserts one queued atlas upload request
+and one distinct logical texture handle per animation, published into the
+definition's animation storage, with no per-frame ordinary requests:
+
+```bash
+cabal test synarchy-test-headless \
+  --test-options='--match "the real unit registration boundary"'
+```
 
 ### Adding a new unit's art
 

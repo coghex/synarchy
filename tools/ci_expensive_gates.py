@@ -87,7 +87,7 @@ GRAPHICAL_GLOBS = [
 # The unit-asset gate: tools/test_pack_atlas.py plus tools/pack_atlas.py
 # --validate-only --strict. That one command is three checks in one —
 # the #1257 inventory, #1258's freshness comparison against a fresh
-# regeneration, and #1262's image/slot and resident-memory budgets — so
+# regeneration, and #1262's atlas-entry and projected-memory budgets — so
 # every path below selects all three and there is nothing to select
 # them separately with.
 #
