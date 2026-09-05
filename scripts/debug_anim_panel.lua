@@ -345,7 +345,7 @@ end
 -----------------------------------------------------------
 function panel.init(scriptId)
     panel.font = engine.loadFont("assets/fonts/shell.ttf", FONT_SIZE)
-    engine.logInfo("DebugAnimPanel: initialized")
+    engine.logDebug("DebugAnimPanel: initialized")
 end
 
 function panel.update(dt)
@@ -389,7 +389,7 @@ function panel.shutdown()
     -- the unit stuck (frozen + force-looped) with no way to recover.
     disarm()
     destroyPage()
-    engine.logInfo("DebugAnimPanel: shut down")
+    engine.logDebug("DebugAnimPanel: shut down")
 end
 
 return panel

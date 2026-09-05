@@ -78,7 +78,7 @@ end
 -- Init
 -----------------------------------------------------------
 function buildingInfoWatch.init(scriptId)
-    engine.logInfo("Building info watcher initializing...")
+    engine.logDebug("Building info watcher initializing...")
 end
 
 -----------------------------------------------------------
@@ -151,7 +151,7 @@ end
 function buildingInfoWatch.shutdown()
     buildingInfoWatch.lastSelectedId = nil
     buildingInfoWatch.lastWasBuilding = false
-    engine.logInfo("Building info watcher shut down")
+    engine.logDebug("Building info watcher shut down")
 end
 
 return buildingInfoWatch

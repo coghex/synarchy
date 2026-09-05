@@ -1302,7 +1302,7 @@ end
 -- Engine script hooks (loaded via engine.loadScript)
 -----------------------------------------------------------
 function buildTool.init(scriptId)
-    engine.logInfo("Build tool initializing...")
+    engine.logDebug("Build tool initializing...")
 end
 
 -- #82, migrated onto the declared session-teardown boundary (#1610): an
@@ -1318,7 +1318,7 @@ end)
 function buildTool.shutdown()
     destroyPicker()
     buildTool.exitPlacement()
-    engine.logInfo("Build tool shut down")
+    engine.logDebug("Build tool shut down")
 end
 
 return buildTool
