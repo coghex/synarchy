@@ -493,7 +493,6 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "eventStoreRef": frozenset(),
     "notificationCfgRef": frozenset({"Engine.Scripting.Lua.API.PlayerEvent"}),
     "notificationOrder": frozenset(),
-    "popupQueueRef": frozenset(),
 }
 
 

@@ -41,8 +41,8 @@ needed.
 <!-- engineenv-field-total -->
 
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-with exactly **91** fields, `engineConfig` through `popupQueueRef`, and
-every one of them has exactly one row in §5 below.
+with exactly **90** fields, `engineConfig` through `notificationOrder`,
+and every one of them has exactly one row in §5 below.
 
 <!-- /engineenv-field-total -->
 
@@ -699,7 +699,6 @@ field documentation restates the reader/writer/lifecycle facts below.
 | `eventStoreRef` | session-replaced | `LuaThread` (`API.PlayerEvent`'s `readEventLog` — `engine.getEventLog()`, the event-log panel's query — and `readEventLogProgress` — `engine.getEventLogProgress()`, the #1714 rows-plus-high-water read, one `readTVarIO` so the pair cannot straddle a commit) | `WorldThread` (`World.Thread.Discovery`'s `emitEventFullOnPage`, `World.Thread.Command.Save.WriteWorld`'s `emitEvent`, and load publish `World.Load.Publish.resetTransientState`, rows reset to empty, counter kept), `UnitThread` (`Unit.Thread.endSessionEpoch`, the Exit-to-Menu boundary — rows reset to empty on the same terms, counter kept, #2291), `LuaThread` (`API.PlayerEvent`'s `emitEvent`/`emitEventAt`/`emitEventFull` — `engine.emitEvent`/`emitEventAt`/`emitEventForUnit` — and `API.Save`'s save/load-lifecycle emits) | `TVar EventStore`, multi-writer STM, ~1000-entry ring of `StoredEvent` rows plus the `esNextSequence` mutation counter (#1714) — one ref so a row's sequence is stamped in the same atomic write that commits the row, and so the counter outlives BOTH session-boundary row resets (`Engine.PlayerEvent.clearEventStoreRows`, called by the load publish and by the Exit-to-Menu boundary) | `newTVarIO emptyEventStore` (`src/Engine/Core/Init.hs:269`) | None | Explicitly session-only, never serialized. No live `Unit.Thread`/`Combat.Thread` call site emits a player event today — verified by grepping every real `emitEvent*` call site. `Engine.PlayerEvent.Emit`'s module comment, `EngineEnv`'s own field doc and `Engine.Core.Init`'s seeding comment all used to read as if unit-thread emitters existed; #898 corrected all three to state the STM primitive's any-thread safety separately from the world-and-Lua-thread call sites that actually exist. |
 | `notificationCfgRef` | boot-process | `AnyThread` (the `emitEvent` read path) | `LuaThread` (Phase 2 settings tab toggles, per the field's own doc comment) | `IORef NotificationCfg` | `loadNotificationCfg` merges `data/notification_categories.yaml` + `config/notifications.local.yaml` (`src/Engine/Core/Init.hs:257-260`) | None | — |
 | `notificationOrder` | boot-process | `LuaThread` (settings tab render order) | None (captured once at boot from the YAML registry order — categories can't be added/removed at runtime, per the field's own doc comment) | Plain `![Text]`, no `IORef` | `loadNotificationCfg`'s second return value (`src/Engine/Core/Init.hs:257-260`) | None | Immutable-boot-configuration carve-out, same shape as `engineConfig`. |
-| `popupQueueRef` | session-replaced | None (write-only today — no `readTVar`/`readTVarIO` on this ref exists anywhere in the codebase; live popup delivery goes through a separate `LuaShowPopup` message sent via `luaQueue` at the same emit call site, `Engine.PlayerEvent.Emit:134-137`, not by draining this TVar back out. `EngineEnv`'s own field doc used to claim the Lua side drains this via the `LuaShowPopup` broadcast; #898 corrected it to state the write-only reality. This TVar exists for inspection/debug querying and as a Phase 2 stable source for the notifications panel, per the same comment.) | `WorldThread`/`LuaThread` (same `emitEvent` producers as `eventStoreRef`, filtered to popup-enabled categories, `Engine.PlayerEvent.Emit:134`), `WorldThread` (load publish, `World.Load.Publish:296`, reset to empty) | `TVar (Seq PlayerEvent)` | `newTVarIO Seq.empty` (`src/Engine/Core/Init.hs:262`) | None | — |
 
 ### `save-load-coordination`
 
@@ -2231,11 +2230,19 @@ containers.
   dropped:** `Engine.PlayerEvent.Emit` and
   `Engine.Scripting.Lua.API.PlayerEvent`. Both are event-dominant:
   they need `eventStoreRef`, `notificationCfgRef`, `notificationOrder`
-  and/or `popupQueueRef`, none of which `UiCapability` carries, and
+  and/or (at the time) `popupQueueRef`, none of which `UiCapability`
+  carries, and
   neither touches any of E7a's four fields — so #898 was a clean
   subtraction rather than a re-audit.
 
-**What landed in E7b (#898):**
+**What landed in E7b (#898):** — the record below is E7b as it landed;
+**#2285 has since removed `popupQueueRef`**, so `EventsCapability` now
+carries three fields and every `popupQueueRef` mention in this
+subsection is history. Popup delivery is unchanged: it was always the
+`LuaShowPopup` message on `luaQueue`, and the removed `TVar` was a
+write-only duplicate of the bounded event store. The current field set
+is §5's `ui-hud-events` table, which is what the audit checks.
+
 `Engine.Core.Capability.Events` exports `EventsCapability` over
 exactly the four event/notification/popup fields (`eventStoreRef`,
 `notificationCfgRef`, `notificationOrder`, `popupQueueRef`) plus the
@@ -2281,7 +2288,8 @@ sequence over the same containers.
   (declares them), the projection module itself and
   `World.Load.Publish` (§6.1, which resets both `TVar`s) stay
   named-accessor consumers by design — the same four kinds of
-  exception E7a left.
+  exception E7a left. (`World.Load.Publish` reset both `TVar`s until
+  #2285; it now resets the event store's rows alone.)
 - **Three steering-text corrections rode along**, each a §5 row this
   document had flagged as stale: `EngineEnv`'s `popupQueueRef` field
   doc no longer claims the Lua side drains the TVar (it is write-only;
@@ -2296,12 +2304,13 @@ sequence over the same containers.
   in `Test.Headless.Capability.Events` — the three ref-shaped fields
   asserted to be the same live container as `EngineEnv`'s,
   `notificationOrder` asserted by value (it has no identity),
-  and an explicit check that the two event `TVar` fields are each
+  and an explicit check that the two event `TVar` fields were each
   pinned to their own named counterpart. That last one was
   written when both were `TVar (Seq PlayerEvent)` and a transposition
   the compiler could not catch; #1714 gave the log ring its own
-  `TVar EventStore`, so the swap is now a type error and the check
-  stands as the remaining proof that neither is aliased to the other.
+  `TVar EventStore`, so the swap became a type error, and #2285 removed
+  `popupQueueRef` outright — the check now stands over the event store
+  alone, with nothing left to transpose it with.
 
 ### 7.8 `save-load-coordination` — **LANDED (#899, E8)**
 

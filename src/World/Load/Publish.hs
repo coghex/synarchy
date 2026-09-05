@@ -32,7 +32,7 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
-import Control.Concurrent.STM (atomically, writeTVar, modifyTVar')
+import Control.Concurrent.STM (atomically, modifyTVar')
 import Engine.Core.State (EngineEnv(..))
 import Engine.PlayerEvent (clearEventStoreRows)
 import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
@@ -401,4 +401,3 @@ resetTransientState env = do
     -- outranks any cursor an observer retained from before it and no
     -- sequence is ever reissued in one engine process (#1714).
     atomically $ modifyTVar' (eventStoreRef env) clearEventStoreRows
-    atomically $ writeTVar (popupQueueRef env) Seq.empty

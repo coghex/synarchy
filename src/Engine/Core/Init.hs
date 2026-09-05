@@ -15,7 +15,6 @@ import Data.Time.Clock (UTCTime(..))
 import Data.Time.Calendar (fromGregorian)
 import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import Data.Aeson (FromJSON)
@@ -463,11 +462,14 @@ initializeEngineWith logBackend = do
   lootTableRegistryRef ← newIORef emptyLootTableRegistry
   tutorialRegistryRef ← newIORef emptyTutorialRegistry
   -- Player Events: load the notification registry (data/) merged
-  -- with player overrides (config/), allocate the ring buffer and
-  -- popup queue. Both are STM TVars, so a push from any thread is
-  -- safe; the emitters that exist today are the world thread and the
-  -- Lua thread, via Engine.PlayerEvent.emitEvent. The cfg IORef
-  -- is updated at runtime by the Phase 2 notifications settings tab.
+  -- with player overrides (config/) and allocate the ring buffer.
+  -- It is an STM TVar, so a push from any thread is safe; the
+  -- emitters that exist today are the world thread and the Lua
+  -- thread, via Engine.PlayerEvent.emitEvent. Popup delivery
+  -- allocates nothing here: it is the LuaShowPopup message on
+  -- luaQueue, and #2285 removed the write-only queue that used to
+  -- shadow it. The cfg IORef is updated at runtime by the Phase 2
+  -- notifications settings tab.
   -- Notifications get no 'LegacyNeutralityCheck' (#1937): they have no
   -- tracked @_default.yaml@ to be neutral AGAINST, and an absent
   -- overrides file already defers to the
@@ -480,7 +482,6 @@ initializeEngineWith logBackend = do
                         "config/notifications.local.yaml"
   notificationCfgRef ← newIORef notificationCfg0
   eventStoreRef ← newTVarIO emptyEventStore
-  popupQueueRef ← newTVarIO Seq.empty
   engineStateRef ← newIORef defaultEngineState
   let env = EngineEnv
         { engineConfig       = defaultEngineConfig
@@ -573,7 +574,6 @@ initializeEngineWith logBackend = do
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef
         , notificationOrder  = notificationOrder
-        , popupQueueRef      = popupQueueRef
         }
 
   pure $ EngineInitResult env

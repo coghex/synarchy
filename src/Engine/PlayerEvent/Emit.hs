@@ -41,15 +41,17 @@ import World.Page.Types (WorldPageId(..))
 import World.Pause (imposePause)
 
 -- | Emit a player-visible event. Honors the player's per-category
---   notification settings: appends to the log ring, queues a popup,
---   and/or sets 'enginePausedRef' to True.
+--   notification settings: appends to the log ring, sends a popup,
+--   and/or sets 'enginePausedRef' to True. Those three switches are
+--   independent — @ccPopup@ delivers a popup whether or not @ccLog@
+--   also stores the event.
 --
 --   If @category@ is not in the registry, the event is dropped and a
 --   dev-log warning is written under 'CatEvent'. This is the
 --   loud-fail path for typos — better than silently swallowing.
 --
---   Thread-safe as a PRIMITIVE: 'ecEventStoreRef' and
---   'ecPopupQueueRef' are STM TVars, the Lua queue is internally
+--   Thread-safe as a PRIMITIVE: 'ecEventStoreRef' is an STM TVar,
+--   the Lua queue is internally
 --   STM-backed, and the pause is one 'World.Pause.imposePause' call,
 --   whose flag write is a single atomic read-modify-write, so
 --   concurrent callers on any thread are safe. That is a property
@@ -157,9 +159,9 @@ unitEventPage env uid = do
 --   editorial choice about what to show, not a safety requirement.
 --
 --   The ONE effective page is used everywhere the event goes: the log
---   ring ('peSourcePage'), the popup queue, and the 'LuaShowPopup'
---   broadcast — so immediate delivery and event-log replay cannot drop
---   different metadata.
+--   ring ('peSourcePage') and the 'LuaShowPopup' broadcast — so
+--   immediate delivery and event-log replay cannot drop different
+--   metadata.
 emitEventFullOnPage ∷ EngineEnv
                     → Text                  -- ^ category id
                     → Text                  -- ^ source tag (dev debug)
@@ -182,10 +184,9 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
         Just cfg → do
             now ← readIORef (wsGameTimeRef worldSim)
             -- Resolved ONCE, before either surface is written, so the
-            -- stored event, the popup queue entry and the Lua broadcast
-            -- can never disagree about which page the coordinates
-            -- belong to (#1588) — not even if the active page changed
-            -- between two reads.
+            -- stored event and the Lua broadcast can never disagree
+            -- about which page the coordinates belong to (#1588) —
+            -- not even if the active page changed between two reads.
             effectivePage ← resolveEventPage worldSim mCoords mSourcePage
             let ev = PlayerEvent
                     { peCategory = category
@@ -201,8 +202,11 @@ emitEventFullOnPage env category source eventText mCoords mUid mSourcePage = do
                 atomically $
                     pushBounded (ccLogCoalesceWindow cfg)
                         (ecEventStoreRef events) ev
+            -- Independent of 'ccLog' above: the message IS the popup,
+            -- and #2285 removed the write-only TVar that used to be
+            -- appended beside it, so this is the only place a
+            -- popup-enabled event goes when logging is off.
             when (ccPopup cfg) $ do
-                atomically $ modifyTVar' (ecPopupQueueRef events) (|> ev)
                 let (r, g, b, a) = ccTextColor cfg
                 Q.writeQueue (ivLuaQueue (toInputViewCapability env))
                     (LuaShowPopup category eventText r g b a mCoords
