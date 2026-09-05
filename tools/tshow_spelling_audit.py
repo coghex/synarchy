@@ -139,6 +139,12 @@ EXEMPTIONS: dict[str, str] = {}
 # column 0 so a `where`-bound local of the same name is NOT exempt.
 # Group 1 is the `pack` token itself, which is what makes the exemption
 # that one occurrence rather than the line or the file.
+#
+# The qualifier class is ASCII here, unlike `_WRAPPER_TAIL`'s, and the
+# difference is not an oversight: this pattern only ever sees a
+# qualifier bound to `Data.Text`, and a Unicode ALIAS for it is refused
+# by `_classify_text_imports` before the scan runs at all. There is no
+# reachable Unicode case to widen for.
 _TSHOW_DEFINITION = re.compile(
     r"^" + CANONICAL + r"[ \t]*=[ \t]*(?:[A-Za-z][\w'.]*\.)?(" + PACK + r")"
     r"[ \t]*[.∘][ \t]*show[ \t]*$",
@@ -157,12 +163,42 @@ _TEXT_MODULE_MENTION = re.compile(
 _REWRITING_CPP_DIRECTIVE = re.compile(
     r"^[ \t]*#[ \t]*(define|undef|include)\b", re.MULTILINE)
 
-# A quasiquote OPENER: `[` immediately followed by a quasiquoter name (a
-# varid, optionally module-qualified) and `|`. The payload runs to the
-# first `|]` and is not Haskell at all. See the module docstring for why
-# the no-space form is unambiguous here.
-_QUASIQUOTE_OPEN = re.compile(r"\[(?:[A-Z][\w']*\.)*[a-z_][\w']*\|")
+# A quasiquote OPENER: `[` immediately followed by a quasiquoter name
+# and `|`. The name is captured loosely and validated by
+# `_is_quasiquoter_name`, because it is a Haskell identifier and those
+# are not ASCII. The payload runs to the first `|]` and is not Haskell.
+# See the module docstring for why the no-space form is unambiguous.
+_QUASIQUOTE_OPEN = re.compile(r"\[([\w'.]+)\|")
 _QUASIQUOTE_CLOSE = "|]"
+
+# Template Haskell's quotation brackets. `[e| |]`, `[t| |]`, `[d| |]`,
+# `[p| |]` and the bare `[| |]` are NOT quasiquotes: their bodies are
+# Haskell, and masking one would hide a wrapper written inside it. This
+# tree uses `[t|` and the bare form (World.Material.Id,
+# Engine.Graphics.Vulkan.Uniform.Layout), so the distinction is live and
+# not hypothetical. Only the UNQUALIFIED spellings are brackets --
+# `[Mod.e| … |]` names a quasiquoter called `e` and is a quasiquote.
+_TH_QUOTATION_NAMES = frozenset({"e", "t", "d", "p"})
+
+
+def _is_quasiquoter_name(name: str) -> bool:
+    """True if `name` (the text between `[` and `|`) names a
+    quasiquoter: a varid, optionally module-qualified, that is not one
+    of Template Haskell's quotation brackets.
+
+    A varid begins with a lowercase letter or `_` and a module segment
+    with an uppercase one, both tested with `str.islower()` /
+    `str.isupper()` rather than an ASCII class -- GHC accepts non-ASCII
+    identifiers, and a name this did not recognize would leave a real
+    quasiquote unmasked, whose payload could then open a string that
+    swallows the code after it."""
+    segments = name.split(".")
+    head, qualifier = segments[-1], segments[:-1]
+    if not head or not (head[0].islower() or head[0] == "_"):
+        return False
+    if not all(seg and seg[0].isupper() for seg in qualifier):
+        return False
+    return bool(qualifier) or head not in _TH_QUOTATION_NAMES
 
 # `pack` as a maximal identifier lexeme. `'` is an identifier character
 # in Haskell, so it joins `\w` in both lookarounds: `pack'` is a
@@ -177,7 +213,7 @@ _PACK_LEXEME = re.compile(r"(?<![\w'])" + PACK + r"(?![\w'])")
 # `P.show` counts and a `t.show` record selector does not.
 _WRAPPER_TAIL = re.compile(
     r"[\s\x00]*(?:\((?P<paren>)|\$(?P<dollar>)|(?P<compose>[.∘]))[\s\x00]*"
-    r"(?P<qualifier>(?:[A-Za-z][\w']*\.)+)?show(?![\w'])")
+    r"(?P<qualifier>(?:\w[\w']*\.)+)?show(?![\w'])")
 
 _FORM_NAMES = {
     "paren": "pack (show …)",
@@ -391,7 +427,7 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
                 i = run
             continue
         opener = _QUASIQUOTE_OPEN.match(text, i)
-        if opener:
+        if opener and _is_quasiquoter_name(opener.group(1)):
             close = text.find(_QUASIQUOTE_CLOSE, opener.end())
             end = n if close == -1 else close + len(_QUASIQUOTE_CLOSE)
             spans.append((i, end))
@@ -711,6 +747,53 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         + "import qualified Prelude as P\n"
         "f x = T.pack (P.show x)\n",
         [4],
+    ),
+    (
+        "a UNICODE module alias on `show`: GHC accepts one, and an "
+        "ASCII-only qualifier class walks straight past the wrapper "
+        "(PR #2404 review round 4)",
+        "module M where\n" + _T
+        + "import qualified Prelude as Ü\n"
+        "f x = T.pack (Ü.show x)\n",
+        [4],
+    ),
+    (
+        "Template Haskell's `[t| … |]` is a QUOTATION BRACKET, not a "
+        "quasiquote: its body is Haskell, so masking it would hide the "
+        "wrapper inside. This tree writes them (World.Material.Id, "
+        "Engine.Graphics.Vulkan.Uniform.Layout)",
+        "module M where\n" + _T
+        + "x = [t| T.pack (show y) |]\n",
+        [3],
+    ),
+    (
+        "the same for `[e|`, and for `[d|` / `[p|` alongside it",
+        "module M where\n" + _T
+        + "x = [e| T.pack (show y) |]\n"
+        "z = [d| g = T.pack (show y) |]\n",
+        [3, 4],
+    ),
+    (
+        "the BARE `[| … |]` bracket, which this tree also writes",
+        "module M where\n" + _T
+        + "x = [| T.pack (show y) |]\n",
+        [3],
+    ),
+    (
+        "a tight list comprehension over a CONSTRUCTOR: `[Nothing|` is "
+        "not a quasiquoter -- a quasiquoter name is a varid -- so its "
+        "text stays code and the wrapper below it is still reported",
+        "module M where\n" + _T
+        + "ys = [Nothing|x<-xs]\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a lowercase-qualified `[mod.e|` names no module, so it is "
+        "neither a bracket nor a quasiquote and its text stays code",
+        "module M where\n" + _T
+        + "s = [mod.e| T.pack (show x) |]\n",
+        [3],
     ),
     (
         "two wrappers on ONE line are two violations",
@@ -1069,6 +1152,20 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n" + _T
         + "s = [text| unclosed\n"
         "f x = T.pack (show x)\n",
+    ),
+    (
+        "a quasiquoter with a UNICODE name is still a quasiquote -- one "
+        "this did not recognize would leave a payload readable as "
+        "Haskell",
+        "module M where\n" + _T
+        + "s = [tëxt| T.pack (show x) |]\n",
+    ),
+    (
+        "`[Mod.e| … |]` names a quasiquoter called `e`, which is a "
+        "quasiquote and not Template Haskell's bracket -- the exclusion "
+        "is for the UNQUALIFIED spellings only",
+        "module M where\n" + _T
+        + "s = [Mod.e| T.pack (show x) |]\n",
     ),
     (
         "a quasiquote whose payload spans lines",

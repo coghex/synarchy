@@ -152,6 +152,11 @@ and only those two (both found in PR #2404's review):
   did. `QuasiQuotes` is a global `default-extensions` entry, which is
   what makes the no-space `[varid|` form unambiguous — with the
   extension on, a list comprehension must be written `[ e | … ]`.
+  Template Haskell's quotation brackets are **not** quasiquotes:
+  `[e|`, `[t|`, `[d|`, `[p|` and the bare `[|` hold Haskell, so masking
+  one would hide a wrapper written inside it, and this tree writes `[t|`
+  and `[|` today. The quasiquoter name is a varid, tested with
+  `str.islower()` / `str.isupper()` rather than an ASCII class.
 * **A multi-dash operator.** Haskell report §2.3 opens a comment only on
   a dash run the rest of its symbol lexeme does not continue, so `-->`
   and `<--` are operators and `f x = x --> T.pack (show x)` is code. A
@@ -203,8 +208,11 @@ comment; an escaped quote inside a string; a `'"'` character literal and
 an identifier's trailing prime before an opener; an unclosed quasiquote;
 `-->`, `<--`, `--|`, a longer `--`-carrying operator, `⊚--`, `--⊚` and
 `--—` against `--`, `---`, `-- |`, `->`, an em dash in comment prose and
-a lone subtracting `-`. Every rule was mutation-tested against them:
-each is removed one at a time and the self-test fails.
+a lone subtracting `-`; the five Template Haskell brackets and a tight
+`[Nothing|` comprehension against a `[tëxt|` quasiquoter and a
+`[Mod.e|` one; and a Unicode module alias on `show`. Every rule was
+mutation-tested against them: each is removed one at a time and the
+self-test fails.
 
 ## World generation tools
 
