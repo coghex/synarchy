@@ -169,9 +169,9 @@ hspec `--match "Asset.UnitInventory"`, `--match "Unit.Atlas"`,
 `--match "pickFrame"` (the whole logical-choice matrix checked against
 an independently written `expectedChoice` table, so an edit to either
 side fails), `--match "the real unit registration boundary"` (drives
-`registerUnitDefs` against a live headless engine: one atlas upload and
-one published `Animation` per animation, no per-frame textures, a
-rejected index queueing nothing).
+`registerUnitDefs` against a live headless engine: one QUEUED atlas
+upload request and one published `Animation` per animation, no
+per-frame textures, a rejected index queueing nothing).
 Roster-wide headless evidence:
 `tools/combat_anim_probe.py --roster-only`, which reads the texture-NAME registry
 (`engine.getTextureHandle`) rather than `engine.getLoadedTexturePaths()`
