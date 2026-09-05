@@ -120,9 +120,11 @@ Reported in `src/` and `app/`: a `Data.Text` `pack` applied directly to
 `show`, as `pack (show …)`, `pack $ show …`, `pack . show` or
 `pack ∘ show`, adjacency measured modulo whitespace and comments so a
 multiline wrap is the same hit. `show` must be the **`Show` method** —
-bare (the file is refused if it binds the name) or qualified by a module
-that exports it, so an unrelated `Custom.show` formatter is not
-reported. Redundant parentheses are transparent
+bare (the file is refused if it binds the name) or qualified by
+`Prelude`, `UPrelude`, `GHC.Show` or `Text.Show`. A `show` qualified by
+anything else is **refused**, not guessed: it may be an unrelated
+formatter, whose wrapper is not `tshow`, or another re-export of the
+method, whose wrapper is, and deciding needs that module's exports.
 on both sides — `pack $ (show x)`, `pack ((show x))` and
 `(T.pack) . show` are the same functions byte for byte — and `$!` joins
 `$`. Only parentheses that GROUP count: juxtaposition is application, so
@@ -301,7 +303,9 @@ against an instance method and a class declaration; and four
 parenthesised prefix applications against one in argument position;
 and two unparenthesised applications and an unrelated qualified `show`
 against a wrapper that is the right operand of a masked operator, a
-`UPrelude`-qualified `show`, and a quasiquote used as an applicand. Every rule was mutation-tested against them: each is
+a `UPrelude`-, `GHC.Show`- and `Text.Show`-qualified `show`, a
+quasiquote used as an applicand, and two unresolvable qualified
+`show`s that refuse. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
