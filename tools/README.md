@@ -341,6 +341,22 @@ That is how #787's input-thread split left all five Layer A areas
 reporting as gaps while every producer was present and passing its own
 hspec suite. Run by CI and `make ci`.
 
+Internally (#2149) the command is a three-module family with one-way
+dependencies. `action_outcome_coverage.py` is the only public entry
+point and owns just mode dispatch, report and Tier 1 diagnostic
+formatting, self-test invocation and the process exit.
+`action_outcome_coverage_core.py` owns the production audit: root
+resolution, function-scope extraction, the predicates, every Layer A
+producer path and call-anchored pattern, the complete
+tier/verb/source/check registry, coverage evaluation and the Tier 1
+policy — it prints nothing and imports neither sibling.
+`action_outcome_coverage_selftest.py` owns the synthetic mutation
+corpus and imports the core's predicates rather than copying them, so
+every pattern, mapping and registry entry has one definition.
+Importing either owner runs no check and reads no file. Operators
+never invoke the two owners directly; the three commands below are
+unchanged.
+
 ```bash
 python3 tools/action_outcome_coverage.py
 python3 tools/action_outcome_coverage.py --self-test
@@ -3642,6 +3658,8 @@ tools/
 ├── haddock_link_baseline.json  (its generated, shrink-only ratchet — deleted by HLR-5)
 ├── test_haddock_link_audit.py  (its fixture suite)
 ├── action_outcome_coverage.py (F4 action-outcome verb instrumentation self-audit; --verify-tier1 is the CI gate)
+├── action_outcome_coverage_core.py     (its production audit: predicates, producer patterns, registry, Tier 1 policy)
+├── action_outcome_coverage_selftest.py (its synthetic mutation corpus — imports the core's predicates)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
 ├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts)
