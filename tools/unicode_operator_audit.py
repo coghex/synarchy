@@ -215,6 +215,28 @@ def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
 _IDENT_MARK_CATEGORIES = frozenset({"Mn", "Mc", "Me"})
 
 
+# Haskell 2010 SS2.2's `special` characters, which `uniSymbol`
+# excludes along with `_`, `"` and `'`. All ASCII, which is what lets
+# `is_haskell_symbol_char` decide every ASCII character from
+# `_ASCII_SYMBOLS` alone and reach the Unicode tables only for the rest.
+_ASCII_SYMBOLS = frozenset("!#$%&*+./<=>?@\\^|~:-")
+_HASKELL_SPECIAL = frozenset("()[]{},;`_\"'")
+
+
+def is_haskell_symbol_char(char: str) -> bool:
+    """True for a character a Haskell symbolic operator is made of.
+
+    Report SS2.2: `symbol -> ascSymbol | uniSymbol<special | _ | " | '>`,
+    where `uniSymbol` is ANY Unicode symbol or punctuation. This
+    codebase is `UnicodeSyntax` throughout and writes its own operators
+    from that set (`⊚`, `⌦`, `∘`, `⚟`), so an ASCII-only test splits a
+    lexeme like `⊚--` -- which matters for the dash rule in
+    `_scan_code` below (#2177)."""
+    if char.isascii():
+        return char in _ASCII_SYMBOLS
+    return unicodedata.category(char)[0] in "SP"
+
+
 def is_haskell_ident_char(char: str) -> bool:
     """True for a character a Haskell identifier may CONTINUE with
     (report SS2.4 as GHC extends it): a letter, a digit, `_`, `'`, or a
@@ -282,12 +304,35 @@ def _scan_code(
                 comment_start = i
                 state, depth, i = "BLOCK", 1, i + 2
                 continue
-            if text.startswith("--", i):
-                if run_start is not None:
-                    runs.append((run_start, i))
-                    run_start = None
-                comment_start = i
-                state, i = "LINE", i + 2
+            # Report SS2.3: a dash run opens a comment only when the
+            # maximal symbol lexeme it belongs to is nothing BUT
+            # dashes. `-->` and `--|` continue into another symbol
+            # character and `<--` began at one, so all three are
+            # OPERATORS and the code after them is code (#2177). The
+            # symbol set is report SS2.2's full one, Unicode included:
+            # `⊚--` and `--—` (an em dash, category Pd) are each one
+            # lexeme too, and this tree writes operators from it.
+            #
+            # A run is consumed WHOLE from its first character, which is
+            # what decides the leading side without a second predicate:
+            # every other arm leaves `i` on a character no symbol
+            # precedes, so a dash inside a longer lexeme is never tested
+            # on its own.
+            if is_haskell_symbol_char(c):
+                run = i
+                while run < n and is_haskell_symbol_char(text[run]):
+                    run += 1
+                lexeme = text[i:run]
+                if len(lexeme) >= 2 and lexeme == "-" * len(lexeme):
+                    if run_start is not None:
+                        runs.append((run_start, i))
+                        run_start = None
+                    comment_start = i
+                    state, i = "LINE", run
+                    continue
+                if run_start is None:
+                    run_start = i
+                i = run
                 continue
             # A `'` is only a CANDIDATE char-literal start when it can't
             # be the trailing prime of an identifier (`x'`, `map''`) --

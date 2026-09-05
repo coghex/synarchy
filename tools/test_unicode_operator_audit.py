@@ -113,6 +113,61 @@ def test_escaped_quote_inside_string_does_not_end_it_early():
            f"literal, so only the real code `>>=` is flagged (got {v})")
 
 
+def test_dash_run_continuing_into_a_symbol_is_an_operator():
+    # Report SS2.3: a dash run opens a comment only when the maximal
+    # symbol lexeme it belongs to is nothing but dashes. `-->` and
+    # `--|` continue into another symbol character, so the code after
+    # them is code -- read as comments they mask every operator to end
+    # of line (#2177).
+    for source in ('go x y = x --> x >>= y\n',
+                   'go x y = x --| x >>= y\n'):
+        v = find_violations(source, ORDINARY_FILE)
+        expect(_tokens(v) == {">>="}, f"a dash run continuing into a symbol "
+               f"is an operator, so {source.strip()!r} still has real code "
+               f"after it (got {v})")
+
+
+def test_dash_run_beginning_at_a_symbol_is_an_operator():
+    # The leading half of the same rule: `<--` began at `<`, so the run
+    # is `<--` and not a comment. A trailing-side-only check misses it.
+    text = 'go x y = x <-- x >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"`<--` is one operator lexeme, so the "
+           f"code after it is scanned (got {v})")
+
+
+def test_dash_run_and_a_unicode_symbol_are_one_lexeme():
+    # Report SS2.2's symbol set is Unicode: `⊚--` is one operator, and
+    # `--\u2014` continues into an em dash (category Pd). This tree writes
+    # its own operators from that set, so an ASCII-only test splits them
+    # and hands the `--` on as a comment opener.
+    for source in ('go x y = x \u229a-- x >>= y\n',
+                   'go x y = x --\u2014 x >>= y\n'):
+        v = find_violations(source, ORDINARY_FILE)
+        expect(_tokens(v) == {">>="}, f"a Unicode symbol continues the "
+               f"lexeme, so {source.strip()!r} still has real code after it "
+               f"(got {v})")
+
+
+def test_a_run_of_only_dashes_is_still_a_comment():
+    # The other direction, so the rule is not simply switched off: `--`
+    # and `---` are nothing but dashes and open comments, and `-- |`
+    # ends its run at the space.
+    for source in ('-- x >>= y\n', '--- x >>= y\n', '-- | x >>= y\n'):
+        v = find_violations(source + 'go a b = a == b\n', ORDINARY_FILE)
+        expect(_tokens(v) == {"=="}, f"{source.strip()!r} is a comment, so "
+               f"only the real code below it is flagged (got {v})")
+
+
+def test_a_lone_dash_is_subtraction_not_a_comment():
+    # Two dashes minimum: a single `-` is an operator, and reading it as
+    # a comment would mask the rest of its line.
+    text = 'go a b = (a - b) >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a lone `-` is subtraction, so the code "
+           f"after it is scanned (got {v})")
+
+
 def test_string_gap_ends_at_its_own_backslash_not_the_closing_quote():
     # Report SS2.6: `\ whitechar {whitechar} \` is a string GAP, not an
     # escape. Read as a two-character escape, the gap's closing
@@ -556,6 +611,11 @@ def main() -> int:
         test_nested_block_comment_does_not_trigger_but_real_code_after_does,
         test_string_literal_does_not_trigger,
         test_escaped_quote_inside_string_does_not_end_it_early,
+        test_dash_run_continuing_into_a_symbol_is_an_operator,
+        test_dash_run_beginning_at_a_symbol_is_an_operator,
+        test_dash_run_and_a_unicode_symbol_are_one_lexeme,
+        test_a_run_of_only_dashes_is_still_a_comment,
+        test_a_lone_dash_is_subtraction_not_a_comment,
         test_string_gap_ends_at_its_own_backslash_not_the_closing_quote,
         test_multi_line_string_gap_keeps_its_body_out_of_the_scan,
         test_char_literal_containing_a_double_quote_does_not_mask_later_code,

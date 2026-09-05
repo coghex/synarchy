@@ -110,9 +110,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unicode_operator_audit import (  # type: ignore  # noqa: E402
-    _CHAR_LITERAL, haskell_code_only, is_haskell_ident_char)
+    _CHAR_LITERAL, haskell_code_only, is_haskell_ident_char,
+    is_haskell_symbol_char)
 from engine_env_capability_common import (  # type: ignore  # noqa: E402
-    _SYMBOL_CHARS, _import_chunks)
+    _import_chunks)
 from engine_env_capability_writer_syntax import (  # type: ignore  # noqa: E402
     _IMPORT_DECL_RE, imports_name, parse_imports)
 
@@ -191,11 +192,13 @@ _REWRITING_CPP_DIRECTIVE = re.compile(
 _CONID_HEAD_CATEGORIES = frozenset({"Lu", "Lt"})
 _VARID_HEAD_CATEGORIES = frozenset({"Ll", "Lo"})
 
-# Haskell 2010 SS2.2's `special` characters, which `uniSymbol` excludes
-# along with `_`, `"` and `'`. All ASCII, which is what lets
-# `_is_symbol_char` decide every ASCII character from `_SYMBOL_CHARS`
-# alone and reach the Unicode tables only for the rest.
-_HASKELL_SPECIAL = frozenset("()[]{},;`_\"'")
+# Report SS2.4 as GHC maps it (`GHC.Parser.Lexer`'s `adjustChar`): a
+# conid begins with an UPPERCASE or TITLECASE letter, a varid with a
+# LOWERCASE or OTHER letter (or `_`). `str.isupper()` is false for a
+# titlecase letter such as `ǅ`, and `str.islower()` is false for an
+# `Lo` letter such as `א`, so neither predicate states the rule alone.
+_CONID_HEAD_CATEGORIES = frozenset({"Lu", "Lt"})
+_VARID_HEAD_CATEGORIES = frozenset({"Ll", "Lo"})
 
 
 def _is_conid_head(char: str) -> bool:
@@ -208,22 +211,6 @@ def _is_varid_head(char: str) -> bool:
     """True if `char` may begin a Haskell VARID -- a function or
     variable name, a quasiquoter among them."""
     return char == "_" or unicodedata.category(char) in _VARID_HEAD_CATEGORIES
-
-
-def _is_symbol_char(char: str) -> bool:
-    """True for a character a Haskell symbolic operator is made of.
-
-    Report SS2.2: `symbol -> ascSymbol | uniSymbol<special | _ | " | '>`,
-    where `uniSymbol` is ANY Unicode symbol or punctuation. This
-    codebase is `UnicodeSyntax` throughout and defines its own operators
-    from that set (`⊚`, `⌦`, `∘`, `⚟`), so an ASCII-only test splits a
-    lexeme like `⊚--` and hands the trailing `--` on as a comment
-    opener. `_SYMBOL_CHARS` is `ascSymbol`, and every `special`
-    character is ASCII, so an ASCII character is decided by that set
-    alone and the category lookup runs only for the rest."""
-    if char.isascii():
-        return char in _SYMBOL_CHARS
-    return unicodedata.category(char)[0] in "SP"
 
 
 def _read_ident(text: str, pos: int) -> tuple[str, int] | None:
@@ -337,25 +324,22 @@ def _quasiquote_name_end(text: str, pos: int) -> int | None:
     return i + 1
 
 
-def _mask_spans(text: str, spans: list[tuple[int, int, str]]) -> str:
-    """Blank each `[start, end)` span to its own fill character, one for
-    one, so every other position -- and every line number -- stays
-    valid.
+def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    """Blank each `[start, end)` span to `\\x00`, one byte for one, so
+    every other position -- and every line number -- stays valid.
 
-    The fill is part of what the span MEANS. A quasiquote is
-    transparent, so it becomes `\\x00`, which every gap here treats as
-    whitespace. A masked multi-dash OPERATOR is not: it separates two
-    operands, so it becomes `+`, an ASCII symbol character that is not
-    one of the connectors."""
+    A quasiquote is transparent once its payload is removed, so `\\x00`
+    -- which every gap here treats as whitespace -- is the right
+    stand-in."""
     out = list(text)
-    for start, end, fill in spans:
+    for start, end in spans:
         for i in range(start, end):
             if out[i] != "\n":
-                out[i] = fill
+                out[i] = "\x00"
     return "".join(out)
 
 
-def _premasked_spans(text: str) -> list[tuple[int, int, str]]:
+def _quasiquote_spans(text: str) -> list[tuple[int, int]]:
     """The spans `_prepared_code` blanks before handing the source to
     `haskell_code_only`, in source order.
 
@@ -399,7 +383,7 @@ def _premasked_spans(text: str) -> list[tuple[int, int, str]]:
     That branch is also what makes the walk terminate on every input: a
     recorded span ends at the opener's end or later, and every other arm
     advances `i` by at least one."""
-    spans: list[tuple[int, int, str]] = []
+    spans: list[tuple[int, int]] = []
     i, n = 0, len(text)
     while i < n:
         char = text[i]
@@ -434,24 +418,22 @@ def _premasked_spans(text: str) -> list[tuple[int, int, str]]:
             if literal:
                 i = literal.end()
                 continue
-        if _is_symbol_char(char):
+        if is_haskell_symbol_char(char):
             run = i
-            while run < n and _is_symbol_char(text[run]):
+            while run < n and is_haskell_symbol_char(text[run]):
                 run += 1
             lexeme = text[i:run]
             if len(lexeme) >= 2 and lexeme == "-" * len(lexeme):
                 newline = text.find("\n", run)
                 i = n if newline == -1 else newline
             else:
-                if "--" in lexeme:
-                    spans.append((i, run, "+"))
                 i = run
             continue
         name_end = _quasiquote_name_end(text, i)
         if name_end is not None and _is_quasiquoter_name(text[i + 1:name_end - 1]):
             close = text.find(_QUASIQUOTE_CLOSE, name_end)
             end = n if close == -1 else close + len(_QUASIQUOTE_CLOSE)
-            spans.append((i, end, "\x00"))
+            spans.append((i, end))
             i = end
             continue
         i += 1
@@ -464,7 +446,7 @@ def _prepared_code(text: str) -> str:
     `haskell_code_only` over the result for comments, strings and
     character literals. Positions and line numbers are preserved, so
     every offset still maps back to the original source."""
-    return haskell_code_only(_mask_spans(text, _premasked_spans(text)))
+    return haskell_code_only(_mask_spans(text, _quasiquote_spans(text)))
 
 
 # ---------------------------------------------------------------------
@@ -783,7 +765,7 @@ def _reads_maximal(text: str, pos: int, lexeme: str) -> bool:
     """True if the maximal symbol run at `pos` is exactly `lexeme`, so
     `==`, `=>` and `=<<` are not `=`."""
     run = pos
-    while run < len(text) and _is_symbol_char(text[run]):
+    while run < len(text) and is_haskell_symbol_char(text[run]):
         run += 1
     return text[pos:run] == lexeme
 
@@ -965,7 +947,7 @@ def _refuse_qualified_connector(text: str, pos: int, rel_path: str) -> None:
     if after >= len(text) or text[after] != ".":
         return
     run = after + 1
-    while run < len(text) and _is_symbol_char(text[run]):
+    while run < len(text) and is_haskell_symbol_char(text[run]):
         run += 1
     operator = text[after + 1:run]
     if operator not in _CONNECTOR_OPERATORS:
@@ -1566,6 +1548,13 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n" + _T
         + "import qualified Data.Semigroup as S\n"
         "f x = T.pack S.<> show x\n",
+    ),
+    (
+        "the walk below applies the dash rule too: `-->` is an "
+        "operator, so a quasiquote opened after it on the same line is "
+        "still found and its payload still masked",
+        "module M where\n" + _T
+        + "s x = x --> [text| T.pack (show y) |]\n",
     ),
     (
         "a quasiquote whose payload spans lines",
