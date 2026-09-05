@@ -1426,6 +1426,12 @@ test-suite synarchy-test-headless
                    Test.Headless.UI.SettingsDefaultsKeybinds
                    Test.Headless.UI.SettingsRevert
                    Test.Headless.UI.TutorialHud
+                   Test.Headless.UI.TutorialHud.Support
+                   Test.Headless.UI.TutorialHud.Lifecycle
+                   Test.Headless.UI.TutorialHud.ModelPresentation
+                   Test.Headless.UI.TutorialHud.Scrolling
+                   Test.Headless.UI.TutorialHud.Responsive
+                   Test.Headless.UI.TutorialHud.CaptionFit
                    Test.Headless.UI.UnicodeTextEditing
                    Test.Headless.UI.Slider
                    Test.Headless.UI.BarFillColor
