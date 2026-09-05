@@ -519,8 +519,9 @@ eventually outweighs that convenience.
 - **Open questions:** None. Deferral precondition, MECHANICALLY CHECKED since
   TEX-7: the baseline is established (*Measured results*) and the budget that
   activates this slice is recorded in `tools/unit_texture_budget.json` —
-  384 MiB of decoded RGBA8 resident unit-animation atlas, compared as
-  `measured x 2.0 > threshold`. `pack_atlas.py --validate-only --strict`
+  384 MiB of decoded RGBA8 unit-animation atlas projected from the compiled
+  indices, compared as `projected x 2.0 > threshold`.
+  `pack_atlas.py --validate-only --strict`
   evaluates it on every run and fails the strict gate by name when it fires,
   so this entry stops being `[deferred]` because a check said so, not because
   someone remembered to look.
@@ -735,8 +736,9 @@ its unit index` scenario keeps this property under test on fixtures.
 Recorded in `tools/unit_texture_budget.json`, which is the single
 machine-readable source `pack_atlas.py --validate-only --strict` reads.
 
-- **Measured:** 106,531,968 bytes (101.60 MiB) of decoded RGBA8 resident unit
-  animation atlas, aggregated over the whole tracked roster.
+- **Measured:** 106,531,968 bytes (101.60 MiB) of decoded RGBA8 unit animation
+  atlas, projected from the compiled indices' declared dimensions and
+  aggregated over the whole tracked roster.
   `scripts/startup_loader.lua` feeds every `data/units/*.yaml` to the loader at
   boot, so that whole total is resident in every session regardless of what
   spawns — the aggregation scope is the roster, not a spawned subset.
@@ -762,12 +764,41 @@ This is a *resident memory* budget and is deliberately separate from D-12's
 tracked-artifact-bytes guardrail above; a future KTX2 artifact set is measured
 against D-12 separately and must not silently expand either one.
 
-The image/slot half of the same document is a hard error rather than a warning:
-at most one resident image and bindless registration per compiled animation,
-the bound derived from each unit's own index so it keeps holding as the roster
-grows. A change that put one image per *frame* back where one per animation
-belongs fails immediately, naming the unit, the expected and actual counts, and
-the offending files.
+The generated-atlas-entry half of the same document is a hard error rather than
+a warning: exactly one entry besides `index.json` in a unit's `atlas/`
+directory per compiled animation, the bound derived from each unit's own index
+so it keeps holding as the roster grows. A change that put one generated file
+per *frame* back where one per animation belongs fails immediately, naming the
+unit, the expected and actual counts, and the offending entries.
+
+**Neither half observes the runtime.** `pack_atlas.py` reads the compiled tree
+— the stored indices and the entries beside them — and has no input from the
+loader, the texture request queue, the bindless table or a running engine. Both
+figures above are projections computed from index metadata, not residency
+measured on a GPU. A green `--validate-only --strict` run therefore says the
+generated artifacts are well-formed and their projected decoded size is under
+threshold, and says nothing about how many uploads, handles or bindless slots
+the runtime actually takes.
+
+That bound is owned by the Hspec group `Unit.Atlas.Load — the real unit
+registration boundary` (`test-headless/Test/Headless/Unit/Atlas/Loader.hs`),
+which runs in the always-blocking headless suite:
+
+```bash
+cabal test synarchy-test-headless \
+  --test-options='--match "the real unit registration boundary"'
+```
+
+It drives the production registration path and inspects the `LuaToEngineMsg`
+values it queues, asserting one `LuaLoadAtlasTextureRequest` and one distinct
+logical texture handle per animation, each published into the definition's
+animation storage, no per-frame ordinary requests, and — for every shipped
+unit through the production resolver — as many atlas requests as animations.
+Its authority is that request-and-handle boundary; the completed Vulkan upload
+and the bindless-table publication happen downstream of the queue it reads
+(`src/Engine/Scripting/Lua/Message.hs`). A loader regression that queued two
+requests per animation while leaving `atlas/` untouched fails there, and the
+Python budget reports nothing (#2217).
 
 ## Risks and mitigations
 

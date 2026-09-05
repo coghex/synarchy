@@ -11,27 +11,27 @@
   ],
   "animation_images": {
     "max_per_animation": 1,
-    "measure": "resident images (and bindless registrations) contributed by one compiled animation",
+    "measure": "generated atlas entries a compiled unit's assets/textures/units/<unit>/atlas/ directory holds for one indexed animation. This is an artifact count read off the compiled tree; it observes no loader, no texture request queue, no bindless table and no running engine.",
     "aggregation_scope": "per unit, over the animations its generated assets/textures/units/<unit>/atlas/index.json declares",
-    "comparison_rule": "a unit's compiler-owned atlas/ directory must hold exactly max_per_animation * (declared animations) image files, each named by exactly one animation's atlas_path; any other count, or any file no animation claims, is an error",
+    "comparison_rule": "a unit's compiler-owned atlas/ directory must hold exactly max_per_animation * (declared animations) entries besides index.json, each named by exactly one animation's atlas_path; any other count, or any entry no animation claims, is an error",
     "excluded": [
       "portrait.png",
       "the unit's direct `sprite` and its `directional_sprites` overrides (T-pose fallbacks)",
       "unknown_unit/rotations/*.png",
       "every other non-animation texture: none of them is named by an atlas index, and D-8 leaves them on ordinary single-texture loading"
     ],
-    "rationale": "D-2 fixes atlas granularity at one image per animation. Holding the count to the DECLARED animation count rather than to a frozen roster total or a frame count is what makes a reintroduced per-frame registration fail automatically as the roster grows."
+    "rationale": "D-2 fixes atlas granularity at one image per animation. Holding the count to the DECLARED animation count rather than to a frozen roster total or a frame count is what makes a per-frame regression IN THE COMPILED TREE — one generated file per FRAME where one per animation belongs — fail automatically as the roster grows. The corresponding RUNTIME bound is not this budget's to enforce: the Hspec group 'Unit.Atlas.Load — the real unit registration boundary' (test-headless/Test/Headless/Unit/Atlas/Loader.hs, in the always-blocking headless suite) is what holds the loader to one atlas upload request and one logical texture handle per animation, with no per-frame requests. A loader regression that left atlas/ untouched fails there, not here."
   },
   "resident_bytes": {
     "threshold": 402653184,
     "unit": "bytes",
-    "measure": "decoded RGBA8 resident bytes: atlas_width * atlas_height * 4, summed over every animation an index declares. Since #2076 those dimensions include the one-texel extrusion gutter around every cell, because the whole padded sheet is what is uploaded and resident.",
+    "measure": "decoded RGBA8 bytes PROJECTED from stored index metadata: atlas_width * atlas_height * 4, summed over every animation an index declares. Nothing here is measured on a GPU or in a running engine; the estimate is computed from the compiled artifacts alone. Since #2076 those dimensions include the one-texel extrusion gutter around every cell, because the whole padded sheet is what gets uploaded.",
     "aggregation_scope": "the whole tracked roster — every unit declared under data/units/ that ships a compiled index. scripts/startup_loader.lua feeds every data/units/*.yaml to the unit loader at boot, so every tracked unit's atlases are resident in every session regardless of what spawns.",
     "projection": {
       "roster_growth_factor": 2.0,
       "basis": "the near-term unit-content plan roughly doubles today's tracked unit-animation content. Applied to the measured total rather than to a per-unit estimate, because unit cost varies by an order of magnitude with canvas size (48x48 acolyte vs 92x92 bear_brown) and the roster mix is what actually scales."
     },
-    "comparison_rule": "measured_resident_bytes * projection.roster_growth_factor > threshold activates deferred TEX-5. The breach is a WARNING, so a plain --validate-only still reports it while `--strict` (what CI and `make ci` run) fails on it, forcing the resume-or-raise decision rather than letting the trigger pass silently.",
+    "comparison_rule": "the two byte quantities stay distinct: the index-projected total above, and that total * projection.roster_growth_factor, which is the only one compared. roster-projected > threshold activates deferred TEX-5. The breach is a WARNING, so a plain --validate-only still reports it while `--strict` (what CI and `make ci` run) fails on it, forcing the resume-or-raise decision rather than letting the trigger pass silently.",
     "distinct_from": "D-12's separate guardrail, which caps TRACKED derived artifact BYTES ON DISK at two times their source frames. That one is about repository size; this one is about resident GPU/decoded memory, and the two are measured independently.",
     "derivation": "Re-measured at 121,620,320 bytes (115.99 MiB) across 8 units / 131 animations at 1ce9955c (#2076), which added the one-texel extrusion gutter around every atlas cell: the same art costs 5.10% more resident than the 115,723,968 bytes (110.36 MiB) it did at the edge-adjacent stride. Projected 231.97 MiB at the recorded growth factor, leaving 152 MiB of headroom under the unchanged threshold — about three more bear_brown-scale quadrupeds (46.52 MiB each). The threshold is untouched by that re-measurement: it is owner-confirmed policy on the date below, and the gutter re-records a measurement rather than buying room for one. Its original basis stands — measured at 106,531,968 bytes (101.60 MiB) across 7 units / 116 animations at aabf94ef (#1261), chosen so the trigger fires on a real content-plan expansion rather than on the next single large quadruped, while still landing well below the point where unit art alone would dominate a modest GPU's texture memory.",
     "confirmed_by": "project owner (coghex)",

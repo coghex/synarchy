@@ -527,8 +527,11 @@ compiled atlas path and there is no other; a bad index refuses the
 whole unit. Read frames through the storage accessors, never by
 matching the constructor; display a live frame via
 `unit.getFrameSample` + `UI.setSpriteFrame`, never `getFrameTexture`.
-The 384 MiB resident-memory threshold is the owner's call. Deleting art
-needs the owner's explicit confirmation. Full contract and gates:
+The 384 MiB projected-memory threshold is the owner's call. That command
+validates GENERATED ARTIFACTS only; the runtime bound of one atlas upload
+and one texture handle per animation belongs to the Hspec group
+`Unit.Atlas.Load — the real unit registration boundary` (#2217). Deleting
+art needs the owner's explicit confirmation. Full contract and gates:
 `src/Unit/Atlas/CLAUDE.md`.
 
 ## Platform notes
