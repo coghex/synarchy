@@ -106,7 +106,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from unicode_operator_audit import haskell_code_only  # type: ignore  # noqa: E402
+from unicode_operator_audit import (  # type: ignore  # noqa: E402
+    _CHAR_LITERAL, _IDENT_CONTINUE, haskell_code_only, haskell_comment_spans)
 from engine_env_capability_common import _import_chunks  # type: ignore  # noqa: E402
 from engine_env_capability_writer_syntax import (  # type: ignore  # noqa: E402
     _IMPORT_DECL_RE, imports_name, parse_imports)
@@ -154,11 +155,12 @@ _TEXT_MODULE_MENTION = re.compile(
 _REWRITING_CPP_DIRECTIVE = re.compile(
     r"^[ \t]*#[ \t]*(define|undef|include)\b", re.MULTILINE)
 
-# A quasiquote: `[` immediately followed by a quasiquoter name (a varid,
-# optionally module-qualified) and `|`, up to the first `|]`. See the
-# module docstring for why the no-space form is unambiguous here.
-_QUASIQUOTE = re.compile(
-    r"\[(?:[A-Z][\w']*\.)*[a-z_][\w']*\|.*?\|\]", re.DOTALL)
+# A quasiquote OPENER: `[` immediately followed by a quasiquoter name (a
+# varid, optionally module-qualified) and `|`. The payload runs to the
+# first `|]` and is not Haskell at all. See the module docstring for why
+# the no-space form is unambiguous here.
+_QUASIQUOTE_OPEN = re.compile(r"\[(?:[A-Z][\w']*\.)*[a-z_][\w']*\|")
+_QUASIQUOTE_CLOSE = "|]"
 
 # `pack` as a maximal identifier lexeme. `'` is an identifier character
 # in Haskell, so it joins `\w` in both lookarounds: `pack'` is a
@@ -217,6 +219,17 @@ class Violation:
                 f"-- use `{CANONICAL}`")
 
 
+def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    """Blank `[start, end)` spans to `\\x00`, one byte for one byte, so
+    every other position -- and every line number -- stays valid."""
+    out = list(text)
+    for start, end in spans:
+        for i in range(start, end):
+            if out[i] != "\n":
+                out[i] = "\x00"
+    return "".join(out)
+
+
 def _line_of(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
@@ -259,19 +272,90 @@ def _qualifier_before(text: str, pos: int) -> str:
     return candidate if _is_module_path(candidate) else ""
 
 
-def _mask_quasiquotes(text: str) -> str:
-    """`text` with every quasiquote body blanked to `\\x00`, positions
-    and line numbers preserved.
+def _quasiquote_spans(text: str) -> list[tuple[int, int]]:
+    """The `[start, end)` spans of every quasiquote in `text`, payload
+    and delimiters included.
 
-    The quasiquote markers are located in CODE only, so a `--` comment
-    that merely contains `[glsl|`-shaped text can never be mistaken for
-    a real opener and mask the live Haskell code after it."""
-    out = list(text)
-    for match in _QUASIQUOTE.finditer(haskell_code_only(text)):
-        for i in range(*match.span()):
-            if out[i] != "\n":
-                out[i] = "\x00"
-    return "".join(out)
+    A quasiquote's payload is not Haskell -- it is whatever the
+    quasiquoter parses -- so it has to be removed BEFORE anything reads
+    the file as Haskell. That ordering is a correctness rule, not a
+    preference, and it cannot be met by masking comments or strings
+    first (PR #2404 review). Both directions are real false NEGATIVES,
+    each hiding a wrapper further down the module:
+
+      * `[text| " |]` -- a lone quote in the payload opens a Haskell
+        string that runs past the closing `|]` and swallows the code
+        after it;
+      * `[text| -- |]` -- a `--` in the payload opens a line comment
+        that eats the closing `|]` itself.
+
+    Which means the five constructs cannot be resolved in phases at
+    all: in code, whichever of `{-`, `--`, `"`, `'x'` and `[qq|` starts
+    FIRST wins, and only a single left-to-right pass can say which did.
+    That is what this is. It is deliberately the ONLY lexing this module
+    does -- `haskell_code_only` still decides what is code once the
+    payloads are gone, so the two agree by construction everywhere
+    except the one construct it does not model. Comments and strings
+    are SKIPPED here rather than masked, for the same reason: reporting
+    them is the shared lexer's job, and doing it twice is how two
+    lexers drift.
+
+    `_CHAR_LITERAL` and `_IDENT_CONTINUE` come from that shared module
+    rather than being restated: a `'x'` must be skipped atomically so
+    the real `'"'` in `Engine.Scripting.Lua.API.Shell` cannot open a
+    phantom string, and a `'` that is an identifier's trailing prime
+    (`map'`) must not be read as a literal at all.
+
+    An UNCLOSED quasiquote ran to end of file and is reported that way.
+    Such a source does not compile either way, and leaving its tail
+    readable would let one phantom opener hide the rest of the module.
+    That branch is also what makes the walk terminate on every input:
+    a recorded span ends at `opener.end()` or later, and every other
+    arm advances `i` by at least one, so `i` strictly increases."""
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if text.startswith("{-", i):
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if text.startswith("{-", i):
+                    depth, i = depth + 1, i + 2
+                elif text.startswith("-}", i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            continue
+        if text.startswith("--", i):
+            newline = text.find("\n", i)
+            i = n if newline == -1 else newline
+            continue
+        if char == '"':
+            i += 1
+            while i < n and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if char == "'" and (i == 0 or not _IDENT_CONTINUE.match(text[i - 1])):
+            literal = _CHAR_LITERAL.match(text, i)
+            if literal:
+                i = literal.end()
+                continue
+        opener = _QUASIQUOTE_OPEN.match(text, i)
+        if opener:
+            close = text.find(_QUASIQUOTE_CLOSE, opener.end())
+            end = n if close == -1 else close + len(_QUASIQUOTE_CLOSE)
+            spans.append((i, end))
+            i = end
+            continue
+        i += 1
+    return spans
+
+
+def _mask_quasiquotes(text: str) -> str:
+    """`text` with every quasiquote blanked to `\\x00`, positions and
+    line numbers preserved."""
+    return _mask_spans(text, _quasiquote_spans(text))
 
 
 _MODULE_KEYWORD = re.compile(r"^module(?![\w'])", re.MULTILINE)
@@ -421,9 +505,9 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     _classify_text_imports(text, rel_path)
     declarations = parse_imports(text)
 
-    # Quasiquotes first, then the comment/string lexer over the result,
-    # so a wrapper quoted inside a splice's payload is neither a hit nor
-    # able to swallow the code around it.
+    # Quasiquote payloads are removed BEFORE the file is read as
+    # Haskell strings -- see `_mask_quasiquotes` for why that order is a
+    # correctness rule and not a preference.
     scan_text = haskell_code_only(_mask_quasiquotes(text))
 
     exempt: set[int] = set()
@@ -609,6 +693,86 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [5],
     ),
     (
+        "a lone `\"` in a quasiquote PAYLOAD must not open a Haskell "
+        "string that runs past the closing `|]` and swallows the "
+        "wrapper below it (PR #2404 review)",
+        "module M where\n" + _T
+        + "s = [text| \" |]\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a `--` in a payload must not open a line comment that eats "
+        "the closing `|]` itself",
+        "module M where\n" + _T
+        + "s = [text| -- |]\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a `{-` in a payload must not open a block comment either",
+        "module M where\n" + _T
+        + "s = [text| {- |]\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "an apostrophe in a payload is prose, not a character literal",
+        "module M where\n" + _T
+        + "s = [text| it's |]\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a MULTILINE payload carrying a quote, closed properly",
+        "module M where\n" + _T
+        + "s = [glsl|\n"
+        "  \" x\n"
+        "  |]\n"
+        "f x = T.pack (show x)\n",
+        [6],
+    ),
+    (
+        "an ESCAPED quote inside a string does not end it, so the "
+        "opener-shaped text after it is still string content and the "
+        "wrapper below stays visible",
+        "module M where\n" + _T
+        + 'note = "\\" [text|"\n'
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a STRING containing quasiquote-opener text opens nothing, so "
+        "the wrapper after it is still reported",
+        "module M where\n" + _T
+        + "note = \"[glsl| x\"\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a line comment containing opener text opens nothing either",
+        "module M where\n" + _T
+        + "-- [glsl| x\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a block comment containing opener text opens nothing either",
+        "module M where\n" + _T
+        + "{- [glsl| x -}\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "the character literal `'\"'` -- real in "
+        "Engine.Scripting.Lua.API.Shell -- must be skipped atomically "
+        "rather than opening a phantom string",
+        "module M where\n" + _T
+        + "q = '\"'\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
         "a wrapper OUTSIDE a quasiquote in a file that also contains "
         "one -- masking a splice must not mask the module",
         "module M where\n" + _T
@@ -702,6 +866,37 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "masking is keyed to",
         "module M where\n" + _T
         + "s = [text| T.pack (show x) |]\n",
+    ),
+    (
+        "a wrapper inside a payload that ALSO carries a quote stays "
+        "inside the payload",
+        "module M where\n" + _T
+        + "s = [text| \" T.pack (show x) |]\n",
+    ),
+    (
+        "a `'\"'` character literal BEFORE a quasiquote must be skipped "
+        "atomically -- read as an ordinary quote it opens a phantom "
+        "string that hides the opener, and the payload's wrapper is "
+        "then reported as real code",
+        "module M where\n" + _T
+        + "q = '\"'\n"
+        "s = [text| T.pack (show x) |]\n",
+    ),
+    (
+        "an identifier's trailing prime is not a literal opener: "
+        "`f' '\"'` misread that way consumes the real literal's opening "
+        "quote and the same phantom string follows",
+        "module M where\n" + _T
+        + "g = f' '\"'\n"
+        "s = [text| T.pack (show x) |]\n",
+    ),
+    (
+        "an UNCLOSED quasiquote ran to end of file, so its tail is "
+        "payload -- the source does not compile either way, and a "
+        "readable tail would let one phantom opener hide the module",
+        "module M where\n" + _T
+        + "s = [text| unclosed\n"
+        "f x = T.pack (show x)\n",
     ),
     (
         "a quasiquote whose payload spans lines",

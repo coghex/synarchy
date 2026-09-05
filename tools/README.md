@@ -137,13 +137,25 @@ an unqualified `import Data.Text (pack)`, `hiding (pack)` and an
 and `Data.Text.Lazy`'s are not this function and are never reported.
 
 Never reported: the same text in a `--` or `{- -}` comment, in a string
-literal, or in a **quasiquote**. Comment and string awareness comes from
+literal, or in a **quasiquote**. What is code comes from
 `unicode_operator_audit.py`'s `haskell_code_only` rather than a second
-lexer; the quasiquote masking is this module's own, because that guard's
-is scoped to `ShaderCode.hs` by name while this rule covers every
-production path. `QuasiQuotes` is a global `default-extensions` entry,
-which is what makes the no-space `[varid|` form unambiguous — with the
-extension on, a list comprehension must be written `[ e | … ]`.
+lexer — but that lexer models four constructs and a quasiquote is a
+fifth, so quasiquote spans are found here first, in one interleaved
+left-to-right pass, and masked before anything reads the file as
+Haskell.
+
+That order is a correctness rule, not a preference (PR #2404 review).
+A quasiquote's payload is not Haskell, so a lone `"` in one opens a
+string that runs past the closing `|]` and swallows the code after it,
+and a `--` in one opens a comment that eats the `|]` itself — each
+hiding a real wrapper further down the module. Neither can be fixed by
+masking comments or strings first: in code, whichever of `{-`, `--`,
+`"`, `'x'` and `[qq|` starts first wins, and only a single pass can say
+which did. That pass skips comments and strings rather than masking
+them, so reporting them stays the shared lexer's job. `QuasiQuotes` is
+a global `default-extensions` entry, which is what makes the no-space
+`[varid|` form unambiguous — with the extension on, a list comprehension
+must be written `[ e | … ]`.
 
 A file it cannot certify is **refused**, loudly, rather than scanned as
 if clean: a CPP `#define`/`#undef`/`#include` (which can rename the very
@@ -168,7 +180,11 @@ sources: every detected spelling and import form, the multiline and
 comment-interrupted wraps, every clean near-miss (`unpack`, `repack`,
 `showFFloat`, `shows`, a `.show` record selector), each refusal, the
 exemption's two scopes, and the `UPrelude` export premise in both
-directions. Every rule was mutation-tested against it.
+directions. The lexing order gets its own set — a payload holding `"`,
+`--`, `{-` or an apostrophe; an opener quoted inside a string or a
+comment; an escaped quote inside a string; a `'"'` character literal and
+an identifier's trailing prime before an opener; an unclosed quasiquote.
+Every rule was mutation-tested against them.
 
 ## World generation tools
 
