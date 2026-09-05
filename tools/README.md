@@ -119,8 +119,12 @@ form is definitionally `tshow`, so a fix moves no rendered byte.
 Reported in `src/` and `app/`: a `Data.Text` `pack` applied directly to
 `show`, as `pack (show …)`, `pack $ show …`, `pack . show` or
 `pack ∘ show`, adjacency measured modulo whitespace and comments so a
-multiline wrap is the same hit. `pack . f . show` is a different
-function and is not reported.
+multiline wrap is the same hit. Redundant parentheses are transparent
+on both sides — `pack $ (show x)`, `pack ((show x))` and
+`(T.pack) . show` are the same functions byte for byte — and `$!` joins
+`$`. A parenthesis with something inside it is not redundant, so
+`pack (f (show x))` and `g (h (T.pack)) . show` are different functions
+and are not reported; neither is `pack . f . show`.
 
 Resolution is by **binding**, never by the `T.` qualifier's spelling:
 this tree binds `T` to `Data.Text` in most modules, but `src/UPrelude.hs`
@@ -210,9 +214,10 @@ an identifier's trailing prime before an opener; an unclosed quasiquote;
 `--—` against `--`, `---`, `-- |`, `->`, an em dash in comment prose and
 a lone subtracting `-`; the five Template Haskell brackets and a tight
 `[Nothing|` comprehension against a `[tëxt|` quasiquoter and a
-`[Mod.e|` one; and a Unicode module alias on `show`. Every rule was
-mutation-tested against them: each is removed one at a time and the
-self-test fails.
+`[Mod.e|` one; a Unicode module alias on `show`; and every
+transparent-parenthesis spelling against the three non-transparent
+lookalikes. Every rule was mutation-tested against them: each is
+removed one at a time and the self-test fails.
 
 ## World generation tools
 

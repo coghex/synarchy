@@ -208,12 +208,35 @@ _PACK_LEXEME = re.compile(r"(?<![\w'])" + PACK + r"(?![\w'])")
 # What must follow a `pack` for the occurrence to be a show-to-Text
 # wrapper. `\x00` joins whitespace in every gap because `haskell_code_only`
 # blanks each non-code byte to it in place, so `pack {- why -} (show x)`
-# is the same expression with a null run in the middle. An optional
-# uppercase-led qualifier on `show` is admitted and then validated, so
-# `P.show` counts and a `t.show` record selector does not.
+# is the same expression with a null run in the middle.
+#
+# REDUNDANT PARENTHESES around `show` are transparent and admitted:
+# `pack $ (show x)`, `pack . (show)` and `pack ((show x))` are the same
+# function as the unparenthesised spellings, byte for byte (PR #2404
+# review round 5). Only parentheses that open with NOTHING between them
+# count -- `pack (f (show x))` puts `f` in the way and is a different
+# function, so the run stops at it.
+#
+# `$!` joins `$` for the same reason: strict application applies `pack`
+# to `show x` and produces the same Text.
+#
+# An optional qualifier on `show` is admitted by `\w` -- Python's own,
+# hence Unicode-aware -- and then validated by `_is_module_path`, so
+# `P.show` and `Ü.show` count while a `t.show` record selector does not.
+# An ASCII-only class here would miss a Unicode module alias, which GHC
+# accepts and this UnicodeSyntax tree may well write.
 _WRAPPER_TAIL = re.compile(
-    r"[\s\x00]*(?:\((?P<paren>)|\$(?P<dollar>)|(?P<compose>[.∘]))[\s\x00]*"
+    r"[\s\x00]*(?:\((?P<paren>)|\$!?(?P<dollar>)|(?P<compose>[.∘]))"
+    r"(?:[\s\x00]*\()*[\s\x00]*"
     r"(?P<qualifier>(?:\w[\w']*\.)+)?show(?![\w'])")
+
+# A closing parenthesis, and whatever whitespace precedes it, between
+# `pack` and the connector after it. Consumed only as many times as
+# `_transparent_open_parens` found matching openers before the
+# expression, so `(T.pack) . show` reads as the wrapper it is while
+# `g (h (T.pack)) . show` -- where the parentheses belong to `g` and
+# `h`, not to `pack` -- does not.
+_TRANSPARENT_CLOSE = re.compile(r"[\s\x00]*\)")
 
 _FORM_NAMES = {
     "paren": "pack (show …)",
@@ -287,9 +310,10 @@ def _is_module_path(candidate: str) -> bool:
                for seg in candidate.split("."))
 
 
-def _qualifier_before(text: str, pos: int) -> str:
-    """The module qualifier written immediately before `pos` (`"T"`,
-    `"Data.Text"`), or `""` for an unqualified occurrence.
+def _qualifier_before(text: str, pos: int) -> tuple[str, int]:
+    """`(module qualifier written immediately before `pos`, where the
+    qualified expression starts)` -- `("T", …)`, `("Data.Text", …)`, or
+    `("", pos)` for an unqualified occurrence.
 
     A qualifier is written with no space before its `.`, so it is the
     `[\\w'.]` run ending in `.` directly ahead of the name -- and only
@@ -305,9 +329,37 @@ def _qualifier_before(text: str, pos: int) -> str:
         start -= 1
     candidate = text[start:pos]
     if not candidate.endswith("."):
-        return ""
-    candidate = candidate[:-1].lstrip("'")
-    return candidate if _is_module_path(candidate) else ""
+        return "", pos
+    stripped = candidate[:-1].lstrip("'")
+    if not _is_module_path(stripped):
+        return "", pos
+    # The expression begins at the qualifier, not at `pack`, so a
+    # parenthesis before `T.pack` is one this occurrence can close.
+    return stripped, pos - len(candidate) + (len(candidate) - 1 - len(stripped))
+
+
+def _transparent_open_parens(text: str, pos: int) -> int:
+    """How many `(` sit immediately before `pos` with only whitespace
+    between them.
+
+    Each is a parenthesis the occurrence at `pos` may close again
+    without changing what the expression means, which is what makes
+    `(T.pack) . show` the same wrapper as `T.pack . show`. Counting
+    them -- rather than skipping any `)` that happens to follow -- is
+    what keeps `g (h (T.pack)) . show` out: those parentheses were
+    opened by `g` and `h`, so only one of the two closers after `pack`
+    is transparent and the second is not the connector."""
+    count = 0
+    i = pos - 1
+    while i >= 0:
+        if text[i].isspace() or text[i] == "\x00":
+            i -= 1
+        elif text[i] == "(":
+            count += 1
+            i -= 1
+        else:
+            break
+    return count
 
 
 # Haskell 2010 SS2.2's `special` characters, which `uniSymbol` excludes
@@ -605,10 +657,21 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     for match in _PACK_LEXEME.finditer(scan_text):
         if match.start() in exempt:
             continue
-        qualifier = _qualifier_before(scan_text, match.start())
+        qualifier, expression_start = _qualifier_before(scan_text,
+                                                        match.start())
         if not imports_name(declarations, TEXT_MODULE, PACK, qualifier):
             continue
-        tail = _WRAPPER_TAIL.match(scan_text, match.end())
+        # Close only as many parentheses as this expression opened, so
+        # `(T.pack) . show` is read while `g (h (T.pack)) . show` -- a
+        # different function -- is not.
+        cursor = match.end()
+        for _ in range(_transparent_open_parens(scan_text,
+                                                expression_start)):
+            closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
+            if closer is None:
+                break
+            cursor = closer.end()
+        tail = _WRAPPER_TAIL.match(scan_text, cursor)
         if tail is None:
             continue
         show_qualifier = tail.group("qualifier")
@@ -717,6 +780,66 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n"
         "import Data.Text hiding (unpack)\n"
         "f x = pack (show x)\n",
+        [3],
+    ),
+    (
+        "redundant parentheses around `show` after `$` are transparent "
+        "-- `pack $ (show x)` is the same function byte for byte "
+        "(PR #2404 review round 5)",
+        "module M where\n" + _T
+        + "f x = T.pack $ (show x)\n",
+        [3],
+    ),
+    (
+        "the same after a composition: `pack . (show)`",
+        "module M where\n" + _T
+        + "f = T.pack . (show)\n",
+        [3],
+    ),
+    (
+        "the same nested inside the application's own parentheses: "
+        "`pack ((show x))`",
+        "module M where\n" + _T
+        + "f x = T.pack ((show x))\n",
+        [3],
+    ),
+    (
+        "with whitespace inside the redundant parentheses too",
+        "module M where\n" + _T
+        + "f x = T.pack (( show x ))\n",
+        [3],
+    ),
+    (
+        "`$!` is strict application of the same function to the same "
+        "argument, so it renders the same Text",
+        "module M where\n" + _T
+        + "f x = T.pack $! show x\n",
+        [3],
+    ),
+    (
+        "the parenthesised WRAPPER: `(T.pack) . show` closes a "
+        "parenthesis this expression itself opened",
+        "module M where\n" + _T
+        + "f = (T.pack) . show\n",
+        [3],
+    ),
+    (
+        "the parentheses may be spaced off the expression they wrap: "
+        "`( T.pack ) . show` opens one just the same",
+        "module M where\n" + _T
+        + "f = ( T.pack ) . show\n",
+        [3],
+    ),
+    (
+        "two of them, closed twice",
+        "module M where\n" + _T
+        + "f = ((T.pack)) . show\n",
+        [3],
+    ),
+    (
+        "a parenthesised `pack` applied directly",
+        "module M where\n" + _T
+        + "f x = (T.pack) (show x)\n",
         [3],
     ),
     (
@@ -1180,6 +1303,25 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n" + _T
         + "xs = [ y | y <- ys ]\n"
         "f x = tshow x\n",
+    ),
+    (
+        "parentheses that belong to somebody ELSE are not transparent: "
+        "in `g (h (T.pack)) . show` they were opened by `g` and `h`, so "
+        "only one of the two closers after `pack` is this expression's "
+        "and the second is not the connector",
+        "module M where\n" + _T
+        + "f = g (h (T.pack)) . show\n",
+    ),
+    (
+        "a parenthesis with something INSIDE it before `show` is not "
+        "redundant -- `pack (f (show x))` is a different function",
+        "module M where\n" + _T
+        + "f x = T.pack (f (show x))\n",
+    ),
+    (
+        "`pack` fmapped over something is not applied to it",
+        "module M where\n" + _T
+        + "f = T.pack <$> Just show\n",
     ),
     (
         "`pack` composed with something else before `show` is a "
