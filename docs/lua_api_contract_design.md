@@ -119,8 +119,9 @@ positional convention no caller can discover mechanically.
 
 **Nothing observes the surface.** A `grep` across all 202 `tools/*.py` finds no
 audit of registration names or call sites. No Lua API reference document exists.
-The two Lua-touching tools (`lua_strict_msg_probe.py`, `text_encoding_probe.py`)
-cover unrelated behavior.
+The one Lua-touching tool (`text_encoding_probe.py`) covers unrelated behavior,
+and the engine-free `Test.Headless.Lua.MessageStrictness` spec that replaced the
+former #622 probe (#2161) observes message-field strictness, not registrations.
 
 **The drift is real, not hypothetical.** `scripts/ui/bar.lua:296-297` called
 `UI.setSpriteColor`, which no registration provides — the registered verb is

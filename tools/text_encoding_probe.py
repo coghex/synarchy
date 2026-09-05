@@ -12,18 +12,25 @@ widget merged three of them, #1107 moved the body into
 log's last two, so the one surviving implementation is
 `textWrap.truncateToWidth`.
 
-Note the Text-API case is a NARROWER regression than #622's
-`lua_strict_msg_probe.py`, which already established that `engine.setText`
-with malformed UTF-8 no longer crashes the whole engine process (Strict/
-StrictData on `LuaToEngineMsg` forces the field inside
-`registerLuaFunction`'s catch guard). That fix alone still leaves
-`setTextFn`'s `TE.decodeUtf8` throwing a *caught* Lua error every single
-call — which is what #618's fix (switch to `TE.decodeUtf8Lenient`, the
-codebase's established convention per #437/PR #492) actually eliminates.
-The Text-API case below asserts the stronger, issue-#618-specific
-property: no error at all, from `setTextFn`'s own `TE.decodeUtf8Lenient`
-at the Lua argument boundary, which runs before `Q.writeQueue` and is
-where the pre-fix throw happened.
+Note the Text-API case is a NARROWER regression than #622's, whose
+invariant — Strict/StrictData on `Engine.Scripting.Lua.Types` forces every
+`LuaToEngineMsg`/`LuaMsg` field at construction, inside
+`registerLuaFunction`'s catch guard, so an exception hiding in a field can
+never escape to the consuming thread and kill the engine — is gated by the
+engine-free headless spec `Test.Headless.Lua.MessageStrictness`
+(`--match "Lua message field strictness"`, #2161). No real-engine probe
+can exercise that guard any more, because #618/#665 made this very path
+lenient; the probe that used to send malformed UTF-8 through
+`engine.setText` for #622 was retired for exactly that reason. That
+strictness alone would still leave `setTextFn`'s `TE.decodeUtf8` throwing
+a *caught* Lua error every single call — which is what #618's fix (switch
+to `TE.decodeUtf8Lenient`, the codebase's established convention per
+#437/PR #492) actually eliminates. The Text-API case below asserts the
+stronger, issue-#618-specific property: no error at all, from
+`setTextFn`'s own `TE.decodeUtf8Lenient` at the Lua argument boundary,
+which runs before `Q.writeQueue` and is where the pre-fix throw happened.
+The closing `engine_alive` + `console_responsive` checks stay here as the
+real-engine survival evidence for that same malformed message.
 
 That decode is ALL this probe can observe of the Text API's `setText`,
 because #1961 made a `setText` naming an id with no scene node a genuine

@@ -143,7 +143,7 @@ DEFAULT_MIGRATION_MINIMUM = 1
 #: The aggregate's order, as which owner fragment runs when. It is the
 #: pre-split order of `main()`: the twenty-one harness groups, then the
 #: ten batch-migrated contracts in the order the batch drove them, then
-#: circadian_species's own protocol contract and the twelve remaining
+#: circadian_species's own protocol contract and the eleven remaining
 #: standalone contracts, then `run_one`'s interface. Naming a fragment is
 #: not naming a test: every group still lives with exactly one owner, and
 #: `compose` checks that each owner's fragments reconstruct its `TESTS`.
@@ -176,7 +176,6 @@ SEQUENCE = (
     ("migration", "remote_warning_page_guard", "TESTS"),
     ("migration", "state_of_mind", "TESTS"),
     ("migration", "position_hold", "TESTS"),
-    ("migration", "lua_strict_msg", "TESTS"),
     ("migration", "text_encoding", "TESTS"),
     ("migration", "thermo_altitude", "TESTS"),
     ("harness", "runner", "TESTS"),

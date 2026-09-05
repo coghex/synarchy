@@ -116,11 +116,11 @@ def test_manifest_real_registry() -> None:
     expect(migrated == ["blood_decal", "blood_impact", "circadian",
                         "circadian_species", "collapse_crawl", "concussion_revive",
                         "config_state", "disarm", "injury_log", "lua_orphan_prune",
-                        "lua_strict_msg", "machine_shop", "meal_waste",
+                        "machine_shop", "meal_waste",
                         "mental_efficiency", "position_hold",
                         "remote_warning_page_guard", "role", "state_of_mind",
                         "text_encoding", "thermo_altitude", "thought", "wire"],
-           f"the twenty-two migrated probes are probe-result/v1 probes in "
+           f"the twenty-one migrated probes are probe-result/v1 probes in "
            f"probe_runner_registry.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
