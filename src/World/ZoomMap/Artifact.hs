@@ -75,7 +75,10 @@ schemaVersion, semanticVersion ∷ Word32
 schemaVersion = 3
 -- Bump only for a deliberate artifact-semantic change. Ordinary production
 -- code/build changes invalidate automatically through 'artifactProducerDigest'.
-semanticVersion = 1
+-- 2: the zoom ocean boundary fill became a single order-independent
+-- dilation seeded only by ocean (#2316), which changes possible pixel
+-- output near lake, river and lava shorelines.
+semanticVersion = 2
 
 entryRecordBytes, pixelBlockBytes, headerBytes ∷ Int
 entryRecordBytes = 24
