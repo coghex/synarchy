@@ -107,8 +107,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unicode_operator_audit import (  # type: ignore  # noqa: E402
-    _CHAR_LITERAL, _IDENT_CONTINUE, haskell_code_only, haskell_comment_spans)
-from engine_env_capability_common import _import_chunks  # type: ignore  # noqa: E402
+    _CHAR_LITERAL, _IDENT_CONTINUE, haskell_code_only)
+from engine_env_capability_common import (  # type: ignore  # noqa: E402
+    _SYMBOL_CHARS, _import_chunks)
 from engine_env_capability_writer_syntax import (  # type: ignore  # noqa: E402
     _IMPORT_DECL_RE, imports_name, parse_imports)
 
@@ -272,41 +273,52 @@ def _qualifier_before(text: str, pos: int) -> str:
     return candidate if _is_module_path(candidate) else ""
 
 
-def _quasiquote_spans(text: str) -> list[tuple[int, int]]:
-    """The `[start, end)` spans of every quasiquote in `text`, payload
-    and delimiters included.
+def _premasked_spans(text: str) -> list[tuple[int, int]]:
+    """The `[start, end)` spans `_prepared_code` blanks before handing
+    the source to `haskell_code_only`, in source order.
 
-    A quasiquote's payload is not Haskell -- it is whatever the
-    quasiquoter parses -- so it has to be removed BEFORE anything reads
-    the file as Haskell. That ordering is a correctness rule, not a
-    preference, and it cannot be met by masking comments or strings
-    first (PR #2404 review). Both directions are real false NEGATIVES,
-    each hiding a wrapper further down the module:
+    Exactly the two constructs that lexer gets WRONG, and nothing else.
+    It models `--` line comments, nestable `{- -}` block comments,
+    string literals and character literals, and it models them
+    correctly; masking those a second time here would be a second
+    opinion free to drift from it. What it does not model is a
+    QUASIQUOTE, and what it gets wrong is a multi-dash OPERATOR:
 
-      * `[text| " |]` -- a lone quote in the payload opens a Haskell
-        string that runs past the closing `|]` and swallows the code
-        after it;
-      * `[text| -- |]` -- a `--` in the payload opens a line comment
-        that eats the closing `|]` itself.
+      * a quasiquote's payload is not Haskell at all, so a lone `"` in
+        one opens a string that runs past the closing `|]` and swallows
+        the code after it, and a `--` in one opens a comment that eats
+        the `|]` itself (PR #2404 review round 1);
+      * `-->` is an operator, not a comment. Haskell report SS2.3 opens
+        a comment only on a dash run the rest of its symbol lexeme does
+        not continue, so `f x = x --> T.pack (show x)` is code and a
+        lexer that stops at the `--` masks the wrapper (round 2).
 
-    Which means the five constructs cannot be resolved in phases at
-    all: in code, whichever of `{-`, `--`, `"`, `'x'` and `[qq|` starts
-    FIRST wins, and only a single left-to-right pass can say which did.
-    That is what this is. It is deliberately the ONLY lexing this module
-    does -- `haskell_code_only` still decides what is code once the
-    payloads are gone, so the two agree by construction everywhere
-    except the one construct it does not model. Comments and strings
-    are SKIPPED here rather than masked, for the same reason: reporting
-    them is the shared lexer's job, and doing it twice is how two
-    lexers drift.
+    Masking the operator is what leaves the shared lexer no `--` to
+    misread, which is what makes the dash rule here the only one in
+    play. It removes nothing the scan could have reported: the four
+    spellings this guard matches are `(`, `$`, `.` and `∘`, none of
+    them a dash run. A run carrying no `--` at all (`->`, `-`, `.`) is
+    left alone, having nothing to be misread.
 
-    `_CHAR_LITERAL` and `_IDENT_CONTINUE` come from that shared module
-    rather than being restated: a `'x'` must be skipped atomically so
-    the real `'"'` in `Engine.Scripting.Lua.API.Shell` cannot open a
+    Both sides of the dash run decide it -- `-->` is an operator
+    because the run continues into `>`, `<--` because it began at `<`.
+    The leading side needs no predicate: a symbol run is consumed WHOLE
+    from its first character, and every other arm leaves `i` on a
+    character no symbol precedes, so a dash inside a longer lexeme is
+    never tested on its own. `_SYMBOL_CHARS` is
+    `engine_env_capability_common`'s, so the character set has one
+    owner.
+
+    Comments, strings and character literals are SKIPPED here, never
+    recorded: skipping is what stops an opener quoted inside one from
+    being read as a real quasiquote boundary, and that is all this walk
+    needs from them. `_CHAR_LITERAL` and `_IDENT_CONTINUE` come from
+    the shared module too -- a `'x'` must be skipped atomically so the
+    real `'"'` in `Engine.Scripting.Lua.API.Shell` cannot open a
     phantom string, and a `'` that is an identifier's trailing prime
     (`map'`) must not be read as a literal at all.
 
-    An UNCLOSED quasiquote ran to end of file and is reported that way.
+    An UNCLOSED quasiquote ran to end of file and is masked that way.
     Such a source does not compile either way, and leaving its tail
     readable would let one phantom opener hide the rest of the module.
     That branch is also what makes the walk terminate on every input:
@@ -326,10 +338,6 @@ def _quasiquote_spans(text: str) -> list[tuple[int, int]]:
                 else:
                     i += 1
             continue
-        if text.startswith("--", i):
-            newline = text.find("\n", i)
-            i = n if newline == -1 else newline
-            continue
         if char == '"':
             i += 1
             while i < n and text[i] != '"':
@@ -341,6 +349,19 @@ def _quasiquote_spans(text: str) -> list[tuple[int, int]]:
             if literal:
                 i = literal.end()
                 continue
+        if char in _SYMBOL_CHARS:
+            run = i
+            while run < n and text[run] in _SYMBOL_CHARS:
+                run += 1
+            lexeme = text[i:run]
+            if len(lexeme) >= 2 and lexeme == "-" * len(lexeme):
+                newline = text.find("\n", run)
+                i = n if newline == -1 else newline
+            else:
+                if "--" in lexeme:
+                    spans.append((i, run))
+                i = run
+            continue
         opener = _QUASIQUOTE_OPEN.match(text, i)
         if opener:
             close = text.find(_QUASIQUOTE_CLOSE, opener.end())
@@ -352,10 +373,14 @@ def _quasiquote_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _mask_quasiquotes(text: str) -> str:
-    """`text` with every quasiquote blanked to `\\x00`, positions and
-    line numbers preserved."""
-    return _mask_spans(text, _quasiquote_spans(text))
+def _prepared_code(text: str) -> str:
+    """`text` reduced to the Haskell code this module scans: comments
+    and quasiquotes masked by the walk above, then `haskell_code_only`
+    over the result for strings and character literals. Positions and
+    line numbers are preserved throughout, so every offset still maps
+    back to the original source."""
+    return haskell_code_only(
+        _mask_spans(text, _premasked_spans(text)))
 
 
 _MODULE_KEYWORD = re.compile(r"^module(?![\w'])", re.MULTILINE)
@@ -383,7 +408,7 @@ def _split_module_header(code_text: str) -> tuple[str, int]:
     return code_text[:where.end()], where.end()
 
 
-def _classify_text_imports(text: str, rel_path: str) -> None:
+def _classify_text_imports(prepared: str, rel_path: str) -> None:
     """Raise `_ImportParseError` unless every `Data.Text` import in
     `text` is one the resolver reads completely.
 
@@ -400,7 +425,6 @@ def _classify_text_imports(text: str, rel_path: str) -> None:
     # module name appears without being an import, and `module
     # Data.Text` there is a re-export, whose hazard is
     # `check_uprelude_premise`'s subject and not this one's.
-    prepared = haskell_code_only(text)
     _, body_start = _split_module_header(prepared)
     code_text = prepared[body_start:]
     accounted = 0
@@ -457,7 +481,7 @@ def check_uprelude_premise(uprelude_source: str) -> None:
     not `pack`. Both halves of the report's rule are tested here, with
     the same resolver the scan uses, rather than the entry's presence
     being read as the hazard."""
-    header, _ = _split_module_header(haskell_code_only(uprelude_source))
+    header, _ = _split_module_header(_prepared_code(uprelude_source))
     re_exported = re.search(
         r"(?<![\w'])module\s+" + re.escape(TEXT_MODULE) + r"(?![\w'.])",
         header) is not None
@@ -502,13 +526,12 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
             f"with the reason it is safe. Conditional directives "
             f"(#if / #ifdef) only select text and are not reported.")
 
-    _classify_text_imports(text, rel_path)
+    # One preparation, shared by the import accounting and the scan, so
+    # a construct one of them reads as comment text can never be code
+    # to the other.
+    scan_text = _prepared_code(text)
+    _classify_text_imports(scan_text, rel_path)
     declarations = parse_imports(text)
-
-    # Quasiquote payloads are removed BEFORE the file is read as
-    # Haskell strings -- see `_mask_quasiquotes` for why that order is a
-    # correctness rule and not a preference.
-    scan_text = haskell_code_only(_mask_quasiquotes(text))
 
     exempt: set[int] = set()
     if rel_path == UPRELUDE_FILE:
@@ -733,6 +756,42 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [6],
     ),
     (
+        "`-->` is an OPERATOR, not a comment: Haskell report SS2.3 opens "
+        "a comment only on a dash run the rest of its symbol lexeme "
+        "does not continue (PR #2404 review round 2)",
+        "module M where\n" + _T
+        + "f x = x --> T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "`<--` is an operator too -- the dash run BEGAN at a symbol "
+        "character, which is the half of the rule a trailing-side-only "
+        "check misses",
+        "module M where\n" + _T
+        + "f x = x <-- T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "`--|` continues into a symbol character on the trailing side",
+        "module M where\n" + _T
+        + "f x = x --| T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "a longer operator carrying `--` inside it",
+        "module M where\n" + _T
+        + "f x = x --<> T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "a single-dash `->` is left alone and the wrapper below it is "
+        "still read",
+        "module M where\n" + _T
+        + "f :: Int -> Text\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
         "an ESCAPED quote inside a string does not end it, so the "
         "opener-shaped text after it is still string content and the "
         "wrapper below stays visible",
@@ -872,6 +931,39 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "inside the payload",
         "module M where\n" + _T
         + "s = [text| \" T.pack (show x) |]\n",
+    ),
+    (
+        "a LONE `-` is subtraction, not a comment: reading it as one "
+        "would skip the rest of the line and leave the quasiquote after "
+        "it unmasked, reporting its payload as real code",
+        "module M where\n" + _T
+        + "banner n = tshow (n - 1) <> [text| T.pack (show n) |]\n",
+    ),
+    (
+        "a plain `--` line comment is still a comment",
+        "module M where\n" + _T
+        + "-- T.pack (show x)\n"
+        "f x = tshow x\n",
+    ),
+    (
+        "three or more dashes is still a comment -- the run is nothing "
+        "but dashes",
+        "module M where\n" + _T
+        + "--- T.pack (show x)\n"
+        "f x = tshow x\n",
+    ),
+    (
+        "a Haddock `-- |` comment: the `|` follows a SPACE, so the dash "
+        "run ends at two and opens a comment",
+        "module M where\n" + _T
+        + "-- | T.pack (show x)\n"
+        "f x = tshow x\n",
+    ),
+    (
+        "a comment closing the file with no trailing newline",
+        "module M where\n" + _T
+        + "f x = tshow x\n"
+        "-- T.pack (show x)",
     ),
     (
         "a `'\"'` character literal BEFORE a quasiquote must be skipped "

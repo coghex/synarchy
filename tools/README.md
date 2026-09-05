@@ -139,23 +139,37 @@ and `Data.Text.Lazy`'s are not this function and are never reported.
 Never reported: the same text in a `--` or `{- -}` comment, in a string
 literal, or in a **quasiquote**. What is code comes from
 `unicode_operator_audit.py`'s `haskell_code_only` rather than a second
-lexer — but that lexer models four constructs and a quasiquote is a
-fifth, so quasiquote spans are found here first, in one interleaved
-left-to-right pass, and masked before anything reads the file as
-Haskell.
+lexer — but a pre-pass here masks the two things that lexer gets wrong,
+and only those two (both found in PR #2404's review):
 
-That order is a correctness rule, not a preference (PR #2404 review).
-A quasiquote's payload is not Haskell, so a lone `"` in one opens a
-string that runs past the closing `|]` and swallows the code after it,
-and a `--` in one opens a comment that eats the `|]` itself — each
-hiding a real wrapper further down the module. Neither can be fixed by
-masking comments or strings first: in code, whichever of `{-`, `--`,
-`"`, `'x'` and `[qq|` starts first wins, and only a single pass can say
-which did. That pass skips comments and strings rather than masking
-them, so reporting them stays the shared lexer's job. `QuasiQuotes` is
-a global `default-extensions` entry, which is what makes the no-space
-`[varid|` form unambiguous — with the extension on, a list comprehension
-must be written `[ e | … ]`.
+* **A quasiquote**, which it does not model. Its payload is not Haskell
+  at all, so a lone `"` in one opens a string that runs past the closing
+  `|]` and swallows the code after it, and a `--` in one opens a comment
+  that eats the `|]` itself — each hiding a real wrapper further down
+  the module. This cannot be fixed by masking comments or strings
+  first: in code, whichever of `{-`, `--`, `"`, `'x'` and `[qq|` starts
+  first wins, and only one interleaved left-to-right pass can say which
+  did. `QuasiQuotes` is a global `default-extensions` entry, which is
+  what makes the no-space `[varid|` form unambiguous — with the
+  extension on, a list comprehension must be written `[ e | … ]`.
+* **A multi-dash operator.** Haskell report §2.3 opens a comment only on
+  a dash run the rest of its symbol lexeme does not continue, so `-->`
+  and `<--` are operators and `f x = x --> T.pack (show x)` is code. A
+  lexer that stops at any `--` masks that wrapper. Masking the operator
+  instead leaves the shared lexer no `--` to misread, so the dash rule
+  here is the only one in play — and it removes nothing reportable,
+  since the four matched spellings are `(`, `$`, `.` and `∘`, none of
+  them a dash run. A run carrying no `--` (`->`, `-`, `.`) is left
+  alone.
+
+Comments, strings and character literals are skipped by that pass, never
+masked by it: skipping is what stops an opener quoted inside one from
+reading as a real quasiquote boundary, and masking them is the shared
+lexer's job. The same dash rule is documented on
+`engine_env_capability_common.py`'s comment stripper, whose
+`_SYMBOL_CHARS` this reuses. Note that the shared `haskell_code_only`
+lexer's own `--` handling still does not model the rule, which matters
+for its other consumers; correcting it there is its own change.
 
 A file it cannot certify is **refused**, loudly, rather than scanned as
 if clean: a CPP `#define`/`#undef`/`#include` (which can rename the very
@@ -180,11 +194,14 @@ sources: every detected spelling and import form, the multiline and
 comment-interrupted wraps, every clean near-miss (`unpack`, `repack`,
 `showFFloat`, `shows`, a `.show` record selector), each refusal, the
 exemption's two scopes, and the `UPrelude` export premise in both
-directions. The lexing order gets its own set — a payload holding `"`,
-`--`, `{-` or an apostrophe; an opener quoted inside a string or a
+directions. The lexing pre-pass gets its own set — a payload holding
+`"`, `--`, `{-` or an apostrophe; an opener quoted inside a string or a
 comment; an escaped quote inside a string; a `'"'` character literal and
-an identifier's trailing prime before an opener; an unclosed quasiquote.
-Every rule was mutation-tested against them.
+an identifier's trailing prime before an opener; an unclosed quasiquote;
+`-->`, `<--`, `--|` and a longer `--`-carrying operator against `--`,
+`---`, `-- |`, `->` and a lone subtracting `-`. Every rule was
+mutation-tested against them: each is removed one at a time and the
+self-test fails.
 
 ## World generation tools
 
