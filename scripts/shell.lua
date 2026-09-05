@@ -243,11 +243,11 @@ end
 
 function shell.init(scriptId)
     myScriptId = scriptId
-    engine.logInfo("Shell initializing...")
+    engine.logDebug("Shell initializing...")
 
     loadArrowHistoryFromDisk()
     if #arrowHistory > 0 then
-        engine.logInfo("Shell history loaded: "
+        engine.logDebug("Shell history loaded: "
             .. tostring(#arrowHistory) .. " entries from "
             .. historyFilePath)
     end

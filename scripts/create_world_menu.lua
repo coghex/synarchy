@@ -1065,7 +1065,7 @@ function createWorldMenu.onBack()
 end
 
 function createWorldMenu.onDefaults()
-    engine.logInfo("Loading create world defaults from config...")
+    engine.logDebug("Loading create world defaults from config...")
     createWorldMenu.pending = {
         worldName  = "",
         seed       = "",

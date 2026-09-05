@@ -55,7 +55,7 @@ package.loaded["scripts.unit_resources"] = unitResources
 -- Init
 -----------------------------------------------------------
 function unitResources.init(scriptId)
-    engine.logInfo("Unit resources tick initializing...")
+    engine.logDebug("Unit resources tick initializing...")
     -- Reset hook, not a save component (issue #761, requirement 4):
     -- this module (via unit_resource_alerts) keeps a uid-keyed cache of
     -- transient per-unit alert-debounce state, with nothing worth
@@ -158,7 +158,7 @@ end
 -- Shutdown
 -----------------------------------------------------------
 function unitResources.shutdown()
-    engine.logInfo("Unit resources tick shut down")
+    engine.logDebug("Unit resources tick shut down")
 end
 
 -- Backfill "strength_body" (#806) for units loaded from a save

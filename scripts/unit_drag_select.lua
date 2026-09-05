@@ -173,7 +173,7 @@ local function mergeIds(a, b)
 end
 
 function dragSelect.init(scriptId)
-    engine.logInfo("Drag-select initializing...")
+    engine.logDebug("Drag-select initializing...")
     -- 1×1 solid-white texture. Each edge sprite tints it white at
     -- full alpha; the resulting strips are uniformly colored without
     -- any pattern from a stretched chrome texture.

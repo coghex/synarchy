@@ -406,7 +406,7 @@ function saveBrowser.createUI()
     UI.setZIndex(button.getElementHandle(backBtnId), baseZ + 2)
 
     saveBrowser.uiCreated = true
-    engine.logInfo("Save browser created with " .. #saves .. " saves")
+    engine.logDebug("Save browser created with " .. #saves .. " saves")
 end
 
 -----------------------------------------------------------

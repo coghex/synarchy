@@ -15,8 +15,8 @@
 --   much. The Lua this gate drives -- @scripts\/lib\/data_codec.lua@,
 --   @scripts\/lib\/save_modules.lua@ and the real components
 --   registered through them -- does reach @engine.logWarn@,
---   @engine.logInfo@ and @engine.gameTime@ outside a real boot, so the
---   runners here load 'engineStub' first. The two sets are not
+--   @engine.logInfo@, @engine.logDebug@ and @engine.gameTime@ outside a
+--   real boot, so the runners here load 'engineStub' first. The two sets are not
 --   interchangeable and must not be consolidated.
 module Test.Headless.Lua.SaveModules.Support
     ( engineStub
@@ -36,7 +36,10 @@ import qualified Data.Text.Encoding as TE
 --   registrations driven through them, call outside of a real engine
 --   boot: @engine.logWarn@ (from @save_modules.snapshotAll@'s
 --   optional-component-omitted warning and @applyEntityRows@' absent-owner
---   drop), @engine.logInfo@, and @engine.gameTime@.
+--   drop), @engine.logInfo@, @engine.logDebug@ (issue #2174 moved the
+--   module lifecycle narration these registrations emit at require time
+--   -- @building_spawn.init@'s among them -- from Info to Debug), and
+--   @engine.gameTime@.
 --
 --   @gameTime@ arrived with issue #2055: @lua.unit_ai@'s @apply@ now
 --   normalizes each retained row against @scripts/unit_ai_defaults.lua@,
@@ -48,6 +51,7 @@ engineStub ∷ Text
 engineStub = lns
     [ "NOW = 1000.0"
     , "engine = { logWarn = function(...) end, logInfo = function(...) end,"
+    , "  logDebug = function(...) end,"
     , "  gameTime = function() return NOW end }"
     ]
 
