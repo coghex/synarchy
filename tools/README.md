@@ -148,19 +148,21 @@ reported. `show` must be the `Show` method — bare, or qualified by
 Never reported: the same text in a `--` or `{- -}` comment, in a string
 literal, or in a **quasiquote**. What is code comes from
 `unicode_operator_audit.py`'s `haskell_code_only` rather than a second
-lexer — but a pre-pass here masks the two things that lexer gets wrong,
-and only those two:
+lexer — but a pre-pass here masks the one thing that lexer does not
+model: a **quasiquote**. Its payload is not Haskell, so a lone `"` in
+one opens a string that runs past the closing `|]` and a `--` in one
+opens a comment that eats it. Template Haskell's quotation brackets are
+**not** quasiquotes: `[e|`, `[t|`, `[d|`, `[p|` and the bare `[|` hold
+Haskell, and this tree writes `[t|` and `[|` today.
 
-* **A quasiquote**, which it does not model. Its payload is not Haskell,
-  so a lone `"` in one opens a string that runs past the closing `|]`
-  and a `--` in one opens a comment that eats it. Template Haskell's
-  quotation brackets are **not** quasiquotes: `[e|`, `[t|`, `[d|`, `[p|`
-  and the bare `[|` hold Haskell, and this tree writes `[t|` and `[|`
-  today.
-* **A multi-dash operator.** Report §2.3 opens a comment only on a dash
-  run the rest of its symbol lexeme does not continue, so `-->` and
-  `<--` are operators over report §2.2's full symbol set — Unicode
-  symbols *and* punctuation, so `⊚--` and `--—` are each one lexeme.
+The **dash rule** lives in the shared lexer rather than here. Report
+§2.3 opens a comment only on a dash run the rest of its symbol lexeme
+does not continue, so `-->`, `<--`, `⊚--` and `--—` are operators over
+report §2.2's full symbol set — Unicode symbols *and* punctuation.
+Correcting it there, with fixtures in `test_unicode_operator_audit.py`,
+is what #2177 asks for; this module applies the same rule only in its
+own quasiquote walk, so an opener written after an operator on the same
+line is still found.
 
 A file it cannot certify is **refused**, loudly, and that is a
 first-class result rather than a gap: a CPP `#define`/`#undef`/`#include`,
