@@ -241,8 +241,8 @@ if clean: a CPP `#define`/`#undef`/`#include` (which can rename the very
 alias the scan resolves by), a `Data.Text` import whose shape the
 resolver cannot read, a `Data.Text` mention outside any recognized
 import declaration, an import putting `pack` in **unqualified** scope,
-and a file that BINDS `show` locally — a `let`/`where` binding, a
-an equation head or parameter at any column, a lambda parameter or a
+and a file that BINDS `show` locally — a `let`/`where` binding, an
+equation head or parameter at any column, a lambda parameter, or a
 `do` binder. That last
 one is the `pack` rule again for the other half of the wrapper:
 `let show _ = "custom" in pack (show x)` is valid, is not this wrapper,
