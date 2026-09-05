@@ -79,8 +79,14 @@ class Budget:
     threshold_bytes: int
     growth_factor: float
 
-    def projected(self, measured: int) -> float:
-        return measured * self.growth_factor
+    def projected(self, index_projected: int) -> float:
+        """The roster-projected total: the index-projected one, scaled.
+
+        Neither end of this is a measurement — the input is summed from
+        stored index dimensions — so the parameter is named for what it
+        is rather than for a reading nothing takes (#2217).
+        """
+        return index_projected * self.growth_factor
 
 
 def _budget_field(
@@ -213,13 +219,13 @@ def load_budget(report: Report, root: Path) -> Optional[Budget]:
             f"{where} resident_bytes",
             f"threshold must be a positive byte count, got {threshold}")
         threshold = None
-    # The tool measures in bytes and reports in bytes. A document
+    # The tool computes in bytes and reports in bytes. A document
     # declaring some other unit would be compared against the wrong
     # scale while looking perfectly well-formed.
     if unit_name is not None and unit_name != "bytes":
         report.err(
             f"{where} resident_bytes",
-            f"unit must be 'bytes' — this tool measures decoded RGBA8 byte "
+            f"unit must be 'bytes' — this tool projects decoded RGBA8 byte "
             f"counts — got {render_scalar(unit_name)}")
 
     if len(report.errors) != before or per_anim is None \

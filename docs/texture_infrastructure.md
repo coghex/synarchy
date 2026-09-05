@@ -520,7 +520,7 @@ eventually outweighs that convenience.
   TEX-7: the baseline is established (*Measured results*) and the budget that
   activates this slice is recorded in `tools/unit_texture_budget.json` —
   384 MiB of decoded RGBA8 unit-animation atlas projected from the compiled
-  indices, compared as `projected x 2.0 > threshold`.
+  indices, compared as `index-projected total x 2.0 > threshold`.
   `pack_atlas.py --validate-only --strict`
   evaluates it on every run and fails the strict gate by name when it fires,
   so this entry stops being `[deferred]` because a check said so, not because
@@ -736,27 +736,34 @@ its unit index` scenario keeps this property under test on fixtures.
 Recorded in `tools/unit_texture_budget.json`, which is the single
 machine-readable source `pack_atlas.py --validate-only --strict` reads.
 
-- **Measured:** 106,531,968 bytes (101.60 MiB) of decoded RGBA8 unit animation
-  atlas, projected from the compiled indices' declared dimensions and
+**Two quantities, and neither is a measurement.** The *index-projected total*
+is the sum of `atlas_width x atlas_height x 4` over every animation the stored
+indices declare; the *roster-projected total* is that figure times the recorded
+growth factor, and it is the only one the threshold compares. Both are computed
+from the compiled artifacts — `pack_atlas.py` reads no GPU and no running
+engine — so the vocabulary below stays consistent throughout.
+
+- **Index-projected total:** 106,531,968 bytes (101.60 MiB) of decoded RGBA8
+  unit animation atlas, from the compiled indices' declared dimensions,
   aggregated over the whole tracked roster.
   `scripts/startup_loader.lua` feeds every `data/units/*.yaml` to the loader at
   boot, so that whole total is resident in every session regardless of what
   spawns — the aggregation scope is the roster, not a spawned subset.
-- **Projection input:** a 2.0x roster-growth factor, applied to the measured
-  total rather than to a per-unit estimate, because per-unit cost varies by an
-  order of magnitude with canvas size (48x48 `acolyte` at 0.37 MiB/animation
-  versus 92x92 `bear_brown` at 1.39 MiB/animation) and it is the mix that
-  scales.
-- **Threshold:** 402,653,184 bytes (384 MiB). Projected 203.19 MiB is 53% of
-  it, leaving ~181 MiB of headroom — roughly four more `bear_brown`-scale
-  trees. Chosen so the trigger fires on a real content-plan expansion rather
-  than on the next single large quadruped.
-- **Comparison rule:** `measured x roster_growth_factor > threshold` activates
-  TEX-5. Strict `>`, so sitting exactly at the threshold does not fire. The
-  breach is a WARNING, which makes a plain `--validate-only` report it and
-  `--strict` — what CI and `make ci` run — fail on it, so the resume-or-raise
-  decision cannot pass unnoticed.
-- **Confirmation:** proposed by the solver from the measurements above and
+- **Projection input:** a 2.0x roster-growth factor, applied to the
+  index-projected total rather than to a per-unit estimate, because per-unit
+  cost varies by an order of magnitude with canvas size (48x48 `acolyte` at
+  0.37 MiB/animation versus 92x92 `bear_brown` at 1.39 MiB/animation) and it is
+  the mix that scales.
+- **Threshold:** 402,653,184 bytes (384 MiB). The roster-projected 203.19 MiB
+  is 53% of it, leaving ~181 MiB of headroom — roughly four more
+  `bear_brown`-scale trees. Chosen so the trigger fires on a real content-plan
+  expansion rather than on the next single large quadruped.
+- **Comparison rule:** `index-projected total x roster_growth_factor >
+  threshold` activates TEX-5. Strict `>`, so sitting exactly at the threshold
+  does not fire. The breach is a WARNING, which makes a plain `--validate-only`
+  report it and `--strict` — what CI and `make ci` run — fail on it, so the
+  resume-or-raise decision cannot pass unnoticed.
+- **Confirmation:** proposed by the solver from the projections above and
   confirmed by the project owner on 2026-08-16, per this slice's 2026-08-11
   sign-off. Raising it is the owner's call, not a maintenance edit.
 
@@ -820,9 +827,10 @@ Python budget reports nothing (#2217).
     tracked artifact size and unrelated-file churn.
 - Risk: KTX2 integration hard-codes a compression format unavailable on a target
   GPU or adds disproportionate native packaging complexity.
-  - Mitigation: D-10 defers the work until the measured budget activates it,
-    selects transcode targets from device features, retains PNG fallback, and
-    permits mixed encodings without retaining duplicate copies of one atlas.
+  - Mitigation: D-10 defers the work until the projected-memory budget
+    activates it, selects transcode targets from device features, retains PNG
+    fallback, and permits mixed encodings without retaining duplicate copies
+    of one atlas.
 - Risk: unowned asset files are silenced without understanding whether they are
   unused, unreferenced future art, or missing declarations.
   - Mitigation: TEX-1 (#1257) required an explicit path-level classification and

@@ -376,6 +376,24 @@ RUNTIME_CLAIMS = (
 LOADER_GROUP = "Unit.Atlas.Load — the real unit registration boundary"
 
 
+def _policy_prose(block: dict) -> str:
+    """Every prose value in one budget block, lowercased.
+
+    `projection` nests its `basis` one level down and `excluded` is a
+    list, so a flat sweep over `block.values()` would silently skip
+    exactly the fields a stale claim hides in.
+    """
+    parts = []
+    for value in block.values():
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            parts.extend(v for v in value.values() if isinstance(v, str))
+        elif isinstance(value, list):
+            parts.extend(v for v in value if isinstance(v, str))
+    return " ".join(parts).lower()
+
+
 @scenario("the budget never claims to observe runtime registrations")
 def _budget_claims_no_runtime_coverage(fx: Fixture) -> None:
     # The defect #2217 fixed was not a broken check but a lying one: the
@@ -404,15 +422,28 @@ def _budget_claims_no_runtime_coverage(fx: Fixture) -> None:
         (pack_atlas.REPO_ROOT / pack_atlas_budget.BUDGET_REL)
         .read_text("utf-8"))
     images = doc["animation_images"]
-    prose = " ".join(
-        v for v in images.values() if isinstance(v, str)).lower()
     for claim in RUNTIME_CLAIMS:
-        assert claim not in prose, (
+        assert claim not in _policy_prose(images), (
             f"the image budget's policy prose claims runtime coverage "
             f"({claim!r})")
     assert LOADER_GROUP in images["rationale"], (
         "the image budget's rationale does not name the Hspec group that "
         "owns the runtime registration bound")
+
+    # The byte budget is the other half of the same lie: it derives its
+    # total by summing index-declared dimensions, so no prose field of
+    # that block may call ANY of its quantities measured. The two names
+    # the block must use instead are the ones the vocabulary check
+    # below requires it to define.
+    byte_prose = _policy_prose(doc["resident_bytes"])
+    assert "measur" not in byte_prose, (
+        "the byte budget's policy prose calls an index-derived total a "
+        "measurement; the unscaled value is the index-projected total "
+        "and the scaled one the roster-projected total")
+    for name in ("index-projected", "roster-projected"):
+        assert name in byte_prose, (
+            f"the byte budget's policy prose never names the "
+            f"{name} total")
 
 
 # The façade's single entry point into this owner. Frozen here, after
