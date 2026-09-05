@@ -113,6 +113,30 @@ def test_escaped_quote_inside_string_does_not_end_it_early():
            f"literal, so only the real code `>>=` is flagged (got {v})")
 
 
+def test_string_gap_ends_at_its_own_backslash_not_the_closing_quote():
+    # Report SS2.6: `\ whitechar {whitechar} \` is a string GAP, not an
+    # escape. Read as a two-character escape, the gap's closing
+    # backslash pairs with the string's closing quote, the string never
+    # ends, and every operator to end of file is masked. `src/`+`app/`
+    # carries 258 gaps today.
+    text = 'msg = "a\\\n\\"\ngo x y = x >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a string gap ends the string at its "
+           f"own closing quote, so the real code after it is still "
+           f"scanned (got {v})")
+
+
+def test_multi_line_string_gap_keeps_its_body_out_of_the_scan():
+    # The shape this tree actually writes: a message split across lines
+    # with a gap, whose text contains an operator that is NOT code.
+    text = ('msg = "first part == not code \\\n'
+            '        \\ second part"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"the gapped string's body stays a "
+           f"literal and the code after it is scanned (got {v})")
+
+
 # ----- Char literals -----------------------------------------------------
 
 def test_char_literal_containing_a_double_quote_does_not_mask_later_code():
@@ -135,6 +159,45 @@ def test_escaped_single_quote_char_literal_does_not_confuse_the_scanner():
     expect(_tokens(v) == {"=="} and len(v) == 1,
            f"a real '==' after an escaped-quote char literal is still "
            f"flagged (got {[str(x) for x in v]})")
+
+
+def test_combining_mark_is_an_identifier_character():
+    # GHC accepts a combining mark inside an identifier (issue #7650),
+    # and Python's `\\w` -- `str.isalnum()` plus `_` -- does not match
+    # one. Excluded, the prime of `π́'` opens a char literal, eats the
+    # quote after it, and the real closing quote opens a phantom string
+    # masking every operator below.
+    text = ('g = let π́\' x = x in π́\'"\'"\\n'
+            'go x y = x >>= y\\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a combining mark stays inside the "
+           f"identifier, so the code after it is scanned (got {v})")
+
+
+def test_double_prime_identifier_is_one_name():
+    # `'` is itself an identifier-continuation character, so the second
+    # prime of `x\'\'` is part of the name. Dropped from the set, it opens
+    # a char literal that swallows the string after it and every
+    # operator below.
+    text = ('g = let x\'\' _ = () in x\'\'"\'"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a doubled prime stays inside the "
+           f"identifier, so the code after it is scanned (got {v})")
+
+
+def test_unicode_identifier_trailing_prime_is_not_a_char_literal():
+    # GHC accepts non-ASCII identifiers and this tree is UnicodeSyntax
+    # throughout. Read with an ASCII-only identifier class, the prime of
+    # `\u03c0'` opens a char literal, consumes the opening quote of the
+    # `'"'` after it, and the real closing quote then opens a phantom
+    # string that masks every operator to end of file.
+    text = ('g = let \u03c0\' _ = () in \u03c0\'"\'"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a Unicode identifier's trailing prime "
+           f"is part of the name, so the code after it is still scanned "
+           f"(got {v})")
 
 
 def test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal():
@@ -493,9 +556,14 @@ def main() -> int:
         test_nested_block_comment_does_not_trigger_but_real_code_after_does,
         test_string_literal_does_not_trigger,
         test_escaped_quote_inside_string_does_not_end_it_early,
+        test_string_gap_ends_at_its_own_backslash_not_the_closing_quote,
+        test_multi_line_string_gap_keeps_its_body_out_of_the_scan,
         test_char_literal_containing_a_double_quote_does_not_mask_later_code,
         test_escaped_single_quote_char_literal_does_not_confuse_the_scanner,
         test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal,
+        test_unicode_identifier_trailing_prime_is_not_a_char_literal,
+        test_double_prime_identifier_is_one_name,
+        test_combining_mark_is_an_identifier_character,
         test_longer_symbol_run_is_not_a_false_positive,
         test_adjacent_operators_without_whitespace_still_detected,
         test_qualified_operator_forms_are_detected,

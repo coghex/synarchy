@@ -19,7 +19,6 @@ module World.Thread.Command.Save
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Control.Exception (SomeException, try)
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.State (EngineEnv(..))
@@ -75,20 +74,20 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
     when held $ do
         gate ← readStageGate (loadStatusRef env)
         logWarn logger CatWorld $
-            "Load transaction #" <> tShow requestId
+            "Load transaction #" <> tshow requestId
             <> " was held at the test-only staging gate and "
             <> (if sgExpired gate
                   then "resumed on the hold bound expiring (debug.releaseLoadStageGate \
                        \was never called)"
                   else "released")
     logInfo logger CatWorld $
-        "Staging load transaction #" <> tShow requestId
+        "Staging load transaction #" <> tshow requestId
     outcome ← try (stageSession env logger saveData matReg)
     case outcome of
         Left (ex ∷ SomeException) → do
             let msg = "internal error during staging: " <> tshow ex
             logWarn logger CatWorld $
-                "Load transaction #" <> tShow requestId <> " staging crashed: " <> msg
+                "Load transaction #" <> tshow requestId <> " staging crashed: " <> msg
             failLoad (loadStatusRef env) requestId msg
             -- prepareLuaLoad already succeeded by the
             -- time staging ever runs, leaving Lua's registration guard
@@ -98,7 +97,7 @@ handleWorldLoadTransactionCommand env logger requestId saveData matReg = do
         Right (Left err) → do
             let msg = renderStageError err
             logWarn logger CatWorld $
-                "Load transaction #" <> tShow requestId <> " staging failed: " <> msg
+                "Load transaction #" <> tshow requestId <> " staging failed: " <> msg
             failLoad (loadStatusRef env) requestId msg
             -- Same as the exception case above.
             Q.writeQueue (luaQueue env) (LuaLoadStagingFailed requestId)
@@ -140,17 +139,14 @@ handleWorldLoadPublishCommand env logger requestId = do
             releaseCaptureLock' env
             completeSaveTransaction env
             logInfo logger CatWorld $
-                "Load transaction #" <> tShow requestId <> " published"
+                "Load transaction #" <> tshow requestId <> " published"
         _ → do
             let msg = "internal error: no staged session matches requestId #"
-                        <> tShow requestId <> " at publish"
+                        <> tshow requestId <> " at publish"
             logError logger CatWorld msg
             releaseCaptureLock' env
             failSaveTransaction env msg
             failLoad (loadStatusRef env) requestId msg
-
-tShow ∷ Int → Text
-tShow = T.pack . show
 
 -- | #758-style: release the save barrier's capture lock, reading the
 --   current transaction id off 'saveBarrierRef' itself (only one
