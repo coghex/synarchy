@@ -31,6 +31,13 @@ Flow:
      the reported failure names the correct storage phase, exactly as
      tools/save_barrier_probe.py already proves for the outcome as a
      whole.
+  5. Occupy a save NAME with a pre-#762 legacy flat file
+     (saves/<name>.synworld) and prove a MANUAL engine.saveWorld under
+     that name is REFUSED synchronously, before any transaction begins
+     (issue #2335): false is returned, the save status is left exactly
+     as the previous save left it, no slot directory appears, the
+     legacy bytes are untouched, and one save_load failure event names
+     the flat file and how to clear it.
 
 Usage:
   python3 tools/save_storage_probe.py [--port 9146] [--seed 42]
@@ -54,6 +61,11 @@ from probelib import boot, quit_engine, send, wait_load_published
 REPO = Path(__file__).resolve().parent.parent
 SLOT = "probe_storage_slot"
 FAIL_SLOT = "probe_storage_writefail"
+# Issue #2335: a save name a legacy flat file already holds, plus the
+# free name whose successful save gives the "status is unchanged"
+# assertion something to be unchanged FROM.
+LEGACY_SLOT = "probe_storage_legacy"
+CONTROL_SLOT = "probe_storage_control"
 CAMERA_1 = (5, 5)
 CAMERA_2 = (40, 40)
 
@@ -141,6 +153,11 @@ def restore_generations(root: str, backup, name: str = SLOT) -> None:
         write_bytes(auth_path(root, name), auth_bytes)
     if prev_bytes is not None:
         write_bytes(prev_path(root, name), prev_bytes)
+
+
+def legacy_flat_path(root: str, name: str = LEGACY_SLOT) -> str:
+    """The pre-#762 legacy flat save file for a save NAME (#2335)."""
+    return os.path.join(root, "saves", name + ".synworld")
 
 
 def flip_last_byte(data: bytes) -> bytes:
@@ -371,6 +388,110 @@ def main() -> int:
                 proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        # --- 5: a legacy flat file OCCUPIES a save name (#2335) --------
+        # Nothing writes the flat form any more, but loadWorld still
+        # prefers a slot directory over a flat namesake, so publishing
+        # one over an occupied name would leave the player's legacy
+        # generation on disk and unreachable BY NAME. Autosave has
+        # refused this since #913; a manual save must too, and it must
+        # refuse BEFORE the transaction starts.
+        legacy_bytes = b"a pre-#762 generation this run must never shadow"
+        flat = legacy_flat_path(root)
+        write_bytes(flat, legacy_bytes)
+        if os.path.isdir(slot_dir(root, LEGACY_SLOT)):
+            shutil.rmtree(slot_dir(root, LEGACY_SLOT))
+        proc = boot_probe(root, args.port, log)
+        try:
+            send(args.port, f'world.init("probe3",{args.seed},64,3)',
+                 expect_result=False)
+            wait_for_init(args.port)
+            send(args.port, 'world.show("probe3")', expect_result=False)
+
+            # A real save to a FREE name first: it proves this session
+            # can save at all (so the refusal below is the rule and not
+            # a broken fixture) and leaves a settled save status for the
+            # refusal to be checked against.
+            if send(args.port,
+                    f'return engine.saveWorld("probe3","{CONTROL_SLOT}")'
+                    ).strip() != "true":
+                raise RuntimeError("the control save to a FREE name was "
+                                    "rejected -- fixture is broken")
+            wait(lambda: os.path.isfile(auth_path(root, CONTROL_SLOT)),
+                 "the control save's generation file")
+
+            def settled_status():
+                raw = send(args.port, "return engine.getSaveStatus()")
+                st = json.loads(raw) if raw != "nil" else None
+                return st if st and st.get("outcome") else None
+
+            before = wait(settled_status, "the control save to settle", 30)
+
+            refused = send(args.port,
+                f'return engine.saveWorld("probe3","{LEGACY_SLOT}")').strip()
+            if refused != "false":
+                raise RuntimeError("engine.saveWorld accepted a name a "
+                                    "legacy flat file occupies, got "
+                                    f"{refused!r}")
+
+            # No transaction began: the barrier still reports the
+            # CONTROL save's request, untouched. A beginSave that ran
+            # and then failed would show a new id (and SaveFailed).
+            raw = send(args.port, "return engine.getSaveStatus()")
+            after = json.loads(raw) if raw != "nil" else None
+            if after is None:
+                raise RuntimeError("the save status disappeared after a "
+                                    "refused save")
+            if (after.get("id"), after.get("phase"), after.get("outcome")) != \
+               (before.get("id"), before.get("phase"), before.get("outcome")):
+                raise RuntimeError("a refused save changed the save status: "
+                                    f"{before!r} -> {after!r}")
+
+            # Requirement 4: neither representation is written.
+            if os.path.exists(slot_dir(root, LEGACY_SLOT)):
+                raise RuntimeError("a refused save created "
+                                    f"{slot_dir(root, LEGACY_SLOT)}")
+            if read_bytes(flat) != legacy_bytes:
+                raise RuntimeError("a refused save modified the legacy flat "
+                                    "file it refused to shadow")
+
+            rows = json.loads(send(args.port, "return engine.getEventLog()"))
+            named = [r for r in rows
+                     if r.get("category") == "save_load"
+                     and f"saves/{LEGACY_SLOT}.synworld" in (r.get("text") or "")]
+            if len(named) != 1:
+                raise RuntimeError("expected exactly one save_load failure "
+                                    "naming the legacy flat file, got "
+                                    f"{[r.get('text') for r in rows]!r}")
+            text = named[0]["text"]
+            if not text.startswith("Save failed: "):
+                raise RuntimeError("the refusal event does not use the "
+                                    f"synchronous-rejection shape: {text!r}")
+            if "Rename or remove" not in text:
+                raise RuntimeError("the refusal event does not say how to "
+                                    f"clear the flat file: {text!r}")
+            print("  [PASS] a manual save under a name a legacy flat file "
+                  "occupies is refused before any transaction begins, and "
+                  "the flat file is untouched")
+
+            # Requirement 5 in the small: clearing the flat file is all
+            # it takes -- the refusal is about occupancy and nothing else.
+            os.remove(flat)
+            if send(args.port,
+                    f'return engine.saveWorld("probe3","{LEGACY_SLOT}")'
+                    ).strip() != "true":
+                raise RuntimeError("the save was still refused after the "
+                                    "legacy flat file was removed")
+            wait(lambda: os.path.isfile(auth_path(root, LEGACY_SLOT)),
+                 "the save that follows removing the flat file")
+            print("  [PASS] removing the legacy flat file is all it takes "
+                  "for the same name to save normally")
+        finally:
+            quit_engine(args.port, proc)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
     finally:
         shutil.rmtree(tmp_base, ignore_errors=True)
 
@@ -378,7 +499,9 @@ def main() -> int:
           "correctly, load-source selection always picks a complete "
           "generation (never a hybrid, never falls back for an "
           "incompatible file), a real disk write failure names its "
-          "storage phase, and the barrier recovers for the next save.")
+          "storage phase, the barrier recovers for the next save, and a "
+          "manual save refuses a name a legacy flat file occupies "
+          "without starting a transaction or touching that file.")
     return 0
 
 
