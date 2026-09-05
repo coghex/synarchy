@@ -405,8 +405,48 @@ def guidance_lines(finding: Finding,
     return carrier_lines(finding.qualified, carriers)
 
 
+@dataclass(frozen=True)
+class Coverage:
+    """The three figures the success line reports.
+
+    They move TOGETHER on a routine append — every guarded type added
+    since 2026-08-15 moved all three — which is why none of them is
+    written down in prose any more (issue #2299): the paragraph in
+    `docs/engine_contracts.md` telling readers not to hand-count these
+    was itself three appends stale."""
+    guarded: int
+    on_save_wire: int
+    component_named: int
+
+
+def coverage_counts(guarded: dict[str, GuardedType],
+                    baseline: dict[str, BaselineEntry]) -> Coverage:
+    """The discovered guarded-set size, plus how many BASELINE entries
+    record `onSaveWire: true` and how many record a NON-EMPTY
+    `components` list.
+
+    The last two are read back from the baseline rather than recomputed
+    from the carrier walk on purpose: they are exactly the two per-type
+    fields the contract document points a reader at, and the success
+    path is reached only when that file's attribution already matches
+    the code (`run_repository_audit` fails on `stale` otherwise), so the
+    two derivations cannot disagree there.
+
+    Component-naming is counted per TYPE, not per component name: a type
+    carried by two components counts once, which is what makes the
+    figure comparable with the guarded total beside it. An entry whose
+    `on_save_wire` was never captured (a hand-added one) is `None` and
+    counts as not on the wire, like a captured `False`."""
+    return Coverage(
+        guarded=len(guarded),
+        on_save_wire=sum(1 for entry in baseline.values()
+                         if entry.on_save_wire),
+        component_named=sum(1 for entry in baseline.values()
+                            if entry.components))
+
+
 def report(findings: list[Finding], carriers: dict[str, list[Carrier]],
-           guarded_count: int, stale_attribution: bool = False) -> int:
+           coverage: Coverage, stale_attribution: bool = False) -> int:
     compatible = [f for f in findings if f.compatible]
     incompatible = [f for f in findings if not f.compatible]
     if not findings:
@@ -420,8 +460,10 @@ def report(findings: list[Finding], carriers: dict[str, list[Carrier]],
             print("  Refresh it with: "
                   "python3 tools/enum_append_only_audit.py --update-baseline")
             return 1
-        print(f"enum_append_only_audit.py: {guarded_count} guarded sum "
-              f"type(s) match {BASELINE_REL}")
+        print(f"enum_append_only_audit.py: {coverage.guarded} guarded sum "
+              f"type(s) match {BASELINE_REL} "
+              f"({coverage.on_save_wire} on the save wire, "
+              f"{coverage.component_named} named by a live component)")
         return 0
     if incompatible:
         print(f"{len(incompatible)} INCOMPATIBLE constructor change(s) — "

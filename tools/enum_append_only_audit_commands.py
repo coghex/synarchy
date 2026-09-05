@@ -19,7 +19,12 @@ from enum_append_only_audit_model import (
 )
 from enum_append_only_audit_baseline import load_baseline, render_baseline
 from enum_append_only_audit_carrier import compute_wire_carriers
-from enum_append_only_audit_report import compare, guidance_lines, report
+from enum_append_only_audit_report import (
+    compare,
+    coverage_counts,
+    guidance_lines,
+    report,
+)
 from enum_append_only_audit_scan import scan_repository
 
 
@@ -40,7 +45,7 @@ def run_repository_audit(root: Path = REPO_ROOT) -> int:
         print(f"enum_append_only_audit.py: {err}")
         return 1
     return report(compare(scan.guarded, baseline, carriers), carriers,
-                  len(scan.guarded), stale)
+                  coverage_counts(scan.guarded, baseline), stale)
 
 
 def run_update_baseline(root: Path = REPO_ROOT) -> int:

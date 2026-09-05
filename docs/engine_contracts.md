@@ -2561,12 +2561,17 @@ own `--self-test`). `src/World/Save/CLAUDE.md` states the rule and the
 two hard facts about the baseline (it is GENERATED; a pure append
 ratchets it with `--update-baseline`). This is the rest.
 
-**Coverage.** Of the 43 guarded types, 38 are on the save wire and 28 are
-named by a live component today; the rest are guarded pre-emptively, which
+**Coverage.** Most guarded types are on the save wire, and fewer again
+are named by a live component; the rest are guarded pre-emptively, which
 is the point of keying on the `Serialize`-via-`Generic` instance rather
-than on save reachability. Don't hand-count these: the audit prints the
-guarded total on every run, and `docs/save_compat/enum_baseline.json`'s
-per-type `onSaveWire` / `components` fields are the other two.
+than on save reachability. How many of each is deliberately not written
+down here. A routine append moves all three figures together, so a
+transcribed set goes stale on the next one — which is what this
+paragraph itself did, while telling its reader not to hand-count
+(#2299). The audit's success line reports all three on every run,
+derived from the guarded set it discovered and from
+`docs/save_compat/enum_baseline.json`'s per-type `onSaveWire` /
+`components` fields.
 
 **What the baseline records.** Module-qualified constructor lists, each
 constructor recording its name and its ordered PAYLOAD signature, plus the
