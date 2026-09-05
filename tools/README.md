@@ -139,7 +139,10 @@ and `g` independent arguments and are not reported. The connector may
 also be **qualified** — `pack P.$ P.show x` and `pack P.. P.show` are
 the same functions — and is read as one only under a qualifier the file
 actually establishes, so an arbitrary `Q.$` is somebody else's
-operator. The right-hand
+operator. Those qualifiers are read here rather than taken from the
+shared resolver, whose alias grammar is ASCII-only: `import qualified
+Prelude as Ü` establishes nothing there, and `pack Ü.$ Ü.show x` would
+go unread. The right-hand
 forms put `show` before the packer, so they get their own backward
 look — one that reads only a section it can see whole,
 giving up at a nested bracket or a literal rather than balance-counting
@@ -282,7 +285,9 @@ position that keeps parentheses transparent against three applications
 that do not; and all four operator-section forms against four
 lookalikes, the three prefix spellings against two argument-position
 lookalikes, all five qualified-connector positions against an
-unestablished qualifier, and every recognised `show`-binding shape
+unestablished qualifier, four alias forms (ASCII, Unicode,
+postpositive-`qualified`, and a multi-segment module name standing as
+its own qualifier), and every recognised `show`-binding shape
 against an instance method and a class declaration. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away

@@ -272,6 +272,70 @@ _CONNECTOR_OPERATORS = {".": "compose", "∘": "compose",
                         "$": "dollar", "$!": "dollar"}
 
 
+_IMPORT_HEAD = re.compile(r"import(?![\w'])")
+_QUALIFIED_KEYWORD = re.compile(r"qualified(?![\w'])")
+_AS_KEYWORD = re.compile(r"as(?![\w'])")
+
+
+def _read_module_path(text: str, pos: int) -> tuple[str, int] | None:
+    """`(module path, offset just past it)` at `pos`, or `None`.
+
+    Read with `_is_conid_head` / `is_haskell_ident_char` rather than an
+    ASCII class, which is the whole point of it existing separately from
+    the shared resolver's."""
+    segments: list[str] = []
+    i, n = pos, len(text)
+    while i < n and _is_conid_head(text[i]):
+        k = i
+        while k < n and is_haskell_ident_char(text[k]):
+            k += 1
+        segments.append(text[i:k])
+        if k < n and text[k] == "." and k + 1 < n and _is_conid_head(text[k + 1]):
+            i = k + 1
+            continue
+        i = k
+        break
+    return (".".join(segments), i) if segments else None
+
+
+def _established_qualifiers(prepared: str) -> frozenset[str]:
+    """Every module qualifier the file's imports establish -- the `as`
+    alias where there is one, otherwise the module's own name.
+
+    This reads the import heads itself rather than taking
+    `parse_imports`' aliases, because that resolver's alias grammar is
+    ASCII-only: a valid `import qualified Prelude as Ü` establishes no
+    qualifier there, so `T.pack Ü.$ Ü.show x` -- a direct wrapper --
+    went unread (PR #2404 review round 14). Only the QUALIFIER is taken
+    from here; `pack` itself is still resolved by the shared resolver,
+    which refuses a `Data.Text` import it cannot read."""
+    qualifiers: set[str] = set()
+    for chunk in _import_chunks(prepared):
+        i = _IMPORT_HEAD.match(chunk)
+        if i is None:
+            continue
+        j = _GAP.match(chunk, i.end()).end()
+        pre = _QUALIFIED_KEYWORD.match(chunk, j)
+        if pre is not None:
+            j = _GAP.match(chunk, pre.end()).end()
+        module = _read_module_path(chunk, j)
+        if module is None:
+            continue
+        name, j = module
+        qualifiers.add(name)
+        j = _GAP.match(chunk, j).end()
+        post = _QUALIFIED_KEYWORD.match(chunk, j)
+        if post is not None:
+            j = _GAP.match(chunk, post.end()).end()
+        alias_at = _AS_KEYWORD.match(chunk, j)
+        if alias_at is None:
+            continue
+        alias = _read_module_path(chunk, _GAP.match(chunk, alias_at.end()).end())
+        if alias is not None:
+            qualifiers.add(alias[0])
+    return frozenset(qualifiers)
+
+
 def _read_connector(text: str, pos: int,
                     qualifiers: frozenset[str]) -> tuple[str, int] | None:
     """`(form, offset just past it)` for a connector OPERATOR at `pos`,
@@ -1060,7 +1124,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     # Every qualifier the file establishes. A qualified connector
     # (`P.$`, `P..`) is honoured only under one of these, so an
     # arbitrary `Foo.$` is not read as Prelude's.
-    qualifiers = frozenset(d.qualifier for d in declarations)
+    qualifiers = _established_qualifiers(scan_text)
 
     exempt: set[int] = set()
     if rel_path == UPRELUDE_FILE:
@@ -1278,6 +1342,55 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n" + _T
         + "import qualified Prelude as P\n"
         "f x = T.pack P.$ P.show x\n",
+        [4],
+    ),
+    (
+        "a UNICODE module alias on the connector: the shared "
+        "resolver's alias grammar is ASCII-only, so it establishes no "
+        "qualifier for `Ü` and the wrapper went unread (PR #2404 "
+        "review round 14)",
+        "module M where\n" + _T
+        + "import qualified Prelude as Ü\n"
+        "f x = T.pack Ü.$ Ü.show x\n",
+        [4],
+    ),
+    (
+        "the same alias on the qualified composition",
+        "module M where\n" + _T
+        + "import qualified Prelude as Ü\n"
+        "f = T.pack Ü.. Ü.show\n",
+        [4],
+    ),
+    (
+        "and in a right section",
+        "module M where\n" + _T
+        + "import qualified Prelude as Ü\n"
+        "f = (Ü.. Ü.show) T.pack\n",
+        [4],
+    ),
+    (
+        "a postpositive `qualified` (ImportQualifiedPost) still "
+        "establishes its alias",
+        "module M where\n" + _T
+        + "import Prelude qualified as Ü\n"
+        "f x = T.pack Ü.$ Ü.show x\n",
+        [4],
+    ),
+    (
+        "a MULTI-SEGMENT module name qualifies as itself: reading only "
+        "its first segment would establish `Data` and leave "
+        "`Data.Function.$` unresolved",
+        "module M where\n" + _T
+        + "import qualified Data.Function\n"
+        "f x = T.pack Data.Function.$ show x\n",
+        [4],
+    ),
+    (
+        "an alias established WITHOUT `as` -- the module's own name "
+        "qualifies it",
+        "module M where\n" + _T
+        + "import qualified Prelude\n"
+        "f x = T.pack Prelude.$ Prelude.show x\n",
         [4],
     ),
     (
