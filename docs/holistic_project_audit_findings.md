@@ -90,49 +90,49 @@ pass broadened HPA-4, HPA-7, and HPA-35 with independently verified evidence.
 - [x] HPA-14. Runtime intervals use discontinuous wall time without a valid first sample — [#2204]
 - [x] HPA-16. A Lua update that changes its interval is scheduled twice — [#2205]
 - [x] HPA-17. Lua callback isolation cannot contain nontermination or chronic failure — [no-issue]
-- [ ] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal — [deferred]: flora species identity epic pending via /design-epic
-- [ ] HPA-21. Plant-designation species bypass the flora load gate — [deferred]: FSI-2 of the flora species identity epic filed
+- [x] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal — [#2236]
+- [x] HPA-21. Plant-designation species bypass the flora load gate — [#2243]
 - [x] HPA-22. Save-barrier acknowledgements do not establish a closed quiescence boundary — [#2221]
 - [x] HPA-23. Unknown-component preservation fails open when a generation cannot be read — [#2227]
 - [x] HPA-24. Slot creation and autosave rotation omit parent-directory durability — [#2229]
 - [x] HPA-25. A fresh world's center chunk is never admitted to fluid simulation — [#2232]
-- [ ] HPA-26. Reusing a world-page name can adopt the previous incarnation's state
-- [ ] HPA-27. Normal world initialization discards runtime material registrations
-- [ ] HPA-28. A non-finite time scale crashes the world worker
-- [ ] HPA-29. A timed-out debug command can still execute later
-- [ ] HPA-30. Fallible crash logging can suppress the engine's fail-stop transition
-- [ ] HPA-31. The action-outcome “ring” is unbounded and survives ordinary session exit
-- [ ] HPA-32. Popup-enabled events accumulate in a write-only queue
-- [ ] HPA-33. A malformed world-generation configuration silently becomes the complete default configuration
-- [ ] HPA-34. Non-finite world-generation parameters can crash asynchronous world initialization
-- [ ] HPA-35. Unit motion accepts invalid numeric state from Lua and YAML
-- [ ] HPA-36. Exit to Menu has no authoritative fresh-session reset transaction
-- [ ] HPA-37. Multi-item construction payment can consume a partial cost and then charge the whole cost again
-- [ ] HPA-38. Autonomous harvesting and foraging bypass carrying-capacity admission
-- [ ] HPA-39. Player-issued medical treatment bypasses page and proximity logistics
-- [ ] HPA-40. Deferred ground-item Info can install a stale selection and erase valid selections
-- [ ] HPA-41. Medical supply discovery aliases same-definition containers to the first instance
-- [ ] HPA-42. Saved immunity keys bypass infection-reference validation
-- [ ] HPA-43. Saved equipment slot keys bypass the current equipment-class schema
-- [ ] HPA-44. Projected page selection does not bind bulk chunk work to its intended page
-- [ ] HPA-45. Flora YAML silently defaults or drops misspelled semantic enums
-- [ ] HPA-46. Zoom coastal fill promotes non-ocean fluids through a scan-order-dependent ocean cascade
-- [ ] HPA-47. Shared lake spillways collapse two source identities into one
-- [ ] HPA-48. Craft-bill mutations can cross page-local identity domains
-- [ ] HPA-49. Building placement validates an unreserved snapshot and commits trusted coordinates
-- [ ] HPA-50. Combat resolution does not authoritatively revalidate mutable attack conditions
-- [ ] HPA-51. Page suspension leaves action clocks and working leases running
-- [ ] HPA-52. One unreadable save entry aborts the complete save listing
-- [ ] HPA-53. Dump fast-settle can wait forever after a worker failure
-- [ ] HPA-54. Modern and legacy saves can occupy and expose the same logical name
-- [ ] HPA-55. A failed candidate flush leaks its still-owned file handle
-- [ ] HPA-56. World-space item and decal spawns admit non-finite coordinates into rendering
-- [ ] HPA-57. Camera APIs admit non-finite state into partial loop and load arithmetic
-- [ ] HPA-58. `world.digTile` can kill the world worker or durably poison a designation
-- [ ] HPA-59. `world.setDate` installs and persists a noncanonical date
-- [ ] HPA-60. Infection YAML has no semantic validation for bands, weights, or multipliers
-- [ ] HPA-61. Building animation FPS can reach partial main-render arithmetic
-- [ ] HPA-62. Duplicate unit body-part IDs split targeting from damage authority
+- [ ] HPA-26. Reusing a world-page name can adopt the previous incarnation's state — [deferred]: page incarnation epic pending via /process-design-doc
+- [x] HPA-27. Normal world initialization discards runtime material registrations — [#2278]
+- [x] HPA-28. A non-finite time scale crashes the world worker — [#2280]
+- [x] HPA-29. A timed-out debug command can still execute later — [#2282]
+- [x] HPA-30. Fallible crash logging can suppress the engine's fail-stop transition — [#2283]
+- [x] HPA-31. The action-outcome “ring” is unbounded and survives ordinary session exit — [#2284]
+- [x] HPA-32. Popup-enabled events accumulate in a write-only queue — [#2285]
+- [x] HPA-33. A malformed world-generation configuration silently becomes the complete default configuration — [#2286]
+- [x] HPA-34. Non-finite world-generation parameters can crash asynchronous world initialization — [#2288]
+- [x] HPA-35. Unit motion accepts invalid numeric state from Lua and YAML — [#2290]
+- [x] HPA-36. Exit to Menu has no authoritative fresh-session reset transaction — [#2291]
+- [x] HPA-37. Multi-item construction payment can consume a partial cost and then charge the whole cost again — [no-issue]
+- [x] HPA-38. Autonomous harvesting and foraging bypass carrying-capacity admission — [#2293]
+- [x] HPA-39. Player-issued medical treatment bypasses page and proximity logistics — [#2297]
+- [x] HPA-40. Deferred ground-item Info can install a stale selection and erase valid selections — [#2300]
+- [x] HPA-41. Medical supply discovery aliases same-definition containers to the first instance — [#2302]
+- [x] HPA-42. Saved immunity keys bypass infection-reference validation — [#2305]
+- [x] HPA-43. Saved equipment slot keys bypass the current equipment-class schema — [#2307]
+- [x] HPA-44. Projected page selection does not bind bulk chunk work to its intended page — [#2310]
+- [x] HPA-45. Flora YAML silently defaults or drops misspelled semantic enums — [#2315]
+- [x] HPA-46. Zoom coastal fill promotes non-ocean fluids through a scan-order-dependent ocean cascade — [#2316]
+- [x] HPA-47. Shared lake spillways collapse two source identities into one — [#2323]
+- [x] HPA-48. Craft-bill mutations can cross page-local identity domains — [#2325]
+- [x] HPA-49. Building placement validates an unreserved snapshot and commits trusted coordinates — [#2326]
+- [x] HPA-50. Combat resolution does not authoritatively revalidate mutable attack conditions — [#2328]
+- [x] HPA-51. Page suspension leaves action clocks and working leases running — [#2332]
+- [x] HPA-52. One unreadable save entry aborts the complete save listing — [#2333]
+- [x] HPA-53. Dump fast-settle can wait forever after a worker failure — [#2334]
+- [x] HPA-54. Modern and legacy saves can occupy and expose the same logical name — [#2335]
+- [x] HPA-55. A failed candidate flush leaks its still-owned file handle — [no-issue]
+- [x] HPA-56. World-space item and decal spawns admit non-finite coordinates into rendering — [#2336]
+- [x] HPA-57. Camera APIs admit non-finite state into partial loop and load arithmetic — [#2337]
+- [x] HPA-58. `world.digTile` can kill the world worker or durably poison a designation — [#2338]
+- [x] HPA-59. `world.setDate` installs and persists a noncanonical date — [#2339]
+- [x] HPA-60. Infection YAML has no semantic validation for bands, weights, or multipliers — [#2346]
+- [x] HPA-61. Building animation FPS can reach partial main-render arithmetic — [#2347]
+- [x] HPA-62. Duplicate unit body-part IDs split targeting from damage authority — [#2348]
 
 ---
 
@@ -672,9 +672,7 @@ yield contract, repeated-error backoff, or quarantine state.
 
 ## Content identity and validation
 
-### [deferred] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal
-
-> **Deferred:** Owner chose the epic path (two independent PRs — order-independent flora registration/placement, and persisting species by YAML name across `world-edits`, crop plots and plant designations — plus the open decision on relaying generated flora in existing saves) — precondition: the flora species identity design document is processed through `/process-design-doc` and its epic number exists to link here.
+### [#2236] HPA-20. Persisted flora species identity is an OS-order-dependent ordinal
 
 **Severity:** High
 
@@ -723,9 +721,7 @@ species as a different one.
   migrate every persisted species reference, particularly groundcover crop
   plots and outstanding plant designations.
 
-### [deferred] HPA-21. Plant-designation species bypass the flora load gate
-
-> **Deferred:** The fix is owned by slice FSI-2 of the pending flora species identity epic (`docs/flora_species_identity_design.md`, whose scope names `missingFloraReferences` "over plant designations") — precondition: FSI-2 is filed through `/process-design-doc` and its issue number exists to link here.
+### [#2243] HPA-21. Plant-designation species bypass the flora load gate
 
 **Severity:** Medium–High
 
@@ -947,7 +943,9 @@ center as already resident, no later path sends its missing
 - **Remaining uncertainty:** No live center-fluid world was observed; the sole
   producer inventory confirms the missing message.
 
-### HPA-26. Reusing a world-page name can adopt the previous incarnation's state
+### [deferred] HPA-26. Reusing a world-page name can adopt the previous incarnation's state
+
+> **Deferred:** Owner chose the epic path (queue-ordered per-page unit and building teardown on single-page destroy and same-id re-init, and fencing in-flight fluid writebacks with the page's existing `ChunkGeneration` epoch; design authority `docs/page_incarnation_design.md`) — precondition: that design document's EPIC entry is processed through `/process-design-doc` and its epic number exists to link here.
 
 **Severity:** High
 
@@ -1000,7 +998,7 @@ name.
   manager rows and reusable-id resolution are direct; exact dependent-state
   cleanup needs an ownership inventory.
 
-### HPA-27. Normal world initialization discards runtime material registrations
+### [#2278] HPA-27. Normal world initialization discards runtime material registrations
 
 **Severity:** Medium
 
@@ -1042,7 +1040,7 @@ over its rebuilt base, but fresh initialization does not use that policy.
   out-of-tree custom material before world creation; the public runtime API and
   multi-page lifecycle make the contract reachable.
 
-### HPA-28. A non-finite time scale crashes the world worker
+### [#2280] HPA-28. A non-finite time scale crashes the world worker
 
 **Severity:** High
 
@@ -1083,7 +1081,7 @@ crash handling.
 
 ## Debugging and fail-stop semantics
 
-### HPA-29. A timed-out debug command can still execute later
+### [#2282] HPA-29. A timed-out debug command can still execute later
 
 **Severity:** Medium
 
@@ -1118,7 +1116,7 @@ out, and an ordinary retry can apply the mutation twice.
 - **Remaining uncertainty:** No client retry was issued. The queue semantics are
   direct.
 
-### HPA-30. Fallible crash logging can suppress the engine's fail-stop transition
+### [#2283] HPA-30. Fallible crash logging can suppress the engine's fail-stop transition
 
 **Severity:** Medium
 
@@ -1163,7 +1161,7 @@ continue in `EngineRunning` with a dead critical subsystem.
 
 ## Diagnostic retention
 
-### HPA-31. The action-outcome “ring” is unbounded and survives ordinary session exit
+### [#2284] HPA-31. The action-outcome “ring” is unbounded and survives ordinary session exit
 
 **Severity:** Medium
 
@@ -1200,7 +1198,7 @@ records can accumulate across successive new games in one process.
 - **Remaining uncertainty:** No long-session heap profile was collected. The
   missing cap and ordinary-session reset are direct.
 
-### HPA-32. Popup-enabled events accumulate in a write-only queue
+### [#2285] HPA-32. Popup-enabled events accumulate in a write-only queue
 
 **Severity:** Medium
 
@@ -1243,7 +1241,7 @@ by load publication but not ordinary Exit to Menu.
 
 ## Configuration and public numeric integrity
 
-### HPA-33. A malformed world-generation configuration silently becomes the complete default configuration
+### [#2286] HPA-33. A malformed world-generation configuration silently becomes the complete default configuration
 
 **Severity:** Medium
 
@@ -1289,7 +1287,7 @@ identifying the file, parser failure, or fallback.
   default file is not stated. The loss of the malformed-file diagnostic is
   direct.
 
-### HPA-34. Non-finite world-generation parameters can crash asynchronous world initialization
+### [#2288] HPA-34. Non-finite world-generation parameters can crash asynchronous world initialization
 
 **Severity:** High
 
@@ -1338,7 +1336,7 @@ cannot contain or accurately report the resulting exception.
   The complete valid domains of the other floating-point knobs require a
   field-by-field design decision.
 
-### HPA-35. Unit motion accepts invalid numeric state from Lua and YAML
+### [#2290] HPA-35. Unit motion accepts invalid numeric state from Lua and YAML
 
 **Severity:** High
 
@@ -1400,7 +1398,7 @@ which lacks the isolated NaN guard present in one fall-prohibited branch.
 
 ## Fresh-session lifecycle
 
-### HPA-36. Exit to Menu has no authoritative fresh-session reset transaction
+### [#2291] HPA-36. Exit to Menu has no authoritative fresh-session reset transaction
 
 **Severity:** Medium
 
@@ -1460,7 +1458,18 @@ process game clock resumes advancing before or between fresh worlds.
 
 ## Gameplay transaction and physical-authority integrity
 
-### HPA-37. Multi-item construction payment can consume a partial cost and then charge the whole cost again
+### [no-issue] HPA-37. Multi-item construction payment can consume a partial cost and then charge the whole cost again
+
+> **Disposition:** No issue — fixed by #1844 (`22b6caf39`, 2026-09-01), after
+> the `78dbbba78` audit commit. The per-item `unit.removeItem` loop is gone:
+> `construction.payMaterials` pops every material inside one
+> `atomicModifyIORef'` of the unit manager and commits nothing on a shortfall,
+> then writes the receipt as a CAS guarded on the attempt, splicing the exact
+> popped instances back at their original indices if that CAS loses
+> (`src/Engine/Scripting/Lua/API/Construct/Payment.hs:113-180`). Gated by
+> hspec `--match "payment"` in `Test/Headless/Construct/AttemptIdentity.hs`,
+> including "removes NOTHING when the unit cannot cover the cost" and
+> "restores the EXACT instances when a cancellation wins the race".
 
 **Severity:** Medium
 
@@ -1509,7 +1518,7 @@ owes the complete original cost.
   run. The partial-commit sequence and reachable intervening mutation are
   direct.
 
-### HPA-38. Autonomous harvesting and foraging bypass carrying-capacity admission
+### [#2293] HPA-38. Autonomous harvesting and foraging bypass carrying-capacity admission
 
 **Severity:** Medium
 
@@ -1559,7 +1568,7 @@ capacity as a hard pickup gate.
   acquisition at full capacity is not documented. The present inconsistency is
   direct.
 
-### HPA-39. Player-issued medical treatment bypasses page and proximity logistics
+### [#2297] HPA-39. Player-issued medical treatment bypasses page and proximity logistics
 
 **Severity:** Medium
 
@@ -1608,7 +1617,7 @@ arrival radius.
 
 ## Deferred UI and exact-instance identity
 
-### HPA-40. Deferred ground-item Info can install a stale selection and erase valid selections
+### [#2300] HPA-40. Deferred ground-item Info can install a stale selection and erase valid selections
 
 **Severity:** Medium
 
@@ -1653,7 +1662,7 @@ The callback then unconditionally clears valid unit and building selections.
 - **Remaining uncertainty:** No interactive modal timing scenario was run. The
   stale-id admission and unconditional clearing are direct.
 
-### HPA-41. Medical supply discovery aliases same-definition containers to the first instance
+### [#2302] HPA-41. Medical supply discovery aliases same-definition containers to the first instance
 
 **Severity:** Medium
 
@@ -1707,7 +1716,7 @@ the same ambiguity.
 
 ## Save compatibility under content evolution
 
-### HPA-42. Saved immunity keys bypass infection-reference validation
+### [#2305] HPA-42. Saved immunity keys bypass infection-reference validation
 
 **Severity:** Medium
 
@@ -1750,7 +1759,7 @@ reintroduced it silently resumes influencing infection behavior.
 - **Remaining uncertainty:** Whether missing immunity should reject the save or
   be deliberately pruned is a compatibility-policy decision.
 
-### HPA-43. Saved equipment slot keys bypass the current equipment-class schema
+### [#2307] HPA-43. Saved equipment slot keys bypass the current equipment-class schema
 
 **Severity:** Medium
 
@@ -1803,7 +1812,7 @@ produce invisible but mechanically active equipment.
 
 ## Page-bound bulk work
 
-### HPA-44. Projected page selection does not bind bulk chunk work to its intended page
+### [#2310] HPA-44. Projected page selection does not bind bulk chunk work to its intended page
 
 **Severity:** Medium–High
 
@@ -1858,7 +1867,7 @@ continues on hidden A.
 
 ## Content-schema validation
 
-### HPA-45. Flora YAML silently defaults or drops misspelled semantic enums
+### [#2315] HPA-45. Flora YAML silently defaults or drops misspelled semantic enums
 
 **Severity:** Medium
 
@@ -1914,7 +1923,7 @@ producing a schema error.
 
 ## Zoom and generated hydrology integrity
 
-### HPA-46. Zoom coastal fill promotes non-ocean fluids through a scan-order-dependent ocean cascade
+### [#2316] HPA-46. Zoom coastal fill promotes non-ocean fluids through a scan-order-dependent ocean cascade
 
 **Severity:** Medium
 
@@ -1959,7 +1968,7 @@ world topology.
   direct. The frequency and maximum visible extent in shipped world seeds were
   not measured under this static-only pass.
 
-### HPA-47. Shared lake spillways collapse two source identities into one
+### [#2323] HPA-47. Shared lake spillways collapse two source identities into one
 
 **Severity:** Medium
 
@@ -2004,7 +2013,7 @@ making generated topology depend on lake iteration order.
 
 ## Asynchronous gameplay authority
 
-### HPA-48. Craft-bill mutations can cross page-local identity domains
+### [#2325] HPA-48. Craft-bill mutations can cross page-local identity domains
 
 **Severity:** Medium–High
 
@@ -2046,7 +2055,7 @@ make the old job disappear locally without releasing its original claim.
 - **Remaining uncertainty:** Normal settled switches are substantially guarded;
   the retained failure requires a mid-update interleaving and was not executed.
 
-### HPA-49. Building placement validates an unreserved snapshot and commits trusted coordinates
+### [#2326] HPA-49. Building placement validates an unreserved snapshot and commits trusted coordinates
 
 **Severity:** Medium
 
@@ -2084,7 +2093,7 @@ all approve the same location and create overlapping buildings.
 - **Remaining uncertainty:** The TOCTOU is direct; no overlapping pair was
   spawned during the static review.
 
-### HPA-50. Combat resolution does not authoritatively revalidate mutable attack conditions
+### [#2328] HPA-50. Combat resolution does not authoritatively revalidate mutable attack conditions
 
 **Severity:** Medium
 
@@ -2126,7 +2135,7 @@ the strike.
   across faction states needs clarification; range, page, pose, and spendable
   stance are direct mutable commit conditions.
 
-### HPA-51. Page suspension leaves action clocks and working leases running
+### [#2332] HPA-51. Page suspension leaves action clocks and working leases running
 
 **Severity:** Medium–High
 
@@ -2172,7 +2181,7 @@ craft progress even though page-local power and coupled resources did not tick.
 
 ## Save discovery and failure containment
 
-### HPA-52. One unreadable save entry aborts the complete save listing
+### [#2333] HPA-52. One unreadable save entry aborts the complete save listing
 
 **Severity:** Medium
 
@@ -2214,7 +2223,7 @@ constructing any listing at all.
 - **Remaining uncertainty:** The uncaught calls are direct; the platform-specific
   filesystem failures were not induced.
 
-### HPA-53. Dump fast-settle can wait forever after a worker failure
+### [#2334] HPA-53. Dump fast-settle can wait forever after a worker failure
 
 **Severity:** High
 
@@ -2258,7 +2267,7 @@ failure.
 - **Remaining uncertainty:** The wait graph is direct; a worker was not
   deliberately crashed during dump mode.
 
-### HPA-54. Modern and legacy saves can occupy and expose the same logical name
+### [#2335] HPA-54. Modern and legacy saves can occupy and expose the same logical name
 
 **Severity:** Medium
 
@@ -2300,7 +2309,9 @@ two indistinguishable rows that both load the modern slot.
 - **Remaining uncertainty:** Existing user save directories were not inspected;
   the namespace collision is structurally reachable.
 
-### HPA-55. A failed candidate flush leaks its still-owned file handle
+### [no-issue] HPA-55. A failed candidate flush leaks its still-owned file handle
+
+> **Disposition:** No issue — fixed after the audit by `d23cc5b7c` (#2024, 2026-09-01): `durableFlush` now closes the handle via `onException` at both the flush and the `handleToFd` hand-over (`src/World/Save/Storage/Durable.hs:112-116`), pinned by the "durableFlush closes the handle when the flush itself fails" spec in `test-headless/Test/Headless/World/GeneratedLibrary.hs`.
 
 **Severity:** Medium
 
@@ -2343,7 +2354,7 @@ the original handle open while outer cleanup attempts only to remove the path.
 
 ## Public spatial and temporal numeric integrity
 
-### HPA-56. World-space item and decal spawns admit non-finite coordinates into rendering
+### [#2336] HPA-56. World-space item and decal spawns admit non-finite coordinates into rendering
 
 **Severity:** High
 
@@ -2394,7 +2405,7 @@ the same failure into a later load.
   downstream behavior of non-finite vertex values inside the graphics backend
   was not exercised.
 
-### HPA-57. Camera APIs admit non-finite state into partial loop and load arithmetic
+### [#2337] HPA-57. Camera APIs admit non-finite state into partial loop and load arithmetic
 
 **Severity:** High
 
@@ -2441,7 +2452,7 @@ staging.
 - **Remaining uncertainty:** The partial conversions are direct; no malformed
   camera was installed or loaded.
 
-### HPA-58. `world.digTile` can kill the world worker or durably poison a designation
+### [#2338] HPA-58. `world.digTile` can kill the world worker or durably poison a designation
 
 **Severity:** High
 
@@ -2487,7 +2498,7 @@ save/load.
 - **Remaining uncertainty:** The numeric paths are direct; neither worker death
   nor a poisoned save fixture was executed.
 
-### HPA-59. `world.setDate` installs and persists a noncanonical date
+### [#2339] HPA-59. `world.setDate` installs and persists a noncanonical date
 
 **Severity:** Medium
 
@@ -2535,7 +2546,7 @@ components survive save/load.
 
 ## Content-schema relational and numeric integrity
 
-### HPA-60. Infection YAML has no semantic validation for bands, weights, or multipliers
+### [#2346] HPA-60. Infection YAML has no semantic validation for bands, weights, or multipliers
 
 **Severity:** Medium–High
 
@@ -2581,7 +2592,7 @@ definition as successfully loaded.
   valid. Exact library behavior for every non-finite random range was not
   asserted; the violated weighted-selection precondition is sufficient.
 
-### HPA-61. Building animation FPS can reach partial main-render arithmetic
+### [#2347] HPA-61. Building animation FPS can reach partial main-render arithmetic
 
 **Severity:** Medium–High
 
@@ -2623,7 +2634,7 @@ path.
 - **Remaining uncertainty:** Shipped building YAML inspected in this pass was
   valid; this is a latent content-authoring failure.
 
-### HPA-62. Duplicate unit body-part IDs split targeting from damage authority
+### [#2348] HPA-62. Duplicate unit body-part IDs split targeting from damage authority
 
 **Severity:** Medium
 

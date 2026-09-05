@@ -54,12 +54,15 @@ concrete precondition
 
 ### Verified current state
 
-- `.github/workflows/ci.yml` now runs `test-and-audits` and the PR-only
-  `behavior-probes` worker in parallel after image resolution, then reports one
-  stable `build-test` aggregate. Compilation, the complete headless Hspec suite,
-  every static audit, and selected unit-asset/worldgen work remain serial inside
-  `test-and-audits`; the existing fan-out therefore removes probe serialization
-  without removing the main worker's critical path.
+- `.github/workflows/ci.yml` now runs `test-and-audits`, `static-audits` and
+  the PR-only `behavior-probes` worker in parallel after image resolution,
+  then reports one stable `build-test` aggregate. Compilation, the complete
+  headless Hspec suite, the two save-compatibility steps and selected
+  worldgen work remain serial inside `test-and-audits`; every engine-free
+  audit, the probe-runner self-tests and the unit-asset gate moved to
+  `static-audits` in #2272, which needs only `resolve-image`. That removed
+  roughly 4.5-5.5 minutes from the main worker's critical path, but its build
+  plus headless suite is still that path.
 - `master` protection is strict: the required `build-test`, `review-approved`,
   and `behavior-probes` checks must pass on a head that is up to date with its
   base. The current drainer has one active lane, so a branch update, pending

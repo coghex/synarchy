@@ -10,28 +10,45 @@ engine instance.
 CI gate: a warning-clean (`-Werror`) build of the library/exe + both test
 suites, the headless hspec suite, `test_audit.py`, the unit-asset inventory
 gate (`test_pack_atlas.py` + `pack_atlas.py --validate-only --strict`),
-`world_check.py --quick`, and the probe-runner self-tests. PR CI is
+`world_check.py --quick`, and the probe-runner self-tests. CI splits that
+same set across two parallel workers — `test-and-audits` for the
+Cabal-backed half, `static-audits` for the engine-free half (#2272) — so
+`make ci`'s single script mirrors their union. PR CI is
 path-selective for the graphical test-suite build, the quick worldgen check,
 and the unit-asset gate, while pushes to master run all three; a green
 `make ci` remains a conservative CI prediction.
 
 That "same gate set" claim is now enforced rather than maintained by hand:
 `ci_parity_audit.py` (#1355) compares this file's `python3 tools/*.py`
-invocations against those of `.github/workflows/ci.yml`'s
-`test-and-audits` worker,
+invocations against the UNION of `.github/workflows/ci.yml`'s two audited
+workers — `test-and-audits`, which owns everything needing a Cabal build
+product, and `static-audits`, which owns every engine-free gate (#2272) —
 at command-and-arguments granularity and in both directions, and fails on
 any difference outside a hard-coded exemption list carrying a reason per
 entry (CI's path selectors, which `make ci` has nothing to select for). It
 runs last in both files and has its own `--self-test`.
 
+Each CI job's set is collected separately and their intersection is
+rejected BEFORE the union is taken, and each job must yield at least one
+invocation: `make ci` is one script, so the union is the only thing it can
+mirror, but a gate run by both CI jobs is work CI pays for twice and the
+union alone cannot see it. The audit also pins `static-audits`'s topology
+(`needs: resolve-image` alone, no job-level condition, the same resolved CI
+image as `test-and-audits`) and the unit-asset gate's guard-to-selector
+wiring in its new home; the save-compatibility wiring checks still inspect
+`test-and-audits`, which is where those Cabal-backed commands stayed.
+
 The PR-only `behavior-probes` job is deliberately outside that parity
 contract: it owns `ci_probes.py --stdin` and `run_probes.py`, restores the
-same build caches on an independent runner, and runs in parallel with
-`test-and-audits`. The stable `build-test` context aggregates both workers;
+same build caches on an independent runner, and runs in parallel with the
+two audited workers. The stable `build-test` context aggregates all three;
 that is the single CI verdict consumed by the admin-bypass PR drainer, while
-branch protection also requires the probe context directly. The parity
-audit structurally pins the aggregate dependencies and both probe commands.
-Behavior probes remain opt-in locally.
+branch protection also requires the probe context directly. It requires
+`static-audits` to have succeeded on pull requests and master pushes alike,
+since that job carries no condition and so is never legitimately skipped.
+The parity audit structurally pins the aggregate dependencies, the
+static-audit verdict assertion and both probe commands. Behavior probes
+remain opt-in locally.
 
 `ci_parity_audit.py` is a facade over five owner modules (#2159); the two
 commands, the audited scope and the exemption list are unchanged by that
@@ -3437,6 +3454,111 @@ gate decides the reproducibility member or which command it guards, and it
 proves the local half by EXECUTING `ci-local.sh`'s marked selection block
 against a positive and a negative sample rather than reading it.
 
+### `ci_timing_report.py` — where a CI run's time went (#2277)
+
+An on-demand report over CI history, run from a developer machine on the
+`gh` authentication already there. It adds **no CI step and no secret**,
+and it is deliberately absent from `.github/workflows/ci.yml` and
+`tools/ci-local.sh` — `docs/ci_runtime_reduction_design.md` CIR-1 forbids
+turning a timing band into a failing check without a maintainer decision,
+so this is a diagnostic, not a gate. `ci_parity_audit.py` therefore needs
+no exemption entry for it.
+
+It replaces the dozen ad-hoc `gh run view --json jobs` / `jq` / `grep`
+commands that produced #2272–#2275's "on the PR's own CI run" figures, so
+the next agent can re-derive them in one command instead of reinventing
+them.
+
+```bash
+python3 tools/ci_timing_report.py --run 33666483367
+python3 tools/ci_timing_report.py --last 10
+python3 tools/ci_timing_report.py --last 20 --event pull_request
+python3 tools/ci_timing_report.py --last 10 --branch master --threshold 60
+python3 tools/ci_timing_report.py --self-test
+```
+
+**Per run** it prints the event, the branch (or the pull request, when the
+head SHA resolves to one), the conclusion, the run's wall time, every
+job's wall time with the **slowest job** marked, every step at or above
+`--threshold` seconds (default 30), the behavior-probe selection with each
+probe's observed attempts and durations, and every `CI_CACHE_REPORT`
+record the run emitted — normally one per cache, or the single
+`skipped=docs-only-fast-path` record on a docs-only run.
+
+**Across runs** it prints median and 95th-percentile wall time for the run
+and for each `(job name, step name)` pair, **separately for pull-request
+runs and master pushes**. Step names repeat across jobs (`Toolchain`,
+`Resolve dependency plan`, the cache-restore steps), so the job name is
+part of the key.
+
+Four rules are worth knowing before reading a number off it:
+
+* **"Slowest job", not "critical path".** The marked job is the
+  longest-duration non-skipped job, ties all marked. `gh run view --json
+  jobs` publishes no dependency edges, so timestamps alone cannot
+  reconstruct which job actually gated the run.
+* **Only successful runs are sampled.** Every other conclusion, and every
+  run still queued or in progress, is listed and counted in its own
+  category and contributes to no percentile — a cancelled run's truncated
+  jobs are exactly the samples that would make the figures lie. Each
+  aggregate row carries its own `n=`.
+* **A missing timestamp is `unavailable`, never `0`.** A step GitHub
+  published no endpoints for is named in the run block and excluded from
+  every aggregate. A *skipped* step is excluded too, for the different
+  reason that its equal endpoints are a real zero.
+* **One estimator, R-7.** Median and p95 both come from linear
+  interpolation between the two closest ranks — `numpy.percentile`'s
+  default and `statistics.quantiles(..., method='inclusive')`'s. The
+  self-test cross-checks against the standard library rather than
+  restating the formula.
+
+`--last N` selects runs of the **`CI` workflow**, resolved by its file path
+`.github/workflows/ci.yml`, before any `--event`/`--branch` filter is
+applied; the repository also runs `review-gate` and `ntfy-notify` on pull
+requests, so an event filter alone would mix three workflows into one
+table. An explicit `--run` naming another workflow is refused by name.
+
+A cancelled, expired or still-running run has no downloadable log. Its
+metadata and job/step timings are still real, so the block prints with its
+probe and cache sections marked unavailable and the batch continues.
+
+`--self-test` is network-free: it drives five recorded runs in
+`tools/fixtures/ci_timing/` (a retried probe, a step with no timestamps, a
+run with no probe job, a cancelled run with no log, and a runner killed
+mid-attempt), cross-checks the estimator, round-trips the probe-attempt
+identity against `probe_runner_diagnostics.attempt_identity`, and
+statically verifies the three `--print-slow-items=20` command sites below.
+
+Layers: `tools/ci_timing_model.py` (every pure rule — timestamp endpoints,
+log framing, probe/cache diagnostics, the estimator, the aggregates),
+`tools/ci_timing_report.py` (this facade — `gh`, the CLI, rendering),
+`tools/test_ci_timing_report.py` (every check, reached through
+`--self-test`).
+
+### The headless suite's slowest-examples list (#2277)
+
+Both of `.github/workflows/ci.yml`'s conditional headless invocations and
+`tools/ci-local.sh`'s full-tier one pass Hspec's `--print-slow-items=20`
+through cabal's `--test-options`:
+
+```bash
+cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
+```
+
+`--print-slow-items` is **Hspec's** flag, not cabal's, so `--test-options`
+is the only way it reaches the runner. Every one of those steps' logs
+therefore ends with the twenty slowest spec items and their durations,
+just before cabal's own footer — which is what names the handful of world
+generations that account for about four of the headless suite's five
+minutes, without diffing log timestamps by hand. Default per-example
+output is otherwise unchanged, and no threshold here fails a run.
+
+`ci_parity_audit.py` cannot police these three sites: it compares
+`python3 tools/*.py` commands and deliberately ignores every `cabal test`
+line. `test_ci_timing_report.py`'s `slow-items wiring` check does, reading
+all three statically — a PR's own CI run executes only ONE of the
+workflow's two conditional branches.
+
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
 `tools/gameplay_scenarios.py` is a small on-demand runner for *watching*
@@ -3802,6 +3924,9 @@ tools/
 ├── test_audit_strict_capture.py    (its strict baseline-capture owner)
 ├── test_audit_missing_baseline.py  (its missing-baseline exit-policy owner)
 ├── ci_expensive_gates.py   (path selector for the worldgen/graphical/unit-assets/save-compat gates)
+├── ci_timing_report.py     (on-demand CI lane/step timing report — the façade, #2277)
+├── ci_timing_model.py          (its pure timings, log framing, diagnostics, estimator)
+├── test_ci_timing_report.py    (its fixture checks, reached through --self-test)
 ├── lua_module_budget.py    (Lua module split line-budget guard)
 ├── haddock_link_audit.py   (qualified haddock link resolution gate, #2292)
 ├── haddock_link_baseline.json  (its generated, shrink-only ratchet — deleted by HLR-5)
@@ -3827,7 +3952,8 @@ tools/
 ├── input_check.py          (GUI-attached input.* injection check — see above)
 ├── action_outcome_layer_a_check.py (GUI-attached F4 Layer A check — see above)
 ├── *_probe.py              (headless behavior probes — see above; includes action_outcome_probe.py, #646)
-└── baselines/
-    ├── _seeds.json         (seed list config)
-    └── seed*.json          (per-seed baseline data)
+├── baselines/
+│   ├── _seeds.json         (seed list config)
+│   └── seed*.json          (per-seed baseline data)
+└── fixtures/ci_timing/    (recorded CI runs driving ci_timing_report --self-test)
 ```

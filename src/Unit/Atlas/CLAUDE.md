@@ -79,20 +79,39 @@ with no packer step.
 
 `tools/unit_texture_budget.json` is the SINGLE machine-readable source
 for two independent budgets; a missing or malformed one is a hard
-error, never a skipped check.
+error, never a skipped check. **Both read the COMPILED TREE ONLY** —
+the stored `atlas/index.json` documents and the entries beside them —
+so neither says anything about runtime behaviour (#2217).
 
-- **Images and bindless slots — a hard ERROR.** At most one resident
-  image and one bindless registration per COMPILED ANIMATION, the bound
-  derived from each unit's own generated index. Non-animation textures
-  are excluded BY CONSTRUCTION, not by an exemption list.
-- **Resident memory — a WARNING, so `--strict` is what blocks.** Decoded
-  RGBA8 footprint over the WHOLE tracked roster (`startup_loader.lua`
-  feeds every `data/units/*.yaml` to the loader at boot), compared as
-  `measured × roster_growth_factor > threshold` against a 384 MiB
-  threshold **confirmed by the project owner on 2026-08-16** — raising
-  it is the owner's call. A breach IS D-10's precondition for resuming
-  deferred TEX-5 (KTX2). A single-unit `--unit` run does NOT evaluate
-  this one.
+- **Generated atlas entries — a hard ERROR.** Exactly one entry besides
+  `index.json` in a unit's `atlas/` directory per COMPILED ANIMATION,
+  the bound derived from each unit's own generated index. Non-animation
+  textures are excluded BY CONSTRUCTION, not by an exemption list. This
+  catches a per-frame regression in the ASSET TREE; a loader regression
+  that leaves `atlas/` alone is invisible to it.
+- **Projected decoded memory — a WARNING, so `--strict` is what
+  blocks.** Decoded RGBA8 footprint PROJECTED from each index's declared
+  `atlas_width × atlas_height × 4` over the WHOLE tracked roster
+  (`startup_loader.lua` feeds every `data/units/*.yaml` to the loader at
+  boot). Two distinct quantities: that index-projected total, and the
+  same total × `roster_growth_factor`, which is the one compared against
+  a 384 MiB threshold **confirmed by the project owner on 2026-08-16** —
+  raising it is the owner's call. Neither is measured on a GPU. A breach
+  IS D-10's precondition for resuming deferred TEX-5 (KTX2). A
+  single-unit `--unit` run does NOT evaluate this one.
+
+**The runtime registration bound is a different gate.** The Hspec group
+`Unit.Atlas.Load — the real unit registration boundary`
+(`test-headless/Test/Headless/Unit/Atlas/Loader.hs`, in the
+always-blocking headless suite) is what holds the loader to one queued
+atlas upload request and one distinct logical texture handle per
+animation, each published into the definition's animation storage, and
+to no per-frame ordinary requests. It inspects the queued
+`LuaToEngineMsg` values the loader produces, so it owns the request and
+handle boundary — not completed Vulkan uploads or bindless-table
+publication, which happen downstream. A green
+`pack_atlas.py --validate-only --strict` is never evidence about any of
+that.
 
 ## Runtime (#1259/#1260/#1261, TEX-3/TEX-6)
 
@@ -150,9 +169,9 @@ hspec `--match "Asset.UnitInventory"`, `--match "Unit.Atlas"`,
 `--match "pickFrame"` (the whole logical-choice matrix checked against
 an independently written `expectedChoice` table, so an edit to either
 side fails), `--match "the real unit registration boundary"` (drives
-`registerUnitDefs` against a live headless engine: one atlas upload and
-one published `Animation` per animation, no per-frame textures, a
-rejected index queueing nothing).
+`registerUnitDefs` against a live headless engine: one QUEUED atlas
+upload request and one published `Animation` per animation, no
+per-frame textures, a rejected index queueing nothing).
 Roster-wide headless evidence:
 `tools/combat_anim_probe.py --roster-only`, which reads the texture-NAME registry
 (`engine.getTextureHandle`) rather than `engine.getLoadedTexturePaths()`

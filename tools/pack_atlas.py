@@ -218,12 +218,23 @@ USAGE
     python3 tools/pack_atlas.py --validate-only --strict
         Also treat warnings as errors. Every inventory violation above
         is an ERROR regardless of this flag, and so is every
-        frame-content finding and every image/slot budget breach;
+        frame-content finding and every atlas-artifact budget breach;
         `--strict` runs no extra checks, it only promotes the warnings.
         Two things warn: non-PNG debris in the animation tree, and the
-        resident-memory budget below. The latter is why CI and
+        projected-memory budget below. The latter is why CI and
         `make ci` pass `--strict` — a breach is a project decision to
         make, and this is what stops it passing unnoticed.
+
+        Both budgets read the COMPILED TREE only — the stored
+        `atlas/index.json` documents and the entries beside them. This
+        tool never observes the loader, the texture request queue, the
+        bindless table or a running engine, so a green strict run says
+        the generated artifacts are well-formed and their projected
+        decoded size is under threshold, and says nothing about runtime
+        registrations. The Hspec group `Unit.Atlas.Load — the real unit
+        registration boundary` (always-blocking headless suite) is what
+        holds the loader to one atlas upload request and one logical
+        texture handle per animation, with no per-frame requests.
 
     python3 tools/pack_atlas.py --compile [--unit acolyte]
         Compile atlases and indices. Refuses to run at all if the
@@ -427,10 +438,11 @@ def cmd_validate(
         # rather than only as a threshold crossing years later.
         if budget is not None and budget.units:
             print(
-                f"BUDGET — {budget.images} resident animation image(s) for "
-                f"{budget.animations} animation(s) across {budget.units} "
-                f"compiled unit(s) ({budget.frames} logical frames); "
-                f"{mib(budget.resident_bytes)} decoded RGBA8 resident.")
+                f"BUDGET — {budget.images} generated atlas entr(ies) for "
+                f"{budget.animations} indexed animation(s) across "
+                f"{budget.units} compiled unit(s) ({budget.frames} logical "
+                f"frames); {mib(budget.resident_bytes)} decoded RGBA8 "
+                f"projected from the stored indices.")
 
     return 1 if report.has_failures(strict) else 0
 

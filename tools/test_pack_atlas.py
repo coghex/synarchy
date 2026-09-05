@@ -39,7 +39,7 @@ over the fixture machinery in `test_pack_atlas_support`:
 
   test_pack_atlas_validation   12 positive + 72 negative (#1257, #1311)
   test_pack_atlas_compiler     34 scenarios (#1258, #2076)
-  test_pack_atlas_budget       14 scenarios (#1262)
+  test_pack_atlas_budget       15 scenarios (#1262, #2217)
 
 None of them parses arguments or runs a case at import.
 
@@ -96,20 +96,20 @@ class Floor(NamedTuple):
 # These are per-owner floors, not one suite-wide floor. A single
 # combined floor cannot see an emptied owner: before #2061 the check
 # was `len(SCENARIO) < 33` against 48 real scenarios, so deleting the
-# whole 14-case budget family would still have exited 0. Each owner is
+# whole 15-case budget family would still have exited 0. Each owner is
 # now checked against its own collection, and this table's key set is
 # checked against the assembled owners' names, so an owner dropped from
 # CASE_OWNERS fails too.
 OWNER_FLOORS: Dict[str, Floor] = {
     "validation": Floor(positive=12, negative=72, scenario=0),
     "compiler": Floor(positive=0, negative=0, scenario=34),
-    "budget": Floor(positive=0, negative=0, scenario=14),
+    "budget": Floor(positive=0, negative=0, scenario=15),
 }
 
 # What the assembled suite must add up to, checked separately from the
 # per-owner floors so that a case lost from every owner fails even if
 # the owners themselves are all present and non-empty.
-TOTAL_FLOOR = Floor(positive=12, negative=72, scenario=48)
+TOTAL_FLOOR = Floor(positive=12, negative=72, scenario=49)
 
 
 def assemble() -> List[OwnerCases]:
