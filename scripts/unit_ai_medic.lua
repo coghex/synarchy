@@ -28,6 +28,8 @@ local reportFailure   = core.reportFailure
 
 local mv = require("scripts.movement_speed")
 local page = require("scripts.unit_ai_page")
+-- Exact-instance medical supply discovery, shared with the context menu.
+local supply = require("scripts.medical_supply")
 
 local M = {}
 
@@ -240,19 +242,14 @@ local function treatAllyUtility(uid, s, params)
 end
 
 -- A usable kit the unit already carries (a container holding ≥1
--- bandage): returns its defName, or nil.
-local function ownKitDefName(uid)
-    for _, it in ipairs(unit.getInventory(uid) or {}) do
-        if it.kind == "container" then
-            for _, r in ipairs(unit.getItemContents(uid, it.defName) or {}) do
-                if r.defName == "bandage" and (r.count or 0) > 0 then
-                    return it.defName
-                end
-            end
-        end
-    end
-    return nil
-end
+-- bandage), as { defName, instanceId }, or nil. Exact identity (#2302):
+-- the scan asks each inventory row about ITS OWN container, so a
+-- stocked kit behind an empty same-definition sibling is found -- and
+-- the fetch below can name the instance discovery chose instead of
+-- popping whichever same-defName item the holder happens to reach
+-- first. Shared with the context menu so the greyed row and the
+-- treatment commit answer the same question.
+local ownKit = supply.bandageKit
 
 -- Nearest unit carrying a usable kit (the technomule), to fetch from.
 -- Page-qualified against the asking medic (#1673), same rule and same
@@ -263,14 +260,15 @@ local function findKitHolder(medicUid, fromX, fromY)
     if not myPage then return nil end
     local best, bestD = nil, math.huge
     for _, uid in ipairs(unit.getAllIds() or {}) do
-        local kit = ownKitDefName(uid)
+        local kit = ownKit(uid)
         if kit then
             local info = unit.getInfo(uid)
             if info and page.same(myPage, info.page) then
                 local d = distance(fromX, fromY, info.gridX, info.gridY)
                 if d < bestD then
                     best = { uid = uid, gridX = info.gridX,
-                             gridY = info.gridY, kit = kit }
+                             gridY = info.gridY, kit = kit.defName,
+                             kitInstance = kit.instanceId }
                     bestD = d
                 end
             end
@@ -316,7 +314,7 @@ local function treatExecute(uid, s, params)
     -- anywhere, don't give up — rush to the patient and improvise a
     -- makeshift tourniquet there (the treatBleeding fallback). Better a
     -- crude stopgap than letting them bleed.
-    if not ownKitDefName(uid) then
+    if not ownKit(uid) then
         local holder = findKitHolder(uid, info.gridX, info.gridY)
         if holder then
             if distance(info.gridX, info.gridY, holder.gridX, holder.gridY)
@@ -325,7 +323,12 @@ local function treatExecute(uid, s, params)
                 return
             end
             unit.stop(uid)
-            unit.transferItemToUnit(holder.uid, uid, holder.kit)
+            -- The exact instance discovery picked: the by-definition
+            -- form could pop a DIFFERENT same-defName kit the holder is
+            -- also carrying -- an empty one, in the very case that made
+            -- the stocked sibling worth fetching (#2302).
+            unit.transferItemToUnit(holder.uid, uid, holder.kit,
+                                    holder.kitInstance)
             return   -- re-evaluate next tick now that I hold the kit
         end
         -- no kit reachable → fall through to the patient (tourniquet)
