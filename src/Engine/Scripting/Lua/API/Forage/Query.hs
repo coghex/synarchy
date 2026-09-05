@@ -26,7 +26,7 @@ import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
 import World.Flora.Clock (growthClock)
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
-                           floraHarvestAdmits,
+                           floraHarvestAdmits, floraHarvestYield,
                            growthPhaseTag, activeStageTag,
                            lifePhaseText, annualStageText)
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
@@ -337,9 +337,9 @@ worldFindHarvestableFloraFn env = do
                                         (fromIntegral gx, fromIntegral gy)
                             inRange coord = chunkInSeamRegion worldSize
                                                 (cx0, cy0) (cx1, cy1) coord
-                            edibleYield fh = or
+                            edibleYield yields = or
                                 [ isJust (idFood def)
-                                | (yName, _, _) ← fhYield fh
+                                | (yName, _, _) ← yields
                                 , Just def ← [lookupItemDef yName itemMgr]
                                 ]
                             -- #2212: tag membership AND the growth
@@ -349,9 +349,21 @@ worldFindHarvestableFloraFn env = do
                             -- would refuse. What is left here is this
                             -- caller's own extra bare-call condition:
                             -- a food search wants an EDIBLE yield.
-                            wanted fh = case tagFilter of
+                            --
+                            -- Weighed against the roll this plant would
+                            -- ACTUALLY spawn in its current life phase,
+                            -- never the block's default: a phase
+                            -- override can empty a plant's yield, or
+                            -- swap an inedible roll for an edible one,
+                            -- and reading 'fhYield' here would send a
+                            -- starving unit to a plant that pays
+                            -- nothing — or hide one that would feed it.
+                            -- The harvest verb resolves the same way
+                            -- ('floraHarvestYield'), so the search and
+                            -- the pick agree by construction.
+                            wanted sp fh g = case tagFilter of
                                 Just _  → True
-                                Nothing → edibleYield fh
+                                Nothing → edibleYield (floraHarvestYield sp fh g)
                             -- Scanning the STORED keys (and testing each
                             -- for alias containment) rather than looking
                             -- up each raw box key is what makes the
@@ -367,9 +379,11 @@ worldFindHarvestableFloraFn env = do
                                 , i ← fcdInstances (lcFlora lc)
                                 , Just sp ← [lookupSpecies (fiSpecies i) cat]
                                 , Just fh ← [fsHarvest sp]
-                                , wanted fh
-                                , floraHarvestAdmits sp tagFilter doy
-                                      (floraGrowth sp absDay i)
+                                -- Derived BEFORE the edible-yield test,
+                                -- which is now phase-aware (#2212).
+                                , let g = floraGrowth sp absDay i
+                                , wanted sp fh g
+                                , floraHarvestAdmits sp tagFilter doy g
                                 , let (tgx, tgy) = chunkToGlobal coord
                                         (fromIntegral (fiTileX i))
                                         (fromIntegral (fiTileY i))
@@ -398,10 +412,15 @@ worldFindHarvestableFloraFn env = do
                                     | ((tgx, tgy), cp) ← HM.toList cropPlots
                                     , Just sp ← [lookupSpecies (cpSpecies cp) cat]
                                     , Just fh ← [fsHarvest sp]
-                                    , wanted fh
                                     , let elapsed = cropPlotElapsedDays absDay cp
                                           g = floraGrowth sp elapsed
                                                   (cropPlotInstance cp)
+                                    -- Same ordering as the wild branch
+                                    -- above, and for the same reason:
+                                    -- the plot's growth state selects
+                                    -- the yield the edibility test
+                                    -- weighs (#2212).
+                                    , wanted sp fh g
                                     -- elapsed (days since planting) is the
                                     -- plot's own AGE clock (#334 — a plot's
                                     -- growth/phase timeline starts fresh at

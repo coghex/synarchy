@@ -52,10 +52,11 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
-import Item.Types (ItemDef(..), ItemManager(..))
+import Item.Types (ItemDef(..), ItemFood(..), ItemManager(..))
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
+import World.Flora.CropPlot (CropPlotOf(..))
 import World.Flora.HitTest
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdToLua, generatedFloraInstanceId)
@@ -69,6 +70,8 @@ import World.State.Types
 import World.Thread.Command.Cursor.Chop
     (handleWorldDesignateChopInstancesCommand)
 import World.Tile.Types (WorldTileData(..))
+import World.Time.Types
+    (defaultCalendarConfig, defaultWorldDate, worldDateAddDays)
 import Structure.Types (emptyChunkStructures)
 
 -- * Fixture
@@ -101,9 +104,16 @@ plantTex = TextureHandle 11
 texSizes ∷ HM.HashMap TextureHandle (Int, Int)
 texSizes = HM.fromList [(plantTex, (96, 128))]
 
-oakId, elmId ∷ FloraId
+oakId, elmId, gourdId, thornId ∷ FloraId
 oakId = FloraId 1
 elmId = FloraId 2
+-- The two BARE-forage species (#2212 review round 1). Both are
+-- untagged food plants; they differ in which direction their matured
+-- phase override moves edibility, so a food search that weighed the
+-- block's DEFAULT roll instead of the phase-resolved one is caught
+-- from both sides at once.
+gourdId = FloraId 3
+thornId = FloraId 4
 
 -- | Two wood-tagged trees differing ONLY in the authored policy.
 --
@@ -117,7 +127,24 @@ elmId = FloraId 2
 --   placement mixer.
 catalog ∷ FloraCatalog
 catalog =
-    insertSpecies elmId
+    -- @probe_gourd@'s matured phase yields NOTHING though its block
+    -- default is food; @probe_thorn@'s matured phase yields FOOD though
+    -- its block default is timber. Both are matured, so the growth
+    -- window is open and edibility is the only thing left deciding.
+    insertSpecies thornId
+        (tree "probe_thorn")
+            { fsHarvest = Just baseHarvest
+                { fhTags = ["fruit"], fhUngatedTags = []
+                , fhYield = [("probe_timber", 1, 1)]
+                , fhPhaseYields =
+                    HM.fromList [(PhaseMatured, [("probe_fruit", 1, 1)])] } }
+    $ insertSpecies gourdId
+        (tree "probe_gourd")
+            { fsHarvest = Just baseHarvest
+                { fhTags = ["fruit"], fhUngatedTags = []
+                , fhYield = [("probe_fruit", 1, 1)]
+                , fhPhaseYields = HM.fromList [(PhaseMatured, [])] } }
+    $ insertSpecies elmId
         (tree "probe_elm") { fsHarvest = Just baseHarvest }
     $ insertSpecies oakId
         (tree "probe_oak")
@@ -143,10 +170,18 @@ catalog =
 -- | The yield item, really registered: 'spawnYields' SKIPS a name the
 --   item registry does not resolve, so an unregistered one would make
 --   every harvest report zero items and the sprout assertion vacuous.
+--
+--   @probe_fruit@ is the one EDIBLE definition, which is what a bare
+--   @world.findHarvestableFlora@ filters on; the other two are not.
 fixtureItems ∷ ItemManager
 fixtureItems = ItemManager $ HM.fromList
-    [ ("probe_log", ItemDef
-        { idName = "probe_log", idDisplayName = "Probe Log"
+    [ ("probe_log",    baseItem { idName = "probe_log" })
+    , ("probe_timber", baseItem { idName = "probe_timber" })
+    , ("probe_fruit",  baseItem { idName = "probe_fruit"
+                                , idFood = Just (ItemFood 50 0) }) ]
+  where
+    baseItem = ItemDef
+        { idName = "", idDisplayName = "Probe Item"
         , idTexture = TextureHandle 0, idIconTexture = TextureHandle 0
         , idWeight = 1, idWeightSpec = Nothing, idBulk = 1
         , idStorage = Nothing, idKind = "misc", idCategory = "Misc"
@@ -154,7 +189,7 @@ fixtureItems = ItemManager $ HM.fromList
         , idQualityTiers = [], idContainer = Nothing
         , idDefaultContents = [], idFood = Nothing, idWeapon = Nothing
         , idArmor = Nothing, idUnequippable = False, idBuffs = []
-        , idInsulation = 0, idSourcePath = "test-fixture" }) ]
+        , idInsulation = 0, idSourcePath = "test-fixture" }
 
 -- | One plant of a species in a named growth state, on its own tile.
 --
@@ -187,6 +222,23 @@ plants =
             generatedFloraInstanceId "chop_tag_policy" 0 0 "probe" ordinal
         , fiChopDesignated = False
         }
+
+-- | A MATURED instance of any species, on tile (12, 4). Used by the
+--   bare-forage cases, whose species are not part of the chop parity
+--   walk above.
+maturedOf ∷ FloraId → FloraInstance
+maturedOf species = FloraInstance
+    { fiSpecies = species
+    , fiTileX = 12, fiTileY = 4
+    , fiOffU = 0, fiOffV = 0, fiZ = zSlice
+    , fiAge = 100, fiHealth = 1, fiVariant = 0, fiBaseWidth = 16
+    , fiInstanceId =
+        generatedFloraInstanceId "chop_tag_policy" 0 0 "forage" 0
+    , fiChopDesignated = False
+    }
+
+foragedTile ∷ (Int, Int)
+foragedTile = (12, 4)
 
 plantId ∷ Plant → FloraInstanceId
 plantId = fiInstanceId . plInstance
@@ -376,6 +428,46 @@ spec = describe "Chop tag policy" $ beforeAll setup $ do
                 , tshow gy, ", 8); return f and f.id or 'nil'" ])
             (plLabel p, found) `shouldBe` (plLabel p, "nil")
 
+  -- Round 1 of #2212's review: making yield phase-aware silently split
+  -- the bare food search from the bare harvest. The search filtered on
+  -- the block's STATIC yield while the fell spawned the phase-resolved
+  -- one, so an override could send a starving unit to a plant that pays
+  -- nothing, or hide one that would have fed it.
+  describe "a bare food search weighs the yield the fell will actually \
+           \spawn" $ do
+
+    it "does NOT report a matured plant whose phase override empties an \
+       \otherwise edible yield" $ \(env, ls) → do
+        _ ← resetPageWith env [maturedOf gourdId]
+        bareFind ls foragedTile `shouldReturn` "nil"
+
+    it "and the bare fell on that plant really does spawn nothing, which \
+       \is what makes the search's refusal right" $ \(env, ls) → do
+        _ ← resetPageWith env [maturedOf gourdId]
+        bareHarvestCount ls foragedTile `shouldReturn` 0
+
+    it "DOES report a matured plant whose phase override makes an \
+       \otherwise inedible yield edible" $ \(env, ls) → do
+        _ ← resetPageWith env [maturedOf thornId]
+        bareFind ls foragedTile `shouldReturn` "probe_thorn"
+
+    it "and the bare fell on that plant really does spawn the food" $
+        \(env, ls) → do
+        _ ← resetPageWith env [maturedOf thornId]
+        bareHarvestCount ls foragedTile `shouldReturn` 1
+
+    it "applies the same rule to a planted CROP PLOT, which reaches the \
+       \edibility test through the same predicate" $ \(env, ls) → do
+        -- A plot's growth clock is days SINCE PLANTING, so the page date
+        -- is advanced rather than the plot back-dated: elapsed 100 puts
+        -- both plots in their matured phase, where the overrides bite.
+        wsA ← resetPageWith env []
+        plantPlot wsA gourdId
+        bareFind ls foragedTile `shouldReturn` "nil"
+        wsB ← resetPageWith env []
+        plantPlot wsB thornId
+        bareFind ls foragedTile `shouldReturn` "probe_thorn"
+
   describe "the fixture is not vacuous" $
     it "the two species differ ONLY in the authored policy, and the \
        \three ages really are three different growth states" $
@@ -396,6 +488,31 @@ spec = describe "Chop tag policy" $ beforeAll setup $ do
         EngineInitResult env ← initializeEngineHeadlessQuiet
         ls ← newBareLuaBackend env
         pure (env, ls)
+
+-- | A BARE (untagged) nearest-harvestable search from a tile, as the
+--   foraging AI issues it. Answers the species name or @"nil"@.
+bareFind ∷ LuaBackendState → (Int, Int) → IO Text
+bareFind ls (gx, gy) = evalDebug ls (T.concat
+    [ "local f = world.findHarvestableFlora(", tshow gx, ", ", tshow gy
+    , ", 8); return f and f.id or 'nil'" ])
+
+-- | The items a BARE harvest of that tile spawns, or @-1@ for a refusal.
+bareHarvestCount ∷ LuaBackendState → (Int, Int) → IO Int
+bareHarvestCount ls (gx, gy) = do
+    reply ← evalDebug ls (T.concat
+        [ "local r = world.harvestFlora(", tshow gx, ", ", tshow gy
+        , "); return r and #r or -1" ])
+    pure (fromMaybe (-99) (readMaybe (T.unpack reply)))
+
+-- | Plant a matured crop plot of @species@ on 'foragedTile', advancing
+--   the page date so the plot's own elapsed-days clock reaches its
+--   matured phase.
+plantPlot ∷ WorldState → FloraId → IO ()
+plantPlot ws species = do
+    writeIORef (wsDateRef ws)
+        (worldDateAddDays defaultCalendarConfig 100 defaultWorldDate)
+    writeIORef (wsCropPlotsRef ws)
+        (HM.singleton foragedTile (CropPlot species 0 1.0))
 
 -- | The named fixture plant. A typo is a test-authoring error, not a
 --   silently skipped case.
