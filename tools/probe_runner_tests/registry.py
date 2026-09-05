@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Registry data and the selection it answers (#2130).
 
-Thirteen groups over `probe_runner_registry` -- the declarations
+Fifteen groups over `probe_runner_registry` -- the declarations
 themselves, checked against the SHIPPED tables rather than a synthetic
 restatement of them, plus the selection behaviour those declarations
 decide:
 
   every timeout override names a registered probe and is a validated
   number;
+  every expected duration does too, and `dispatch_order` turns those
+  declarations into the order `--jobs` considers probes in -- longest
+  first, undeclared last, ties stable, and always the same items back;
   every exclusive-resource declaration is data about real probes, and
   every probe declares what an exclusive holder takes;
   exact selection refuses an unknown key before listing and never runs
@@ -66,6 +69,81 @@ def test_timeout_overrides_are_validated_registry_data() -> None:
                "no probe starts for an invalid explicit timeout")
     finally:
         tree.cleanup()
+
+
+def test_expected_durations_are_validated_registry_data() -> None:
+    print("\n-- per-probe expected durations are validated registry data")
+    expect(probe_runner_registry.expected_duration_problems() == [],
+           "the shipped expected-duration declarations are valid")
+    # Every declared key is a real probe and every real probe either has a
+    # number or honestly has nothing; there is no default standing in for a
+    # measurement nobody took.
+    for key, seconds in probe_runner_registry.PROBE_EXPECTED_SECONDS.items():
+        expect(probe_runner_registry.expected_seconds(key) == seconds,
+               f"{key} reads back the duration it declares ({seconds})")
+    expect(probe_runner_registry.expected_seconds("definitely_not_a_probe")
+           is None,
+           "an unregistered key has no expectation rather than a default")
+
+    unknown = probe_runner_registry.expected_duration_problems(
+        expectations={"not_registered": 1.0})
+    expect(any("unknown probe key" in problem for problem in unknown),
+           f"an unknown declaration is rejected ({unknown})")
+    for bad in (0, -1, float("inf"), float("nan"), True, False, "90"):
+        problems = probe_runner_registry.expected_duration_problems(
+            expectations={"movement": bad})
+        expect(any("finite and positive" in problem for problem in problems),
+               f"an unusable expectation {bad!r} is rejected ({problems})")
+
+
+def test_dispatch_order_is_a_stable_longest_first_reordering() -> None:
+    print("\n-- dispatch_order sorts longest-first, keeps ties stable, and "
+          "returns the same items")
+    saved = probe_runner_registry.PROBE_EXPECTED_SECONDS
+    try:
+        # Synthetic declarations, so the case states the ordering rule
+        # rather than restating whichever probes happen to be slow today.
+        probe_runner_registry.PROBE_EXPECTED_SECONDS = {
+            "a": 10.0, "b": 30.0, "d": 30.0, "e": 5.0,
+        }
+        items = [("a", "a.py", ""), ("b", "b.py", ""), ("c", "c.py", ""),
+                 ("d", "d.py", ""), ("e", "e.py", ""), ("f", "f.py", "")]
+        got = [key for key, _, _ in
+               probe_runner_registry.dispatch_order(items)]
+        expect(got == ["b", "d", "a", "e", "c", "f"],
+               f"longest first, the 30.0 tie in its original order, then "
+               f"the undeclared probes in theirs (got {got})")
+
+        # The scheduler's own shape: each probe paired with the positional
+        # index its reserved port span was allocated against. The pairing
+        # must survive, or a reordered dispatch would hand a probe another
+        # probe's port span (#1571).
+        indexed = list(enumerate(items))
+        reordered = probe_runner_registry.dispatch_order(
+            indexed, key=lambda item: item[1][0])
+        expect([item[1][0] for item in reordered] == got,
+               f"the same order through a custom key extractor "
+               f"(got {[item[1][0] for item in reordered]})")
+        expect(all(items[position] is probe for position, probe in reordered),
+               f"and every probe still carries its own allocation index "
+               f"(got {[(position, probe[0]) for position, probe in reordered]})")
+
+        # A REORDERING, not a filter: nothing may be dropped or duplicated
+        # on the way through, which is what confines the change to which
+        # probe starts next.
+        expect(sorted(reordered) == sorted(indexed),
+               "the same items come back, none lost and none duplicated")
+        expect(probe_runner_registry.dispatch_order([]) == [],
+               "an empty selection reorders to an empty selection")
+
+        probe_runner_registry.PROBE_EXPECTED_SECONDS = {}
+        bare = [key for key, _, _ in
+                probe_runner_registry.dispatch_order(items)]
+        expect(bare == ["a", "b", "c", "d", "e", "f"],
+               f"with nothing declared the input order is preserved exactly "
+               f"(got {bare})")
+    finally:
+        probe_runner_registry.PROBE_EXPECTED_SECONDS = saved
 
 
 def test_exclusive_resource_declaration_is_data_about_real_probes() -> None:
@@ -389,9 +467,12 @@ def test_port_with_jobs_bases_the_parallel_allocation() -> None:
         tree.cleanup()
 
 
-#: Timeout-override declarations.
+#: Timeout-override and expected-duration declarations, and the dispatch
+#: order the latter decides (#2275).
 TESTS_TIMEOUT_DECLARATIONS = (
     test_timeout_overrides_are_validated_registry_data,
+    test_expected_durations_are_validated_registry_data,
+    test_dispatch_order_is_a_stable_longest_first_reordering,
 )
 
 #: Exclusive-resource declaration completeness.

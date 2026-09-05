@@ -641,7 +641,8 @@ fails if this section states one again.
 invocation validation, `--list`, dependency construction, scheduler dispatch
 and the process exit. The implementation sits in five importable owners
 beside it: `probe_runner_registry.py` (the probe list, selection, port spans,
-per-key timeout declarations), `probe_runner_diagnostics.py` (the durable
+per-key timeout and expected-duration declarations, and the longest-first
+dispatch order the latter decides), `probe_runner_diagnostics.py` (the durable
 progress and failure record protocols), `probe_runner_resources.py` (the
 reader/writer conflict model, the cross-process holds, the inherited ancestor
 holds, the engine preflight and its `ENGINE_EXECUTABLE` cell),
@@ -697,6 +698,33 @@ once:
   engine-boot and port contention, so failures are more likely to be
   flakes than with `--jobs 1`. Cap `N` at (cores − 1) or so — each probe
   is a full engine process.
+
+**Dispatch order under `--jobs` (#2275).** Ready, unblocked probes are
+submitted **longest-expected-first**, not in registry order. The
+expectations are checked in, one per probe, as
+`probe_runner_registry.PROBE_EXPECTED_SECONDS`; a probe with no entry
+sorts behind every probe that has one, and probes whose expectations tie
+keep their registry order among themselves. A long probe the registry
+happens to name late would otherwise be dispatched late and finish well
+after the last worker went idle — the durable point is that the step's
+tail stays bounded as probes are added, rather than depending on the new
+probe's key.
+
+Those numbers are *measurements, not budgets*: `PROBE_TIMEOUT_OVERRIDES`
+is the hang bound a probe may not exceed, while this is how long it
+ordinarily takes, and it is only ever read to choose which probe to start
+next. A stale value costs a slightly worse order and nothing else, so
+nothing checks them against a run — refresh one by reading the seconds off
+the runner's own `[i/n] <script> ... PASS (86.7s)` lines. What *is*
+enforced is presence: `ci_probes.py --self-test` fails if a CI-eligible
+probe has no expectation, so the blocking gate's own batch cannot silently
+fall back to registry order.
+
+Nothing else reads them. `--jobs 1`, `--list`, the reserved-port
+allocation, the solo retries after a parallel failure, the failure
+presentation and the final `FAILED:` summary all stay in registry order,
+and `tools/test_run_probes.py`'s scheduler family pins each of those
+separately from the dispatch order itself.
 
 A full run (any `--jobs`) is slow; it is *not* part of any default test
 tier — see `CLAUDE.md` "Testing tiers". Prefer `--only` for day-to-day use.
@@ -3689,7 +3717,7 @@ tools/
 ├── action_outcome_coverage_selftest.py (its synthetic mutation corpus — imports the core's predicates)
 ├── language_report.py      (generated-language native-name report/check, #710/#1094/#1095/#1096)
 ├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
-├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts)
+├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts + expected durations)
 ├── probe_runner_diagnostics.py (its durable progress/failure record protocols)
 ├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine preflight)
 ├── probe_runner_lifecycle.py   (its one-probe launch and process-group teardown)

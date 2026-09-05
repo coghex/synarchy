@@ -13,6 +13,12 @@ a time; `--jobs N` runs up to N CONCURRENTLY, each an independent engine on
 its own RESERVED PORT SPAN (#531, #1571) — a probe that binds more than one
 port declares how many in `probe_runner_registry.PROBE_PORT_SPANS`, and the
 allocator lays the spans end to end so no two concurrent probes overlap.
+Which probe starts next is decided LONGEST-EXPECTED-FIRST (#2275), reading
+the checked-in `probe_runner_registry.PROBE_EXPECTED_SECONDS`: a probe with
+no declared expectation sorts behind every probe that has one, and probes
+whose expectations tie keep their registry order. That is the only thing
+the expectations decide — `--jobs 1`, `--list`, the port allocation, the
+solo retries and the final summary all stay in registry order.
 Probes canNOT share a single engine — 8 neutralise the global
 `unit_ai.update`, 37 load defs engine-wide, many reuse the same world/page
 names, and 16 restart the engine, so there is no clean per-scenario
@@ -75,7 +81,9 @@ This module is the COMMAND and nothing else (#2074). The implementation
 lives in five owners beside it, each of which is importable on its own:
 
   `probe_runner_registry`     the probe list, selection, port spans,
-                              per-key timeout declarations
+                              per-key timeout and expected-duration
+                              declarations, and the dispatch order the
+                              latter decides
   `probe_runner_diagnostics`  the durable progress (#1768) and failure
                               (#1982) record protocols
   `probe_runner_resources`    the reader/writer conflict model, the
@@ -141,9 +149,13 @@ def main() -> int:
                           "on any attempt counts as PASS")
     ap.add_argument("--jobs", type=int, default=1, metavar="N",
                      help="run up to N probes CONCURRENTLY, each its own engine on its "
-                          "own reserved port span (#531, #1571). Cuts wall-time to "
+                          "own reserved port span (#531, #1571), dispatched "
+                          "LONGEST-EXPECTED-FIRST from the checked-in "
+                          "probe_runner_registry.PROBE_EXPECTED_SECONDS — undeclared "
+                          "probes last, ties in registry order (#2275). Cuts wall-time to "
                           "~total/N. Default 1 = the "
-                          "sequential behavior CI relies on. Since concurrency raises "
+                          "sequential behavior CI relies on, which keeps registry order. "
+                          "Since concurrency raises "
                           "contention, --retries re-runs failures SOLO after the parallel "
                           "batch. Cap N to (cores - 1) or so — each probe is a full engine.")
     args = ap.parse_args()
