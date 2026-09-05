@@ -409,11 +409,13 @@ def guidance_lines(finding: Finding,
 class Coverage:
     """The three figures the success line reports.
 
-    They move TOGETHER on a routine append — every guarded type added
-    since 2026-08-15 moved all three — which is why none of them is
-    written down in prose any more (issue #2299): the paragraph in
-    `docs/engine_contracts.md` telling readers not to hand-count these
-    was itself three appends stale."""
+    None of them is written down in prose any more (issue #2299): the
+    paragraph in `docs/engine_contracts.md` telling readers not to
+    hand-count these was itself three appends stale. Adding a guarded
+    type moves one, two or all three, depending on what reaches it — an
+    off-wire type moves only `guarded`, one carried solely by a bare
+    wire root leaves `component_named` alone — so which figures a given
+    append disturbs is not something a transcription can anticipate."""
     guarded: int
     on_save_wire: int
     component_named: int

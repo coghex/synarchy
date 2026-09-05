@@ -2565,9 +2565,11 @@ ratchets it with `--update-baseline`). This is the rest.
 are named by a live component; the rest are guarded pre-emptively, which
 is the point of keying on the `Serialize`-via-`Generic` instance rather
 than on save reachability. How many of each is deliberately not written
-down here. A routine append moves all three figures together, so a
-transcribed set goes stale on the next one — which is what this
-paragraph itself did, while telling its reader not to hand-count
+down here. Adding a guarded type moves one, two or all three of them,
+depending on what reaches it — nothing for an off-wire type but the
+guarded total, no component for one carried only by a bare wire root —
+so a transcribed set goes stale unpredictably, which is what this
+paragraph itself did while telling its reader not to hand-count
 (#2299). The audit's success line reports all three on every run,
 derived from the guarded set it discovered and from
 `docs/save_compat/enum_baseline.json`'s per-type `onSaveWire` /
