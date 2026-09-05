@@ -74,11 +74,22 @@ the repository anchors, the live-field derivation, the one production
 tree walk, SS6.1's permanent set, the Haskell source and import
 helpers, the policy-free inventory-document primitives and the
 projection canonicalizer. The import graph is acyclic and one-way:
-common imports no owner, no owner imports another, and this file
-imports common and every owner. `python3 -m py_compile` does not
-execute imports and so proves nothing about that; the two run commands
-below do, because both load the full graph at run time, where a
-`from X import Y` cycle raises `ImportError`.
+common imports no owner, no contract owner imports another, and this
+file imports common and every owner. The one owner with an interior is
+the writer scanner: since issue #2230
+`engine_env_capability_writers.py` is a facade over four
+implementation owners that DO import each other, in the fixed order
+authority -> {syntax, projections} -> scan, and none of which imports
+the facade. That interior is invisible from here by construction --
+this file imports the facade and nothing below it, so the writer
+scanner is still exactly one owner at this level (issue #2230
+requirements 16 and 23), and adding an edge from here to a writer
+child is what would break the layering. `python3 -m py_compile` does
+not execute imports and so proves nothing about any of it; the two run
+commands below do, because both load the full graph at run time, where
+a `from X import Y` cycle raises `ImportError`, and
+`test_engine_env_capability_writers.py`'s conformance owner checks the
+writer family's interior edges directly.
 
 Single collection
 -----------------

@@ -23,7 +23,11 @@ composes the owners in a fixed order and reports.
 Those owners share a small set of inputs and helpers, and #2036 moved
 every one of them HERE -- #2064 adding the ones a second owner started
 needing when the aggregate was split -- so each exists exactly once and
-no owner needs to import another:
+no owner needs to import another. (An owner may still have an interior:
+`engine_env_capability_writers.py` is a facade over four
+implementation owners of its own since issue #2230, which import each
+other one way and read this module directly, exactly as the facade
+did. Nothing here is duplicated into them.) The shared substrate:
 
   * the repository anchors -- `REPO_ROOT`, the inventory doc, the
     `EngineEnv` declaration file and pattern -- and the live-field
