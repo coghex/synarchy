@@ -184,11 +184,17 @@ lexer's job. Both walkers consume a Haskell **string gap** (report §2.6's
 rather than as an escape — read the other way, the gap's closing
 backslash pairs with the string's own closing quote, the string never
 ends and everything below it is masked. And an identifier's trailing
-prime is recognised over the full Unicode identifier set — read with an
-ASCII-only class, the prime of `π'` opens a char literal that eats the
-quote after it, with the same masking result. Both were live bugs in
-the shared lexer, so this branch fixes them there too, with their own
-fixtures in `test_unicode_operator_audit.py`. The same dash rule is documented on
+prime is recognised over the full Haskell identifier set — letters,
+digits, `_`, `'` **and combining marks**, which GHC accepts (issue
+#7650) and Python's `\w` does not match. Read with a narrower class, the
+prime of `π` + U+0301 opens a char literal that eats the quote after it,
+with the same masking result. Every lexical matcher here reads
+identifiers through that one predicate rather than a character class,
+so a marked quasiquoter name (`[té̲xt|`) and a marked module alias
+(`Ṕ́.show`) resolve too. Both were live bugs in the shared lexer, so this
+branch fixes them there too — `is_haskell_ident_char` lives beside the
+lexer it serves — with their own fixtures in
+`test_unicode_operator_audit.py`. The same dash rule is documented on
 `engine_env_capability_common.py`'s comment stripper, whose
 `_SYMBOL_CHARS` this reuses. Note that the shared `haskell_code_only`
 lexer's own `--` handling still does not model the rule, which matters
@@ -240,8 +246,10 @@ transparent-parenthesis spelling against the three non-transparent
 lookalikes; and an import inside a quasiquote payload, a trailing
 import comment, a comment between `hiding` and its list, and a string
 gap before a quasiquote; and a Unicode identifier's trailing prime and
-a doubled prime before a string. Every rule was mutation-tested against
-them: each is removed one at a time and the self-test fails. The one exception is documented at its definition —
+a doubled prime before a string; and a combining mark in an
+identifier, in a quasiquoter name and in a module alias. Every rule was
+mutation-tested against them: each is removed one at a time and the
+self-test fails. The one exception is documented at its definition —
 `_PACK_LEXEME`'s leading lookaround has no reachable failure mode now
 that bare names are refused, and is kept because it is what the lexeme
 means.

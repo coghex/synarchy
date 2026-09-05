@@ -161,6 +161,19 @@ def test_escaped_single_quote_char_literal_does_not_confuse_the_scanner():
            f"flagged (got {[str(x) for x in v]})")
 
 
+def test_combining_mark_is_an_identifier_character():
+    # GHC accepts a combining mark inside an identifier (issue #7650),
+    # and Python's `\\w` -- `str.isalnum()` plus `_` -- does not match
+    # one. Excluded, the prime of `π́'` opens a char literal, eats the
+    # quote after it, and the real closing quote opens a phantom string
+    # masking every operator below.
+    text = ('g = let π́\' x = x in π́\'"\'"\\n'
+            'go x y = x >>= y\\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a combining mark stays inside the "
+           f"identifier, so the code after it is scanned (got {v})")
+
+
 def test_double_prime_identifier_is_one_name():
     # `'` is itself an identifier-continuation character, so the second
     # prime of `x\'\'` is part of the name. Dropped from the set, it opens
@@ -550,6 +563,7 @@ def main() -> int:
         test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal,
         test_unicode_identifier_trailing_prime_is_not_a_char_literal,
         test_double_prime_identifier_is_one_name,
+        test_combining_mark_is_an_identifier_character,
         test_longer_symbol_run_is_not_a_false_positive,
         test_adjacent_operators_without_whitespace_still_detected,
         test_qualified_operator_forms_are_detected,

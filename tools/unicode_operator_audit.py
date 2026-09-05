@@ -38,6 +38,7 @@ or inequality was spelled `≠`, outside the exemption list below.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -207,15 +208,27 @@ def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
-# A character a Haskell identifier may continue with (report SS2.4): a
-# letter, a digit, `_`, or `'`. `\w` is Python's own and therefore
-# Unicode-aware, which is load-bearing rather than tidy: GHC accepts
-# non-ASCII identifiers and this tree is `UnicodeSyntax` throughout, so
-# an ASCII-only class reads the trailing prime of `π'` as a char-literal
-# opener. That consumes the opening quote of a following `'"'`, whose
-# real closing quote then opens a phantom string that masks every
-# operator to end of file (#2177 / PR #2404 review round 8).
-_IDENT_CONTINUE = re.compile(r"[\w']")
+# Unicode general categories GHC accepts INSIDE an identifier beyond
+# letters and digits. A combining mark is one (GHC issue #7650): `π́`
+# is one identifier of two code points, and Python's `\w` -- which is
+# `str.isalnum()` plus `_` -- does not match the mark.
+_IDENT_MARK_CATEGORIES = frozenset({"Mn", "Mc", "Me"})
+
+
+def is_haskell_ident_char(char: str) -> bool:
+    """True for a character a Haskell identifier may CONTINUE with
+    (report SS2.4 as GHC extends it): a letter, a digit, `_`, `'`, or a
+    combining mark.
+
+    The whole set matters, not the ASCII part and not `\\w`. This tree is
+    `UnicodeSyntax` throughout, and every consumer of this lexer decides
+    where an identifier ENDS by this predicate -- so a character wrongly
+    excluded makes the next `'` look like a char-literal opener, which
+    consumes the opening quote of a following `'"'`, whose real closing
+    quote then opens a phantom string masking the rest of the file
+    (#2177 / PR #2404 review rounds 8 and 9)."""
+    return (char.isalnum() or char in "_'"
+            or unicodedata.category(char) in _IDENT_MARK_CATEGORIES)
 # A Haskell char literal, escaped or not (`'x'`, `'\n'`, `'\''`, `'\NUL'`,
 # `'\65'`, `'\x41'`, ...). Matched WHOLE and skipped atomically so a
 # literal double quote inside one -- `'"'`, a real occurrence in this
@@ -280,7 +293,7 @@ def _scan_code(
             # be the trailing prime of an identifier (`x'`, `map''`) --
             # Haskell identifiers may contain `'` anywhere after the
             # first character.
-            if c == "'" and (i == 0 or not _IDENT_CONTINUE.match(text[i - 1])):
+            if c == "'" and (i == 0 or not is_haskell_ident_char(text[i - 1])):
                 m = _CHAR_LITERAL.match(text, i)
                 if m:
                     if run_start is None:

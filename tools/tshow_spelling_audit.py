@@ -111,7 +111,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from unicode_operator_audit import (  # type: ignore  # noqa: E402
-    _CHAR_LITERAL, _IDENT_CONTINUE, haskell_code_only)
+    _CHAR_LITERAL, haskell_code_only, is_haskell_ident_char)
 from engine_env_capability_common import (  # type: ignore  # noqa: E402
     _SYMBOL_CHARS, _import_chunks)
 from engine_env_capability_writer_syntax import (  # type: ignore  # noqa: E402
@@ -179,8 +179,26 @@ _REWRITING_CPP_DIRECTIVE = re.compile(
 # `_is_quasiquoter_name`, because it is a Haskell identifier and those
 # are not ASCII. The payload runs to the first `|]` and is not Haskell.
 # See the module docstring for why the no-space form is unambiguous.
-_QUASIQUOTE_OPEN = re.compile(r"\[([\w'.]+)\|")
 _QUASIQUOTE_CLOSE = "|]"
+
+
+def _quasiquote_name_end(text: str, pos: int) -> int | None:
+    """The offset just past the `|` of a quasiquote opener starting at
+    `pos`, or `None` if no opener starts there.
+
+    The name is read with `is_haskell_ident_char` rather than a regex
+    character class, because a Haskell identifier may carry a combining
+    mark that no `\\w` class matches (PR #2404 review round 9): an
+    unrecognised opener leaves its payload readable as Haskell, and a
+    lone `"` in there then masks the rest of the file."""
+    if text[pos] != "[":
+        return None
+    i, n = pos + 1, len(text)
+    while i < n and (is_haskell_ident_char(text[i]) or text[i] == "."):
+        i += 1
+    if i == pos + 1 or i >= n or text[i] != "|":
+        return None
+    return i + 1
 
 # Template Haskell's quotation brackets. `[e| |]`, `[t| |]`, `[d| |]`,
 # `[p| |]` and the bare `[| |]` are NOT quasiquotes: their bodies are
@@ -215,14 +233,15 @@ def _is_quasiquoter_name(name: str) -> bool:
 # in Haskell, so it joins `\w` in both lookarounds: `pack'` is a
 # different name and `unpack` is not this one.
 #
-# No fixture claims an independent failure mode for the LEADING
-# lookaround, and that is deliberate rather than an omission: since a
-# bare `pack` is refused rather than resolved (`_UnqualifiedImportError`),
-# a `pack` found inside `unpack` would carry the qualifier `T.un`, which
-# is not a module path, and be dropped a step later anyway. It is here
-# because it is what "the identifier `pack`" means, not because a
-# reachable input depends on it.
-_PACK_LEXEME = re.compile(r"(?<![\w'])" + PACK + r"(?![\w'])")
+# No fixture claims an independent failure mode for the lexeme-boundary
+# test applied to each match below, and that is deliberate rather than
+# an omission: since a bare `pack` is refused rather than resolved
+# (`_UnqualifiedImportError`), a `pack` found inside `unpack` would
+# carry the qualifier `T.un`, which is not a module path, and be
+# dropped a step later anyway. The test is there because it is what
+# "the identifier `pack`" means, not because a reachable input depends
+# on it.
+_PACK_LEXEME = re.compile(PACK)
 
 # What must follow a `pack` for the occurrence to be a show-to-Text
 # wrapper. `\x00` joins whitespace in every gap because `haskell_code_only`
@@ -246,8 +265,25 @@ _PACK_LEXEME = re.compile(r"(?<![\w'])" + PACK + r"(?![\w'])")
 # accepts and this UnicodeSyntax tree may well write.
 _WRAPPER_TAIL = re.compile(
     r"[\s\x00]*(?:\((?P<paren>)|\$!?(?P<dollar>)|(?P<compose>[.∘]))"
-    r"(?:[\s\x00]*\()*[\s\x00]*"
-    r"(?P<qualifier>(?:\w[\w']*\.)+)?show(?![\w'])")
+    r"(?:[\s\x00]*\()*[\s\x00]*")
+
+
+def _names_show(text: str, pos: int) -> bool:
+    """True if the lexeme at `pos` is `show`, bare or qualified by a
+    real module path.
+
+    Read character by character with `is_haskell_ident_char` rather than
+    by a regex class: a module alias may carry a combining mark
+    (`Ṕ́.show`), which no `\\w` class matches, and the wrapper would then
+    go unreported (PR #2404 review round 9). Splitting on `.` after the
+    fact is what separates the qualified `P.show` from the record
+    selector `t.show`, whose prefix is not a module path."""
+    i, n = pos, len(text)
+    while i < n and (is_haskell_ident_char(text[i]) or text[i] == "."):
+        i += 1
+    lexeme = text[pos:i]
+    qualifier, _, head = lexeme.rpartition(".")
+    return head == "show" and (not qualifier or _is_module_path(qualifier))
 
 # A closing parenthesis, and whatever whitespace precedes it, between
 # `pack` and the connector after it. Consumed only as many times as
@@ -344,7 +380,7 @@ def _is_module_path(candidate: str) -> bool:
     if not candidate:
         return False
     return all(seg and seg[0].isupper()
-               and all(ch.isalnum() or ch in "_'" for ch in seg[1:])
+               and all(is_haskell_ident_char(ch) for ch in seg[1:])
                for seg in candidate.split("."))
 
 
@@ -362,8 +398,8 @@ def _qualifier_before(text: str, pos: int) -> tuple[str, int]:
     `'T`, read as no qualifier at all, and the splice names the very
     function this resolves."""
     start = pos
-    while start > 0 and (text[start - 1].isalnum()
-                         or text[start - 1] in "_'."):
+    while start > 0 and (is_haskell_ident_char(text[start - 1])
+                         or text[start - 1] == "."):
         start -= 1
     candidate = text[start:pos]
     if not candidate.endswith("."):
@@ -513,7 +549,8 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
                     i = j + 1
             i += 1
             continue
-        if char == "'" and (i == 0 or not _IDENT_CONTINUE.match(text[i - 1])):
+        if char == "'" and (i == 0
+                            or not is_haskell_ident_char(text[i - 1])):
             literal = _CHAR_LITERAL.match(text, i)
             if literal:
                 i = literal.end()
@@ -531,9 +568,9 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
                     spans.append((i, run))
                 i = run
             continue
-        opener = _QUASIQUOTE_OPEN.match(text, i)
-        if opener and _is_quasiquoter_name(opener.group(1)):
-            close = text.find(_QUASIQUOTE_CLOSE, opener.end())
+        name_end = _quasiquote_name_end(text, i)
+        if name_end is not None and _is_quasiquoter_name(text[i + 1:name_end - 1]):
+            close = text.find(_QUASIQUOTE_CLOSE, name_end)
             end = n if close == -1 else close + len(_QUASIQUOTE_CLOSE)
             spans.append((i, end))
             i = end
@@ -728,6 +765,14 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
 
     violations: list[Violation] = []
     for match in _PACK_LEXEME.finditer(scan_text):
+        # A maximal identifier LEXEME, decided by the predicate rather
+        # than a `\w` class: `unpack` and `pack'` are different names,
+        # and so is a `pack` carrying a combining mark.
+        if ((match.start() > 0
+             and is_haskell_ident_char(scan_text[match.start() - 1]))
+                or (match.end() < len(scan_text)
+                    and is_haskell_ident_char(scan_text[match.end()]))):
+            continue
         if match.start() in exempt:
             continue
         qualifier, expression_start = _qualifier_before(scan_text,
@@ -745,10 +790,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
                 break
             cursor = closer.end()
         tail = _WRAPPER_TAIL.match(scan_text, cursor)
-        if tail is None:
-            continue
-        show_qualifier = tail.group("qualifier")
-        if show_qualifier and not _is_module_path(show_qualifier[:-1]):
+        if tail is None or not _names_show(scan_text, tail.end()):
             continue
         form = next(name for name in _FORM_NAMES
                     if tail.group(name) is not None)
@@ -1234,6 +1276,32 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [4],
     ),
     (
+        "a COMBINING MARK is an identifier character GHC accepts (issue "
+        "#7650) and Python's `\\w` does not match: read without it, the "
+        "prime of `π́'` opens a char literal and the string after it "
+        "masks the wrapper (PR #2404 review round 9)",
+        "module M where\n" + _T
+        + "g = let π́' x = x in π́'\"'\"\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a module alias carrying a mark still qualifies `show`",
+        "module M where\n" + _T
+        + "import qualified Prelude as Ṕ́\n"
+        "f x = T.pack (Ṕ́.show x)\n",
+        [4],
+    ),
+    (
+        "a quasiquoter name carrying a mark is still a quasiquoter -- "
+        "an opener read as ordinary code leaves its payload readable, "
+        "and a lone quote in there masks everything below",
+        "module M where\n" + _T
+        + 's = [téxt| " |]\n'
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
         "a prime may itself follow a prime: `x''` is one name, and "
         "dropping `'` from the continuation set makes its second prime "
         "open a literal that eats the string after it",
@@ -1435,6 +1503,12 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "module M where\n" + _T
         + "s = [text| unclosed\n"
         "f x = T.pack (show x)\n",
+    ),
+    (
+        "and its payload is still a payload: a wrapper written inside a "
+        "marked quasiquoter's body is not code",
+        "module M where\n" + _T
+        + 's = [téxt| T.pack (show x) |]\n',
     ),
     (
         "a quasiquoter with a UNICODE name is still a quasiquote -- one "
