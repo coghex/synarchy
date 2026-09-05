@@ -150,7 +150,7 @@ different *field types*, not different field *sets*):
 | `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` — `WorldSimCapability` (9 world/sim fields); `Engine.Core.Capability.RenderHandoff` — `RenderHandoffCapability` (7 coupled handoff fields) | #893 (E5a) / #894 (E5b) |
 | `units-buildings-combat` | `Engine.Core.Capability.UnitCombat` — `UnitCombatCapability` (10); `Engine.Core.Capability.Building` — `BuildingCapability` (3) | #895 (E6a) / #896 (E6b) |
 | `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (8 registries, the raw WRITER interface); `Engine.Core.Capability.ContentRegistriesView` — `ContentRegistriesViewCapability` (the reader-facing view: 4 registries as `ReadOnlyRef`s + `crvInfectionManagerRef` raw) | #890 (E2) / #1896 (CMA-2) |
-| `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 UI/focus/HUD fields); `Engine.Core.Capability.Events` — `EventsCapability` (4 event/notification/popup fields) | #897 (E7a) / #898 (E7b) |
+| `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 UI/focus/HUD fields); `Engine.Core.Capability.Events` — `EventsCapability` (3 event/notification fields; a 4th, the write-only popup queue, was removed by #2285) | #897 (E7a) / #898 (E7b) |
 | `save-load-coordination` | `Engine.Core.Capability.SaveLoad` — `SaveLoadCapability` (5 coordination handles) | #899 (E8) |
 
 The `world-sim-render-handoff` split is the one that is not a §3.1
@@ -684,11 +684,14 @@ half #897 (E7a) moved: every production consumer reaches them through
 `Engine.Core.Capability.Ui`'s `UiCapability` rather than a field
 accessor, apart from the four §7.7 names as deliberate exceptions
 (`Engine.Core.State`, `Engine.Core.Init`, the projection module
-itself, and §6.1's `World.Load.Publish`). The last four are the
-event/notification/popup half #898 (E7b) moved, reached through
+itself, and §6.1's `World.Load.Publish`). The last three are the
+event/notification half #898 (E7b) moved, reached through
 `Engine.Core.Capability.Events`'s `EventsCapability` under the same
-rule and with the same four kinds of exception. Each record's own
-field documentation restates the reader/writer/lifecycle facts below.
+rule and with the same four kinds of exception. That half moved as
+four fields; #2285 removed the write-only `popupQueueRef`, so popup
+delivery is now the `LuaShowPopup` message alone and this table lists
+three. Each record's own field documentation restates the
+reader/writer/lifecycle facts below.
 
 | Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
 |---|---|---|---|---|---|---|---|
@@ -880,9 +883,10 @@ grep -rl "import Engine.Core.State" src app | wc -l                    # 205
 #        half of the `ui-hud-events` projection; bare `EngineEnv` type
 #        plus its four field accessors, never `EngineEnv(..)`)
 #   1  × `Engine.Core.Capability.Events` (new by #898 — the
-#        event/notification/popup half of the `ui-hud-events`
-#        projection; bare `EngineEnv` type plus its four field
-#        accessors, never `EngineEnv(..)`)
+#        event/notification half of the `ui-hud-events`
+#        projection; bare `EngineEnv` type plus its three field
+#        accessors, never `EngineEnv(..)`; four until #2285 removed
+#        the write-only `popupQueueRef`)
 #   2  × the #898-narrowed `ui-hud-events` modules,
 #        `Engine.PlayerEvent.Emit` and
 #        `Engine.Scripting.Lua.API.PlayerEvent`: both still take an
