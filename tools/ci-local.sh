@@ -260,6 +260,16 @@ step "cabal library module inventory audit"
 python3 tools/test_cabal_module_audit.py
 python3 tools/cabal_module_audit.py
 
+# Source-distribution completeness audit (#2175): the other direction of
+# the same concern as the module inventory above. That one asks whether
+# every src/ module is in the cabal library; this one asks whether every
+# tracked file a shipped runtime path or the headless suite READS is in
+# the sdist, and whether anything untracked ships. Unconditional, and on
+# the CI side it is in test-and-audits -- the only worker with `cabal`.
+step "source distribution manifest audit"
+python3 tools/sdist_manifest_audit.py --self-test
+python3 tools/sdist_manifest_audit.py
+
 step "material id/name correspondence audit"
 python3 tools/material_id_audit.py --self-test
 python3 tools/material_id_audit.py
