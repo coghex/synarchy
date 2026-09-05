@@ -207,7 +207,15 @@ def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
-_IDENT_CONTINUE = re.compile(r"[A-Za-z0-9_']")
+# A character a Haskell identifier may continue with (report SS2.4): a
+# letter, a digit, `_`, or `'`. `\w` is Python's own and therefore
+# Unicode-aware, which is load-bearing rather than tidy: GHC accepts
+# non-ASCII identifiers and this tree is `UnicodeSyntax` throughout, so
+# an ASCII-only class reads the trailing prime of `π'` as a char-literal
+# opener. That consumes the opening quote of a following `'"'`, whose
+# real closing quote then opens a phantom string that masks every
+# operator to end of file (#2177 / PR #2404 review round 8).
+_IDENT_CONTINUE = re.compile(r"[\w']")
 # A Haskell char literal, escaped or not (`'x'`, `'\n'`, `'\''`, `'\NUL'`,
 # `'\65'`, `'\x41'`, ...). Matched WHOLE and skipped atomically so a
 # literal double quote inside one -- `'"'`, a real occurrence in this

@@ -1223,6 +1223,26 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [4],
     ),
     (
+        "a UNICODE identifier's trailing prime is part of the name: "
+        "read as a char-literal opener it eats the opening quote of the "
+        "`'\"'` after it, and the real closing quote then opens a "
+        "phantom string masking everything below (PR #2404 review "
+        "round 8)",
+        "module M where\n" + _T
+        + "g = let π' _ = () in π'\"'\"\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a prime may itself follow a prime: `x''` is one name, and "
+        "dropping `'` from the continuation set makes its second prime "
+        "open a literal that eats the string after it",
+        "module M where\n" + _T
+        + "g = let x'' _ = () in x''\"'\"\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
         "the character literal `'\"'` -- real in "
         "Engine.Scripting.Lua.API.Shell -- must be skipped atomically "
         "rather than opening a phantom string",
