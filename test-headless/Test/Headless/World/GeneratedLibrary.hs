@@ -27,11 +27,10 @@ import qualified Data.Serialize as S
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, createDirectory
+    ( createDirectoryIfMissing, createDirectory
     , createDirectoryLink, copyFile, doesDirectoryExist, doesFileExist
     , doesPathExist, listDirectory, removeDirectoryRecursive, removeFile
-    , removePathForcibly, getPermissions, setPermissions, Permissions(..)
-    , renameDirectory )
+    , getPermissions, setPermissions, Permissions(..), renameDirectory )
 import System.FilePath ((</>))
 import System.IO (hClose, hGetLine, hIsClosed, hSetBinaryMode)
 import System.Posix.IO (createPipe, closeFd, fdToHandle)
@@ -75,24 +74,24 @@ import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldId)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- ---------------------------------------------------------------------
 -- Scratch root
 -- ---------------------------------------------------------------------
 
 -- | A scratch RESOURCE ROOT holding @saves/@ and the library beside it,
---   wiped before and after each use. Nested two levels below the
---   system temp directory for the same reason
---   'Test.Headless.World.Save.Storage' nests: macOS's @\/tmp@ is itself
---   a symlink, and every containment check here inspects a managed
---   directory's immediate parent.
+--   owned outright by this invocation (#2163) and discarded afterwards.
+--   Every managed directory sits two levels below the system temp
+--   directory for the same reason 'Test.Headless.World.Save.Storage'
+--   nests: macOS's @\/tmp@ is itself a symlink, and every containment
+--   check here inspects a managed directory's immediate parent — which
+--   is @root@, a real directory the harness created.
 withScratch ∷ (FilePath → IO a) → IO a
-withScratch action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-generated-library-spec-root"
-    removePathForcibly root
-    createDirectoryIfMissing True (root </> "saves")
-    action root `finally` removePathForcibly root
+withScratch action =
+    withExclusiveTempDirectory "synarchy-generated-library-spec-root" $ \root → do
+        createDirectoryIfMissing True (root </> "saves")
+        action root
 
 configFor ∷ FilePath → LibraryConfig
 configFor root = LibraryConfig

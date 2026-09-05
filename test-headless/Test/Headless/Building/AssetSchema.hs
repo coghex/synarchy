@@ -51,10 +51,10 @@ import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaToEngineMsg(..))
 import System.Directory
-    ( createDirectoryIfMissing, getTemporaryDirectory, listDirectory
-    , removeDirectoryRecursive, removeFile, withCurrentDirectory )
+    (createDirectoryIfMissing, listDirectory, withCurrentDirectory)
 import System.FilePath (takeExtension, (</>))
 import Test.Headless.Harness (withHeadlessEngine)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 import Test.Headless.Harness.Log (newLogCapture)
 import World.Page.Types (WorldPageId(..))
 import World.Save.Types
@@ -523,18 +523,17 @@ numericDomainSpec = do
             bydMaterials def `shouldBe` Map.empty
 
     describe "the whole-file contract" $
-        it "refuses the file entirely, sparing not even a valid sibling" $ do
+        it "refuses the file entirely, sparing not even a valid sibling" $
+          withExclusiveTempDirectory "synarchy-2347-whole-file" $ \tmp → do
             -- Engine.Asset.YamlList is all-or-nothing: one invalid
             -- declaration costs the file, and the warning has to name
             -- BOTH the file (which YamlList supplies) and the offending
             -- declaration (which only the decoder can).
-            tmp ← getTemporaryDirectory
             let path = tmp </> "synarchy-2347-whole-file.yaml"
             BS.writeFile path siblingYaml
             (backend, drain) ← newLogCapture
             logger ← initLogger defaultLogConfig { lcBackend = backend }
             outcome ← loadBuildingYamlOutcome logger path
-                          `finally` removeFile path
             outcome `shouldBe` Nothing
             entries ← drain
             let warned = unwords (map (T.unpack ∘ leMessage) entries)
@@ -668,13 +667,12 @@ validFpsPreviewYaml = BS.unlines
 --   'Test.Headless.Harness.Isolation' uses, narrowed to the one file
 --   this decoder reads.
 withPreviewRoot ∷ BS.ByteString → IO a → IO a
-withPreviewRoot bytes act = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-2347-preview-root"
-        dir  = root </> "data" </> "buildings"
-    createDirectoryIfMissing True dir
-    BS.writeFile (dir </> "probe_hall.yaml") bytes
-    withCurrentDirectory root act `finally` removeDirectoryRecursive root
+withPreviewRoot bytes act =
+    withExclusiveTempDirectory "synarchy-2347-preview-root" $ \root → do
+        let dir = root </> "data" </> "buildings"
+        createDirectoryIfMissing True dir
+        BS.writeFile (dir </> "probe_hall.yaml") bytes
+        withCurrentDirectory root act
 
 legacySpec ∷ Spec
 legacySpec = do
@@ -1066,10 +1064,10 @@ runLoader env fileName bytes = do
     bm0 ← readIORef defsRef
     let restore = atomicModifyIORef' defsRef $ \bm →
             (bm { bmDefs = bmDefs bm0 }, ())
-    tmp ← getTemporaryDirectory
-    let path = tmp </> "synarchy-bda1-" <> fileName
-    BS.writeFile path bytes
-    (`finally` (restore ≫ removeFile path)) $ do
+    withExclusiveTempDirectory "synarchy-bda1" $ \tmp → do
+      let path = tmp </> "synarchy-bda1-" <> fileName
+      BS.writeFile path bytes
+      (`finally` restore) $ do
         ls ← newBareLuaBackend env
         _ ← Q.flushQueue (luaToEngineQueue env)
         _ ← executeDebugLua (lbsLuaState ls)

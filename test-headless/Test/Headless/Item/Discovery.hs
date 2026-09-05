@@ -37,7 +37,6 @@ module Test.Headless.Item.Discovery (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
@@ -45,8 +44,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import System.Directory
-    ( createDirectoryIfMissing, createDirectoryLink, createFileLink
-    , doesDirectoryExist, getTemporaryDirectory, removeDirectoryRecursive )
+    ( createDirectoryIfMissing, createDirectoryLink, createFileLink )
 import System.FilePath ((</>), takeDirectory)
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import Engine.Asset.Types (defaultAssetPool)
@@ -59,6 +57,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Scripting.Lua.API.Items.Defs
     (registerItemDefs, itemDuplicateMessage)
 import Item.Types (ItemDef(..), ItemManager(..), emptyItemManager)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -----------------------------------------------------------------------
 -- Fixture trees
@@ -70,20 +69,13 @@ import Item.Types (ItemDef(..), ItemManager(..), emptyItemManager)
 --   system temp directory, never inside the checkout, so the #1257
 --   inventory walk and the shipped-corpus counts never see it.
 withTree ∷ String → [(FilePath, String)] → (FilePath → IO α) → IO α
-withTree label files action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> ("synarchy-1232-" ⧺ label)
-    removeIfPresent root
-    createDirectoryIfMissing True root
-    forM_ files $ \(rel, contents) → do
-        let full = root </> rel
-        createDirectoryIfMissing True (takeDirectory full)
-        writeFile full contents
-    action root `finally` removeIfPresent root
-  where
-    removeIfPresent p = do
-        present ← doesDirectoryExist p
-        when present $ removeDirectoryRecursive p
+withTree label files action =
+    withExclusiveTempDirectory ("synarchy-1232-" ⧺ label) $ \root → do
+        forM_ files $ \(rel, contents) → do
+            let full = root </> rel
+            createDirectoryIfMissing True (takeDirectory full)
+            writeFile full contents
+        action root
 
 -- | A minimal valid item definition: exactly the four fields the loader
 --   REQUIRES (a missing or non-positive @bulk@ is rejected outright,
@@ -287,11 +279,15 @@ spec = describe "Item definition discovery" $ do
                 sort found `shouldBe` ["keep.yaml", "nested/keep.yaml"]
 
         it "returns nothing — never an error — for a directory that \
-           \does not exist" $ \_ → do
-            tmp ← getTemporaryDirectory
-            found ← walkFilesWithExtension
-                        (tmp </> "synarchy-1232-absent") ".yaml"
-            found `shouldBe` []
+           \does not exist" $ \_ →
+            -- A NEVER-CREATED child of a directory this invocation owns,
+            -- not that directory itself: an existing but empty directory
+            -- would answer @[]@ for the wrong reason, so only a path
+            -- nothing ever created proves the absent-directory branch.
+            withExclusiveTempDirectory "synarchy-1232-absent" $ \owned → do
+                found ← walkFilesWithExtension
+                            (owned </> "absent") ".yaml"
+                found `shouldBe` []
 
         it "skips a symlinked FILE rather than discovering the same \
            \definition twice" $ \_ → withTree "walk-file-link"

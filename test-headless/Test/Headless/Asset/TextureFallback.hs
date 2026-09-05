@@ -25,14 +25,11 @@ import UPrelude
 import Test.Hspec
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, takeMVar)
-import Control.Exception (finally)
 import Data.List (sort)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as Map
-import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , doesFileExist )
+import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as Vec
@@ -99,6 +96,7 @@ import Unit.Direction (Direction(..))
 import World.Flora.Types (FloraCatalog(..), FloraId(..), FloraSpecies(..)
     , FloraHarvest(..), FloraInstance(..), lookupSpecies)
 import World.Flora.Identity (floraInstanceIdNone)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- A real, always-present repo asset — stands in for both "the preferred
 -- path" (existing case) and "the fallback path" (missing case) so the
@@ -203,12 +201,9 @@ spec = do
             -- when the test ends, and the aroundAll-shared `_sharedEnv`
             -- above is deliberately unused.
             EngineInitResult env ← initializeEngineHeadlessQuiet
-            tmp ← getTemporaryDirectory
-            let dir = tmp </> "synarchy-texture-fallback-spec"
-                path = dir </> "no_harvest_texture.yaml"
-            createDirectoryIfMissing True dir
-            writeFile path noHarvestedTextureYaml
-            (`finally` removeDirectoryRecursive dir) $ do
+            withExclusiveTempDirectory "synarchy-texture-fallback-spec" $ \dir → do
+                let path = dir </> "no_harvest_texture.yaml"
+                writeFile path noHarvestedTextureYaml
                 idBefore ← fcNextId <$> readIORef (floraCatalogRef env)
                 ls ← newBareLuaBackend env
                 result ← evalDebug ls

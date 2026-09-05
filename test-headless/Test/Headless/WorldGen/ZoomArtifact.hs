@@ -3,17 +3,13 @@ module Test.Headless.WorldGen.ZoomArtifact (spec, worldSpec) where
 
 import UPrelude
 import Control.DeepSeq (force)
-import Control.Exception (evaluate, finally)
+import Control.Exception (evaluate)
 import qualified Data.ByteString as BS
 import Data.Either (isLeft, isRight)
 import Data.IORef (readIORef)
 import qualified Data.Text as T
 import qualified Data.Vector as V
-import System.Directory
-    ( createDirectory, doesDirectoryExist, doesFileExist
-    , getTemporaryDirectory, listDirectory, removeDirectoryRecursive
-    , removeFile )
-import System.IO (hClose, openBinaryTempFile)
+import System.Directory (listDirectory, removeDirectoryRecursive)
 import Test.Hspec
 import Test.Headless.Harness (sharedWorld, getWorldGenParams)
 import Engine.Core.State (EngineEnv, loggerRef, materialRegistryRef)
@@ -26,6 +22,7 @@ import World.Geology.Timeline.Stitch
 import World.Material
     ( MaterialId(..), MaterialProps(..), getMaterialProps, matGranite
     , registerMaterial )
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 spec ∷ Spec
 spec = describe "exact zoom reconstruction artifact" $ do
@@ -161,15 +158,4 @@ fixturePixels = V.fromList
     blockBytes = zoomTileSize * zoomTileSize * 4
 
 withTempRoot ∷ (FilePath → IO a) → IO a
-withTempRoot action = do
-    tmp ← getTemporaryDirectory
-    (root, handle) ← openBinaryTempFile tmp "synarchy-zoom-artifact-spec"
-    hClose handle
-    removeFile root
-    createDirectory root
-    let reset = do
-            directory ← doesDirectoryExist root
-            when directory $ removeDirectoryRecursive root
-            file ← doesFileExist root
-            when file $ removeFile root
-    action root `finally` reset
+withTempRoot = withExclusiveTempDirectory "synarchy-zoom-artifact-spec"

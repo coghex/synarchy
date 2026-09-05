@@ -16,11 +16,8 @@ module Test.Headless.Core.ConfigState (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (newIORef, readIORef, modifyIORef')
-import System.Directory
-  ( getTemporaryDirectory, createDirectoryIfMissing
-  , removeDirectoryRecursive, doesDirectoryExist, doesFileExist )
+import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import System.IO (stderr)
 import Data.Aeson (FromJSON(..), withObject, (.:))
@@ -38,6 +35,7 @@ import Engine.Core.Log
 import Engine.Asset.YamlNotifications
   ( loadNotificationCfg, writeNotificationOverrides, OverridesFile )
 import Engine.PlayerEvent (CategoryCfg(..))
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | A minimal FromJSON type with one REQUIRED field, standing in for a
 --   real subsystem's config type (e.g. 'Engine.Graphics.Config.VideoConfigFile'
@@ -159,20 +157,13 @@ neutralityCheck deflt record = LegacyNeutralityCheck
     , lncRecordPath  = record
     }
 
--- | A scratch directory, wiped clean before and after use. The suite runs
---   sequentially, so a single fixed path (under the system temp dir, never
---   inside the repo) is safe to reuse across 'it's.
+-- | A scratch directory this invocation owns outright (#2163): created
+--   fresh under a random name, never inside the repo, and torn down
+--   afterwards. Nothing is wiped on the way IN, because there is nothing
+--   at the path to wipe — which is what lets two suite processes run this
+--   group at once without one clearing the other's fixture.
 withTempDir ∷ (FilePath → IO a) → IO a
-withTempDir action = do
-    tmp ← getTemporaryDirectory
-    let dir = tmp </> "synarchy-config-state-spec"
-    reset dir
-    action dir `finally` reset dir
-  where
-    reset d = do
-        exists ← doesDirectoryExist d
-        when exists (removeDirectoryRecursive d)
-        createDirectoryIfMissing True d
+withTempDir = withExclusiveTempDirectory "synarchy-config-state-spec"
 
 registryYaml ∷ String
 registryYaml = unlines

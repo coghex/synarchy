@@ -19,7 +19,6 @@ module Test.Headless.Item.BulkStorage (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (sort)
 import qualified Data.ByteString as BS
@@ -29,9 +28,6 @@ import qualified Data.HashSet as HS
 import qualified Data.Serialize as S
 import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
-import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing
-    , removeDirectoryRecursive )
 import System.FilePath ((</>))
 import Engine.Asset.Discovery (walkFilesWithExtension)
 import Engine.Core.Log
@@ -49,6 +45,7 @@ import World.Save.Envelope (decodeSessionEnvelope)
 import World.Save.Snapshot (SessionSnapshot(..), PageSnapshot(..))
 import World.Save.Types
     (ItemWalkOrder(..), pageItemContainers, flattenItemInstances)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | The shipped item-definition directory, exactly as boot loads it.
 shippedItemDir ∷ FilePath
@@ -551,10 +548,8 @@ callbackLogger = do
     pure (logger, entriesRef)
 
 withTempItemYaml ∷ String → (FilePath → IO α) → IO α
-withTempItemYaml contents action = do
-    tmp ← getTemporaryDirectory
-    let dir  = tmp </> "synarchy-1233-item-bulk"
-        path = dir </> "probe_items.yaml"
-    createDirectoryIfMissing True dir
-    writeFile path contents
-    action path `finally` removeDirectoryRecursive dir
+withTempItemYaml contents action =
+    withExclusiveTempDirectory "synarchy-1233-item-bulk" $ \dir → do
+        let path = dir </> "probe_items.yaml"
+        writeFile path contents
+        action path

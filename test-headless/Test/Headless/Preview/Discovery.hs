@@ -11,12 +11,12 @@ import Control.Exception (finally)
 import Data.List (sort)
 import qualified Data.Text as T
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , doesDirectoryExist, createFileLink, createDirectoryLink
+    ( createDirectoryIfMissing, doesDirectoryExist, createFileLink, createDirectoryLink
     , removeDirectoryLink )
 import System.FilePath ((</>))
 import Engine.Core.Types (PreviewEntry(..))
 import Engine.Preview.Discovery
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- A real, always-present repo asset (mirrors Test.Headless.Asset.TextureFallback's
 -- 'realAsset' convention) — proves 'textureCategoryRoot' + resolution
@@ -32,16 +32,15 @@ realItem = "skill/climbing.png"
 -- which exist under any real simple-category root in this repo (every
 -- asset is already a .png).
 withFixture ∷ (FilePath → IO ()) → IO ()
-withFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-discovery-spec"
-    createDirectoryIfMissing True (root </> "sub")
-    writeFile (root </> "a.png") ""
-    writeFile (root </> "sub" </> "b.png") ""
-    writeFile (root </> "sub" </> "c.PNG") ""        -- extension case-insensitivity
-    writeFile (root </> "notes.txt") ""              -- must be excluded
-    writeFile (root </> "sub" </> "readme.md") ""    -- must be excluded
-    (`finally` removeDirectoryRecursive root) (action root)
+withFixture action =
+    withExclusiveTempDirectory "synarchy-preview-discovery-spec" $ \root → do
+        createDirectoryIfMissing True (root </> "sub")
+        writeFile (root </> "a.png") ""
+        writeFile (root </> "sub" </> "b.png") ""
+        writeFile (root </> "sub" </> "c.PNG") ""    -- extension case-insensitivity
+        writeFile (root </> "notes.txt") ""          -- must be excluded
+        writeFile (root </> "sub" </> "readme.md") ""  -- must be excluded
+        action root
 
 -- A fixture proving the symlink rule (#886 round-5 review): rejected
 -- unconditionally, not just when it escapes the root, and checked at
@@ -54,25 +53,25 @@ withFixture action = do
 --   shortcut/           -- a symlinked DIRECTORY pointing at 'outside'
 --   shortcut/escape.png -- reached only by walking through 'shortcut'
 withSymlinkFixture ∷ (FilePath → IO ()) → IO ()
-withSymlinkFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-discovery-symlink-spec"
-        outside = tmp </> "synarchy-preview-discovery-symlink-spec-outside"
-    createDirectoryIfMissing True root
-    createDirectoryIfMissing True outside
-    writeFile (outside </> "escape.png") ""
-    writeFile (root </> "real.png") ""
-    createFileLink (outside </> "escape.png") (root </> "escape_link.png")
-    createFileLink (root </> "real.png") (root </> "inner_link.png")
-    createDirectoryLink outside (root </> "shortcut")
-    -- Unlink the directory symlink FIRST — removeDirectoryRecursive must
-    -- never be given a chance to follow it into 'outside' (the exact
-    -- cycle/escape hazard this whole fixture exists to prove is fixed).
-    let cleanup = do
-            removeDirectoryLink (root </> "shortcut")
-            removeDirectoryRecursive root
-            removeDirectoryRecursive outside
-    (`finally` cleanup) (action root)
+withSymlinkFixture action =
+    -- 'outside' is a SIBLING of the walked root, not a child: the links
+    -- still escape the fixture root exactly as before, while both trees
+    -- live inside the one directory this invocation created and is the
+    -- only owner of.
+    withExclusiveTempDirectory "synarchy-preview-discovery-symlink-spec" $ \base → do
+        let root = base </> "root"
+            outside = base </> "outside"
+        createDirectoryIfMissing True root
+        createDirectoryIfMissing True outside
+        writeFile (outside </> "escape.png") ""
+        writeFile (root </> "real.png") ""
+        createFileLink (outside </> "escape.png") (root </> "escape_link.png")
+        createFileLink (root </> "real.png") (root </> "inner_link.png")
+        createDirectoryLink outside (root </> "shortcut")
+        -- Unlink the directory symlink FIRST — no recursive removal may
+        -- ever be given a chance to follow it into 'outside' (the exact
+        -- cycle/escape hazard this whole fixture exists to prove is fixed).
+        action root `finally` removeDirectoryLink (root </> "shortcut")
 
 spec ∷ Spec
 spec = do

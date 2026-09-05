@@ -26,10 +26,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Yaml as Yaml
 import qualified HsLua as Lua
-import Control.Exception (bracket_)
 import Data.IORef (readIORef, writeIORef)
-import System.Directory
-  (getTemporaryDirectory, createDirectoryIfMissing, removePathForcibly)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (CoreCapability, toCoreCapability)
 import Engine.Core.Capability.ContentRegistries
@@ -38,6 +35,7 @@ import Engine.Asset.YamlTutorials
 import Engine.Scripting.Lua.API.Tutorial
   (loadTutorialDirFn, getTutorialTreeFn)
 import Tutorial.Types
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | The shipped tree, as the engine loads it.
 firstSessionPath ∷ FilePath
@@ -415,10 +413,14 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
         withTutorialDir "empty" [("README.md", "not a tutorial\n")] $
           \dir → loadAndQuery env dir `shouldReturn` (Just 0, Nothing)
 
-    it "rejects a directory that does not exist" $ \env → do
-        tmp ← getTemporaryDirectory
-        loadAndQuery env (tmp ⊘ "synarchy_957_absent_tutorials")
-            `shouldReturn` (Just 0, Nothing)
+    it "rejects a directory that does not exist" $ \env →
+        -- A NEVER-CREATED child of a directory this invocation owns,
+        -- not that directory itself: an existing but empty directory
+        -- loads zero trees too, so only a path nothing ever created
+        -- distinguishes "absent" from "present and empty".
+        withExclusiveTempDirectory "synarchy_957_absent_tutorials" $ \owned →
+            loadAndQuery env (owned ⊘ "absent")
+                `shouldReturn` (Just 0, Nothing)
 
     it "rejects two files that both declare a valid tree" $ \env →
         -- Without this, the winner would be whichever file the OS
@@ -504,15 +506,10 @@ shippedTutorialDir = "data/tutorials"
 
 -- | A throwaway tutorial directory holding exactly the given files.
 withTutorialDir ∷ String → [(FilePath, String)] → (FilePath → IO α) → IO α
-withTutorialDir name files act = do
-    tmp ← getTemporaryDirectory
-    let dir = tmp ⊘ ("synarchy_957_tutorials_" <> name)
-    bracket_ (setup dir) (removePathForcibly dir) (act dir)
-  where
-    setup dir = do
-        removePathForcibly dir
-        createDirectoryIfMissing True dir
+withTutorialDir name files act =
+    withExclusiveTempDirectory ("synarchy_957_tutorials_" <> name) $ \dir → do
         forM_ files $ \(f, contents) → writeFile (dir ⊘ f) contents
+        act dir
 
 -- | A minimal complete tree — enough to validate, small enough to read.
 validTutorialYaml ∷ String
