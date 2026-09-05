@@ -160,7 +160,10 @@ and only those two (both found in PR #2404's review):
   here is the only one in play — and it removes nothing reportable,
   since the four matched spellings are `(`, `$`, `.` and `∘`, none of
   them a dash run. A run carrying no `--` (`->`, `-`, `.`) is left
-  alone.
+  alone. What counts as a symbol character is report §2.2's full
+  `ascSymbol | uniSymbol` set — Unicode symbols **and** punctuation,
+  minus the specials — not just the ASCII half: this tree writes its own
+  operators in Unicode, so `⊚--` and `--—` are each one lexeme.
 
 Comments, strings and character literals are skipped by that pass, never
 masked by it: skipping is what stops an opener quoted inside one from
@@ -198,10 +201,10 @@ directions. The lexing pre-pass gets its own set — a payload holding
 `"`, `--`, `{-` or an apostrophe; an opener quoted inside a string or a
 comment; an escaped quote inside a string; a `'"'` character literal and
 an identifier's trailing prime before an opener; an unclosed quasiquote;
-`-->`, `<--`, `--|` and a longer `--`-carrying operator against `--`,
-`---`, `-- |`, `->` and a lone subtracting `-`. Every rule was
-mutation-tested against them: each is removed one at a time and the
-self-test fails.
+`-->`, `<--`, `--|`, a longer `--`-carrying operator, `⊚--`, `--⊚` and
+`--—` against `--`, `---`, `-- |`, `->`, an em dash in comment prose and
+a lone subtracting `-`. Every rule was mutation-tested against them:
+each is removed one at a time and the self-test fails.
 
 ## World generation tools
 

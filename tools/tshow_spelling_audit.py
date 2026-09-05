@@ -101,6 +101,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -273,6 +274,32 @@ def _qualifier_before(text: str, pos: int) -> str:
     return candidate if _is_module_path(candidate) else ""
 
 
+# Haskell 2010 SS2.2's `special` characters, which `uniSymbol` excludes
+# along with `_`, `"` and `'`. All ASCII, which is what lets
+# `_is_symbol_char` decide every ASCII character from `_SYMBOL_CHARS`
+# alone and reach the Unicode tables only for the rest.
+_HASKELL_SPECIAL = frozenset("()[]{},;`_\"'")
+
+
+def _is_symbol_char(char: str) -> bool:
+    """True for a character a Haskell symbolic operator is made of.
+
+    Report SS2.2: `symbol -> ascSymbol | uniSymbol<special | _ | " | '>`,
+    where `uniSymbol` is ANY Unicode symbol or punctuation. This
+    codebase is `UnicodeSyntax` throughout and defines its own operators
+    from that set (`⊚`, `⌦`, `∘`, `⚟`), so an ASCII-only test splits a
+    lexeme like `⊚--` and hands the trailing `--` on as a comment
+    opener -- masking the wrapper after a valid operator (PR #2404
+    review round 3).
+
+    `_SYMBOL_CHARS` is `ascSymbol`, and every `special` character is
+    ASCII, so an ASCII character is decided by that set alone and the
+    category lookup runs only for the rest."""
+    if char.isascii():
+        return char in _SYMBOL_CHARS
+    return unicodedata.category(char)[0] in "SP"
+
+
 def _premasked_spans(text: str) -> list[tuple[int, int]]:
     """The `[start, end)` spans `_prepared_code` blanks before handing
     the source to `haskell_code_only`, in source order.
@@ -305,9 +332,10 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
     The leading side needs no predicate: a symbol run is consumed WHOLE
     from its first character, and every other arm leaves `i` on a
     character no symbol precedes, so a dash inside a longer lexeme is
-    never tested on its own. `_SYMBOL_CHARS` is
-    `engine_env_capability_common`'s, so the character set has one
-    owner.
+    never tested on its own. What counts as a symbol character is
+    `_is_symbol_char`, which is report SS2.2's full set and not just the
+    ASCII half -- this tree writes its own operators in Unicode, and
+    `⊚--` is one lexeme.
 
     Comments, strings and character literals are SKIPPED here, never
     recorded: skipping is what stops an opener quoted inside one from
@@ -349,9 +377,9 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
             if literal:
                 i = literal.end()
                 continue
-        if char in _SYMBOL_CHARS:
+        if _is_symbol_char(char):
             run = i
-            while run < n and text[run] in _SYMBOL_CHARS:
+            while run < n and _is_symbol_char(text[run]):
                 run += 1
             lexeme = text[i:run]
             if len(lexeme) >= 2 and lexeme == "-" * len(lexeme):
@@ -784,6 +812,51 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [3],
     ),
     (
+        "`⊚--` is ONE operator: report SS2.2's symbol set is Unicode, and "
+        "this tree writes its own operators from it, so an ASCII-only "
+        "test splits the lexeme and hands the `--` on as a comment "
+        "opener (PR #2404 review round 3)",
+        "module M where\n" + _T
+        + "(⊚--) :: Int -> T.Text -> T.Text\n"
+        "_ ⊚-- y = y\n"
+        "f x = 0 ⊚-- T.pack (show x)\n",
+        [5],
+    ),
+    (
+        "report SS2.2's `uniSymbol` is symbols AND punctuation, so a "
+        "dash run continuing into an em dash (category Pd) is an "
+        "operator too -- and this tree's comment prose is full of em "
+        "dashes, so a symbols-only test is not a safe approximation",
+        "module M where\n" + _T
+        + "(--—) :: Int -> T.Text -> T.Text\n"
+        "_ --— y = y\n"
+        "f x = 0 --— T.pack (show x)\n",
+        [5],
+    ),
+    (
+        "a dash run continuing into a UNICODE symbol is an operator for "
+        "the same reason",
+        "module M where\n" + _T
+        + "f x = x --⊚ T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "a Unicode operator followed by a REAL comment: the operator "
+        "run ends at the space, so the `--` after it still opens one",
+        "module M where\n" + _T
+        + "f x = x ⊚ y -- T.pack (show x)\n"
+        "g x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "a Unicode type signature is skipped without hiding the wrapper "
+        "under it",
+        "module M where\n" + _T
+        + "f ∷ Int → Text\n"
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
         "a single-dash `->` is left alone and the wrapper below it is "
         "still read",
         "module M where\n" + _T
@@ -957,6 +1030,13 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "run ends at two and opens a comment",
         "module M where\n" + _T
         + "-- | T.pack (show x)\n"
+        "f x = tshow x\n",
+    ),
+    (
+        "an em dash inside comment prose is comment text, not an "
+        "operator -- this tree's comments are full of them",
+        "module M where\n" + _T
+        + "-- note — T.pack (show x)\n"
         "f x = tshow x\n",
     ),
     (
