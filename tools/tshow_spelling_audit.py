@@ -264,9 +264,12 @@ _PACK_LEXEME = re.compile(PACK)
 # `P.show` and `Ü.show` count while a `t.show` record selector does not.
 # An ASCII-only class here would miss a Unicode module alias, which GHC
 # accepts and this UnicodeSyntax tree may well write.
-_WRAPPER_TAIL = re.compile(
-    r"[\s\x00]*(?:\((?P<paren>)|\$!?(?P<dollar>)|(?P<compose>[.∘]))"
-    r"(?:[\s\x00]*\()*[\s\x00]*")
+_CONNECTOR = re.compile(
+    r"[\s\x00]*(?:\((?P<paren>)|\$!?(?P<dollar>)|(?P<compose>[.∘]))")
+
+# The redundant openers admitted between the connector and `show`, and
+# the gap after them.
+_TRANSPARENT_OPEN_RUN = re.compile(r"(?:[\s\x00]*\()*[\s\x00]*")
 
 
 def _names_show(text: str, pos: int) -> bool:
@@ -294,10 +297,54 @@ def _names_show(text: str, pos: int) -> bool:
 # `h`, not to `pack` -- does not.
 _TRANSPARENT_CLOSE = re.compile(r"[\s\x00]*\)")
 
+# An OPERATOR SECTION puts the connector at the edge of a parenthesised
+# expression instead of between its operands, and both halves of that
+# are still this wrapper (PR #2404 review round 11):
+#
+#   (pack .) show      (pack $) (show x)     -- LEFT sections, applied
+#   (. show) pack      ($ show x) pack       -- RIGHT sections, applied
+#
+# GHC infers `Show a => a -> Text` for every one, so each is `tshow`
+# spelled out. The left forms are read by letting a section's closing
+# `)` sit between the connector and `show`, drawing on the same opener
+# budget `_transparent_open_parens` computes. The right forms put
+# `show` BEFORE `pack`, so they need their own backward look.
+#
+# The backward look reads only a section it can see whole: it walks
+# back over identifier characters, connectors and gaps to the opening
+# `(`, and gives up at anything else -- a nested bracket, a literal.
+# That is a conservative MISS on an exotic section rather than a
+# balance count that a `')'` character literal could throw off.
+_SECTION_SCANNABLE = frozenset(".∘$!")
+_RIGHT_SECTION_HEAD = re.compile(r"[\s\x00]*(?:\$!?|[.∘])[\s\x00]*")
+
+
+def _right_section_before(text: str, pos: int) -> bool:
+    """True if a right section applying `show` sits immediately before
+    `pos` -- `(. show)` or `($ show …)`, whose operand is therefore the
+    expression at `pos`."""
+    i = pos - 1
+    while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
+        i -= 1
+    if i < 0 or text[i] != ")":
+        return False
+    j = i - 1
+    while j >= 0 and (is_haskell_ident_char(text[j])
+                      or text[j] in _SECTION_SCANNABLE
+                      or text[j].isspace() or text[j] == "\x00"):
+        j -= 1
+    if j < 0 or text[j] != "(":
+        return False
+    content = text[j + 1:i]
+    head = _RIGHT_SECTION_HEAD.match(content)
+    return head is not None and _names_show(content, head.end())
+
+
 _FORM_NAMES = {
     "paren": "pack (show …)",
     "dollar": "pack $ show …",
     "compose": "pack ∘ show",
+    "section": "(∘ show) pack",
 }
 
 
@@ -823,22 +870,41 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
                                                         match.start())
         if not imports_name(declarations, TEXT_MODULE, PACK, qualifier):
             continue
-        # Close only as many parentheses as this expression opened, so
-        # `(T.pack) . show` is read while `g (h (T.pack)) . show` -- a
-        # different function -- is not.
+        spelling = f"{qualifier}.{PACK}" if qualifier else PACK
+        # `(. show) T.pack` and `($ show x) T.pack`: the section holds
+        # `show` and this expression is its operand, so the wrapper
+        # reads right to left.
+        if _right_section_before(scan_text, expression_start):
+            violations.append(Violation(rel_path,
+                                        _line_of(text, match.start()),
+                                        spelling, "section"))
+            continue
+        # Otherwise the connector follows. Close only as many
+        # parentheses as this expression opened, so `(T.pack) . show` is
+        # read while `g (h (T.pack)) . show` -- a different function --
+        # is not; a section's own closer may sit on either side of the
+        # connector, and draws on the same budget.
+        budget = _transparent_open_parens(scan_text, expression_start)
         cursor = match.end()
-        for _ in range(_transparent_open_parens(scan_text,
-                                                expression_start)):
+        while budget:
             closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
             if closer is None:
                 break
-            cursor = closer.end()
-        tail = _WRAPPER_TAIL.match(scan_text, cursor)
-        if tail is None or not _names_show(scan_text, tail.end()):
+            cursor, budget = closer.end(), budget - 1
+        connector = _CONNECTOR.match(scan_text, cursor)
+        if connector is None:
+            continue
+        cursor = connector.end()
+        if budget:
+            closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
+            if closer is not None:
+                cursor = closer.end()
+        cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
+        if not _names_show(scan_text, cursor):
             continue
         form = next(name for name in _FORM_NAMES
-                    if tail.group(name) is not None)
-        spelling = f"{qualifier}.{PACK}" if qualifier else PACK
+                    if name in connector.groupdict()
+                    and connector.group(name) is not None)
         violations.append(Violation(rel_path, _line_of(text, match.start()),
                                     spelling, form))
     return violations
@@ -964,6 +1030,32 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "`( T.pack ) . show` opens one just the same",
         "module M where\n" + _T
         + "f = ( T.pack ) . show\n",
+        [3],
+    ),
+    (
+        "a LEFT operator section applied to `show`: `(pack .) show` is\n        the same function, and GHC infers `Show a => a -> Text` for it "
+        "(PR #2404 review round 11)",
+        "module M where\n" + _T
+        + "f = (T.pack .) show\n",
+        [3],
+    ),
+    (
+        "a left section of `$`, applied to the shown value",
+        "module M where\n" + _T
+        + "g x = (T.pack $) (show x)\n",
+        [3],
+    ),
+    (
+        "a RIGHT section puts `show` BEFORE the packer: `(. show) pack` "
+        "reads right to left and needs its own backward look",
+        "module M where\n" + _T
+        + "f = (. show) T.pack\n",
+        [3],
+    ),
+    (
+        "and the `$` right section, whose operand is the packer too",
+        "module M where\n" + _T
+        + "g x = ($ show x) T.pack\n",
         [3],
     ),
     (
@@ -1610,6 +1702,45 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f = format (T.pack) . show\n",
     ),
     (
+        "a left section that is somebody's ARGUMENT is not standalone: "
+        "`format (T.pack .) show` applies `format` to both",
+        "module M where\n" + _T
+        + "f = format (T.pack .) show\n",
+    ),
+    (
+        "a right section naming a DIFFERENT function",
+        "module M where\n" + _T
+        + "f = (. showFFloat) T.pack\n",
+    ),
+    (
+        "`(g . show)` is a composition, not a section -- its content "
+        "does not begin with the connector, so applying it to `pack` "
+        "is `g (show pack)` and not this wrapper",
+        "module M where\n" + _T
+        + "f = (g . show) T.pack\n",
+    ),
+    (
+        "the backward look reads only a section it can see WHOLE: it "
+        "gives up at the `<>` rather than scanning on to some earlier "
+        "`(`, so `(. show <> q)` -- whose right operand is not `show` "
+        "-- is not read as one",
+        "module M where\n" + _T
+        + "f = (. show <> q) T.pack\n",
+    ),
+    (
+        "a section must be CLOSED before its operand: in "
+        "`(. show . T.pack)` the packer is inside the parentheses, so "
+        "nothing is applying the section to it",
+        "module M where\n" + _T
+        + "f = (. show . T.pack)\n",
+    ),
+    (
+        "a right section whose operand is a ByteString packer",
+        "module M where\n"
+        "import qualified Data.ByteString.Char8 as BC\n"
+        + "f = (. show) BC.pack\n",
+    ),
+    (
         "a BACKTICK application binds the parentheses after it the "
         "same way",
         "module M where\n" + _T
@@ -1951,6 +2082,33 @@ PREMISE_FIXTURES: list[tuple[str, str, bool]] = [
 ]
 
 
+def _fixture_shape_failures() -> list[str]:
+    """Every fixture whose SOURCE lost its line breaks.
+
+    Such a fixture is VACUOUS, not failing: its import stops being an
+    import declaration and the file is refused (or scanned wrongly) for
+    a reason that has nothing to do with the rule under test. This suite
+    made that mistake, so it is checked rather than watched for."""
+    out: list[str] = []
+    for group, table, single_line_ok in (
+            ("DETECTED", DETECTED_FIXTURES, ()),
+            ("CLEAN", CLEAN_FIXTURES, ()),
+            ("UNSCANNABLE", UNSCANNABLE_FIXTURES, ("an EXPLICIT-BRACE",)),
+            ("UPRELUDE", UPRELUDE_FIXTURES, ())):
+        for entry in table:
+            label, source = entry[0], entry[1]
+            if "\\n" in source:
+                out.append(f"  {group}: {label}\n"
+                           f"    source carries a LITERAL backslash-n; its "
+                           f"line breaks were escaped away")
+            elif ("\n" not in source.rstrip("\n")
+                    and not label.startswith(single_line_ok)):
+                out.append(f"  {group}: {label}\n"
+                           f"    source is a single line; a fixture module "
+                           f"needs its line breaks")
+    return out
+
+
 def _exemptions_missing_reasons() -> list[str]:
     """Every exemption states its reason inline, the way the sibling
     operator guard's do."""
@@ -2044,6 +2202,24 @@ def self_test() -> int:
                             "another")
     finally:
         del EXEMPTIONS["exempt.hs"]
+
+    failures.extend(_fixture_shape_failures())
+
+    # And the invariant itself is probed, the way EXEMPTIONS is: a
+    # checker nothing can fail is a comment.
+    for probe, complaint in ((("probe", "module M where\\nf = 1\\n", []),
+                              "LITERAL backslash-n"),
+                             (("probe", "module M where f = 1", []),
+                              "single line")):
+        DETECTED_FIXTURES.append(probe)
+        try:
+            broken = [line for line in _fixture_shape_failures()
+                      if complaint in line]
+        finally:
+            DETECTED_FIXTURES.pop()
+        if not broken:
+            failures.append(f"  FIXTURE SHAPE: a fixture source that is "
+                            f"{complaint} was not reported")
 
     for path in _exemptions_missing_reasons():
         failures.append(f"  EXEMPTIONS['{path}'] carries no inline reason")

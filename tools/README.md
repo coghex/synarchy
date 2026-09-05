@@ -129,6 +129,14 @@ it is not redundant either, so `pack (f (show x))` and
 `g (h (T.pack)) . show` are different functions and are not reported;
 neither is `pack . f . show`.
 
+**Operator sections** count too, in both directions: `(pack .) show`,
+`(pack $) (show x)`, `(. show) pack` and `($ show x) pack` are each the
+same function, and GHC infers `Show a => a -> Text` for every one. The
+right-hand forms put `show` before the packer, so they get their own
+backward look — one that reads only a section it can see whole,
+giving up at a nested bracket or a literal rather than balance-counting
+through text a `')'` character literal could throw off.
+
 Resolution is by **binding**, never by the `T.` qualifier's spelling:
 this tree binds `T` to `Data.Text` in most modules, but `src/UPrelude.hs`
 binds `T` to `Data.Text.Encoding` (and `Data.Text` to `TXT`), while two
@@ -256,8 +264,12 @@ a doubled prime before a string; and a combining mark in an
 identifier, in a quasiquoter name and in a module alias; a titlecase
 module alias and an `Lo`-headed quasiquoter; and every grouping
 position that keeps parentheses transparent against three applications
-that do not. Every rule was mutation-tested against them: each is
-removed one at a time and the self-test fails. The one exception is documented at its definition —
+that do not; and all four operator-section forms against four
+lookalikes. Every rule was mutation-tested against them: each is
+removed one at a time and the self-test fails. The suite also checks
+its own fixtures' SHAPE — a source whose line breaks were escaped away
+is vacuous rather than failing, which is a mistake it actually made —
+and that check is itself probed. The one exception is documented at its definition —
 `_PACK_LEXEME`'s leading lookaround has no reachable failure mode now
 that bare names are refused, and is kept because it is what the lexeme
 means.
