@@ -1,12 +1,14 @@
 {-# LANGUAGE Strict #-}
 -- | Shared read-only helpers for the Forage API family (#94/#332):
---   resolving the flora instances on a tile and the world's growth
---   clock. Depended on by every Forage.* submodule that needs to look
---   up flora state.
+--   resolving the flora instances on a tile and canonicalizing a tile
+--   coord. Depended on by every Forage.* submodule that needs to look
+--   up flora state. The growth CLOCK moved down to
+--   "World.Flora.Clock" with #2212, so the world thread's Chop commit
+--   evaluates the shared eligibility predicate on the same reading
+--   these verbs do.
 module Engine.Scripting.Lua.API.Forage.Lookup
     ( floraAt
     , canonicalPageTile
-    , growthClock
     ) where
 
 import UPrelude
@@ -51,13 +53,3 @@ floraAt wsc ws rawGX rawGY = do
             , fromIntegral (fiTileY i) ≡ ly
             , Just sp ← [lookupSpecies (fiSpecies i) cat]
             ]
-
--- | The world's growth clock (#332): (day-of-year, absolute day),
---   converted through the page's calendar.
-growthClock ∷ WorldState → IO (Int, Int)
-growthClock ws = do
-    paramsM ← readIORef (wsGenParamsRef ws)
-    date ← readIORef (wsDateRef ws)
-    let calendar = maybe defaultCalendarConfig wgpCalender paramsM
-    pure ( worldDateToDayOfYear calendar date
-         , worldAbsoluteDay calendar date )

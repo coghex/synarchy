@@ -82,7 +82,8 @@ catalog =
       emptyFloraCatalog
   where
     harvest tags = FloraHarvest
-        { fhTags = tags, fhYield = [], fhRegrowth = 86400
+        { fhTags = tags, fhUngatedTags = []
+        , fhYield = [], fhPhaseYields = HM.empty, fhRegrowth = 86400
         , fhHarvestedTexture = TextureHandle 0 }
 
 plantId ∷ Int → FloraInstanceId

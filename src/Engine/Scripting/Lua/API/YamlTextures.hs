@@ -426,10 +426,17 @@ registerFloraSpecies env backendState lteq catRef def = do
                             ("flora_harvested_" <> name) resolved
                     atomicModifyIORef' texCount (\n → (n + 1, ()))
                     return h
+            -- #2212: the two authored policy fields carry straight
+            -- across. The decoder has already required every ungated
+            -- tag to be one this block declares and every phase_yield
+            -- key to name a phase this species enters, so nothing
+            -- registered here is unreachable.
+            let yieldsOf ys = [ (fyyId y, fyyMin y, fyyMax y) | y ← ys ]
             return $ Just FloraHarvest
                 { fhTags             = fyhTags yh
-                , fhYield            = [ (fyyId y, fyyMin y, fyyMax y)
-                                       | y ← fyhYield yh ]
+                , fhUngatedTags      = fyhUngatedTags yh
+                , fhYield            = yieldsOf (fyhYield yh)
+                , fhPhaseYields      = HM.map yieldsOf (fyhPhaseYield yh)
                 , fhRegrowth         = fyhRegrowthTime yh
                 , fhHarvestedTexture = depletedH
                 }

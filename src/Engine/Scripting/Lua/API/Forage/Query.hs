@@ -24,7 +24,9 @@ import Engine.Core.Capability.ContentRegistriesView
     (ContentRegistriesViewCapability(..), toContentRegistriesViewCapability)
 import Engine.Core.State (EngineEnv, activeWorldStateFrom)
 import World.Types
+import World.Flora.Clock (growthClock)
 import World.Flora.Growth (FloraGrowth(..), floraGrowth, harvestOpen,
+                           floraHarvestAdmits,
                            growthPhaseTag, activeStageTag,
                            lifePhaseText, annualStageText)
 import World.Flora.CropPlot (CropPlotOf(..), cropPlotElapsedDays,
@@ -33,7 +35,7 @@ import World.Generate.Coordinates (globalToChunk, chunkToGlobal,
                                   chunkInSeamRegion, seamTileDist2)
 import Item.Types (ItemDef(..), ItemFood(..), lookupItemDef)
 import Engine.Scripting.Lua.API.Forage.Lookup
-    (canonicalPageTile, floraAt, growthClock)
+    (canonicalPageTile, floraAt)
 
 -- | Push a 'FloraInstanceId' as a Lua integer. The whole id space fits
 --   in a positive Int64 by construction ("World.Flora.Identity"), so
@@ -248,9 +250,14 @@ worldGetFloraGrowthAtFn env = do
 --   (Euclidean, clamped to 64 like getAreaFluid), scanning only LOADED
 --   chunks. Skips tiles with a live regrowth timer.
 --
---   With @tag@ (#97): only species whose harvest tags include it — the
---   chop tool/probe pass "wood" to find trees, in any growth state (a
---   standing-dead tree is still worth designating). WITHOUT a tag the
+--   With @tag@ (#97): only species whose harvest tags include it, in
+--   the growth states that species' harvest block AUTHORS the tag as
+--   ungated in (#2212). The chop tool/probe pass "wood", and the three
+--   shipped tree species author it, so a sprout or a standing-dead tree
+--   is still found and still worth designating — while a species that
+--   authors no exemption is reported only inside the #332 window, which
+--   is exactly when its own tagged harvest verb would accept it.
+--   WITHOUT a tag the
 --   call is the foraging AI's food search, so only species whose yield
 --   contains at least one EDIBLE item count (a bare call must not send
 --   a starving unit to fell an oak for inedible logs), further gated on
@@ -335,8 +342,15 @@ worldFindHarvestableFloraFn env = do
                                 | (yName, _, _) ← fhYield fh
                                 , Just def ← [lookupItemDef yName itemMgr]
                                 ]
+                            -- #2212: tag membership AND the growth
+                            -- window are both 'floraHarvestAdmits''s
+                            -- now, so the finder can never report a
+                            -- plant the matching tagged harvest verb
+                            -- would refuse. What is left here is this
+                            -- caller's own extra bare-call condition:
+                            -- a food search wants an EDIBLE yield.
                             wanted fh = case tagFilter of
-                                Just tg → tg `elem` fhTags fh
+                                Just _  → True
                                 Nothing → edibleYield fh
                             -- Scanning the STORED keys (and testing each
                             -- for alias containment) rather than looking
@@ -354,12 +368,8 @@ worldFindHarvestableFloraFn env = do
                                 , Just sp ← [lookupSpecies (fiSpecies i) cat]
                                 , Just fh ← [fsHarvest sp]
                                 , wanted fh
-                                -- #332: the growth window gates the
-                                -- bare food search only (see above).
-                                , case tagFilter of
-                                    Just _  → True
-                                    Nothing → harvestOpen sp doy
-                                                  (floraGrowth sp absDay i)
+                                , floraHarvestAdmits sp tagFilter doy
+                                      (floraGrowth sp absDay i)
                                 , let (tgx, tgy) = chunkToGlobal coord
                                         (fromIntegral (fiTileX i))
                                         (fromIntegral (fiTileY i))
@@ -402,7 +412,12 @@ worldFindHarvestableFloraFn env = do
                                     -- groundcover species must ripen in
                                     -- season, not on an elapsed-day clock
                                     -- that drifts away from the calendar.
-                                    , harvestOpen sp doy g
+                                    -- Bare-only, so this is
+                                    -- 'harvestOpen' by construction;
+                                    -- routed through the shared
+                                    -- predicate so the two branches
+                                    -- cannot drift apart (#2212).
+                                    , floraHarvestAdmits sp Nothing doy g
                                     -- Seam-aware like the wild-flora
                                     -- branch above (#1707): the two must
                                     -- agree, or a bare call ranks a plot

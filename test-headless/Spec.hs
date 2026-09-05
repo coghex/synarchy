@@ -70,6 +70,7 @@ import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
 import qualified Test.Headless.Asset.FloraContent as FloraContent
 import qualified Test.Headless.Asset.FloraRegrowthSchema as FloraRegrowthSchema
+import qualified Test.Headless.Asset.FloraHarvestPolicySchema as FloraHarvestPolicySchema
 import qualified Test.Headless.Asset.FloraVocabularySchema as FloraVocabularySchema
 import qualified Test.Headless.Asset.InfectionSchema as InfectionSchema
 import qualified Test.Headless.Asset.UnitBodyGraph as AssetUnitBodyGraph
@@ -214,6 +215,7 @@ import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
 import qualified Test.Headless.Lua.ChopGesture as LuaChopGesture
+import qualified Test.Headless.Lua.ChopFellXp as LuaChopFellXp
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.Lua.GroupedLogRetention as LuaGroupedLogRetention
 import qualified Test.Headless.Lua.TextTruncation as LuaTextTruncation
@@ -250,6 +252,7 @@ import qualified Test.Headless.World.DesignationSeam as DesignationSeam
 import qualified Test.Headless.World.DigDomain as DigDomain
 import qualified Test.Headless.World.Chop.Selection as ChopSelection
 import qualified Test.Headless.World.Chop.Authority as ChopAuthority
+import qualified Test.Headless.World.Chop.TagPolicy as ChopTagPolicy
 import qualified Test.Headless.World.FloraIdentity as FloraIdentity
 import qualified Test.Headless.World.FloraOrder as FloraOrder
 import qualified Test.Headless.World.CropPlant as CropPlant
@@ -714,6 +717,7 @@ main = hspec $ do
     describe "Asset.Types" AssetTypes.spec
     describe "Asset.FloraContent" FloraContent.spec
     describe "Asset.FloraRegrowthSchema" FloraRegrowthSchema.spec
+    describe "Asset.FloraHarvestPolicySchema" FloraHarvestPolicySchema.spec
     describe "Asset.FloraVocabularySchema" FloraVocabularySchema.spec
     describe "Asset.InfectionSchema" InfectionSchema.spec
     describe "Asset.UnitBodyGraph" AssetUnitBodyGraph.spec
@@ -979,7 +983,9 @@ main = hspec $ do
     describe "World.DesignationSeam" DesignationSeam.spec
     ChopSelection.spec
     ChopAuthority.spec
+    ChopTagPolicy.spec
     LuaChopGesture.spec
+    LuaChopFellXp.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
     describe "World.DigDomain (engine)" DigDomain.engineSpec
     FloraIdentity.spec

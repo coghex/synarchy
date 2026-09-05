@@ -254,7 +254,8 @@ woodCatalog ∷ FloraCatalog
 woodCatalog =
     let sp = (newFloraSpecies "probe_tree" (TextureHandle 0))
                 { fsHarvest = Just FloraHarvest
-                    { fhTags = ["wood"], fhYield = []
+                    { fhTags = ["wood"], fhUngatedTags = []
+                    , fhYield = [], fhPhaseYields = HM.empty
                     , fhRegrowth = 0, fhHarvestedTexture = TextureHandle 0 } }
     in emptyFloraCatalog { fcSpecies = HM.fromList [(1, sp)], fcNextId = 2 }
 
@@ -290,7 +291,8 @@ logSpecies    = FloraId 3
 forageCatalog ∷ FloraCatalog
 forageCatalog =
     let harvestOf tags yield = Just FloraHarvest
-            { fhTags = tags, fhYield = yield
+            { fhTags = tags, fhUngatedTags = []
+            , fhYield = yield, fhPhaseYields = HM.empty
             , fhRegrowth = 0, fhHarvestedTexture = TextureHandle 0 }
         sp name tags yield = (newFloraSpecies name (TextureHandle 0))
             { fsHarvest = harvestOf tags yield }

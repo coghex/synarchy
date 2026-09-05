@@ -942,6 +942,7 @@ library
                      World.Flora.Designation
                      World.Flora.HitTest
                      World.Flora.Growth
+                     World.Flora.Clock
                      World.Flora.Placement
                      World.Flora.Render
                      World.Flora.Harvest
@@ -1256,6 +1257,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Asset.TextureFallback
                    Test.Headless.Asset.FloraContent
                    Test.Headless.Asset.FloraRegrowthSchema
+                   Test.Headless.Asset.FloraHarvestPolicySchema
                    Test.Headless.Asset.FloraVocabularySchema
                    Test.Headless.Asset.InfectionSchema
                    Test.Headless.Asset.Types
@@ -1318,7 +1320,9 @@ test-suite synarchy-test-headless
                    Test.Headless.World.DigDomain
                    Test.Headless.World.Chop.Selection
                    Test.Headless.World.Chop.Authority
+                   Test.Headless.World.Chop.TagPolicy
                    Test.Headless.Lua.ChopGesture
+                   Test.Headless.Lua.ChopFellXp
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue

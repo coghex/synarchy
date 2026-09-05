@@ -32,10 +32,14 @@
 -- Add and erase are symmetric gestures over the same geometry but not
 -- over the same candidates (D-12):
 --
---   * 'SelectChoppable' is the unchanged Chop predicate — a species
---     with a harvest block whose tags carry the requested one, and an
---     instance with no live regrowth timer. It deliberately does NOT
---     consult the forage API's growth-window @harvestable@ signal.
+--   * 'SelectChoppable' is the SHARED tagged-harvest predicate
+--     ('World.Flora.Growth.floraHarvestAdmits', #2212) plus this
+--     gesture's own regrowth-timer check — the same rule the world
+--     thread's commit and the @wood@ harvest verb apply. It still
+--     deliberately does NOT consult the forage API's growth-window
+--     @harvestable@ signal: a species that authors its tag as ungated
+--     (the three shipped trees do) stays choppable as a sprout or
+--     standing dead.
 --   * 'SelectDesignated' is every currently designated live tree, so a
 --     standing designation stays clearable by the player even after it
 --     has stopped being add-eligible.
@@ -65,6 +69,8 @@ import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Chop.Types (ChopDesignations)
 import World.Chunk.Types (LoadedChunk(..))
+import World.Flora.Growth
+    (floraDayOfYear, floraGrowth, floraHarvestAdmits)
 import World.Flora.Harvest (FloraHarvests)
 import World.Flora.Identity (FloraInstanceId)
 import World.Flora.Types
@@ -245,15 +251,29 @@ floraSelectCandidates view mode =
                            , fpZ  = fiZ inst }
     ]
 
--- | Chop eligibility. Add filters by the species' harvest tags and the
---   instance's own regrowth timer — the exact predicate the two-click
---   rectangle applied, deliberately NOT the forage growth-window
---   @harvestable@ signal. Erase filters by what is designated NOW.
+-- | Chop eligibility. Add asks the SHARED tagged-harvest predicate
+--   ('World.Flora.Growth.floraHarvestAdmits', #2212) and this
+--   gesture's own live-state condition, the instance's regrowth timer.
+--
+--   Sharing the predicate is what makes selection and execution one
+--   rule rather than two that agree by coincidence: before #2212 this
+--   admitted every wood-tagged plant unconditionally while the harvest
+--   verb applied its own window logic, so the two could disagree about
+--   any species the shipped corpus did not happen to contain. It is
+--   still deliberately NOT the forage @harvestable@ signal — the three
+--   shipped wood species author their tag as ungated, so a sprout or a
+--   standing-dead tree stays selectable exactly as before.
+--
+--   Erase filters by what is designated NOW, unchanged (D-12).
 eligible ∷ FloraHitView → FloraSelectMode → FloraInstance → Bool
 eligible view (SelectChoppable tag) inst = fromMaybe False $ do
     sp ← lookupSpecies (fiSpecies inst) (fhvCatalog view)
-    fh ← fsHarvest sp
-    pure $ tag `elem` fhTags fh
+    -- The frame's own snapshot, not a live read: the same
+    -- (daysPerYear, absDay) pair 'chunkFloraDraws' picked this plant's
+    -- texture with, so the rule and the pixels agree.
+    let doy = floraDayOfYear (fhvDaysPerYear view) (fhvAbsDay view)
+        g   = floraGrowth sp (fhvAbsDay view) inst
+    pure $ floraHarvestAdmits sp (Just tag) doy g
          ∧ HM.lookupDefault 0 (fiInstanceId inst) (fhvHarvests view) ≤ 0
 eligible view SelectDesignated inst =
     HM.member (fiInstanceId inst) (fhvDesignated view)

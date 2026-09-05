@@ -57,11 +57,23 @@ flora:
     # it and the yield is a construction material. regrowth_time is
     # GAME seconds — four game-days before the stump regrows; while
     # regrowing the tile draws the bare dead-tree art.
+    #
+    # ungated_tags / phase_yield (#2212): felling is a REMOVAL, so a
+    # wood harvest is allowed outside the #332 growth window — that is
+    # what keeps a sprout and a standing-dead tree choppable. What it no
+    # longer buys is a mature tree's logs: a felled sprout yields
+    # nothing (and so earns no woodcutting XP), while matured and dead
+    # phases author no override and inherit the roll below. Without the
+    # sprout override a day-zero sprout would drop 3–6 logs, hide for
+    # its regrowth, come back a sprout and be fellable again.
     harvestable:
       tags: [wood]
+      ungated_tags: [wood]
       yield:
         - id: wood_log
           count: [3, 6]
+      phase_yield:
+        sprout: []
       regrowth_time: 345600
       harvested_texture: "dead.png"
     worldGen:
@@ -135,11 +147,16 @@ flora:
         cycle: senescing
         texture: "dead.png"
     # Choppable (#97) — slender trunks, fewer logs than the oak.
+    # #2212: see white_oak — wood fells outside the growth window, and
+    # a felled sprout yields nothing.
     harvestable:
       tags: [wood]
+      ungated_tags: [wood]
       yield:
         - id: wood_log
           count: [2, 4]
+      phase_yield:
+        sprout: []
       regrowth_time: 259200
       harvested_texture: "dead.png"
     worldGen:
@@ -283,11 +300,16 @@ flora:
         cycle: senescing
         texture: "dead.png"
     # Choppable (#97) — dense hardwood, a solid yield.
+    # #2212: see white_oak — wood fells outside the growth window, and
+    # a felled sprout yields nothing.
     harvestable:
       tags: [wood]
+      ungated_tags: [wood]
       yield:
         - id: wood_log
           count: [3, 5]
+      phase_yield:
+        sprout: []
       regrowth_time: 345600
       harvested_texture: "dead.png"
     worldGen:
