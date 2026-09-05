@@ -38,7 +38,6 @@ module World.GeneratedLibrary.Lock
     ) where
 
 import UPrelude
-import qualified Data.Text as T
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (IOException, bracket, try)
@@ -97,7 +96,7 @@ withLibraryLock cfg action = withLibraryProcessMutex $ do
                 now ← getMonotonicTimeNSec
                 if now ≥ deadline
                     then pure (Left ("another process holds the library lock ("
-                                     <> T.pack (show e) <> ")"))
+                                     <> tshow e <> ")"))
                     else threadDelay pollMicros ≫ acquire fd deadline
     pollMicros = 20_000
 

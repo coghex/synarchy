@@ -392,7 +392,7 @@ function loadingScreen.show(params)
     if loadingScreen.page then
         UI.showPage(loadingScreen.page)
     end
-    engine.logInfo("Loading screen shown: " .. loadingScreen.statusText
+    engine.logDebug("Loading screen shown: " .. loadingScreen.statusText
         .. " (" .. loadingScreen.fbW .. "x" .. loadingScreen.fbH .. ")")
 end
 

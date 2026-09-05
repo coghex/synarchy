@@ -38,6 +38,7 @@ or inequality was spelled `≠`, outside the exemption list below.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -207,7 +208,49 @@ def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
     return "".join(out)
 
 
-_IDENT_CONTINUE = re.compile(r"[A-Za-z0-9_']")
+# Unicode general categories GHC accepts INSIDE an identifier beyond
+# letters and digits. A combining mark is one (GHC issue #7650): `π́`
+# is one identifier of two code points, and Python's `\w` -- which is
+# `str.isalnum()` plus `_` -- does not match the mark.
+_IDENT_MARK_CATEGORIES = frozenset({"Mn", "Mc", "Me"})
+
+
+# Haskell 2010 SS2.2's `special` characters, which `uniSymbol`
+# excludes along with `_`, `"` and `'`. All ASCII, which is what lets
+# `is_haskell_symbol_char` decide every ASCII character from
+# `_ASCII_SYMBOLS` alone and reach the Unicode tables only for the rest.
+_ASCII_SYMBOLS = frozenset("!#$%&*+./<=>?@\\^|~:-")
+_HASKELL_SPECIAL = frozenset("()[]{},;`_\"'")
+
+
+def is_haskell_symbol_char(char: str) -> bool:
+    """True for a character a Haskell symbolic operator is made of.
+
+    Report SS2.2: `symbol -> ascSymbol | uniSymbol<special | _ | " | '>`,
+    where `uniSymbol` is ANY Unicode symbol or punctuation. This
+    codebase is `UnicodeSyntax` throughout and writes its own operators
+    from that set (`⊚`, `⌦`, `∘`, `⚟`), so an ASCII-only test splits a
+    lexeme like `⊚--` -- which matters for the dash rule in
+    `_scan_code` below (#2177)."""
+    if char.isascii():
+        return char in _ASCII_SYMBOLS
+    return unicodedata.category(char)[0] in "SP"
+
+
+def is_haskell_ident_char(char: str) -> bool:
+    """True for a character a Haskell identifier may CONTINUE with
+    (report SS2.4 as GHC extends it): a letter, a digit, `_`, `'`, or a
+    combining mark.
+
+    The whole set matters, not the ASCII part and not `\\w`. This tree is
+    `UnicodeSyntax` throughout, and every consumer of this lexer decides
+    where an identifier ENDS by this predicate -- so a character wrongly
+    excluded makes the next `'` look like a char-literal opener, which
+    consumes the opening quote of a following `'"'`, whose real closing
+    quote then opens a phantom string masking the rest of the file
+    (#2177 / PR #2404 review rounds 8 and 9)."""
+    return (char.isalnum() or char in "_'"
+            or unicodedata.category(char) in _IDENT_MARK_CATEGORIES)
 # A Haskell char literal, escaped or not (`'x'`, `'\n'`, `'\''`, `'\NUL'`,
 # `'\65'`, `'\x41'`, ...). Matched WHOLE and skipped atomically so a
 # literal double quote inside one -- `'"'`, a real occurrence in this
@@ -261,18 +304,41 @@ def _scan_code(
                 comment_start = i
                 state, depth, i = "BLOCK", 1, i + 2
                 continue
-            if text.startswith("--", i):
-                if run_start is not None:
-                    runs.append((run_start, i))
-                    run_start = None
-                comment_start = i
-                state, i = "LINE", i + 2
+            # Report SS2.3: a dash run opens a comment only when the
+            # maximal symbol lexeme it belongs to is nothing BUT
+            # dashes. `-->` and `--|` continue into another symbol
+            # character and `<--` began at one, so all three are
+            # OPERATORS and the code after them is code (#2177). The
+            # symbol set is report SS2.2's full one, Unicode included:
+            # `⊚--` and `--—` (an em dash, category Pd) are each one
+            # lexeme too, and this tree writes operators from it.
+            #
+            # A run is consumed WHOLE from its first character, which is
+            # what decides the leading side without a second predicate:
+            # every other arm leaves `i` on a character no symbol
+            # precedes, so a dash inside a longer lexeme is never tested
+            # on its own.
+            if is_haskell_symbol_char(c):
+                run = i
+                while run < n and is_haskell_symbol_char(text[run]):
+                    run += 1
+                lexeme = text[i:run]
+                if len(lexeme) >= 2 and lexeme == "-" * len(lexeme):
+                    if run_start is not None:
+                        runs.append((run_start, i))
+                        run_start = None
+                    comment_start = i
+                    state, i = "LINE", run
+                    continue
+                if run_start is None:
+                    run_start = i
+                i = run
                 continue
             # A `'` is only a CANDIDATE char-literal start when it can't
             # be the trailing prime of an identifier (`x'`, `map''`) --
             # Haskell identifiers may contain `'` anywhere after the
             # first character.
-            if c == "'" and (i == 0 or not _IDENT_CONTINUE.match(text[i - 1])):
+            if c == "'" and (i == 0 or not is_haskell_ident_char(text[i - 1])):
                 m = _CHAR_LITERAL.match(text, i)
                 if m:
                     if run_start is None:
@@ -313,7 +379,25 @@ def _scan_code(
                 i += 1
         else:  # STRING
             if c == "\\":
-                i += 2
+                # Report SS2.6: a backslash followed by WHITESPACE opens a
+                # string GAP (`\ whitechar {whitechar} \`), not an
+                # escape. Consuming it as a two-character escape leaves
+                # the gap's closing backslash to pair with whatever
+                # follows -- and when that is the string's own closing
+                # quote (`"a\<newline>\"`), the string never ends and
+                # every operator to end of file is masked. 258 gaps of
+                # this shape live in `src/`+`app/` today (#2177 / PR
+                # #2404 review round 7).
+                j = i + 1
+                if j < n and text[j].isspace():
+                    while j < n and text[j].isspace():
+                        j += 1
+                    # A well-formed gap resumes with another backslash.
+                    # Malformed source is left where it stands rather
+                    # than guessed at; it cannot swallow the quote.
+                    i = j + 1 if j < n and text[j] == "\\" else j
+                else:
+                    i = j + 1
             elif c == '"':
                 state, i = "CODE", i + 1
             else:

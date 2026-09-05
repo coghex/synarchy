@@ -412,7 +412,7 @@ end
 -- Init / Update / Shutdown
 -----------------------------------------------------------
 function unitAi.init(scriptId)
-    engine.logInfo("Unit AI initializing...")
+    engine.logDebug("Unit AI initializing...")
     unitAiSave.register(aiState)
     locations.register(unitAi, aiState)
 end
@@ -494,7 +494,7 @@ function unitAi.shutdown()
     -- Empty the singleton state in-place so all references see it
     -- (reassigning the local would orphan the package.loaded copy).
     for k in pairs(aiState) do aiState[k] = nil end
-    engine.logInfo("Unit AI shut down")
+    engine.logDebug("Unit AI shut down")
 end
 
 return unitAi

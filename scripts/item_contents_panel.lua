@@ -290,11 +290,11 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 function itemContentsPanel.init(scriptId)
-    engine.logInfo("Item contents level initializing...")
+    engine.logDebug("Item contents level initializing...")
 end
 
 function itemContentsPanel.shutdown()
-    engine.logInfo("Item contents level shut down")
+    engine.logDebug("Item contents level shut down")
 end
 
 return itemContentsPanel

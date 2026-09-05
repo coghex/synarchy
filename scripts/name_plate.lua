@@ -312,12 +312,12 @@ function namePlate.dump()
 end
 
 function namePlate.init(scriptId)
-    engine.logInfo("Name plate initializing...")
+    engine.logDebug("Name plate initializing...")
 end
 
 function namePlate.shutdown()
     namePlate.clear()
-    engine.logInfo("Name plate shut down")
+    engine.logDebug("Name plate shut down")
 end
 
 return namePlate

@@ -281,7 +281,7 @@ end
 
 function unitInfoV2.init(scriptId)
     unitInfoV2.scriptId = scriptId
-    engine.logInfo("Unit info v2 initialising...")
+    engine.logDebug("Unit info v2 initialising...")
 
     -- Suppress the old unit_info_panel push so the existing HUD info
     -- panel stays empty for unit selections (the new pane owns it).

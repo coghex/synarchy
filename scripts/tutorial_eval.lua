@@ -318,7 +318,7 @@ function tutorialEval.update(dt)
 end
 
 function tutorialEval.init(scriptId)
-    engine.logInfo("Tutorial evaluation initializing...")
+    engine.logDebug("Tutorial evaluation initializing...")
 end
 
 return tutorialEval

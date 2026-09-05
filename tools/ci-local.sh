@@ -181,6 +181,10 @@ step "unicode operator audit"
 python3 tools/test_unicode_operator_audit.py
 python3 tools/unicode_operator_audit.py
 
+step "tshow spelling audit"
+python3 tools/tshow_spelling_audit.py --self-test
+python3 tools/tshow_spelling_audit.py
+
 step "haddock link audit"
 python3 tools/test_haddock_link_audit.py
 python3 tools/haddock_link_audit.py

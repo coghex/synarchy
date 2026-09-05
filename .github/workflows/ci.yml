@@ -830,6 +830,23 @@ jobs:
           python3 tools/test_unicode_operator_audit.py
           python3 tools/unicode_operator_audit.py
 
+      # Cheap, no-engine guard (#2177): fails if any `src/`+`app/`
+      # rendering of a Show value to strict Text is written as a
+      # hand-rolled wrapper instead of `UPrelude`'s one `tshow`. The
+      # rule is a CLOSED list of four spellings -- `pack (show ...)`,
+      # `pack $ show ...`, `pack . show`, `pack ∘ show` -- and nothing
+      # else about the surrounding expression is read; #2177's §Out of
+      # scope names the forms that are deliberately not caught, and PR
+      # #2404 is the worked reference for what each would cost. `pack`
+      # and `show` resolve by BINDING, not by qualifier spelling, and a
+      # file whose bindings cannot be certified is REFUSED rather than
+      # scanned as clean. The fixture suite runs first so a rule that
+      # stopped matching fails here rather than passing on a clean tree.
+      - name: tshow spelling audit
+        run: |
+          python3 tools/tshow_spelling_audit.py --self-test
+          python3 tools/tshow_spelling_audit.py
+
       # Cheap, no-engine guard (#2292, HLR-1 of
       # docs/haddock_link_resolution_design.md): fails if a QUALIFIED
       # haddock link `'Module.function'` in a src/ or app/ comment names

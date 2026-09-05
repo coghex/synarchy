@@ -217,7 +217,7 @@ function worldView.init(width, height)
     worldView.texturesNeeded = count
     worldView.texturesLoadedCount = count
 
-    engine.logInfo("World view initialized, loading " .. count .. " textures")
+    engine.logDebug("World view initialized, loading " .. count .. " textures")
 end
 
 -----------------------------------------------------------
@@ -245,12 +245,12 @@ function worldView.onAssetLoaded(assetType, handle, path)
 
     if worldView.texturesLoadedCount >= worldView.texturesNeeded then
         if worldView.visible then
-            engine.logInfo("All world textures loaded, creating world...")
+            engine.logDebug("All world textures loaded, creating world...")
             worldView.createWorld()
         end
         if worldView.pendingGeneration then
             worldView.pendingGeneration = false
-            engine.logInfo("Pending generation triggered, creating world...")
+            engine.logDebug("Pending generation triggered, creating world...")
             worldView.createWorld()
         end
     end
@@ -288,7 +288,7 @@ function worldView.startGeneration()
         worldView.createWorld()
     else
         worldView.pendingGeneration = true
-        engine.logInfo("World generation deferred, waiting for textures... ("
+        engine.logDebug("World generation deferred, waiting for textures... ("
             .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
     end
 end
@@ -363,7 +363,7 @@ function worldView.createUI()
 
     worldView.page = UI.newPage("world_view_hud", "hud")
 
-    engine.logInfo("World view UI created")
+    engine.logDebug("World view UI created")
 end
 
 -----------------------------------------------------------
@@ -392,11 +392,11 @@ function worldView.show()
     elseif worldView.texturesLoadedCount >= worldView.texturesNeeded then
         worldView.createWorld()
     else
-        engine.logInfo("World view shown, waiting for textures... ("
+        engine.logDebug("World view shown, waiting for textures... ("
             .. worldView.texturesLoadedCount .. "/" .. worldView.texturesNeeded .. ")")
     end
 
-    engine.logInfo("World view shown")
+    engine.logDebug("World view shown")
 end
 
 function worldView.hide()
@@ -407,7 +407,7 @@ function worldView.hide()
         UI.hidePage(worldView.page)
     end
 
-    engine.logInfo("World view hidden")
+    engine.logDebug("World view hidden")
 end
 
 -----------------------------------------------------------
@@ -545,7 +545,7 @@ function worldView.sendTexturesToWorld(worldId)
         return false
     end
 
-    engine.logInfo("Sending textures to loaded world: " .. worldId)
+    engine.logDebug("Sending textures to loaded world: " .. worldId)
 
     -- Structural (ocean/blank/facemaps), bound via the shared helper.
     worldView.rebindStructural(worldId)
@@ -585,7 +585,7 @@ function worldView.sendTexturesToWorld(worldId)
         if bgH   and bgH   >= 0 then world.setTexture(worldId, "mat_bg_"   .. matId, bgH)   end
     end
 
-    engine.logInfo("All textures sent to world: " .. worldId)
+    engine.logDebug("All textures sent to world: " .. worldId)
     return true
 end
 

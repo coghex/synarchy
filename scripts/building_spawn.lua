@@ -480,7 +480,7 @@ local function addOwnerToAllLastUid(data)
 end
 
 function buildingSpawn.init(scriptId)
-    engine.logInfo("Building spawn sequencer initializing...")
+    engine.logDebug("Building spawn sequencer initializing...")
     -- Persistent save component (issue #761, save-overhaul B3) for
     -- per-building transient sequencer state (lastUid/lastSpawnX/Y/
     -- lastSpawnedAt). The roster countdown itself lives on the
@@ -677,7 +677,7 @@ end
 
 function buildingSpawn.shutdown()
     for k in pairs(state) do state[k] = nil end
-    engine.logInfo("Building spawn sequencer shut down")
+    engine.logDebug("Building spawn sequencer shut down")
 end
 
 return buildingSpawn

@@ -738,7 +738,7 @@ end
 -- predicates that DRIVE it live in scripts/tutorial_eval.lua (#959),
 -- which ticks and calls the write surface above.
 function tutorialProgress.init(scriptId)
-    engine.logInfo("Tutorial progress initializing...")
+    engine.logDebug("Tutorial progress initializing...")
     tutorialProgress.register()
 end
 

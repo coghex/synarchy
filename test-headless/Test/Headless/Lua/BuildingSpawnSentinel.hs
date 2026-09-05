@@ -87,6 +87,10 @@ fixture =
     , "  isPaused = function() return false end,"
     , "  logWarn  = function(m) WARNINGS[#WARNINGS + 1] = tostring(m) end,"
     , "  logInfo  = function(m) INFOS[#INFOS + 1] = tostring(m) end,"
+    -- #2174 moved the module's own init/shutdown narration to Debug;
+    -- INFOS therefore still holds only the per-spawn outcome lines the
+    -- cases below assert on.
+    , "  logDebug = function() end,"
     , "}"
     , "building = {"
     , "  getActiveIds = function() return { BID } end,"
