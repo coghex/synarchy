@@ -98,8 +98,25 @@ it grades residue against the captured launch's own identity
 lunge is still inside its own `LUNGE_TIMEOUT_SEC` window, which is the
 one window `timedOut` cannot have cleared it in.
 
+EVERY FIXTURE STANDS ON LOADED ARENA TERRAIN (#1909). The flat arena is
+only `(2 * arenaRadius + 1)^2` chunks around the origin
+(`World.Generate.Arena`) -- global tiles -32..47 on each axis at
+chunkSize 16. Outside it `unit.spawn` resolves no height, logs
+`unit.spawn: chunk not loaded`, substitutes Z=0 and carries on -- and on
+this arena that fallback COINCIDES with the real surface (`arenaZ` is
+seaLevel = 0), so a case placed outside the footprint keeps passing
+while no longer standing on resolvable arena terrain at all. Two of the
+four rows (60 and 90) did exactly that. Every scenario now sits on a row
+inside the footprint, every fixture spawn asserts its own tile resolves
+a surface BEFORE spawning, and the run refuses to report success unless
+the engine's own log agrees no spawn took the fallback. Same shape as
+#1395's fix in `tools/bleeding_trail_probe.py`, and like it, local to
+this probe: `probelib.spawn_acolyte` and the engine are untouched.
+
 Exit codes: 0 = every declared check passed, 1 = a behavioural failure,
-2 = the fixture could not be established (checks left NOT RUN).
+2 = the fixture could not be established (checks left NOT RUN) -- which
+includes a spawn tile with no resolvable surface, and an engine log that
+either carries the unloaded-chunk warning or cannot be read at all.
 
 Usage:
   python3 tools/lunge_probe.py [--port 9361]
@@ -109,12 +126,65 @@ from __future__ import annotations
 
 import argparse
 import glob
+import math
+import os
+import tempfile
 import time
+from collections.abc import Callable
 
 from probelib import (boot, init_arena, load_ai_stack, poll_until,
                       quit_engine, send, send_json, spawn_acolyte)
 
 LOG = "/tmp/lunge_probe_engine.log"
+
+#: The flat arena's loaded footprint, in global tiles on each axis.
+#: `World.Generate.Arena` generates `(2 * arenaRadius + 1)^2` chunks
+#: centred on the origin with `arenaRadius = 2` -- chunks -2..2 -- and
+#: `chunkSize` is 16 (`World.Chunk.Types`), so tiles -32..47 inclusive.
+#: Mirrored by hand, exactly as `bleeding_trail_probe.py` does. A run
+#: never TRUSTS these numbers: it asks the engine per tile
+#: (`require_loaded_surface`) and then reads the engine's own log
+#: (`unloaded_spawn_failure`). They document the layout and drive the
+#: no-engine assertions in `--self-test`.
+ARENA_MIN_TILE = -32
+ARENA_MAX_TILE = 47
+
+#: How far inside that footprint every fixture tile is kept. A leap is at
+#: most ~5 tiles for this species (`jumpMaxTiles`,
+#: `Unit.Thread.Movement.Leap`, at the red squirrel's capped
+#: jumping/agility roll), so this margin keeps a launched subject over
+#: loaded terrain for the whole flight rather than only at spawn.
+FOOTPRINT_MARGIN = 6
+
+#: Minimum gap between two scenarios' rows: twice that widest leap, so no
+#: fixture unit is inside another case's reach and no case can inherit
+#: another's landing position, stamina spend or swing cooldown. The
+#: per-case fresh-unit isolation `Fixture` documents depends on it.
+MIN_ROW_SEPARATION = 12
+
+#: Each scenario's own arena row: (label, row, wants a decoy). All four
+#: sit inside the footprint with `FOOTPRINT_MARGIN` to spare and at least
+#: `MIN_ROW_SEPARATION` between them -- both asserted, for this exact
+#: table, in `--self-test`. Rows 60 and 90, where the timeout and
+#: unlifted cases used to stage, were outside the arena entirely (#1909).
+CASE_LAYOUT: tuple[tuple[str, int, bool], ...] = (
+    ("success",         -22, False),
+    ("replaced target",  -2, True),
+    ("timeout",          18, False),
+    ("unlifted launch",  38, False),
+)
+
+#: The warning `unit.spawn` logs when it cannot resolve a spawn height
+#: (`Engine.Scripting.Lua.API.Units.Spawn`). It substitutes Z=0 and
+#: continues, which on this flat arena silently coincides with the real
+#: surface, so the run refuses to report success if the engine took that
+#: path even once (#1909 requirement 3).
+UNLOADED_SPAWN_WARNING = "unit.spawn: chunk not loaded"
+
+#: What `require_loaded_surface`'s console line returns for a nil
+#: `world.getSurfaceAt`. A bare `tostring(nil)` would arrive as the text
+#: "nil", indistinguishable from a Lua error message reaching the console.
+UNLOADED_REPLY = "unloaded"
 
 #: Every check this probe intends to grade, in report order. A fixture
 #: failure reports the ones it never reached as NOT RUN rather than
@@ -171,6 +241,19 @@ class Ledger:
         self._names = dict(declared)
         self._order = [k for k, _ in declared]
         self._results: dict[str, tuple[bool, str]] = {}
+        self._setup_failures: list[str] = []
+
+    def fail_setup(self, message: str) -> None:
+        """Record that the run could not be established on arena terrain.
+
+        Held ON the ledger rather than beside it so `report` cannot print
+        a success summary over a run that never stood up: a setup failure
+        is status 2 whatever the recorded checks say. That matters for
+        the end-of-run log scan in particular, which arrives AFTER every
+        check has been graded and would otherwise be announced under an
+        "all 10 lunge checks passed" line.
+        """
+        self._setup_failures.append(message)
 
     def record(self, key: str, passed: bool, detail: str = "") -> None:
         if key not in self._names:
@@ -189,11 +272,16 @@ class Ledger:
 
     def report(self) -> int:
         unrun, failed = self.unrun(), self.failed()
+        for message in self._setup_failures:
+            print(f"\nFIXTURE FAILURE: {message}")
         if unrun:
             print(f"\nNOT RUN ({len(unrun)}): "
                   + ", ".join(self._names[k] for k in unrun))
         if failed:
             print(f"\n{len(failed)} check(s) FAILED")
+        if self._setup_failures:
+            return 2
+        if failed:
             return 1
         if unrun:
             return 2
@@ -207,6 +295,77 @@ class Ledger:
 def lua(*statements: str) -> str:
     """One console line. The debug console is single-line only."""
     return " ".join(statements)
+
+
+def surface_z(raw, gx: int, gy: int, label: str) -> int:
+    """Decode `world.getSurfaceAt`'s console reply, or raise a SETUP failure.
+
+    Split out from the console round trip so `--self-test` can drive
+    every reply shape -- an unloaded chunk, a real height, and a garbled
+    line -- with no engine.
+    """
+    if raw == UNLOADED_REPLY:
+        raise FixtureFailure(
+            f"{label}: no resolvable surface at tile ({gx}, {gy}) — that tile "
+            f"is outside the arena's loaded footprint (tiles "
+            f"{ARENA_MIN_TILE}..{ARENA_MAX_TILE} on each axis), so unit.spawn "
+            "would fall back to Z=0 instead of standing the unit on arena "
+            "terrain")
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        raise FixtureFailure(
+            f"{label}: world.getSurfaceAt({gx}, {gy}) -> {raw!r}, which is "
+            "neither a height nor the unloaded sentinel, so the spawn tile "
+            "cannot be shown to carry loaded arena terrain") from None
+
+
+def require_loaded_surface(port: int, x: float, y: float, label: str) -> int:
+    """The spawn tile's surface Z, or a SETUP failure if it has none.
+
+    Asks exactly the question the spawn will ask. `unit.spawn` floors
+    both coordinates before calling `surfaceZInWorld`
+    (`Engine.Scripting.Lua.API.Units.Spawn`), and `world.getSurfaceAt`
+    takes integers and returns nil for an unloaded chunk
+    (`Engine.Scripting.Lua.API.WorldQuery.Fluid`), so flooring here poses
+    the identical lookup. `getSurfaceAt` returns several values (the
+    console tab-joins them); the parentheses keep the first.
+
+    An unresolvable surface is a SETUP failure, never an assertion
+    failure: nothing about the lunge has been graded when a fixture
+    cannot be placed (#1909 requirement 1).
+    """
+    gx, gy = math.floor(x), math.floor(y)
+    raw = send(port, lua(
+        f"local z = (world.getSurfaceAt({gx}, {gy}));",
+        f"return z == nil and '{UNLOADED_REPLY}' or tostring(z)"))
+    return surface_z(raw, gx, gy, label)
+
+
+def unloaded_spawn_failure(log: str = LOG) -> str | None:
+    """This run's setup-failure message from the engine log, or None.
+
+    The precondition above guards this probe's own spawn sites; this
+    reads the engine's own log so a spawn placed outside the footprint by
+    any other route fails the run instead of passing quietly (#1909
+    requirement 3). A log that cannot be read is itself a setup failure:
+    an unreadable log cannot show that every fixture stood on loaded
+    terrain, and "could not check" must not be reported as "checked".
+    """
+    try:
+        with open(log, errors="replace") as fh:
+            hits = [line.rstrip() for line in fh
+                    if UNLOADED_SPAWN_WARNING in line]
+    except OSError as exc:
+        return (f"could not read the engine log {log} to check for "
+                f"{UNLOADED_SPAWN_WARNING!r} ({exc}), so this run cannot show "
+                "that every fixture spawned on loaded arena terrain")
+    if hits:
+        return (f"{len(hits)} spawn(s) fell back to Z=0 on an unloaded chunk — "
+                f"every fixture must spawn inside the arena's loaded footprint "
+                f"(tiles {ARENA_MIN_TILE}..{ARENA_MAX_TILE} on each axis). "
+                f"First: {hits[0]}")
+    return None
 
 
 def bootstrap(port: int) -> None:
@@ -491,7 +650,9 @@ class Fixture:
     Every scenario stages a FRESH set at its own arena row. Sharing one
     subject across cases would let an earlier case's landing position,
     stamina spend and swing cooldown decide whether a later one can even
-    launch.
+    launch. `CASE_LAYOUT` owns the rows, keeps every one of them inside
+    the arena's loaded footprint, and keeps them `MIN_ROW_SEPARATION`
+    apart so no case's units sit inside another case's leap reach.
     """
 
     def __init__(self, label: str, row: int, sep: int = 2, decoy: bool = False):
@@ -503,17 +664,43 @@ class Fixture:
         self.target = -1
         self.decoy = -1
 
+    def roster(self) -> tuple[tuple[float, float, dict], ...]:
+        """(x, y, spawn kwargs) for every unit this fixture stages.
+
+        In spawn order: subject, target, and the decoy when the case
+        wants one. `spawn` walks exactly this list, so `--self-test`'s
+        footprint assertion covers the tiles a real run uses rather than
+        a restatement of them.
+        """
+        row = float(self.row)
+        entries = [(0.0, row, {"unit": "red_squirrel"}),
+                   (float(self.sep), row, {"clear_water": False})]
+        if self.wants_decoy:
+            entries.append((float(-self.sep), row, {"clear_water": False}))
+        return tuple(entries)
+
     def spawn(self, port: int) -> None:
         unrestrict_ai(port)
-        self.subject = spawn_acolyte(port, 0, self.row, unit="red_squirrel")
-        self.target = spawn_acolyte(port, self.sep, self.row, clear_water=False)
+        placed = [self._stage(port, x, y, kwargs)
+                  for x, y, kwargs in self.roster()]
+        self.subject, self.target = placed[0], placed[1]
         if self.wants_decoy:
-            self.decoy = spawn_acolyte(port, -self.sep, self.row,
-                                       clear_water=False)
+            self.decoy = placed[2]
         # The subject alone: everything else stays off the AI tick, so no
         # fixture unit walks out of leap range or takes a turn of its own
         # while a launch is being staged or graded.
         restrict_ai(port, [self.subject])
+
+    def _stage(self, port: int, x: float, y: float, kwargs: dict) -> int:
+        """One fixture unit, refusing a tile with no resolvable surface.
+
+        The precondition runs BEFORE the spawn (#1909 requirement 1):
+        `unit.spawn` would otherwise warn, substitute Z=0 and carry on,
+        which on this flat arena coincides with the real surface and
+        hides the misplacement completely.
+        """
+        require_loaded_surface(port, x, y, self.label)
+        return spawn_acolyte(port, x, y, **kwargs)
 
     def reach_precondition(self, port: int) -> None:
         """Refuse to grade a subject the lunge path does not apply to."""
@@ -550,6 +737,18 @@ class Fixture:
             "local ai = require('scripts.unit_ai');",
             f"ai.commandAttack({self.subject}, {self.target});",
             "return 'ok'"))
+
+
+def fixture(label: str) -> Fixture:
+    """The scenario's fixture, at the row `CASE_LAYOUT` assigns it.
+
+    One table owns every row, so a scenario cannot drift out of the
+    arena's footprint without `--self-test` saying so (#1909).
+    """
+    for name, row, decoy in CASE_LAYOUT:
+        if name == label:
+            return Fixture(label, row=row, decoy=decoy)
+    raise KeyError(f"no arena row declared for scenario {label!r}")
 
 
 def await_launch(port: int, fx: Fixture, want_positive: bool = True) -> dict:
@@ -589,8 +788,7 @@ def _airborne_snapshot(port: int, uid: int):
 # --------------------------------------------------------------------------
 # Scenarios
 # --------------------------------------------------------------------------
-def case_success(port: int, ledger: Ledger) -> None:
-    fx = Fixture("success", row=0)
+def case_success(port: int, ledger: Ledger, fx: Fixture) -> None:
     fx.spawn(port)
     launch = await_launch(port, fx)
     print(f"  launched: target={launch['target']} mode={launch['mode']!r} "
@@ -628,8 +826,7 @@ def case_success(port: int, ledger: Ledger) -> None:
                   f"left set: {left or '(none)'}")
 
 
-def case_replaced(port: int, ledger: Ledger) -> None:
-    fx = Fixture("replaced target", row=30, decoy=True)
+def case_replaced(port: int, ledger: Ledger, fx: Fixture) -> None:
     fx.spawn(port)
     timeout_sec = lunge_timeout(port)
     launch = await_launch(port, fx)
@@ -654,8 +851,7 @@ def case_replaced(port: int, ledger: Ledger) -> None:
         unstub_jump(port)
 
 
-def case_timeout(port: int, ledger: Ledger) -> None:
-    fx = Fixture("timeout", row=60)
+def case_timeout(port: int, ledger: Ledger, fx: Fixture) -> None:
     fx.spawn(port)
     launch = await_launch(port, fx)
     # The engine offers no way to stall a leap in the air, so age the
@@ -671,8 +867,7 @@ def case_timeout(port: int, ledger: Ledger) -> None:
                         nostrike_key="timeout_nostrike")
 
 
-def case_unlifted(port: int, ledger: Ledger) -> None:
-    fx = Fixture("unlifted launch", row=90)
+def case_unlifted(port: int, ledger: Ledger, fx: Fixture) -> None:
     fx.spawn(port)
     stub_jump(port, fx.subject)
     try:
@@ -692,6 +887,19 @@ def case_unlifted(port: int, ledger: Ledger) -> None:
                             clear_key="unlifted_clear")
     finally:
         unstub_jump(port)
+
+
+#: The scenarios this probe runs, in order: (banner, `CASE_LAYOUT`
+#: label, case function). Each one is handed the fixture `fixture(label)`
+#: builds, so the arena row a case runs on is declared in exactly one
+#: place and `--self-test` can hold the layout and the run to the same
+#: list of scenarios.
+SCENARIOS: tuple[tuple[str, str, Callable[[int, Ledger, Fixture], None]], ...] = (
+    ("A. a launched lunge lands and strikes", "success", case_success),
+    ("B. the target is replaced mid-flight", "replaced target", case_replaced),
+    ("C. the lunge outlives its timeout", "timeout", case_timeout),
+    ("D. the engine never lifts the launch", "unlifted launch", case_unlifted),
+)
 
 
 def await_strike(port: int, uid: int, launch: dict,
@@ -954,6 +1162,142 @@ def self_test() -> int:
                         "excused as a different launch, though only a launch "
                         "writes phase 'air'")
 
+    # #1909: the declared layout itself. Every tile a fixture spawns on
+    # is inside the arena's loaded footprint with margin to spare, and no
+    # case's units sit inside another case's leap reach. Rows 60 and 90
+    # satisfied neither, and a real run could not say so.
+    rows = [row for _, row, _ in CASE_LAYOUT]
+    run_labels = [label for _, label, _ in SCENARIOS]
+    if sorted(label for label, _, _ in CASE_LAYOUT) != sorted(run_labels):
+        failures.append("CASE_LAYOUT does not declare a row for exactly the "
+                        f"scenarios this probe runs: "
+                        f"{[l for l, _, _ in CASE_LAYOUT]} vs {run_labels}")
+    if len(set(rows)) != len(rows):
+        failures.append(f"two scenarios share an arena row: {rows}")
+    low = ARENA_MIN_TILE + FOOTPRINT_MARGIN
+    high = ARENA_MAX_TILE - FOOTPRINT_MARGIN
+    for label, row, decoy in CASE_LAYOUT:
+        for x, y, _ in Fixture(label, row=row, decoy=decoy).roster():
+            if not (low <= x <= high and low <= y <= high):
+                failures.append(f"{label!r} stages a unit at ({x}, {y}), "
+                                f"outside the arena footprint's safe band "
+                                f"[{low}, {high}] — the #1909 defect")
+    for index, first in enumerate(rows):
+        for second in rows[index + 1:]:
+            if abs(first - second) < MIN_ROW_SEPARATION:
+                failures.append(f"rows {first} and {second} are "
+                                f"{abs(first - second)} tiles apart, inside "
+                                f"MIN_ROW_SEPARATION ({MIN_ROW_SEPARATION}), "
+                                "so one case's units are within another's "
+                                "leap reach")
+    for label, row, decoy in CASE_LAYOUT:
+        built = fixture(label)
+        if (built.label, built.row, built.wants_decoy) != (label, row, decoy):
+            failures.append(f"fixture({label!r}) built "
+                            f"({built.label!r}, {built.row}, "
+                            f"{built.wants_decoy}) rather than the declared "
+                            f"({label!r}, {row}, {decoy})")
+    try:
+        fixture("no such scenario")
+    except KeyError:
+        pass
+    else:
+        failures.append("fixture() invented a row for an undeclared scenario")
+
+    # #1909 requirement 1: the spawn precondition. `surface_z` is the
+    # whole decision `require_loaded_surface` makes about a console
+    # reply, so every reply shape is graded here with no engine.
+    try:
+        float(UNLOADED_REPLY)
+    except ValueError:
+        pass
+    else:
+        failures.append(f"UNLOADED_REPLY ({UNLOADED_REPLY!r}) parses as a "
+                        "height, so a nil world.getSurfaceAt would be read as "
+                        "a resolved surface")
+    try:
+        surface_z(UNLOADED_REPLY, 0, 60, "timeout")
+    except FixtureFailure as exc:
+        if "footprint" not in str(exc):
+            failures.append("an unloaded spawn tile was refused, but not as an "
+                            f"out-of-footprint tile: {exc}")
+    else:
+        failures.append("a spawn tile on an unloaded chunk was accepted as "
+                        "resolvable terrain — the #1909 defect")
+    try:
+        surface_z("attempt to index a nil value", 0, 0, "success")
+    except FixtureFailure:
+        pass
+    else:
+        failures.append("a garbled world.getSurfaceAt reply was accepted as a "
+                        "surface height")
+    for reply, expected in (("0", 0), ("12.0", 12), ("-3", -3)):
+        try:
+            got = surface_z(reply, 0, 0, "success")
+        except FixtureFailure as exc:
+            failures.append(f"a resolved surface height {reply!r} was refused "
+                            f"as unusable: {exc}")
+        else:
+            if got != expected:
+                failures.append(f"surface_z({reply!r}) decoded to {got!r}, not "
+                                f"{expected}")
+
+    # ...and that it runs BEFORE the spawn, so an unresolvable tile can
+    # never reach unit.spawn's Z=0 fallback in the first place.
+    staged: list[tuple[float, float]] = []
+
+    def _refuse_surface(port, x, y, label):
+        raise FixtureFailure(f"{label}: refused ({x}, {y})")
+
+    def _record_spawn(port, x, y, **kwargs):
+        staged.append((x, y))
+        return 100 + len(staged)
+
+    saved = {name: globals()[name]
+             for name in ("require_loaded_surface", "spawn_acolyte")}
+    try:
+        globals()["require_loaded_surface"] = _refuse_surface
+        globals()["spawn_acolyte"] = _record_spawn
+        try:
+            Fixture("staging", row=0)._stage(0, 0.0, 60.0, {})
+        except FixtureFailure:
+            pass
+        else:
+            failures.append("a fixture unit was staged on a tile whose surface "
+                            "does not resolve")
+        if staged:
+            failures.append("unit.spawn was reached despite an unresolvable "
+                            "spawn surface — the precondition must run first")
+        globals()["require_loaded_surface"] = lambda port, x, y, label: 0
+        if Fixture("staging", row=0)._stage(0, 1.0, 2.0, {}) != 101:
+            failures.append("a fixture unit with a resolvable surface was not "
+                            "spawned")
+        if staged != [(1.0, 2.0)]:
+            failures.append(f"the staged tile was not the one requested: "
+                            f"{staged}")
+    finally:
+        globals().update(saved)
+
+    # #1909 requirement 3: the end-of-run log scan, which catches a spawn
+    # placed outside the footprint by any route the precondition above
+    # does not guard.
+    with tempfile.TemporaryDirectory() as tmp:
+        clean = os.path.join(tmp, "clean.log")
+        with open(clean, "w") as fh:
+            fh.write("READY\n[Info] unit.spawn: acolyte at (2, -22)\n")
+        if unloaded_spawn_failure(clean) is not None:
+            failures.append("a clean engine log was read as a fallback spawn")
+        dirty = os.path.join(tmp, "dirty.log")
+        with open(dirty, "w") as fh:
+            fh.write(f"READY\n[Warn] {UNLOADED_SPAWN_WARNING} at (0, 60), "
+                     "defaulting Z=0\n")
+        if unloaded_spawn_failure(dirty) is None:
+            failures.append("an engine log carrying the unloaded-chunk warning "
+                            "was read as clean — the #1909 defect")
+        if unloaded_spawn_failure(os.path.join(tmp, "absent.log")) is None:
+            failures.append("a missing engine log was accepted, so a run that "
+                            "could not be checked would report success")
+
     led = Ledger((("a", "first"), ("b", "second")))
     if led.report() != 2:
         failures.append("a ledger with nothing recorded must report NOT RUN (2)")
@@ -971,6 +1315,15 @@ def self_test() -> int:
         pass
     else:
         failures.append("recording an undeclared check must raise")
+    # A setup failure outranks a full sheet of passes: the engine-log
+    # scan lands after every check has been graded, and must not be
+    # announced under an "all N checks passed" line (#1909 review).
+    led3 = Ledger((("a", "first"),))
+    led3.record("a", True)
+    led3.fail_setup("the engine log could not be read")
+    if led3.report() != 2:
+        failures.append("a fully-recorded ledger carrying a setup failure "
+                        "reported success instead of 2")
 
     for f in failures:
         print(f"  [FAIL] {f}")
@@ -993,7 +1346,6 @@ def main() -> int:
     port = args.port
     ledger = Ledger()
     proc = boot(port, log=LOG)
-    failure: FixtureFailure | None = None
     try:
         bootstrap(port)
         install_recorder(port)
@@ -1005,24 +1357,24 @@ def main() -> int:
                 f"requirement 3 names: {fields}")
         print(f"lunge bookkeeping fields: {', '.join(fields)}")
 
-        print("\n-- A. a launched lunge lands and strikes --")
-        case_success(port, ledger)
-        print("\n-- B. the target is replaced mid-flight --")
-        case_replaced(port, ledger)
-        print("\n-- C. the lunge outlives its timeout --")
-        case_timeout(port, ledger)
-        print("\n-- D. the engine never lifts the launch --")
-        case_unlifted(port, ledger)
+        for banner, label, run_case in SCENARIOS:
+            print(f"\n-- {banner} --")
+            run_case(port, ledger, fixture(label))
     except FixtureFailure as exc:
-        failure = exc
-        print(f"\nFIXTURE FAILURE: {exc}")
+        ledger.fail_setup(str(exc))
     finally:
         quit_engine(port, proc)
 
-    code = ledger.report()
-    if failure is not None:
-        return 2
-    return code
+    # Nothing above can report success until the engine's own log agrees
+    # every spawn landed on loaded arena terrain (#1909 requirement 3).
+    # Read once the engine is down, so the whole run's output is on disk,
+    # and folded into the LEDGER rather than checked beside it — that is
+    # what stops a clean sheet of ten checks being announced as passing
+    # over a run whose fixtures never stood on the arena.
+    unloaded = unloaded_spawn_failure(LOG)
+    if unloaded is not None:
+        ledger.fail_setup(unloaded)
+    return ledger.report()
 
 
 if __name__ == "__main__":
