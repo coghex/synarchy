@@ -132,7 +132,11 @@ neither is `pack . f . show`.
 **Operator sections** count too, in both directions: `(pack .) show`,
 `(pack $) (show x)`, `(. show) pack` and `($ show x) pack` are each the
 same function, and GHC infers `Show a => a -> Text` for every one — as
-does the **prefix** spelling, `(.) pack show` and `($) pack (show x)`.
+does the **prefix** spelling, `(.) pack show` and `($) pack (show x)`,
+parenthesised either way round — `((.) pack) show` and
+`(.) (pack) show`. (The prefix form fixes where its operand sits, so
+the operand's own parentheses need no grouping test; the ones around
+the whole application do.)
 Every one of these must be in FUNCTION position: application is
 left-associative, so `f (. show) pack` and `g (.) pack show` hand `f`
 and `g` independent arguments and are not reported. The connector may
@@ -288,7 +292,8 @@ lookalikes, all five qualified-connector positions against an
 unestablished qualifier, four alias forms (ASCII, Unicode,
 postpositive-`qualified`, and a multi-segment module name standing as
 its own qualifier), and every recognised `show`-binding shape
-against an instance method and a class declaration. Every rule was mutation-tested against them: each is
+against an instance method and a class declaration; and four
+parenthesised prefix applications against one in argument position. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
