@@ -338,7 +338,8 @@ def _established_qualifiers(prepared: str) -> dict[str, frozenset[str]]:
 
 
 def _read_connector(text: str, pos: int,
-                    qualifiers: frozenset[str]) -> tuple[str, int] | None:
+                    qualifiers: dict[str, frozenset[str]]
+                    ) -> tuple[str, int] | None:
     """`(form, offset just past it)` for a connector OPERATOR at `pos`,
     or `None`.
 
@@ -363,17 +364,31 @@ def _read_connector(text: str, pos: int,
             break
         segments.append(text[j:k])
         j = k + 1
-    if segments:
-        qualifier = ".".join(segments)
-        if qualifier not in qualifiers:
-            return None
-    else:
+    qualifier = ".".join(segments) if segments else ""
+    if not segments:
         j = i
     run = j
     while run < n and _is_symbol_char(text[run]):
         run += 1
-    form = _CONNECTOR_OPERATORS.get(text[j:run])
-    return None if form is None else (form, run)
+    operator = text[j:run]
+    form = _CONNECTOR_OPERATORS.get(operator)
+    if form is None:
+        return None
+    if not qualifier:
+        return form, run
+    if qualifier not in qualifiers:
+        return None
+    if qualifiers[qualifier] & CONNECTOR_MODULES:
+        return form, run
+    raise _UnresolvedConnectorError(
+        f"a wrapper here is joined by `{qualifier}.{operator}`, and "
+        f"`{qualifier}` names {', '.join(sorted(qualifiers[qualifier]))}."
+        f"\n\ntools/tshow_spelling_audit.py reads `{operator}` as the "
+        f"standard operator, which {', '.join(sorted(CONNECTOR_MODULES))} "
+        f"export. One from anywhere else may have its own semantics, and "
+        f"a wrapper built from it is not `{CANONICAL}`.\n\nQualify it by "
+        f"one of those modules, or record this file in EXEMPTIONS with "
+        f"the reason it is safe.")
 
 # The redundant openers admitted between the connector and `show`, and
 # the gap after them.
@@ -393,6 +408,87 @@ _TRANSPARENT_OPEN_RUN = re.compile(r"(?:[\s\x00]*\()*[\s\x00]*")
 # which closes the question rather than guessing it one module at a
 # time.
 SHOW_MODULES = frozenset({"Prelude", "UPrelude", "GHC.Show", "Text.Show"})
+
+# The modules whose `.`, `∘`, `$` and `$!` are the standard ones. A
+# qualifier naming anything else may be somebody's own operator with
+# its own semantics, and a wrapper built from it is not `tshow` -- so
+# it is REFUSED rather than read either way, exactly as an unresolvable
+# qualified `show` is (PR #2404 review round 20).
+CONNECTOR_MODULES = frozenset({
+    "Prelude", "UPrelude", "GHC.Base", "Data.Function",
+    "Prelude.Unicode", "Data.Function.Unicode", "Control.Category",
+    "Control.Category.Unicode"})
+
+
+def _past_group(text: str, pos: int) -> int | None:
+    """The offset just past the `)` closing the group opened before
+    `pos`, or `None` if it never closes. Depth-tracked, so a nested
+    group does not end it early."""
+    depth, i, n = 0, pos, len(text)
+    while i < n:
+        if text[i] == "(":
+            depth += 1
+        elif text[i] == ")":
+            if depth == 0:
+                return i + 1
+            depth -= 1
+        i += 1
+    return None
+
+
+# What a `show` application may be followed by and still BE the whole
+# operand. An operator character or a backtick is not on the list: it
+# continues the expression, so `pack (show x <> " s")` renders more
+# than the shown value and is not this wrapper at all (PR #2404 review
+# round 20).
+_OPERAND_ENDS = frozenset(")]},;")
+
+
+def _skip_atoms(text: str, pos: int) -> int:
+    """Past the atomic arguments following `pos` -- identifiers,
+    numeric literals and parenthesised groups -- to the first thing
+    that is not one."""
+    i = pos
+    while True:
+        gap = _GAP.match(text, i).end()
+        if gap >= len(text):
+            return gap
+        char = text[gap]
+        if is_haskell_ident_char(char):
+            read = _read_ident(text, gap)
+            if read is None:
+                return gap
+            i = read[1]
+        elif char == "(":
+            closed = _past_group(text, gap + 1)
+            if closed is None:
+                return gap
+            i = closed
+        else:
+            return gap
+
+
+def _show_is_whole_operand(text: str, pos: int) -> bool:
+    """True if the `show` application starting at `pos` runs to the end
+    of the operand it stands in.
+
+    `pack (show x)` renders the shown value and nothing else;
+    `pack (show x <> " s")` renders more, and rewriting it to `tshow x`
+    would drop the suffix. The two differ only in what follows the
+    arguments, so that is what this reads: an operator character or a
+    backtick continues the expression and disqualifies it, while a
+    closing bracket, a separator or the end of a line finishes it."""
+    # Step over the `show` lexeme itself first -- which may be
+    # QUALIFIED, and so is a run of identifier characters and dots
+    # rather than one identifier.
+    i, n = pos, len(text)
+    while i < n and (is_haskell_ident_char(text[i]) or text[i] == "."):
+        i += 1
+    end = _skip_atoms(text, i)
+    if end >= len(text):
+        return True
+    char = text[end]
+    return not (_is_symbol_char(char) or char == "`")
 
 
 def _names_show(text: str, pos: int,
@@ -455,19 +551,12 @@ def _past_ascription(text: str, pos: int) -> int | None:
     """The offset just past the `)` closing the group whose ascription
     begins at `pos`, or `None` if it never closes.
 
-    Parenthesis depth is tracked, so a type spelling its own
-    (`(pack :: (String) -> Text)`) does not end the group early. The
-    type's text is not read: nothing about it changes what `pack` is."""
-    depth, i, n = 0, pos, len(text)
-    while i < n:
-        if text[i] == "(":
-            depth += 1
-        elif text[i] == ")":
-            if depth == 0:
-                return i + 1
-            depth -= 1
-        i += 1
-    return None
+    `_past_group`'s question exactly, so it asks it rather than keeping
+    a second copy of the answer: depth is tracked, and a type spelling
+    its own parentheses (`(pack :: (String) -> Text)`) does not end the
+    group early. The type's text is not read -- nothing about it
+    changes what `pack` is."""
+    return _past_group(text, pos)
 
 # An OPERATOR SECTION puts the connector at the edge of a parenthesised
 # expression instead of between its operands, and both halves of that
@@ -577,17 +666,32 @@ def _prefix_operator_before(text: str, pos: int,
         i -= 1
     if i < 0 or text[i] != ")":
         return None
-    # No fixture claims an independent failure mode for that `)` test,
-    # and deliberately so: `_read_connector` below must consume the
-    # whole of `inner`, so reaching this code with anything else before
-    # the operand needs an unbalanced parenthesis, which no source GHC
-    # accepts has. It is here because it is what closes a prefix
-    # operator -- the same reasoning as `_PACK_LEXEME`'s boundary test.
-    start = text.rfind("(", 0, i)
+    # The MATCHING `(`, found by depth rather than by the nearest one,
+    # so a redundantly parenthesised operator (`((.)) pack show`, which
+    # is the same function) is not read as the inner group alone
+    # (PR #2404 review round 20).
+    depth, start = 0, i
+    while start >= 0:
+        if text[start] == ")":
+            depth += 1
+        elif text[start] == "(":
+            depth -= 1
+            if depth == 0:
+                break
+        start -= 1
     if start < 0 or not _in_function_position(text, start):
         return None
+    # Then peel the redundant layers off: `( ( . ) )` is `(.)`.
     inner = text[start + 1:i]
-    read = _read_connector(inner, 0, frozenset(qualifiers))
+    while True:
+        stripped = inner.strip(" \t\n\x00")
+        if (len(stripped) >= 2 and stripped.startswith("(")
+                and stripped.endswith(")")):
+            inner = stripped[1:-1]
+            continue
+        inner = stripped
+        break
+    read = _read_connector(inner, 0, qualifiers)
     if read is None or read[1] != len(inner):
         return None
     return read[0], start
@@ -616,7 +720,7 @@ def _right_section_before(text: str, pos: int,
         return False
     content = text[j + 1:i]
     head = _read_connector(content, _GAP.match(content, 0).end(),
-                           frozenset(qualifiers))
+                           qualifiers)
     if head is None:
         return False
     return _names_show(content, _GAP.match(content, head[1]).end(),
@@ -701,6 +805,16 @@ class _UnresolvedShowError(_UnscannableSource):
     this audit does not read, so it refuses rather than guessing --
     guessing either way is a defect (PR #2404 review rounds 16 and
     17)."""
+
+
+class _UnresolvedConnectorError(_UnscannableSource):
+    """A wrapper joined by an operator qualified by a module this
+    cannot resolve.
+
+    `T.pack C.$ show x` is `tshow x` when `C` names a module exporting
+    the standard `$` and is something else when `C` exports its own.
+    Deciding needs that module's exports, so it refuses rather than
+    guessing (PR #2404 review round 20)."""
 
 
 class _PremiseError(_UnscannableSource):
@@ -1418,7 +1532,8 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
                     break
                 cursor, budget = closer.end(), budget - 1
             cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
-            if _names_show(scan_text, cursor, qualifiers):
+            if (_names_show(scan_text, cursor, qualifiers)
+                    and _show_is_whole_operand(scan_text, cursor)):
                 violations.append(Violation(rel_path,
                                             _line_of(text, match.start()),
                                             spelling, form))
@@ -1466,8 +1581,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         if scan_text[cursor:cursor + 1] == "(":
             form, cursor = "paren", cursor + 1
         else:
-            read = _read_connector(scan_text, cursor,
-                                   frozenset(qualifiers))
+            read = _read_connector(scan_text, cursor, qualifiers)
             if read is None:
                 continue
             form, cursor = read
@@ -1475,8 +1589,17 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
             closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
             if closer is not None:
                 cursor = closer.end()
-        cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
+        opened = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor)
+        grouped = form == "paren" or opened.group(0).count("(") > 0
+        cursor = opened.end()
         if not _names_show(scan_text, cursor, qualifiers):
+            continue
+        # `show` must be the WHOLE operand. A composition written
+        # without a group of its own is exempt: `pack . show . g` is
+        # `tshow . g`, because every operator that could follow binds
+        # looser than `.` (PR #2404 review round 20).
+        if (grouped or form != "compose") and not _show_is_whole_operand(
+                scan_text, cursor):
             continue
         violations.append(Violation(rel_path, _line_of(text, match.start()),
                                     spelling, form))
@@ -1731,6 +1854,42 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n" + _T
         + "f = (.) T.pack show\n",
         [3],
+    ),
+    (
+        "a composition chain written WITHOUT a group of its own is "
+        "still this wrapper: `pack . show . g` is `tshow . g`, because "
+        "every operator that could follow binds looser than `.`",
+        "module M where\n" + _T
+        + "f = T.pack . show . g\n",
+        [3],
+    ),
+    (
+        "redundant parentheses around the OPERATOR itself: `((.))` is "
+        "`(.)` (PR #2404 review round 20)",
+        "module M where\n" + _T
+        + "f = ((.)) T.pack show\n",
+        [3],
+    ),
+    (
+        "the same around `($)`",
+        "module M where\n" + _T
+        + "g x = (($)) T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "`Data.Function` exports the standard `$` too, so a connector "
+        "qualified by it is read",
+        "module M where\n" + _T
+        + "import qualified Data.Function as F\n"
+        "f x = T.pack F.$ show x\n",
+        [4],
+    ),
+    (
+        "and around a QUALIFIED prefix operator",
+        "module M where\n" + _T
+        + "import qualified Prelude as P\n"
+        "f = ((P..)) T.pack P.show\n",
+        [4],
     ),
     (
         "a prefix application GROUPED as a whole: `((.) pack) show` "
@@ -2521,6 +2680,30 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f = format (T.pack .) show\n",
     ),
     (
+        "a BACKTICK application after the shown value extends the "
+        "operand just as an operator does",
+        "module M where\n" + _T
+        + "f x = T.pack $ show x `seq` y\n",
+    ),
+    (
+        "`show` must be the WHOLE operand: `pack (show x <> \" s\")` "
+        "renders more than the shown value, and rewriting it to "
+        "`tshow x` would drop the suffix (PR #2404 review round 20)",
+        "module M where\n" + _T
+        + 'f x = T.pack (show x <> " s")\n',
+    ),
+    (
+        "the same after `$`, where the argument extends just as far",
+        "module M where\n" + _T
+        + 'f x = T.pack $ show x <> " s"\n',
+    ),
+    (
+        "a composition given a group of its OWN is read the same way: "
+        "`pack . (show . transform)` composes with more than `show`",
+        "module M where\n" + _T
+        + "f = T.pack . (show . transform)\n",
+    ),
+    (
         "an ascribed packer that is somebody's ARGUMENT: "
         "`g (T.pack :: …) . show` is `(g (T.pack :: …)) . show`, so "
         "the ascription is read only when there is a parenthesis of "
@@ -2799,6 +2982,16 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str, type[_UnscannableSource]]] = [
         "#include \"aliases.h\"\n" + _T
         + "f x = tshow x\n",
         _PreprocessorError,
+    ),
+    (
+        "a CONNECTOR qualified by a module this cannot read: `C.$` may "
+        "be somebody's own operator with its own semantics, so a "
+        "wrapper built from it is not `tshow` -- and may be, so it is "
+        "refused rather than read either way (PR #2404 review round 20)",
+        "module M where\n" + _T
+        + "import qualified Custom as C\n"
+        "f x = T.pack C.$ show x\n",
+        _UnresolvedConnectorError,
     ),
     (
         "a `show` qualified by a module this cannot read: `Custom.show` "

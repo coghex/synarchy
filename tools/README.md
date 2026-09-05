@@ -144,6 +144,14 @@ the operand's own parentheses need no grouping test; the ones around
 the whole application do.) A **type ascription** on the packer —
 `(pack :: String -> Text) . show` — is read past to the group's
 closing parenthesis: it names the type `pack` already has.
+Redundant parentheses around a prefix operator (`((.)) pack show`)
+are peeled off too.
+
+`show` must be the **whole operand**: `pack (show x <> " s")` renders
+more than the shown value, so it is not reported — an operator or a
+backtick after the shown arguments disqualifies it. A composition
+written without a group of its own is the exception, since
+`pack . show . g` is `tshow . g`.
 Every one of these must be in FUNCTION position — the packer too:
 application binds tighter than any connector, so `format pack . show` is
 `(format pack) . show`, `g pack (show x)` is two arguments to `g`, and
@@ -152,7 +160,10 @@ independent arguments. None of those is reported. The connector may
 also be **qualified** — `pack P.$ P.show x` and `pack P.. P.show` are
 the same functions — and is read as one only under a qualifier the file
 actually establishes, so an arbitrary `Q.$` is somebody else's
-operator. Those qualifiers are read here rather than taken from the
+operator — and a qualifier that names a module other than
+`Prelude`, `UPrelude`, `GHC.Base`, `Data.Function` or their Unicode
+counterparts is **refused**, on the same reasoning as an
+unresolvable qualified `show`. Those qualifiers are read here rather than taken from the
 shared resolver, whose alias grammar is ASCII-only: `import qualified
 Prelude as Ü` establishes nothing there, and `pack Ü.$ Ü.show x` would
 go unread. The right-hand
@@ -310,7 +321,9 @@ a `UPrelude`-, `GHC.Show`- and `Text.Show`-qualified `show`, a
 quasiquote used as an applicand, and two unresolvable qualified
 `show`s that refuse; and three combining-mark and indented binder
 shapes against a reserved word introducing a wrapper; and four
-ascription spellings against two that are somebody's argument. Every rule was mutation-tested against them: each is
+ascription spellings against two that are somebody's argument; and
+four parenthesised prefix operators and a `Data.Function` connector
+against four extended operands and an unresolvable connector. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
