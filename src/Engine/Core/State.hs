@@ -27,7 +27,7 @@ import Engine.Asset.TextureNameRegistry (TextureNameRegistry)
 import Engine.Core.Log
 import Engine.Core.Types
 import Engine.Core.Queue as Q
-import Engine.PlayerEvent (PlayerEvent, EventStore, NotificationCfg)
+import Engine.PlayerEvent (EventStore, NotificationCfg)
 import qualified Combat.Types
 import Engine.ActionOutcome (ActionOutcome)
 import Engine.Scripting.Lua.Types
@@ -608,14 +608,6 @@ data EngineEnv = EngineEnv
     --   session — categories can't be added/removed at runtime, only
     --   their flags toggled. The settings tab uses this to render
     --   rows in the YAML order rather than HashMap iteration order.
-  , popupQueueRef      ∷ TVar (Seq PlayerEvent)
-    -- ^ Events with popup display enabled, appended at the same emit
-    --   call site that sends the live 'LuaShowPopup' message on
-    --   'luaQueue'. WRITE-ONLY today: that message — not a drain of
-    --   this TVar — is how the Lua popup module receives a popup, and
-    --   nothing reads this queue back out anywhere. It exists for
-    --   inspection / debug querying and as a Phase 2 stable source
-    --   for the notifications panel.
   } deriving (Eq)
 
 -- | Main-thread-private engine state, threaded through 'EngineM'.

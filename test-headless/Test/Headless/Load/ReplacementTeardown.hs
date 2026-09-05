@@ -4,7 +4,8 @@
 --   covered the modules holding session-bound UI state:
 --
 --     * Haskell-side, 'World.Load.Publish.resetTransientState' cleared
---       input, focus, the engine event streams and the popup queue but
+--       input, focus and the engine event streams (and, until #2285
+--       removed it, the write-only engine popup queue) but
 --       never reconciled the LOCKED tooltip — 'UI.Tooltip.State.tickLocked'
 --       freezes it and ignores hover and source validity, so a tooltip
 --       locked before the load stayed on screen and
