@@ -42,7 +42,8 @@ writer scanner uses -- so all of these are decided correctly:
   * `import qualified Data.Text as T`     -> `T.pack (show x)` is a hit.
   * `import qualified Data.Text as Txt`   -> `Txt.pack ...` is a hit too.
   * `import qualified Data.Text`          -> `Data.Text.pack ...` is a hit.
-  * `import Data.Text (pack)`             -> a BARE `pack ...` is a hit.
+  * `import Data.Text (pack)`             -> REFUSED, not resolved: a
+    bare name cannot be told from a local binder that shadows it.
   * `import qualified Data.ByteString.Char8 as BC`
                                           -> `BC.pack (show w)` is NOT
     a hit: `Unit.Atlas.Digest` builds ByteString digest material, a
@@ -72,6 +73,8 @@ have. Three cases, each with its own fixture below:
     alias this scan resolves by before GHC ever sees the module;
   * a `Data.Text` import whose shape the resolver does not model (an
     alias it cannot read, trailing text it cannot classify);
+  * an import putting `pack` in UNQUALIFIED scope, whose uses are bare
+    names a local binder may legally shadow;
   * a `Data.Text` mention outside any recognized import declaration --
     an indented or explicit-brace top-level layout, which
     `_import_chunks` does not collect and whose import would otherwise
@@ -154,6 +157,14 @@ _TSHOW_DEFINITION = re.compile(
 # `Data.Text.Encoding`, and never the qualifier of a use such as
 # `Data.Text.pack` (whose trailing `.` fails the lookahead), so the
 # refusal check below counts import mentions and nothing else.
+# Everything `_prepared_code` can leave where source text used to be.
+# `\x00` is how a masked comment, string or quasiquote survives in
+# place, and `str.strip()` does not remove it -- so an ordinary
+# `import qualified Data.Text as T -- rationale` looked like an import
+# with trailing text this module could not read, and was refused
+# (PR #2404 review round 6).
+_BLANK = " \t\r\n\x00"
+
 _TEXT_MODULE_MENTION = re.compile(
     r"(?<![\w'.])" + re.escape(TEXT_MODULE) + r"(?![\w'.])")
 
@@ -203,6 +214,14 @@ def _is_quasiquoter_name(name: str) -> bool:
 # `pack` as a maximal identifier lexeme. `'` is an identifier character
 # in Haskell, so it joins `\w` in both lookarounds: `pack'` is a
 # different name and `unpack` is not this one.
+#
+# No fixture claims an independent failure mode for the LEADING
+# lookaround, and that is deliberate rather than an omission: since a
+# bare `pack` is refused rather than resolved (`_UnqualifiedImportError`),
+# a `pack` found inside `unpack` would carry the qualifier `T.un`, which
+# is not a module path, and be dropped a step later anyway. It is here
+# because it is what "the identifier `pack`" means, not because a
+# reachable input depends on it.
 _PACK_LEXEME = re.compile(r"(?<![\w'])" + PACK + r"(?![\w'])")
 
 # What must follow a `pack` for the occurrence to be a show-to-Text
@@ -261,6 +280,25 @@ class _PreprocessorError(_UnscannableSource):
 
 class _ImportParseError(_UnscannableSource):
     """A `Data.Text` import this module cannot classify."""
+
+
+class _UnqualifiedImportError(_UnscannableSource):
+    """An import that puts `Data.Text`'s `pack` in UNQUALIFIED scope.
+
+    Its uses are bare names, and a bare name cannot be told from a
+    local binder that legally shadows it without full Haskell scope
+    analysis: `f x = let pack = id in pack (show x)` is valid, returns
+    `String`, and is not this wrapper at all (PR #2404 review round 6).
+    A qualified use has no such ambiguity -- a `let` cannot bind
+    `T.pack` -- so only the bare case is refused.
+
+    `tools/lua_strict_decode_audit.py` refuses an unqualified
+    `Data.Text.Encoding` import for exactly this reason, and this is
+    the same rule for the same reason. A refusal is not a claim that
+    the file contains a wrapper; it is a refusal to certify that it
+    does not, which is a non-zero exit naming the file rather than a
+    silent pass. Importing `Data.Text` qualified -- as every import of
+    it in `src/` and `app/` already is -- resolves it."""
 
 
 class _PremiseError(_UnscannableSource):
@@ -549,9 +587,9 @@ def _classify_text_imports(prepared: str, rel_path: str) -> None:
         if head is None or head.group("module") != TEXT_MODULE:
             continue
         accounted += len(_TEXT_MODULE_MENTION.findall(chunk))
-        rest = chunk[head.end():].strip()
+        rest = chunk[head.end():].strip(_BLANK)
         if rest.startswith("hiding"):
-            rest = rest[len("hiding"):].strip()
+            rest = rest[len("hiding"):].strip(_BLANK)
         if rest.startswith("("):
             if not rest.endswith(")"):
                 raise _ImportParseError(
@@ -566,6 +604,21 @@ def _classify_text_imports(prepared: str, rel_path: str) -> None:
                 f"read this one -- so the file cannot be certified as "
                 f"written. Teach the resolver the shape, or record the file "
                 f"in EXEMPTIONS with the reason it is safe.")
+
+    if imports_name(parse_imports(prepared), TEXT_MODULE, PACK, ""):
+        raise _UnqualifiedImportError(
+            f"{rel_path}: this file imports {TEXT_MODULE}'s `{PACK}` "
+            f"UNQUALIFIED, so its uses are bare names.\n\n"
+            f"tools/tshow_spelling_audit.py resolves `{PACK}` by the binding "
+            f"the import establishes, and a BARE occurrence cannot be told "
+            f"from a local binder that legally shadows it -- "
+            f"`let {PACK} = id in {PACK} (show x)` is valid and is not this "
+            f"wrapper -- without full Haskell scope analysis. So this file "
+            f"cannot be certified as written, which is not a claim that it "
+            f"contains one.\n\n"
+            f"Import {TEXT_MODULE} qualified, as every import of it in "
+            f"src/ and app/ already is, or record this file in EXEMPTIONS "
+            f"with the reason it is safe.")
 
     total = len(_TEXT_MODULE_MENTION.findall(code_text))
     if total > accounted:
@@ -647,7 +700,12 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     # to the other.
     scan_text = _prepared_code(text)
     _classify_text_imports(scan_text, rel_path)
-    declarations = parse_imports(text)
+    # From the SAME masked text, never the raw source: a column-zero
+    # `import qualified Data.Text as T` inside a quasiquote payload is
+    # not an import, and resolving against it would bind `T` here and
+    # report a `T.pack (show x)` that is really a ByteString packer
+    # (PR #2404 review round 6).
+    declarations = parse_imports(scan_text)
 
     exempt: set[int] = set()
     if rel_path == UPRELUDE_FILE:
@@ -757,29 +815,6 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n"
         "import Data.Text qualified as T\n"
         "f x = T.pack (show x)\n",
-        [3],
-    ),
-    (
-        "`pack` imported UNQUALIFIED from Data.Text, so the bare name is "
-        "the strict packer",
-        "module M where\n"
-        "import Data.Text (Text, pack)\n"
-        "f x = pack (show x)\n",
-        [3],
-    ),
-    (
-        "an unqualified import with no list at all still brings `pack` in",
-        "module M where\n"
-        "import Data.Text\n"
-        "f x = pack (show x)\n",
-        [3],
-    ),
-    (
-        "an unqualified import `hiding` something ELSE still brings "
-        "`pack` in",
-        "module M where\n"
-        "import Data.Text hiding (unpack)\n"
-        "f x = pack (show x)\n",
         [3],
     ),
     (
@@ -932,6 +967,42 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         + "import qualified Data.Text.Read as T\n"
         "f x = T.pack (show x)\n",
         [4],
+    ),
+    (
+        "an import declaration inside a QUASIQUOTE payload is not an "
+        "import: resolving against it would bind `T` to Data.Text and "
+        "report a ByteString packer (PR #2404 review round 6)",
+        "module M where\n"
+        "import qualified Data.ByteString.Char8 as BC\n" + _T
+        + "s = [text|\n"
+        "import qualified Data.Text as BC\n"
+        "|]\n"
+        "f x = T.pack (show x)\n"
+        "g w = BC.pack (show w)\n",
+        [7],
+    ),
+    (
+        "a wrapper on an import carrying a trailing comment",
+        "module M where\n"
+        "import qualified Data.Text as T -- rationale\n"
+        "f x = T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "a comment between `hiding` and its list is masked in place, so "
+        "the text after the keyword needs the same blank set stripped "
+        "off it as the text before",
+        "module M where\n"
+        "import qualified Data.Text as T hiding {- why -} (unpack)\n"
+        "f x = T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "and on one carrying a trailing block comment",
+        "module M where\n"
+        "import qualified Data.Text as T {- why -}\n"
+        "f x = T.pack (show x)\n",
+        [3],
     ),
     (
         "an import list that names `pack` explicitly, qualified",
@@ -1170,13 +1241,16 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "f x = pack (show x)\n",
     ),
     (
-        "an unqualified import that `hiding`s `pack` does not bring it in",
+        "an unqualified import that `hiding`s `pack` does not bring it "
+        "in, so the file is scanned rather than refused",
         "module M where\n"
         "import Data.Text hiding (pack)\n"
         "f x = pack (show x)\n",
     ),
     (
-        "an unqualified import list WITHOUT `pack` does not bring it in",
+        "an unqualified import list WITHOUT `pack` does not bring it in "
+        "either -- UPrelude's own `import Data.Text (Text)` is this "
+        "shape, and refusing it would refuse the tree",
         "module M where\n"
         "import Data.Text (Text)\n"
         "f x = pack (show x)\n",
@@ -1345,16 +1419,6 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f t = T.unpack t\n",
     ),
     (
-        "a longer name merely ENDING in `pack`, with the unqualified "
-        "`pack` genuinely in scope beside it -- the left lexeme "
-        "boundary is what separates the two",
-        "module M where\n"
-        "import Data.Text (Text, pack)\n"
-        "repack :: String -> Text\n"
-        "repack s = pack s\n"
-        "f x = repack (show x)\n",
-    ),
-    (
         "a name that merely starts with `pack`",
         "module M where\n" + _T
         + "f x = T.packed (show x)\n",
@@ -1386,6 +1450,15 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "  , Text ) where\n"
         "import qualified Data.Text as TXT\n"
         "import Data.Text (Text)\n"
+        "f x = tshow x\n",
+    ),
+    (
+        "a trailing COMMENT on the import is not trailing text the "
+        "resolver failed to read -- masked bytes are whitespace here, "
+        "and `str.strip()` does not remove a NUL (PR #2404 review "
+        "round 6)",
+        "module M where\n"
+        "import qualified Data.Text as T -- rationale\n"
         "f x = tshow x\n",
     ),
     (
@@ -1436,6 +1509,40 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str, type[_UnscannableSource]]] = [
         "#include \"aliases.h\"\n" + _T
         + "f x = tshow x\n",
         _PreprocessorError,
+    ),
+    (
+        "an import putting `pack` in UNQUALIFIED scope: its uses are "
+        "bare names, and `let pack = id in pack (show x)` is valid, "
+        "returns String, and is not this wrapper (PR #2404 review "
+        "round 6)",
+        "module M where\n"
+        "import Data.Text (Text, pack)\n"
+        "f x = let pack = id in pack (show x)\n",
+        _UnqualifiedImportError,
+    ),
+    (
+        "the same refusal without a shadowing binder in sight -- the "
+        "file is refused for what its imports ALLOW, since finding "
+        "every binder is the scope analysis this does not do",
+        "module M where\n"
+        "import Data.Text (Text, pack)\n"
+        "f x = pack (show x)\n",
+        _UnqualifiedImportError,
+    ),
+    (
+        "an unqualified import with no list at all brings `pack` in too",
+        "module M where\n"
+        "import Data.Text\n"
+        "f x = pack (show x)\n",
+        _UnqualifiedImportError,
+    ),
+    (
+        "an unqualified import `hiding` something ELSE still brings "
+        "`pack` in",
+        "module M where\n"
+        "import Data.Text hiding (unpack)\n"
+        "f x = pack (show x)\n",
+        _UnqualifiedImportError,
     ),
     (
         "an alias the resolver cannot read -- GHC accepts a non-ASCII "

@@ -131,7 +131,9 @@ this tree binds `T` to `Data.Text` in most modules, but `src/UPrelude.hs`
 binds `T` to `Data.Text.Encoding` (and `Data.Text` to `TXT`), while two
 Lua modules bind `T` to `Data.Text` and `Data.Text.Read` at once. A
 qualifier-keyed rule would report `UPrelude`'s encoder and miss a
-`Data.Text` under any other alias.
+`Data.Text` under any other alias. The imports are read from the same
+masked text the scan reads, so an `import` written inside a quasiquote
+payload binds nothing.
 Imports are read with `engine_env_capability_writer_syntax.py`'s
 `parse_imports`/`imports_name` — the resolver the capability writer
 scanner already uses — so an alias, a bare `import qualified Data.Text`,
@@ -186,8 +188,18 @@ for its other consumers; correcting it there is its own change.
 A file it cannot certify is **refused**, loudly, rather than scanned as
 if clean: a CPP `#define`/`#undef`/`#include` (which can rename the very
 alias the scan resolves by), a `Data.Text` import whose shape the
-resolver cannot read, and a `Data.Text` mention outside any recognized
-import declaration. `src/UPrelude.hs`'s export list is checked once per
+resolver cannot read, a `Data.Text` mention outside any recognized
+import declaration, and an import putting `pack` in **unqualified**
+scope. That last one is the same rule `lua_strict_decode_audit.py`
+applies to an unqualified `Data.Text.Encoding` import, for the same
+reason: a bare name cannot be told from a local binder that legally
+shadows it (`let pack = id in pack (show x)` is valid, returns `String`,
+and is not this wrapper) without full scope analysis. A qualified use
+has no such ambiguity — a `let` cannot bind `T.pack` — so only the bare
+case is refused, and only when `pack` is actually in unqualified scope:
+`import Data.Text (Text)`, which is `UPrelude`'s own shape, is scanned
+normally. Every `Data.Text` import in `src/` and `app/` is qualified
+today. `src/UPrelude.hs`'s export list is checked once per
 run for the one premise the whole scan rests on — that a bare `pack` is
 not in scope tree-wide. Its `module Data.Text` re-export carries `Text`
 and not `pack` (report §5.2: a `module M` export needs the entity in
@@ -216,8 +228,13 @@ a lone subtracting `-`; the five Template Haskell brackets and a tight
 `[Nothing|` comprehension against a `[tëxt|` quasiquoter and a
 `[Mod.e|` one; a Unicode module alias on `show`; and every
 transparent-parenthesis spelling against the three non-transparent
-lookalikes. Every rule was mutation-tested against them: each is
-removed one at a time and the self-test fails.
+lookalikes; and an import inside a quasiquote payload, a trailing
+import comment, and a comment between `hiding` and its list. Every rule
+was mutation-tested against them: each is removed one at a time and the
+self-test fails. The one exception is documented at its definition —
+`_PACK_LEXEME`'s leading lookaround has no reachable failure mode now
+that bare names are refused, and is kept because it is what the lexeme
+means.
 
 ## World generation tools
 
