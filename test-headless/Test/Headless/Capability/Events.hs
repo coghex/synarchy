@@ -1,5 +1,5 @@
 -- | Projection-aliasing coverage for the @ui-hud-events@
---   event\/notification\/popup capability record (issue #898, E7b of
+--   event\/notification capability record (issue #898, E7b of
 --   the @EngineEnv@ capability split #537).
 --
 --   'Engine.Core.Capability.Events.toEventsCapability' is documented
@@ -13,19 +13,20 @@
 --   detaching the event log the world thread pushes to from the one
 --   @engine.getEventLog()@ reads.
 --
---   Transposing 'ecEventStoreRef' and 'ecPopupQueueRef' used to be the
+--   Transposing 'ecEventStoreRef' and the popup queue used to be the
 --   other silent break: both were @TVar (Seq PlayerEvent)@, so the
 --   compiler could not object. #1714 gave the log ring its own
 --   @TVar EventStore@ (rows plus the mutation-sequence counter), which
---   makes that swap a TYPE ERROR rather than a test-caught mistake —
---   the check below is kept as the standing proof that the two stay
---   distinct containers, not merely distinct names.
+--   made that swap a TYPE ERROR rather than a test-caught mistake, and
+--   #2285 removed the write-only popup queue outright — popup delivery
+--   is the @LuaShowPopup@ message, gated in
+--   'Test.Headless.Event.PopupCoordPage'.
 --
---   Three of the four fields are 'Control.Concurrent.STM.TVar.TVar' or
---   'Data.IORef.IORef' (pointer 'Eq'), so "same live container" is
---   directly assertable. The fourth, 'ecNotificationOrder', is a plain
---   immutable @[Text]@ with no identity to compare, so it is asserted
---   by value instead.
+--   Two of the three remaining fields are
+--   'Control.Concurrent.STM.TVar.TVar' or 'Data.IORef.IORef' (pointer
+--   'Eq'), so "same live container" is directly assertable. The third,
+--   'ecNotificationOrder', is a plain immutable @[Text]@ with no
+--   identity to compare, so it is asserted by value instead.
 --
 --   Per SS6.3 test fixtures are outside the full-access ratchet, so
 --   this module imports @EngineEnv(..)@ directly — that is the point:
@@ -51,14 +52,13 @@ sameContainer projected live
 
 spec ∷ SpecWith EngineEnv
 spec = do
-  describe "toEventsCapability (all four ui-hud-events event/notification/popup fields)" $ do
+  describe "toEventsCapability (all three ui-hud-events event/notification fields)" $ do
     let aliases name project field =
           it (name <> " aliases the live EngineEnv container") $ \env →
             sameContainer (project (toEventsCapability env)) (field env)
 
     aliases "ecEventStoreRef"      ecEventStoreRef      eventStoreRef
     aliases "ecNotificationCfgRef" ecNotificationCfgRef notificationCfgRef
-    aliases "ecPopupQueueRef"      ecPopupQueueRef      popupQueueRef
 
     it "ecNotificationOrder carries the live EngineEnv value" $ \env → do
       -- Not a ref: a plain immutable boot value (registry order of the
@@ -69,14 +69,14 @@ spec = do
       ecNotificationOrder (toEventsCapability env) `shouldBe` notificationOrder env
       ecNotificationOrder (toEventsCapability env) `shouldNotBe` []
 
-    it "keeps the two event TVars pinned to their own counterparts" $ \env → do
+    it "keeps the event ring pinned to its own counterpart" $ \env → do
       -- `eventStoreRef` (the log ring, read back by
-      -- engine.getEventLog()) and `popupQueueRef` (popup-enabled
-      -- events, write-only today) were both `TVar (Seq PlayerEvent)`
+      -- engine.getEventLog()) and the popup queue (popup-enabled
+      -- events, write-only) were both `TVar (Seq PlayerEvent)`
       -- until #1714, so transposing them in the projection typechecked
-      -- silently. Each is still pinned to its own named counterpart
-      -- here; what changed is that the log ring is now
-      -- `TVar EventStore`, so the swap no longer compiles at all.
+      -- silently. #1714 made the log ring a `TVar EventStore` so the
+      -- swap stopped compiling, and #2285 deleted the popup queue, so
+      -- the ring is the only STM container this record still carries
+      -- and there is nothing left to transpose it with.
       let cap = toEventsCapability env
       sameContainer (ecEventStoreRef cap) (eventStoreRef env)
-      sameContainer (ecPopupQueueRef cap) (popupQueueRef env)

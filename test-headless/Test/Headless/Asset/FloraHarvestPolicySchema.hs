@@ -43,13 +43,10 @@ module Test.Headless.Asset.FloraHarvestPolicySchema (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import Engine.Asset.YamlFlora
     (FloraYamlDef(..), FloraYamlHarvest(..), FloraYamlYield(..), loadFloraYaml)
@@ -57,6 +54,7 @@ import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
     , LogCategory(..), LogLevel(..), LogEntry(..), LoggerState )
 import World.Flora.Types (LifePhaseTag(..))
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- * Fixtures
 
@@ -346,10 +344,8 @@ callbackLogger = do
     pure (logger, entriesRef)
 
 withTempYaml ∷ FilePath → String → (FilePath → IO a) → IO a
-withTempYaml name contents action = do
-    tmp ← getTemporaryDirectory
-    let dir  = tmp </> "synarchy-flora-harvest-policy-spec"
-        path = dir </> name
-    createDirectoryIfMissing True dir
-    writeFile path contents
-    action path `finally` removeDirectoryRecursive dir
+withTempYaml name contents action =
+    withExclusiveTempDirectory "synarchy-flora-harvest-policy-spec" $ \dir → do
+        let path = dir </> name
+        writeFile path contents
+        action path

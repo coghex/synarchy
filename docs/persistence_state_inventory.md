@@ -127,7 +127,6 @@ the affected fields as unclassified.
 | `eventStoreRef` | global | Exclude | — | player-event ring buffer plus its session mutation-sequence counter (#1714), explicitly session-only | `tools/injury_log_probe.py` (stream behavior) |
 | `notificationCfgRef` | global | Exclude | — | local runtime config (`config/notifications.local.yaml`, #638/#786) | `tools/config_state_probe.py` |
 | `notificationOrder` | global | Exclude | — | local runtime config, derived ordering | `tools/config_state_probe.py` |
-| `popupQueueRef` | global | Exclude | — | transient popup event queue | none yet |
 
 `engineStateRef` and `worldManagerRef`/`unitManagerRef`/
 `buildingManagerRef` are pointer fields whose *pointed-to* records are

@@ -24,8 +24,7 @@ import Data.List (sort, find, nub)
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , doesDirectoryExist, doesFileExist, createDirectoryLink
+    ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist, createDirectoryLink
     , removeDirectoryLink )
 import System.FilePath ((</>))
 import qualified Data.HashMap.Strict as HM
@@ -37,6 +36,7 @@ import Unit.Atlas.Index (unitAtlasIndexPath)
 import Unit.Atlas.Types
     ( AtlasAnimation(..), AtlasDirectionRow(..), AtlasStorageFormat(..) )
 import Unit.Direction (Direction(..))
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- The real shipped acolyte tree — every ordering/mirroring claim below
 -- is also proved against the ACTUAL canonical layout, not just a
@@ -122,30 +122,29 @@ framePaths = map pfPath ∘ pfdFrames
 --   <root>/uneven/{south (3 frames), east (2 frames)}/...
 --   <root>/unpadded/south/frame_{1,2,10}.png
 withUnitFixture ∷ (FilePath → IO ()) → IO ()
-withUnitFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-unit-spec"
-        unitDir = root </> "fixture_unit"
-        animDir a = unitDir </> "animations" </> a
-        put a d fs = do
-            createDirectoryIfMissing True (animDir a </> d)
-            forM_ fs $ \f → writeFile (animDir a </> d </> f) ""
-    forM_ ["south", "south-east", "east", "north-east", "north"] $ \d →
-        put "five" d ["frame_000.png", "frame_001.png"]
-    forM_ [ "south", "south-west", "west", "north-west"
-          , "north", "north-east", "east", "south-east" ] $ \d →
-        put "eight" d ["frame_000.png"]
-    put "uneven" "south" ["frame_000.png", "frame_001.png", "frame_002.png"]
-    put "uneven" "east"  ["frame_000.png", "frame_001.png"]
-    put "unpadded" "south" ["frame_1.png", "frame_2.png", "frame_10.png"]
-    -- A non-texture file and an unrecognized direction folder: both
-    -- must be ignored rather than becoming frames/cells.
-    writeFile (animDir "five" </> "south" </> "notes.txt") ""
-    createDirectoryIfMissing True (animDir "five" </> "up")
-    writeFile (animDir "five" </> "up" </> "frame_000.png") ""
-    -- A sibling directory with no animations/ subtree at all.
-    createDirectoryIfMissing True (root </> "no_anims")
-    (`finally` removeDirectoryRecursive root) (action root)
+withUnitFixture action =
+    withExclusiveTempDirectory "synarchy-preview-unit-spec" $ \root → do
+        let unitDir = root </> "fixture_unit"
+            animDir a = unitDir </> "animations" </> a
+            put a d fs = do
+                createDirectoryIfMissing True (animDir a </> d)
+                forM_ fs $ \f → writeFile (animDir a </> d </> f) ""
+        forM_ ["south", "south-east", "east", "north-east", "north"] $ \d →
+            put "five" d ["frame_000.png", "frame_001.png"]
+        forM_ [ "south", "south-west", "west", "north-west"
+              , "north", "north-east", "east", "south-east" ] $ \d →
+            put "eight" d ["frame_000.png"]
+        put "uneven" "south" ["frame_000.png", "frame_001.png", "frame_002.png"]
+        put "uneven" "east"  ["frame_000.png", "frame_001.png"]
+        put "unpadded" "south" ["frame_1.png", "frame_2.png", "frame_10.png"]
+        -- A non-texture file and an unrecognized direction folder: both
+        -- must be ignored rather than becoming frames/cells.
+        writeFile (animDir "five" </> "south" </> "notes.txt") ""
+        createDirectoryIfMissing True (animDir "five" </> "up")
+        writeFile (animDir "five" </> "up" </> "frame_000.png") ""
+        -- A sibling directory with no animations/ subtree at all.
+        createDirectoryIfMissing True (root </> "no_anims")
+        action root
 
 -- Two symlink shapes, both refused unconditionally (the same rule
 -- Engine.Preview.Discovery applies to every path it walks):
@@ -157,22 +156,24 @@ withUnitFixture action = do
 --                         unit would browse (and load textures from)
 --                         assets it does not own.
 withSymlinkedUnit ∷ (FilePath → IO ()) → IO ()
-withSymlinkedUnit action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-unit-symlink-spec"
-        real = tmp </> "synarchy-preview-unit-symlink-spec-outside"
-    createDirectoryIfMissing True (real </> "animations" </> "idle" </> "south")
-    writeFile (real </> "animations" </> "idle" </> "south" </> "frame_000.png") ""
-    createDirectoryIfMissing True root
-    createDirectoryLink real (root </> "linked")
-    createDirectoryIfMissing True (root </> "real_unit")
-    createDirectoryLink (real </> "animations") (root </> "real_unit" </> "animations")
-    let cleanup = do
-            removeDirectoryLink (root </> "real_unit" </> "animations")
-            removeDirectoryLink (root </> "linked")
-            removeDirectoryRecursive root
-            removeDirectoryRecursive real
-    (`finally` cleanup) (action root)
+withSymlinkedUnit action =
+    -- 'real' is a SIBLING of the browsed root, not a child: both links
+    -- still point at a tree OUTSIDE the root exactly as before, while
+    -- everything lives inside the one directory this invocation created
+    -- and is the only owner of.
+    withExclusiveTempDirectory "synarchy-preview-unit-symlink-spec" $ \base → do
+        let root = base </> "root"
+            real = base </> "outside"
+        createDirectoryIfMissing True (real </> "animations" </> "idle" </> "south")
+        writeFile (real </> "animations" </> "idle" </> "south" </> "frame_000.png") ""
+        createDirectoryIfMissing True root
+        createDirectoryLink real (root </> "linked")
+        createDirectoryIfMissing True (root </> "real_unit")
+        createDirectoryLink (real </> "animations") (root </> "real_unit" </> "animations")
+        let cleanup = do
+                removeDirectoryLink (root </> "real_unit" </> "animations")
+                removeDirectoryLink (root </> "linked")
+        action root `finally` cleanup
 
 -- A unit whose compiled artifacts are BROKEN, in its own temp resource
 -- root (#1260). Deliberately a fixture rather than a temporarily
@@ -192,17 +193,16 @@ brokenUnit ∷ String
 brokenUnit = "spec_broken_atlas_unit"
 
 withCompiledUnitFixture ∷ Maybe String → (FilePath → FilePath → IO ()) → IO ()
-withCompiledUnitFixture mIndex action = do
-    tmp ← getTemporaryDirectory
-    let resRoot = tmp </> "synarchy-preview-unit-atlas-spec"
-        catRoot = resRoot </> unitsCategoryRoot
-        unitDir = catRoot </> brokenUnit
-    createDirectoryIfMissing True (unitDir </> "animations" </> "idle" </> "south")
-    writeFile (unitDir </> "animations" </> "idle" </> "south" </> "frame_000.png") ""
-    createDirectoryIfMissing True (unitDir </> "atlas")
-    forM_ mIndex $ \doc →
-        writeFile (resRoot </> unitAtlasIndexPath (T.pack brokenUnit)) doc
-    (`finally` removeDirectoryRecursive resRoot) (action resRoot catRoot)
+withCompiledUnitFixture mIndex action =
+    withExclusiveTempDirectory "synarchy-preview-unit-atlas-spec" $ \resRoot → do
+        let catRoot = resRoot </> unitsCategoryRoot
+            unitDir = catRoot </> brokenUnit
+        createDirectoryIfMissing True (unitDir </> "animations" </> "idle" </> "south")
+        writeFile (unitDir </> "animations" </> "idle" </> "south" </> "frame_000.png") ""
+        createDirectoryIfMissing True (unitDir </> "atlas")
+        forM_ mIndex $ \doc →
+            writeFile (resRoot </> unitAtlasIndexPath (T.pack brokenUnit)) doc
+        action resRoot catRoot
 
 -- | A STRUCTURALLY sound index whose animation declares a
 --   representation this build has no decoder for — the shape deferred
@@ -235,27 +235,26 @@ uncompiledUnit ∷ String
 uncompiledUnit = "spec_uncompiled_unit"
 
 withUncompiledUnitFixture ∷ (FilePath → FilePath → IO ()) → IO ()
-withUncompiledUnitFixture action = do
-    tmp ← getTemporaryDirectory
-    let resRoot = tmp </> "synarchy-preview-unit-uncompiled-spec"
-        catRoot = resRoot </> unitsCategoryRoot
-        unitDir = catRoot </> uncompiledUnit
-        framePath = "assets/textures/units/" ⧺ uncompiledUnit
-                    ⧺ "/animations/idle/south/frame_000.png"
-    createDirectoryIfMissing True (unitDir </> "animations" </> "idle" </> "south")
-    writeFile (resRoot </> framePath) ""
-    createDirectoryIfMissing True (resRoot </> "data" </> "units")
-    writeFile (resRoot </> unitDataPath (T.pack uncompiledUnit))
-        (unlines
-            [ "units:"
-            , "  - name: " ⧺ uncompiledUnit
-            , "    sprite: \"" ⧺ framePath ⧺ "\""
-            , "    animations:"
-            , "      idle:"
-            , "        frames:"
-            , "          south:"
-            , "            - \"" ⧺ framePath ⧺ "\"" ])
-    (`finally` removeDirectoryRecursive resRoot) (action resRoot catRoot)
+withUncompiledUnitFixture action =
+    withExclusiveTempDirectory "synarchy-preview-unit-uncompiled-spec" $ \resRoot → do
+        let catRoot = resRoot </> unitsCategoryRoot
+            unitDir = catRoot </> uncompiledUnit
+            framePath = "assets/textures/units/" ⧺ uncompiledUnit
+                        ⧺ "/animations/idle/south/frame_000.png"
+        createDirectoryIfMissing True (unitDir </> "animations" </> "idle" </> "south")
+        writeFile (resRoot </> framePath) ""
+        createDirectoryIfMissing True (resRoot </> "data" </> "units")
+        writeFile (resRoot </> unitDataPath (T.pack uncompiledUnit))
+            (unlines
+                [ "units:"
+                , "  - name: " ⧺ uncompiledUnit
+                , "    sprite: \"" ⧺ framePath ⧺ "\""
+                , "    animations:"
+                , "      idle:"
+                , "        frames:"
+                , "          south:"
+                , "            - \"" ⧺ framePath ⧺ "\"" ])
+        action resRoot catRoot
 
 spec ∷ Spec
 spec = do

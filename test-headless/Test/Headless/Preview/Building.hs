@@ -28,9 +28,8 @@ import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import qualified Data.Yaml as Yaml
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , createDirectoryLink, removeDirectoryLink, createFileLink
-    , doesDirectoryExist )
+    ( createDirectoryIfMissing, createDirectoryLink, removeDirectoryLink
+    , createFileLink, doesDirectoryExist )
 import System.FilePath ((</>))
 import System.Posix.Files (createNamedPipe, stdFileMode)
 import Building.Schema (legacyAssets)
@@ -38,6 +37,7 @@ import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
 import Engine.Preview.Building
 import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- The real shipped trees — every claim below is proved against the
 -- ACTUAL canonical layout, not just a synthetic fixture (the
@@ -91,39 +91,38 @@ animated lbl frames = PreviewBuildingEntry
 --                                     png must surface as a static
 --   <root>/top.png                 -- a loose top-level static
 withBuildingFixture ∷ (FilePath → IO ()) → IO ()
-withBuildingFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-building-spec"
-        item = root </> "fixture_building"
-        put sub fs = do
-            createDirectoryIfMissing True (item </> sub)
-            forM_ fs $ \f → writeFile (item </> sub </> f) ""
-    createDirectoryIfMissing True item
-    put "unpadded" ["frame_1.png", "frame_2.png", "frame_10.png"]
-    put "mixed"    ["frame_001.png", "cover.png"]
-    writeFile (item </> "top.png") ""
-    (`finally` removeDirectoryRecursive root) (action root)
+withBuildingFixture action =
+    withExclusiveTempDirectory "synarchy-preview-building-spec" $ \root → do
+        let item = root </> "fixture_building"
+            put sub fs = do
+                createDirectoryIfMissing True (item </> sub)
+                forM_ fs $ \f → writeFile (item </> sub </> f) ""
+        createDirectoryIfMissing True item
+        put "unpadded" ["frame_1.png", "frame_2.png", "frame_10.png"]
+        put "mixed"    ["frame_001.png", "cover.png"]
+        writeFile (item </> "top.png") ""
+        action root
 
 -- A symlinked item directory: rejected unconditionally before boot,
 -- exactly like a symlinked unit directory (#887) — doesDirectoryExist
 -- follows links, so browsing one would load another tree's textures
 -- and break the trimmed-loading contract.
 withSymlinkFixture ∷ (FilePath → IO ()) → IO ()
-withSymlinkFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-building-symlink-spec"
-        outside = tmp </> "synarchy-preview-building-symlink-spec-outside"
-    createDirectoryIfMissing True root
-    createDirectoryIfMissing True outside
-    writeFile (outside </> "default.png") ""
-    createDirectoryLink outside (root </> "shortcut")
-    -- Unlink the directory symlink FIRST so removeDirectoryRecursive is
-    -- never given a chance to follow it into 'outside'.
-    let cleanup = do
-            removeDirectoryLink (root </> "shortcut")
-            removeDirectoryRecursive root
-            removeDirectoryRecursive outside
-    (`finally` cleanup) (action root)
+withSymlinkFixture action =
+    -- 'outside' is a SIBLING of the browsed root, not a child: the link
+    -- still escapes the fixture root exactly as before, while both trees
+    -- live inside the one directory this invocation created and is the
+    -- only owner of.
+    withExclusiveTempDirectory "synarchy-preview-building-symlink-spec" $ \base → do
+        let root = base </> "root"
+            outside = base </> "outside"
+        createDirectoryIfMissing True root
+        createDirectoryIfMissing True outside
+        writeFile (outside </> "default.png") ""
+        createDirectoryLink outside (root </> "shortcut")
+        -- Unlink the directory symlink FIRST so no recursive removal is
+        -- ever given a chance to follow it into 'outside'.
+        action root `finally` removeDirectoryLink (root </> "shortcut")
 
 -- A tree of NON-FILES carrying a supported extension (#1417). A
 -- @.png@ suffix is a NAME test, so every one of these children looks
@@ -158,32 +157,31 @@ withSymlinkFixture action = do
 --                        name), so the walk descends and the static
 --                        producer sees both children there too
 withNonFileFixture ∷ (FilePath → IO ()) → IO ()
-withNonFileFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-preview-building-nonfile-spec"
-        item = root </> "fixture_building"
-        dir sub = createDirectoryIfMissing True (item </> sub)
-        file sub = writeFile (item </> sub) ""
-    createDirectoryIfMissing True item
-    dir  ("dir_only" </> "frame_001.png")
-    file ("dir_only" </> "frame_001.png" </> "wall.png")
-    dir  "yaml_matched"
-    file ("yaml_matched" </> "frame_001.png")
-    dir  ("yaml_matched" </> "frame_002.png")
-    dir  "symlinked"
-    file ("symlinked" </> "frame_001.png")
-    -- Relative, and inside the fixture, so the recursive cleanup
-    -- unlinks it without ever resolving outside the temp tree.
-    createFileLink "frame_001.png" (item </> "symlinked" </> "frame_002.png")
-    dir  "special"
-    file ("special" </> "frame_001.png")
-    createNamedPipe (item </> "special" </> "frame_002.png") stdFileMode
-    file "loose.png"
-    createNamedPipe (item </> "pipe.png") stdFileMode
-    dir  "plain"
-    file ("plain" </> "wall.png")
-    createNamedPipe (item </> "plain" </> "pipe.png") stdFileMode
-    (`finally` removeDirectoryRecursive root) (action root)
+withNonFileFixture action =
+    withExclusiveTempDirectory "synarchy-preview-building-nonfile-spec" $ \root → do
+        let item = root </> "fixture_building"
+            dir sub = createDirectoryIfMissing True (item </> sub)
+            file sub = writeFile (item </> sub) ""
+        createDirectoryIfMissing True item
+        dir  ("dir_only" </> "frame_001.png")
+        file ("dir_only" </> "frame_001.png" </> "wall.png")
+        dir  "yaml_matched"
+        file ("yaml_matched" </> "frame_001.png")
+        dir  ("yaml_matched" </> "frame_002.png")
+        dir  "symlinked"
+        file ("symlinked" </> "frame_001.png")
+        -- Relative, and inside the fixture, so the recursive cleanup
+        -- unlinks it without ever resolving outside the temp tree.
+        createFileLink "frame_001.png" (item </> "symlinked" </> "frame_002.png")
+        dir  "special"
+        file ("special" </> "frame_001.png")
+        createNamedPipe (item </> "special" </> "frame_002.png") stdFileMode
+        file "loose.png"
+        createNamedPipe (item </> "pipe.png") stdFileMode
+        dir  "plain"
+        file ("plain" </> "wall.png")
+        createNamedPipe (item </> "plain" </> "pipe.png") stdFileMode
+        action root
 
 spec ∷ Spec
 spec = do

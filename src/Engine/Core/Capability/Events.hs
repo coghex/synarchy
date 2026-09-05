@@ -1,8 +1,14 @@
--- | The event\/notification\/popup half of the @ui-hud-events@
---   capability (epic #537, issue #898 — E7b): exactly the four fields
+-- | The event\/notification half of the @ui-hud-events@
+--   capability (epic #537, issue #898 — E7b): exactly the three fields
 --   'docs/engineenv_capability_inventory.md' SS7.7 splits off from the
 --   UI\/focus\/HUD half (#897, "Engine.Core.Capability.Ui"), in SS5's
 --   own table order.
+--
+--   #2285 removed a fourth, @ecPopupQueueRef@: a @TVar (Seq
+--   PlayerEvent)@ that every popup-enabled emit appended to and
+--   nothing ever read. Popup DELIVERY was always the separate
+--   @LuaShowPopup@ message on @luaQueue@, so the queue was an
+--   unbounded write-only duplicate of the bounded event store.
 --
 --   Follows the capability-record convention
 --   ('docs/engineenv_capability_inventory.md' SS2.1 is its one
@@ -20,21 +26,21 @@
 --
 --   Unlike @render-gpu-asset@ (SS3.1) and @input-lua-transport@
 --   (SS7.3), this capability owns nothing one thread privately owns.
---   'ecEventStoreRef' and 'ecPopupQueueRef' are multi-writer STM
---   TVars, 'ecNotificationCfgRef' is read on ANY thread from the
+--   'ecEventStoreRef' is a multi-writer STM TVar,
+--   'ecNotificationCfgRef' is read on ANY thread from the
 --   @emitEvent@ path, and 'ecNotificationOrder' is an immutable boot
 --   value. So there is one record here, not a main-only\/worker-safe
 --   pair, and @tools/engine_env_capability_audit.py@ needs no import
 --   boundary for it beyond the SS6 ratchet.
 --
 --   #1714's event-log sequence counter is progress state, but it is
---   NOT a fifth field: it rides inside 'ecEventStoreRef'\'s own value,
+--   NOT a fourth field: it rides inside 'ecEventStoreRef'\'s own value,
 --   which is what keeps sequence assignment and the store mutation one
 --   atomic STM write.
 --
 --   == Concurrency contract these handles carry (SS5)
 --
---   The two 'TVar's are genuinely multi-writer and are only ever
+--   'ecEventStoreRef' is genuinely multi-writer and is only ever
 --   touched inside @atomically@; 'ecNotificationCfgRef' takes a single
 --   'Data.IORef.readIORef' per emit (negligible even from the world
 --   thread) and is updated with @atomicModifyIORef'@ by the settings
@@ -44,10 +50,10 @@
 --
 --   == Lifecycle (SS5, and @World.Load.Publish.resetTransientState@)
 --
---   'ecEventStoreRef' and 'ecPopupQueueRef' are @session-replaced@ and
---   ARE emptied of rows by a load publish
+--   'ecEventStoreRef' is @session-replaced@ and IS emptied of rows by
+--   a load publish
 --   (@World.Load.Publish.resetTransientState@) — a loaded session
---   starts with no event history and no pending popups. 'ecEventStoreRef'
+--   starts with no event history. 'ecEventStoreRef'
 --   is emptied at the OTHER session boundary too, when Exit to Menu
 --   destroys every world (@Unit.Thread.endSessionEpoch@, #2291); until
 --   that issue only the load half existed, so the previous session's
@@ -61,7 +67,7 @@
 --
 --   Like the other capability modules, this one imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'
---   type plus its four field accessors) rather than @EngineEnv(..)@ or
+--   type plus its three field accessors) rather than @EngineEnv(..)@ or
 --   a bare import, so it is not itself a full-@EngineEnv@-access
 --   consumer under the SS6 ratchet.
 module Engine.Core.Capability.Events
@@ -71,18 +77,17 @@ module Engine.Core.Capability.Events
 
 import UPrelude
 import Data.IORef (IORef)
-import Data.Sequence (Seq)
 import Control.Concurrent.STM.TVar (TVar)
-import Engine.PlayerEvent (PlayerEvent, EventStore, NotificationCfg)
+import Engine.PlayerEvent (EventStore, NotificationCfg)
 import Engine.Core.State
   ( EngineEnv
-  , eventStoreRef, notificationCfgRef, notificationOrder, popupQueueRef
+  , eventStoreRef, notificationCfgRef, notificationOrder
   )
 
--- | The event\/notification\/popup slice of @ui-hud-events@: the
+-- | The event\/notification slice of @ui-hud-events@: the
 --   player-event ring buffer, the resolved per-category notification
---   settings, the boot-captured category display order, and the
---   popup queue. See 'docs/engineenv_capability_inventory.md' SS5
+--   settings, and the boot-captured category display order. See
+--   'docs/engineenv_capability_inventory.md' SS5
 --   @ui-hud-events@ and SS7.7.
 data EventsCapability = EventsCapability
   { -- | Ring buffer of player-facing events, capped at
@@ -111,14 +116,6 @@ data EventsCapability = EventsCapability
     --   categories cannot be added or removed at runtime, only their
     --   flags toggled. @boot-process@.
   , ecNotificationOrder  ∷ [Text]
-    -- | Popup-enabled events, appended at the same emit call site
-    --   that sends the live @LuaShowPopup@ message. __Write-only
-    --   today__: nothing reads this TVar back out — popup DELIVERY is
-    --   the separate @luaQueue@ message, not a drain of this queue.
-    --   It exists for inspection\/debug querying and as a Phase 2
-    --   stable source for the notifications panel.
-    --   @session-replaced@ — a load publish resets it to empty.
-  , ecPopupQueueRef      ∷ TVar (Seq PlayerEvent)
   }
 
 -- | Total projection — every field aliases the identical live
@@ -128,5 +125,4 @@ toEventsCapability env = EventsCapability
   { ecEventStoreRef      = eventStoreRef env
   , ecNotificationCfgRef = notificationCfgRef env
   , ecNotificationOrder  = notificationOrder env
-  , ecPopupQueueRef      = popupQueueRef env
   }

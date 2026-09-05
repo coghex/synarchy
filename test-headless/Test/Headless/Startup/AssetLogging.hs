@@ -31,7 +31,6 @@ module Test.Headless.Startup.AssetLogging (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.Char (isDigit)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import qualified Data.Text as T
@@ -39,14 +38,13 @@ import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
-import System.Directory
-    ( createDirectoryIfMissing, doesDirectoryExist, getTemporaryDirectory
-    , listDirectory, removeDirectoryRecursive )
+import System.Directory (listDirectory)
 import System.FilePath ((</>), takeExtension)
 import World.Flora.Types (FloraSpecies(..), FloraCatalog(..))
 import Engine.Core.Init (EngineInitResult(..))
 import Test.Headless.Harness.Isolation
-    (isInsideIsolatedResourceRoot, withIsolatedResourceRoot)
+    ( isInsideIsolatedResourceRoot, withExclusiveTempDirectory
+    , withIsolatedResourceRoot )
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
@@ -471,17 +469,10 @@ shippedPrereqs verb = case verb of
 -----------------------------------------------------------------------
 
 withFixtureDir ∷ String → [(FilePath, String)] → (FilePath → IO α) → IO α
-withFixtureDir label files action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> ("synarchy-1930-" ⧺ label)
-    removeIfPresent root
-    createDirectoryIfMissing True root
-    forM_ files $ \(rel, contents) → writeFile (root </> rel) contents
-    action root `finally` removeIfPresent root
-  where
-    removeIfPresent p = do
-        present ← doesDirectoryExist p
-        when present $ removeDirectoryRecursive p
+withFixtureDir label files action =
+    withExclusiveTempDirectory ("synarchy-1930-" ⧺ label) $ \root → do
+        forM_ files $ \(rel, contents) → writeFile (root </> rel) contents
+        action root
 
 -- | A material whose three textures do not exist, so the missing-texture
 --   substitution warning fires three times per definition.

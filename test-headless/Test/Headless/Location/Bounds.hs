@@ -13,15 +13,12 @@ module Test.Headless.Location.Bounds
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Text as T
 import qualified Data.HashSet as HS
 import qualified Data.Yaml as Yaml
-import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , listDirectory )
+import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import Data.List (sort)
 import Data.Foldable (toList)
@@ -34,6 +31,7 @@ import Engine.Asset.YamlLocations
     , LocationYamlDef(..), LocationYamlFile(..), authoredLocationCoordinateLimit
     , loadLocationYaml, significantItemErrors )
 import Location.Bounds
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 decodeBounds ∷ BS.ByteString → Either String LocationYamlBounds
 decodeBounds = either (Left . show) Right . Yaml.decodeEither'
@@ -890,10 +888,8 @@ callbackLogger = do
     pure (logger, entriesRef)
 
 withTempLocationYaml ∷ FilePath → String → (FilePath → IO a) → IO a
-withTempLocationYaml name contents action = do
-    tmp ← getTemporaryDirectory
-    let dir  = tmp </> "synarchy-location-bounds-spec"
-        path = dir </> name
-    createDirectoryIfMissing True dir
-    writeFile path contents
-    action path `finally` removeDirectoryRecursive dir
+withTempLocationYaml name contents action =
+    withExclusiveTempDirectory "synarchy-location-bounds-spec" $ \dir → do
+        let path = dir </> name
+        writeFile path contents
+        action path

@@ -21,7 +21,6 @@ module Test.Headless.Item.Materialize (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.Char (isAlphaNum)
 import Control.Monad (filterM)
 import Data.IORef
@@ -33,9 +32,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Yaml as Yaml
 import qualified HsLua as Lua
-import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, doesFileExist
-    , removeDirectoryRecursive )
+import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.Random (StdGen, mkStdGen)
 import Engine.Asset.Discovery (walkFilesWithExtension)
@@ -60,6 +57,7 @@ import Item.Types
     , itemTotalWeight )
 import LootTable.Roll (LootRollContext(..), rollLootTableFor)
 import LootTable.Types (LootTableDef(..), LootTableEntry(..))
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- * Fixtures
 
@@ -185,13 +183,11 @@ silentLogger = initLogger defaultLogConfig
     { lcBackend = LogToCallback (\_ → pure ()) }
 
 withTempItemYaml ∷ String → (FilePath → IO α) → IO α
-withTempItemYaml contents action = do
-    tmp ← getTemporaryDirectory
-    let dir  = tmp </> "synarchy-1418-materialize"
-        path = dir </> "probe_items.yaml"
-    createDirectoryIfMissing True dir
-    writeFile path contents
-    action path `finally` removeDirectoryRecursive dir
+withTempItemYaml contents action =
+    withExclusiveTempDirectory "synarchy-1418-materialize" $ \dir → do
+        let path = dir </> "probe_items.yaml"
+        writeFile path contents
+        action path
 
 -- | Load one temp item file and return the authored entries by
 --   definition name, THROUGH the production decoder and the production

@@ -445,7 +445,7 @@ def audit_field_total(live_fields: list[str], inventory_text: str
     `live_fields` is the ORDERED field list `extract_record_fields`
     returns, so `[0]`/`[-1]` are the record's real first and last
     field -- which is what SS1's "`engineConfig` through
-    `popupQueueRef`" span claim asserts.
+    `notificationOrder`" span claim asserts.
     """
     violations: list[str] = []
     doc = f"docs/{INVENTORY_PATH.name}"

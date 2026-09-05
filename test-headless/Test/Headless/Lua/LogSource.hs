@@ -41,18 +41,16 @@ module Test.Headless.Lua.LogSource (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import qualified Data.ByteString.Char8 as BSC
 import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified HsLua as Lua
-import System.Directory
-    ( createDirectoryIfMissing, getTemporaryDirectory
-    , removePathForcibly, withCurrentDirectory )
+import System.Directory (createDirectoryIfMissing, withCurrentDirectory)
 import System.FilePath ((</>))
 
 import Engine.Scripting.Lua.API.Log (logSourceField, shortenChunkPath)
 import Engine.Scripting.Lua.Debug
     (ChunkSourceInfo(..), ChunkKind(..), getChunkSourceInfo)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 spec ∷ Spec
 spec = do
@@ -207,11 +205,4 @@ withChunk (Right csi) k = k csi
 
 -- | A private scratch tree, removed however the action ends.
 withTempTree ∷ String → (FilePath → IO α) → IO α
-withTempTree label action = do
-    base ← getTemporaryDirectory
-    let root = base </> ("synarchy-" <> label)
-    -- 'removePathForcibly' tolerates an absent path, so this is both the
-    -- setup and the teardown.
-    removePathForcibly root
-    createDirectoryIfMissing True root
-    action root `finally` removePathForcibly root
+withTempTree label = withExclusiveTempDirectory ("synarchy-" <> label)

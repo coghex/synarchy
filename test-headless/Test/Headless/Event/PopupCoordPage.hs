@@ -14,9 +14,12 @@
 --
 --   * __Attribution__: the one rule in
 --     'Engine.PlayerEvent.Emit.resolveEventPage', asserted against a
---     live engine — the stored ring entry, the popup queue and the
---     queued 'LuaShowPopup' all carry the same effective page, and no
---     emitter had to opt in to get one.
+--     live engine — the stored ring entry and the queued
+--     'LuaShowPopup' carry the same effective page, and no emitter had
+--     to opt in to get one. #2285 deleted the third surface, an
+--     engine-side popup queue nothing ever read, so the delivered
+--     message is now asserted whole (category, text, RGBA, coords,
+--     page) rather than for its page alone.
 --   * __Activation__: the refusal decision itself, on a bare Lua
 --     backend in the style of 'Test.Headless.UI.PopupPlacement' —
 --     same-page pans, different-page and page-less do not, the cycle
@@ -43,7 +46,8 @@ import Data.Aeson (FromJSON(..), Value(..), decode, withObject, (.:), (.:?))
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
-import Data.IORef (newIORef, writeIORef)
+import Data.IORef (newIORef, writeIORef, readIORef, modifyIORef')
+import qualified Data.HashMap.Strict as HM
 import Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import Control.Concurrent.STM (readTVarIO)
@@ -51,7 +55,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.PlayerEvent.Emit
-  (PlayerEvent(..), StoredEvent(..), EventStore(..)
+  (PlayerEvent(..), StoredEvent(..), EventStore(..), CategoryCfg(..)
   , emitEvent, emitEventAt, emitEventFullOnPage)
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
@@ -110,26 +114,62 @@ newestEvent ∷ EngineEnv → IO PlayerEvent
 newestEvent env =
     seEvent <$> (lastOf "event log" =≪ (esRows <$> readTVarIO (eventStoreRef env)))
 
--- | The newest entry in the popup queue. A separate container from the
---   log ring — and a separate TYPE since #1714 gave the ring its own
---   'EventStore' wrapper, so it gets its own assertion instead of
---   riding on the ring's.
-newestQueuedPopup ∷ EngineEnv → IO PlayerEvent
-newestQueuedPopup env = lastOf "popup queue" =≪ readTVarIO (popupQueueRef env)
-
 lastOf ∷ String → Seq α → IO α
 lastOf what s = case Seq.viewr s of
     Seq.EmptyR   → fail (what ⧺ " is empty — nothing was emitted")
     _ Seq.:> ev  → pure ev
 
--- | Every 'LuaShowPopup' currently waiting on the engine-to-Lua queue,
---   as @(coords, page)@. Draining is destructive, so a case that
---   asserts on it emits first and drains once.
-drainShowPopups ∷ EngineEnv → IO [(Maybe (Int, Int), Maybe Text)]
+-- | One drained 'LuaShowPopup', with every field the message carries.
+--
+--   Since #2285 removed the engine-side popup queue, this message is
+--   the ONLY place a popup-enabled event goes, so the assertions below
+--   pin it whole rather than projecting out the two fields #1588 was
+--   about. A record rather than an 8-tuple so a mismatch renders which
+--   field drifted.
+data DeliveredPopup = DeliveredPopup
+    { dpCategory ∷ Text
+    , dpText     ∷ Text
+    , dpColor    ∷ (Float, Float, Float, Float)
+    , dpCoords   ∷ Maybe (Int, Int)
+    , dpPage     ∷ Maybe Text
+    } deriving (Eq, Show)
+
+-- | Every 'LuaShowPopup' currently waiting on the engine-to-Lua queue.
+--   Draining is destructive, so a case that asserts on it emits first
+--   and drains once.
+drainShowPopups ∷ EngineEnv → IO [DeliveredPopup]
 drainShowPopups env = do
     msgs ← Q.flushQueue (luaQueue env)
-    pure [ (mCoords, mPage)
-         | LuaShowPopup _ _ _ _ _ _ mCoords mPage ← msgs ]
+    pure [ DeliveredPopup c t (r, g, b, a) mCoords mPage
+         | LuaShowPopup c t r g b a mCoords mPage ← msgs ]
+
+-- | The live registry entry for @category@ — the settings the emit
+--   path itself reads. The popup's colour is asserted against THIS
+--   rather than a literal copied out of
+--   @data/notification_categories.yaml@, so the case proves the
+--   registry value is what reaches the message (in channel order)
+--   instead of re-stating the YAML in Haskell.
+liveCategoryCfg ∷ EngineEnv → Text → IO CategoryCfg
+liveCategoryCfg env category = do
+    cfgMap ← readIORef (notificationCfgRef env)
+    case HM.lookup category cfgMap of
+        Just cfg → pure cfg
+        Nothing  → fail ("category '" ⧺ T.unpack category
+                          ⧺ "' is not in the notification registry")
+
+-- | Rewrite one category's notification switches for the duration of a
+--   case. 'CategoryCfg' makes @log@ and @popup@ independent, and the
+--   shipped registry turns both on together, so the only way to
+--   exercise the popup-without-log half is to set it here.
+setCategorySwitches ∷ EngineEnv → Text → Bool → Bool → IO ()
+setCategorySwitches env category logOn popupOn =
+    modifyIORef' (notificationCfgRef env)
+        (HM.adjust (\cfg → cfg { ccLog = logOn, ccPopup = popupOn })
+                   category)
+
+-- | How many rows the event ring currently holds.
+eventRowCount ∷ EngineEnv → IO Int
+eventRowCount env = Seq.length ∘ esRows <$> readTVarIO (eventStoreRef env)
 
 -----------------------------------------------------------
 -- Lua-side helpers
@@ -352,9 +392,10 @@ attributionSpec = around withHeadlessEngine $
   describe "player-event page attribution" $ do
 
     it "attributes a coords-carrying emit to the active page, identically \
-       \on the ring, the popup queue and the Lua message" $ \env → do
+       \on the ring and the whole Lua message" $ \env → do
         installPages env [alphaPage]
         _ ← drainShowPopups env      -- discard anything boot queued
+        cfg ← liveCategoryCfg env "location_discovery"
         emitEventAt env "location_discovery" "Test" "Discovered: ruin"
             (Just (7, 9))
 
@@ -362,12 +403,46 @@ attributionSpec = around withHeadlessEngine $
         peCoords stored `shouldBe` Just (7, 9)
         peSourcePage stored `shouldBe` Just alphaPage
 
-        queued ← newestQueuedPopup env
-        peSourcePage queued `shouldBe` Just alphaPage
+        -- Requirement 8: both surfaces agree because 'resolveEventPage'
+        -- ran exactly once, before either was written. The message is
+        -- pinned WHOLE -- category, text, RGBA and coords as well as
+        -- the page -- because since #2285 it is the only delivery
+        -- surface a popup has, so a field dropped or transposed on the
+        -- way out has nothing else left to catch it.
+        drainShowPopups env ≫= (`shouldBe`
+            [ DeliveredPopup
+                { dpCategory = "location_discovery"
+                , dpText     = "Discovered: ruin"
+                , dpColor    = ccTextColor cfg
+                , dpCoords   = Just (7, 9)
+                , dpPage     = Just alphaPage
+                } ])
 
-        -- Requirement 8: all three agree because 'resolveEventPage' ran
-        -- exactly once, before any of them was written.
-        drainShowPopups env ≫= (`shouldBe` [(Just (7, 9), Just alphaPage)])
+    it "delivers a popup with logging off, storing no event row" $ \env → do
+        -- 'ccLog' and 'ccPopup' are separate switches, so a player who
+        -- silenced this category's log rows must still see its toast.
+        -- With the write-only engine queue gone (#2285) the message is
+        -- the whole of that delivery: if the emit path ever gated the
+        -- popup on the store write, this is the case that fails.
+        installPages env [alphaPage]
+        _ ← drainShowPopups env
+        setCategorySwitches env "location_discovery" False True
+        cfg ← liveCategoryCfg env "location_discovery"
+        ccLog cfg `shouldBe` False
+        before ← eventRowCount env
+
+        emitEventAt env "location_discovery" "Test" "Discovered: shrine"
+            (Just (2, 3))
+
+        eventRowCount env ≫= (`shouldBe` before)
+        drainShowPopups env ≫= (`shouldBe`
+            [ DeliveredPopup
+                { dpCategory = "location_discovery"
+                , dpText     = "Discovered: shrine"
+                , dpColor    = ccTextColor cfg
+                , dpCoords   = Just (2, 3)
+                , dpPage     = Just alphaPage
+                } ])
 
     it "follows the visible page, not the head of wmWorlds" $ \env → do
         -- 'installPages' lists alpha FIRST both times; only visibility

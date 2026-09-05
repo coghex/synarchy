@@ -22,15 +22,12 @@ module Test.Headless.Asset.UnitInventory (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Control.Monad (filterM)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (sort)
-import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing
-    , removeDirectoryRecursive, doesFileExist )
+import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
@@ -38,6 +35,7 @@ import Engine.Core.Log
 import Engine.Asset.YamlUnits
     ( UnitYamlDef(..), UnitYamlAnim(..), UnitYamlAssetDef(..)
     , loadUnitYaml, loadUnitYamlAssets )
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | The three trees #1261 promoted, with the direction count each
 --   declared layout must produce. Five means the canonical authored
@@ -282,10 +280,8 @@ recordingLogger = do
     pure (logger, ref)
 
 withTempUnitYaml ∷ String → (FilePath → IO α) → IO α
-withTempUnitYaml contents act = do
-    tmp ← getTemporaryDirectory
-    let dir = tmp </> "synarchy-unit-inventory-1257"
-    createDirectoryIfMissing True dir
-    let path = dir </> "candidate.yaml"
-    writeFile path contents
-    act path `finally` removeDirectoryRecursive dir
+withTempUnitYaml contents act =
+    withExclusiveTempDirectory "synarchy-unit-inventory-1257" $ \dir → do
+        let path = dir </> "candidate.yaml"
+        writeFile path contents
+        act path

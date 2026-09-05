@@ -31,8 +31,6 @@ import qualified Data.Text as T
 import qualified Data.Yaml as Yaml
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
-import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import Engine.Asset.YamlLootTables
     ( LootTableYamlDef(..), LootTableYamlEntry(..), loadLootTableYaml )
@@ -49,6 +47,7 @@ import LootTable.Types
     , emptyLootTableRegistry, registerLootTable, lookupLootTable )
 import LootTable.Roll
     ( LootRollContext(..), lootRollUnit, pickByWeight, rollLootTableFor )
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | The engine's own YAML → registry conversion
 --   ('Engine.Scripting.Lua.API.LootTables.loadLootTableYamlFn'), so the
@@ -441,13 +440,11 @@ callbackLogger = do
     pure (logger, entriesRef)
 
 withTempLootYaml ∷ Text → (FilePath → IO a) → IO a
-withTempLootYaml contents action = do
-    tmp ← getTemporaryDirectory
-    let dir  = tmp </> "synarchy-loot-weight-spec"
-        path = dir </> "probe_loot_table.yaml"
-    createDirectoryIfMissing True dir
-    writeFile path (T.unpack contents)
-    action path `finally` removeDirectoryRecursive dir
+withTempLootYaml contents action =
+    withExclusiveTempDirectory "synarchy-loot-weight-spec" $ \dir → do
+        let path = dir </> "probe_loot_table.yaml"
+        writeFile path (T.unpack contents)
+        action path
 
 -- | The load-and-register boundary itself (#1946), driven through the
 --   real @engine.loadLootTableYaml@ verb and the live engine's own

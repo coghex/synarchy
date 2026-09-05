@@ -25,10 +25,9 @@ import qualified Data.Map.Strict as Map
 import qualified Codec.Picture as JP
 import qualified Data.Text as T
 import qualified Data.Vector.Storable as SV
-import Control.Exception (finally)
 import System.Directory
-    ( createDirectoryIfMissing, getTemporaryDirectory, removeDirectoryRecursive
-    , removeFile, renameFile )
+    ( createDirectoryIfMissing, removeDirectoryRecursive, removeFile
+    , renameFile )
 import System.FilePath ((</>), takeDirectory)
 import Test.Headless.Unit.Atlas.Document (arr, goodIndex, obj, parse, str)
 import Test.Headless.Unit.Atlas.Rejection
@@ -41,6 +40,7 @@ import Unit.Atlas.Index
 import Unit.Atlas.Load (loadUnitAtlasIndexIn)
 import Unit.Atlas.Types
 import Unit.Direction (Direction(..))
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | The YAML facts an index animation was compiled from: the same
 --   playback declarations and one synthetic source path per real frame.
@@ -210,20 +210,19 @@ fixtureSourceDigest name flipV fps loop ds = sourceDigest SourceAnimInput
 
 -- | Build the whole tree in a temp directory and tear it down after.
 withAtlasFixture ∷ (FilePath → IO ()) → IO ()
-withAtlasFixture action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-unit-atlas-spec"
-        write path bytes = do
-            createDirectoryIfMissing True (takeDirectory (root </> path))
-            BS.writeFile (root </> path) bytes
-    forM_ fixtureAnims $ \(name, _, _, _, ds) → do
-        forM_ ds $ \(d, n) → forM_ [0 .. n - 1] $ \i →
-            write (framePath name d i)
-                  (BL.toStrict (JP.encodePng (frameImage name d i)))
-        write (unitAtlasDir fixtureUnit </> T.unpack name ⧺ ".png")
-              (BL.toStrict (JP.encodePng (atlasImage name ds)))
-    write (unitAtlasIndexPath fixtureUnit) (BL.toStrict fixtureIndex)
-    (`finally` removeDirectoryRecursive root) (action root)
+withAtlasFixture action =
+    withExclusiveTempDirectory "synarchy-unit-atlas-spec" $ \root → do
+        let write path bytes = do
+                createDirectoryIfMissing True (takeDirectory (root </> path))
+                BS.writeFile (root </> path) bytes
+        forM_ fixtureAnims $ \(name, _, _, _, ds) → do
+            forM_ ds $ \(d, n) → forM_ [0 .. n - 1] $ \i →
+                write (framePath name d i)
+                      (BL.toStrict (JP.encodePng (frameImage name d i)))
+            write (unitAtlasDir fixtureUnit </> T.unpack name ⧺ ".png")
+                  (BL.toStrict (JP.encodePng (atlasImage name ds)))
+        write (unitAtlasIndexPath fixtureUnit) (BL.toStrict fixtureIndex)
+        action root
 
 -- | Change one texel of an existing PNG in place.
 repaint ∷ FilePath → IO ()

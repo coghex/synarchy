@@ -40,13 +40,13 @@ import qualified Engine.Core.Queue as Q
 import Engine.Graphics.Vulkan.Texture.Policy (UploadSampler(..))
 import Engine.Scripting.Lua.API.Units.Yaml (AtlasResolver, registerUnitDefs)
 import Engine.Scripting.Lua.Types (LuaToEngineMsg(..))
-import System.Directory (getTemporaryDirectory, removeFile)
 import System.FilePath ((</>))
 import Unit.Atlas.Index (AtlasLoadError(..))
 import Unit.Atlas.Types
 import Unit.Atlas.Yaml (resolveUnitAtlases)
 import Unit.Direction (Direction(..))
 import Unit.Types
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 fixtureUnit ∷ Text
 fixtureUnit = "spec_loader_unit"
@@ -93,11 +93,11 @@ fixtureYamlText = unlines
     ]
 
 withFixtureYaml ∷ (FilePath → IO α) → IO α
-withFixtureYaml action = do
-    tmp ← getTemporaryDirectory
-    let path = tmp </> "synarchy-unit-atlas-loader-spec.yaml"
-    writeFile path fixtureYamlText
-    action path `finally` removeFile path
+withFixtureYaml action =
+    withExclusiveTempDirectory "synarchy-unit-atlas-loader-spec" $ \dir → do
+        let path = dir </> "synarchy-unit-atlas-loader-spec.yaml"
+        writeFile path fixtureYamlText
+        action path
 
 -- | A compiled animation, as the resolver would report it.
 atlasFor ∷ Text → Int → AtlasAnimation
