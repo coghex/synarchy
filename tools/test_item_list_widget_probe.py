@@ -49,7 +49,9 @@ Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import ast
 import contextlib
+import importlib
 import io
 import json
 import re
@@ -59,7 +61,60 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
-import item_list_widget_probe as probe  # type: ignore  # noqa: E402
+import item_list_widget_probe_checks as checks  # type: ignore  # noqa: E402
+import item_list_widget_probe_escort as probe  # type: ignore  # noqa: E402
+import item_list_widget_probe_oracle as oracle  # type: ignore  # noqa: E402
+import item_list_widget_probe_terrain as terrain  # type: ignore  # noqa: E402
+
+# Since #2046 the probe is a facade over owner-scoped modules, so the
+# scenario under test and the state it writes live in two different
+# ones: `probe` is now the ESCORT module that owns the #1251 scenario and
+# its staging, and `checks` owns the accumulator every check writes
+# through.
+#
+# Each module binds its OWN name for `probelib.send`, so patching one
+# leaves every other on a real socket. `terrain` is reached by the
+# staging itself (`spawn_pair_apart` and `order_target_away` read ground
+# through `tile_surface`); `oracle` is reached by the rendered half past
+# the gate, which the positive control below stops short of today but
+# which is one edit away from being driven here.
+PATCHED = (probe, oracle, terrain)
+
+
+def _console_modules() -> set[str]:
+    """Every probe module the scenario under test can reach that holds
+    its own console name.
+
+    Computed from the escort module's real import closure rather than
+    listed, so a support module added to that closure later is caught
+    here — as a loud failure naming it — instead of quietly opening a
+    real socket in the middle of a case. The closure is read out of the
+    SOURCE rather than off the imported objects: a sibling imported only
+    for a constant leaves nothing on the module to trace back to it."""
+    seen: set[str] = set()
+    pending = [probe.__name__]
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        source = ast.parse((TOOLS / f"{name}.py").read_text(encoding="utf-8"))
+        for node in ast.walk(source):
+            if (isinstance(node, ast.ImportFrom) and node.module
+                    and node.module.startswith("item_list_widget_probe")):
+                pending.append(node.module)
+            elif isinstance(node, ast.Import):
+                pending += [alias.name for alias in node.names
+                            if alias.name.startswith("item_list_widget_probe")]
+    return {name for name in seen
+            if hasattr(importlib.import_module(name), "send")}
+
+
+_UNPATCHED = _console_modules() - {module.__name__ for module in PATCHED}
+assert not _UNPATCHED, (
+    "these probe modules the escort scenario can reach hold their own "
+    f"console and are not in PATCHED, so a case would reach a real "
+    f"socket through them: {sorted(_UNPATCHED)}")
 
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
@@ -200,40 +255,54 @@ def scripted(console: FakeConsole):
     `clear_find_water`, `set_paused` and `poll_until` come from
     `probelib` and call ITS `send`, not the probe's, so patching the
     console alone would leave all three reaching for a real socket or a
-    real minute."""
-    saved = {name: getattr(probe, name)
-             for name in ("send", "send_json", "set_paused",
-                          "clear_find_water", "poll_until", "time")}
-    probe.send = console.send
-    probe.send_json = console.send_json
-    probe.set_paused = console.set_paused
-    probe.clear_find_water = lambda port, uid, seconds=10.0: True
-    probe.poll_until = instant_poll
-    probe.time = types.SimpleNamespace(sleep=lambda *_a, **_k: None,
-                                       time=saved["time"].time)
+    real minute.
+
+    Applied across every module the scenario reaches (`PATCHED`), each
+    of which imported its own name for these: a module left unpatched
+    would open a real socket the moment the staging called into it."""
+    replacements = {
+        "send": console.send,
+        "send_json": console.send_json,
+        "set_paused": console.set_paused,
+        "clear_find_water": lambda port, uid, seconds=10.0: True,
+        "poll_until": instant_poll,
+    }
+    saved = [(module, name, getattr(module, name))
+             for module in PATCHED
+             for name in tuple(replacements) + ("time",)
+             if hasattr(module, name)]
+    for module, name, value in saved:
+        if name == "time":
+            setattr(module, name,
+                    types.SimpleNamespace(sleep=lambda *_a, **_k: None,
+                                          time=value.time))
+        else:
+            setattr(module, name, replacements[name])
     try:
         yield console
     finally:
-        for name, value in saved.items():
-            setattr(probe, name, value)
+        for module, name, value in saved:
+            setattr(module, name, value)
 
 
 def run_scenario(console: FakeConsole) -> tuple[str, int]:
     """Drive the real scenario against `console`; answer its printed
     output and how many checks it failed.
 
-    The probe's accumulator is a module global, so it is zeroed for the
-    run and restored afterwards: a case here must count its OWN failures
-    rather than whatever the case before it left behind."""
-    saved = probe.failures
-    probe.failures = 0
+    The accumulator is a module global on `checks`, so it is zeroed for
+    the run and restored afterwards: a case here must count its OWN
+    failures rather than whatever the case before it left behind. It is
+    reached through the module on purpose — importing `failures` by name
+    would bind a stale 0 that never moves."""
+    saved = checks.failures
+    checks.failures = 0
     out = io.StringIO()
     try:
         with scripted(console), contextlib.redirect_stdout(out):
             probe.unit_escort_session_scenario(PORT, *ANCHOR)
-        return out.getvalue(), probe.failures
+        return out.getvalue(), checks.failures
     finally:
-        probe.failures = saved
+        checks.failures = saved
 
 
 def failed_lines(output: str) -> list[str]:
@@ -368,19 +437,210 @@ def test_the_exit_status_follows_the_accumulator() -> None:
     """A setup failure is only terminal for the SCENARIO; what makes it
     terminal for the RUN is this, so the two are pinned together."""
     print("\nthe run's exit status")
-    saved, out = probe.failures, io.StringIO()
+    saved, out = checks.failures, io.StringIO()
     try:
         for count, expected in ((0, 0), (1, 1), (7, 1)):
-            probe.failures = count
+            checks.failures = count
             with contextlib.redirect_stdout(out):
-                got = probe.probe_result()
+                got = checks.probe_result()
             expect(got == expected,
                    f"{count} failed check(s) exits {expected} (got {got})")
     finally:
-        probe.failures = saved
+        checks.failures = saved
     expect("1 check(s) FAILED" in out.getvalue()
            and "all checks passed" in out.getvalue(),
            f"each outcome says which it was ({out.getvalue()!r})")
+
+
+# --------------------------------------------------------------------------
+# The split's own contract (#2046)
+# --------------------------------------------------------------------------
+# The facade is one registered probe over eight libraries. Every claim
+# in that sentence is checkable without an engine, so it is checked here
+# rather than left to a reviewer re-deriving it from the imports.
+FACADE = "item_list_widget_probe"
+SCENARIO_MODULES = {f"{FACADE}_endpoints", f"{FACADE}_inventory",
+                    f"{FACADE}_escort", f"{FACADE}_nesting"}
+SUPPORT_MODULES = {f"{FACADE}_fixtures", f"{FACADE}_oracle",
+                   f"{FACADE}_terrain", f"{FACADE}_checks"}
+
+# The load-bearing order (#2046 requirement 6), and the constraints that
+# make it load-bearing (requirement 7, including the fifth one the issue
+# body's enumeration omits): inventory and knowledge assert their
+# fixtures before temperature strips or restocks them; temperature runs
+# before item contents, whose first-aid kit it leaves carried; the
+# nesting stock lands only after every exact row/count assertion;
+# building escort follows every exact cargo assertion; unit-to-unit
+# escort is last of all.
+SCENARIO_ORDER = (
+    "cargo_scenario",
+    "knowledge_scenario",
+    "unit_endpoint_scenario",
+    "unit_inventory_scenario",
+    "store_gesture_scenario",
+    "temperature_scenario",
+    "item_contents_scenario",
+    "nesting_stack_scenario",
+    "escort_session_scenario",
+    "unit_escort_session_scenario",
+)
+
+
+def _module_source(name: str) -> str:
+    return (TOOLS / f"{name}.py").read_text(encoding="utf-8")
+
+
+def _split_modules() -> list[str]:
+    return sorted(path.stem for path in TOOLS.glob(f"{FACADE}*.py")
+                  if not path.stem.startswith("test_"))
+
+
+def test_the_facade_is_the_only_registered_probe() -> None:
+    """Requirement 2: the extracted modules are libraries. A second
+    registration would double the engine boots and put the same checks
+    on two schedules."""
+    print("\nthe registry still names one probe")
+    import probe_runner_registry  # type: ignore  # noqa: PLC0415
+
+    registered = [(key, script) for key, script, *_ in probe_runner_registry.PROBES
+                  if FACADE in script or FACADE in key]
+    expect(registered == [("item_list_widget", f"{FACADE}.py")],
+           f"exactly one registration, of the facade ({registered!r})")
+    libraries = [name for name in _split_modules() if name != FACADE]
+    expect(len(libraries) == 8, f"eight libraries ({libraries!r})")
+    expect(not [name for name in libraries if name.endswith("_probe")],
+           f"none of them is named like a registered probe ({libraries!r})")
+
+
+def test_no_library_boots_an_engine_or_a_world() -> None:
+    """Requirement 12: one boot, one world, one port — all of them the
+    facade's. A library that booted its own would multiply a fifteen
+    minute run by however many modules did it."""
+    print("\nno library boots anything")
+    for name in _split_modules():
+        if name == FACADE:
+            continue
+        tree = ast.parse(_module_source(name))
+        called = {node.func.id for node in ast.walk(tree)
+                  if isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Name)}
+        imported = {alias.name for node in ast.walk(tree)
+                    if isinstance(node, ast.ImportFrom)
+                    for alias in node.names}
+        forbidden = (called | imported) & {"boot", "quit_engine"}
+        expect(not forbidden,
+               f"{name} neither boots nor tears down an engine ({forbidden!r})")
+        source = _module_source(name)
+        expect("Create World" not in source and "getInitProgress" not in source,
+               f"{name} does not carry the worldgen bootstrap")
+        expect("argparse" not in source,
+               f"{name} defines no CLI of its own")
+
+
+def test_no_scenario_module_imports_a_sibling() -> None:
+    """The acceptance's ownership rule: a scenario module reaches its
+    peers' shared needs through support, never through the peer. That is
+    why `stack_dump`/`level_list_id` and `check_no_duplicate_rows` sit in
+    support despite each having one obvious-looking owner."""
+    print("\nscenario modules import support, not each other")
+    for name in sorted(SCENARIO_MODULES):
+        siblings = {node.module for node in ast.walk(ast.parse(_module_source(name)))
+                    if isinstance(node, ast.ImportFrom) and node.module
+                    and node.module.startswith(FACADE)}
+        leaked = siblings & (SCENARIO_MODULES | {FACADE})
+        expect(not leaked, f"{name} imports no sibling scenario ({leaked!r})")
+        expect(siblings <= SUPPORT_MODULES,
+               f"{name} imports only support modules ({sorted(siblings)!r})")
+    for name in sorted(SUPPORT_MODULES):
+        upward = {node.module for node in ast.walk(ast.parse(_module_source(name)))
+                  if isinstance(node, ast.ImportFrom) and node.module
+                  and node.module.startswith(FACADE)} & (SCENARIO_MODULES | {FACADE})
+        expect(not upward, f"{name} does not import upward ({upward!r})")
+
+
+def test_the_facade_holds_the_order_and_no_scenario_body() -> None:
+    """Requirements 5 and 6: `_run` is where the sequence is readable,
+    and it is the whole sequence — a scenario dropped from it is a check
+    silently stopping, which nothing else here would notice."""
+    print("\nthe facade owns the order")
+    tree = ast.parse(_module_source(FACADE))
+    defined = [node.name for node in tree.body
+               if isinstance(node, (ast.FunctionDef, ast.ClassDef))]
+    expect(not [name for name in defined if name.endswith("_scenario")],
+           f"the facade holds no scenario body ({defined!r})")
+    run = next(node for node in tree.body
+               if isinstance(node, ast.FunctionDef) and node.name == "_run")
+    # Sorted by position, not by `ast.walk` order: the nesting scenario
+    # is called inside a guard (its fixture may not have come out deep
+    # enough to nest), and walk yields a nested statement after every
+    # top-level one — which would report the guarded call last however
+    # the source reads.
+    calls = sorted((node for node in ast.walk(run)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id.endswith("_scenario")),
+                   key=lambda node: (node.lineno, node.col_offset))
+    called = [node.func.id for node in calls]
+    expect(tuple(called) == SCENARIO_ORDER,
+           f"the ten scenarios run in the documented order ({called!r})")
+    # Requirement 6 as amended: the guard is part of the order. The
+    # nesting scenario runs only when its fixture came out stocked deeply
+    # enough, and both fixture-staging failures above it end the run
+    # rather than grading the scenarios behind them.
+    guarded = [node.func.id
+               for statement in ast.walk(run)
+               if isinstance(statement, ast.If)
+               for node in ast.walk(statement.body[0] if statement.body
+                                    else statement)
+               if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+               and node.func.id.endswith("_scenario")]
+    expect(guarded == ["nesting_stack_scenario"],
+           f"the nesting scenario is the one guarded call ({guarded!r})")
+    early_exits = [node for node in ast.walk(run)
+                   if isinstance(node, ast.Return) and isinstance(node.value,
+                                                                  ast.Constant)
+                   and node.value.value == 1]
+    expect(len(early_exits) == 2,
+           f"two staging failures end the run before any scenario "
+           f"({len(early_exits)})")
+
+
+def test_the_accumulator_is_never_imported_by_value() -> None:
+    """`from ..._checks import failures` binds a stale 0, so every failed
+    check would still print FAIL and the run would still exit 0."""
+    print("\nthe accumulator is reached through its module")
+    for name in _split_modules():
+        by_value = [alias.name
+                    for node in ast.walk(ast.parse(_module_source(name)))
+                    if isinstance(node, ast.ImportFrom)
+                    and node.module == f"{FACADE}_checks"
+                    for alias in node.names if alias.name == "failures"]
+        expect(not by_value, f"{name} does not import the counter by value")
+    expect(checks.failure_count() == checks.failures,
+           "the accessor and the attribute answer the same count")
+
+
+def test_every_fixture_constant_has_one_definition() -> None:
+    """Requirement 8: no YAML body, def name, stock list or
+    level-addressing expression is restated in a second module."""
+    print("\nfixture content is defined once")
+    owners: dict[str, list[str]] = {}
+    for name in _split_modules():
+        for node in ast.parse(_module_source(name)).body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.isupper():
+                        owners.setdefault(target.id, []).append(name)
+    duplicated = {const: names for const, names in owners.items()
+                  if len(names) > 1}
+    expect(not duplicated, f"no constant is defined twice ({duplicated!r})")
+    fixtures = f"{FACADE}_fixtures"
+    for const in ("TEST_BUILDINGS", "TEST_ITEMS", "TEST_UNITS", "CARGO_STOCK",
+                  "CARGO_BULK_STOCK", "CARGO_LIST_ID",
+                  "ITEM_CONTENTS_LIST_ID", "UNIT_INV_LIST_ID"):
+        expect(owners.get(const) == [fixtures],
+               f"{const} is owned by the fixtures module "
+               f"({owners.get(const)!r})")
 
 
 def main() -> int:
@@ -392,6 +652,12 @@ def main() -> int:
     test_a_separated_fixture_reaches_the_measurement()
     test_the_separation_measure_is_the_contract_s_own()
     test_the_exit_status_follows_the_accumulator()
+    test_the_facade_is_the_only_registered_probe()
+    test_no_library_boots_an_engine_or_a_world()
+    test_no_scenario_module_imports_a_sibling()
+    test_the_facade_holds_the_order_and_no_scenario_body()
+    test_the_accumulator_is_never_imported_by_value()
+    test_every_fixture_constant_has_one_definition()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:

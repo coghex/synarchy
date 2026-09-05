@@ -29,6 +29,10 @@ Design state: `ready for issue processing`
 > epic #1229 were both rewritten to this design. EXP-4 is filed as #1230. EXP-5
 > is `[deferred]` until #916 and #917 close by merged PRs, which leaves EXP-3
 > dependency-blocked behind it — so the arc currently has no selectable entry.
+>
+> **Processing state (2026-09-02).** EXP-1 (#916) and EXP-2 (#917) both closed
+> by merged PRs, discharging EXP-5's deferral. EXP-5 is filed as #2301. EXP-3 is
+> the one remaining unprocessed entry, dependency-blocked behind #2301.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]`
 reviewed and deliberately not tracked separately · `[deferred]` blocked on a
@@ -40,7 +44,7 @@ concrete precondition
 - [x] EXP-1. Add hostile location occupants and the first combat encounter — [#916]
 - [x] EXP-4. Mark every location unknown and reveal its type by unit sight — [#1230]
 - [x] EXP-2. Gate location clearing on guaranteed significant loot — [#917]
-- [ ] EXP-5. Extend the first-session tutorial through confrontation and advancement — [deferred]: #916 and #917 must be closed by merged PRs first
+- [x] EXP-5. Extend the first-session tutorial through confrontation and advancement — [#2301]
 - [ ] EXP-3. Extend the integrated expedition gate to cover confrontation and advancement
 
 ## Epic contract
@@ -1128,15 +1132,15 @@ type icon its reveal resolves to.
 
 ### EXP-5. Extend the first-session tutorial through confrontation and advancement
 
-> **Deferred (2026-08-11) — precondition: #916 and #917 are both closed by
-> merged PRs.** All four rows this slice adds read durable state that does not
-> exist yet: encounter membership and outcome (#916), and guaranteed significant
-> contents plus their per-item taken flag (#917). `cleared` is currently
-> reachable only through the `world.setLocationLifecycle` debug verb, and
-> `tutorial_eval.lua` treats an evaluator key with no bound predicate as a
-> warn-once no-op — so rows authored now would never tick. D-8 forbids authoring
-> them ahead of the state that answers them. Re-select this slice once both
-> prerequisites have merged.
+> **Filed as #2301 (2026-09-02).** The 2026-08-11 deferral is discharged:
+> #916 closed by merged PR #1900 and #917 by merged PR #2125, so encounter
+> membership and outcome, guaranteed significant contents and their per-item
+> taken flag, and a real `cleared` producer all exist. Two premises the issue
+> had to settle first: a `composite` may not declare `children`, so the tree
+> had no legal attachment point below `first_session_prepare_expedition`, and
+> the location query verbs are page-scoped where `tutorial_eval.lua` requires
+> global-per-save scope. The owner chose to relax the schema and to enumerate
+> through `aiState[uid].knownLocations`.
 
 - **Outcome:** The existing tutorial tree presents and durably tracks the
   confrontation, recovery, return, and cleared-location payoff.
