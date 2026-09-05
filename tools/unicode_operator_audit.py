@@ -313,7 +313,25 @@ def _scan_code(
                 i += 1
         else:  # STRING
             if c == "\\":
-                i += 2
+                # Report SS2.6: a backslash followed by WHITESPACE opens a
+                # string GAP (`\ whitechar {whitechar} \`), not an
+                # escape. Consuming it as a two-character escape leaves
+                # the gap's closing backslash to pair with whatever
+                # follows -- and when that is the string's own closing
+                # quote (`"a\<newline>\"`), the string never ends and
+                # every operator to end of file is masked. 258 gaps of
+                # this shape live in `src/`+`app/` today (#2177 / PR
+                # #2404 review round 7).
+                j = i + 1
+                if j < n and text[j].isspace():
+                    while j < n and text[j].isspace():
+                        j += 1
+                    # A well-formed gap resumes with another backslash.
+                    # Malformed source is left where it stands rather
+                    # than guessed at; it cannot swallow the quote.
+                    i = j + 1 if j < n and text[j] == "\\" else j
+                else:
+                    i = j + 1
             elif c == '"':
                 state, i = "CODE", i + 1
             else:

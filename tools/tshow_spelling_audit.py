@@ -495,7 +495,22 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
         if char == '"':
             i += 1
             while i < n and text[i] != '"':
-                i += 2 if text[i] == "\\" else 1
+                if text[i] != "\\":
+                    i += 1
+                    continue
+                # Report SS2.6: a backslash followed by WHITESPACE is a
+                # string GAP (`\ whitechar {whitechar} \`), not an
+                # escape. Consumed as a two-character escape, the gap's
+                # closing backslash pairs with the string's own closing
+                # quote and the string never ends -- masking every
+                # wrapper to end of file (PR #2404 review round 7).
+                j = i + 1
+                if j < n and text[j].isspace():
+                    while j < n and text[j].isspace():
+                        j += 1
+                    i = j + 1 if j < n and text[j] == "\\" else j
+                else:
+                    i = j + 1
             i += 1
             continue
         if char == "'" and (i == 0 or not _IDENT_CONTINUE.match(text[i - 1])):
@@ -1151,6 +1166,41 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         [4],
     ),
     (
+        "a string GAP ends at its own backslash: read as a two-character "
+        "escape, the gap's closer pairs with the string's closing quote, "
+        "the string never ends and every wrapper below is masked "
+        "(PR #2404 review round 7)",
+        "module M where\n" + _T
+        + 's = "a\\\n\\"\n'
+        "f x = T.pack (show x)\n",
+        [5],
+    ),
+    (
+        "an ESCAPED quote is not a gap: a backslash before a NON-space "
+        "is still an escape, so the string ends at its real closing "
+        "quote and the wrapper below it is reported",
+        "module M where\n" + _T
+        + 's = "she said \\"hi\\""\n'
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "an escaped BACKSLASH ending a string is not a gap either",
+        "module M where\n" + _T
+        + 's = "path\\\\"\n'
+        "f x = T.pack (show x)\n",
+        [4],
+    ),
+    (
+        "the shape this tree actually writes 258 times -- a message "
+        "split across lines by a gap",
+        "module M where\n" + _T
+        + 's = "first \\\n'
+        '      \\ second"\n'
+        "f x = T.pack (show x)\n",
+        [5],
+    ),
+    (
         "a STRING containing quasiquote-opener text opens nothing, so "
         "the wrapper after it is still reported",
         "module M where\n" + _T
@@ -1271,6 +1321,22 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "the same text inside a string literal",
         "module M where\n" + _T
         + "note = \"T.pack (show x)\"\n",
+    ),
+    (
+        "a gapped string BEFORE a quasiquote: if the pre-pass runs past "
+        "the string's real closing quote it never sees the opener, "
+        "leaves the payload unmasked, and reports it as code",
+        "module M where\n" + _T
+        + 's = "a\\\n\\"\n'
+        "q = [text| T.pack (show x) |]\n",
+    ),
+    (
+        "a GAPPED string whose body contains the wrapper text is still "
+        "a literal, in both of its halves",
+        "module M where\n" + _T
+        + 's = "T.pack (show x) \\\n'
+        '      \\ more"\n'
+        "f x = tshow x\n",
     ),
     (
         "the same text inside a QUASIQUOTE in an ordinary production "

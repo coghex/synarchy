@@ -179,7 +179,13 @@ and only those two (both found in PR #2404's review):
 Comments, strings and character literals are skipped by that pass, never
 masked by it: skipping is what stops an opener quoted inside one from
 reading as a real quasiquote boundary, and masking them is the shared
-lexer's job. The same dash rule is documented on
+lexer's job. Both walkers consume a Haskell **string gap** (report §2.6's
+`\ whitechar {whitechar} \`, which this tree writes 258 times) as a gap
+rather than as an escape — read the other way, the gap's closing
+backslash pairs with the string's own closing quote, the string never
+ends and everything below it is masked. That was a live bug in the
+shared lexer, so this branch fixes it there too, with its own fixtures
+in `test_unicode_operator_audit.py`. The same dash rule is documented on
 `engine_env_capability_common.py`'s comment stripper, whose
 `_SYMBOL_CHARS` this reuses. Note that the shared `haskell_code_only`
 lexer's own `--` handling still does not model the rule, which matters
@@ -229,9 +235,9 @@ a lone subtracting `-`; the five Template Haskell brackets and a tight
 `[Mod.e|` one; a Unicode module alias on `show`; and every
 transparent-parenthesis spelling against the three non-transparent
 lookalikes; and an import inside a quasiquote payload, a trailing
-import comment, and a comment between `hiding` and its list. Every rule
-was mutation-tested against them: each is removed one at a time and the
-self-test fails. The one exception is documented at its definition —
+import comment, a comment between `hiding` and its list, and a string
+gap before a quasiquote. Every rule was mutation-tested against them:
+each is removed one at a time and the self-test fails. The one exception is documented at its definition —
 `_PACK_LEXEME`'s leading lookaround has no reachable failure mode now
 that bare names are refused, and is kept because it is what the lexeme
 means.

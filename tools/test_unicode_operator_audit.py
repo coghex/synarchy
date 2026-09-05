@@ -113,6 +113,30 @@ def test_escaped_quote_inside_string_does_not_end_it_early():
            f"literal, so only the real code `>>=` is flagged (got {v})")
 
 
+def test_string_gap_ends_at_its_own_backslash_not_the_closing_quote():
+    # Report SS2.6: `\ whitechar {whitechar} \` is a string GAP, not an
+    # escape. Read as a two-character escape, the gap's closing
+    # backslash pairs with the string's closing quote, the string never
+    # ends, and every operator to end of file is masked. `src/`+`app/`
+    # carries 258 gaps today.
+    text = 'msg = "a\\\n\\"\ngo x y = x >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a string gap ends the string at its "
+           f"own closing quote, so the real code after it is still "
+           f"scanned (got {v})")
+
+
+def test_multi_line_string_gap_keeps_its_body_out_of_the_scan():
+    # The shape this tree actually writes: a message split across lines
+    # with a gap, whose text contains an operator that is NOT code.
+    text = ('msg = "first part == not code \\\n'
+            '        \\ second part"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"the gapped string's body stays a "
+           f"literal and the code after it is scanned (got {v})")
+
+
 # ----- Char literals -----------------------------------------------------
 
 def test_char_literal_containing_a_double_quote_does_not_mask_later_code():
@@ -493,6 +517,8 @@ def main() -> int:
         test_nested_block_comment_does_not_trigger_but_real_code_after_does,
         test_string_literal_does_not_trigger,
         test_escaped_quote_inside_string_does_not_end_it_early,
+        test_string_gap_ends_at_its_own_backslash_not_the_closing_quote,
+        test_multi_line_string_gap_keeps_its_body_out_of_the_scan,
         test_char_literal_containing_a_double_quote_does_not_mask_later_code,
         test_escaped_single_quote_char_literal_does_not_confuse_the_scanner,
         test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal,
