@@ -107,9 +107,9 @@ contract. It does show that the scenario’s local guard is insufficient.
 
 **Evidence:**
 
-- `tools/gameplay_scenarios.py:438` — the runner acknowledges that
+- `tools/gameplay_scenarios_support.py` (`transfer`) — the runner acknowledges that
   `unit.transferItemToUnit` performs no capacity check.
-- `tools/gameplay_scenarios.py:443` — the local guard checks `w >= cap` before
+- `tools/gameplay_scenarios_support.py` (`transfer`) — the local guard checks `w >= cap` before
   transfer rather than `w + itemWeight > cap`.
 - `src/Unit/Transfer.hs:29` — the newer transfer policy deliberately leaves the
   old unit-to-unit verb lax while applying strict capacity rules to the new
@@ -227,7 +227,7 @@ off the ridge before receiving the commanded descent.
   `unit.moveTo`.
 - `src/Unit/Pathing/Cost.hs:124` — damaging descents are discouraged through
   cost rather than rejected as impassable.
-- `tools/gameplay_scenarios.py:177` — the runner already documents that an
+- `tools/gameplay_scenarios_support.py` (`spawn_roster`) — the runner already documents that an
   autonomous water-search goal can walk a scout off a cliff.
 
 **Handoff context:**
@@ -253,13 +253,13 @@ the baseline while the scenario continues.
 
 **Evidence:**
 
-- `tools/gameplay_scenarios.py:170` — `spawn_roster` creates live AI-controlled
+- `tools/gameplay_scenarios_support.py` (`spawn_roster`) — `spawn_roster` creates live AI-controlled
   units and waits before clearing their initial water goal.
-- `tools/gameplay_scenarios.py:194` — the materialization wait gives ambient AI
+- `tools/gameplay_scenarios_support.py` (`spawn_roster`) — the materialization wait gives ambient AI
   time to act.
-- `tools/gameplay_scenarios.py:719` — the first-aid scenario immediately
+- `tools/gameplay_scenarios_first_aid.py` (`run_first_aid`) — the first-aid scenario immediately
   provisions the live roster.
-- `tools/gameplay_scenarios.py:729` — the “before the fall” checkpoint is
+- `tools/gameplay_scenarios_first_aid.py` (`run_first_aid`) — the “before the fall” checkpoint is
   recorded without an atomic health/position precondition.
 
 **Handoff context:**
@@ -431,9 +431,9 @@ establish end-to-end treatment throughput.
   and dresses one worst-bleeding wound.
 - `scripts/unit_ai_medic.lua:313` — the medic repeats treatment on subsequent
   idle ticks until bleeding stops or supplies fail.
-- `tools/gameplay_scenarios.py:755` — the scenario watches for a treatment claim
+- `tools/gameplay_scenarios_first_aid.py` (`follow_treatment`) — the scenario watches for a treatment claim
   and exits that observation loop immediately once the claim appears.
-- `tools/gameplay_scenarios.py:777` — final success evidence requires only that
+- `tools/gameplay_scenarios_first_aid.py` (`run_first_aid`) — final success evidence requires only that
   some wound is dressed.
 - `test-headless/Test/Headless/Unit/Fall.hs:145` — current regression tests cover
   fall output and bleed projections, not medic stabilization.
