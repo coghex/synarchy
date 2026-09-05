@@ -76,7 +76,7 @@ end
 local MOUSE_LEFT = 1
 
 function debugOverlay.init(scriptId)
-    engine.logInfo("Debug overlay initializing...")
+    engine.logDebug("Debug overlay initializing...")
     debugOverlay.debugFont = engine.loadFont(
         "assets/fonts/shell.ttf", debugOverlay.baseSizes.fontSize)
     engine.logDebug("Debug overlay initialized")

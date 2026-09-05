@@ -230,7 +230,7 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 function tileEditor.init(scriptId)
-    engine.logInfo("Tile editor initializing...")
+    engine.logDebug("Tile editor initializing...")
 end
 
 function tileEditor.update(dt)
@@ -241,7 +241,7 @@ end
 
 function tileEditor.shutdown()
     destroyPopup()
-    engine.logInfo("Tile editor shut down")
+    engine.logDebug("Tile editor shut down")
 end
 
 return tileEditor

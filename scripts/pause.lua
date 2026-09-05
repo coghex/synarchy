@@ -132,7 +132,7 @@ end
 
 -- Engine script hooks
 function pause.init(scriptId)
-    engine.logInfo("Pause module initializing...")
+    engine.logDebug("Pause module initializing...")
     -- No save registration (issue #761, requirement 5): pause is NOT
     -- persistent. `pause.paused` is never read for real logic (see
     -- `pause.isPaused`/`pause.set` above -- it's just a transition-
@@ -142,7 +142,7 @@ function pause.init(scriptId)
 end
 
 function pause.shutdown()
-    engine.logInfo("Pause module shut down")
+    engine.logDebug("Pause module shut down")
 end
 
 return pause

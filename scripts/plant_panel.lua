@@ -583,7 +583,7 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 function plantPanel.init(scriptId)
-    engine.logInfo("Plant panel initializing...")
+    engine.logDebug("Plant panel initializing...")
 end
 
 -- Poll the search box each tick and rebuild the list only when the
@@ -603,7 +603,7 @@ end
 
 function plantPanel.shutdown()
     plantPanel.closeIfOpen()
-    engine.logInfo("Plant panel shut down")
+    engine.logDebug("Plant panel shut down")
 end
 
 return plantPanel

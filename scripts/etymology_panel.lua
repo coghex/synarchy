@@ -649,12 +649,12 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 function etymologyPanel.init(scriptId)
-    engine.logInfo("Etymology panel initializing...")
+    engine.logDebug("Etymology panel initializing...")
 end
 
 function etymologyPanel.shutdown()
     etymologyPanel.closeIfOpen()
-    engine.logInfo("Etymology panel shut down")
+    engine.logDebug("Etymology panel shut down")
 end
 
 return etymologyPanel

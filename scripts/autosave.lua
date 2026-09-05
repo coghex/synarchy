@@ -354,7 +354,7 @@ end
 -----------------------------------------------------------
 
 function autosave.init(scriptId)
-    engine.logInfo("Autosave module initializing...")
+    engine.logDebug("Autosave module initializing...")
     autosave.reload()
     local cfg = autosave.config
     if cfg then
@@ -366,7 +366,7 @@ function autosave.init(scriptId)
 end
 
 function autosave.shutdown()
-    engine.logInfo("Autosave module shut down")
+    engine.logDebug("Autosave module shut down")
 end
 
 return autosave

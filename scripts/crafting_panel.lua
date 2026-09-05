@@ -948,7 +948,7 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 function craftingPanel.init(scriptId)
-    engine.logInfo("Crafting panel initializing...")
+    engine.logDebug("Crafting panel initializing...")
 end
 
 -- Periodic refresh (queue progress/claimant/remaining, and recipe
@@ -974,7 +974,7 @@ end
 
 function craftingPanel.shutdown()
     craftingPanel.closeIfOpen()
-    engine.logInfo("Crafting panel shut down")
+    engine.logDebug("Crafting panel shut down")
 end
 
 return craftingPanel

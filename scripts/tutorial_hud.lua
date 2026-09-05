@@ -908,7 +908,7 @@ function tutorialHud.update(_dt)
 end
 
 function tutorialHud.init(_scriptId)
-    engine.logInfo("Tutorial HUD initializing...")
+    engine.logDebug("Tutorial HUD initializing...")
     if tutorialHud.page == nil then
         -- "overlay", the same pass-through band scripts/hud.lua's own
         -- pages use. NOT "modal": a modal page defaults to

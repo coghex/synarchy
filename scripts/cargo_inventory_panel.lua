@@ -852,12 +852,12 @@ end
 -- Engine script hooks
 -----------------------------------------------------------
 function cargoInventoryPanel.init(scriptId)
-    engine.logInfo("Container window initializing...")
+    engine.logDebug("Container window initializing...")
 end
 
 function cargoInventoryPanel.shutdown()
     cargoInventoryPanel.closeIfOpen()
-    engine.logInfo("Container window shut down")
+    engine.logDebug("Container window shut down")
 end
 
 -- Esc closes the DEEPEST level, one per press (requirement 6). Returns

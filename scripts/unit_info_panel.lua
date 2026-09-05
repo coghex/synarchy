@@ -197,7 +197,7 @@ end
 -- Init
 -----------------------------------------------------------
 function unitInfoWatch.init(scriptId)
-    engine.logInfo("Unit info watcher initializing...")
+    engine.logDebug("Unit info watcher initializing...")
     -- The HUD's info panel is created by hud.createUI() in its own
     -- lifecycle; we never create it. We just call setText on it once
     -- it exists. setText is safe to call before the panel is built —
@@ -302,7 +302,7 @@ function unitInfoWatch.shutdown()
     -- Don't touch the panel — hud owns its lifecycle. Just reset our state.
     unitInfoWatch.lastSelectedId = nil
     unitInfoWatch.lastWasUnit    = false
-    engine.logInfo("Unit info watcher shut down")
+    engine.logDebug("Unit info watcher shut down")
 end
 
 return unitInfoWatch

@@ -20,7 +20,7 @@ unitManager.units = {}
 -----------------------------------------------------------
 
 function unitManager.init(scriptId)
-    engine.logInfo("Unit manager initializing (YAML loads deferred to startup_loader)")
+    engine.logDebug("Unit manager initializing (YAML loads deferred to startup_loader)")
     -- Unit / building / item / equipment / substance YAMLs are now
     -- loaded by scripts/startup_loader.lua during the boot loading
     -- screen, so this init no longer eagerly parses them. The
@@ -43,7 +43,7 @@ end
 
 function unitManager.shutdown()
     unitManager.units = {}
-    engine.logInfo("Unit manager shut down")
+    engine.logDebug("Unit manager shut down")
 end
 
 return unitManager
