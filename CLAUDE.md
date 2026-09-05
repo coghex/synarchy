@@ -243,6 +243,13 @@ Section names above refer to engine contracts. Additional required reading:
   `python3 tools/test_pack_atlas.py` and
   `python3 tools/pack_atlas.py --validate-only --strict`.
   Full rules: [src/Unit/Atlas/CLAUDE.md](src/Unit/Atlas/CLAUDE.md).
+- Those budgets validate GENERATED ARTIFACTS only. The loader bound of
+  one QUEUED atlas upload request and one distinct logical texture
+  handle per animation belongs to the Hspec group
+  `Unit.Atlas.Load — the real unit registration boundary` (#2217); a
+  green strict run is not evidence about it. Completed Vulkan uploads
+  and bindless publication happen downstream of that queue and are
+  covered by neither.
 
 ## Platform notes
 

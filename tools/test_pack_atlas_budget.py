@@ -3,12 +3,18 @@
 test_pack_atlas_budget.py — the unit-animation texture budget scenarios
 of `tools/test_pack_atlas.py` (#1262, #2061 owner split).
 
-Two budgets, one policy document. The image/slot budget is a hard error
-and is what catches a reintroduced per-frame registration; the
-resident-byte budget is a warning carrying D-10's TEX-5 activation
-trigger, so `--strict` is what makes it blocking. Policy schema and
-value validation, image/frame/decoded-byte accounting, both thresholds,
-and the shipped budget document all live here.
+Two budgets, one policy document, both reading the COMPILED TREE alone.
+The atlas-entry budget is a hard error and is what catches a per-frame
+regression in the generated asset tree; the projected-byte budget is a
+warning carrying D-10's TEX-5 activation trigger, so `--strict` is what
+makes it blocking. Policy schema and value validation, entry/frame/
+projected-byte accounting, both thresholds, and the shipped budget
+document all live here.
+
+Neither budget observes the loader, the texture request queue or the
+bindless table, and no scenario below asserts that it does: the runtime
+registration bound is the Hspec group `Unit.Atlas.Load — the real unit
+registration boundary` (#2217).
 
 Not runnable on its own: it parses no arguments and executes no case at
 import. `tools/test_pack_atlas.py` imports `CASES` and runs it.
@@ -32,27 +38,30 @@ from test_pack_atlas_support import (  # noqa: E402
 _CASES = CaseRegistry("budget")
 scenario = _CASES.scenario
 
-@scenario("the budget reports one resident image per animation")
+@scenario("the budget reports one generated atlas entry per animation")
 def _budget_baseline(fx: Fixture) -> None:
     budget_unit(fx, anims=3)
     output = fx.validate_ok()
-    assert "BUDGET — 3 resident animation image(s) for 3 animation(s)" \
-        in output, output
+    assert "BUDGET — 3 generated atlas entr(ies) for 3 indexed " \
+        "animation(s)" in output, output
     # Derived from the index, not from a roster constant: growing the
     # unit must move the expected count with it.
     build_unit(fx, "hero", [(f"anim{i}", uniform(CANON5, 2), True)
                             for i in range(4)])
     fx.compile_ok()
-    assert "BUDGET — 4 resident animation image(s) for 4 animation(s)" \
-        in fx.validate_ok()
+    assert "BUDGET — 4 generated atlas entr(ies) for 4 indexed " \
+        "animation(s)" in fx.validate_ok()
 
 
-@scenario("a per-frame regression fails the image budget by path")
+@scenario("a per-frame ASSET-TREE regression fails the entry budget by path")
 def _budget_per_frame_regression(fx: Fixture) -> None:
-    # THE case requirement 3 names. A regression that puts one image
-    # per FRAME where D-2 wants one per animation lands extra files in
+    # THE case requirement 3 names, and it is a change to the ASSET
+    # TREE, not to the loader: a regression that puts one generated file
+    # per FRAME where D-2 wants one per animation lands extra entries in
     # the compiler-owned directory; the budget must name the unit, the
-    # expected count, the actual count, and the offending records.
+    # expected count, the actual count, and the offending records. A
+    # loader that queued per-frame REQUESTS while leaving atlas/ alone
+    # is invisible here and fails the Hspec group instead (#2217).
     budget_unit(fx, anims=2)
     source = fx.atlas_path("hero", "anim0").read_bytes()
     for direction in CANON5:
@@ -60,7 +69,8 @@ def _budget_per_frame_regression(fx: Fixture) -> None:
             fx.write_file(
                 f"assets/textures/units/hero/atlas/"
                 f"anim0_{direction}_{index:03d}.png", source)
-    output = fx.validate_fails("budget: expected 2 resident animation image(s)")
+    output = fx.validate_fails(
+        "budget: expected 2 generated atlas entr(ies)")
     assert "found 12" in output, output
     assert "anim0_east_000.png" in output, output
     assert "(+" in output and "more)" in output, (
@@ -71,22 +81,23 @@ def _budget_per_frame_regression(fx: Fixture) -> None:
     assert output.count("budget:") >= 1, output
 
 
-@scenario("removing an atlas fails the image budget in the other direction")
+@scenario("removing an atlas fails the entry budget in the other direction")
 def _budget_missing_image(fx: Fixture) -> None:
     # The bound is an equality, so under-count fails too — otherwise a
     # unit whose atlas silently vanished would satisfy "at most one per
     # animation" while rendering nothing.
     budget_unit(fx, anims=3)
     fx.rm("assets/textures/units/hero/atlas/anim1.png")
-    output = fx.validate_fails("budget: expected 3 resident animation image(s)")
+    output = fx.validate_fails(
+        "budget: expected 3 generated atlas entr(ies)")
     assert "found 2" in output, output
 
 
 @scenario("two animations sharing one atlas is its own budget finding")
 def _budget_shared_atlas(fx: Fixture) -> None:
-    # File COUNT alone would still be right here while the second
-    # animation registered no image of its own, so this is reported on
-    # its own terms rather than through the count.
+    # Entry COUNT alone would still be right here while the second
+    # animation had no generated atlas of its own, so this is reported
+    # on its own terms rather than through the count.
     budget_unit(fx, anims=2)
     doc = fx.index("hero")
     entry(doc, "anim1")["atlas_path"] = entry(doc, "anim0")["atlas_path"]
@@ -115,8 +126,8 @@ def _budget_excludes_non_animation(fx: Fixture) -> None:
         '      south: "assets/textures/units/hero/sprite_south.png"\n'
         "    animations:\n") + anim_yaml_ragged("hero", "idle", counts, True))
     fx.compile_ok()
-    assert "BUDGET — 1 resident animation image(s) for 1 animation(s)" \
-        in fx.validate_ok()
+    assert "BUDGET — 1 generated atlas entr(ies) for 1 indexed " \
+        "animation(s)" in fx.validate_ok()
 
 
 @scenario("an uncompiled unit is weighed by neither budget")
@@ -127,14 +138,15 @@ def _budget_skips_uncompiled(fx: Fixture) -> None:
         "an uncompiled tree reported a budget it cannot measure:\n" + output)
 
 
-@scenario("resident bytes are the index's own decoded RGBA8 footprint")
+@scenario("projected bytes are the index's own decoded RGBA8 footprint")
 def _budget_resident_bytes(fx: Fixture) -> None:
     budget_unit(fx, anims=2)
     doc = fx.index("hero")
     expected = sum(a["atlas_width"] * a["atlas_height"] * 4
                    for a in doc["animations"])
-    assert f"{expected / (1024 * 1024):.2f} MiB decoded RGBA8 resident" \
-        in fx.validate_ok(), (expected, fx.validate_ok())
+    assert f"{expected / (1024 * 1024):.2f} MiB decoded RGBA8 projected " \
+        f"from the stored indices" in fx.validate_ok(), \
+        (expected, fx.validate_ok())
 
 
 @scenario("crossing the memory threshold reports D-10's TEX-5 trigger")
@@ -340,6 +352,98 @@ def _budget_shipped_document(_fx: Fixture) -> None:
     confirmed = doc["resident_bytes"]
     assert confirmed["confirmed_by"] and confirmed["confirmed_on"], (
         "the recorded threshold carries no owner confirmation")
+
+
+# The wording ratchet (#2217). The budget reads generated artifacts;
+# every string it prints, and every prose field of the policy it reads,
+# has to say so. These are the phrases that used to claim otherwise.
+#
+# Spelled from a fragment rather than as literals, because #2217's own
+# acceptance sweep greps the tree for these phrases and this list would
+# otherwise be the one hit it reports.
+_R = "resident"
+RUNTIME_CLAIMS = (
+    f"{_R} animation image",
+    f"{_R} image",
+    "bindless registration",
+    "bindless slot",
+    "per-frame registration",
+)
+
+# The Hspec group that DOES own the runtime bound, named verbatim so a
+# rename there is caught here rather than leaving the policy pointing at
+# a group that no longer exists.
+LOADER_GROUP = "Unit.Atlas.Load — the real unit registration boundary"
+
+
+def _policy_prose(block: dict) -> str:
+    """Every prose value in one budget block, lowercased.
+
+    `projection` nests its `basis` one level down and `excluded` is a
+    list, so a flat sweep over `block.values()` would silently skip
+    exactly the fields a stale claim hides in.
+    """
+    parts = []
+    for value in block.values():
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            parts.extend(v for v in value.values() if isinstance(v, str))
+        elif isinstance(value, list):
+            parts.extend(v for v in value if isinstance(v, str))
+    return " ".join(parts).lower()
+
+
+@scenario("the budget never claims to observe runtime registrations")
+def _budget_claims_no_runtime_coverage(fx: Fixture) -> None:
+    # The defect #2217 fixed was not a broken check but a lying one: the
+    # policy, the diagnostics and the summary line all described a
+    # measurement of resident images and bindless registrations that
+    # this tool has never made. Nothing it prints may say that again.
+    budget_unit(fx, anims=2)
+    surfaces = [fx.validate_ok()]
+
+    # ...including the failure path, which is where a reader is most
+    # likely to take the wording as a statement about the runtime.
+    fx.rm("assets/textures/units/hero/atlas/anim1.png")
+    surfaces.append(fx.validate_fails("budget: expected 2"))
+
+    for output in surfaces:
+        lowered = output.lower()
+        for claim in RUNTIME_CLAIMS:
+            assert claim not in lowered, (
+                f"the budget's output claims runtime coverage "
+                f"({claim!r}):\n{output}")
+
+    # The machine-readable policy is the source the prose above quotes,
+    # so it carries the same rule — and it has to point at the gate that
+    # really owns the runtime bound.
+    doc = json.loads(
+        (pack_atlas.REPO_ROOT / pack_atlas_budget.BUDGET_REL)
+        .read_text("utf-8"))
+    images = doc["animation_images"]
+    for claim in RUNTIME_CLAIMS:
+        assert claim not in _policy_prose(images), (
+            f"the image budget's policy prose claims runtime coverage "
+            f"({claim!r})")
+    assert LOADER_GROUP in images["rationale"], (
+        "the image budget's rationale does not name the Hspec group that "
+        "owns the runtime registration bound")
+
+    # The byte budget is the other half of the same lie: it derives its
+    # total by summing index-declared dimensions, so no prose field of
+    # that block may call ANY of its quantities measured. The two names
+    # the block must use instead are the ones the vocabulary check
+    # below requires it to define.
+    byte_prose = _policy_prose(doc["resident_bytes"])
+    assert "measur" not in byte_prose, (
+        "the byte budget's policy prose calls an index-derived total a "
+        "measurement; the unscaled value is the index-projected total "
+        "and the scaled one the roster-projected total")
+    for name in ("index-projected", "roster-projected"):
+        assert name in byte_prose, (
+            f"the byte budget's policy prose never names the "
+            f"{name} total")
 
 
 # The façade's single entry point into this owner. Frozen here, after

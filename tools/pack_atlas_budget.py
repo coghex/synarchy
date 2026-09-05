@@ -14,6 +14,13 @@ in this run, so its dependencies are the shared definitions alone —
 including the path helpers and `read_bytes_or_none` that live there for
 exactly this reason (requirement 16). The public façade is
 tools/pack_atlas.py.
+
+Its whole input is the compiled asset tree: stored indices and the
+entries beside them. It has no view of the loader, the texture request
+queue, the bindless table or a running engine, so it validates
+generated artifacts and a projection of their decoded size, and never
+runtime registrations (#2217). The Hspec group `Unit.Atlas.Load — the
+real unit registration boundary` owns that boundary.
 """
 from __future__ import annotations
 
@@ -72,8 +79,14 @@ class Budget:
     threshold_bytes: int
     growth_factor: float
 
-    def projected(self, measured: int) -> float:
-        return measured * self.growth_factor
+    def projected(self, index_projected: int) -> float:
+        """The roster-projected total: the index-projected one, scaled.
+
+        Neither end of this is a measurement — the input is summed from
+        stored index dimensions — so the parameter is named for what it
+        is rather than for a reading nothing takes (#2217).
+        """
+        return index_projected * self.growth_factor
 
 
 def _budget_field(
@@ -206,13 +219,13 @@ def load_budget(report: Report, root: Path) -> Optional[Budget]:
             f"{where} resident_bytes",
             f"threshold must be a positive byte count, got {threshold}")
         threshold = None
-    # The tool measures in bytes and reports in bytes. A document
+    # The tool computes in bytes and reports in bytes. A document
     # declaring some other unit would be compared against the wrong
     # scale while looking perfectly well-formed.
     if unit_name is not None and unit_name != "bytes":
         report.err(
             f"{where} resident_bytes",
-            f"unit must be 'bytes' — this tool measures decoded RGBA8 byte "
+            f"unit must be 'bytes' — this tool projects decoded RGBA8 byte "
             f"counts — got {render_scalar(unit_name)}")
 
     if len(report.errors) != before or per_anim is None \
@@ -237,21 +250,33 @@ def validate_budget(
     report: Report, root: Path, decls: Sequence[UnitDecl],
     only_unit: Optional[str],
 ) -> Optional[BudgetTally]:
-    """The per-unit image/slot budget, and the TEX-5 memory trigger.
+    """The per-unit atlas-artifact budget, and the TEX-5 memory trigger.
 
     Two independent budgets, one policy document
-    (`tools/unit_texture_budget.json`):
+    (`tools/unit_texture_budget.json`). **Both read the COMPILED TREE
+    and nothing else** — the stored `atlas/index.json` documents and the
+    entries beside them. Neither one observes the loader, the texture
+    request queue, the bindless table, or a running engine, so neither
+    can see a runtime regression that leaves `atlas/` alone.
 
-    **Images and bindless slots.** D-2 fixes atlas granularity at one
-    image per ANIMATION, and the runtime turns each indexed atlas into
-    exactly one texture handle and one bindless registration
-    (`Unit.Atlas.Load`). So a unit's compiler-owned `atlas/` directory
-    must hold exactly `max_per_animation * (animations the index
-    declares)` images — a bound DERIVED from the authoritative index,
-    never a frozen roster total and never a frame count, so it keeps
-    holding as animations are added. Reintroducing per-frame
-    registrations means putting one image per FRAME where one per
-    animation belongs, which fails this immediately and by path.
+    **Generated atlas entries per indexed animation.** D-2 fixes atlas
+    granularity at one image per ANIMATION, so a unit's compiler-owned
+    `atlas/` directory must hold exactly `max_per_animation *
+    (animations the index declares)` entries besides `index.json` — a
+    bound DERIVED from the authoritative index, never a frozen roster
+    total and never a frame count, so it keeps holding as animations
+    are added. A per-frame regression IN THE ASSET TREE — one generated
+    file per FRAME where one per animation belongs — fails this
+    immediately and by path.
+
+    That is an artifact check, not a registration one. The RUNTIME bound
+    (one queued atlas upload request and one distinct logical texture
+    handle per animation, each published into the definition's animation
+    storage, and no per-frame ordinary requests) belongs to the Hspec
+    group `Unit.Atlas.Load — the real unit registration boundary` in the
+    always-blocking headless suite. A loader change that queued two
+    requests per animation while leaving `atlas/` untouched fails there
+    and is invisible here.
 
     Non-animation textures are excluded by construction rather than by
     an exemption list: portraits, the direct `sprite`, its
@@ -259,11 +284,14 @@ def validate_budget(
     all live OUTSIDE `atlas/` and are named by no index, and D-8 leaves
     them on ordinary single-texture loading.
 
-    **Resident bytes.** The decoded RGBA8 footprint every session pays —
-    `scripts/startup_loader.lua` feeds every `data/units/*.yaml` to the
-    loader at boot, so the whole tracked roster is resident regardless
-    of what spawns. Measured, projected at the recorded growth factor,
-    and compared against the owner-confirmed threshold: exceeding it is
+    **Projected decoded bytes.** The decoded RGBA8 footprint the roster
+    would cost, PROJECTED from each index's declared `atlas_width x
+    atlas_height x 4` rather than measured anywhere — the scope is the
+    whole tracked roster because `scripts/startup_loader.lua` feeds
+    every `data/units/*.yaml` to the loader at boot. Two quantities,
+    kept distinct: that index-projected total, and the same total scaled
+    by the recorded `roster_growth_factor`, which is the only one
+    compared against the owner-confirmed threshold. Exceeding it is
     D-10's precondition for resuming deferred TEX-5. That one is a
     WARNING — a breach is a project decision to make, not a broken tree
     — so a plain run reports it and `--strict` (CI, `make ci`) fails on
@@ -271,7 +299,7 @@ def validate_budget(
 
     Note this is NOT D-12's guardrail, which caps tracked derived
     artifact bytes ON DISK at two times their source frames. That is
-    repository size; this is resident memory.
+    repository size; this is a projection of decoded memory.
     """
     budget = load_budget(report, root)
     if budget is None:
@@ -316,9 +344,10 @@ def validate_budget(
                     if isinstance(count, int) and not isinstance(count, bool):
                         tally.frames += count
 
-        # Two animations naming ONE image would keep the file count
-        # right while halving the registrations, so it is reported on
-        # its own terms rather than through the count below.
+        # Two animations naming ONE image would keep the entry count
+        # right while leaving the second animation with no atlas of its
+        # own, so it is reported on its own terms rather than through
+        # the count below.
         for basename, owners in sorted(claimed.items()):
             if len(owners) > 1:
                 report.err(
@@ -337,11 +366,13 @@ def validate_budget(
                 shown += f", … (+{len(unclaimed) - 6} more)"
             report.err(
                 where,
-                f"budget: expected {expected} resident animation image(s) "
-                f"({len(anims)} animation(s) x {budget.max_per_animation}), "
+                f"budget: expected {expected} generated atlas entr(ies) "
+                f"besides {INDEX_FILENAME} ({len(anims)} indexed "
+                f"animation(s) x {budget.max_per_animation}), "
                 f"found {len(present)}. Unclaimed by any animation: {shown}. "
-                f"One image per animation is D-2's contract and is what "
-                f"keeps registrations off the frame count.")
+                f"One atlas per indexed animation is D-2's contract; this "
+                f"counts the compiled tree, never what the loader "
+                f"registers at runtime.")
 
         tally.units += 1
         tally.animations += len(anims)
@@ -355,8 +386,9 @@ def validate_budget(
             report.warn(
                 BUDGET_REL.as_posix(),
                 f"unit-texture memory budget exceeded: "
-                f"{mib(tally.resident_bytes)} measured x "
-                f"{budget.growth_factor:g} projected = {mib(projected)} > "
+                f"{mib(tally.resident_bytes)} projected from the stored "
+                f"indices x {budget.growth_factor:g} roster growth = "
+                f"{mib(projected)} > "
                 f"{mib(budget.threshold_bytes)} threshold. This is D-10's "
                 f"precondition for resuming deferred TEX-5 (KTX2 atlas "
                 f"loading) — resume it, or have the owner re-confirm a new "
