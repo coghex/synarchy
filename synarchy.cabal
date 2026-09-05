@@ -1593,6 +1593,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Graphics.BindlessRelease
                    Test.Headless.Graphics.BindlessPublish
                    Test.Headless.Lua.AssetFailure
+                   Test.Headless.Lua.MessageStrictness
     build-depends: base >=4.20 && <5
                 , base-unicode-symbols
                 -- Test.Headless.Core.Queue's two-thread FIFO case uses

@@ -3,7 +3,7 @@
 
 `tools/test_probe_flake.py` stays the aggregate command; this module
 holds what more than one of its owners needs, so the harness owners and
-the twenty-two per-probe migration owners single-source it instead of
+the twenty-one per-probe migration owners single-source it instead of
 carrying a copy each.
 
 Three things live here:

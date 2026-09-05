@@ -290,7 +290,6 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     "config_state": (Reason(TARGETED, "narrow #638 config load/save vs git-tracking regression"),),
     "disarm": (Reason(TARGETED, "narrow #193 disabled-hand auto-drop regression"),),
     "injury_log": (Reason(TARGETED, "injury-log backend plumbing, narrower than the combat subsystem"),),
-    "lua_strict_msg": (Reason(TARGETED, "narrow #622 LuaToEngineMsg/LuaMsg strictness crash regression"),),
     "lunge": (Reason(TARGETED, "narrow #1713 combat-lunge reachability regression: one "
                                "leap -> land -> strike state machine and the four ways "
                                "it can end. combat_anim remains the general "
