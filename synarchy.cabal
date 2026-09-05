@@ -1327,6 +1327,11 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Serialize
                    Test.Headless.World.Save.Envelope
                    Test.Headless.World.Save.Components
+                   Test.Headless.World.Save.Components.Fixture
+                   Test.Headless.World.Save.Components.Registry
+                   Test.Headless.World.Save.Components.Compatibility
+                   Test.Headless.World.Save.Components.Assembly
+                   Test.Headless.World.Save.Components.Integrity
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.PauseSpeed
