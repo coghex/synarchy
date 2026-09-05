@@ -1882,6 +1882,10 @@ systems run side by side and must not interact; this is strictly a reader.
 python3 tools/probe_external_evidence.py --probe role
 python3 tools/probe_external_evidence.py --probe transfer_order --json
 python3 tools/test_probe_external_evidence.py   # the synthetic self-test
+python3 tools/test_probe_external_evidence.py --only identity      # one owner's cases (#2187)
+python3 tools/test_probe_external_evidence.py --only reports
+python3 tools/test_probe_external_evidence.py --only confinement
+python3 tools/test_probe_external_evidence.py --only resilience
 ```
 
 State lives at `<git-common-dir>/codex-test`, resolved with `git rev-parse
