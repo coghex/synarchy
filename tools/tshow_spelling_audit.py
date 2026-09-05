@@ -448,16 +448,22 @@ def _in_function_position(text: str, pos: int) -> bool:
 # 12). The operator itself must be in function position, or
 # `g (.) pack show` -- three arguments to `g` -- would read as one.
 def _prefix_operator_before(text: str, pos: int,
-                            qualifiers: frozenset[str]) -> str | None:
-    """The FORM of the prefix-spelled connector applied immediately
-    before `pos`, or `None`.
+                            qualifiers: frozenset[str]
+                            ) -> tuple[str, int] | None:
+    """`(form, offset of the prefix operator's own `(`)` for the
+    prefix-spelled connector applied immediately before `pos`, or
+    `None`.
 
     `(.) pack show` names the operator ahead of both operands, and
     `(P.$) pack (show x)` does the same with it qualified. The operator
     must itself be in function position, or `g (.) pack show` -- three
     arguments to `g` -- would read as one."""
+    # Skip the operand's OWN opening parentheses on the way back:
+    # `(.) (pack) show` puts them between the operator and the operand,
+    # and they are redundant there (PR #2404 review round 15).
     i = pos - 1
-    while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
+    while i >= 0 and (text[i].isspace() or text[i] == "\x00"
+                      or text[i] == "("):
         i -= 1
     if i < 0 or text[i] != ")":
         return None
@@ -472,7 +478,9 @@ def _prefix_operator_before(text: str, pos: int,
         return None
     inner = text[start + 1:i]
     read = _read_connector(inner, 0, qualifiers)
-    return read[0] if read is not None and read[1] == len(inner) else None
+    if read is None or read[1] != len(inner):
+        return None
+    return read[0], start
 
 
 def _right_section_before(text: str, pos: int,
@@ -673,6 +681,29 @@ def _qualifier_before(text: str, pos: int) -> tuple[str, int]:
 _APPLICAND_TAIL = frozenset(')]`"')
 
 
+def _open_parens_before(text: str, pos: int) -> int:
+    """How many `(` sit immediately before `pos`, with only whitespace
+    between them -- whether they group or supply an argument.
+
+    `_transparent_open_parens` adds the question of whether they GROUP,
+    which is what an infix connector needs (`format (pack) . show` is a
+    different function). A prefix connector does not: its operand's
+    position is fixed by the form, so `(.) (pack) show` is `(.) pack
+    show` and the operand's own parentheses are redundant either way
+    (PR #2404 review round 15)."""
+    count = 0
+    i = pos - 1
+    while i >= 0:
+        if text[i].isspace() or text[i] == "\x00":
+            i -= 1
+        elif text[i] == "(":
+            count += 1
+            i -= 1
+        else:
+            break
+    return count
+
+
 def _transparent_open_parens(text: str, pos: int) -> int:
     """How many `(` sit immediately before `pos`, with only whitespace
     between them, and GROUP rather than supply an argument.
@@ -691,18 +722,13 @@ def _transparent_open_parens(text: str, pos: int) -> int:
     standalone, so none of them is transparent and the count is zero;
     an operator, a `=`, a `[`, or the start of the file leaves them
     grouping."""
-    count = 0
-    i = pos - 1
-    while i >= 0:
-        if text[i].isspace() or text[i] == "\x00":
-            i -= 1
-        elif text[i] == "(":
-            count += 1
-            i -= 1
-        else:
-            break
+    count = _open_parens_before(text, pos)
     if count == 0:
         return 0
+    i = pos - 1
+    while i >= 0 and (text[i].isspace() or text[i] == "\x00"
+                      or text[i] == "("):
+        i -= 1
     # The loop above already skipped whitespace, so it broke on the
     # first character that is neither space nor `(` -- the applicand
     # candidate itself.
@@ -1160,12 +1186,25 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         prefix = _prefix_operator_before(scan_text, expression_start,
                                          qualifiers)
         if prefix is not None:
-            cursor = _TRANSPARENT_OPEN_RUN.match(scan_text,
-                                                 match.end()).end()
+            form, operator_start = prefix
+            # Two kinds of redundant parenthesis close after the
+            # operand: those GROUPING the whole application
+            # (`((.) pack) show`) and the operand's own
+            # (`(.) (pack) show`). The operand's need no grouping test
+            # -- the prefix form fixes where it sits.
+            budget = (_transparent_open_parens(scan_text, operator_start)
+                      + _open_parens_before(scan_text, expression_start))
+            cursor = match.end()
+            while budget:
+                closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
+                if closer is None:
+                    break
+                cursor, budget = closer.end(), budget - 1
+            cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
             if _names_show(scan_text, cursor):
                 violations.append(Violation(rel_path,
                                             _line_of(text, match.start()),
-                                            spelling, prefix))
+                                            spelling, form))
                 continue
         # Otherwise the connector follows. Close only as many
         # parentheses as this expression opened, so `(T.pack) . show` is
@@ -1446,6 +1485,34 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "round 12)",
         "module M where\n" + _T
         + "f = (.) T.pack show\n",
+        [3],
+    ),
+    (
+        "a prefix application GROUPED as a whole: `((.) pack) show` "
+        "closes a redundant parenthesis after the operand (PR #2404 "
+        "review round 15)",
+        "module M where\n" + _T
+        + "f = ((.) T.pack) show\n",
+        [3],
+    ),
+    (
+        "the OPERAND parenthesised instead: a prefix form fixes where "
+        "its operand sits, so those parentheses are redundant with no "
+        "grouping test needed",
+        "module M where\n" + _T
+        + "f = (.) (T.pack) show\n",
+        [3],
+    ),
+    (
+        "both at once",
+        "module M where\n" + _T
+        + "f = ((.) (T.pack)) show\n",
+        [3],
+    ),
+    (
+        "a grouped prefix `($)`, applied to the shown value",
+        "module M where\n" + _T
+        + "g x = (($) T.pack) (show x)\n",
         [3],
     ),
     (
@@ -2147,6 +2214,13 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "argument position too: `(g y) (. show) T.pack` applies `g y`",
         "module M where\n" + _T
         + "x = (g y) (. show) T.pack\n",
+    ),
+    (
+        "a GROUPED prefix application in argument position is not "
+        "applied to what follows it either: `g ((.) T.pack) show` "
+        "hands `g` two arguments",
+        "module M where\n" + _T
+        + "f = g ((.) T.pack) show\n",
     ),
     (
         "and a prefix operator in argument position is not applying "
