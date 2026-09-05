@@ -228,7 +228,206 @@ def check(label: str, ok: bool) -> None:
     print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
 
 
+# --- construct_job timeout diagnostics (#2172) -------------------------
+#
+# Every construct_job wait below used to leave NOTHING behind on expiry:
+# poll_until returns None and check prints a bare [FAIL]. The state that
+# classifies such a miss — which phase the worker's own job was in, what
+# the designation record actually said, where the worker stood — was
+# gone by the time anyone read the output, so a single dropped wait
+# could not be told apart from a real product failure.
+#
+# This is #1758's craft_timeout_bundle shape (tools/power_workshop_probe
+# .py:322-378) applied to construct_job: capture on expiry only, print
+# beneath the FAIL line, leave a passing run's output untouched.
+#
+# IN SCOPE: every bounded wait whose success depends on a spawned
+# worker's construct_job producing a designation state, a progress
+# artifact, a placement, a cancellation, or a staking outcome. The
+# phase-1 transition wait added below is one of them.
+#
+# NOT IN SCOPE, and deliberately uninstrumented: the bootstrap wait for
+# the arena page (`bootstrap`), the direct fixture placements that call
+# `scripts.structures` themselves with no worker involved, the
+# pending-refusal cleanup wait, and phase 8's post-load waits — the load
+# transaction (`wait_load_published`) and the designation-survives-load
+# poll, whose paying unit is destroyed before the save and whose
+# successor is not spawned until afterwards. None of them is waiting on
+# a construct_job, so a bundle describing one would name a worker that
+# is not driving the wait.
+
+CONSTRUCT_BUNDLE_FAMILIES = ("designations", "aiState", "unit")
+
+
+def construct_job_state(port: int, uid: int):
+    """The worker's own construct_job, as `scripts/unit_ai` sees it.
+
+    One console round trip. Every field falls back to ``false`` rather
+    than ``nil``: Lua drops nil fields on the way out, so an absent
+    value would vanish from the record entirely and read as "not
+    captured" instead of "the AI had nothing there". ``None`` for the
+    WHOLE record means the unit has no AI state at all — normally
+    because it no longer exists.
+
+    ``x``/``y``/``attempt`` are the job's own identity
+    (`scripts/unit_ai_construct.lua:255`), so a caller can tell a job on
+    the designation it is watching from one on a neighbouring tile or a
+    successor attempt at the same tile. ``constructCandidate`` separates
+    a claim-stage miss that never scanned the job from one that scanned
+    it and lost the arbitration.
+    """
+    return send_json(port,
+        f"local s = require('scripts.unit_ai').getState({uid}); "
+        "if not s then return nil end; local j = s.constructJob; "
+        "return {currentAction = s.currentAction or false, "
+        "constructJob = j ~= nil, "
+        "constructCandidate = s.constructCandidate ~= nil, "
+        "phase = j and j.phase or false, "
+        "x = j and j.x or false, "
+        "y = j and j.y or false, "
+        "attempt = j and j.attempt or false}")
+
+
+def construct_segment(state) -> str:
+    """Which construct_job segment a worker was sampled in.
+
+    Names where the worker WAS, not necessarily the root cause:
+    `releaseConstructJob` (`scripts/unit_ai_construct.lua:80-91`) clears
+    the job when the designation vanishes or a successor attempt takes
+    the tile, so "no constructJob" does not prove the job was never
+    claimed.
+    """
+    if not isinstance(state, dict):
+        return "no AI state (unit gone?)"
+    if not state.get("constructJob"):
+        return "no constructJob"
+    return str(state.get("phase") or "unknown phase")
+
+
+def construct_timeout_bundle(port: int, coords, uid: int | None,
+                             state=None) -> dict:
+    """Read-only state that classifies an expired construct_job wait.
+
+    ``coords`` is every tile the expired predicate queried. Each one's
+    WHOLE ``construction.getDesignationAt`` record (status, progress,
+    paid, attempt, kind, edge) is retained under its own ``"x,y"`` key,
+    including an explicit ``null`` for a tile whose designation has
+    already cleared — a predicate spanning two designations cannot be
+    reconstructed from a single record, and "cleared" is a different
+    fact from "not queried".
+
+    ``uid`` is the unit intended to DRIVE that wait. A unit that no
+    longer exists yields explicit ``null`` for both ``aiState`` and
+    ``unit``, so a live ``aiState`` beside a live ``unit`` is the only
+    shape that reads as "the unit is alive", and a populated
+    ``aiState`` always describes a unit that still exists. ``state``
+    lets a caller hand over an AI sample it has ALREADY taken (the
+    phase-1 transition wait keeps its last one) instead of taking a
+    fresh one after the fact.
+
+    EXISTENCE IS ESTABLISHED FIRST, and it gates the AI family — a
+    handed-over ``state`` included. `unitAi.aiState`
+    (`scripts/unit_ai_core.lua:80`) is never pruned when an individual
+    unit is destroyed; it is emptied only at teardown or a load
+    reconciliation. So `getState` would happily return a dead worker's
+    last decision, and a sample taken while it was alive is equally
+    stale — either would print a phase and a `currentAction` next to
+    `unit: null` and invite a classification the engine no longer
+    supports.
+
+    Read-only throughout: it must not perturb the scenario it is
+    describing, and callers must run it immediately on expiry, before
+    any further stimulus reaches the engine.
+    """
+    designations = {}
+    for (x, y) in coords:
+        designations[f"{x},{y}"] = designation_at(port, x, y)
+    if uid is None:
+        ai, info = None, None
+    else:
+        info = send_json(port, f"return unit.getInfo({uid})")
+        if info is None:
+            ai = None
+        else:
+            ai = state if state is not None else construct_job_state(port, uid)
+    return {"designations": designations, "aiState": ai, "unit": info}
+
+
+def emit_timeout_bundle(bundle) -> None:
+    """Print a captured `construct_timeout_bundle` beneath its FAIL line.
+
+    ``None`` means the poll succeeded, so a passing run's output is
+    unchanged. One line per family, always all three, so a family the
+    engine had nothing for reads as an explicit ``null``.
+    """
+    if bundle is None:
+        return
+    for family in CONSTRUCT_BUNDLE_FAMILIES:
+        print(f"    (debug) {family}: "
+              f"{json.dumps(bundle.get(family), sort_keys=True)}")
+
+
 # --- phases ------------------------------------------------------------
+
+
+PHASE1_FLOORS = ((8, 8), (9, 8))
+PROGRESS_LABEL = "build progress accrued on the designation"
+
+# Phase 1's two post-claim segments (#2172).
+#
+# The old single 30 s window spanned fetch, walking, utility arbitration
+# AND the build itself, so an expiry could not say which of them ran
+# long — and a job still in 'fetch' failed an assertion about progress
+# ACCRUAL, which it had not yet had the chance to produce. The two
+# segments are now bounded separately and both are measured on every
+# run, so a later miss has a recorded distribution to be compared
+# against.
+#
+# Measured on master@da96202c8 (2026-09-05, M-series laptop, one engine
+# at a time, with an unrelated GHC build occupying the machine — the
+# ordinary condition this manual-only probe is run under). Six solo runs
+# of `python3 tools/construction_probe.py --port 9377`, all 72/72; the
+# last three are the consecutive runs against this file as committed:
+#
+#   claim → 'building'   'building' → progress
+#     8.69 s               0.31 s     } three runs measured while the
+#    17.94 s               0.93 s     } budget below was still the
+#    26.27 s               0.32 s     } original single 30 s window
+#    30.90 s               0.31 s     } three consecutive runs against
+#     4.95 s               0.31 s     } this file as committed
+#    22.56 s               0.96 s     }
+#
+# That record is why the transition gets a budget of its own AND a
+# larger one. The transition alone spans 5-31 s while the accrual it
+# was lumped in with never exceeds 1 s — so the old single 30 s window
+# was, in practice, a budget on fetch + walking + utility arbitration,
+# and the 30.90 s run above would have blown it. The assertion it would
+# have failed is the one about progress ACCRUAL, in a run whose later
+# slope and terminal checks then pass: exactly the retained TH-3 shape
+# (`docs/coordinated_test_harness_findings.md`).
+#
+# 60 s is ~1.9x the worst of the six. Widening it costs nothing this
+# probe was relying on: the wait decides only HOW a miss is classified,
+# while phase 1's terminal 60 s "both floors placed and designations
+# cleared" check still gates the outcome on its own budget.
+#
+# BUILDING_TO_PROGRESS_S is the newly separated budget. Progress lands
+# on the first think tick after the building branch is entered
+# (`thought_interval` 1.0 s, `scripts/unit_ai_construct.lua:423-449`),
+# and the record above tops out at 0.96 s, so 15 s is 15x the worst
+# observed — and, unlike the old window, independent of the fetch/walk
+# variance above.
+CLAIM_TO_BUILDING_S = 60.0
+BUILDING_TO_PROGRESS_S = 15.0
+
+
+def _latency_line(label: str, seconds, note: str) -> None:
+    """One phase-1 latency line. Never invents a number: a transition
+    that was not observed prints why, and the bound it ran out of."""
+    if seconds is None:
+        print(f"  [latency] {label}: unavailable — {note}")
+    else:
+        print(f"  [latency] {label}: {seconds:.2f} s ({note})")
 
 
 def phase_inventory(port: int) -> None:
@@ -246,15 +445,139 @@ def phase_inventory(port: int) -> None:
     send(port, f"unit.addItem({uid}, 'steel_plate', 0); "
                f"unit.addItem({uid}, 'steel_plate', 0); return 'ok'")
 
-    claimed = poll_until(port, 20, lambda: (
-        (designation_at(port, 8, 8) or {}).get("status") == "claimed"
-        or (designation_at(port, 9, 8) or {}).get("status") == "claimed"))
-    check("a designation became 'claimed'", claimed is not None)
+    # Latch ONE designation attempt and measure everything below about
+    # that one: the first record observed 'claimed', by coordinate AND
+    # attempt id. Without the latch the two-floor predicate could pair a
+    # claim on (8,8) with progress on (9,8) — two different jobs — and
+    # the latencies would describe neither.
+    def first_claimed():
+        for (x, y) in PHASE1_FLOORS:
+            d = designation_at(port, x, y)
+            if isinstance(d, dict) and d.get("status") == "claimed":
+                return (x, y, d.get("attempt"))
+        return None
 
-    progressed = poll_until(port, 30, lambda: any(
-        (designation_at(port, x, 8) or {}).get("progress", 0) > 0
-        for x in (8, 9)))
-    check("build progress accrued on the designation", progressed is not None)
+    claimed = poll_until(port, 20, first_claimed)
+    claimed_at = time.time()
+    claim_bundle = (None if claimed
+                    else construct_timeout_bundle(port, PHASE1_FLOORS, uid))
+    check("a designation became 'claimed'", claimed is not None)
+    emit_timeout_bundle(claim_bundle)
+
+    # With nothing latched the claim assertion has already failed; the
+    # remaining checks still run, in order, against both floors and any
+    # attempt.
+    site = claimed[:2] if claimed else None
+    attempt = claimed[2] if claimed else None
+    watched = [site] if site else list(PHASE1_FLOORS)
+
+    def latched_progress():
+        for (x, y) in watched:
+            d = designation_at(port, x, y)
+            if (isinstance(d, dict) and d.get("progress", 0) > 0
+                    and (attempt is None or d.get("attempt") == attempt)):
+                return d
+        return None
+
+    obs = {"ai": None, "building_at": None, "progress_at": None}
+
+    def sample() -> None:
+        """One observation of the latched attempt: the worker's own job
+        phase, then that designation's progress. Each is timestamped the
+        FIRST time it is seen and never overwritten."""
+        st = construct_job_state(port, uid)
+        obs["ai"] = st
+        if (obs["building_at"] is None
+                and isinstance(st, dict) and st.get("constructJob")
+                and st.get("phase") == "building"
+                and (site is None
+                     or (st.get("x") == site[0] and st.get("y") == site[1]))
+                and (attempt is None or st.get("attempt") == attempt)):
+            obs["building_at"] = time.time()
+        if obs["progress_at"] is None and latched_progress() is not None:
+            obs["progress_at"] = time.time()
+
+    def saw_transition() -> bool:
+        # Positive progress is itself proof the job reached 'building' —
+        # only that branch pours it — so two samples straddling a short
+        # building phase cannot read as a transition that never
+        # happened.
+        sample()
+        return (obs["building_at"] is not None
+                or obs["progress_at"] is not None)
+
+    def saw_progress() -> bool:
+        sample()
+        return obs["progress_at"] is not None
+
+    reached = poll_until(port, CLAIM_TO_BUILDING_S, saw_transition)
+    # #1758's ordering: sample the classifying state HERE, on expiry,
+    # before the second wait sends anything further at the engine.
+    miss_bundle = (None if reached else construct_timeout_bundle(
+        port, watched, uid, state=obs["ai"]))
+    if reached and obs["progress_at"] is None:
+        if not poll_until(port, BUILDING_TO_PROGRESS_S, saw_progress):
+            miss_bundle = construct_timeout_bundle(
+                port, watched, uid, state=obs["ai"])
+    # Name the segment from the BUNDLE's AI family, never from the raw
+    # sample: the bundle gates it on the worker still existing, and a
+    # worker that died mid-wait must not be reported as standing in a
+    # phase (see construct_timeout_bundle). Every branch below that
+    # names a segment runs only on a miss, and a miss always has a
+    # bundle.
+    miss_state = miss_bundle["aiState"] if miss_bundle else None
+
+    if claimed is None:
+        _latency_line("claim → 'building'", None,
+                      "no 'claimed' record was ever latched")
+        _latency_line("'building' → first progress", None,
+                      "no 'claimed' record was ever latched")
+    else:
+        if obs["building_at"] is not None:
+            _latency_line("claim → 'building'",
+                          obs["building_at"] - claimed_at,
+                          f"budget {CLAIM_TO_BUILDING_S:.0f} s")
+        elif obs["progress_at"] is not None:
+            _latency_line(
+                "claim → 'building'", None,
+                "the phase was never sampled; progress first seen "
+                f"{obs['progress_at'] - claimed_at:.2f} s after the claim")
+        else:
+            _latency_line(
+                "claim → 'building'", None,
+                f"EXPIRED after {CLAIM_TO_BUILDING_S:.0f} s; worker in "
+                f"{construct_segment(miss_state)!r}")
+        if obs["building_at"] is not None and obs["progress_at"] is not None:
+            _latency_line("'building' → first progress",
+                          max(0.0, obs["progress_at"] - obs["building_at"]),
+                          f"budget {BUILDING_TO_PROGRESS_S:.0f} s")
+        elif obs["building_at"] is None:
+            _latency_line("'building' → first progress", None,
+                          "the 'building' phase was never sampled")
+        else:
+            _latency_line(
+                "'building' → first progress", None,
+                f"EXPIRED after {BUILDING_TO_PROGRESS_S:.0f} s; worker in "
+                f"{construct_segment(miss_state)!r}")
+
+    # The causal rule (#2172 review): an expiry in fetch/walking/no-job
+    # is a phase-transition miss and says so; only a miss observed AFTER
+    # 'building' is a failure to accrue progress.
+    if obs["progress_at"] is not None:
+        progress_label, progressed = PROGRESS_LABEL, True
+    elif obs["building_at"] is None:
+        progressed = False
+        progress_label = (
+            f"{PROGRESS_LABEL} — PHASE-TRANSITION MISS, not a failure to "
+            f"accrue: the construct_job never reached 'building' within "
+            f"{CLAIM_TO_BUILDING_S:.0f} s (worker in "
+            f"{construct_segment(miss_state)!r})")
+    else:
+        progressed = False
+        progress_label = (f"{PROGRESS_LABEL} — none within "
+                          f"{BUILDING_TO_PROGRESS_S:.0f} s of 'building'")
+    check(progress_label, progressed)
+    emit_timeout_bundle(miss_bundle)
 
     # The mining-style corner-progress display: once ≥ 2 corners have
     # drained (past ~40% of the job) the tile's slope mask goes
@@ -262,15 +585,21 @@ def phase_inventory(port: int) -> None:
     sloped = poll_until(port, 30, lambda: any(
         send(port, f"return world.getSlopeAt({x}, 8)") not in ("0", "nil")
         for x in (8, 9)))
+    slope_bundle = (None if sloped
+                    else construct_timeout_bundle(port, PHASE1_FLOORS, uid))
     check("corner-progress display visible mid-build (slope mask set)",
           sloped is not None)
+    emit_timeout_bundle(slope_bundle)
 
     done = poll_until(port, 60, lambda: (
         send(port, "return structure.hasAt(8, 8, 'floor')") == "true"
         and send(port, "return structure.hasAt(9, 8, 'floor')") == "true"
         and designation_at(port, 8, 8) is None
         and designation_at(port, 9, 8) is None))
+    done_bundle = (None if done
+                   else construct_timeout_bundle(port, PHASE1_FLOORS, uid))
     check("both floors placed and designations cleared", done is not None)
+    emit_timeout_bundle(done_bundle)
     check("tiles returned to flat after completion",
           send(port, "return world.getSlopeAt(8, 8)") == "0"
           and send(port, "return world.getSlopeAt(9, 8)") == "0")
@@ -292,7 +621,10 @@ def phase_ground(port: int) -> None:
     done = poll_until(port, 90, lambda: (
         send(port, "return structure.hasAt(8, 14, 'wall_ne')") == "true"
         and designation_at(port, 8, 14) is None))
+    done_bundle = (None if done
+                   else construct_timeout_bundle(port, [(8, 14)], uid))
     check("wall placed from ground-sourced bars", done is not None)
+    emit_timeout_bundle(done_bundle)
     check("ground bars were consumed",
           send(port,
                "local n = 0; "
@@ -432,7 +764,10 @@ def phase_occupied(port: int) -> None:
     done = poll_until(port, 60, lambda: (
         send(port, "return structure.hasAt(8, 30, 'wall_ne')") == "true"
         and designation_at(port, 8, 30) is None))
+    co_bundle = (None if done
+                 else construct_timeout_bundle(port, [(8, 30)], coUid))
     check("wall built alongside the pre-existing floor", done is not None)
+    emit_timeout_bundle(co_bundle)
     check("floor still present after the coexisting wall build",
           send(port, "return structure.hasAt(8, 30, 'floor')") == "true")
     destroy_unit(port, coUid)
@@ -448,7 +783,10 @@ def phase_occupied(port: int) -> None:
     send(port, f"unit.addItem({racer}, 'steel_plate', 0); return 'ok'")
     claimed = poll_until(port, 20, lambda: (
         (designation_at(port, 8, 36) or {}).get("status") == "claimed"))
+    race_bundle = (None if claimed
+                   else construct_timeout_bundle(port, [(8, 36)], racer))
     check("racer claimed the tile before the slot filled", claimed is not None)
+    emit_timeout_bundle(race_bundle)
 
     # Fill the slot out from under the claimant while it's still walking
     # over — simulates a second worker winning the race for the same slot
@@ -460,8 +798,11 @@ def phase_occupied(port: int) -> None:
     check("competing floor landed mid-job", filled is not None)
 
     resolved = poll_until(port, 60, lambda: designation_at(port, 8, 36) is None)
+    resolve_bundle = (None if resolved
+                      else construct_timeout_bundle(port, [(8, 36)], racer))
     check("raced designation resolves (cancelled), no stuck job",
           resolved is not None)
+    emit_timeout_bundle(resolve_bundle)
     check("claimant never paid its material",
           send(port, f"local n = 0; for _, it in ipairs(unit.getInventory({racer}) "
                      "or {}) do if it.defName == 'steel_plate' then n = n + 1 end "
@@ -506,7 +847,10 @@ def phase_stake(port: int) -> None:
                  "local i = building.getInfo(b); "
                  "if i and i.defName == 'acolyte_portal' then ok = true end "
                  "end; return ok") == "true"))
+    stake_bundle = (None if staked
+                    else construct_timeout_bundle(port, [(20, 8)], uid))
     check("blueprint became a real building and cleared", staked is not None)
+    emit_timeout_bundle(stake_bundle)
     destroy_unit(port, uid)
 
 
@@ -523,14 +867,14 @@ def phase_release(port: int) -> None:
     send(port, f"unit.addItem({a}, 'steel_plate', 0); return 'ok'")
     claimed = poll_until(port, 20, lambda: (
         (designation_at(port, 8, 22) or {}).get("status") == "claimed"))
+    # #2172: this wait's own ad-hoc debug print used to run AFTER the
+    # check; the standard bundle captures the same state (plus the whole
+    # designation record and the worker's position) on expiry, before
+    # anything else is sent.
+    claim_bundle = (None if claimed
+                    else construct_timeout_bundle(port, [(8, 22)], a))
     check("first acolyte claimed the job", claimed is not None)
-    if claimed is None:
-        print("  (debug) A aiState:",
-              send(port, f"local s = require('scripts.unit_ai').getState({a}); "
-                         f"return s and {{action=s.currentAction, "
-                         f"job=s.constructJob ~= nil, "
-                         f"cand=s.constructCandidate ~= nil}} or 'none'"))
-        print("  (debug) designation:", designation_at(port, 8, 22))
+    emit_timeout_bundle(claim_bundle)
 
     destroy_unit(port, a)
     # A materials-less scout triggers the sweep (any scanning acolyte
@@ -539,14 +883,20 @@ def phase_release(port: int) -> None:
     scout = spawn_acolyte(port, 12.5, 22.5)
     released = poll_until(port, 30, lambda: (
         (designation_at(port, 8, 22) or {}).get("status") == "pending"))
+    release_bundle = (None if released
+                      else construct_timeout_bundle(port, [(8, 22)], scout))
     check("claim released back to 'pending' after claimant death",
           released is not None)
+    emit_timeout_bundle(release_bundle)
 
     send(port, f"unit.addItem({scout}, 'steel_plate', 0); return 'ok'")
     done = poll_until(port, 60, lambda: (
         send(port, "return structure.hasAt(8, 22, 'floor')") == "true"
         and designation_at(port, 8, 22) is None))
+    done_bundle = (None if done
+                   else construct_timeout_bundle(port, [(8, 22)], scout))
     check("second acolyte finished the released job", done is not None)
+    emit_timeout_bundle(done_bundle)
     destroy_unit(port, scout)
 
 
@@ -578,7 +928,10 @@ def phase_paid_death(port: int) -> None:
     paid = poll_until(port, 90, lambda: (
         (designation_at(port, 8, -8) or {}).get("paid") is True
         and (designation_at(port, 8, -8) or {}).get("progress", 0) > 0))
+    paid_bundle = (None if paid
+                   else construct_timeout_bundle(port, [(8, -8)], a))
     check("materials paid and progress accrued before death", paid is not None)
+    emit_timeout_bundle(paid_bundle)
     check("payer's inventory shows the material spent",
           send(port, f"local n=0; for _,it in ipairs(unit.getInventory({a}) "
                      "or {}) do if it.defName=='steel_plate' then "
@@ -593,8 +946,11 @@ def phase_paid_death(port: int) -> None:
     farScout = spawn_acolyte(port, 40.5, -7.5)
     released = poll_until(port, 60, lambda: (
         (designation_at(port, 8, -8) or {}).get("status") == "pending"))
+    release_bundle = (None if released
+                      else construct_timeout_bundle(port, [(8, -8)], farScout))
     check("claim released back to 'pending' after claimant death",
           released is not None)
+    emit_timeout_bundle(release_bundle)
     check("payment marker survives the claimant's death",
           (designation_at(port, 8, -8) or {}).get("paid") is True)
     destroy_unit(port, farScout)
@@ -605,8 +961,11 @@ def phase_paid_death(port: int) -> None:
     done = poll_until(port, 120, lambda: (
         send(port, "return structure.hasAt(8, -8, 'floor')") == "true"
         and designation_at(port, 8, -8) is None))
+    done_bundle = (None if done
+                   else construct_timeout_bundle(port, [(8, -8)], b))
     check("materials-less replacement finished the already-paid job "
           "after the original claimant died", done is not None)
+    emit_timeout_bundle(done_bundle)
     destroy_unit(port, b)
 
 
@@ -627,7 +986,10 @@ def phase_preemption(port: int) -> None:
     send(port, f"unit.addItem({uid}, 'steel_plate', 0); return 'ok'")
     building = poll_until(port, 90, lambda: (
         (designation_at(port, 8, -16) or {}).get("progress", 0) > 0))
+    building_bundle = (None if building
+                       else construct_timeout_bundle(port, [(8, -16)], uid))
     check("payment made and progress underway", building is not None)
+    emit_timeout_bundle(building_bundle)
     check("exactly one payment taken (inventory now empty)",
           send(port, f"local n=0; for _,it in ipairs(unit.getInventory({uid}) "
                      "or {}) do if it.defName=='steel_plate' then "
@@ -641,9 +1003,12 @@ def phase_preemption(port: int) -> None:
     done = poll_until(port, 120, lambda: (
         send(port, "return structure.hasAt(8, -16, 'floor')") == "true"
         and designation_at(port, 8, -16) is None))
+    done_bundle = (None if done
+                   else construct_timeout_bundle(port, [(8, -16)], uid))
     check("job completed after preemption with no re-payment attempt "
           "(a duplicate charge would stall: no spare material, no "
           "ground/mule stock)", done is not None)
+    emit_timeout_bundle(done_bundle)
     destroy_unit(port, uid)
 
 
@@ -662,7 +1027,10 @@ def phase_save_load(port: int) -> None:
     paid = poll_until(port, 90, lambda: (
         (designation_at(port, 8, -24) or {}).get("paid") is True
         and (designation_at(port, 8, -24) or {}).get("progress", 0) > 0))
+    paid_bundle = (None if paid
+                   else construct_timeout_bundle(port, [(8, -24)], a))
     check("materials paid and progress accrued before save", paid is not None)
+    emit_timeout_bundle(paid_bundle)
     destroy_unit(port, a)   # the paying unit does NOT survive to save
 
     send(port, f"engine.saveWorld('{w}', 'construct_payment_check'); "
@@ -693,7 +1061,10 @@ def phase_save_load(port: int) -> None:
     done = poll_until(port, 120, lambda: (
         send(port, "return structure.hasAt(8, -24, 'floor')") == "true"
         and designation_at(port, 8, -24) is None))
+    done_bundle = (None if done
+                   else construct_timeout_bundle(port, [(8, -24)], b))
     check("materials-less unit finished the reloaded paid job", done is not None)
+    emit_timeout_bundle(done_bundle)
     destroy_unit(port, b)
 
 
@@ -751,7 +1122,10 @@ def phase_cancel_refund(port: int) -> None:
     send(port, f"unit.addItem({payer}, 'steel_plate', 0); return 'ok'")
     paid2 = poll_fast(90, lambda: (
         (designation_at(port, ux2, uy2) or {}).get("paid") is True))
+    paid2_bundle = (None if paid2 else construct_timeout_bundle(
+        port, [(ux2, uy2)], payer))
     check("second fixture tile paid before cancel", paid2 is not None)
+    emit_timeout_bundle(paid2_bundle)
     before2 = ground_count(port, "steel_plate")
     ui_right_click(px2, py2)
     time.sleep(0.5)
@@ -786,12 +1160,18 @@ def phase_cancel_refund(port: int) -> None:
     send(port, f"unit.addItem({poster}, 'wood_log', 0); return 'ok'")
     paid3 = poll_fast(90, lambda: (
         (designation_at(port, ux3, uy3) or {}).get("paid") is True))
+    paid3_bundle = (None if paid3 else construct_timeout_bundle(
+        port, [(ux3, uy3)], poster))
     check("post job paid before its floor is pulled", paid3 is not None)
+    emit_timeout_bundle(paid3_bundle)
 
     beforeLogs = ground_count(port, "wood_log")
     send(port, f"structure.clear({ux3}, {uy3}, 'floor'); return 'ok'")
     done3 = poll_until(port, 90, lambda: designation_at(port, ux3, uy3) is None)
+    done3_bundle = (None if done3 else construct_timeout_bundle(
+        port, [(ux3, uy3)], poster))
     check("job resolved (removed) after the placement failure", done3 is not None)
+    emit_timeout_bundle(done3_bundle)
     check("post was never actually placed",
           send(port, f"return structure.hasAt({ux3}, {uy3}, 'post_n')") == "false")
     check("its material was refunded to the ground, not lost",
@@ -823,7 +1203,10 @@ def phase_cancel_refund(port: int) -> None:
         p = d.get("progress", 0)
         return d if d.get("paid") is True and 0 < p < 0.9 else None
     caught = poll_fast(90, mid_build)
+    caught_bundle = (None if caught else construct_timeout_bundle(
+        port, [(ux4, uy4)], builder))
     check("caught the job mid-build (paid, partial progress)", caught is not None)
+    emit_timeout_bundle(caught_bundle)
     beforePlate = ground_count(port, "steel_plate")
     ui_right_click(px4, py4)
     time.sleep(2.0)   # comfortably longer than the job would take to finish
