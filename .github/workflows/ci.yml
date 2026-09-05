@@ -830,6 +830,23 @@ jobs:
           python3 tools/test_unicode_operator_audit.py
           python3 tools/unicode_operator_audit.py
 
+      # Cheap, no-engine guard (#2177): fails if any `src/`+`app/`
+      # rendering of a Show value to strict Text is written as a
+      # hand-rolled wrapper instead of `UPrelude`'s one `tshow`. The
+      # rule is a CLOSED list of four spellings -- `pack (show ...)`,
+      # `pack $ show ...`, `pack . show`, `pack ∘ show` -- and nothing
+      # else about the surrounding expression is read; #2177's §Out of
+      # scope names the forms that are deliberately not caught, and PR
+      # #2404 is the worked reference for what each would cost. `pack`
+      # and `show` resolve by BINDING, not by qualifier spelling, and a
+      # file whose bindings cannot be certified is REFUSED rather than
+      # scanned as clean. The fixture suite runs first so a rule that
+      # stopped matching fails here rather than passing on a clean tree.
+      - name: tshow spelling audit
+        run: |
+          python3 tools/tshow_spelling_audit.py --self-test
+          python3 tools/tshow_spelling_audit.py
+
       # Cheap, no-engine guard (#2292, HLR-1 of
       # docs/haddock_link_resolution_design.md): fails if a QUALIFIED
       # haddock link `'Module.function'` in a src/ or app/ comment names
@@ -1335,6 +1352,23 @@ jobs:
       # only ever be noticed by a dev-machine run; the companion boots
       # nothing and runs in well under a second.
       #
+      # test_construction_probe is #2172's: tools/construction_probe.py
+      # now captures a read-only diagnostic bundle on every construct_job
+      # wait that expires. `unitAi.aiState` is never pruned when an
+      # individual unit is destroyed (scripts/unit_ai_core.lua empties it
+      # only at teardown or a load reconciliation), so `getState` answers
+      # for a dead worker with its last decision indefinitely -- a bundle
+      # that sampled the AI unconditionally would print a phase and a
+      # currentAction beside `unit: null`, and the phase-transition
+      # classifier would then name a segment no unit is standing in. The
+      # bundle establishes existence FIRST and gates the whole AI family
+      # on it, a caller's already-taken sample included. That probe is
+      # manual-only and scenario-heavy (about ten minutes), and the
+      # stale-state path needs a wait to expire while its driving worker
+      # is already gone, so an ordinary run cannot be relied on to reach
+      # it; this companion boots nothing and answers from a fake console
+      # in under a second.
+      #
       # tools/test_deflake_diagnosis.py (#1437) is deliberately absent
       # too, and from tools/ci-local.sh's mirrored list: that issue's
       # approved rereview amendment scopes the diagnosis lab's own
@@ -1364,6 +1398,7 @@ jobs:
           python3 tools/test_farm_ai_probe.py
           python3 tools/test_probe_boot_logs.py
           python3 tools/test_item_list_widget_probe.py
+          python3 tools/test_construction_probe.py
 
       # The decision `.github/workflows/review-gate.yml` makes on every
       # synchronize push: keep `reviewed:approve` only when the push left

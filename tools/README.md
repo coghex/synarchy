@@ -100,6 +100,100 @@ on a continuation line, so either rule would report zero dead links and
 generate an empty baseline), a dropped comment form, and treating every
 non-code span as a comment.
 
+## `tshow` spelling audit (`tshow_spelling_audit.py`, #2177)
+
+```bash
+python3 tools/tshow_spelling_audit.py --self-test  # the fixtures (run first)
+python3 tools/tshow_spelling_audit.py             # the gate
+```
+
+`UPrelude` defines the pack-a-shown-value wrapper once
+(`tshow = TXT.pack ∘ show`), and #1099 replaced the 709 direct copies it
+found. Nothing enforced the result: the spelling regressed twice within
+nine days of that merge, and the point-free compositions #1099's
+acceptance grep never scoped survived in eleven more files, two of them
+as renamed copies (`showT`, `tShow`). This is the guard for it, and it
+belongs to the same class as the operator audit above — every reported
+form is definitionally `tshow`, so a fix moves no rendered byte.
+
+**The rule is a CLOSED list.** Reported in `src/` and `app/`: a
+`Data.Text` `pack` applied to `show`, written as one of *exactly*
+`pack (show …)`, `pack $ show …`, `pack . show` or `pack ∘ show`
+(`$!` rides with `$`). Adjacency is measured modulo whitespace and
+comments, so a multiline wrap is the same hit, and **nothing else about
+the surrounding expression is read**.
+
+That list is exhaustive by design (#2177 §Scope note). PR #2404 read the
+requirement as an obligation to recognise every valid Haskell *spelling*
+of the conversion; twenty review rounds did not exhaust it, because that
+is a parsing problem. Operator sections, prefix operators, qualified
+connectors, type ascriptions, redundant parentheses, application
+position and argument extent are **out of scope**: a wrapper written one
+of those ways is not caught, and a non-wrapper reported because of one
+is answered with an `EXEMPTIONS` entry rather than more analysis. PR
+#2404 is the worked reference for what each would cost.
+
+Two names resolve by **binding**, never by the `T.` qualifier's
+spelling: this tree binds `T` to `Data.Text` in most modules, but
+`src/UPrelude.hs` binds it to `Data.Text.Encoding`, and two Lua modules
+bind it to `Data.Text` and `Data.Text.Read` at once. Imports are read
+with `engine_env_capability_writer_syntax.py`'s
+`parse_imports`/`imports_name`, so an alias, a bare
+`import qualified Data.Text`, `hiding` and an `ImportQualifiedPost`
+declaration each resolve, while `Data.ByteString.Char8`'s packer
+(`Unit.Atlas.Digest`'s digest material) and `Data.Text.Lazy`'s are never
+reported. `show` must be the `Show` method — bare, or qualified by
+`Prelude`, `UPrelude`, `GHC.Show` or `Text.Show`.
+
+Never reported: the same text in a `--` or `{- -}` comment, in a string
+literal, or in a **quasiquote**. What is code comes from
+`unicode_operator_audit.py`'s `haskell_code_only` rather than a second
+lexer — but a pre-pass here masks the one thing that lexer does not
+model: a **quasiquote**. Its payload is not Haskell, so a lone `"` in
+one opens a string that runs past the closing `|]` and a `--` in one
+opens a comment that eats it. Template Haskell's quotation brackets are
+**not** quasiquotes: `[e|`, `[t|`, `[d|`, `[p|` and the bare `[|` hold
+Haskell, and this tree writes `[t|` and `[|` today.
+
+The **dash rule** lives in the shared lexer rather than here. Report
+§2.3 opens a comment only on a dash run the rest of its symbol lexeme
+does not continue, so `-->`, `<--`, `⊚--` and `--—` are operators over
+report §2.2's full symbol set — Unicode symbols *and* punctuation.
+Correcting it there, with fixtures in `test_unicode_operator_audit.py`,
+is what #2177 asks for; this module applies the same rule only in its
+own quasiquote walk, so an opener written after an operator on the same
+line is still found.
+
+A file it cannot certify is **refused**, loudly, and that is a
+first-class result rather than a gap: a CPP `#define`/`#undef`/`#include`,
+a `Data.Text` import shape the resolver cannot read, an import putting
+`pack` in unqualified scope, a file that binds `show` locally, and a
+`show` or connector qualified by a module it cannot resolve. The last
+three are all the same rule — a bare or unresolvable name cannot be told
+from a local binding or somebody else's operator without scope analysis,
+which is `lua_strict_decode_audit.py`'s precedent. `src/UPrelude.hs`'s
+export list is checked once per run for the premise the whole scan rests
+on (report §5.2: its `module Data.Text` re-export carries `Text`, not
+`pack`).
+
+One exemption is construct-scoped — `tshow`'s own definition in
+`src/UPrelude.hs`, that single `pack` occurrence and not the file — and
+`EXEMPTIONS` is the per-file escape, which suppresses a refusal as well
+as a report.
+
+`--self-test` drives the same `find_violations` over synthetic module
+sources: every form in the closed list, every import and `show` form,
+every refusal, both scopes of the exemption, the `UPrelude` export
+premise in both directions, the out-of-scope spellings staying clean,
+and the lexical traps (payloads holding `"` or `--`, an opener quoted in
+a string or either comment form, a string gap, a `'"'` literal, an
+identifier's trailing prime, an unclosed quasiquote, `-->`/`<--`/`⊚--`/
+`--—` against `--`/`---`/`-- |`/`->`/a lone `-`). Every rule was
+mutation-tested against them: each is removed one at a time and the
+self-test fails. The suite also checks its own fixtures' shape — a
+source whose line breaks were escaped away is vacuous rather than
+failing — and that check is itself probed.
+
 ## World generation tools
 
 Scripts for auditing, checking determinism, and regression-testing the

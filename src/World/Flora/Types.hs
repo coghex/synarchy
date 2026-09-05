@@ -42,7 +42,6 @@ import Control.DeepSeq (NFData(..))
 import GHC.Generics (Generic)
 import Data.Serialize (Serialize)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.Text as T
 import Data.List (sortOn)
 import Data.Hashable (Hashable(..))
 import Engine.Asset.Handle (TextureHandle(..))
@@ -384,7 +383,7 @@ worldGenSpecies cat =
 floraWorldGenKey ∷ FloraCatalog → FloraId → Text
 floraWorldGenKey cat fid@(FloraId n) = case lookupSpecies fid cat of
     Just sp → fsName sp
-    Nothing → "\SOHworldgen:" <> T.pack (show n)
+    Nothing → "\SOHworldgen:" <> tshow n
 
 -- | The two worldGen category tags (World.Flora.Placement) that mark a
 --   species as a plantable crop — a row_crop 'FloraInstance' (#334) or a

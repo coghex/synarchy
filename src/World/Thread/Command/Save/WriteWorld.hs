@@ -296,7 +296,7 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                             -- hash-map entry, always bounded" contract
                             -- 'capComponentErrors'/'capIntegrityErrors'
                             -- already enforce at the other boundaries.
-                            let rendered = L.sort (map (T.pack ∘ show) errs)
+                            let rendered = L.sort (map tshow errs)
                                 total    = length rendered
                                 capped   = take integrityErrorCap rendered
                                 omitted  = max 0 (total - length capped)

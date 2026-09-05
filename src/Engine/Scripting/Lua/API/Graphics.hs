@@ -162,7 +162,7 @@ describePolicyArgument = Lua.ltype 2 ⌦ \case
     pure $ maybe "(unreadable)"
         (\bs → "'" <> TE.decodeUtf8Lenient bs <> "'") raw
   Lua.TypeNil → pure "an explicit nil (omit the argument instead)"
-  other → pure $ "of type " <> T.pack (show other)
+  other → pure $ "of type " <> tshow other
 
 -- | engine.getTextureSize(handle) → {width=, height=} | nil
 --   The natural pixel dimensions of a texture 'engine.loadTexture'
