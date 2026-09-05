@@ -103,9 +103,22 @@ exactly why the detail could move out of the always-loaded file.
 ## The `make ci` gate set
 
 CLAUDE.md states the rule: `make ci` runs the same gate SET as `ci.yml`'s
-`test-and-audits` worker, `tools/ci_parity_audit.py` keeps the two from drifting,
-and the gate is never an iteration loop. This is the enumeration and the
-exemptions.
+two audited workers together — `test-and-audits` for everything needing a
+Cabal build product, `static-audits` for every engine-free `python3
+tools/*.py` gate (#2272) — `tools/ci_parity_audit.py` keeps the union and
+`make ci` from drifting, and the gate is never an iteration loop. This is
+the enumeration and the exemptions.
+
+The two-job shape is a CI-side optimisation only: the engine-free half used
+to queue behind ~11.6 minutes of Cabal work purely by sharing a job with it.
+`make ci` is one script, so the UNION is what it mirrors — but the audit
+collects each job's set separately and rejects any command run by both
+before it takes that union, because the union alone cannot distinguish a
+correctly split gate set from one CI pays for twice. Each audited job must
+also yield at least one invocation, so an emptied job fails rather than
+shrinking the comparison. `static-audits` carries no job-level condition:
+that, and not the docs-only selector, is what now keeps the engine-free
+audits running on a docs-only change.
 
 The set: warning-clean (`-Werror`) build of library/exe + both test
 suites, the headless hspec suite, `test_audit.py`,
@@ -381,15 +394,19 @@ would hide the very failure it was built for. The separate PR-only
 behavior-probe job also selects no probes for documentation. `make ci`
 has no event change range and so has no fast path; it always runs
 everything.
-The CI-only invocations split across the two worker jobs. In
+The CI-only invocations split across three worker jobs. In
 `test-and-audits`, the path SELECTORS
-(`ci_expensive_gates.py --stdin --gate worldgen|graphical|unit-assets`
-and `ci_docs_fast_path.py --stdin --explain`) have nothing to select
-locally. Its bare `ci_cache_report.py` (#1358) classifies what the two
+(`ci_expensive_gates.py --stdin --gate worldgen|graphical` and
+`ci_docs_fast_path.py --stdin --explain`) have nothing to select
+locally, and its bare `ci_cache_report.py` (#1358) classifies what the two
 `actions/cache` restore steps got from outputs only a runner publishes;
 `make ci` restores no GitHub Actions cache, so it has no outcome to
 classify, and the command reports rather than gates. Its `--self-test`
-form is not exempt and runs on both sides.
+form is not exempt and runs on both sides — in `static-audits`, with the
+cache-key and retention self-tests, since none of the three reads a cache.
+`static-audits` also owns `ci_expensive_gates.py --stdin --gate
+unit-assets`, which moved there with the unit-asset gate it decides
+(#2272); it is exempt for the same reason its siblings are.
 
 The same CI-only exemption applies to `ci_cache_epoch.py --ref ...`: that
 invocation derives the GitHub Actions key and writes runner outputs, while a
@@ -419,13 +436,16 @@ project cache. Dependency caches and PR-ref caches are outside the default
 selection.
 
 The separate `behavior-probes` job owns `ci_probes.py --stdin` and the
-engine-booting `run_probes.py` sweep; neither is part of the
-`test-and-audits` / `make ci` parity contract because CLAUDE.md keeps
-behavior probes opt-in locally. The stable `build-test` context depends
-on both parallel workers and is the single CI verdict the admin-bypass
-PR drainer consumes, so moving the sweep out of the heavy worker does
-not weaken its blocking PR verdict. The parity audit pins that aggregate
-wiring and the probe worker's selector and runner commands.
+engine-booting `run_probes.py` sweep; neither is part of the CI /
+`make ci` parity contract because CLAUDE.md keeps behavior probes opt-in
+locally. The stable `build-test` context depends on all three parallel
+workers and is the single CI verdict the admin-bypass PR drainer consumes,
+so moving the sweep — and, since #2272, the engine-free audits — out of the
+heavy worker does not weaken its blocking PR verdict. `static-audits` is
+required with a plain `= success` on both events, because it carries no
+condition and so is never legitimately skipped. The parity audit pins that
+aggregate wiring, the static-audit worker's own topology, and the probe
+worker's selector and runner commands.
 
 One invocation is LOCAL-only for the mirror-image reason:
 `ci_expensive_gates.py --local-changed-paths`, because CI is handed a
@@ -3167,13 +3187,62 @@ recapture is owed.
 Flora growth is DERIVED state from the advancing calendar (nothing
 per-instance in saves; `world.getDate`/`setDate`,
 `world.getFloraGrowthAt`). Fruiting windows gate bare food-harvest
-calls only; tagged calls (chop's `"wood"`) skip the window, and
-chop-claim keys on `regrowthRemaining`+`tags`, not `harvestable`.
+calls; whether a TAGGED call skips the window is AUTHORED per
+`harvestable:` block (#2212, below), and chop-claim keys on
+`regrowthRemaining`+`tags`, not `harvestable`.
 Tilling: `till.*` mirrors `chop.*`; completion writes `world.setVegAt`
 (edit-log — survives eviction/saves); consumers must use
 `world.isPlantable`, never compare `getVegAt` to raw id 77. Gates:
 `flora_growth_probe.py` (registers a max-tolerance `probe_berry`
 species), `till_probe.py`.
+
+### Authored harvest-tag policy (#2212)
+
+Before #2212 a tagged `world.harvestFlora` skipped `harvestOpen`
+unconditionally — a wood-REMOVAL policy written as a property of
+"being tagged", which any future `fruit`/`grain` tag would have
+inherited — and yield had no phase input, so a day-zero sprout dropped
+a mature tree's logs, hid for its regrowth and could be felled again.
+Two additive `harvestable:` keys now author both halves:
+
+- **`ungated_tags:`** — the subset of `tags:` whose harvest may take
+  the plant OUTSIDE the growth window. **Absent means growth-gated**,
+  so a tagged call against a non-declaring block is refused in exactly
+  the states a bare one is. Every entry must appear in `tags:`
+  (rejected at the authoring boundary, like a `cycleOverrides`
+  selector).
+- **`phase_yield:`** — a life phase → that phase's own yield list. An
+  ABSENT phase inherits `yield:`; a phase mapped to `[]` yields
+  nothing. Absent and explicitly-empty are deliberately
+  distinguishable; keys are checked against the `LifePhaseTag`
+  vocabulary AND against the species' own `phases:`.
+
+`white_oak`, `paper_birch` and `sugar_maple` author `ungated_tags:
+[wood]` plus an empty `sprout` yield, so every tree the chop drag-box
+selects stays designatable and fellable as a sprout, matured or
+standing dead, and a felled sprout pays nothing.
+
+`World.Flora.Growth.floraHarvestAdmits` is the SINGLE predicate the
+screen-space hit test (`World.Flora.HitTest`), the world thread's
+designation commit (`World.Thread.Command.Cursor.Chop`), both tagged
+harvest verbs and the tagged finder consult, evaluated from the same
+tag and derived growth state; the per-instance regrowth timer, the
+exact-identity filter and a bare finder's edible-yield filter stay
+caller-side. The growth clock is `World.Flora.Clock.growthClock`, so
+the world thread and the Lua verbs read one value.
+
+An ACCEPTED fell whose authored yield is empty returns a non-nil EMPTY
+Lua table, starts the regrowth timer and permits designation
+cancellation; `nil` stays reserved for a refusal or a raced-away
+target. `scripts/unit_ai_chop.lua` grants woodcutting XP only when the
+result carries spawned yield, so sprouts and races earn none.
+
+Gates: hspec `--match "harvestOpen"` (the pure predicate and the phase
+yields), `--match "Asset.FloraHarvestPolicySchema"` (the authoring
+boundary and the shipped corpus), `--match "Chop tag policy"` (all
+four surfaces agreeing against a real engine), `--match "chop fell
+XP"` (the Lua grant). `tools/chop_probe.py` stays ADVISORY until #2058
+gives it a fixture.
 
 ---
 

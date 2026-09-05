@@ -1,0 +1,32 @@
+-- Pure production tickUnit; controlled path, no terrain.
+-- Each schedule admits exactly one second; speed is 1 tile/s.
+:module +Data.List Unit.Pathing.Cost Unit.Pathing.Hazard Unit.Sim.Types Unit.Thread.Movement.PathAdvance Unit.Thread.Movement.Types World.Material Unit.Direction
+:{
+let start = UnitSimState
+      { usRealX = 0.4, usRealY = 0.5, usGridZ = 0, usRealZ = 0
+      , usTarget = Just (MoveTarget 2.5 0.5 1 FallPermitted)
+      , usPose = Standing, usState = Walking, usFacing = DirE
+      , usLocalPath = [(0.5, 0.5), (1.5, 0.5), (2.5, 0.5)]
+      , usDrinkUntil = Nothing, usEatUntil = Nothing, usPickupUntil = Nothing
+      , usTransitionUntil = Nothing, usTransitionStride = 1, usPostTransition = []
+      , usClimbFromTile = Nothing, usClimbToTile = Nothing, usClimbStartTime = Nothing
+      , usClimbSlipAt = Nothing, usFallFromTile = Nothing, usFallToTile = Nothing
+      , usPendingClimbXP = 0, usGetUpAt = Nothing, usPendingFallDrop = Nothing
+      , usJumpApex = Nothing, usMoveGrade = 0 }
+    world = MoveWorld Nothing False
+    run ds = foldl' step start (zip [1 :: Int ..] ds)
+      where step s (n, dt) = tickUnit defaultPathingConfig emptyMaterialRegistry
+                    (sum (take n ds)) dt world defaultMoveStats s
+    report (label, ds) = let s = run ds
+      in putStrLn (label ++ ": x=" ++ show (usRealX s)
+                  ++ " path=" ++ show (usLocalPath s)
+                  ++ " target=" ++ show (usTarget s))
+:}
+:{
+mapM_ report
+  [ ("4 x 0.25", replicate 4 0.25)
+  , ("10 x 0.10", replicate 10 0.10)
+  , ("20 x 0.05", replicate 20 0.05) ]
+:}
+
+:quit

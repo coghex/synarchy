@@ -19,9 +19,9 @@ concrete precondition
 - [x] WML-2. Reject unsafe map image plans before allocation or upload — [#2020]
 - [x] WML-3. Persist an opaque generated-world identity with save migration — [#2021]
 - [x] WML-4. Establish the shared generated-world library lifecycle — [#2024]
-- [ ] WML-5. Generate deterministic spatial pyramid pages
-- [ ] WML-6. Measure map-page codecs and disk-cache budgets
-- [ ] WML-7. Define the versioned map-artifact format
+- [x] WML-5. Generate deterministic spatial pyramid pages — [#2298]
+- [x] WML-6. Measure map-page codecs and disk-cache budgets — [#2303]
+- [ ] WML-7. Define the versioned map-artifact format — [deferred]: #2303 must report and the owner must select Q-17's codec, disk quota, and multiworld cache accounting
 - [ ] WML-8. Publish mandatory map artifacts during world generation
 - [ ] WML-9. Load and recover map artifacts transactionally
 - [ ] WML-10. Serve lazy fine pages through bounded caches
@@ -1444,6 +1444,13 @@ the exact commands appropriate to each one-PR slice:
 - **Open questions:** Q-17; this slice supplies the evidence and then stops.
 
 ### WML-7. Define the versioned map-artifact format
+
+> **Deferred (2026-09-02).** Q-17 is unresolved. #2303 (WML-6) is filed but has
+> not run, so no page codec, fine-page disk quota, or multiworld cache
+> accounting has been measured or selected. This slice's own scope begins
+> "After Q-17 is explicitly resolved", and Q-17 forbids any issue inferring a
+> codec or quota from delivery order. Processable once #2303 has reported its
+> measurements and the owner has explicitly selected all three values.
 
 - **Outcome:** Mandatory root/coarse pages and reproducible fine-cache pages
   have one versioned, integrity-checked, world-qualified storage contract.

@@ -69,9 +69,6 @@ spec = do
             itemContentsSig (kit "first_aid_kit" []) `shouldBe` T.empty
 
     describe "represented child fields (each splits a row)" $ do
-        it "identical children give equal signatures" $
-            sigWith id `shouldBe` sigWith id
-
         it "a child differing only in quality gives unequal signatures" $
             sigWith id `shouldNotBe` sigWith (\c → c { iiQuality = 40 })
 
@@ -102,9 +99,6 @@ spec = do
             sigWith id `shouldBe` sigWith (\c → c { iiInstanceId = 4242 })
 
     describe "one level deeper (the signature recurses)" $ do
-        it "identical grandchildren give equal signatures" $
-            deepSigWith id `shouldBe` deepSigWith id
-
         it "a grandchild differing only in quality gives unequal signatures" $
             deepSigWith id `shouldNotBe` deepSigWith (\c → c { iiQuality = 40 })
 

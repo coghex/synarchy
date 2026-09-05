@@ -410,8 +410,10 @@ one module).
   its call sites fail; shadow a global with a local of the same name and confirm
   no false positive; isolate one of several sibling call sites; and make an
   unparsed-but-call-shaped construct a loud failure rather than a silent skip.
-- A new `tools/*.py` audit must join both `tools/ci-local.sh` and `ci.yml`'s
-  `test-and-audits` worker, or `tools/ci_parity_audit.py` fails.
+- A new `tools/*.py` audit must join both `tools/ci-local.sh` and exactly one
+  of `ci.yml`'s two audited workers — `static-audits` for an engine-free gate,
+  `test-and-audits` only if it needs a Cabal build product — or
+  `tools/ci_parity_audit.py` fails.
 - The gate must report zero findings on the current tree once #1914 lands, and
   must fail on the tree before it.
 - LAC-2's piloted namespace keeps its existing hspec and probe coverage green
