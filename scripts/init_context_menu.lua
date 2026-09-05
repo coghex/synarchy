@@ -240,19 +240,14 @@ function M.tryUnitMenu(x, y)
             end
         end
         if medic then
+            -- Supply discovery is the shared exact-instance scan
+            -- (#2302): a row is enabled on the same container the
+            -- treatment verb would draw from, so an empty kit ordered
+            -- before a stocked same-definition one no longer greys out
+            -- a treatment that would have committed.
+            local supply = require("scripts.medical_supply")
             local function hasBandages(uid)
-                for _, it in ipairs(unit.getInventory(uid) or {}) do
-                    if it.kind == "container" then
-                        for _, r in ipairs(unit.getItemContents(
-                                      uid, it.defName) or {}) do
-                            if r.defName == "bandage"
-                               and (r.count or 0) > 0 then
-                                return true
-                            end
-                        end
-                    end
-                end
-                return false
+                return supply.bandageKit(uid) ~= nil
             end
             local kitOwner
             if hasBandages(medic) then
@@ -306,18 +301,7 @@ function M.tryUnitMenu(x, y)
             -- infected wound, a kit with antibiotics on the medic
             -- or another selected unit, and both within reach (#2297).
             local function hasAntibiotics(uid)
-                for _, it in ipairs(unit.getInventory(uid) or {}) do
-                    if it.kind == "container" then
-                        for _, r in ipairs(unit.getItemContents(
-                                      uid, it.defName) or {}) do
-                            if r.defName == "antibiotics"
-                               and (r.fill or 0) > 0 then
-                                return true
-                            end
-                        end
-                    end
-                end
-                return false
+                return supply.antibioticsKit(uid) ~= nil
             end
             -- The cure needs INFECTION-CONTROL knowledge, a
             -- different skill from bleed-control; resolve a medic
