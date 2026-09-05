@@ -240,19 +240,14 @@ function M.tryUnitMenu(x, y)
             end
         end
         if medic then
+            -- Supply discovery is the shared exact-instance scan
+            -- (#2302): a row is enabled on the same container the
+            -- treatment verb would draw from, so an empty kit ordered
+            -- before a stocked same-definition one no longer greys out
+            -- a treatment that would have committed.
+            local supply = require("scripts.medical_supply")
             local function hasBandages(uid)
-                for _, it in ipairs(unit.getInventory(uid) or {}) do
-                    if it.kind == "container" then
-                        for _, r in ipairs(unit.getItemContents(
-                                      uid, it.defName) or {}) do
-                            if r.defName == "bandage"
-                               and (r.count or 0) > 0 then
-                                return true
-                            end
-                        end
-                    end
-                end
-                return false
+                return supply.bandageKit(uid) ~= nil
             end
             local kitOwner
             if hasBandages(medic) then
@@ -306,18 +301,7 @@ function M.tryUnitMenu(x, y)
             -- infected wound, a kit with antibiotics on the medic
             -- or another selected unit, and both within reach (#2297).
             local function hasAntibiotics(uid)
-                for _, it in ipairs(unit.getInventory(uid) or {}) do
-                    if it.kind == "container" then
-                        for _, r in ipairs(unit.getItemContents(
-                                      uid, it.defName) or {}) do
-                            if r.defName == "antibiotics"
-                               and (r.fill or 0) > 0 then
-                                return true
-                            end
-                        end
-                    end
-                end
-                return false
+                return supply.antibioticsKit(uid) ~= nil
             end
             -- The cure needs INFECTION-CONTROL knowledge, a
             -- different skill from bleed-control; resolve a medic
@@ -377,72 +361,13 @@ function M.tryUnitMenu(x, y)
     return true
 end
 
--- Right-click on a ground item → context menu. With units selected:
--- Info / Pick up / Move here. Without: just Info. Pick up dispatches
--- the NEAREST selected unit; capacity is checked at the moment of
--- pickup (it can change en route).
+-- Right-click on a ground item → context menu. The construction lives
+-- in scripts/init_context_menu_item.lua (#2300): this file sits at its
+-- 500-line budget (tools/lua_module_budget.py), and the Info row's
+-- stale-gid gate needed room to state its contract the way the unit
+-- row's does above.
 function M.tryItemMenu(x, y)
-    local gid = item.hitTestAt(x, y)
-    if not gid then return false end
-
-    local fbW, fbH = engine.getFramebufferSize()
-    local ww, wh   = engine.getWindowSize()
-    local mx, my   = x, y
-    if ww and wh and ww > 0 and wh > 0 then
-        mx = x * (fbW / ww)
-        my = y * (fbH / wh)
-    end
-    local contextMenu = require("scripts.ui.context_menu")
-    local menuItems = {
-        { label = "Info",
-          callback = function()
-              item.select(gid)
-              unit.deselectAll()
-              building.deselect()
-          end },
-    }
-    local selUids = unit.getSelected() or {}
-    if #selUids > 0 then
-        local ipos = nil
-        for _, g in ipairs(item.listGround() or {}) do
-            if g.id == gid then ipos = g; break end
-        end
-        if ipos then
-            local unitAi = require("scripts.unit_ai")
-            local transferSession = require("scripts.transfer_session")
-            table.insert(menuItems, {
-                label = "Pick up",
-                callback = function()
-                    local best, bestUid = math.huge, nil
-                    for _, uid in ipairs(selUids) do
-                        local info = unit.getInfo(uid)
-                        if info then
-                            local d = (info.gridX - ipos.x) ^ 2
-                                    + (info.gridY - ipos.y) ^ 2
-                            if d < best then
-                                best, bestUid = d, uid
-                            end
-                        end
-                    end
-                    if bestUid then
-                        -- #1254, as on Attack above: a player order to
-                        -- a held unit ends the Mode A session first.
-                        transferSession.notePlayerOrder(bestUid)
-                        unitAi.commandPickup(bestUid, gid)
-                    end
-                end })
-            table.insert(menuItems, {
-                label = "Move here",
-                callback = function()
-                    for _, uid in ipairs(selUids) do
-                        transferSession.notePlayerOrder(uid)
-                        unitAi.commandMove(uid, ipos.x, ipos.y)
-                    end
-                end })
-        end
-    end
-    contextMenu.show(menuItems, mx, my)
-    return true
+    return require("scripts.init_context_menu_item").tryItemMenu(x, y)
 end
 
 -- No-selection right-click on a tile → tile context menu. Capture the

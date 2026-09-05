@@ -2,13 +2,14 @@ module World.Thread.Command.Time
     ( handleWorldSetTimeCommand
     , handleWorldSetDateCommand
     , handleWorldSetTimeScaleCommand
+    , setDateClampWarning
     ) where
 
 import UPrelude
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), withPlayerIntentHeld)
-import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import World.Pause (setPauseResumeScale)
 import World.Types
 
@@ -29,6 +30,24 @@ handleWorldSetTimeCommand wsc logger pageId hour minute = do
                 "World not found for time update: " <> unWorldPageId pageId
 
 
+-- | Set a page's calendar date, in the page's own canonical form
+--   (#2339).
+--
+--   The three integers arrive from @world.setDate@ unjudged, and used to
+--   be stored exactly as given. That left @world.getDate@ reporting a
+--   raw @month = 14, day = 40@ beside a @dayOfYear@ and @absoluteDay@
+--   computed for month 12, day 30 — the derived readings clamp, the
+--   stored components did not — and the next midnight rollover then
+--   snapped the raw fields to the following year's day 1, a
+--   discontinuity from the state the getter had been reporting all
+--   along.
+--
+--   So the date is put in 'canonicalWorldDate' form against the PAGE's
+--   own 'CalendarConfig' before it is stored, which is the same
+--   judgement 'handleWorldSetTimeCommand' above already applies to the
+--   clock: clamp, never refuse. A page with no generation params yet
+--   (an arena page mid-build) falls back to 'defaultCalendarConfig',
+--   exactly as @world.getDate@ does when it reads one back.
 handleWorldSetDateCommand ∷ WorldSimCapability → LoggerState → WorldPageId
     → Int → Int → Int → IO ()
 handleWorldSetDateCommand wsc logger pageId year month day = do
@@ -39,7 +58,13 @@ handleWorldSetDateCommand wsc logger pageId year month day = do
     mgr ← readIORef (wsWorldManagerRef wsc)
     case lookup pageId (wmWorlds mgr) of
         Just worldState → do
-            let newDate = WorldDate year month day
+            calendar ← maybe defaultCalendarConfig wgpCalender
+                ⊚ readIORef (wsGenParamsRef worldState)
+            let rawDate = WorldDate year month day
+                newDate = canonicalWorldDate calendar rawDate
+            when (newDate ≢ rawDate) $
+                logWarn logger CatWorld
+                    (setDateClampWarning pageId rawDate newDate)
             oldDate ← atomicModifyIORef' (wsDateRef worldState) $ \old →
                 (newDate, old)
             -- Flora textures derive from the date (#332: annual stage +
@@ -51,6 +76,17 @@ handleWorldSetDateCommand wsc logger pageId year month day = do
         Nothing →
             logDebug logger CatWorld $
                 "World not found for date update: " <> unWorldPageId pageId
+
+-- | The warning one clamped @world.setDate@ produces (#2339): the page
+--   it was aimed at, the three raw components the caller passed, and the
+--   canonical date that was stored instead. Exported so a spec can pin
+--   the whole line without reaching into the logger's formatting.
+setDateClampWarning ∷ WorldPageId → WorldDate → WorldDate → Text
+setDateClampWarning pid raw canonical =
+    "world.setDate on page '" <> unWorldPageId pid
+      <> "': the date " <> renderWorldDate raw
+      <> " is outside the page's calendar; storing " <> renderWorldDate canonical
+      <> " instead"
 
 handleWorldSetTimeScaleCommand ∷ WorldSimCapability → LoggerState → WorldPageId → Float → IO ()
 handleWorldSetTimeScaleCommand wsc logger pageId scale = do

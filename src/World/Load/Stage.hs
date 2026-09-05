@@ -25,6 +25,7 @@ module World.Load.Stage
     , stagedGroundItemWarning
     , repairSavedCameraView
     , stagedCameraWarning
+    , stagedWorldDateWarning
     ) where
 
 import UPrelude
@@ -413,6 +414,18 @@ stagedCameraWarning pid wps =
     (dx, dy) = camPosition defaultCamera
     dzoom    = camZoom defaultCamera
 
+-- | The warning one clamped restored date produces (#2339): the page it
+--   came from, the date the save stored, and the canonical date that
+--   replaced it. Exposed for the same reason its gen-params, camera and
+--   ground-item siblings are — a spec pins the whole line without
+--   staging a save.
+stagedWorldDateWarning ∷ WorldPageId → WorldDate → WorldDate → Text
+stagedWorldDateWarning pid raw canonical =
+    "Saved page '" <> unWorldPageId pid <> "': the stored date "
+      <> renderWorldDate raw
+      <> " is outside the page's calendar; loading it as "
+      <> renderWorldDate canonical
+
 -- | The warning one dropped ground item produces (#2336): the page it
 --   came from, its PAGE-LOCAL ground-item id, what it was, and the
 --   position the save stored. Exposed for the same reason its
@@ -541,6 +554,21 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         -- transfer order already gets below.
         (stagedGroundItems, droppedGroundItems) =
             sanitizeGroundItems (wpsGroundItems wps)
+        -- #2339: a stored date outside the page's own calendar is
+        -- canonicalized HERE, at the one boundary every decoded page
+        -- passes through, so the live session never holds a raw
+        -- @month = 14@ whose derived readings disagree with it. Bounded
+        -- by the REPAIRED params' calendar, so a page that also carried
+        -- an out-of-domain generation setting is judged against the
+        -- calendar it will actually run on.
+        --
+        -- A repair, never a load failure, for the same reason its
+        -- siblings above are: the rest of the save is good, and the
+        -- clamp is the same judgement @world.setDate@ now applies to a
+        -- live poke.
+        savedDate = WorldDate (wpsDateYear wps) (wpsDateMonth wps)
+                              (wpsDateDay wps)
+        stagedDate = canonicalWorldDate (wgpCalender params) savedDate
 
     logInfo logger CatWorld $ "Staging saved page: " <> unWorldPageId pid
     forM_ genRejections $ logWarn logger CatWorld . stagedGenParamsWarning pid
@@ -548,6 +576,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         logWarn logger CatWorld (stagedCameraWarning pid savedWps)
     forM_ droppedGroundItems $
         logWarn logger CatWorld . stagedGroundItemWarning pid
+    when (stagedDate ≢ savedDate) $
+        logWarn logger CatWorld (stagedWorldDateWarning pid savedDate stagedDate)
 
     worldState ← emptyWorldState
     let phaseRef   = wsLoadPhaseRef worldState
@@ -573,8 +603,7 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         (WorldCamera (wpsCameraX wps) (wpsCameraY wps))
     writeIORef (wsTimeRef worldState)
         (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
-    writeIORef (wsDateRef worldState)
-        (WorldDate (wpsDateYear wps) (wpsDateMonth wps) (wpsDateDay wps))
+    writeIORef (wsDateRef worldState) stagedDate
     -- Never restore a player's previous simulation speed from a save.
     writeIORef (wsTimeScaleRef worldState) 1
     writeIORef (wsMapModeRef worldState) (wpsMapMode wps)

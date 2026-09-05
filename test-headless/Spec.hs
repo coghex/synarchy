@@ -46,12 +46,14 @@ import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
 import qualified Test.Headless.Unit.CargoApi as UnitCargoApi
 import qualified Test.Headless.Unit.MedicalReach as UnitMedicalReach
+import qualified Test.Headless.Unit.MedicalKitInstance as UnitMedicalKitInstance
 import qualified Test.Headless.Unit.NightPerception as NightPerception
 import qualified Test.Headless.Unit.LineOfSight as LineOfSightTest
 import qualified Test.Headless.World.ArenaSeed as ArenaSeed
 import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
+import qualified Test.Headless.Item.GroundSelection as GroundSelection
 import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
 import qualified Test.Headless.Lua.UnitAiRepairGround as LuaUnitAiRepairGround
 import qualified Test.Headless.Item.Temperature as ItemTemp
@@ -190,6 +192,7 @@ import qualified Test.Headless.UI.Tooltip as UITooltip
 import qualified Test.Headless.UI.InputOwnership as UIInputOwnership
 import qualified Test.Headless.UI.ZoomBandInputGate as UIZoomBandInputGate
 import qualified Test.Headless.UI.HudHoverGate as UIHudHoverGate
+import qualified Test.Headless.UI.ItemInfoRowSelection as UIItemInfoRowSelection
 import qualified Test.Headless.UI.UnitInfoRowSelection as UIUnitInfoRowSelection
 import qualified Test.Headless.UI.ElementInputPolicy as UIElementInputPolicy
 import qualified Test.Headless.UI.ControlActivation as UIControlActivation
@@ -564,6 +567,10 @@ main = hspec $ do
     -- manager ref and installs its own two-page world manager, for the
     -- same reason as the cargo spec above.
     aroundAll withHeadlessEngine UnitMedicalReach.spec
+    -- Own engine (#2302): the medical kit-instance spec WRITES the
+    -- unit and item manager refs and installs its own world manager,
+    -- for the same reason as the reach spec above.
+    aroundAll withHeadlessEngine UnitMedicalKitInstance.spec
     -- Own engine (#1205): the live power.placeNode path WRITES the
     -- unit/building manager refs and installs its own two-page world
     -- manager, so it cannot share the worldgen engine above.
@@ -638,6 +645,18 @@ main = hspec $ do
     -- worlds engine's pages. Its page is an arena page, so staging
     -- rebuilds flat chunks instead of generating a world.
     aroundAll withHeadlessEngineNoWorld GenConfigDomain.stagingSpec
+    -- #2339: the canonical form of a stored world date, at its two
+    -- ingresses. Both halves get their OWN world-thread-free engine, for
+    -- the same reasons the gen-domain pair above does. The setter half
+    -- installs its own single-page manager, reads back the queue a
+    -- world.setDate left there, and finishes each call through the
+    -- production handler -- a running worker would drain the queue and
+    -- rewrite the page's clock underneath it. The staging half drives
+    -- World.Load.Stage.stageSession against a forged one-page arena
+    -- save, so it must not gain or disturb the shared engine's pages.
+    describe "World.Calendar" $ do
+        aroundAll withHeadlessEngineNoWorld Calendar.setterSpec
+        aroundAll withHeadlessEngineNoWorld Calendar.stagingSpec
     -- #2307: the saved-equipment-slot reconciliation, split the same
     -- way. The pure half needs no engine; the staging half gets its OWN
     -- world-thread-free engine for the same reason the gen-domain one
@@ -887,6 +906,8 @@ main = hspec $ do
     describe "zoom-band entity input gate" UIZoomBandInputGate.spec
     describe "hud hover gameplay-input gate" UIHudHoverGate.spec
     describe "Unit Info row selection gate" UIUnitInfoRowSelection.spec
+    describe "Item Info row selection gate" UIItemInfoRowSelection.spec
+    describe "ground item selection" GroundSelection.spec
     describe "UI.ElementInputPolicy" UIElementInputPolicy.spec
     describe "UI.ControlActivation" UIControlActivation.spec
     describe "UI hierarchy structural ownership" UIHierarchyOwnership.spec
