@@ -22,10 +22,11 @@ GLFW, no swapchain) and asserts the mode end to end:
 6. (unless --skip-worldgen) Remote portal warning (#779), against the
    SAME generated world from phase 5, located dynamically via
    building.canPlaceAt/building.remoteCheck (never hardcoded world
-   coordinates — worldgen is unseeded here, same "oracle, not guessed
-   coordinates" rule the issue asks the UI half of this probe to
-   follow too): a valid remote position renders a normal (white, not
-   red) ghost; clicking it presents the remote-settlement modal
+   coordinates — the world is PINNED but the POSITIONS are still the
+   engine's own verdict, the same "oracle, not guessed coordinates"
+   rule the issue asks the UI half of this probe to follow too): a
+   valid remote position renders a normal (white, not red) ghost;
+   clicking it presents the remote-settlement modal
    (located via ui.dumpWidgets, not hardcoded coordinates) without
    spawning anything; a second click while it's open cannot stack a
    second modal; "Choose Another Site" closes it, spawns nothing, and
@@ -35,9 +36,11 @@ GLFW, no swapchain) and asserts the mode end to end:
    portal, exiting placement.
 7. (unless --skip-worldgen) Location lifecycle-state map icons
    (#781, #1230), against the same generated world, located via
-   world.listPlacedLocations() (never a hardcoded seed/coordinate): a
-   placed ruin shows the SHARED unknown marker before any player unit
-   has seen it; loading its chunks (structure physically visible) alone
+   world.listPlacedLocations() (the world is pinned; the ruins it
+   grades are still whatever that oracle reports, never a hardcoded
+   coordinate): a placed ruin shows the SHARED unknown marker before
+   any player unit has seen it; loading its chunks (structure
+   physically visible) alone
    does not change the icon; spawning a player-faction unit at the ruin
    flips ONLY that ruin's icon to its ruin TYPE icon (a second, unseen
    ruin keeps the unknown marker) — measured over a BOUNDED region
@@ -59,8 +62,36 @@ overwrite that long session's capture. Each path is printed when it is
 allocated and again in a closing summary naming the launch that wrote
 it.
 
+The pinned fixture world (#2166)
+--------------------------------
+Phases 6 and 7 both need a world that actually CONTAINS what they
+grade — a buildable position beyond the remote threshold, a buildable
+one next to a placed location, and at least two placed locations. The
+create-world screen rolls a fresh random hex seed on every visit
+(scripts/create_world/settings_tab.lua's ``randbox.newHexSeed()`` when
+``pending.seed`` is empty), so those preconditions used to be a
+per-run coin flip: one retained run missed the remote search and
+silently skipped the whole portal path, another passed it.
+
+So the generation parameters are PINNED here, through the create-world
+screen's own controls (the seed randbox, the world-size dropdown, and
+the advanced tab's plate-count textbox — never a bypass around the
+screen, and never a change to the screen itself), ``world.getSeed``
+confirms the world that came out is the pinned one, ``--seed``
+overrides the default, and every run prints a one-line ``FIXTURE``
+identity so two runs can be compared.
+
+A pinned fixture that stops fitting must be NOTICED, not hidden, so a
+search that finds nothing is reported as a FIXTURE/SETUP failure —
+printed ``[SETUP]``, counted separately in the closing summary, and
+still exiting non-zero — rather than as a product assertion about the
+remote-portal feature. Every candidate either search rejects prints
+its own line (resolved tile, canPlaceAt verdict AND reason, and the
+full remoteCheck classification), so the next miss names its cause
+without a rerun.
+
 Usage: python3 tools/offscreen_probe.py [--port 9418] [--size 1280x720]
-       [--skip-worldgen]
+       [--seed 0000002A] [--skip-worldgen]
 """
 from __future__ import annotations
 
@@ -73,17 +104,92 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from probe_runner_diagnostics import FailureEmitter   # durable failure records (#1982)
 from probelib import boot, poll_until, quit_engine, send, send_json, wait_load_published
 
-failures = 0
+# --------------------------------------------------------------------------
+# The pinned fixture world (#2166)
+# --------------------------------------------------------------------------
+# Written the way the create-world seed field spells one — 8 uppercase
+# hex digits, which scripts/create_world/generation.lua reads with
+# tonumber(seed, 16).
+#
+# This exact triple is what phases 6 and 7 are verified against: it
+# carries a buildable position beyond the remote threshold, a buildable
+# non-remote position next to a placed location, and the two placed
+# locations the icon phase needs. Change one of the three and all of
+# that has to be re-verified — which is what the FIXTURE line every run
+# prints exists to make checkable.
+DEFAULT_SEED_HEX = "5DEA7E52"
+DEFAULT_WORLD_SIZE = "128"
+DEFAULT_PLATE_COUNT = "10"
+
+# Reported for a tile that no search ever chose. NONE is a search that
+# ran and found nothing (or never ran because the world was wrong);
+# SKIPPED is --skip-worldgen, where there is no world to search at all.
+TILE_NONE = "NONE"
+TILE_SKIPPED = "SKIPPED"
+
+# Both kinds are kept as the failure TEXTS, not just counts, so the run
+# can hand them to `FailureEmitter` below. `run_probes` drains this
+# process's stdout only at exit, so a failure printed inline can fall off
+# the retained tail of a long run; a durable record cannot (#1982).
+failures: list[str] = []
+setup_failures: list[str] = []
+FAILURE = FailureEmitter("offscreen_probe")
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
-    global failures
+    """One GRADED product assertion about the engine's behavior."""
     print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
           + (f" — {detail}" if detail and not ok else ""))
-    failures += not ok
+    if not ok:
+        failures.append(name + (f" — {detail}" if detail else ""))
     return ok
+
+
+def setup_check(name: str, ok: bool, cause: str = "") -> bool:
+    """One FIXTURE precondition — the pinned world either carries what a
+    phase needs or it does not.
+
+    Deliberately NOT `check`: a fixture that stopped fitting (a re-pinned
+    seed, a worldgen-output change, a changed placement rule) is not a
+    regression in the remote-portal feature, and reporting it as one
+    sends the next reader hunting the wrong code. It is still a failure
+    — printed distinctly, counted separately, and non-zero at exit —
+    because a fixture that silently stopped covering the feature is
+    exactly what #2166 was filed about.
+    """
+    print(f"  [{'OK   ' if ok else 'SETUP'}] {name}"
+          + (f" — {cause}" if cause and not ok else ""))
+    if not ok:
+        setup_failures.append(name + (f" — {cause}" if cause else ""))
+    return ok
+
+
+# The one-line fixture identity (#2166 requirement 4). Populated as the
+# run establishes each field and printed exactly once, from `main`'s
+# `finally`, so even a run that dies mid-phase still says which world it
+# was grading.
+FIXTURE = {
+    "seed": DEFAULT_SEED_HEX,
+    "worldSize": DEFAULT_WORLD_SIZE,
+    "plateCount": DEFAULT_PLATE_COUNT,
+    "remote": TILE_NONE,
+    "nearby": TILE_NONE,
+}
+_fixture_printed = False
+
+
+def print_fixture() -> None:
+    """Print the fixture identity, once per run."""
+    global _fixture_printed
+    if _fixture_printed:
+        return
+    _fixture_printed = True
+    print(f"FIXTURE seed=0x{FIXTURE['seed']} worldSize={FIXTURE['worldSize']} "
+          f"plateCount={FIXTURE['plateCount']} remote={FIXTURE['remote']} "
+          f"nearby={FIXTURE['nearby']}")
 
 
 # --------------------------------------------------------------------------
@@ -316,8 +422,68 @@ def goto_and_resolve(port: int, gx: int, gy: int, screen_x: int, screen_y: int):
     return (picked[0], picked[1]) if picked else None
 
 
+def classify_candidate(port: int, def_name: str, gx: int, gy: int,
+                       screen_x: int, screen_y: int) -> dict:
+    """Resolve one seed coordinate and classify the tile it lands on.
+
+    Every field a rejection could turn on is captured here (#2166
+    requirement 2), including `canPlaceAt`'s own REASON and the full
+    `remoteCheck` classification — the latter even when placement was
+    refused, because `building.remoteCheck` is an independent, safe
+    classification of any resolved tile (it asks about the nearest
+    placed location, not about buildability), and a candidate rejected
+    for being too close is a different fixture problem from one
+    rejected for standing in water.
+
+    A candidate whose tile never resolved has no placement or
+    remoteness verdict at all; those fields stay None and are reported
+    as unavailable rather than guessed."""
+    record = {
+        "seed": (gx, gy), "resolved": None,
+        "valid": None, "reason": None,
+        "remote": None, "distance": None, "threshold": None,
+    }
+    resolved = goto_and_resolve(port, gx, gy, screen_x, screen_y)
+    if not resolved:
+        return record
+    rgx, rgy = resolved
+    record["resolved"] = (rgx, rgy)
+    load_region_around(port, rgx, rgy)
+    record["valid"], record["reason"] = can_place_at(port, def_name, rgx, rgy)
+    (record["remote"], record["distance"],
+     record["threshold"]) = remote_check(port, def_name, rgx, rgy)
+    return record
+
+
+def describe_candidate(record: dict, want_remote: bool,
+                       force_miss: bool = False) -> str:
+    """One line naming this candidate's fate and the cause of it."""
+    sx, sy = record["seed"]
+    if record["resolved"] is None:
+        return (f"seed ({sx},{sy}) -> REJECT: the camera resolved no tile "
+                f"under the screen centre; canPlaceAt and remoteCheck are "
+                f"unavailable for it")
+    rgx, rgy = record["resolved"]
+    reason = record["reason"] if record["reason"] is not None else "none given"
+    remoteness = (f"remote={record['remote']} "
+                  f"nearestDistance={record['distance']} "
+                  f"thresholdTiles={record['threshold']}")
+    if not record["valid"]:
+        verdict = f"REJECT: canPlaceAt=false ({reason})"
+    elif record["remote"] != want_remote:
+        verdict = (f"REJECT: canPlaceAt=true but remote={record['remote']}, "
+                   f"wanted remote={want_remote}")
+    elif force_miss:
+        verdict = ("ACCEPT, IGNORED: canPlaceAt=true and the remoteness "
+                   "matches, but --force-search-miss is forcing this search "
+                   "to reject everything")
+    else:
+        verdict = "ACCEPT: canPlaceAt=true and the remoteness matches"
+    return f"seed ({sx},{sy}) -> tile ({rgx},{rgy}) {verdict}; {remoteness}"
+
+
 def find_buildable(port: int, def_name: str, seed_targets, want_remote: bool,
-                    screen_x: int, screen_y: int):
+                    screen_x: int, screen_y: int, force_miss: bool = False):
     """For each seed (gx, gy), resolve the tile ACTUALLY under the
     screen centre (goto_and_resolve) and classify THAT tile with the
     engine's own oracle (building.canPlaceAt / building.remoteCheck)
@@ -325,22 +491,38 @@ def find_buildable(port: int, def_name: str, seed_targets, want_remote: bool,
     search, matching how ruin/location probes (e.g.
     tools/portal_ghost_probe.py) locate real worldgen features, robust
     to the seed itself landing on unbuildable or off-target terrain.
-    Returns (seed_gx, seed_gy, resolved_gx, resolved_gy, distance,
-    thresholdTiles) — re-navigating with the SEED coordinates
+
+    Returns (hit, records): `hit` is (seed_gx, seed_gy, resolved_gx,
+    resolved_gy, distance, thresholdTiles) or None, and `records` is
+    every candidate classified before the search stopped — the caller
+    prints them so a miss names its own cause without a rerun (#2166
+    requirement 2). Re-navigating with the SEED coordinates
     (goto_and_resolve) later reliably reproduces the resolved tile."""
+    records = []
     for gx, gy in seed_targets:
-        resolved = goto_and_resolve(port, gx, gy, screen_x, screen_y)
-        if not resolved:
+        record = classify_candidate(port, def_name, gx, gy, screen_x, screen_y)
+        records.append(record)
+        if force_miss:
+            # --force-search-miss: classify EVERY candidate, accept none.
+            # Deliberately not an emptied candidate list — the point of
+            # exercising this path is to see the per-candidate report the
+            # next real miss will print, and an empty list prints none.
             continue
-        rgx, rgy = resolved
-        load_region_around(port, rgx, rgy)
-        valid, _ = can_place_at(port, def_name, rgx, rgy)
-        if not valid:
-            continue
-        remote, distance, threshold = remote_check(port, def_name, rgx, rgy)
-        if remote == want_remote:
-            return gx, gy, rgx, rgy, distance, threshold
-    return None
+        if record["valid"] and record["remote"] == want_remote:
+            rgx, rgy = record["resolved"]
+            return (gx, gy, rgx, rgy, record["distance"],
+                    record["threshold"]), records
+    return None, records
+
+
+def report_candidates(label: str, records, want_remote: bool,
+                      force_miss: bool = False) -> None:
+    """Print every classified candidate under a named search."""
+    print(f"  {label}: {len(records)} candidate"
+          f"{'' if len(records) == 1 else 's'} classified"
+          + (" [--force-search-miss]" if force_miss else ""))
+    for record in records:
+        print(f"    {describe_candidate(record, want_remote, force_miss)}")
 
 
 def arm_portal_placement(port: int) -> None:
@@ -374,7 +556,17 @@ def click_at_seed(port: int, seed_gx: int, seed_gy: int, resolved_gx: int,
     return resolved == (resolved_gx, resolved_gy)
 
 
-def remote_warning_phase(port: int, cx0: int, cy0: int, shots: str) -> None:
+def remote_warning_phase(port: int, cx0: int, cy0: int, shots: str,
+                          force_search_miss: bool = False) -> None:
+    """The #779 gate, graded against the pinned fixture world.
+
+    Both bounded searches below are FIXTURE preconditions, not product
+    assertions (#2166 requirement 3): the remote-portal feature is not
+    what fails when the pinned world stops carrying a position to build
+    on. A miss is reported through `setup_check`, every candidate it
+    rejected is printed with its cause, and the phase returns before
+    grading anything — the run still exits non-zero, so a fixture that
+    quietly stopped covering this feature cannot pass unnoticed."""
     print("== remote portal warning (#779) ==")
 
     located = send_json(port, "return world.listPlacedLocations()", timeout=10.0)
@@ -387,34 +579,66 @@ def remote_warning_phase(port: int, cx0: int, cy0: int, shots: str) -> None:
         (400, 400), (900, 300), (300, 900), (1400, 1400), (1700, 500),
         (500, 1700), (100, 1200), (1200, 100), (1900, 900), (900, 1900),
     ]
-    remote_hit = find_buildable(port, PORTAL, remote_seeds, want_remote=True,
-                                 screen_x=cx0, screen_y=cy0)
-    if not check("found a valid remote buildable position", bool(remote_hit)):
+    remote_hit, remote_records = find_buildable(
+        port, PORTAL, remote_seeds, want_remote=True,
+        screen_x=cx0, screen_y=cy0, force_miss=force_search_miss)
+    report_candidates("remote search", remote_records, want_remote=True,
+                      force_miss=force_search_miss)
+    if not setup_check(
+            "the fixture world carries a valid remote buildable position",
+            bool(remote_hit),
+            f"none of the {len(remote_records)} candidate(s) above is both "
+            f"buildable and beyond the remote threshold on this world "
+            f"(seed 0x{FIXTURE['seed']}, worldSize {FIXTURE['worldSize']}, "
+            f"plateCount {FIXTURE['plateCount']}). Nothing about the "
+            f"remote-portal warning was graded — re-pin DEFAULT_SEED_HEX to a "
+            f"world that carries one rather than reading this as a #779 "
+            f"regression"):
         return
     rseed_gx, rseed_gy, rgx, rgy, rdist, rthr = remote_hit
+    FIXTURE["remote"] = f"{rgx},{rgy}"
     print(f"  remote position ({rgx},{rgy}) distance={rdist} threshold={rthr}")
 
     # -- find a valid, NON-remote position near an actual placed
     # location (needs at least one placed location to be meaningful).
-    nearby_hit = None
-    if located:
-        loc = located[0]
-        lgx, lgy = loc.get("gx", 0), loc.get("gy", 0)
-        nearby_seeds = [
-            (lgx + dx, lgy + dy)
-            for dx, dy in ((40, 0), (-40, 0), (0, 40), (0, -40),
-                           (60, 20), (-60, -20), (20, 60), (-20, -60),
-                           (90, 0), (-90, 0), (0, 90), (0, -90))
-        ]
-        nearby_hit = find_buildable(port, PORTAL, nearby_seeds, want_remote=False,
-                                     screen_x=cx0, screen_y=cy0)
-    check("world has at least one placed location", bool(located))
-    if not check("found a valid nearby (non-remote) buildable position",
-                 bool(nearby_hit)):
-        nearby_hit = None
-    if nearby_hit:
-        nseed_gx, nseed_gy, ngx, ngy, ndist, nthr = nearby_hit
-        print(f"  nearby position ({ngx},{ngy}) distance={ndist} threshold={nthr}")
+    # Both halves of that — the world having a placed location to derive
+    # candidates from, and one of the derived candidates being usable —
+    # are fixture preconditions of the same search.
+    if not setup_check(
+            "the fixture world has at least one placed location to derive "
+            "nearby candidates from", bool(located),
+            f"world.listPlacedLocations() reports no placed location on this "
+            f"world (seed 0x{FIXTURE['seed']}), so the nearby search has no "
+            f"anchor and the instant-commit half of #779 cannot be graded at "
+            f"all"):
+        return
+    loc = located[0]
+    lgx, lgy = loc.get("gx", 0), loc.get("gy", 0)
+    nearby_seeds = [
+        (lgx + dx, lgy + dy)
+        for dx, dy in ((40, 0), (-40, 0), (0, 40), (0, -40),
+                       (60, 20), (-60, -20), (20, 60), (-20, -60),
+                       (90, 0), (-90, 0), (0, 90), (0, -90))
+    ]
+    nearby_hit, nearby_records = find_buildable(
+        port, PORTAL, nearby_seeds, want_remote=False,
+        screen_x=cx0, screen_y=cy0, force_miss=force_search_miss)
+    report_candidates(f"nearby search (around the placed location at "
+                      f"{lgx},{lgy})", nearby_records, want_remote=False,
+                      force_miss=force_search_miss)
+    if not setup_check(
+            "the fixture world carries a valid nearby (non-remote) buildable "
+            "position", bool(nearby_hit),
+            f"none of the {len(nearby_records)} candidate(s) above is both "
+            f"buildable and inside the remote threshold of the placed "
+            f"location at ({lgx},{lgy}) on this world (seed "
+            f"0x{FIXTURE['seed']}). Nothing about the remote-portal warning "
+            f"was graded — re-pin DEFAULT_SEED_HEX rather than reading this "
+            f"as a #779 regression"):
+        return
+    nseed_gx, nseed_gy, ngx, ngy, ndist, nthr = nearby_hit
+    FIXTURE["nearby"] = f"{ngx},{ngy}"
+    print(f"  nearby position ({ngx},{ngy}) distance={ndist} threshold={nthr}")
 
     before = building_count(port, PORTAL)
 
@@ -488,18 +712,19 @@ def remote_warning_phase(port: int, cx0: int, cy0: int, shots: str) -> None:
     check("placement mode exited after a confirmed remote placement",
           placement_mode(port) == "off")
 
-    # -- a nearby valid position commits instantly, no modal.
-    if nearby_hit:
-        before2 = building_count(port, PORTAL)
-        arm_portal_placement(port)
-        click_at_seed(port, nseed_gx, nseed_gy, ngx, ngy, cx0, cy0)
-        time.sleep(0.5)
-        check("clicking a nearby valid position never presents the modal",
-              not find_widget(port, "Establish Here"))
-        check("clicking a nearby valid position commits instantly "
-              "(single click, no confirmation)",
-              building_count(port, PORTAL) == before2 + 1,
-              f"before={before2} after={building_count(port, PORTAL)}")
+    # -- a nearby valid position commits instantly, no modal. Reached
+    # unconditionally now: the nearby search is a fixture precondition
+    # above, so a run that gets here HAS one (#2166 requirement 3).
+    before2 = building_count(port, PORTAL)
+    arm_portal_placement(port)
+    click_at_seed(port, nseed_gx, nseed_gy, ngx, ngy, cx0, cy0)
+    time.sleep(0.5)
+    check("clicking a nearby valid position never presents the modal",
+          not find_widget(port, "Establish Here"))
+    check("clicking a nearby valid position commits instantly "
+          "(single click, no confirmation)",
+          building_count(port, PORTAL) == before2 + 1,
+          f"before={before2} after={building_count(port, PORTAL)}")
 
 
 # --------------------------------------------------------------------------
@@ -577,8 +802,11 @@ def spawn_player_unit(port: int, gx: int, gy: int, page: str = "main_world") -> 
 def location_map_icons_phase(port: int, w: int, h: int, shots: str):
     """The #781/#1230 gate: lifecycle-state zoom-map icons, verified
     through screenshots + the world.listPlacedLocations() oracle against
-    THIS run's real (unseeded) worldgen — never a hardcoded seed, map
-    coordinate, or click position.
+    THIS run's real worldgen — a PINNED world (#2166: DEFAULT_SEED_HEX
+    at the pinned size and plate count, confirmed by world.getSeed
+    before this phase is reached), but never a hardcoded map coordinate
+    or click position: which ruins exist, and where, is still whatever
+    that oracle reports on the world that was generated.
 
     Since #1230 the pre-reveal marker is the ONE shared
     location_unknown.png rather than a per-definition undiscovered
@@ -904,6 +1132,83 @@ def debug_console_load_rebind_phase(port: int) -> None:
           "the pre-load page", hud_world_id == "debug_rebind_b")
 
 
+# --------------------------------------------------------------------------
+# Pinning the fixture world through the create-world screen (#2166)
+# --------------------------------------------------------------------------
+def pin_generation_params(port: int, seed_hex: str, world_size: str,
+                          plate_count: str) -> dict:
+    """Pin seed, world size and plate count through the create-world
+    screen's OWN controls, and read back what the screen now holds.
+
+    Each value goes through the same mutation a player's keystroke or
+    click ends at — ``randbox.setValue`` on the seed control,
+    ``dropdown.selectOption`` on the world-size dropdown, and
+    ``textbox.setText`` on the advanced tab's plate-count box — so the
+    screen, its defaults, and how ``create_world/generation.lua``
+    resolves them are left exactly as shipped (#2166 out-of-scope).
+
+    Going through the plate-count TEXTBOX specifically, rather than
+    writing ``pending.plateCount``, is load-bearing: every tab is built
+    eagerly (``create_world_menu.lua``'s ``advancedTab.create``), and
+    ``generation.start`` re-reads ``advancedTab.getWidgetValues()`` over
+    ``pending`` on its first lines — a direct ``pending`` write would be
+    silently overwritten by the widget at the moment it matters.
+
+    Returns the screen's own read-back of all three."""
+    got = send_json(
+        port,
+        "local m = require('scripts.create_world_menu'); "
+        "local st = require('scripts.create_world.settings_tab'); "
+        "local adv = require('scripts.create_world.advanced_tab'); "
+        "local rb = require('scripts.ui.randbox'); "
+        "local dd = require('scripts.ui.dropdown'); "
+        "local tb = require('scripts.ui.textbox'); "
+        "if st.seedRandBoxId then "
+        f"rb.setValue(st.seedRandBoxId, '{seed_hex}') end; "
+        "if st.sizeDropdownId then "
+        "  for i, opt in ipairs(st.worldSizeOptions) do "
+        f"    if opt.value == '{world_size}' then "
+        "      dd.selectOption(st.sizeDropdownId, i) end end end; "
+        "if adv.plateCountTextBoxId then "
+        f"tb.setText(adv.plateCountTextBoxId, '{plate_count}') end; "
+        "return {seed = tostring(m.pending.seed), "
+        "        seedControl = st.seedRandBoxId "
+        "            and tostring(rb.getValue(st.seedRandBoxId)) or 'NO-CONTROL', "
+        "        worldSize = tostring(m.pending.worldSize), "
+        "        plateCount = adv.plateCountTextBoxId "
+        "            and tostring(tb.getValue(adv.plateCountTextBoxId)) "
+        "            or tostring(m.pending.plateCount)}",
+        timeout=10.0)
+    return got if isinstance(got, dict) else {}
+
+
+def resolved_gen_params(port: int) -> dict:
+    """(worldSize, plateCount) as the create-world menu FINALLY resolved
+    them — read after ``generation.start``, which writes every tab's
+    widget values back into ``pending``, so this is the pair worldgen
+    was actually handed."""
+    got = send_json(
+        port,
+        "local m = require('scripts.create_world_menu'); "
+        "return {worldSize = tostring(m.pending.worldSize), "
+        "        plateCount = tostring(m.pending.plateCount)}",
+        timeout=10.0)
+    return got if isinstance(got, dict) else {}
+
+
+def live_world_seed(port: int) -> int | None:
+    """The generated world's OWN seed, or None when it cannot be read.
+
+    This is the check that matters: it proves the pinned hex survived
+    ``generation.lua``'s ``tonumber(seed, 16)`` and reached worldgen,
+    not merely that a control read back the right text."""
+    raw = send(port, "return world.getSeed()", timeout=10.0).strip()
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
 class Engines:
     """The offscreen engines booted and not yet stopped (#1323).
 
@@ -963,6 +1268,18 @@ class Engines:
         for port in reversed(list(self._live)):
             self.stop(port)
 
+    def report_failure_context(self, emitter: FailureEmitter) -> None:
+        """Name every engine log beside the failure records (#1982).
+
+        A fixture failure and a product failure look identical in a check
+        name and different in the last few lines the engine wrote, so the
+        durable block carries a bounded tail of each launch's own log.
+        """
+        for ordinal, (phase, port, path) in enumerate(self._logs, start=1):
+            emitter.context_log(path,
+                                label=f"engine log {ordinal:02d} ({phase}, "
+                                      f"port {port})")
+
     def report_logs(self) -> None:
         """Name every log this run wrote, against the launch that wrote it."""
         if not self._logs:
@@ -980,23 +1297,52 @@ def main() -> int:
     ap.add_argument("--size", default="1280x720")
     ap.add_argument("--skip-worldgen", action="store_true",
                     help="skip the Generate World -> HUD phase (~1 min)")
+    ap.add_argument("--seed", default=DEFAULT_SEED_HEX,
+                    help="hex world seed to pin the fixture world to "
+                         f"(default {DEFAULT_SEED_HEX})")
+    ap.add_argument("--force-search-miss", action="store_true",
+                    help="classify every candidate in both bounded searches "
+                         "but accept none, to exercise the fixture/setup "
+                         "failure path end to end without editing this file")
     args = ap.parse_args()
+
+    seed_hex = args.seed.strip().upper()
+    try:
+        int(seed_hex, 16)
+    except ValueError:
+        ap.error(f"--seed must be hexadecimal (got {args.seed!r})")
+    FIXTURE["seed"] = seed_hex
+    if args.skip_worldgen:
+        FIXTURE["remote"] = TILE_SKIPPED
+        FIXTURE["nearby"] = TILE_SKIPPED
 
     w, h = (int(v) for v in args.size.lower().split("x"))
     shots = tempfile.mkdtemp(prefix="offscreen_probe_")
 
     engines = Engines()
     try:
-        return _run(args, w, h, shots, engines)
+        return _run(args, seed_hex, w, h, shots, engines)
     finally:
         engines.stop_all()
         # After stop_all, and in a `finally`, so the map survives the runs
         # that do not reach the summary at the end of `_run` — including a
         # `boot` that exits before its engine ever printed READY.
         engines.report_logs()
+        # Durable failure records, in the runner's own shared vocabulary
+        # (#1982): `setup` for a fixture that stopped fitting, `check` for
+        # a product assertion. Emitted here rather than at the end of
+        # `_run` so a run that died mid-phase still names what it had
+        # already failed.
+        if failures or setup_failures:
+            FAILURE.report(failures, setup_failures)
+            engines.report_failure_context(FAILURE)
+        # Same reason (#2166 requirement 4): EVERY run says which world it
+        # was grading, including one that died before reaching a verdict.
+        print_fixture()
 
 
-def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
+def _run(args, seed_hex: str, w: int, h: int, shots: str,
+         engines: Engines) -> int:
     print(f"== offscreen boot (port {args.port}, {args.size}) ==")
     engines.start(args.port, phase="main session (menu, worldgen, gameplay)",
                   mode=("--offscreen",),
@@ -1030,6 +1376,27 @@ def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
     if check("second screenshot answers", screenshot(args.port, shot_create)):
         check("create-world frame differs from menu frame",
               png_differs(shot_menu, shot_create))
+
+    # -- pin the fixture world (#2166) BEFORE anything is generated.
+    # Left alone this screen rolls a fresh random seed on every visit,
+    # which made phases 6 and 7 a per-run coin flip. Done here, after
+    # the frame comparison just above, so pinning cannot perturb what
+    # that comparison measures.
+    pinned = pin_generation_params(args.port, seed_hex, DEFAULT_WORLD_SIZE,
+                                   DEFAULT_PLATE_COUNT)
+    for field, want in (("seed", seed_hex),
+                        ("seedControl", seed_hex),
+                        ("worldSize", DEFAULT_WORLD_SIZE),
+                        ("plateCount", DEFAULT_PLATE_COUNT)):
+        setup_check(
+            f"create-world screen pinned: {field} = {want}",
+            pinned.get(field) == want,
+            f"the create-world screen reads {field}={pinned.get(field)!r}, "
+            f"not the pinned {want!r}. Without every one of these the "
+            f"generated world is not the fixture and nothing graded against "
+            f"it means what it says")
+    FIXTURE["worldSize"] = pinned.get("worldSize", DEFAULT_WORLD_SIZE)
+    FIXTURE["plateCount"] = pinned.get("plateCount", DEFAULT_PLATE_COUNT)
 
     # -- 4. parallel instances: a second engine while the first runs.
     # Both engines are up at once, so `--port` is a BASE reserving two
@@ -1077,12 +1444,59 @@ def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
         got = send_json(args.port, "return world.getChunkInfo(0, 0)", timeout=10.0)
         check("world query answers in-game", isinstance(got, dict))
 
-        # -- 6. remote portal warning (#779), against this same world.
-        remote_warning_phase(args.port, w // 2, h // 2, shots)
+        # -- the world that came out is the world that was pinned. Read
+        # from the live page rather than from the menu, so this proves
+        # the hex survived generation.lua's tonumber(seed, 16) and
+        # reached worldgen. The size/plate pair is re-read here too:
+        # generation.start rewrites `pending` from every tab's widgets on
+        # its first lines, so the values it actually generated with are
+        # only knowable afterwards.
+        resolved = resolved_gen_params(args.port)
+        FIXTURE["worldSize"] = resolved.get("worldSize", FIXTURE["worldSize"])
+        FIXTURE["plateCount"] = resolved.get("plateCount", FIXTURE["plateCount"])
+        want_seed = int(seed_hex, 16)
+        live_seed = live_world_seed(args.port)
+        seed_pinned = setup_check(
+            f"the generated world carries the pinned seed {want_seed} "
+            f"(0x{seed_hex})",
+            live_seed == want_seed,
+            f"world.getSeed() reports "
+            f"{'nothing readable' if live_seed is None else live_seed}, not "
+            f"the pinned {want_seed}. The world in front of the portal and "
+            f"icon phases is not the fixture they were verified against, so "
+            f"grading them here would report on the wrong world")
+        if not seed_pinned:
+            # The identity line has to name the world that was actually
+            # generated, not the one that was asked for — an identity
+            # that reports the request would make two runs on two
+            # different worlds compare as the same fixture.
+            actual = "UNREADABLE" if live_seed is None else f"{live_seed:08X}"
+            FIXTURE["seed"] = f"{actual}(NOT-THE-PINNED-{seed_hex})"
+        size_pinned = setup_check(
+            f"the generated world used the pinned worldSize "
+            f"{DEFAULT_WORLD_SIZE} / plateCount {DEFAULT_PLATE_COUNT}",
+            resolved.get("worldSize") == DEFAULT_WORLD_SIZE
+            and resolved.get("plateCount") == DEFAULT_PLATE_COUNT,
+            f"generation resolved worldSize={resolved.get('worldSize')!r} "
+            f"plateCount={resolved.get('plateCount')!r}, not the pinned pair. "
+            f"The same seed at a different size or plate count is a "
+            f"different world")
+        world_is_pinned = seed_pinned and size_pinned
 
+        # -- 6. remote portal warning (#779), against this same world.
         # -- 7. location discovery-state map icons (#781), against this
         # same world.
-        icon_target = location_map_icons_phase(args.port, w, h, shots)
+        # Both are skipped outright when the world is not the pinned one:
+        # a verdict from either would be a verdict about some other
+        # world. The run still exits non-zero on the setup failure above.
+        icon_target = None
+        if world_is_pinned:
+            remote_warning_phase(args.port, w // 2, h // 2, shots,
+                                 force_search_miss=args.force_search_miss)
+            icon_target = location_map_icons_phase(args.port, w, h, shots)
+        else:
+            print("== portal + icon phases SKIPPED (the generated world is "
+                  "not the pinned fixture) ==")
 
         # -- 8. debug-console engine.loadSave while gameplay is already
         # open rebinds worldManager/hud, not just world.getActiveWorldId()
@@ -1107,8 +1521,19 @@ def _run(args, w: int, h: int, shots: str, engines: Engines) -> int:
         engines.stop(args.port)
 
     print(f"\nscreenshots kept in {shots}")
-    if failures:
-        print(f"offscreen_probe: {failures} check(s) FAILED")
+    print_fixture()
+    # Both totals, always, and separately (#2166 requirement 3): a
+    # fixture that stopped fitting and a product regression are
+    # different problems with different repairs, and a reader who sees
+    # only "N checks FAILED" cannot tell which one this run found.
+    print(f"offscreen_probe: {len(failures)} product assertion(s) failed, "
+          f"{len(setup_failures)} fixture/setup precondition(s) failed")
+    if setup_failures:
+        print("offscreen_probe: FIXTURE/SETUP FAILURE — the pinned world no "
+              "longer carries what a phase needs; re-pin DEFAULT_SEED_HEX "
+              "(or pass --seed) rather than reading this as a product "
+              "regression")
+    if failures or setup_failures:
         return 1
     print("offscreen_probe: all checks passed")
     return 0
