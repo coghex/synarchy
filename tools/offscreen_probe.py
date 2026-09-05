@@ -802,8 +802,11 @@ def spawn_player_unit(port: int, gx: int, gy: int, page: str = "main_world") -> 
 def location_map_icons_phase(port: int, w: int, h: int, shots: str):
     """The #781/#1230 gate: lifecycle-state zoom-map icons, verified
     through screenshots + the world.listPlacedLocations() oracle against
-    THIS run's real (unseeded) worldgen — never a hardcoded seed, map
-    coordinate, or click position.
+    THIS run's real worldgen — a PINNED world (#2166: DEFAULT_SEED_HEX
+    at the pinned size and plate count, confirmed by world.getSeed
+    before this phase is reached), but never a hardcoded map coordinate
+    or click position: which ruins exist, and where, is still whatever
+    that oracle reports on the world that was generated.
 
     Since #1230 the pre-reveal marker is the ONE shared
     location_unknown.png rather than a per-definition undiscovered
