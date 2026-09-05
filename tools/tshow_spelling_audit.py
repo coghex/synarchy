@@ -464,6 +464,44 @@ _TRANSPARENT_CLOSE = re.compile(r"[\s\x00]*\)")
 _SECTION_SCANNABLE = frozenset(".∘$!")
 
 
+# Haskell 2010 SS2.4's reserved words. One of these before an
+# expression is a keyword introducing it, not a function applying to
+# it: `let … in T.pack (show x)` and `if p then T.pack (show x)` are
+# both standalone wrappers, and reading `in`/`then` as an applicand
+# hid them.
+RESERVED_WORDS = frozenset({
+    "case", "class", "data", "default", "deriving", "do", "else",
+    "foreign", "if", "import", "in", "infix", "infixl", "infixr",
+    "instance", "let", "module", "newtype", "of", "then", "type",
+    "where", "_"})
+
+
+def _read_ident(text: str, pos: int) -> tuple[str, int] | None:
+    """`(lexeme, offset just past it)` for the identifier at `pos`, or
+    `None`.
+
+    Read with `is_haskell_ident_char`, so a combining mark stays inside
+    the name -- which is the whole reason this exists rather than a
+    `\\w` class (PR #2404 review rounds 9 and 18)."""
+    n = len(text)
+    if pos >= n or not is_haskell_ident_char(text[pos]):
+        return None
+    i = pos
+    while i < n and is_haskell_ident_char(text[i]):
+        i += 1
+    return text[pos:i], i
+
+
+def _ident_ending_at(text: str, pos: int) -> str:
+    """The identifier lexeme ending just past `pos`, or `""`."""
+    if pos < 0 or not is_haskell_ident_char(text[pos]):
+        return ""
+    start = pos
+    while start > 0 and is_haskell_ident_char(text[start - 1]):
+        start -= 1
+    return text[start:pos + 1]
+
+
 def _in_function_position(text: str, pos: int) -> bool:
     """True if nothing is being APPLIED to the expression starting at
     `pos` -- that is, the character before it is not something an
@@ -473,12 +511,19 @@ def _in_function_position(text: str, pos: int) -> bool:
     hands `f` two independent arguments and is not a section applied to
     the packer at all (PR #2404 review round 12). The same test decides
     whether a prefix operator is being applied or is itself an
-    argument."""
+    argument.
+
+    A RESERVED WORD before the expression introduces it rather than
+    applying to it, so `let … in T.pack (show x)` and
+    `if p then T.pack (show x)` are standalone."""
     i = pos - 1
     while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
         i -= 1
-    return not (i >= 0 and (is_haskell_ident_char(text[i])
-                            or text[i] in _APPLICAND_TAIL))
+    if i < 0:
+        return True
+    if is_haskell_ident_char(text[i]):
+        return _ident_ending_at(text, i) in RESERVED_WORDS
+    return text[i] not in _APPLICAND_TAIL
 
 
 # A connector written in PREFIX form: `(.) pack show` is `pack . show`
@@ -607,9 +652,10 @@ class _ShadowedShowError(_UnscannableSource):
     a file that binds the name at all is refused rather than guessed at
     -- the same treatment `_UnqualifiedImportError` gives a bare `pack`.
 
-    The binding shapes recognized are a TOP-LEVEL equation head
-    (`show … =` at column zero), a `let`/`where`-introduced binding, a
-    lambda parameter and a `do` binder. An `instance Show … where`
+    The binding shapes recognized are an equation head (`show … =`) at
+    any column, a `let`/`where`-introduced binding, a lambda parameter
+    and a `do` binder, with every identifier in them read by
+    `is_haskell_ident_char` so a combining mark cannot end one early. An `instance Show … where`
     method definition is none of those -- it IS the method -- and is
     excluded by both the column-zero anchor and `_opens_method_block`. A `show` bound by a TUPLE or constructor PATTERN is not
     recognized, and cannot be without a parser: `(show, y) = …` and
@@ -1097,47 +1143,15 @@ def check_uprelude_premise(uprelude_source: str) -> None:
 # shadows `Prelude`'s, and then `pack (show x)` is not this wrapper.
 SHOW = "show"
 
-# `show` as a TOP-LEVEL equation head: the name at column zero,
-# optional parameters that are plain identifiers, then a maximal `=`.
-# Column zero is the point: an INDENTED `show f = …` is an `instance
-# Show … where` method, which IS the `Show` method and shadows nothing.
-#
-# `==`, `=>` and `=<<` are longer symbol lexemes and do not match. No
-# fixture claims an independent failure mode for that, and deliberately
-# so: layout puts every continuation line at a deeper column, so a
-# column-zero declaration beginning `show <params>` can only continue
-# with `=` or `::`, and `show x == y` is not a declaration at all. The
-# rule is here because it is what an equation head means.
-_SHOW_EQUATION = re.compile(
-    r"^" + SHOW + r"(?![\w'])(?:[ \t\x00]+[^\W\d]\w*)*"
-    r"[ \t\x00]*=(?![!#$%&*+./<=>?@\\^|~:-])", re.MULTILINE)
-# `show <- …`, a `do` binder.
-_SHOW_DO_BIND = re.compile(
-    r"(?<![\w'])" + SHOW + r"(?![\w'])[\s\x00]*<-(?![!#$%&*+./<=>?@\\^|~:-])")
-# `\show ->` / `\x show ->`, a lambda parameter.
-# Every repetition below consumes at least one character, so the
-# nested quantifiers cannot match empty and backtrack exponentially --
-# which the first draft of this pattern did, hanging the whole audit.
-_SHOW_LAMBDA = re.compile(
-    r"\\[\s\x00]*(?:[^\W\d]\w*[\s\x00]+)*" + SHOW + r"(?![\w'])"
-    r"[\s\x00]*(?:[^\W\d]\w*[\s\x00]*)*(?:->|→)")
-# `let show` / `where show`, whatever follows. The `where` of an
-# `instance`/`class` declaration is excluded by `_opens_method_block`:
-# its `show` is the method, not a shadow of it.
-_SHOW_LOCAL_KEYWORD = re.compile(
-    r"(?<![\w'])(?P<keyword>let|where)(?![\w'])[\s\x00{;]*"
-    + SHOW + r"(?![\w'])")
-
-# No `^`: this is used with `.match(text, line_start)`, which already
-# anchors at that offset, and a `^` there would anchor at the start of
-# the FILE instead.
+_LINE_INDENT = re.compile(r"^[ \t\x00]*", re.MULTILINE)
+_HORIZONTAL_GAP = re.compile(r"[ \t\x00]*")
 _METHOD_BLOCK_HEAD = re.compile(r"(?:instance|class)(?![\w'])")
 
 
 def _opens_method_block(text: str, pos: int) -> bool:
-    """True if the `where` at `pos` closes an `instance` or `class`
-    declaration, whose `show` is the `Show` METHOD rather than a local
-    binding shadowing it.
+    """True if the declaration containing `pos` belongs to an
+    `instance` or `class` block, whose `show` is the `Show` METHOD
+    rather than a local binding shadowing it.
 
     Decided by the nearest preceding COLUMN-ZERO line, which is where a
     Haskell top-level declaration begins; an `instance … where` head may
@@ -1150,24 +1164,133 @@ def _opens_method_block(text: str, pos: int) -> bool:
     return _METHOD_BLOCK_HEAD.match(text, line_start) is not None
 
 
-_SHOW_BINDERS = (("a top-level equation head", _SHOW_EQUATION),
-                 ("a `do` binder", _SHOW_DO_BIND),
-                 ("a lambda parameter", _SHOW_LAMBDA),
-                 ("a `let`/`where` binding", _SHOW_LOCAL_KEYWORD))
+def _reads_maximal(text: str, pos: int, lexeme: str) -> bool:
+    """True if the maximal symbol run at `pos` is exactly `lexeme`, so
+    `==`, `=>` and `=<<` are not `=`."""
+    run = pos
+    while run < len(text) and _is_symbol_char(text[run]):
+        run += 1
+    return text[pos:run] == lexeme
+
+
+def _read_parameters(text: str, pos: int) -> tuple[list[str], int]:
+    """`(identifier parameters, offset past them)` from `pos`, separated
+    by horizontal whitespace.
+
+    Identifiers are read with `_read_ident`, so a parameter carrying a
+    combining mark (`show π́ = …`) does not end the run early and leave
+    the binding unrecognised (PR #2404 review round 18). The names are
+    returned because a PARAMETER called `show` binds it just as a head
+    of that name does: `f show x = … ` shadows the method inside `f`."""
+    names: list[str] = []
+    i = pos
+    while True:
+        gap = _HORIZONTAL_GAP.match(text, i).end()
+        parameter = _read_ident(text, gap)
+        if parameter is None:
+            return names, gap
+        names.append(parameter[0])
+        i = parameter[1]
+
+
+def _show_equation_binding(prepared: str) -> int | None:
+    """Where an equation binds `show` -- as its HEAD or as one of its
+    PARAMETERS, at ANY column, so a `let`/`where` block's second binding
+    counts as much as a top-level one -- or `None`.
+
+    An `instance`/`class` method definition is excluded: it IS the
+    method. That exclusion is what the column matters for, and it is
+    made by `_opens_method_block` rather than by requiring column
+    zero, which missed every indented local binding."""
+    for indent in _LINE_INDENT.finditer(prepared):
+        start = indent.end()
+        name = _read_ident(prepared, start)
+        if name is None:
+            continue
+        parameters, after = _read_parameters(prepared, name[1])
+        if name[0] != SHOW and SHOW not in parameters:
+            continue
+        if not _reads_maximal(prepared, after, "="):
+            continue
+        if (name[0] == SHOW and start > indent.start()
+                and _opens_method_block(prepared, start)):
+            continue
+        return start
+    return None
+
+
+def _show_keyword_binding(prepared: str) -> int | None:
+    """Where a `let` or `where` on the SAME LINE introduces `show`, or
+    `None` -- `f x = let show _ = "c" in …`, which starts no line of
+    its own."""
+    for found in re.finditer(r"(?<![\w'])(?P<keyword>let|where)(?![\w'])",
+                             prepared):
+        cursor = found.end()
+        while cursor < len(prepared) and prepared[cursor] in " \t\x00{;":
+            cursor += 1
+        name = _read_ident(prepared, cursor)
+        if name is None or name[0] != SHOW:
+            continue
+        if (found.group("keyword") == "where"
+                and _opens_method_block(prepared, found.start())):
+            continue
+        return found.start()
+    return None
+
+
+def _show_lambda_binding(prepared: str) -> int | None:
+    """Where a lambda binds `show` as a parameter, or `None`.
+
+    No fixture claims an independent failure mode for the closing
+    `->`/`→`, and deliberately so: the parameter run only reports
+    `binds` when it read the lexeme `show` as a parameter, and a `\\`
+    whose run reaches that lexeme in some LATER declaration is reading
+    an equation head or parameter that `_show_equation_binding` already
+    refuses. The arrow is here because it is what makes the construct a
+    lambda -- the same reasoning as `_PACK_LEXEME`'s boundary test."""
+    for found in re.finditer(r"\\", prepared):
+        i, binds = found.end(), False
+        while True:
+            gap = _GAP.match(prepared, i).end()
+            parameter = _read_ident(prepared, gap)
+            if parameter is None:
+                i = gap
+                break
+            binds = binds or parameter[0] == SHOW
+            i = parameter[1]
+        if binds and (_reads_maximal(prepared, i, "->")
+                      or _reads_maximal(prepared, i, "→")):
+            return found.start()
+    return None
+
+
+def _show_do_binding(prepared: str) -> int | None:
+    """Where a `do` statement binds `show`, or `None`."""
+    for found in re.finditer(SHOW, prepared):
+        start, end = found.start(), found.end()
+        if start > 0 and is_haskell_ident_char(prepared[start - 1]):
+            continue
+        if end < len(prepared) and is_haskell_ident_char(prepared[end]):
+            continue
+        if _reads_maximal(prepared, _GAP.match(prepared, end).end(), "<-"):
+            return start
+    return None
+
+
+_SHOW_BINDERS = (("an equation head", _show_equation_binding),
+                 ("a `let`/`where` binding", _show_keyword_binding),
+                 ("a lambda parameter", _show_lambda_binding),
+                 ("a `do` binder", _show_do_binding))
 
 
 def _refuse_shadowed_show(prepared: str, rel_path: str) -> None:
     """Raise `_ShadowedShowError` if `prepared` binds `show`."""
-    for shape, pattern in _SHOW_BINDERS:
-        for found in pattern.finditer(prepared):
-            if (found.groupdict().get("keyword") == "where"
-                    and _opens_method_block(prepared, found.start())):
-                continue
-            break
-        else:
+    for shape, detect in _SHOW_BINDERS:
+        found = detect(prepared)
+        if found is None:
             continue
         raise _ShadowedShowError(
-            f"{rel_path}:{_line_of(prepared, found.start())}: this file "
+            f"{rel_path}:{_line_of(prepared, found)}: this file "
             f"binds `{SHOW}` as {shape}, shadowing the `Show` method.\n\n"
             f"tools/tshow_spelling_audit.py reads a bare `{SHOW}` as that "
             f"method, and `{CANONICAL}` is defined in terms of it, so a "
@@ -1668,6 +1791,31 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n" + _T
         + "f x = T.pack {- why -} (show x)\n",
         [3],
+    ),
+    (
+        "`show x == y` is an expression, not an equation head: the "
+        "`=` must be a MAXIMAL symbol lexeme, or the line reads as a "
+        "binding and the file is refused",
+        "module M where\n" + _T
+        + "f x y =\n"
+        "  show x == y\n"
+        "g x = T.pack (show x)\n",
+        [5],
+    ),
+    (
+        "a RESERVED WORD before the wrapper introduces it rather than "
+        "applying to it: `let … in T.pack (show x)` is standalone "
+        "(PR #2404 review round 18)",
+        "module M where\n" + _T
+        + "f x = let y = 1 in T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "and so do `then` and `of`",
+        "module M where\n" + _T
+        + "f p x = if p then T.pack (show x) else t\n"
+        "g x = case x of _ -> T.pack (show x)\n",
+        [3, 4],
     ),
     (
         "a wrapper that is the RIGHT OPERAND of a masked multi-dash "
@@ -2603,6 +2751,38 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str, type[_UnscannableSource]]] = [
         "module M where\n" + _T
         + 'show _ = "c"\n'
         "g x = T.pack (show x)\n",
+        _ShadowedShowError,
+    ),
+    (
+        "a lambda parameter carrying a COMBINING MARK beside it: a "
+        "binder identifier read with a narrower class ends early and "
+        "leaves the binding unrecognised (PR #2404 review round 18)",
+        "module M where\n" + _T
+        + "f = \\\\π́ show -> T.pack (show 1)\n",
+        _ShadowedShowError,
+    ),
+    (
+        "an equation PARAMETER named `show` binds it inside that "
+        "equation just as a head of that name would",
+        "module M where\n" + _T
+        + "f show x = T.pack (show x)\n",
+        _ShadowedShowError,
+    ),
+    (
+        "an equation head whose PARAMETER carries one",
+        "module M where\n" + _T
+        + 'show π́ = "c"\n'
+        "g x = T.pack (show x)\n",
+        _ShadowedShowError,
+    ),
+    (
+        "a `let` block whose `show` binding is not the FIRST one: an "
+        "equation head is recognised at any column, so an indented "
+        "local binding counts like a top-level one",
+        "module M where\n" + _T
+        + "f x = let y = 1\n"
+        '          show _ = "c"\n'
+        "      in T.pack (show x)\n",
         _ShadowedShowError,
     ),
     (
