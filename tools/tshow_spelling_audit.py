@@ -380,12 +380,19 @@ def _read_connector(text: str, pos: int,
 _TRANSPARENT_OPEN_RUN = re.compile(r"(?:[\s\x00]*\()*[\s\x00]*")
 
 
-# The modules whose `show` is the `Show` METHOD. `UPrelude` re-exports
-# `module Prelude`, which is where every bare `show` in this tree comes
-# from. A qualifier naming anything else is somebody's own formatter:
-# `Custom.show` is not this method, and rewriting a wrapper around it to
-# `tshow` would change behaviour (PR #2404 review round 16).
-SHOW_MODULES = frozenset({"Prelude", "UPrelude"})
+# The modules whose `show` is the `Show` METHOD. `GHC.Show` is where
+# `base` defines the class, `Text.Show` and `Prelude` re-export it, and
+# `UPrelude` re-exports `module Prelude` -- which is where every bare
+# `show` in this tree comes from.
+#
+# A qualifier naming anything else is not resolved either way: it may be
+# somebody's own formatter, whose wrapper is NOT `tshow` and must not be
+# reported (PR #2404 review round 16), or another re-exporter of the
+# method, whose wrapper IS and must not be missed (round 17). Telling
+# those apart means reading the other module, so the file is REFUSED --
+# which closes the question rather than guessing it one module at a
+# time.
+SHOW_MODULES = frozenset({"Prelude", "UPrelude", "GHC.Show", "Text.Show"})
 
 
 def _names_show(text: str, pos: int,
@@ -408,8 +415,25 @@ def _names_show(text: str, pos: int,
         return False
     if not qualifier:
         return True
-    return (_is_module_path(qualifier)
-            and bool(qualifiers.get(qualifier, frozenset()) & SHOW_MODULES))
+    if not _is_module_path(qualifier):
+        # A lowercase prefix is a record selector, not a qualifier.
+        return False
+    named = qualifiers.get(qualifier, frozenset())
+    if named & SHOW_MODULES:
+        return True
+    raise _UnresolvedShowError(
+        f"a wrapper here renders through `{qualifier}.{SHOW}`, and "
+        f"`{qualifier}` names "
+        + (f"{', '.join(sorted(named))}" if named else "no module this "
+           "file imports")
+        + f".\n\ntools/tshow_spelling_audit.py resolves `{SHOW}` to the "
+        f"`Show` method, which {', '.join(sorted(SHOW_MODULES))} export. "
+        f"A `{SHOW}` from anywhere else may be an unrelated formatter -- "
+        f"whose wrapper is NOT `{CANONICAL}` -- or another re-export of "
+        f"the method -- whose wrapper is. Deciding needs that module's "
+        f"exports, which this audit does not read.\n\nQualify it by one "
+        f"of those modules, or record this file in EXEMPTIONS with the "
+        f"reason it is safe.")
 
 # A closing parenthesis, and whatever whitespace precedes it, between
 # `pack` and the connector after it. Consumed only as many times as
@@ -593,6 +617,18 @@ class _ShadowedShowError(_UnscannableSource):
     false POSITIVE on code that shadows `show` that way -- loud, and
     `EXEMPTIONS` is the recorded escape -- never a silent pass on a
     wrapper."""
+
+
+class _UnresolvedShowError(_UnscannableSource):
+    """A wrapper whose `show` is qualified by a module this cannot
+    resolve.
+
+    `T.pack (C.show x)` is `tshow` when `C` names a module re-exporting
+    the `Show` method and is something else entirely when `C` names a
+    formatter of its own. Deciding needs that module's exports, which
+    this audit does not read, so it refuses rather than guessing --
+    guessing either way is a defect (PR #2404 review rounds 16 and
+    17)."""
 
 
 class _PremiseError(_UnscannableSource):
@@ -1188,6 +1224,8 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
 
     violations: list[Violation] = []
     for match in _PACK_LEXEME.finditer(scan_text):
+        # A `show` this cannot resolve is reported against the line the
+        # wrapper sits on, not against the whole file.
         # A maximal identifier LEXEME, decided by the predicate rather
         # than a `\w` class: `unpack` and `pack'` are different names,
         # and so is a `pack` carrying a combining mark.
@@ -1639,6 +1677,21 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n" + _T
         + "f x = x --> T.pack (show x)\n",
         [3],
+    ),
+    (
+        "`GHC.Show` is where `base` DEFINES the class, so a `show` "
+        "qualified by it is the same method (PR #2404 review round 17)",
+        "module M where\n" + _T
+        + "import qualified GHC.Show as S\n"
+        "f x = T.pack (S.show x)\n",
+        [4],
+    ),
+    (
+        "and `Text.Show` re-exports it",
+        "module M where\n" + _T
+        + "import qualified Text.Show as S\n"
+        "f x = T.pack (S.show x)\n",
+        [4],
     ),
     (
         "`UPrelude` re-exports `module Prelude`, so a `show` qualified "
@@ -2269,14 +2322,6 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "s = [fn| g |] (T.pack) . show\n",
     ),
     (
-        "a qualified `show` from an unrelated module is not the `Show` "
-        "method: `Custom.show` may format differently, so rewriting a "
-        "wrapper around it would change behaviour",
-        "module M where\n" + _T
-        + "import qualified Custom as C\n"
-        "f x = T.pack (C.show x)\n",
-    ),
-    (
         "a section in ARGUMENT position is not applied to what follows "
         "it: application is left-associative, so `f (. show) T.pack` "
         "hands `f` two independent arguments (PR #2404 review round 12)",
@@ -2519,6 +2564,23 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str, type[_UnscannableSource]]] = [
         "#include \"aliases.h\"\n" + _T
         + "f x = tshow x\n",
         _PreprocessorError,
+    ),
+    (
+        "a `show` qualified by a module this cannot read: `Custom.show` "
+        "may be an unrelated formatter -- whose wrapper is NOT `tshow` "
+        "-- or another re-export of the method -- whose wrapper is. "
+        "Guessing either way is a defect, so it refuses (PR #2404 "
+        "review rounds 16 and 17)",
+        "module M where\n" + _T
+        + "import qualified Custom as C\n"
+        "f x = T.pack (C.show x)\n",
+        _UnresolvedShowError,
+    ),
+    (
+        "and one qualified by a module the file does not import at all",
+        "module M where\n" + _T
+        + "f x = T.pack (C.show x)\n",
+        _UnresolvedShowError,
     ),
     (
         "a `let`-bound `show`: valid, not this wrapper, and rewriting "
