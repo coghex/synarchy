@@ -8,7 +8,8 @@ worldgen; the arena has no flora), then checks:
      world.getFloraAt reports it with a 'wood' tag and no live
      regrowth timer (its 'harvestable' flag is the FORAGE signal,
      gated on the #332 growth window — the chop path keys on
-     tags + regrowthRemaining instead); a BARE findHarvestableFlora
+     tags + the species' authored `ungated_tags:` exemption (#2212)
+     + regrowthRemaining instead); a BARE findHarvestableFlora
      (the foraging AI's food search) does NOT return the tree tile —
      wood yields are inedible, so the #97 tag split must keep hungry
      units from felling oaks for dinner.

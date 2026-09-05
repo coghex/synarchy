@@ -128,7 +128,8 @@ catalog =
     -- construction. The erase cases below depend on it still being on
     -- screen.
     harvest tags = FloraHarvest
-        { fhTags = tags, fhYield = [], fhRegrowth = 86400
+        { fhTags = tags, fhUngatedTags = []
+        , fhYield = [], fhPhaseYields = HM.empty, fhRegrowth = 86400
         , fhHarvestedTexture = shrubTex }
 
 instanceId ∷ Int → FloraInstanceId
