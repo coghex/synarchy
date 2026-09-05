@@ -298,9 +298,10 @@ def _read_module_path(text: str, pos: int) -> tuple[str, int] | None:
     return (".".join(segments), i) if segments else None
 
 
-def _established_qualifiers(prepared: str) -> frozenset[str]:
-    """Every module qualifier the file's imports establish -- the `as`
-    alias where there is one, otherwise the module's own name.
+def _established_qualifiers(prepared: str) -> dict[str, frozenset[str]]:
+    """Every module qualifier the file's imports establish, mapped to
+    the module names it can denote -- the `as` alias where there is
+    one, and the module's own name either way.
 
     This reads the import heads itself rather than taking
     `parse_imports`' aliases, because that resolver's alias grammar is
@@ -309,7 +310,7 @@ def _established_qualifiers(prepared: str) -> frozenset[str]:
     went unread (PR #2404 review round 14). Only the QUALIFIER is taken
     from here; `pack` itself is still resolved by the shared resolver,
     which refuses a `Data.Text` import it cannot read."""
-    qualifiers: set[str] = set()
+    qualifiers: dict[str, set[str]] = {}
     for chunk in _import_chunks(prepared):
         i = _IMPORT_HEAD.match(chunk)
         if i is None:
@@ -322,7 +323,7 @@ def _established_qualifiers(prepared: str) -> frozenset[str]:
         if module is None:
             continue
         name, j = module
-        qualifiers.add(name)
+        qualifiers.setdefault(name, set()).add(name)
         j = _GAP.match(chunk, j).end()
         post = _QUALIFIED_KEYWORD.match(chunk, j)
         if post is not None:
@@ -332,8 +333,8 @@ def _established_qualifiers(prepared: str) -> frozenset[str]:
             continue
         alias = _read_module_path(chunk, _GAP.match(chunk, alias_at.end()).end())
         if alias is not None:
-            qualifiers.add(alias[0])
-    return frozenset(qualifiers)
+            qualifiers.setdefault(alias[0], set()).add(name)
+    return {q: frozenset(m) for q, m in qualifiers.items()}
 
 
 def _read_connector(text: str, pos: int,
@@ -379,9 +380,18 @@ def _read_connector(text: str, pos: int,
 _TRANSPARENT_OPEN_RUN = re.compile(r"(?:[\s\x00]*\()*[\s\x00]*")
 
 
-def _names_show(text: str, pos: int) -> bool:
-    """True if the lexeme at `pos` is `show`, bare or qualified by a
-    real module path.
+# The modules whose `show` is the `Show` METHOD. `UPrelude` re-exports
+# `module Prelude`, which is where every bare `show` in this tree comes
+# from. A qualifier naming anything else is somebody's own formatter:
+# `Custom.show` is not this method, and rewriting a wrapper around it to
+# `tshow` would change behaviour (PR #2404 review round 16).
+SHOW_MODULES = frozenset({"Prelude", "UPrelude"})
+
+
+def _names_show(text: str, pos: int,
+                qualifiers: dict[str, frozenset[str]]) -> bool:
+    """True if the lexeme at `pos` is the `Show` method `show` -- bare,
+    or qualified by a module that exports it.
 
     Read character by character with `is_haskell_ident_char` rather than
     by a regex class: a module alias may carry a combining mark
@@ -394,7 +404,12 @@ def _names_show(text: str, pos: int) -> bool:
         i += 1
     lexeme = text[pos:i]
     qualifier, _, head = lexeme.rpartition(".")
-    return head == "show" and (not qualifier or _is_module_path(qualifier))
+    if head != SHOW:
+        return False
+    if not qualifier:
+        return True
+    return (_is_module_path(qualifier)
+            and bool(qualifiers.get(qualifier, frozenset()) & SHOW_MODULES))
 
 # A closing parenthesis, and whatever whitespace precedes it, between
 # `pack` and the connector after it. Consumed only as many times as
@@ -448,7 +463,7 @@ def _in_function_position(text: str, pos: int) -> bool:
 # 12). The operator itself must be in function position, or
 # `g (.) pack show` -- three arguments to `g` -- would read as one.
 def _prefix_operator_before(text: str, pos: int,
-                            qualifiers: frozenset[str]
+                            qualifiers: dict[str, frozenset[str]]
                             ) -> tuple[str, int] | None:
     """`(form, offset of the prefix operator's own `(`)` for the
     prefix-spelled connector applied immediately before `pos`, or
@@ -477,14 +492,14 @@ def _prefix_operator_before(text: str, pos: int,
     if start < 0 or not _in_function_position(text, start):
         return None
     inner = text[start + 1:i]
-    read = _read_connector(inner, 0, qualifiers)
+    read = _read_connector(inner, 0, frozenset(qualifiers))
     if read is None or read[1] != len(inner):
         return None
     return read[0], start
 
 
 def _right_section_before(text: str, pos: int,
-                          qualifiers: frozenset[str]) -> bool:
+                          qualifiers: dict[str, frozenset[str]]) -> bool:
     """True if a right section applying `show` sits immediately before
     `pos` IN FUNCTION POSITION -- `(. show)` or `($ show …)`, whose
     operand is therefore the expression at `pos`.
@@ -505,10 +520,12 @@ def _right_section_before(text: str, pos: int,
     if j < 0 or text[j] != "(" or not _in_function_position(text, j):
         return False
     content = text[j + 1:i]
-    head = _read_connector(content, _GAP.match(content, 0).end(), qualifiers)
+    head = _read_connector(content, _GAP.match(content, 0).end(),
+                           frozenset(qualifiers))
     if head is None:
         return False
-    return _names_show(content, _GAP.match(content, head[1]).end())
+    return _names_show(content, _GAP.match(content, head[1]).end(),
+                       qualifiers)
 
 
 _FORM_NAMES = {
@@ -595,14 +612,23 @@ class Violation:
                 f"-- use `{CANONICAL}`")
 
 
-def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
-    """Blank `[start, end)` spans to `\\x00`, one byte for one byte, so
-    every other position -- and every line number -- stays valid."""
+def _mask_spans(text: str, spans: list[tuple[int, int, str]]) -> str:
+    """Blank each `[start, end)` span to its own fill character, one
+    for one, so every other position -- and every line number -- stays
+    valid.
+
+    The fill is part of what the span MEANS. A comment or a quasiquote
+    is transparent, so it becomes `\\x00`, which every gap here treats as
+    whitespace. A masked multi-dash OPERATOR is not transparent -- it
+    separates two operands, and reading through it would make the right
+    one look like an argument of the left (PR #2404 review round 16) --
+    so it becomes `+`, an ASCII symbol character that is not one of the
+    connectors."""
     out = list(text)
-    for start, end in spans:
+    for start, end, fill in spans:
         for i in range(start, end):
             if out[i] != "\n":
-                out[i] = "\x00"
+                out[i] = fill
     return "".join(out)
 
 
@@ -764,7 +790,7 @@ def _is_symbol_char(char: str) -> bool:
     return unicodedata.category(char)[0] in "SP"
 
 
-def _premasked_spans(text: str) -> list[tuple[int, int]]:
+def _premasked_spans(text: str) -> list[tuple[int, int, str]]:
     """The `[start, end)` spans `_prepared_code` blanks before handing
     the source to `haskell_code_only`, in source order.
 
@@ -867,14 +893,18 @@ def _premasked_spans(text: str) -> list[tuple[int, int]]:
                 i = n if newline == -1 else newline
             else:
                 if "--" in lexeme:
-                    spans.append((i, run))
+                    spans.append((i, run, "+"))
                 i = run
             continue
         name_end = _quasiquote_name_end(text, i)
         if name_end is not None and _is_quasiquoter_name(text[i + 1:name_end - 1]):
             close = text.find(_QUASIQUOTE_CLOSE, name_end)
             end = n if close == -1 else close + len(_QUASIQUOTE_CLOSE)
-            spans.append((i, end))
+            # The closing `]` is left visible: a quasiquote is a VALUE,
+            # so something written directly after it is applying to it,
+            # and `_APPLICAND_TAIL` recognises `]`. Masking it away
+            # would make that application invisible.
+            spans.append((i, max(i, end - 1), "\x00"))
             i = end
             continue
         i += 1
@@ -1201,12 +1231,20 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
                     break
                 cursor, budget = closer.end(), budget - 1
             cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
-            if _names_show(scan_text, cursor):
+            if _names_show(scan_text, cursor, qualifiers):
                 violations.append(Violation(rel_path,
                                             _line_of(text, match.start()),
                                             spelling, form))
                 continue
-        # Otherwise the connector follows. Close only as many
+        # Otherwise the connector follows -- and `pack` must be the
+        # connector's own left operand, not somebody's ARGUMENT.
+        # Application binds tighter than any of them, so
+        # `format T.pack . show` is `(format T.pack) . show` and
+        # `g T.pack (show x)` is two arguments to `g` (PR #2404 review
+        # round 16).
+        if not _in_function_position(scan_text, expression_start):
+            continue
+        # Close only as many
         # parentheses as this expression opened, so `(T.pack) . show` is
         # read while `g (h (T.pack)) . show` -- a different function --
         # is not; a section's own closer may sit on either side of the
@@ -1222,7 +1260,8 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         if scan_text[cursor:cursor + 1] == "(":
             form, cursor = "paren", cursor + 1
         else:
-            read = _read_connector(scan_text, cursor, qualifiers)
+            read = _read_connector(scan_text, cursor,
+                                   frozenset(qualifiers))
             if read is None:
                 continue
             form, cursor = read
@@ -1231,7 +1270,7 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
             if closer is not None:
                 cursor = closer.end()
         cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
-        if not _names_show(scan_text, cursor):
+        if not _names_show(scan_text, cursor, qualifiers):
             continue
         violations.append(Violation(rel_path, _line_of(text, match.start()),
                                     spelling, form))
@@ -1591,6 +1630,24 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n" + _T
         + "f x = T.pack {- why -} (show x)\n",
         [3],
+    ),
+    (
+        "a wrapper that is the RIGHT OPERAND of a masked multi-dash "
+        "operator is still standalone -- the operator separates two "
+        "operands, so reading through it would make this one look "
+        "like an argument of the left",
+        "module M where\n" + _T
+        + "f x = x --> T.pack (show x)\n",
+        [3],
+    ),
+    (
+        "`UPrelude` re-exports `module Prelude`, so a `show` qualified "
+        "by it is the same method -- which is where every bare `show` "
+        "in this tree comes from",
+        "module M where\n" + _T
+        + "import qualified UPrelude as U\n"
+        "f x = T.pack (U.show x)\n",
+        [4],
     ),
     (
         "a QUALIFIED `show`: `P.show` is the same function",
@@ -2190,11 +2247,47 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "f = format (T.pack .) show\n",
     ),
     (
+        "`format T.pack . show` is `(format T.pack) . show`: "
+        "application binds tighter than any connector, so the packer "
+        "is `format`'s ARGUMENT and not the composition's left "
+        "operand (PR #2404 review round 16)",
+        "module M where\n" + _T
+        + "f = format T.pack . show\n",
+    ),
+    (
+        "the same unparenthesised application before the paren form: "
+        "`g T.pack (show x)` is two arguments to `g`",
+        "module M where\n" + _T
+        + "f x = g T.pack (show x)\n",
+    ),
+    (
+        "a QUASIQUOTE is a value, so something written after it is "
+        "applying to it: its closing bracket stays visible, or "
+        "`[fn| g |] (T.pack) . show` would read as a standalone "
+        "wrapper",
+        "module M where\n" + _T
+        + "s = [fn| g |] (T.pack) . show\n",
+    ),
+    (
+        "a qualified `show` from an unrelated module is not the `Show` "
+        "method: `Custom.show` may format differently, so rewriting a "
+        "wrapper around it would change behaviour",
+        "module M where\n" + _T
+        + "import qualified Custom as C\n"
+        "f x = T.pack (C.show x)\n",
+    ),
+    (
         "a section in ARGUMENT position is not applied to what follows "
         "it: application is left-associative, so `f (. show) T.pack` "
         "hands `f` two independent arguments (PR #2404 review round 12)",
         "module M where\n" + _T
         + "x = f (. show) T.pack\n",
+    ),
+    (
+        "the same with a BARE `show` after it, so the connector's own "
+        "qualifier is what decides",
+        "module M where\n" + _T
+        + "f x = T.pack Q.$ show x\n",
     ),
     (
         "a qualifier the file does NOT establish is not read as a "

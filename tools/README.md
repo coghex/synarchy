@@ -119,7 +119,10 @@ form is definitionally `tshow`, so a fix moves no rendered byte.
 Reported in `src/` and `app/`: a `Data.Text` `pack` applied directly to
 `show`, as `pack (show …)`, `pack $ show …`, `pack . show` or
 `pack ∘ show`, adjacency measured modulo whitespace and comments so a
-multiline wrap is the same hit. Redundant parentheses are transparent
+multiline wrap is the same hit. `show` must be the **`Show` method** —
+bare (the file is refused if it binds the name) or qualified by a module
+that exports it, so an unrelated `Custom.show` formatter is not
+reported. Redundant parentheses are transparent
 on both sides — `pack $ (show x)`, `pack ((show x))` and
 `(T.pack) . show` are the same functions byte for byte — and `$!` joins
 `$`. Only parentheses that GROUP count: juxtaposition is application, so
@@ -137,9 +140,11 @@ parenthesised either way round — `((.) pack) show` and
 `(.) (pack) show`. (The prefix form fixes where its operand sits, so
 the operand's own parentheses need no grouping test; the ones around
 the whole application do.)
-Every one of these must be in FUNCTION position: application is
-left-associative, so `f (. show) pack` and `g (.) pack show` hand `f`
-and `g` independent arguments and are not reported. The connector may
+Every one of these must be in FUNCTION position — the packer too:
+application binds tighter than any connector, so `format pack . show` is
+`(format pack) . show`, `g pack (show x)` is two arguments to `g`, and
+`f (. show) pack` and `g (.) pack show` likewise hand `f` and `g`
+independent arguments. None of those is reported. The connector may
 also be **qualified** — `pack P.$ P.show x` and `pack P.. P.show` are
 the same functions — and is read as one only under a qualifier the file
 actually establishes, so an arbitrary `Q.$` is somebody else's
@@ -293,7 +298,10 @@ unestablished qualifier, four alias forms (ASCII, Unicode,
 postpositive-`qualified`, and a multi-segment module name standing as
 its own qualifier), and every recognised `show`-binding shape
 against an instance method and a class declaration; and four
-parenthesised prefix applications against one in argument position. Every rule was mutation-tested against them: each is
+parenthesised prefix applications against one in argument position;
+and two unparenthesised applications and an unrelated qualified `show`
+against a wrapper that is the right operand of a masked operator, a
+`UPrelude`-qualified `show`, and a quasiquote used as an applicand. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
