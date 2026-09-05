@@ -207,6 +207,9 @@ its rules and gates. Keep these cross-cutting traps visible:
 - **Log queries consume data:** event, combat, and injury logs are drained
   streams; do not drain them manually while their panel script is loaded.
   See §Logging streams.
+- **Blood decals (#603):** transient by design; see
+  [blood_decals.md](docs/blood_decals.md) for architecture and probes,
+  and engine contracts §Blood decals for the transience contract.
 
 Section names above refer to engine contracts. Additional required reading:
 
@@ -215,7 +218,6 @@ Section names above refer to engine contracts. Additional required reading:
 | Rivers, lakes, oceans, ice, water tables | [hydrology_pipeline.md](docs/hydrology_pipeline.md) |
 | Player transfers, gesture eligibility, executor/teardown behavior | [unified_item_transfers.md](docs/unified_item_transfers.md) and engine contracts §Player transfers |
 | Expedition loop or its integrated probe | [expedition_gameplay_loop.md](docs/expedition_gameplay_loop.md) and engine contracts §The expedition loop |
-| Blood rendering or persistence expectations | [blood_decals.md](docs/blood_decals.md) |
 
 ## AI asset generation
 
@@ -241,3 +243,11 @@ Section names above refer to engine contracts. Additional required reading:
   `python3 tools/test_pack_atlas.py` and
   `python3 tools/pack_atlas.py --validate-only --strict`.
   Full rules: [src/Unit/Atlas/CLAUDE.md](src/Unit/Atlas/CLAUDE.md).
+
+## Platform notes
+
+- Developed primarily on macOS; Linux works with minor adjustments.
+  Windows is not supported.
+- On macOS, GLFW can emit diagnostic noise on stdout.
+- macOS builds define `DARWIN`; `-f dev` enables address sanitizer for
+  the graphical test suite.
