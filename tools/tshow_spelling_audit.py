@@ -319,10 +319,57 @@ _SECTION_SCANNABLE = frozenset(".∘$!")
 _RIGHT_SECTION_HEAD = re.compile(r"[\s\x00]*(?:\$!?|[.∘])[\s\x00]*")
 
 
+def _in_function_position(text: str, pos: int) -> bool:
+    """True if nothing is being APPLIED to the expression starting at
+    `pos` -- that is, the character before it is not something an
+    application could have as its function.
+
+    Application is left-associative juxtaposition, so `f (. show) T.pack`
+    hands `f` two independent arguments and is not a section applied to
+    the packer at all (PR #2404 review round 12). The same test decides
+    whether a prefix operator is being applied or is itself an
+    argument."""
+    i = pos - 1
+    while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
+        i -= 1
+    return not (i >= 0 and (is_haskell_ident_char(text[i])
+                            or text[i] in _APPLICAND_TAIL))
+
+
+# A connector written in PREFIX form: `(.) pack show` is `pack . show`
+# and `($) pack (show x)` is `pack (show x)`, both with the operator
+# named rather than placed between its operands (PR #2404 review round
+# 12). The operator itself must be in function position, or
+# `g (.) pack show` -- three arguments to `g` -- would read as one.
+_PREFIX_OPERATOR = re.compile(r"\((?:\$!?(?P<dollar>)|(?P<compose>[.∘]))\)")
+
+
+def _prefix_operator_before(text: str, pos: int) -> re.Match[str] | None:
+    """The prefix-form connector applied immediately before `pos`, or
+    `None`."""
+    i = pos - 1
+    while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
+        i -= 1
+    # No separate check that `text[i]` closes the operator: the
+    # fullmatch below spans the whole window and already requires it.
+    for width in (3, 4):
+        start = i - width + 1
+        if start < 0:
+            continue
+        found = _PREFIX_OPERATOR.fullmatch(text, start, i + 1)
+        if found is not None:
+            return found if _in_function_position(text, start) else None
+    return None
+
+
 def _right_section_before(text: str, pos: int) -> bool:
     """True if a right section applying `show` sits immediately before
-    `pos` -- `(. show)` or `($ show …)`, whose operand is therefore the
-    expression at `pos`."""
+    `pos` IN FUNCTION POSITION -- `(. show)` or `($ show …)`, whose
+    operand is therefore the expression at `pos`.
+
+    Function position is what makes it an application rather than a
+    sibling argument: `f (. show) T.pack` hands `f` two arguments and is
+    not this wrapper (PR #2404 review round 12)."""
     i = pos - 1
     while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
         i -= 1
@@ -333,7 +380,7 @@ def _right_section_before(text: str, pos: int) -> bool:
                       or text[j] in _SECTION_SCANNABLE
                       or text[j].isspace() or text[j] == "\x00"):
         j -= 1
-    if j < 0 or text[j] != "(":
+    if j < 0 or text[j] != "(" or not _in_function_position(text, j):
         return False
     content = text[j + 1:i]
     head = _RIGHT_SECTION_HEAD.match(content)
@@ -879,6 +926,19 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
                                         _line_of(text, match.start()),
                                         spelling, "section"))
             continue
+        # `(.) T.pack show` and `($) T.pack (show x)`: the connector is
+        # named in prefix form ahead of both operands.
+        prefix = _prefix_operator_before(scan_text, expression_start)
+        if prefix is not None:
+            cursor = _TRANSPARENT_OPEN_RUN.match(scan_text,
+                                                 match.end()).end()
+            if _names_show(scan_text, cursor):
+                form = next(name for name in ("dollar", "compose")
+                            if prefix.group(name) is not None)
+                violations.append(Violation(rel_path,
+                                            _line_of(text, match.start()),
+                                            spelling, form))
+                continue
         # Otherwise the connector follows. Close only as many
         # parentheses as this expression opened, so `(T.pack) . show` is
         # read while `g (h (T.pack)) . show` -- a different function --
@@ -1043,6 +1103,27 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "a left section of `$`, applied to the shown value",
         "module M where\n" + _T
         + "g x = (T.pack $) (show x)\n",
+        [3],
+    ),
+    (
+        "a connector named in PREFIX form: `(.) pack show` is "
+        "`pack . show` with the operator ahead of both operands, and "
+        "GHC infers `Show a => a -> Text` for it (PR #2404 review "
+        "round 12)",
+        "module M where\n" + _T
+        + "f = (.) T.pack show\n",
+        [3],
+    ),
+    (
+        "the Unicode composition operator in prefix form too",
+        "module M where\n" + _T
+        + "f = (∘) T.pack show\n",
+        [3],
+    ),
+    (
+        "and prefix `($)`, applied to the shown value",
+        "module M where\n" + _T
+        + "g x = ($) T.pack (show x)\n",
         [3],
     ),
     (
@@ -1706,6 +1787,32 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         "`format (T.pack .) show` applies `format` to both",
         "module M where\n" + _T
         + "f = format (T.pack .) show\n",
+    ),
+    (
+        "a section in ARGUMENT position is not applied to what follows "
+        "it: application is left-associative, so `f (. show) T.pack` "
+        "hands `f` two independent arguments (PR #2404 review round 12)",
+        "module M where\n" + _T
+        + "x = f (. show) T.pack\n",
+    ),
+    (
+        "a prefix connector applied to something that is not `show` "
+        "is a different function: `(.) T.pack g` is `T.pack . g`",
+        "module M where\n" + _T
+        + "f = (.) T.pack g\n",
+    ),
+    (
+        "an applicand ending in a closing bracket puts the section in "
+        "argument position too: `(g y) (. show) T.pack` applies `g y`",
+        "module M where\n" + _T
+        + "x = (g y) (. show) T.pack\n",
+    ),
+    (
+        "and a prefix operator in argument position is not applying "
+        "anything either -- `g (.) T.pack show` is three arguments to "
+        "`g`",
+        "module M where\n" + _T
+        + "f = g (.) T.pack show\n",
     ),
     (
         "a right section naming a DIFFERENT function",

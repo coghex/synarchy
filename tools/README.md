@@ -131,9 +131,13 @@ neither is `pack . f . show`.
 
 **Operator sections** count too, in both directions: `(pack .) show`,
 `(pack $) (show x)`, `(. show) pack` and `($ show x) pack` are each the
-same function, and GHC infers `Show a => a -> Text` for every one. The
-right-hand forms put `show` before the packer, so they get their own
-backward look — one that reads only a section it can see whole,
+same function, and GHC infers `Show a => a -> Text` for every one — as
+does the **prefix** spelling, `(.) pack show` and `($) pack (show x)`.
+Every one of these must be in FUNCTION position: application is
+left-associative, so `f (. show) pack` and `g (.) pack show` hand `f`
+and `g` independent arguments and are not reported. The right-hand
+forms put `show` before the packer, so they get their own backward
+look — one that reads only a section it can see whole,
 giving up at a nested bracket or a literal rather than balance-counting
 through text a `')'` character literal could throw off.
 
@@ -265,6 +269,7 @@ identifier, in a quasiquoter name and in a module alias; a titlecase
 module alias and an `Lo`-headed quasiquoter; and every grouping
 position that keeps parentheses transparent against three applications
 that do not; and all four operator-section forms against four
+lookalikes, and the three prefix spellings against two argument-position
 lookalikes. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
