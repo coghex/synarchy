@@ -30,9 +30,19 @@ The owners, in the order `main` composes them
       `CAPABILITY_WRITER_MODULES`, `SHADOW_EXEMPTIONS`, the Haskell
       tokenizer and import resolver, the capability-accessor map and
       its #2059 fail-closed completeness audit, mutation-site
-      classification, the scan and its three blocking checks. It is
-      also the only owner with a self-test command of its own,
-      runnable alone for iteration.
+      classification, the scan and its three blocking checks. Since
+      issue #2230 it is documentation and re-exports over four one-way
+      implementation owners -- `..._writer_authority.py` (the
+      checked-in map, the exemptions, the recognized primitives and
+      the two checks that read them), `..._writer_syntax.py` (the
+      tokenizer, the import resolver and mutation-expression
+      classification), `..._writer_projections.py` (capability-record
+      and projection discovery) and `..._writer_scan.py` (the single
+      pass over the tree, the mutation-site check and the residue
+      report) -- but it is still ONE owner from here: this module
+      imports the facade and nothing below it. It is also the only
+      owner with a self-test command of its own, runnable alone for
+      iteration.
   `engine_env_capability_inventory.py`   the SS5 inventory-row contract
       (issue #876): one row per live field, under a known capability
       heading, with a valid lifecycle, a strict Readers/Writers role
