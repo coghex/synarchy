@@ -264,8 +264,51 @@ _PACK_LEXEME = re.compile(PACK)
 # `P.show` and `Ü.show` count while a `t.show` record selector does not.
 # An ASCII-only class here would miss a Unicode module alias, which GHC
 # accepts and this UnicodeSyntax tree may well write.
-_CONNECTOR = re.compile(
-    r"[\s\x00]*(?:\((?P<paren>)|\$!?(?P<dollar>)|(?P<compose>[.∘]))")
+_GAP = re.compile(r"[\s\x00]*")
+
+# The connector OPERATORS, as maximal symbol lexemes. `.&.` is not `.`,
+# so the run must be exactly one of these.
+_CONNECTOR_OPERATORS = {".": "compose", "∘": "compose",
+                        "$": "dollar", "$!": "dollar"}
+
+
+def _read_connector(text: str, pos: int,
+                    qualifiers: frozenset[str]) -> tuple[str, int] | None:
+    """`(form, offset just past it)` for a connector OPERATOR at `pos`,
+    or `None`.
+
+    The operator may carry a module qualifier: `T.pack P.$ P.show x`
+    and `T.pack P.. P.show` are valid, compile to the same function, and
+    were missed while only the bare spellings were read (PR #2404 review
+    round 13). `P..` is the awkward one -- the qualifier's separating
+    dot and the operator are both `.` -- so the qualifier is read
+    segment by segment rather than by a greedy class.
+
+    A qualifier is honoured only when the file ESTABLISHES it, which is
+    what keeps this from reading an arbitrary `Foo.$` as Prelude's. The
+    operator itself is a maximal symbol run, so `.&.` is not `.`."""
+    i, n = pos, len(text)
+    segments: list[str] = []
+    j = i
+    while j < n and is_haskell_ident_char(text[j]) and _is_conid_head(text[j]):
+        k = j
+        while k < n and is_haskell_ident_char(text[k]):
+            k += 1
+        if k >= n or text[k] != ".":
+            break
+        segments.append(text[j:k])
+        j = k + 1
+    if segments:
+        qualifier = ".".join(segments)
+        if qualifier not in qualifiers:
+            return None
+    else:
+        j = i
+    run = j
+    while run < n and _is_symbol_char(text[run]):
+        run += 1
+    form = _CONNECTOR_OPERATORS.get(text[j:run])
+    return None if form is None else (form, run)
 
 # The redundant openers admitted between the connector and `show`, and
 # the gap after them.
@@ -316,7 +359,6 @@ _TRANSPARENT_CLOSE = re.compile(r"[\s\x00]*\)")
 # That is a conservative MISS on an exotic section rather than a
 # balance count that a `')'` character literal could throw off.
 _SECTION_SCANNABLE = frozenset(".∘$!")
-_RIGHT_SECTION_HEAD = re.compile(r"[\s\x00]*(?:\$!?|[.∘])[\s\x00]*")
 
 
 def _in_function_position(text: str, pos: int) -> bool:
@@ -341,28 +383,36 @@ def _in_function_position(text: str, pos: int) -> bool:
 # named rather than placed between its operands (PR #2404 review round
 # 12). The operator itself must be in function position, or
 # `g (.) pack show` -- three arguments to `g` -- would read as one.
-_PREFIX_OPERATOR = re.compile(r"\((?:\$!?(?P<dollar>)|(?P<compose>[.∘]))\)")
+def _prefix_operator_before(text: str, pos: int,
+                            qualifiers: frozenset[str]) -> str | None:
+    """The FORM of the prefix-spelled connector applied immediately
+    before `pos`, or `None`.
 
-
-def _prefix_operator_before(text: str, pos: int) -> re.Match[str] | None:
-    """The prefix-form connector applied immediately before `pos`, or
-    `None`."""
+    `(.) pack show` names the operator ahead of both operands, and
+    `(P.$) pack (show x)` does the same with it qualified. The operator
+    must itself be in function position, or `g (.) pack show` -- three
+    arguments to `g` -- would read as one."""
     i = pos - 1
     while i >= 0 and (text[i].isspace() or text[i] == "\x00"):
         i -= 1
-    # No separate check that `text[i]` closes the operator: the
-    # fullmatch below spans the whole window and already requires it.
-    for width in (3, 4):
-        start = i - width + 1
-        if start < 0:
-            continue
-        found = _PREFIX_OPERATOR.fullmatch(text, start, i + 1)
-        if found is not None:
-            return found if _in_function_position(text, start) else None
-    return None
+    if i < 0 or text[i] != ")":
+        return None
+    # No fixture claims an independent failure mode for that `)` test,
+    # and deliberately so: `_read_connector` below must consume the
+    # whole of `inner`, so reaching this code with anything else before
+    # the operand needs an unbalanced parenthesis, which no source GHC
+    # accepts has. It is here because it is what closes a prefix
+    # operator -- the same reasoning as `_PACK_LEXEME`'s boundary test.
+    start = text.rfind("(", 0, i)
+    if start < 0 or not _in_function_position(text, start):
+        return None
+    inner = text[start + 1:i]
+    read = _read_connector(inner, 0, qualifiers)
+    return read[0] if read is not None and read[1] == len(inner) else None
 
 
-def _right_section_before(text: str, pos: int) -> bool:
+def _right_section_before(text: str, pos: int,
+                          qualifiers: frozenset[str]) -> bool:
     """True if a right section applying `show` sits immediately before
     `pos` IN FUNCTION POSITION -- `(. show)` or `($ show …)`, whose
     operand is therefore the expression at `pos`.
@@ -383,8 +433,10 @@ def _right_section_before(text: str, pos: int) -> bool:
     if j < 0 or text[j] != "(" or not _in_function_position(text, j):
         return False
     content = text[j + 1:i]
-    head = _RIGHT_SECTION_HEAD.match(content)
-    return head is not None and _names_show(content, head.end())
+    head = _read_connector(content, _GAP.match(content, 0).end(), qualifiers)
+    if head is None:
+        return False
+    return _names_show(content, _GAP.match(content, head[1]).end())
 
 
 _FORM_NAMES = {
@@ -430,6 +482,28 @@ class _UnqualifiedImportError(_UnscannableSource):
     does not, which is a non-zero exit naming the file rather than a
     silent pass. Importing `Data.Text` qualified -- as every import of
     it in `src/` and `app/` already is -- resolves it."""
+
+
+class _ShadowedShowError(_UnscannableSource):
+    """A file that BINDS `show` locally.
+
+    `f x = let show _ = "custom" in T.pack (show x)` is valid, is not
+    this wrapper, and rewriting it to `tshow` would change both its
+    behaviour and its constraints (PR #2404 review round 13). Deciding
+    which `show` a bare occurrence denotes needs full scope analysis, so
+    a file that binds the name at all is refused rather than guessed at
+    -- the same treatment `_UnqualifiedImportError` gives a bare `pack`.
+
+    The binding shapes recognized are a TOP-LEVEL equation head
+    (`show … =` at column zero), a `let`/`where`-introduced binding, a
+    lambda parameter and a `do` binder. An `instance Show … where`
+    method definition is none of those -- it IS the method -- and is
+    excluded by both the column-zero anchor and `_opens_method_block`. A `show` bound by a TUPLE or constructor PATTERN is not
+    recognized, and cannot be without a parser: `(show, y) = …` and
+    `f (show x)` differ only in what encloses them. That residual is a
+    false POSITIVE on code that shadows `show` that way -- loud, and
+    `EXEMPTIONS` is the recorded escape -- never a silent pass on a
+    wrapper."""
 
 
 class _PremiseError(_UnscannableSource):
@@ -863,6 +937,92 @@ def check_uprelude_premise(uprelude_source: str) -> None:
             f"{TEXT_MODULE} imported qualified there.")
 
 
+# The identifier this wrapper renders through. A local binding of it
+# shadows `Prelude`'s, and then `pack (show x)` is not this wrapper.
+SHOW = "show"
+
+# `show` as a TOP-LEVEL equation head: the name at column zero,
+# optional parameters that are plain identifiers, then a maximal `=`.
+# Column zero is the point: an INDENTED `show f = …` is an `instance
+# Show … where` method, which IS the `Show` method and shadows nothing.
+#
+# `==`, `=>` and `=<<` are longer symbol lexemes and do not match. No
+# fixture claims an independent failure mode for that, and deliberately
+# so: layout puts every continuation line at a deeper column, so a
+# column-zero declaration beginning `show <params>` can only continue
+# with `=` or `::`, and `show x == y` is not a declaration at all. The
+# rule is here because it is what an equation head means.
+_SHOW_EQUATION = re.compile(
+    r"^" + SHOW + r"(?![\w'])(?:[ \t\x00]+[^\W\d]\w*)*"
+    r"[ \t\x00]*=(?![!#$%&*+./<=>?@\\^|~:-])", re.MULTILINE)
+# `show <- …`, a `do` binder.
+_SHOW_DO_BIND = re.compile(
+    r"(?<![\w'])" + SHOW + r"(?![\w'])[\s\x00]*<-(?![!#$%&*+./<=>?@\\^|~:-])")
+# `\show ->` / `\x show ->`, a lambda parameter.
+# Every repetition below consumes at least one character, so the
+# nested quantifiers cannot match empty and backtrack exponentially --
+# which the first draft of this pattern did, hanging the whole audit.
+_SHOW_LAMBDA = re.compile(
+    r"\\[\s\x00]*(?:[^\W\d]\w*[\s\x00]+)*" + SHOW + r"(?![\w'])"
+    r"[\s\x00]*(?:[^\W\d]\w*[\s\x00]*)*(?:->|→)")
+# `let show` / `where show`, whatever follows. The `where` of an
+# `instance`/`class` declaration is excluded by `_opens_method_block`:
+# its `show` is the method, not a shadow of it.
+_SHOW_LOCAL_KEYWORD = re.compile(
+    r"(?<![\w'])(?P<keyword>let|where)(?![\w'])[\s\x00{;]*"
+    + SHOW + r"(?![\w'])")
+
+# No `^`: this is used with `.match(text, line_start)`, which already
+# anchors at that offset, and a `^` there would anchor at the start of
+# the FILE instead.
+_METHOD_BLOCK_HEAD = re.compile(r"(?:instance|class)(?![\w'])")
+
+
+def _opens_method_block(text: str, pos: int) -> bool:
+    """True if the `where` at `pos` closes an `instance` or `class`
+    declaration, whose `show` is the `Show` METHOD rather than a local
+    binding shadowing it.
+
+    Decided by the nearest preceding COLUMN-ZERO line, which is where a
+    Haskell top-level declaration begins; an `instance … where` head may
+    wrap across lines, and every continuation line is indented."""
+    line_start = text.rfind("\n", 0, pos) + 1
+    while line_start > 0:
+        if line_start < len(text) and text[line_start] not in " \t\n":
+            break
+        line_start = text.rfind("\n", 0, line_start - 1) + 1
+    return _METHOD_BLOCK_HEAD.match(text, line_start) is not None
+
+
+_SHOW_BINDERS = (("a top-level equation head", _SHOW_EQUATION),
+                 ("a `do` binder", _SHOW_DO_BIND),
+                 ("a lambda parameter", _SHOW_LAMBDA),
+                 ("a `let`/`where` binding", _SHOW_LOCAL_KEYWORD))
+
+
+def _refuse_shadowed_show(prepared: str, rel_path: str) -> None:
+    """Raise `_ShadowedShowError` if `prepared` binds `show`."""
+    for shape, pattern in _SHOW_BINDERS:
+        for found in pattern.finditer(prepared):
+            if (found.groupdict().get("keyword") == "where"
+                    and _opens_method_block(prepared, found.start())):
+                continue
+            break
+        else:
+            continue
+        raise _ShadowedShowError(
+            f"{rel_path}:{_line_of(prepared, found.start())}: this file "
+            f"binds `{SHOW}` as {shape}, shadowing the `Show` method.\n\n"
+            f"tools/tshow_spelling_audit.py reads a bare `{SHOW}` as that "
+            f"method, and `{CANONICAL}` is defined in terms of it, so a "
+            f"wrapper written in the shadow's scope is NOT the same "
+            f"function -- rewriting it would change behaviour and "
+            f"constraints. Telling the two apart needs full scope "
+            f"analysis, so the file cannot be certified as written.\n\n"
+            f"Rename the local binding, or record this file in EXEMPTIONS "
+            f"with the reason it is safe.")
+
+
 def find_violations(text: str, rel_path: str) -> list[Violation]:
     """Every hand-written show-to-Text wrapper in `text` (the source of
     the file at repo-relative `rel_path`), outside comments, string
@@ -890,12 +1050,17 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
     # to the other.
     scan_text = _prepared_code(text)
     _classify_text_imports(scan_text, rel_path)
+    _refuse_shadowed_show(scan_text, rel_path)
     # From the SAME masked text, never the raw source: a column-zero
     # `import qualified Data.Text as T` inside a quasiquote payload is
     # not an import, and resolving against it would bind `T` here and
     # report a `T.pack (show x)` that is really a ByteString packer
     # (PR #2404 review round 6).
     declarations = parse_imports(scan_text)
+    # Every qualifier the file establishes. A qualified connector
+    # (`P.$`, `P..`) is honoured only under one of these, so an
+    # arbitrary `Foo.$` is not read as Prelude's.
+    qualifiers = frozenset(d.qualifier for d in declarations)
 
     exempt: set[int] = set()
     if rel_path == UPRELUDE_FILE:
@@ -921,23 +1086,22 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         # `(. show) T.pack` and `($ show x) T.pack`: the section holds
         # `show` and this expression is its operand, so the wrapper
         # reads right to left.
-        if _right_section_before(scan_text, expression_start):
+        if _right_section_before(scan_text, expression_start, qualifiers):
             violations.append(Violation(rel_path,
                                         _line_of(text, match.start()),
                                         spelling, "section"))
             continue
         # `(.) T.pack show` and `($) T.pack (show x)`: the connector is
         # named in prefix form ahead of both operands.
-        prefix = _prefix_operator_before(scan_text, expression_start)
+        prefix = _prefix_operator_before(scan_text, expression_start,
+                                         qualifiers)
         if prefix is not None:
             cursor = _TRANSPARENT_OPEN_RUN.match(scan_text,
                                                  match.end()).end()
             if _names_show(scan_text, cursor):
-                form = next(name for name in ("dollar", "compose")
-                            if prefix.group(name) is not None)
                 violations.append(Violation(rel_path,
                                             _line_of(text, match.start()),
-                                            spelling, form))
+                                            spelling, prefix))
                 continue
         # Otherwise the connector follows. Close only as many
         # parentheses as this expression opened, so `(T.pack) . show` is
@@ -951,10 +1115,14 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
             if closer is None:
                 break
             cursor, budget = closer.end(), budget - 1
-        connector = _CONNECTOR.match(scan_text, cursor)
-        if connector is None:
-            continue
-        cursor = connector.end()
+        cursor = _GAP.match(scan_text, cursor).end()
+        if scan_text[cursor:cursor + 1] == "(":
+            form, cursor = "paren", cursor + 1
+        else:
+            read = _read_connector(scan_text, cursor, qualifiers)
+            if read is None:
+                continue
+            form, cursor = read
         if budget:
             closer = _TRANSPARENT_CLOSE.match(scan_text, cursor)
             if closer is not None:
@@ -962,9 +1130,6 @@ def find_violations(text: str, rel_path: str) -> list[Violation]:
         cursor = _TRANSPARENT_OPEN_RUN.match(scan_text, cursor).end()
         if not _names_show(scan_text, cursor):
             continue
-        form = next(name for name in _FORM_NAMES
-                    if name in connector.groupdict()
-                    and connector.group(name) is not None)
         violations.append(Violation(rel_path, _line_of(text, match.start()),
                                     spelling, form))
     return violations
@@ -1104,6 +1269,62 @@ DETECTED_FIXTURES: list[tuple[str, str, list[int]]] = [
         "module M where\n" + _T
         + "g x = (T.pack $) (show x)\n",
         [3],
+    ),
+    (
+        "a QUALIFIED connector: `T.pack P.$ P.show x` compiles to the "
+        "same function, and `P..` is the awkward one -- the "
+        "qualifier's dot and the operator are both `.` (PR #2404 "
+        "review round 13)",
+        "module M where\n" + _T
+        + "import qualified Prelude as P\n"
+        "f x = T.pack P.$ P.show x\n",
+        [4],
+    ),
+    (
+        "the qualified composition, `T.pack P.. P.show`",
+        "module M where\n" + _T
+        + "import qualified Prelude as P\n"
+        "f = T.pack P.. P.show\n",
+        [4],
+    ),
+    (
+        "qualified in PREFIX form",
+        "module M where\n" + _T
+        + "import qualified Prelude as P\n"
+        "f x = (P.$) T.pack (P.show x)\n",
+        [4],
+    ),
+    (
+        "qualified in a RIGHT section",
+        "module M where\n" + _T
+        + "import qualified Prelude as P\n"
+        "f = (P.. P.show) T.pack\n",
+        [4],
+    ),
+    (
+        "qualified in a LEFT section",
+        "module M where\n" + _T
+        + "import qualified Prelude as P\n"
+        "f = (T.pack P..) P.show\n",
+        [4],
+    ),
+    (
+        "an `instance Show … where` method is the `Show` method, not a "
+        "shadow of it, so the file is scanned normally",
+        "module M where\n" + _T
+        + "data F = F\n"
+        "instance Show F where\n"
+        "  show _ = \"F\"\n"
+        "g x = T.pack (show x)\n",
+        [6],
+    ),
+    (
+        "and neither is a `class … where` method declaration",
+        "module M where\n" + _T
+        + "class C a where\n"
+        "  show :: a -> String\n"
+        "g x = T.pack (show x)\n",
+        [5],
     ),
     (
         "a connector named in PREFIX form: `(.) pack show` is "
@@ -1796,6 +2017,13 @@ CLEAN_FIXTURES: list[tuple[str, str]] = [
         + "x = f (. show) T.pack\n",
     ),
     (
+        "a qualifier the file does NOT establish is not read as a "
+        "connector: `Q.$` under no such import is somebody else's "
+        "operator",
+        "module M where\n" + _T
+        + "f x = T.pack Q.$ Q.show x\n",
+    ),
+    (
         "a prefix connector applied to something that is not `show` "
         "is a different function: `(.) T.pack g` is `T.pack . g`",
         "module M where\n" + _T
@@ -2011,6 +2239,43 @@ UNSCANNABLE_FIXTURES: list[tuple[str, str, type[_UnscannableSource]]] = [
         "#include \"aliases.h\"\n" + _T
         + "f x = tshow x\n",
         _PreprocessorError,
+    ),
+    (
+        "a `let`-bound `show`: valid, not this wrapper, and rewriting "
+        "it would change behaviour and constraints (PR #2404 review "
+        "round 13)",
+        "module M where\n" + _T
+        + 'f x = let show _ = "c" in T.pack (show x)\n',
+        _ShadowedShowError,
+    ),
+    (
+        "a `where`-bound one",
+        "module M where\n" + _T
+        + "f x = T.pack (show x)\n"
+        '  where show _ = "c"\n',
+        _ShadowedShowError,
+    ),
+    (
+        "a TOP-LEVEL equation head, which an indented instance method "
+        "is not",
+        "module M where\n" + _T
+        + 'show _ = "c"\n'
+        "g x = T.pack (show x)\n",
+        _ShadowedShowError,
+    ),
+    (
+        "a lambda parameter",
+        "module M where\n" + _T
+        + "f = \\show -> T.pack (show 1)\n",
+        _ShadowedShowError,
+    ),
+    (
+        "a `do` binder",
+        "module M where\n" + _T
+        + "f = do\n"
+        "  show <- act\n"
+        "  pure (T.pack (show 1))\n",
+        _ShadowedShowError,
     ),
     (
         "an import putting `pack` in UNQUALIFIED scope: its uses are "

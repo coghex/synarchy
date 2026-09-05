@@ -135,7 +135,11 @@ same function, and GHC infers `Show a => a -> Text` for every one — as
 does the **prefix** spelling, `(.) pack show` and `($) pack (show x)`.
 Every one of these must be in FUNCTION position: application is
 left-associative, so `f (. show) pack` and `g (.) pack show` hand `f`
-and `g` independent arguments and are not reported. The right-hand
+and `g` independent arguments and are not reported. The connector may
+also be **qualified** — `pack P.$ P.show x` and `pack P.. P.show` are
+the same functions — and is read as one only under a qualifier the file
+actually establishes, so an arbitrary `Q.$` is somebody else's
+operator. The right-hand
 forms put `show` before the packer, so they get their own backward
 look — one that reads only a section it can see whole,
 giving up at a nested bracket or a literal rather than balance-counting
@@ -222,8 +226,15 @@ A file it cannot certify is **refused**, loudly, rather than scanned as
 if clean: a CPP `#define`/`#undef`/`#include` (which can rename the very
 alias the scan resolves by), a `Data.Text` import whose shape the
 resolver cannot read, a `Data.Text` mention outside any recognized
-import declaration, and an import putting `pack` in **unqualified**
-scope. That last one is the same rule `lua_strict_decode_audit.py`
+import declaration, an import putting `pack` in **unqualified** scope,
+and a file that BINDS `show` locally — a `let`/`where` binding, a
+top-level equation head, a lambda parameter or a `do` binder. That last
+one is the `pack` rule again for the other half of the wrapper:
+`let show _ = "custom" in pack (show x)` is valid, is not this wrapper,
+and rewriting it would change behaviour and constraints. An
+`instance Show … where` method is not a shadow — it IS the method — and
+neither the column-zero anchor nor `_opens_method_block` treats it as
+one. That last one is the same rule `lua_strict_decode_audit.py`
 applies to an unqualified `Data.Text.Encoding` import, for the same
 reason: a bare name cannot be told from a local binder that legally
 shadows it (`let pack = id in pack (show x)` is valid, returns `String`,
@@ -269,8 +280,10 @@ identifier, in a quasiquoter name and in a module alias; a titlecase
 module alias and an `Lo`-headed quasiquoter; and every grouping
 position that keeps parentheses transparent against three applications
 that do not; and all four operator-section forms against four
-lookalikes, and the three prefix spellings against two argument-position
-lookalikes. Every rule was mutation-tested against them: each is
+lookalikes, the three prefix spellings against two argument-position
+lookalikes, all five qualified-connector positions against an
+unestablished qualifier, and every recognised `show`-binding shape
+against an instance method and a class declaration. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
