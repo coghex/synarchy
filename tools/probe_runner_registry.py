@@ -2,10 +2,12 @@
 """The aggregate runner's probe REGISTRY, and every per-key declaration.
 
 The authoritative list of registered probes (`PROBES`), the selection
-rules `--only`/`--exact` are resolved through, and the two per-key
+rules `--only`/`--exact` are resolved through, and the three per-key
 declaration tables that are pure DATA about a probe rather than about a
-run: how many ports it may bind (`PROBE_PORT_SPANS`, #1571) and how long
-its complete scenario is allowed to take (`PROBE_TIMEOUT_OVERRIDES`).
+run: how many ports it may bind (`PROBE_PORT_SPANS`, #1571), how long
+its complete scenario is allowed to take (`PROBE_TIMEOUT_OVERRIDES`), and
+how long it is EXPECTED to take, which is what parallel dispatch orders by
+(`PROBE_EXPECTED_SECONDS`, #2275).
 
 This is a LEAF owner (#2074): it imports nothing of the runner's, so
 every other owner — and every tool that only wants the inventory
@@ -502,6 +504,125 @@ def timeout_plan(chosen, explicit: float | None = None) -> str:
         return f"timeout {format_timeout(budgets[0])} each"
     rendered = ", ".join(format_timeout(timeout) for timeout in budgets)
     return f"per-probe timeouts {rendered}"
+
+
+# ---------------------------------------------------------------------------
+# Expected durations: what parallel dispatch orders by (#2275)
+#
+# `--jobs N` used to consider pending probes in the literal order of
+# `PROBES` above, which is neither alphabetical nor related to cost:
+# `content_registry` sits before `consumable_effects` and `repair_item`
+# before `repair`. With durations spanning 5 s to 206 s that made the
+# step's tail depend on where the long probes happened to fall — a long
+# probe dispatched late finishes long after the last worker would
+# otherwise have gone idle. Dispatching the longest EXPECTED probe first
+# is the standard fix, and its value is durable: the tail stays bounded as
+# probes are added, rather than depending on the new probe's key.
+#
+# These are MEASUREMENTS, not budgets. `PROBE_TIMEOUT_OVERRIDES` above is
+# the hang bound a probe may not exceed; this is how long it ordinarily
+# takes, and it is only ever read to decide which probe to start next. A
+# stale value costs a slightly worse dispatch order and nothing else — no
+# probe is failed, skipped or timed out by it — which is why nothing
+# checks these against a run and `tools/ci_probes.py --self-test` only
+# requires that every CI-eligible probe HAS one.
+#
+# To refresh: run the sweep and read each probe's own reported time off
+# the runner's per-probe lines, e.g.
+#
+#   python3 tools/run_probes.py --only <keys> --exact --retries 1 --jobs 2
+#
+# whose `[i/n] <script> ... PASS (86.7s)` lines carry the seconds, and
+# round to whole seconds here. The seeded values are the CI-eligible set
+# measured on PR run 33666483367 (2026-09-02), listed longest first, which
+# is the order dispatch will consider them in.
+PROBE_EXPECTED_SECONDS: dict[str, float] = {
+    "persistence_contract": 206.0,
+    "craft": 97.0,
+    "repair_item": 88.0,
+    "cargo_capacity": 85.0,
+    "content_registry": 73.0,
+    "infection": 60.0,
+    "repair": 57.0,
+    "consumable_effects": 56.0,
+    "cooking": 42.0,
+    "medic_coord": 39.0,
+    "canteen_instance": 36.0,
+    "preview_cli": 14.0,
+    "debug_console_boot": 5.0,
+}
+
+
+def expected_seconds(key: str) -> float | None:
+    """How long probe `key` is expected to take, or None if undeclared.
+
+    None is a legitimate answer, not a gap to paper over with a default: a
+    made-up number would sort an unmeasured probe among the measured ones
+    on no evidence, whereas an absent expectation sorts LAST and keeps its
+    registry position among the other undeclared probes.
+    """
+    return PROBE_EXPECTED_SECONDS.get(key)
+
+
+def expected_duration_problems(
+        probes=None, expectations: dict[str, float] | None = None) -> list[str]:
+    """Validate expected-duration declarations against the registry.
+
+    The same shape check `timeout_override_problems` applies, for the same
+    reason: a declaration naming a retired probe is dead data, and a
+    non-numeric, non-finite, non-positive or boolean value would order the
+    sweep by nonsense. `True` is rejected explicitly — it is an `int` to
+    `isinstance`, and `float(True)` is a perfectly sortable 1.0, so
+    nothing downstream would ever notice it.
+    """
+    registry = PROBES if probes is None else probes
+    declared = PROBE_EXPECTED_SECONDS if expectations is None else expectations
+    known = {key for key, _, _ in registry}
+    problems = []
+    for key, seconds in sorted(declared.items()):
+        if key not in known:
+            problems.append(
+                f"expected duration names unknown probe key {key!r}")
+        if (isinstance(seconds, bool)
+                or not isinstance(seconds, (int, float))
+                or not math.isfinite(seconds) or seconds <= 0):
+            problems.append(
+                f"expected duration for {key!r} must be finite and positive "
+                f"(got {seconds!r})")
+    return problems
+
+
+def dispatch_order(items, key=lambda item: item[0]):
+    """`items` reordered as parallel dispatch should CONSIDER them (#2275).
+
+    A new list, longest declared expectation first; every probe with an
+    expectation sorts before every probe without one, and probes whose
+    expectations are equal — or both absent — keep their relative order in
+    `items`. `key` extracts the probe key from an item, defaulting to the
+    `PROBES`-shaped `item[0]` so a slice of the registry can be passed
+    straight in; `probe_runner_scheduler` passes its own extractor because
+    its pending list pairs each probe with the positional index its
+    reserved port span was allocated against.
+
+    Pure, and a REORDERING only: the same items come back, so a caller
+    cannot lose or duplicate a probe by consulting this. That is what
+    keeps the effect confined to which probe is submitted next — selection,
+    port assignment, sequential execution, solo retries, failure
+    presentation and the final summary all continue to read `chosen`
+    itself, which this never touches.
+    """
+    def rank(entry):
+        position, item = entry
+        seconds = expected_seconds(key(item))
+        # The position tiebreak makes the stability explicit rather than
+        # borrowing it from `sorted`, and the leading 0/1 keeps every
+        # undeclared probe behind every declared one without inventing a
+        # sentinel duration for it.
+        if seconds is None:
+            return (1, 0.0, position)
+        return (0, -float(seconds), position)
+
+    return [item for _, item in sorted(enumerate(items), key=rank)]
 
 
 def _only_tokens(only: str) -> list[str]:

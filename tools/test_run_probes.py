@@ -7,23 +7,25 @@ every group, in the order this suite has always run them, the same
 assertions, the same failure accounting and the same final summary.
 
 What this module holds is only that -- selection, ordered aggregation and
-reporting. It carries no test body and names no test group. The 74 groups
+reporting. It carries no test body and names no test group. The 81 groups
 live with six owners, five of them mirroring the production owners #2074
 split `run_probes.py` into, so the suite divides exactly where the code
 under test does:
 
   `readme`        2  #2035's `tools/README.md` registry-count audit, and
                      the proof that a failing audit fails this gate;
-  `registry`     13  timeout-override and exclusive-resource
-                     declarations, exact and substring selection, and
-                     reserved port spans;
+  `registry`     15  timeout-override, expected-duration and
+                     exclusive-resource declarations, the longest-first
+                     dispatch order (#2275), exact and substring
+                     selection, and reserved port spans;
   `resources`    20  the one-time engine preflight, resolved-executable
                      propagation, inherited and foreign holds, and the
                      reader/writer resource ledger;
   `lifecycle`    14  one probe's launch, teardown, liveness and reap,
                      including the shutdown launch window;
-  `scheduler`    14  aggregate exits, conflict scheduling, retries,
-                     Ctrl-C, and the synthetic fixtures' own validation;
+  `scheduler`    19  aggregate exits, conflict scheduling, #2275's
+                     longest-expected-first dispatch, retries, Ctrl-C,
+                     and the synthetic fixtures' own validation;
   `diagnostics`  11  the durable progress and failure record protocols.
 
 Each owner declares its own ordered `TESTS` under
@@ -109,23 +111,25 @@ FAMILIES = {
 #: would still pass after a registry entry was deleted.
 NON_OWNER_MODULES = {"__init__", "support"}
 
-#: The group count each family carried at this split: 2 + 13 + 20 + 14 +
-#: 14 + 11 = 74. The issue pinned 1 + 13 + 20 + 14 + 14 + 11 = 73 at
-#: 837792c; #2035 has since landed `test_a_failing_readme_audit_fails_this
-#: _gate` beside the audit it extracted, which is the whole of the delta
-#: and is why `readme` is 2. A FLOOR, not an exact count, so a
-#: legitimately added group joins without an edit here; a family declaring
-#: FEWER is a truncation and is refused.
+#: The group count each family carries: 2 + 15 + 20 + 14 + 19 + 11 = 81.
+#: The issue pinned 1 + 13 + 20 + 14 + 14 + 11 = 73 at 837792c; #2035
+#: landed `test_a_failing_readme_audit_fails_this_gate` beside the audit
+#: it extracted, which is why `readme` is 2, and #2275 added two
+#: expected-duration groups to `registry` and five dispatch-order groups
+#: to `scheduler`. A FLOOR, not an exact count, so a legitimately added
+#: group joins without an edit here; a family declaring FEWER is a
+#: truncation and is refused. Raising it alongside an addition is what
+#: keeps the floor able to catch that addition's own later loss.
 MINIMUM_GROUPS = {
     "readme": 2,
-    "registry": 13,
+    "registry": 15,
     "resources": 20,
     "lifecycle": 14,
-    "scheduler": 14,
+    "scheduler": 19,
     "diagnostics": 11,
 }
 
-#: The aggregate's order, as which family fragment runs when. Twenty-one
+#: The aggregate's order, as which family fragment runs when. Twenty-two
 #: entries for six families, because the run interleaves them: the
 #: scheduler's fixture validation opens it, the lifecycle block follows,
 #: and the port-span and diagnostics blocks close it. Each entry names a
@@ -142,6 +146,7 @@ SEQUENCE_FRAGMENTS = (
     ("lifecycle", "TESTS_DIRECT_RUN_ONE"),
     ("resources", "TESTS_PROPAGATION_AND_HOLDS"),
     ("scheduler", "TESTS_RESOURCE_SCHEDULING"),
+    ("scheduler", "TESTS_DISPATCH_ORDER"),
     ("resources", "TESTS_FOREIGN_HOLDERS"),
     ("registry", "TESTS_EXACT_SELECTION"),
     ("scheduler", "TESTS_RETRY_TEARDOWN"),

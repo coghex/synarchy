@@ -2,11 +2,12 @@
 """Ordering a whole SWEEP of probes, sequentially or `--jobs` at a time.
 
 The aggregate half of the runner (#2074): the sequential path with its
-inline retries, the parallel path's resource-aware dispatch (#1322,
-#1444, #1436) over the ports the registry allocated (#1571), the solo
-retries a parallel failure gets, the cancellation that takes every engine
-down on Ctrl-C, the failure presentation both paths share, and the
-ordered summary the exit status comes from.
+inline retries, the parallel path's resource-aware,
+longest-expected-first dispatch (#1322, #1444, #1436, #2275) over the
+ports the registry allocated (#1571), the solo retries a parallel failure
+gets, the cancellation that takes every engine down on Ctrl-C, the failure
+presentation both paths share, and the ordered summary the exit status
+comes from.
 
 Dependencies (#2074 requirement 11): the registry, resource, diagnostics
 and lifecycle owners. Nothing here parses arguments or exits a process —
@@ -168,7 +169,18 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
         # use. Holding it back here — rather than taking a lock inside the
         # worker — is what keeps `--jobs` worth of real work in flight while
         # a conflict is pending.
-        pending = list(enumerate(chosen))
+        #
+        # The order it considers them in is LONGEST-EXPECTED-FIRST (#2275)
+        # rather than registry order: with two workers and durations
+        # spanning 5 s to 206 s, a long probe the registry happens to name
+        # late finishes well after the last worker would otherwise have
+        # gone idle. Each item keeps the POSITIONAL index it had in
+        # `chosen`, so reordering the consideration list cannot move a
+        # probe off the port span allocated against that position — nor
+        # reach the sequential path, the solo retries, the failure
+        # presentation or the summary, all of which read `chosen` itself.
+        pending = registry.dispatch_order(list(enumerate(chosen)),
+                                          key=lambda item: item[1][0])
         running: dict[concurrent.futures.Future,
                       tuple[set[str], set[str],
                             probe_resource_lock.ResourceHold]] = {}
@@ -177,9 +189,11 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
         foreign = None
         try:
             while pending or running:
-                # Dispatch in registry order every probe that fits and whose
-                # resources are free; a BLOCKED probe is skipped, never
-                # waited on, so later disjoint probes still start.
+                # Dispatch, in the order settled above, every probe that
+                # fits and whose resources are free; a BLOCKED probe is
+                # skipped, never waited on, so later disjoint probes still
+                # start — including one expected to be much shorter than
+                # the blocked probe ahead of it.
                 foreign = None
                 for item in list(pending):
                     if len(running) >= jobs:

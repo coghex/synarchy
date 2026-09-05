@@ -15,8 +15,9 @@ module the split exists to avoid.
   `PreflightRecorder`, the deterministic stand-in for the preflight's
   one Cabal contact;
   `patched`, which points the production owners at the synthetic tree
-  for the duration of one case, and `clear_namespace`, which it calls on
-  the way out;
+  for the duration of one case -- including the port-span, timeout and
+  expected-duration declaration tables, none of which name a synthetic
+  key -- and `clear_namespace`, which it calls on the way out;
   `main_with_open`, `main_with` and `main_refusal`, the three ways a
   case invokes the real `run_probes.main` and captures what it printed.
 
@@ -645,6 +646,7 @@ class patched:
                  namespace: str | None = None,
                  spans: dict[str, int] | None = None,
                  timeouts: dict[str, float] | None = None,
+                 durations: dict[str, float] | None = None,
                  preflight: "PreflightRecorder | None" = None) -> None:
         self.tree, self.grace = tree, grace
         # The engine-executable preflight (#1570) is doubled for the same
@@ -663,12 +665,19 @@ class patched:
         # The shipped timeout table names shipped keys. Synthetic registries
         # start with no exceptions unless a case supplies its own declarations.
         self.timeouts = {} if timeouts is None else dict(timeouts)
+        # Likewise the expected-duration table parallel dispatch orders by
+        # (#2275). Supplying it INDEPENDENTLY of how long a synthetic probe
+        # actually dwells is the point: a case can then assert that the
+        # order came from the declarations rather than from the fixture
+        # happening to finish in that sequence.
+        self.durations = {} if durations is None else dict(durations)
 
     def __enter__(self):
         self._saved = (probe_engine.REPO_ROOT, probe_runner_registry.PROBES,
                        probe_runner_lifecycle.GROUP_GRACE, probe_runner_resources.RESOURCE_NAMESPACE,
                        probe_runner_registry.PROBE_PORT_SPANS,
                        probe_runner_registry.PROBE_TIMEOUT_OVERRIDES,
+                       probe_runner_registry.PROBE_EXPECTED_SECONDS,
                        probe_runner_resources.ENGINE_EXECUTABLE,
                        probe_runner_resources.ENGINE_PREFLIGHT_RUNNER)
         # An operator's own export of the runner's variables must not
@@ -681,6 +690,7 @@ class patched:
         probe_runner_resources.RESOURCE_NAMESPACE = self.namespace
         probe_runner_registry.PROBE_PORT_SPANS = self.spans
         probe_runner_registry.PROBE_TIMEOUT_OVERRIDES = self.timeouts
+        probe_runner_registry.PROBE_EXPECTED_SECONDS = self.durations
         probe_runner_resources.ENGINE_EXECUTABLE = None
         probe_runner_resources.ENGINE_PREFLIGHT_RUNNER = self.preflight
         return self
@@ -690,6 +700,7 @@ class patched:
          probe_runner_resources.RESOURCE_NAMESPACE,
          probe_runner_registry.PROBE_PORT_SPANS,
          probe_runner_registry.PROBE_TIMEOUT_OVERRIDES,
+         probe_runner_registry.PROBE_EXPECTED_SECONDS,
          probe_runner_resources.ENGINE_EXECUTABLE,
          probe_runner_resources.ENGINE_PREFLIGHT_RUNNER) = self._saved
         for name, value in self._saved_env.items():
@@ -751,14 +762,16 @@ def main_with_open(tree: Tree, argv: list[str]) -> tuple[int, str]:
 
 def main_with(tree: Tree, argv: list[str],
                spans: dict[str, int] | None = None,
-               timeouts: dict[str, float] | None = None) -> tuple[int, str]:
+               timeouts: dict[str, float] | None = None,
+               durations: dict[str, float] | None = None) -> tuple[int, str]:
     import io
     import contextlib
     buf = io.StringIO()
     saved_argv = sys.argv
     sys.argv = ["run_probes.py"] + argv
     try:
-        with patched(tree, spans=spans, timeouts=timeouts), \
+        with patched(tree, spans=spans, timeouts=timeouts,
+                     durations=durations), \
              contextlib.redirect_stdout(buf), \
              contextlib.redirect_stderr(buf):
             rc = run_probes.main()

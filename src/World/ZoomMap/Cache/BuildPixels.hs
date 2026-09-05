@@ -27,9 +27,8 @@ import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.ZoomMap.ColorPalette (ZoomColorPalette)
 import World.ZoomMap.Cache.Classify (majorityMaterial, vegCategoryFromClimate)
 import World.ZoomMap.Cache.Noise (zoomIceNoise)
+import World.ZoomMap.Cache.OceanFill (extendOceanBoundary)
 import World.ZoomMap.Cache.Pixels (generateChunkPixels)
-import qualified Data.Vector.Mutable as MV
-import Control.Monad.ST (runST)
 
 -- * Build Zoom Cache + Per-Chunk Pixel Data
 
@@ -245,31 +244,14 @@ buildZoomCacheWithPixels params registry palette mBorderedCache =
                         Nothing → False
 
                 -- Extend ocean: empty tiles at seaLevel+1/+2 adjacent to
-                -- ocean (including in neighbor chunks) get ocean fluid
-                extendedFluid = runST $ do
-                    mv ← V.thaw rawFluid
-                    let area = chunkSize * chunkSize
-                    forM_ [0 .. area - 1] $ \idx → do
-                        val ← MV.read mv idx
-                        when (isNothing val) $ do
-                            let (_, _, _, elevV) = extras
-                                surfZ = elevV VU.! idx
-                            when (surfZ ≤ seaLevel + 2 ∧ surfZ > minBound) $ do
-                                let lx = idx `mod` chunkSize
-                                    ly = idx `div` chunkSize
-                                    checkAdj x y
-                                      | x ≥ 0 ∧ x < chunkSize
-                                        ∧ y ≥ 0 ∧ y < chunkSize =
-                                          isJust ⊚ MV.read mv (y * chunkSize + x)
-                                      | otherwise =
-                                          return (neighborHasOcean x y)
-                                n ← checkAdj lx (ly-1)
-                                s ← checkAdj lx (ly+1)
-                                w ← checkAdj (lx-1) ly
-                                e ← checkAdj (lx+1) ly
-                                when (n ∨ s ∨ w ∨ e) $
-                                    MV.write mv idx (Just (FluidCell Ocean seaLevel))
-                    V.freeze mv
+                -- ocean (including in neighbor chunks) get ocean fluid.
+                -- ONE cardinal dilation of the composed ocean mask, read
+                -- from the immutable composed map — no other fluid kind
+                -- seeds it and no synthesized cell seeds another, so the
+                -- result does not depend on scan order (#2316).
+                (_, _, _, elevV) = extras
+                extendedFluid =
+                    extendOceanBoundary neighborHasOcean elevV rawFluid
 
                 (chunkLava0, chunkIceMap0, tileDataWithIce0, _) = extras
                 tileVec = V.fromList tileDataWithIce0
