@@ -565,6 +565,22 @@ python3 tools/world_check.py --quick
 # depends on live terrain, so an ordinary run cannot be relied on to
 # reach it; the companion boots nothing.
 #
+# test_construction_probe is #2172's: tools/construction_probe.py now
+# captures a read-only diagnostic bundle on every construct_job wait that
+# expires. `unitAi.aiState` is never pruned when an individual unit is
+# destroyed (scripts/unit_ai_core.lua empties it only at teardown or a
+# load reconciliation), so `getState` answers for a dead worker with its
+# last decision indefinitely -- a bundle that sampled the AI
+# unconditionally would print a phase and a currentAction beside
+# `unit: null`, and the phase-transition classifier would then name a
+# segment no unit is standing in. The bundle establishes existence FIRST
+# and gates the whole AI family on it, a caller's already-taken sample
+# included. That probe is manual-only and scenario-heavy (about ten
+# minutes), and the stale-state path needs a wait to expire while its
+# driving worker is already gone, so an ordinary run cannot be relied on
+# to reach it; this companion boots nothing and answers from a fake
+# console in under a second.
+#
 # tools/test_deflake_diagnosis.py (#1437) is deliberately absent from
 # this list as well, and from the CI job it mirrors: that issue's
 # approved rereview amendment scopes the diagnosis lab's own self-test
@@ -593,6 +609,7 @@ python3 tools/test_movement_probe.py
 python3 tools/test_farm_ai_probe.py
 python3 tools/test_probe_boot_logs.py
 python3 tools/test_item_list_widget_probe.py
+python3 tools/test_construction_probe.py
 
 # The decision .github/workflows/review-gate.yml makes on every
 # synchronize push: keep `reviewed:approve` only when the push left the

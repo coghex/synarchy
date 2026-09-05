@@ -318,11 +318,22 @@ def construct_timeout_bundle(port: int, coords, uid: int | None,
 
     ``uid`` is the unit intended to DRIVE that wait. A unit that no
     longer exists yields explicit ``null`` for both ``aiState`` and
-    ``unit``; read together they separate "the unit is gone" from "the
-    unit is alive holding no construct job". ``state`` lets a caller
-    hand over an AI sample it has ALREADY taken (the phase-1 transition
-    wait keeps its last one) instead of taking a fresh one after the
-    fact.
+    ``unit``, so a live ``aiState`` beside a live ``unit`` is the only
+    shape that reads as "the unit is alive", and a populated
+    ``aiState`` always describes a unit that still exists. ``state``
+    lets a caller hand over an AI sample it has ALREADY taken (the
+    phase-1 transition wait keeps its last one) instead of taking a
+    fresh one after the fact.
+
+    EXISTENCE IS ESTABLISHED FIRST, and it gates the AI family — a
+    handed-over ``state`` included. `unitAi.aiState`
+    (`scripts/unit_ai_core.lua:80`) is never pruned when an individual
+    unit is destroyed; it is emptied only at teardown or a load
+    reconciliation. So `getState` would happily return a dead worker's
+    last decision, and a sample taken while it was alive is equally
+    stale — either would print a phase and a `currentAction` next to
+    `unit: null` and invite a classification the engine no longer
+    supports.
 
     Read-only throughout: it must not perturb the scenario it is
     describing, and callers must run it immediately on expiry, before
@@ -334,8 +345,11 @@ def construct_timeout_bundle(port: int, coords, uid: int | None,
     if uid is None:
         ai, info = None, None
     else:
-        ai = state if state is not None else construct_job_state(port, uid)
         info = send_json(port, f"return unit.getInfo({uid})")
+        if info is None:
+            ai = None
+        else:
+            ai = state if state is not None else construct_job_state(port, uid)
     return {"designations": designations, "aiState": ai, "unit": info}
 
 
@@ -505,6 +519,13 @@ def phase_inventory(port: int) -> None:
         if not poll_until(port, BUILDING_TO_PROGRESS_S, saw_progress):
             miss_bundle = construct_timeout_bundle(
                 port, watched, uid, state=obs["ai"])
+    # Name the segment from the BUNDLE's AI family, never from the raw
+    # sample: the bundle gates it on the worker still existing, and a
+    # worker that died mid-wait must not be reported as standing in a
+    # phase (see construct_timeout_bundle). Every branch below that
+    # names a segment runs only on a miss, and a miss always has a
+    # bundle.
+    miss_state = miss_bundle["aiState"] if miss_bundle else None
 
     if claimed is None:
         _latency_line("claim → 'building'", None,
@@ -525,7 +546,7 @@ def phase_inventory(port: int) -> None:
             _latency_line(
                 "claim → 'building'", None,
                 f"EXPIRED after {CLAIM_TO_BUILDING_S:.0f} s; worker in "
-                f"{construct_segment(obs['ai'])!r}")
+                f"{construct_segment(miss_state)!r}")
         if obs["building_at"] is not None and obs["progress_at"] is not None:
             _latency_line("'building' → first progress",
                           max(0.0, obs["progress_at"] - obs["building_at"]),
@@ -537,7 +558,7 @@ def phase_inventory(port: int) -> None:
             _latency_line(
                 "'building' → first progress", None,
                 f"EXPIRED after {BUILDING_TO_PROGRESS_S:.0f} s; worker in "
-                f"{construct_segment(obs['ai'])!r}")
+                f"{construct_segment(miss_state)!r}")
 
     # The causal rule (#2172 review): an expiry in fetch/walking/no-job
     # is a phase-transition miss and says so; only a miss observed AFTER
@@ -550,7 +571,7 @@ def phase_inventory(port: int) -> None:
             f"{PROGRESS_LABEL} — PHASE-TRANSITION MISS, not a failure to "
             f"accrue: the construct_job never reached 'building' within "
             f"{CLAIM_TO_BUILDING_S:.0f} s (worker in "
-            f"{construct_segment(obs['ai'])!r})")
+            f"{construct_segment(miss_state)!r})")
     else:
         progressed = False
         progress_label = (f"{PROGRESS_LABEL} — none within "
