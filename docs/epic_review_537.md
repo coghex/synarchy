@@ -21,7 +21,7 @@ concrete precondition
 ## Status
 
 - [x] ER-1. Epic #537's live body still says the completed capability split is unimplemented — [#537]
-- [ ] ER-2. The capability summary understates the live WorldSim and RenderHandoff records
+- [x] ER-2. The capability summary understates the live WorldSim and RenderHandoff records — [#2269]
 
 ## 1. Epic closure steering
 
@@ -91,7 +91,7 @@ and the focused gates agree with the closure comment, not with the stale body.
 
 ## 2. Capability summary drift
 
-### ER-2. The capability summary understates the live WorldSim and RenderHandoff records
+### [#2269] ER-2. The capability summary understates the live WorldSim and RenderHandoff records
 
 > **Captured note:** The authoritative capability inventory's §2.1 summary
 > still describes `WorldSimCapability` as 9 fields and

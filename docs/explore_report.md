@@ -71,26 +71,26 @@ cited lines.
 - [x] EXPL-21. 98 production call sites spell inequality `≠` instead of `≢`; neither the operator audit nor CLAUDE.md's table can see it — [#1494]
 - [x] EXPL-22. The capability inventory says four of the five capability splits are §3.1 thread-privacy splits; two are, and the doc contradicts itself — [#2219]
 - [x] EXPL-23. `inputBoundaryPage` explains the modal-boundary tie-break by `PageHandle` and show-recency; the sort key is `(upLayer, upZIndex)` — [#2223]
-- [ ] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported — [deferred]: EXPL-27 dispositioned
+- [x] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported — [#2292]
 - [x] EXPL-25. `isPointerSurfaceBlocked` names `Engine.Input.Thread` as its caller; since #787 that is `Engine.Input.Thread.Mouse` — [#2225]
 - [x] EXPL-26. `World.Save.Storage`'s header says it "receives only" four of six parameters, and its numbered transaction omits the requirement-9 refusal — [#2226]
-- [ ] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
-- [ ] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
-- [ ] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
-- [ ] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
-- [ ] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
-- [ ] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
-- [ ] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
-- [ ] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
-- [ ] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
-- [ ] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
-- [ ] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
-- [ ] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
-- [ ] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
-- [ ] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
-- [ ] EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
-- [ ] EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects
-- [ ] EXPL-43. `circadian.lua` documents its function as `unit.getCircadianUrge`; no such engine verb is registered
+- [x] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams — [#2292]
+- [x] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files — [#2294]
+- [x] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them — [#2299]
+- [x] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83 — [no-issue]
+- [x] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven — [#2304]
+- [x] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused — [#2381]
+- [x] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten — [#2306]
+- [x] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four — [#2308]
+- [x] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five — [#2311]
+- [x] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk — [#2314]
+- [x] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors — [#2317]
+- [x] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case — [#2324]
+- [x] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline` — [#2292]
+- [x] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair — [#2327]
+- [x] EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components — [no-issue]
+- [x] EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects — [#2329]
+- [x] EXPL-43. `circadian.lua` documents its function as `unit.getCircadianUrge`; no such engine verb is registered — [#2330]
 
 ---
 
@@ -1620,9 +1620,7 @@ input boundary by default; every other layer defaults pass-through"
 (`src/UI/Manager/Page.hs:34-38`) matches `upInputExclusive = layer ≡ LayerModal`
 exactly.
 
-### [deferred] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
-
-> **Deferred:** EXPL-27's tree-wide dead-link sweep already lists both of this finding's sites (`UI/Manager/Query.hs`, `UI/FocusNavigation.hs`), so a standalone fix would collide with whatever that finding files — cleared once EXPL-27 carries a `[#N]`, `[no-issue]` or `[deferred]` marker, at which point this links to its issue (adding the `scopedPageOk` wording point and the third site, `UI/Types.hs:481`) or files alone if excluded there.
+### [#2292] EXPL-24. `hitsAtPointBy`'s haddock cites `UI.InputOwnership.pagesInScope`, which is not exported
 
 `src/UI/Manager/Query.hs:182-186`:
 
@@ -1805,7 +1803,7 @@ Verified truthful in the same header, so a fix does not disturb any of it:
 
 ## Haddock references that cannot resolve
 
-### EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
+### [#2292] EXPL-27. 59 cross-module haddock links point at functions their named module does not export, concentrated on module-split seams
 
 Unlike every other finding in this report, this one is systematic rather than
 situational: it was found by sweeping the whole tree rather than by reading one
@@ -1992,7 +1990,7 @@ was found in context with detail this entry does not carry: **EXPL-6**
 
 ## Asset-loader path references
 
-### EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
+### [#2294] EXPL-28. `Engine.Asset.YamlVegetation`'s summary names a `data/vegetation.yaml` that does not exist; the data is a directory of five files
 
 `src/Engine/Asset/YamlVegetation.hs:2`:
 
@@ -2087,7 +2085,7 @@ stated "~730"; the compiled-atlas corpus really is 7 unit trees, 7
 frames, matching every statement of those figures in CLAUDE.md and in
 `Unit.Atlas.Load`'s "ALL SEVEN shipped units" header.
 
-### EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
+### [#2299] EXPL-29. `engine_contracts.md`'s enum-audit coverage counts are each off by one, in the paragraph that says not to hand-count them
 
 `docs/engine_contracts.md:1337-1342`:
 
@@ -2132,7 +2130,9 @@ because the three figures are trivially re-derivable from artifacts the same
 sentence points at, and because a documentation paragraph whose stated purpose
 is to stop people hand-counting should not be a hand-count.
 
-### EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
+### [no-issue] EXPL-30. CLAUDE.md says `tools/README.md` "lists all ~85" probes; there are 89 and README names 83
+
+> **Disposition:** No issue — `dca2fe074` (2026-09-02) removed both quoted claims from CLAUDE.md; the replacement at `:102-104` says "About a hundred" against 102 probe files and no longer asserts that `tools/README.md` lists them all, while `ci_probes.py --status` remains designated authoritative. README still omits three real probes and names none that do not exist, but no document now claims otherwise.
 
 `CLAUDE.md:73-74`:
 
@@ -2184,7 +2184,7 @@ false by six, and points at a file a reader is being sent to as complete.
 
 ## Player transfers
 
-### EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
+### [#2304] EXPL-31. `Unit.Transfer`'s header calls its serializable set "the six types" and then names seven
 
 `src/Unit/Transfer.hs:29-38`:
 
@@ -2275,7 +2275,7 @@ results are on file:
 
 ## Main loop and the save barrier
 
-### EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
+### [#2381] EXPL-32. `runGatedByCaptureLock` cites "the same shape every other owner uses" and names Combat, which acks only while paused
 
 `src/Engine/Loop/Mode.hs:205-213`:
 
@@ -2376,7 +2376,7 @@ Verified truthful in the same module, so a fix does not disturb any of it:
 
 ## Lua text display
 
-### EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
+### [#2306] EXPL-33. CLAUDE.md's `text_wrap.lua` summary names two functions and four consumers; there are three functions and ten
 
 `CLAUDE.md`'s #1159 text-display contract:
 
@@ -2472,7 +2472,7 @@ Recorded so the negative results are on file and are not re-derived:
 
 ## Save-system item walk
 
-### EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
+### [#2308] EXPL-34. `flattenItemInstances` says "all three now go through this one definition" and enumerates three; there are four
 
 `src/World/Save/Types.hs:793-799`:
 
@@ -2553,7 +2553,7 @@ items privately any more.
   exactly 1 z, and `data/units/acolyte.yaml:40` really does declare a height
   mean of 1.8.
 
-### EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
+### [#2311] EXPL-35. `loadVegetationYamlFn`'s body says it parses "the single vegetation YAML file"; both Lua callers loop over five
 
 `src/Engine/Scripting/Lua/API/YamlTextures.hs:148-153`:
 
@@ -2627,7 +2627,7 @@ because it corroborates EXPL-28 rather than duplicating it.
 
 ## Sun angle: three curves, one input
 
-### EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
+### [#2314] EXPL-36. `computeAmbientLight`'s inline labels name noon and midnight; its input convention puts those values at dawn and dusk
 
 **This is a comment defect, not a behavioural one.** That conclusion is load
 bearing and was reached only after the phase difference below turned out to be
@@ -2733,7 +2733,7 @@ noon".
 
 ## Combat damage model
 
-### EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
+### [#2317] EXPL-37. The Tier 3 damage model's derivation block is stale in two places: a `modeCoupling` constant that does not exist, and a `delivered` formula missing two factors
 
 `src/Combat/Resolution/Constants.hs:43-53` is the derivation block for the whole
 Tier 3 damage model — the thing `Combat.Resolution`'s own haddock sends readers
@@ -2895,7 +2895,7 @@ Verified accurate in the same block, so a fix need not touch them:
 
 ## Hydrology namespace map
 
-### EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
+### [#2324] EXPL-38. Three references outlived the deleted `World.Fluids` facade, one of them a CI path-selector self-test case
 
 `World.Fluids` no longer exists. Commit `88d8c96f` — "Delete World.Fluids
 facade, import World.Fluid.Ocean directly" — removed `src/World/Fluids.hs`,
@@ -2979,7 +2979,7 @@ longer supports.
 
 ## Geological ore deposition
 
-### EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
+### [#2292] EXPL-39. `World.Geology.Ore` says its caller is `World.Geology.Timeline.buildAge`; that module exports only `buildTimeline`
 
 `src/World/Geology/Ore.hs:1-6`:
 
@@ -3063,7 +3063,7 @@ survived checking, arithmetic included:
 
 ## Save component machinery
 
-### EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
+### [#2327] EXPL-40. `World.Save.Component.Types` says concrete components live in three modules; five define them, and the two omitted are the optional pair
 
 `src/World/Save/Component/Types.hs:7-12`:
 
@@ -3134,7 +3134,9 @@ hardest and longest-reaching part:
   place, the old type is frozen and moved to `csOlderVersions` via `atVersion`,
   and the new one becomes `csVersion` / `csEncode` / `csDecode`.
 
-### EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
+### [no-issue] EXPL-41. `World.Save.Component.Entities`' header omits the `core-session` dependency from two of its five components
+
+> **Disposition:** No issue — `f6d3bedb6` (#2150) rewrote this header when it split `Entities.hs` into owner modules; all five components now document dependency sets matching their `csDeps` exactly, including `core-session` for `"buildings"` (`EntitySnapshots.hs:271`) and `"units"` (`:631`), and the global-allocator reasoning this finding wanted promoted is now stated in the header itself rather than only at the declaration sites.
 
 `src/World/Save/Component/Entities.hs:6-11` lists the module's five components
 with their dependencies. Three are exact; two are incomplete:
@@ -3211,7 +3213,7 @@ rather than a hard orphan reject.
 
 ## Container-knowledge seeding
 
-### EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects
+### [#2329] EXPL-42. A haddock names `Building.Knowledge.SeedAtSpawn`; the constructor is `SeedWhenBuilt`, and "at spawn" is what the design rejects
 
 `src/Engine/Scripting/Lua/API/Buildings/Progress.hs:158-167`:
 
@@ -3308,7 +3310,7 @@ Also verified exact in this pass, and recorded so they are not re-checked:
 
 ## Lua scripts
 
-### EXPL-43. `circadian.lua` documents its function as `unit.getCircadianUrge`; no such engine verb is registered
+### [#2330] EXPL-43. `circadian.lua` documents its function as `unit.getCircadianUrge`; no such engine verb is registered
 
 `scripts/circadian.lua:63-66`:
 

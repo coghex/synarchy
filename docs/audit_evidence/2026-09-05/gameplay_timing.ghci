@@ -1,0 +1,13 @@
+-- Run from the reviewed source checkout:
+-- cabal repl lib:synarchy --repl-options=-v0 < /absolute/path/to/this/file
+-- Pure production functions, controlled inputs; not a running world worker.
+import qualified World.Time.Types as WT
+import qualified Engine.Core.Clock as EC
+let step scale dt (t,d,_) = WT.advanceWorldClock WT.defaultCalendarConfig scale dt t d
+let start = (WT.WorldTime 10 0, WT.WorldDate 1 1 1, 0 :: Int)
+print ("default_240_quarter_second_ticks", iterate (step 1 0.25) start !! 240)
+print ("same_60_seconds_one_clock_call", step 1 60 start)
+print ("scale60_600_ticks_of_0_1", iterate (step 60 0.1) start !! 600)
+print ("scale60_480_ticks_of_0_125", iterate (step 60 0.125) start !! 480)
+print ("independent_cap_4_short_vs_1_long", sum (map EC.sanitiseElapsed [0.25,0.25,0.25,0.25]), EC.sanitiseElapsed 1)
+:quit
