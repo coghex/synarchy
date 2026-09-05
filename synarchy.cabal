@@ -1237,6 +1237,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.TransferOrderApi
                    Test.Headless.Unit.CargoApi
                    Test.Headless.Unit.MedicalReach
+                   Test.Headless.Unit.MedicalKitInstance
                    Test.Headless.Unit.NightPerception
                    Test.Headless.Unit.LineOfSight
                    Test.Headless.Item.GroundPageOwnership

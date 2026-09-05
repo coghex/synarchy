@@ -30,7 +30,7 @@ import System.Directory
     , doesDirectoryExist, doesFileExist, listDirectory, removeFile
     , getPermissions, setPermissions, Permissions(..), createFileLink
     , withCurrentDirectory )
-import System.FilePath ((</>), takeDirectory)
+import System.FilePath ((</>), takeDirectory, addTrailingPathSeparator)
 import System.IO (stderr, openBinaryTempFile)
 
 import Engine.Core.Log
@@ -38,7 +38,8 @@ import Engine.Core.Log
     , LogEntry(..) )
 import World.Save.Serialize
     ( listSaves, listSavesWithSeams, ListingSeams(..), productionListingSeams
-    , loadWorld, savesDirectory, saveExtension, SaveListing(..), loadPhaseFor )
+    , loadWorld, savesDirectory, saveExtension, SaveListing(..), loadPhaseFor
+    , saveSlotPath, legacySavePath, checkSaveName, SaveRequestKind(..) )
 import World.Save.Storage
 import World.Save.Storage.Durable (syncDirectory)
 import World.Save.Envelope
@@ -1358,6 +1359,191 @@ spec = do
                 createFileLink decoy (prevPath slot)
                 saves ← listSavesOK logger `finally` removeFile decoy
                 map slName saves `shouldNotContain` ["leaked"]
+
+    -- Issue #2335: a save NAME has two physical forms -- the modern
+    -- slot directory saves/<name>/ and the pre-#762 legacy flat file
+    -- saves/<name>.synworld -- and 'loadWorld' resolves the name to the
+    -- DIRECTORY whenever one exists at all. Listing used to visit the
+    -- two as independent entries and publish a row apiece under the SAME
+    -- 'slName', and every consumer keys a row by name alone, so the
+    -- second row silently loaded the first one's save. The listing now
+    -- publishes at most one row per logical name, and it is the one
+    -- loading that name would actually reach.
+    describe "World.Save.Serialize.listSaves logical-name coalescence \
+             \(issue #2335 -- at most one row per save NAME, and it is \
+             \the form loadWorld would reach)" $ do
+        let twin = "twinned" ∷ Text
+            twinSlot = saveSlotPath twin
+            twinFlat = legacySavePath twin
+            -- The one warning requirement 3 asks for: it must name BOTH
+            -- physical forms, so a message naming only the flat path it
+            -- is skipping does not count. The directory is named with a
+            -- trailing separator precisely so this match cannot be
+            -- satisfied by 'twinFlat''s own leading substring.
+            collisionDiagnostics = filter $ \d →
+                T.pack twinFlat `T.isInfixOf` d
+                    ∧ T.pack (addTrailingPathSeparator twinSlot) `T.isInfixOf` d
+            plantFlat = do
+                let (_, bytes) = buildEncoded 3 twin "t3"
+                createDirectoryIfMissing True savesDirectory
+                BS.writeFile twinFlat bytes
+                pure bytes
+
+        it "lists a lone legacy flat file exactly as before -- the \
+           \shadowing rule is about a directory NAMESAKE, not about \
+           \legacy files" $
+            withSavesRoot $ do
+                flatBytes ← plantFlat
+                doesDirectoryExist twinSlot `shouldReturn` False
+                (logger, readSeen) ← capturingLogger
+                listings ← listSavesOK logger
+                case filter ((≡ twin) . slName) listings of
+                    [entry] → do
+                        smSeed (slMetadata entry) `shouldBe` 3
+                        slRecovered entry `shouldBe` False
+                    other → expectationFailure
+                        ("expected exactly one 'twinned' listing, got "
+                            <> show other)
+                diagnostics ← listingDiagnostics <$> readSeen
+                diagnostics `shouldBe` []
+                BS.readFile twinFlat `shouldReturn` flatBytes
+
+        it "publishes ONE row -- the slot directory's -- when both forms \
+           \hold the same name, and names both paths in exactly one \
+           \warning" $
+            withSavesRoot $ do
+                _ ← publishOK twinSlot twin 7 twin "t7"
+                flatBytes ← plantFlat
+                (logger, readSeen) ← capturingLogger
+                listings ← listSavesOK logger
+                case filter ((≡ twin) . slName) listings of
+                    -- The DIRECTORY's seed: picking the flat row instead
+                    -- would also produce exactly one row under this name.
+                    [entry] → do
+                        smSeed (slMetadata entry) `shouldBe` 7
+                        slRecovered entry `shouldBe` False
+                    other → expectationFailure
+                        ("expected exactly one 'twinned' listing, got "
+                            <> show other)
+                diagnostics ← listingDiagnostics <$> readSeen
+                case collisionDiagnostics diagnostics of
+                    [_] → pure ()
+                    other → expectationFailure
+                        ("expected exactly one collision warning naming \
+                         \both paths, got " <> show diagnostics
+                            <> " (collision subset " <> show other <> ")")
+                -- Requirement 4: listing is a read-only survey. Neither
+                -- representation is deleted, renamed, or migrated.
+                BS.readFile twinFlat `shouldReturn` flatBytes
+                doesFileExist (authPath twinSlot) `shouldReturn` True
+
+        it "suppresses the flat row even when the directory namesake is \
+           \UNLISTABLE, publishing neither -- loading the name reaches \
+           \that directory and fails, never the flat file, so a flat row \
+           \would advertise a save nothing can open" $
+            withSavesRoot $ do
+                _ ← publishOK twinSlot twin 7 twin "t7"
+                -- One publish, so there is no previous generation to
+                -- fall back to, and an INCOMPATIBLE authoritative
+                -- generation is dropped outright (requirement 7).
+                doesFileExist (prevPath twinSlot) `shouldReturn` False
+                whole ← BS.readFile (authPath twinSlot)
+                BS.writeFile (authPath twinSlot) (corruptEnvelopeVersion whole)
+                flatBytes ← plantFlat
+                -- Precondition: the flat file really is listable on its
+                -- own (the case above proves the same bytes list), so a
+                -- missing row here is the shadowing rule and not a
+                -- decode failure.
+                (logger, readSeen) ← capturingLogger
+                listings ← listSavesOK logger
+                map slName listings `shouldNotContain` [twin]
+                diagnostics ← listingDiagnostics <$> readSeen
+                case collisionDiagnostics diagnostics of
+                    [_] → pure ()
+                    other → expectationFailure
+                        ("expected exactly one collision warning naming \
+                         \both paths, got " <> show diagnostics
+                            <> " (collision subset " <> show other <> ")")
+                BS.readFile twinFlat `shouldReturn` flatBytes
+
+    -- Issue #2335: the manual-save side of the same rule. Autosave has
+    -- refused to publish over a legacy flat namesake since #913
+    -- ('World.Save.Autosave.ownershipProblem'); a manual save published
+    -- straight over it, leaving the player's legacy generation on disk
+    -- and unreachable by name. This is the check
+    -- 'Engine.Scripting.Lua.API.Save.saveWorldFn' runs -- whole, and by
+    -- the same call -- BEFORE 'beginSave', so a refusal opens no
+    -- barrier and captures no snapshot. The end-to-end boundary
+    -- (synchronous false, the save_load failure event, an untouched
+    -- save status) is tools/save_storage_probe.py's.
+    describe "World.Save.Serialize.checkSaveName (issue #2335 -- a \
+             \manual save is refused a name a legacy flat file holds)" $ do
+        let occupied = "occupied" ∷ Text
+            flatPath = legacySavePath occupied
+            plantOccupied = do
+                createDirectoryIfMissing True savesDirectory
+                let bytes = "a legacy generation this run must not shadow"
+                BS.writeFile flatPath bytes
+                pure bytes
+
+        it "refuses a MANUAL save under an occupied name, naming the \
+           \flat file and how to clear it" $
+            withSavesRoot $ do
+                _ ← plantOccupied
+                result ← checkSaveName ManualSave occupied
+                case result of
+                    Right nm → expectationFailure
+                        ("expected a refusal, got " <> show nm)
+                    Left reason → do
+                        T.unpack reason `shouldContain` flatPath
+                        T.unpack reason `shouldContain` "Rename or remove"
+
+        it "leaves the legacy file byte-identical and creates no slot \
+           \directory -- a refusal touches nothing on disk \
+           \(requirement 4)" $
+            withSavesRoot $ do
+                planted ← plantOccupied
+                result ← checkSaveName ManualSave occupied
+                -- Tied to the refusal: a check that stopped refusing
+                -- would also leave the disk alone.
+                result `shouldSatisfy` isLeft
+                BS.readFile flatPath `shouldReturn` planted
+                doesDirectoryExist (saveSlotPath occupied) `shouldReturn` False
+
+        it "accepts a MANUAL save under a name no flat file holds -- \
+           \occupancy is the flat NAMESAKE, not the saves directory \
+           \holding some flat file" $
+            withSavesRoot $ do
+                _ ← plantOccupied
+                checkSaveName ManualSave "unoccupied"
+                    `shouldReturn` Right "unoccupied"
+
+        it "does not decode the legacy file: bytes that are not a save \
+           \at all still occupy the name, and are still preserved" $
+            withSavesRoot $ do
+                createDirectoryIfMissing True savesDirectory
+                BS.writeFile flatPath "\0\0 not an envelope"
+                result ← checkSaveName ManualSave occupied
+                result `shouldSatisfy` isLeft
+                BS.readFile flatPath `shouldReturn` "\0\0 not an envelope"
+
+        it "leaves an AUTOSAVE request alone -- World.Save.Autosave owns \
+           \that refusal, one step earlier and with its own reason" $
+            withSavesRoot $ do
+                _ ← plantOccupied
+                checkSaveName ScheduledAutosave occupied
+                    `shouldReturn` Right occupied
+
+        it "still reports an INVALID name with sanitizeSaveName's own \
+           \reason -- the occupancy rule is added to name validation, \
+           \not put in front of it" $
+            withSavesRoot $ do
+                result ← checkSaveName ManualSave "../escape"
+                case result of
+                    Right nm → expectationFailure
+                        ("expected a refusal, got " <> show nm)
+                    Left reason →
+                        T.unpack reason `shouldContain` "'..'"
 
     -- Issue #2333: the three generation reads inside 'listSaves' were
     -- bare 'BS.readFile' calls, so ONE unreadable file (a permission

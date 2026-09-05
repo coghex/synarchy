@@ -112,8 +112,16 @@ UNIT_ASSET_GLOBS = [
     # unrelated under tools/ shares the `pack_atlas_` prefix, and a
     # future owner module must not be able to escape the gate by being
     # left off a list. `tools/pack_atlas_*.py` does not match the
-    # self-test (`tools/test_pack_atlas.py`), which is named on its own.
-    "tools/pack_atlas.py", "tools/pack_atlas_*.py", "tools/test_pack_atlas.py",
+    # self-test family, which is matched by its own prefix below.
+    "tools/pack_atlas.py", "tools/pack_atlas_*.py",
+    # Since issue #2061 the self-test is a façade of the same shape,
+    # over `tools/test_pack_atlas_support.py` and one case owner per
+    # concern (validation, compiler, budget). Matched by prefix for the
+    # same reason: a case owner that dropped off an explicit list would
+    # stop selecting the gate its own cases are the gate for.
+    # `tools/test_pack_atlas*.py` covers the façade and every owner, and
+    # is the same pattern the issue's acceptance compile command uses.
+    "tools/test_pack_atlas*.py",
     "tools/ci_expensive_gates.py", "tools/ci-local.sh", "Makefile",
     ".github/workflows/ci.yml", ".github/ci/Dockerfile",
     # The budget policy the strict run enforces (#1262). Editing a
@@ -561,6 +569,13 @@ def self_test() -> int:
         ("unit-assets", ["tools/pack_atlas_index.py"], True),
         ("unit-assets", ["tools/pack_atlas_budget.py"], True),
         ("unit-assets", ["tools/test_pack_atlas.py"], True),
+        # Every #2061 self-test owner, named one by one: the prefix
+        # pattern above is only load-bearing if each real filename
+        # actually matches it.
+        ("unit-assets", ["tools/test_pack_atlas_support.py"], True),
+        ("unit-assets", ["tools/test_pack_atlas_validation.py"], True),
+        ("unit-assets", ["tools/test_pack_atlas_compiler.py"], True),
+        ("unit-assets", ["tools/test_pack_atlas_budget.py"], True),
         ("unit-assets", ["tools/ci_expensive_gates.py"], True),
         ("unit-assets", ["tools/ci-local.sh"], True),
         ("unit-assets", ["Makefile"], True),
