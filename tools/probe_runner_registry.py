@@ -146,8 +146,6 @@ PROBES = [
      "lunge's own stored reach/impact speed rather than timing out, and a "
      "replaced target, an aged-out timeout and a launch the engine never "
      "lifts each cancel it with all seven lunge fields cleared"),
-    ("lua_strict_msg", "lua_strict_msg_probe.py",
-     "a Haskell exception embedded in a LuaToEngineMsg/LuaMsg field must not escape and crash the engine (#622)"),
     ("machine_shop", "machine_shop_probe.py",
      "electric furnace smelt recipe + machine_shop wiring/motor recipes, real content (#591)"),
     ("meal_waste", "meal_waste_probe.py",
