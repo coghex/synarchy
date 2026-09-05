@@ -271,6 +271,7 @@ import qualified Test.Headless.Graphics.TextureSamplerPolicy as TextureSamplerPo
 import qualified Test.Headless.Graphics.BindlessRelease as BindlessRelease
 import qualified Test.Headless.Graphics.BindlessPublish as BindlessPublish
 import qualified Test.Headless.Lua.AssetFailure as LuaAssetFailure
+import qualified Test.Headless.Lua.MessageStrictness as LuaMessageStrictness
 import qualified Test.Headless.Core.ConfigState as ConfigState
 import qualified Test.Headless.Core.ConfigWrite as ConfigWrite
 import qualified Test.Headless.Core.Queue as CoreQueue
@@ -742,6 +743,7 @@ main = hspec $ do
     describe "bindless registration failure" $ do
         BindlessPublish.spec
         LuaAssetFailure.spec
+    LuaMessageStrictness.spec
     describe "Unit.Pathing.Cost" PathingCost.spec
     PathingHazard.spec
     describe "Unit.Pathing.AStar" PathingAStar.spec

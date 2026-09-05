@@ -85,7 +85,6 @@ PROTOCOL_PROBES: dict[str, str] = {
     "disarm": probe_protocol.PROTOCOL_VERSION,
     "injury_log": probe_protocol.PROTOCOL_VERSION,
     "lua_orphan_prune": probe_protocol.PROTOCOL_VERSION,
-    "lua_strict_msg": probe_protocol.PROTOCOL_VERSION,
     "machine_shop": probe_protocol.PROTOCOL_VERSION,
     "meal_waste": probe_protocol.PROTOCOL_VERSION,
     "mental_efficiency": probe_protocol.PROTOCOL_VERSION,

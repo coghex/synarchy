@@ -17,7 +17,7 @@ Three groups:
                 not name -- reading the REAL registry rather than a
                 stand-in a harness fixture rebound;
   selection     `--only` really selects, exhaustively: the harness
-                selection and the twenty-two migration selections
+                selection and the twenty-one migration selections
                 partition the aggregate exactly, and a fresh process
                 running one of them executes that owner and no other;
   refusal       an unrecognized selector exits non-zero naming the
@@ -102,7 +102,7 @@ def test_owner_composition() -> None:
         migrations.extend(test.__name__
                           for test in aggregate.compose(f"migration:{key}"))
     expect(sorted(harness + migrations) == sorted(everything),
-           "the harness selection and the twenty-two migration selections "
+           "the harness selection and the twenty-one migration selections "
            "partition the aggregate exactly")
 
     # Both drift directions, by name, against the real registry. The dict

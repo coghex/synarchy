@@ -245,6 +245,34 @@ jobs:
           echo "/usr/local/.ghcup/bin" >> "$GITHUB_PATH"
           echo "CABAL_DIR=/usr/local/cabal" >> "$GITHUB_ENV"
 
+      # Source-distribution completeness audit (issue #2175). Compares
+      # `cabal sdist --list-only` against what git tracks in the resource
+      # families a shipped runtime path or the packaged headless suite
+      # reads, in BOTH directions: nothing required may be missing, and
+      # nothing untracked (a gitignored config/*.local.yaml, say) may
+      # ship. The manifest had already drifted -- the tarball carried no
+      # unit atlas index, no save-compat fixture and neither
+      # docs/save_compat document -- and nothing could see it, because
+      # every one of those files is present in a checkout, so the whole
+      # suite passes against the repository while the tarball it
+      # describes cannot register a unit or run its own save gate.
+      #
+      # It lives in this job rather than static-audits because it needs
+      # `cabal`, which that engine-free worker deliberately does not
+      # have. It needs no build product though, so it runs here, right
+      # after the toolchain export and BEFORE the docs-only fast path is
+      # even selected: deliberately unconditional, like the enum and
+      # cabal-module inventory audits, since either side of the
+      # comparison can drift alone and a path filter keyed on the
+      # resource directories would not fire for a cabal-only edit that
+      # drops a family. One `cabal sdist --list-only` (~3 s; it reads no
+      # dependency index and no build product); everything else is in
+      # memory.
+      - name: Source distribution manifest audit
+        run: |
+          python3 tools/sdist_manifest_audit.py --self-test
+          python3 tools/sdist_manifest_audit.py
+
       # Docs-only fast path (#1490). A PR or push that changes ONLY
       # documentation cannot affect the Haskell half of this job -- no
       # target compiles a doc, and docs/save_compat/* is excluded because
