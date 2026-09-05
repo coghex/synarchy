@@ -205,7 +205,7 @@ runWaitForChunks env timeoutArg mPage = do
     case mTarget of
         Nothing      → return "0"
         Just (_, ws) →
-            T.pack ∘ show ⊚ loop ws (4 * chunkWaitTimeoutSec timeoutArg)
+            tshow ⊚ loop ws (4 * chunkWaitTimeoutSec timeoutArg)
   where
     remaining ∷ WorldState → IO Int
     remaining ws = length ⊚ readIORef (wsInitQueueRef ws)

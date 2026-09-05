@@ -189,7 +189,7 @@ readerRequiredComponentIds luaRequiredNames =
         `HS.union` HS.map luaComponentId luaRequiredNames
 
 renderEnvelopeError ∷ EnvelopeError → Text
-renderEnvelopeError = T.pack . show
+renderEnvelopeError = tshow
 
 renderComponentErrors ∷ [ComponentError] → Text
 renderComponentErrors = T.intercalate "; " . map renderComponentError
@@ -1006,7 +1006,7 @@ decodeMetadataComponent decoded = do
     when (version `notElem` metadataComponentInputVersions) $
         Left ("Save format incompatible: expected metadata component v"
               <> T.intercalate "/"
-                   (map (T.pack . show) metadataComponentInputVersions)
+                   (map tshow metadataComponentInputVersions)
               <> ", got v" <> tshow version)
     payload ← maybe (Left "metadata component payload missing \
                            \(unreachable — already required)") Right

@@ -100,6 +100,76 @@ on a continuation line, so either rule would report zero dead links and
 generate an empty baseline), a dropped comment form, and treating every
 non-code span as a comment.
 
+## `tshow` spelling audit (`tshow_spelling_audit.py`, #2177)
+
+```bash
+python3 tools/tshow_spelling_audit.py --self-test  # the fixtures (run first)
+python3 tools/tshow_spelling_audit.py             # the gate
+```
+
+`UPrelude` defines the pack-a-shown-value wrapper once
+(`tshow = TXT.pack ∘ show`), and #1099 replaced the 709 direct copies it
+found. Nothing enforced the result: the spelling regressed twice within
+nine days of that merge, and the point-free compositions #1099's
+acceptance grep never scoped survived in eleven more files, two of them
+as renamed copies (`showT`, `tShow`). This is the guard for it, and it
+belongs to the same class as the operator audit above — every reported
+form is definitionally `tshow`, so a fix moves no rendered byte.
+
+Reported in `src/` and `app/`: a `Data.Text` `pack` applied directly to
+`show`, as `pack (show …)`, `pack $ show …`, `pack . show` or
+`pack ∘ show`, adjacency measured modulo whitespace and comments so a
+multiline wrap is the same hit. `pack . f . show` is a different
+function and is not reported.
+
+Resolution is by **binding**, never by the `T.` qualifier's spelling:
+this tree binds `T` to `Data.Text` in most modules, but `src/UPrelude.hs`
+binds `T` to `Data.Text.Encoding` (and `Data.Text` to `TXT`), while two
+Lua modules bind `T` to `Data.Text` and `Data.Text.Read` at once. A
+qualifier-keyed rule would report `UPrelude`'s encoder and miss a
+`Data.Text` under any other alias.
+Imports are read with `engine_env_capability_writer_syntax.py`'s
+`parse_imports`/`imports_name` — the resolver the capability writer
+scanner already uses — so an alias, a bare `import qualified Data.Text`,
+an unqualified `import Data.Text (pack)`, `hiding (pack)` and an
+`ImportQualifiedPost` declaration each resolve correctly, while
+`Data.ByteString.Char8`'s packer (`Unit.Atlas.Digest`'s digest material)
+and `Data.Text.Lazy`'s are not this function and are never reported.
+
+Never reported: the same text in a `--` or `{- -}` comment, in a string
+literal, or in a **quasiquote**. Comment and string awareness comes from
+`unicode_operator_audit.py`'s `haskell_code_only` rather than a second
+lexer; the quasiquote masking is this module's own, because that guard's
+is scoped to `ShaderCode.hs` by name while this rule covers every
+production path. `QuasiQuotes` is a global `default-extensions` entry,
+which is what makes the no-space `[varid|` form unambiguous — with the
+extension on, a list comprehension must be written `[ e | … ]`.
+
+A file it cannot certify is **refused**, loudly, rather than scanned as
+if clean: a CPP `#define`/`#undef`/`#include` (which can rename the very
+alias the scan resolves by), a `Data.Text` import whose shape the
+resolver cannot read, and a `Data.Text` mention outside any recognized
+import declaration. `src/UPrelude.hs`'s export list is checked once per
+run for the one premise the whole scan rests on — that a bare `pack` is
+not in scope tree-wide. Its `module Data.Text` re-export carries `Text`
+and not `pack` (report §5.2: a `module M` export needs the entity in
+scope both unqualified and as `M.e`, and `Data.Text` is imported there
+qualified as `TXT` plus `(Text)`), and the check tests both halves of
+that rule rather than reading the entry's presence as the hazard.
+
+One exemption, construct-scoped: `tshow`'s own definition in
+`src/UPrelude.hs`. It covers that single `pack` occurrence, so a second
+hand-written wrapper elsewhere in `UPrelude` — or a `where`-bound local
+named `tshow` — still fails, and the identical definition in any other
+module is an ordinary local copy and fails too.
+
+`--self-test` drives the same `find_violations` over synthetic module
+sources: every detected spelling and import form, the multiline and
+comment-interrupted wraps, every clean near-miss (`unpack`, `repack`,
+`showFFloat`, `shows`, a `.show` record selector), each refusal, the
+exemption's two scopes, and the `UPrelude` export premise in both
+directions. Every rule was mutation-tested against it.
+
 ## World generation tools
 
 Scripts for auditing, checking determinism, and regression-testing the
