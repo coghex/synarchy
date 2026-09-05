@@ -1278,6 +1278,26 @@ module that no longer writes the field fails just as loudly, so the map
 can never decay into a mere upper bound. Its **keys** are checked
 against the live record in both directions too.
 
+Since #2230 the writer-scanner module itself is documentation and
+re-exports over four one-way implementation owners:
+`..._writer_authority.py` holds the checked-in map, the shadow
+exemptions, the recognized mutation and read primitives and the two
+blocking checks that read them; `..._writer_syntax.py` holds the
+Haskell tokenizer, the import resolver and the mutation-expression
+classification that makes the recognized-form list a closed set;
+`..._writer_projections.py` holds capability-record and projection
+discovery with #2059's fail-closed completeness audit; and
+`..._writer_scan.py` holds the single pass over the production tree,
+the mutation-site check and the residue report. Dependencies run one
+way — authority, then syntax and projections over it, then scan over
+all three — and no owner imports the façade, so the scan owner rather
+than an import edge is the composition boundary between syntax and
+projection discovery. Every name the scanner exposed stays importable
+from `tools/engine_env_capability_writers.py`, bound to its owner's
+own object, and every diagnostic still cites that stable façade path;
+`tools/engine_env_capability_audit.py` imports the façade and nothing
+below it, so the aggregate still sees one writer owner.
+
 Since #2228 that focused self-test is itself a façade over four case
 owners — `..._writers_map.py` (the map contract and pass-on residue),
 `..._writers_scanner.py` (import scope, tokenization, and
