@@ -353,9 +353,6 @@ renderPublishFailure f =
   where
     pathSuffix = maybe "" (\p → " (" <> T.pack p <> ")") (pfPath f)
 
-showT ∷ Show a ⇒ a → Text
-showT = T.pack . show
-
 -- | The complete storage transaction (requirement 1). Receives ONLY: the
 --   slot directory (created if missing), a slot name (diagnostics only —
 --   NOT re-sanitized here, the caller already owns that), the metadata
@@ -456,7 +453,7 @@ publishGenerationWithSeams createCandidate readGeneration syncDir dir slotName
                     dirResult ← try (createDirectoryIfMissing True dir)
                     case dirResult of
                         Left (e ∷ IOException) →
-                            pure (Left (failure PhaseDirectoryCreate (Just dir) (showT e)))
+                            pure (Left (failure PhaseDirectoryCreate (Just dir) (tshow e)))
                         Right () → do
                             owned ← syncSlotOwners established
                             case owned of
@@ -465,7 +462,7 @@ publishGenerationWithSeams createCandidate readGeneration syncDir dir slotName
                                     created ← try (createCandidate dir candidateTemplate)
                                     case created of
                                         Left (e ∷ IOException) →
-                                            pure (Left (failure PhaseCandidateCreate (Just dir) (showT e)))
+                                            pure (Left (failure PhaseCandidateCreate (Just dir) (tshow e)))
                                         Right (tempPath, h) →
                                             writeValidateAndPublish syncDir dir slotName
                                                 expectedMeta
@@ -487,7 +484,7 @@ publishGenerationWithSeams createCandidate readGeneration syncDir dir slotName
             result ← try (syncDir owner)
             case result of
                 Left (e ∷ SomeException) → pure
-                    (Left (failure PhaseOwnerDirectorySync (Just owner) (showT e)))
+                    (Left (failure PhaseOwnerDirectorySync (Just owner) (tshow e)))
                 Right () → go more
 
 -- | Whether this slot is an ESTABLISHED published slot: one that
@@ -632,7 +629,7 @@ existingGenerationPreflight readGeneration dir luaKnownNames = do
                 -- unreadable\" case this refuses on.
                 Left (e ∷ IOException)
                     | isDoesNotExistError e → pure (Right [])
-                    | otherwise → pure (Left (PreflightUnreadable path (showT e)))
+                    | otherwise → pure (Left (PreflightUnreadable path (tshow e)))
                 Right bytes →
                     pure (Right (foreignOptionalComponentIds luaKnownNames bytes))
 
@@ -646,17 +643,17 @@ writeValidateAndPublish syncDir dir slotName expectedMeta encoded
     case writeResult of
         Left (e ∷ IOException) → do
             closeQuietly h
-            pure (Left (fail' PhaseCandidateWrite (Just tempPath) (showT e)))
+            pure (Left (fail' PhaseCandidateWrite (Just tempPath) (tshow e)))
         Right () → do
             flushResult ← try (durableFlush h)
             case flushResult of
                 Left (e ∷ SomeException) →
-                    pure (Left (fail' PhaseCandidateFlush (Just tempPath) (showT e)))
+                    pure (Left (fail' PhaseCandidateFlush (Just tempPath) (tshow e)))
                 Right () → do
                     rereadResult ← try (BS.readFile tempPath)
                     case rereadResult of
                         Left (e ∷ IOException) →
-                            pure (Left (fail' PhaseCandidateReread (Just tempPath) (showT e)))
+                            pure (Left (fail' PhaseCandidateReread (Just tempPath) (tshow e)))
                         Right rereadBytes →
                             case validateCandidate expectedMeta
                                     luaKnownNames luaRequiredNames rereadBytes of
@@ -774,7 +771,7 @@ publishValidated syncDir dir slotName luaKnownNames luaRequiredNames tempPath = 
             stageResult ← stageOldPrevious dir prevPath
             case stageResult of
                 Left (e ∷ IOException) →
-                    pure (Left (fail' PhaseStalePrevious (Just prevPath) (showT e)))
+                    pure (Left (fail' PhaseStalePrevious (Just prevPath) (tshow e)))
                 Right mStaled → afterSync (rotate authPath prevPath mStaled)
   where
     fail' = publishFailureFor slotName
@@ -784,19 +781,19 @@ publishValidated syncDir dir slotName luaKnownNames luaRequiredNames tempPath = 
         syncResult ← try (syncDir dir)
         case syncResult of
             Left (e ∷ SomeException) →
-                pure (Left (fail' PhaseDirectorySync (Just dir) (showT e)))
+                pure (Left (fail' PhaseDirectorySync (Just dir) (tshow e)))
             Right () → next
     rotate authPath prevPath mStaled = do
         rotateResult ← try (renameFile authPath prevPath)
         case rotateResult of
             Left (e ∷ IOException) →
-                pure (Left (fail' PhaseRotatePrevious (Just authPath) (showT e)))
+                pure (Left (fail' PhaseRotatePrevious (Just authPath) (tshow e)))
             Right () → afterSync (publish authPath mStaled)
     publish authPath mStaled = do
         publishResult ← try (renameFile tempPath authPath)
         case publishResult of
             Left (e ∷ IOException) →
-                pure (Left (fail' PhasePublishRename (Just tempPath) (showT e)))
+                pure (Left (fail' PhasePublishRename (Just tempPath) (tshow e)))
             Right () → afterSync (Right ⊚ cleanupAfterPublish dir mStaled)
 
 -- | What the slot's CURRENT authoritative file means for this
@@ -1066,7 +1063,7 @@ decodeGenerationFile luaKnownNames luaRequiredNames path = do
             readResult ← try (BS.readFile path)
             case readResult of
                 Left (e ∷ IOException) →
-                    pure (Left (GenerationCorrupt ("cannot read: " <> showT e)))
+                    pure (Left (GenerationCorrupt ("cannot read: " <> tshow e)))
                 Right bytes → pure $ do
                     (meta, snap, luaComponents, isMigrated) ←
                         decodeSessionEnvelopeClassified

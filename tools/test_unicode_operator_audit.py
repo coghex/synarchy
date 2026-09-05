@@ -113,6 +113,85 @@ def test_escaped_quote_inside_string_does_not_end_it_early():
            f"literal, so only the real code `>>=` is flagged (got {v})")
 
 
+def test_dash_run_continuing_into_a_symbol_is_an_operator():
+    # Report SS2.3: a dash run opens a comment only when the maximal
+    # symbol lexeme it belongs to is nothing but dashes. `-->` and
+    # `--|` continue into another symbol character, so the code after
+    # them is code -- read as comments they mask every operator to end
+    # of line (#2177).
+    for source in ('go x y = x --> x >>= y\n',
+                   'go x y = x --| x >>= y\n'):
+        v = find_violations(source, ORDINARY_FILE)
+        expect(_tokens(v) == {">>="}, f"a dash run continuing into a symbol "
+               f"is an operator, so {source.strip()!r} still has real code "
+               f"after it (got {v})")
+
+
+def test_dash_run_beginning_at_a_symbol_is_an_operator():
+    # The leading half of the same rule: `<--` began at `<`, so the run
+    # is `<--` and not a comment. A trailing-side-only check misses it.
+    text = 'go x y = x <-- x >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"`<--` is one operator lexeme, so the "
+           f"code after it is scanned (got {v})")
+
+
+def test_dash_run_and_a_unicode_symbol_are_one_lexeme():
+    # Report SS2.2's symbol set is Unicode: `⊚--` is one operator, and
+    # `--\u2014` continues into an em dash (category Pd). This tree writes
+    # its own operators from that set, so an ASCII-only test splits them
+    # and hands the `--` on as a comment opener.
+    for source in ('go x y = x \u229a-- x >>= y\n',
+                   'go x y = x --\u2014 x >>= y\n'):
+        v = find_violations(source, ORDINARY_FILE)
+        expect(_tokens(v) == {">>="}, f"a Unicode symbol continues the "
+               f"lexeme, so {source.strip()!r} still has real code after it "
+               f"(got {v})")
+
+
+def test_a_run_of_only_dashes_is_still_a_comment():
+    # The other direction, so the rule is not simply switched off: `--`
+    # and `---` are nothing but dashes and open comments, and `-- |`
+    # ends its run at the space.
+    for source in ('-- x >>= y\n', '--- x >>= y\n', '-- | x >>= y\n'):
+        v = find_violations(source + 'go a b = a == b\n', ORDINARY_FILE)
+        expect(_tokens(v) == {"=="}, f"{source.strip()!r} is a comment, so "
+               f"only the real code below it is flagged (got {v})")
+
+
+def test_a_lone_dash_is_subtraction_not_a_comment():
+    # Two dashes minimum: a single `-` is an operator, and reading it as
+    # a comment would mask the rest of its line.
+    text = 'go a b = (a - b) >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a lone `-` is subtraction, so the code "
+           f"after it is scanned (got {v})")
+
+
+def test_string_gap_ends_at_its_own_backslash_not_the_closing_quote():
+    # Report SS2.6: `\ whitechar {whitechar} \` is a string GAP, not an
+    # escape. Read as a two-character escape, the gap's closing
+    # backslash pairs with the string's closing quote, the string never
+    # ends, and every operator to end of file is masked. `src/`+`app/`
+    # carries 258 gaps today.
+    text = 'msg = "a\\\n\\"\ngo x y = x >>= y\n'
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a string gap ends the string at its "
+           f"own closing quote, so the real code after it is still "
+           f"scanned (got {v})")
+
+
+def test_multi_line_string_gap_keeps_its_body_out_of_the_scan():
+    # The shape this tree actually writes: a message split across lines
+    # with a gap, whose text contains an operator that is NOT code.
+    text = ('msg = "first part == not code \\\n'
+            '        \\ second part"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"the gapped string's body stays a "
+           f"literal and the code after it is scanned (got {v})")
+
+
 # ----- Char literals -----------------------------------------------------
 
 def test_char_literal_containing_a_double_quote_does_not_mask_later_code():
@@ -135,6 +214,45 @@ def test_escaped_single_quote_char_literal_does_not_confuse_the_scanner():
     expect(_tokens(v) == {"=="} and len(v) == 1,
            f"a real '==' after an escaped-quote char literal is still "
            f"flagged (got {[str(x) for x in v]})")
+
+
+def test_combining_mark_is_an_identifier_character():
+    # GHC accepts a combining mark inside an identifier (issue #7650),
+    # and Python's `\\w` -- `str.isalnum()` plus `_` -- does not match
+    # one. Excluded, the prime of `π́'` opens a char literal, eats the
+    # quote after it, and the real closing quote opens a phantom string
+    # masking every operator below.
+    text = ('g = let π́\' x = x in π́\'"\'"\\n'
+            'go x y = x >>= y\\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a combining mark stays inside the "
+           f"identifier, so the code after it is scanned (got {v})")
+
+
+def test_double_prime_identifier_is_one_name():
+    # `'` is itself an identifier-continuation character, so the second
+    # prime of `x\'\'` is part of the name. Dropped from the set, it opens
+    # a char literal that swallows the string after it and every
+    # operator below.
+    text = ('g = let x\'\' _ = () in x\'\'"\'"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a doubled prime stays inside the "
+           f"identifier, so the code after it is scanned (got {v})")
+
+
+def test_unicode_identifier_trailing_prime_is_not_a_char_literal():
+    # GHC accepts non-ASCII identifiers and this tree is UnicodeSyntax
+    # throughout. Read with an ASCII-only identifier class, the prime of
+    # `\u03c0'` opens a char literal, consumes the opening quote of the
+    # `'"'` after it, and the real closing quote then opens a phantom
+    # string that masks every operator to end of file.
+    text = ('g = let \u03c0\' _ = () in \u03c0\'"\'"\n'
+            'go x y = x >>= y\n')
+    v = find_violations(text, ORDINARY_FILE)
+    expect(_tokens(v) == {">>="}, f"a Unicode identifier's trailing prime "
+           f"is part of the name, so the code after it is still scanned "
+           f"(got {v})")
 
 
 def test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal():
@@ -493,9 +611,19 @@ def main() -> int:
         test_nested_block_comment_does_not_trigger_but_real_code_after_does,
         test_string_literal_does_not_trigger,
         test_escaped_quote_inside_string_does_not_end_it_early,
+        test_dash_run_continuing_into_a_symbol_is_an_operator,
+        test_dash_run_beginning_at_a_symbol_is_an_operator,
+        test_dash_run_and_a_unicode_symbol_are_one_lexeme,
+        test_a_run_of_only_dashes_is_still_a_comment,
+        test_a_lone_dash_is_subtraction_not_a_comment,
+        test_string_gap_ends_at_its_own_backslash_not_the_closing_quote,
+        test_multi_line_string_gap_keeps_its_body_out_of_the_scan,
         test_char_literal_containing_a_double_quote_does_not_mask_later_code,
         test_escaped_single_quote_char_literal_does_not_confuse_the_scanner,
         test_identifier_trailing_prime_is_not_mistaken_for_a_char_literal,
+        test_unicode_identifier_trailing_prime_is_not_a_char_literal,
+        test_double_prime_identifier_is_one_name,
+        test_combining_mark_is_an_identifier_character,
         test_longer_symbol_run_is_not_a_false_positive,
         test_adjacent_operators_without_whitespace_still_detected,
         test_qualified_operator_forms_are_detected,

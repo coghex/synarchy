@@ -200,14 +200,14 @@ saveStatusFn env = do
             Lua.newtable
             Lua.pushinteger (fromIntegral $ ssRequestId s)
             Lua.setfield (-2) "id"
-            Lua.pushstring . TE.encodeUtf8 . T.pack . show $ ssPhase s
+            Lua.pushstring . TE.encodeUtf8 . tshow $ ssPhase s
             Lua.setfield (-2) "phase"
             Lua.pushinteger (fromIntegral $ Set.size $ ssAcknowledged s)
             Lua.setfield (-2) "acknowledgedOwners"
             Lua.pushinteger (fromIntegral $ Set.size $ ssOwners s)
             Lua.setfield (-2) "ownerCount"
             forM_ (ssOutcome s) $ \outcome → do
-                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ outcome
+                Lua.pushstring . TE.encodeUtf8 . tshow $ outcome
                 Lua.setfield (-2) "outcome"
     pure 1
 
@@ -227,10 +227,10 @@ loadStatusFn env = do
             Lua.setfield (-2) "id"
             Lua.pushstring (TE.encodeUtf8 (lsSaveName s))
             Lua.setfield (-2) "saveName"
-            Lua.pushstring . TE.encodeUtf8 . T.pack . show $ lsPhase s
+            Lua.pushstring . TE.encodeUtf8 . tshow $ lsPhase s
             Lua.setfield (-2) "phase"
             forM_ (lsOutcome s) $ \outcome → do
-                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ outcome
+                Lua.pushstring . TE.encodeUtf8 . tshow $ outcome
                 Lua.setfield (-2) "outcome"
             -- 'phase' above is 'LoadFailed' itself once
             -- the transaction is terminal-and-aborted, which on its own
@@ -239,7 +239,7 @@ loadStatusFn env = do
             -- BEFORE 'failLoad' overwrote it — present only on a failed
             -- load.
             forM_ (lsFailedAtPhase s) $ \phase → do
-                Lua.pushstring . TE.encodeUtf8 . T.pack . show $ phase
+                Lua.pushstring . TE.encodeUtf8 . tshow $ phase
                 Lua.setfield (-2) "failedAtPhase"
             -- Issue #1204: a post-publication reconciliation failure
             -- reports through its OWN terminal phase
