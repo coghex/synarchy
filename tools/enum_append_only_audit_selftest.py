@@ -150,6 +150,17 @@ data Pose
     deriving (Show, Eq, Generic, Serialize)
 """
 
+# A guarded sum no save-wire DTO reaches: the pre-emptively guarded half
+# of the set, and the only thing that makes the on-wire count differ from
+# the guarded total. Kept out of `_source_tree` so the coverage cases can
+# add it without shifting every other fixture's baseline.
+_DETACHED_HS = """\
+module Extra.Detached where
+
+data Detached = DetachedA | DetachedB
+    deriving (Show, Eq, Generic, Serialize)
+"""
+
 # The modules WIRE_ROOT_EXTRA / WIRE_ROOT_GLOB_EXCLUSIONS require to
 # exist. `World.Save.Types` carries a real shape so the fixtures cover
 # the legacy bridge: `UnitInstanceSnapshot` is the LIVE side that
@@ -271,6 +282,60 @@ def _self_test() -> list[str]:
     #    haddock comments hanging off the constructors, which must not
     #    drop one.
     expect_clean("clean tree", _clean_tree())
+
+    # 1b. Issue #2299: the success line reports all three coverage
+    #     figures, each read from its own field. Both fixtures are
+    #     INTERNALLY CONSISTENT — source and baseline captured together
+    #     by the audit's own writer — because editing `onSaveWire` in a
+    #     baseline alone is detected as stale attribution and never
+    #     reaches the success path at all.
+    #
+    #     `Extra.Detached` is guarded but off the wire, and `ToolMode`
+    #     rides the bare `World.Save.Types` root with no component, so
+    #     all three figures differ: a count taken from the wrong field
+    #     cannot coincide with the right one. The second fixture then
+    #     moves the wire coverage while leaving the guarded set alone,
+    #     so a hard-coded figure fails too.
+    def coverage_tree(entities: str) -> dict[str, str]:
+        """The fixture tree plus one off-wire guarded sum, with
+        `entities` as the `World.Save.Component.Entities` source and the
+        baseline the audit's own writer captured from that pair."""
+        tree = _source_tree()
+        tree["src/Extra/Detached.hs"] = _DETACHED_HS
+        tree["src/World/Save/Component/Entities.hs"] = entities
+        code, out = _run(tree, update=True)
+        if code != 0:
+            failures.append(f"coverage fixture: could not capture a "
+                            f"baseline:\n{out}")
+        tree[BASELINE_REL] = out.split("<<baseline>>\n", 1)[1]
+        return tree
+
+    def expect_success_line(label: str, tree: dict[str, str],
+                            guarded: int, on_wire: int,
+                            named: int) -> None:
+        """The WHOLE success output, not a substring: a figure that
+        stops being emitted must fail here rather than pass quietly."""
+        expected = (f"enum_append_only_audit.py: {guarded} guarded sum "
+                    f"type(s) match {BASELINE_REL} ({on_wire} on the save "
+                    f"wire, {named} named by a live component)")
+        code, out = _run(tree)
+        if code != 0:
+            failures.append(f"coverage counts ({label}): expected a clean "
+                            f"pass, got exit {code}:\n{out}")
+        elif out.strip() != expected:
+            failures.append(f"coverage counts ({label}): success output was\n"
+                            f"  {out.strip()}\nexpected\n  {expected}")
+
+    # `Pose` on the wire in two components, `WorldEditDTO` in one,
+    # `ToolMode` on the wire with none, `Detached` off it: 4 / 3 / 2.
+    expect_success_line("every figure distinct",
+                        coverage_tree(_ENTITIES_HS), 4, 3, 2)
+    # The same guarded set with `Pose` dropped out of both DTOs: the
+    # guarded total holds while both other figures move.
+    unwired = _ENTITIES_HS.replace("usdPose ∷ !Pose", "usdSeq ∷ !Int") \
+                          .replace("uidPose ∷ !Pose", "uidSeq ∷ !Int")
+    expect_success_line("wire coverage changed", coverage_tree(unwired),
+                        4, 2, 1)
 
     # 2. Requirement 1: each of the four incompatible mutations fails,
     #    and names the tag whose meaning changed.
