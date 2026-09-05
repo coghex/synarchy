@@ -242,7 +242,8 @@ alias the scan resolves by), a `Data.Text` import whose shape the
 resolver cannot read, a `Data.Text` mention outside any recognized
 import declaration, an import putting `pack` in **unqualified** scope,
 and a file that BINDS `show` locally — a `let`/`where` binding, a
-top-level equation head, a lambda parameter or a `do` binder. That last
+an equation head or parameter at any column, a lambda parameter or a
+`do` binder. That last
 one is the `pack` rule again for the other half of the wrapper:
 `let show _ = "custom" in pack (show x)` is valid, is not this wrapper,
 and rewriting it would change behaviour and constraints. An
@@ -305,7 +306,8 @@ and two unparenthesised applications and an unrelated qualified `show`
 against a wrapper that is the right operand of a masked operator, a
 a `UPrelude`-, `GHC.Show`- and `Text.Show`-qualified `show`, a
 quasiquote used as an applicand, and two unresolvable qualified
-`show`s that refuse. Every rule was mutation-tested against them: each is
+`show`s that refuse; and three combining-mark and indented binder
+shapes against a reserved word introducing a wrapper. Every rule was mutation-tested against them: each is
 removed one at a time and the self-test fails. The suite also checks
 its own fixtures' SHAPE — a source whose line breaks were escaped away
 is vacuous rather than failing, which is a mistake it actually made —
