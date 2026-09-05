@@ -225,15 +225,19 @@ Section names above refer to engine contracts. Additional required reading:
   signoff before landing. Do not substitute placeholders or narrow scope
   to hide missing art. Deleting art also needs explicit owner confirmation.
 - Before generating, read [asset_generation.md](docs/asset_generation.md).
-  PixelLab is available. Recompiling atlases from tracked source frames
-  requires no external generation: PNG frames are artwork, unit YAML is
-  semantic authority, and `atlas/` is derived; never hand-edit it.
-- Unit art, YAML, budget, atlas, and decoder changes require
-  `python3 tools/test_pack_atlas.py` and
-  `python3 tools/pack_atlas.py --validate-only --strict`.
-  Full rules: `src/Unit/Atlas/CLAUDE.md`.
+  PixelLab is available.
 - **Sprite signoff uses a real preview window.** In the task's isolated
   worktree, first complete `cabal build all`, then run
   `cabal run exe:synarchy -- --preview <category>/<item>` from that worktree.
   Leave it open for the owner's decision and record the verdict. This is
   the sole exception to the no-window rule.
+
+## Unit animation art
+
+- Recompiling atlases from tracked source frames requires no external
+  generation: PNG frames are artwork, unit YAML is semantic authority,
+  and `atlas/` is derived; never hand-edit it.
+- Unit art, YAML, budget, atlas, and decoder changes require
+  `python3 tools/test_pack_atlas.py` and
+  `python3 tools/pack_atlas.py --validate-only --strict`.
+  Full rules: [src/Unit/Atlas/CLAUDE.md](src/Unit/Atlas/CLAUDE.md).
