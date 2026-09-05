@@ -13,15 +13,12 @@ module Test.Headless.Asset.MaterialMoveCost (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (isInfixOf)
 import qualified Data.Text as T
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.HashMap.Strict as HM
-import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import Engine.Core.Log
     ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
@@ -39,6 +36,7 @@ import World.Material
     (MaterialRegistry, MaterialId(..), MaterialProps(..), getMaterialProps)
 import Unit.Pathing.Cost (defaultPathingConfig, materialFactor)
 import Unit.Thread.Movement.PathAdvance (rawStepLength)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | A commanded speed and tick length that are themselves unremarkable:
 --   both finite and strictly positive, so a zero step length can only
@@ -349,9 +347,7 @@ callbackLogger = do
     pure (logger, entriesRef)
 
 withMaterialFiles ∷ [(FilePath, String)] → (FilePath → IO a) → IO a
-withMaterialFiles files action = do
-    tmp ← getTemporaryDirectory
-    let dir = tmp </> "synarchy-move-cost-spec"
-    createDirectoryIfMissing True dir
-    mapM_ (\(name, contents) → writeFile (dir </> name) contents) files
-    action dir `finally` removeDirectoryRecursive dir
+withMaterialFiles files action =
+    withExclusiveTempDirectory "synarchy-move-cost-spec" $ \dir → do
+        mapM_ (\(name, contents) → writeFile (dir </> name) contents) files
+        action dir

@@ -18,12 +18,9 @@ module Test.Headless.Asset.YamlList (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import Data.List (isInfixOf)
 import qualified Data.Text as T
-import System.Directory
-    (getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive)
 import System.FilePath ((</>))
 import GHC.Generics (Generic)
 -- 'HasCallStack' is deliberately NOT listed here: it reaches this
@@ -39,6 +36,7 @@ import Engine.Core.Log
     )
 import Engine.Asset.YamlList (loadYamlList)
 import Engine.Asset.YamlItems (loadItemYaml)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 newtype TestYamlFile = TestYamlFile
     { tyfItems ∷ [Text]
@@ -167,10 +165,8 @@ callbackLoggerWith assetDebug showLocation = do
     pure (logger, entriesRef)
 
 withTempYaml ∷ FilePath → String → (FilePath → IO a) → IO a
-withTempYaml name contents action = do
-    tmp ← getTemporaryDirectory
-    let dir = tmp </> "synarchy-yamllist-spec"
-        path = dir </> name
-    createDirectoryIfMissing True dir
-    writeFile path contents
-    action path `finally` removeDirectoryRecursive dir
+withTempYaml name contents action =
+    withExclusiveTempDirectory "synarchy-yamllist-spec" $ \dir → do
+        let path = dir </> name
+        writeFile path contents
+        action path

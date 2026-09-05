@@ -17,7 +17,6 @@ import qualified Data.Map.Strict as Map
 import Data.IORef (newIORef, readIORef, modifyIORef', writeIORef)
 import Control.Exception (finally)
 import System.IO (IOMode(WriteMode), openFile, hClose)
-import System.Directory (getTemporaryDirectory, removeFile)
 import System.FilePath ((</>))
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -27,6 +26,7 @@ import Engine.Core.Log
   , LogCategory(..), LogEntry(..), LoggerState(..), LogContext(..)
   , logInfoS, logThreadInfo
   )
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 spec ∷ Spec
 spec = describe "normal and thread logging parity" $ do
@@ -85,19 +85,18 @@ spec = describe "normal and thread logging parity" $ do
 -- | Runs one logging call against a real 'LogToHandle' backend and
 --   returns the single formatted line it wrote.
 withLoggedLine ∷ FilePath → (LoggerState → IO ()) → IO Text
-withLoggedLine name useLogger = do
-  tmp ← getTemporaryDirectory
-  let path = tmp </> ("synarchy-log-parity-" ⧺ name)
-  h ← openFile path WriteMode
-  logger ← initLogger defaultLogConfig { lcBackend = LogToHandle h }
-  useLogger logger `finally` hClose h
-  contents ← TIO.readFile path
-  removeFile path
-  case T.lines contents of
-    [line] → pure line
-    other → do
-      expectationFailure $ "expected exactly one logged line, got " ⧺ show (length other)
-      pure ""
+withLoggedLine name useLogger =
+  withExclusiveTempDirectory "synarchy-log-parity" $ \tmp → do
+    let path = tmp </> ("synarchy-log-parity-" ⧺ name)
+    h ← openFile path WriteMode
+    logger ← initLogger defaultLogConfig { lcBackend = LogToHandle h }
+    useLogger logger `finally` hClose h
+    contents ← TIO.readFile path
+    case T.lines contents of
+      [line] → pure line
+      other → do
+        expectationFailure $ "expected exactly one logged line, got " ⧺ show (length other)
+        pure ""
 
 shouldContainInOrder ∷ Text → [Text] → Expectation
 shouldContainInOrder line markers = do

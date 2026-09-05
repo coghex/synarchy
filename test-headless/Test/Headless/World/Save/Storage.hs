@@ -26,10 +26,9 @@ import qualified Data.Text as T
 import Data.Either (isLeft)
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
+    ( createDirectoryIfMissing, removeDirectoryRecursive
     , doesDirectoryExist, doesFileExist, listDirectory, removeFile
-    , getPermissions, setPermissions, Permissions(..), createFileLink
-    , withCurrentDirectory )
+    , createFileLink, withCurrentDirectory )
 import System.FilePath ((</>), takeDirectory, addTrailingPathSeparator)
 import System.IO (stderr, openBinaryTempFile)
 
@@ -75,6 +74,7 @@ import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -218,10 +218,12 @@ foreignBytesFor seed name =
 -- Scratch directory
 -- ---------------------------------------------------------------------
 
--- | A scratch directory, wiped clean before and after use (mirrors
---   'Test.Headless.Core.ConfigState''s withTempDir — the suite runs
---   sequentially, so a single fixed path under the system temp dir,
---   never inside the repo or 'saves/', is safe to reuse across 'it's).
+-- | A scratch directory this invocation owns outright (#2163), created
+--   fresh under a random name and discarded afterwards (mirrors
+--   'Test.Headless.Core.ConfigState''s withTempDir). Nothing is cleared
+--   on the way in, and teardown only ever removes what this call made,
+--   so a fault-injection test below can leave its own root in any shape
+--   at all without reaching another test — or another suite process.
 --
 --   Deliberately nests the slot dir handed to each test TWO levels below
 --   the system temp directory (@root\/saves\/slot@, mirroring production's
@@ -235,30 +237,12 @@ foreignBytesFor seed name =
 --   is always a REAL directory this module creates itself, so it only
 --   ever looks like a symlink when a test deliberately makes it one.
 withTempSlotDir ∷ (FilePath → IO a) → IO a
-withTempSlotDir action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-save-storage-spec-root"
-        savesLikeDir = root </> "saves"
-        dir = savesLikeDir </> "slot"
-    reset root
-    createDirectoryIfMissing True savesLikeDir
-    action dir `finally` reset root
-  where
-    -- A fault-injection test below may leave 'root' (or 'dir' nested
-    -- inside it) as a plain FILE or a read-only DIRECTORY instead of an
-    -- ordinary writable tree — handle both at the top level (removing a
-    -- directory ENTRY only ever needs write permission on its PARENT,
-    -- never on the entry itself, so nothing nested needs its own
-    -- permissions restored), or a later test's own setup would fail at
-    -- this same path.
-    reset root = do
-        isDir ← doesDirectoryExist root
-        when isDir $ do
-            perms ← getPermissions root
-            setPermissions root (perms { writable = True })
-            removeDirectoryRecursive root
-        isFile ← doesFileExist root
-        when isFile $ removeFile root
+withTempSlotDir action =
+    withExclusiveTempDirectory "synarchy-save-storage-spec-root" $ \root → do
+        let savesLikeDir = root </> "saves"
+            dir = savesLikeDir </> "slot"
+        createDirectoryIfMissing True savesLikeDir
+        action dir
 
 -- | Publish for real via the transaction under test, failing the test
 --   (rather than the assertion under test) if setup itself can't
@@ -438,19 +422,12 @@ listSavesOK logger = do
 --   process's CURRENT DIRECTORY (its own @savesDirectory@ constant is a
 --   bare relative @"saves"@), unlike every other function this file
 --   tests — so exercising it for real means temporarily chdir'ing into
---   an isolated scratch root, wiped clean before and after (mirrors
---   'withTempSlotDir', same sequential-suite safety rationale).
+--   an isolated scratch root this invocation owns outright (mirrors
+--   'withTempSlotDir', same #2163 rationale).
 withSavesRoot ∷ IO a → IO a
-withSavesRoot action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-listsaves-symlink-spec"
-    reset root
-    createDirectoryIfMissing True root
-    withCurrentDirectory root action `finally` reset root
-  where
-    reset root = do
-        isDir ← doesDirectoryExist root
-        when isDir (removeDirectoryRecursive root)
+withSavesRoot action =
+    withExclusiveTempDirectory "synarchy-listsaves-symlink-spec" $ \root →
+        withCurrentDirectory root action
 
 spec ∷ Spec
 spec = do

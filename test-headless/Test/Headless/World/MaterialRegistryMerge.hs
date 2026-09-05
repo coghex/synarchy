@@ -27,12 +27,10 @@ module Test.Headless.World.MaterialRegistryMerge (spec) where
 
 import UPrelude
 import Test.Hspec
-import Control.Exception (finally)
 import Data.IORef (newIORef, readIORef)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import System.Directory (getTemporaryDirectory, removePathForcibly)
 
 import Engine.Asset.YamlMaterials (loadPopulatedMaterialRegistry)
 import Engine.Core.State (EngineEnv(..))
@@ -45,6 +43,7 @@ import World.Material
     ( MaterialId(..), MaterialProps(..), MaterialRegistry
     , getMaterialProps, isKnownMaterial )
 import World.Types
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- | An id no file under @data/materials@ defines, so it can only ever
 --   reach the registry through @engine.loadMaterialYaml@ — the exact
@@ -165,9 +164,8 @@ spec = describe "live material registrations survive world.init (#2278)" $ do
        \world.init — and a live override of a shipped id keeps winning \
        \while an untouched shipped id keeps its data/materials values" $
         \env → do
-            tmpDir ← getTemporaryDirectory
-            let yamlPath = tmpDir ⊘ "synarchy_issue2278_materials.yaml"
-            (`finally` removePathForcibly yamlPath) $ do
+            withExclusiveTempDirectory "synarchy-issue2278-materials" $ \tmpDir → do
+                let yamlPath = tmpDir ⊘ "synarchy_issue2278_materials.yaml"
                 writeFile yamlPath (T.unpack customMaterialYaml)
 
                 -- A first page, so the second init below happens while a

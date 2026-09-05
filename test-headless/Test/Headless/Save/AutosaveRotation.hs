@@ -35,10 +35,8 @@ import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
 import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
-import Control.Exception (finally)
 import System.Directory
-    ( getTemporaryDirectory, createDirectoryIfMissing, removeDirectoryRecursive
-    , doesDirectoryExist, withCurrentDirectory )
+    ( createDirectoryIfMissing, doesDirectoryExist, withCurrentDirectory )
 import System.FilePath ((</>))
 
 import Engine.Core.Log
@@ -73,6 +71,7 @@ import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
 
 -- ---------------------------------------------------------------------
 -- Fixture (the minimal* pattern every save gate in this suite uses)
@@ -160,22 +159,16 @@ publishAutosave slot ts = do
 -- Scratch root and the injected sync
 -- ---------------------------------------------------------------------
 
--- | An isolated resource root, chdir'd into and wiped clean before and
---   after use. "World.Save.Autosave" resolves every slot through the
---   bare relative 'savesDirectory', so this is the only way to exercise
---   it against real directories without touching the repository's own
---   @saves\/@.
+-- | An isolated resource root this invocation owns outright (#2163),
+--   chdir'd into and discarded afterwards. "World.Save.Autosave"
+--   resolves every slot through the bare relative 'savesDirectory', so
+--   this is the only way to exercise it against real directories
+--   without touching the repository's own @saves\/@.
 withAutosaveRoot ∷ IO a → IO a
-withAutosaveRoot action = do
-    tmp ← getTemporaryDirectory
-    let root = tmp </> "synarchy-autosave-rotation-spec"
-    reset root
-    createDirectoryIfMissing True (root </> savesDirectory)
-    withCurrentDirectory root action `finally` reset root
-  where
-    reset root = do
-        isDir ← doesDirectoryExist root
-        when isDir (removeDirectoryRecursive root)
+withAutosaveRoot action =
+    withExclusiveTempDirectory "synarchy-autosave-rotation-spec" $ \root → do
+        createDirectoryIfMissing True (root </> savesDirectory)
+        withCurrentDirectory root action
 
 -- | Records every directory the cycle syncs, in call order, and throws
 --   on the @failAt@'th call (1-based; 0 never fails).
