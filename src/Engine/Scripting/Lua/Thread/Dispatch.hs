@@ -330,9 +330,10 @@ processLuaMsg env ls stateRef msg = case msg of
     -- any command that arrived is still sitting there, queued for a
     -- session that no longer exists once this handler runs (this is
     -- the FIRST point on the Lua thread reached after publish — see
-    -- @Engine.Scripting.Lua.Thread.luaTick@s own comment on why
-    -- 'processLuaMsgs' drains 'LuaSaveLoaded' before 'processDebugCommands'
-    -- ever gets a chance to run again). Left alone, that later
+    -- "Engine.Scripting.Lua.Thread.Scheduler"'s reconciliation hold,
+    -- which admits engine messages but no timed pass and no ordinary
+    -- console execution until THIS message has been reached, however
+    -- many message batches away it is). Left alone, that later
     -- 'processDebugCommands' call would execute every one of them
     -- against the REPLACEMENT session — e.g. a queued
     -- @world.setDate(pageId, ...)@ whose pageId the load happens to
