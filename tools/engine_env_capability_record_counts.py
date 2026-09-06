@@ -275,17 +275,43 @@ def _audit_block_placement(inventory_text: str, spans: list) -> list[str]:
 
 
 def _audit_stray_counts(inventory_text: str, spans: list) -> list[str]:
-    """No `` `XCapability` (<n> `` phrase anywhere outside the block."""
+    """No `` `XCapability` (<n> `` phrase anywhere but the block's table.
+
+    Two directions, because "stated once" has two ways to fail and the
+    audited column only reads one of them:
+
+    * outside the marked block, anywhere in the document -- a second
+      copy in prose that reads exactly like the table's;
+    * inside the block but OUTSIDE its table -- prose between the
+      marker and the table, which is inside the governed region and so
+      exempt from the first sweep, but is not a table cell and so never
+      reaches `_audit_column_counts` either. That gap is the same one
+      the round-1 review found for a second TABLE, one step over.
+    """
+    violations: list[str] = []
     outside = inventory_text
     for span in spans:
         outside = outside.replace(
             inventory_text[span.start:span.end], "", 1)
     found = [match.group(0) for match in _STRAY_COUNT_RE.finditer(outside)]
-    if not found:
-        return []
-    return [f"{_DOC} states {found} outside its `{RECORD_COUNTS_OPEN}` "
+    if found:
+        violations.append(
+            f"{_DOC} states {found} outside its `{RECORD_COUNTS_OPEN}` "
             f"block -- a record's size is stated once, in that block's "
-            f"table, and nowhere else in this document"]
+            f"table, and nowhere else in this document")
+    for span in spans:
+        prose = "\n".join(line for line in span.body.splitlines()
+                          if not line.strip().startswith("|"))
+        smuggled = [match.group(0)
+                    for match in _STRAY_COUNT_RE.finditer(prose)]
+        if smuggled:
+            violations.append(
+                f"{_DOC} states {smuggled} inside its "
+                f"`{RECORD_COUNTS_OPEN}` block but outside its table -- "
+                f"only the table's record column is checked against the "
+                f"live records, so a size in the block's prose is a "
+                f"displayed figure nothing verifies")
+    return violations
 
 
 def _audit_column_counts(column: list[str], sizes: dict[str, int]

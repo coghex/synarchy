@@ -290,6 +290,21 @@ def test_record_counts_second_table_smuggling_a_stale_size_rejected():
            "real marked block must be rejected")
 
 
+def test_record_counts_size_in_the_blocks_prose_rejected():
+    """The round-1 finding one step over: a size in prose INSIDE the
+    marked block. It is exempt from the outside-the-block sweep because
+    it is inside the governed region, and it never reaches the column
+    check because it is not a table cell."""
+    doc = _counts_doc().replace(
+        RECORD_COUNTS_CLOSE,
+        "\nHistorically `AlphaCapability` (9 fields).\n\n"
+        + RECORD_COUNTS_CLOSE, 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any("but outside its table" in v for v in violations),
+           f"a record size in the block's own prose must be rejected, "
+           f"got: {violations}")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -499,6 +514,7 @@ TESTS = (
     test_record_counts_block_without_a_table_rejected,
     test_record_counts_second_table_in_the_block_rejected,
     test_record_counts_second_table_smuggling_a_stale_size_rejected,
+    test_record_counts_size_in_the_blocks_prose_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
