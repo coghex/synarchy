@@ -1442,82 +1442,6 @@ spec = around withMenusEngine $ do
                 ]
             noFurtherChangeNeeded `shouldBe` True
 
-        it "settingsMenu.onApply calls shell's resize handler exactly once (not double-routed through the shared fan-out)" $ \env → do
-            ls ← newBareLuaBackend env
-            calls ← evalInt ls $ luaLines
-                [ "local shell = require('scripts.shell');"
-                , "local calls = 0;"
-                , "local realHandler = shell.onFramebufferResize;"
-                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
-                , "local m = require('scripts.settings_menu');"
-                , "m.init(1,2,3,1280,720);"
-                , "local graphicsTab = require('scripts.settings.graphics_tab');"
-                , "local textbox = require('scripts.ui.textbox');"
-                , "local data = require('scripts.settings.data');"
-                , "local target = (data.current.uiScale >= 3.0) and 1.0 or (data.current.uiScale + 1.0);"
-                , "textbox.setText(graphicsTab.uiScaleTextBoxId, tostring(target));"
-                , "m.onApply();"
-                , "return calls"
-                ]
-            calls `shouldBe` 1
-
-        -- #748 round 11: onDefaults/onBack can ALSO change the live
-        -- UI scale (data.loadDefaults' auto 4K/1440p/1080p detection;
-        -- data.revert reverting an applied-but-unsaved change back to
-        -- the on-disk config) — previously only onApply/onSave fanned
-        -- that out. Stub data.loadDefaults/revert themselves (rather
-        -- than depending on real engine default-config/auto-detection
-        -- specifics) to deterministically force a scale change, then
-        -- verify the SAME fan-out (including the direct shell call)
-        -- now fires.
-        it "settingsMenu.onDefaults fans out a real scale change to shell" $ \env → do
-            ls ← newBareLuaBackend env
-            calls ← evalInt ls $ luaLines
-                [ "local shell = require('scripts.shell');"
-                , "local calls = 0;"
-                , "local realHandler = shell.onFramebufferResize;"
-                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
-                , "local m = require('scripts.settings_menu');"
-                , "m.init(1,2,3,1280,720);"
-                , "local data = require('scripts.settings.data');"
-                , "data.loadDefaults = function() data.current.uiScale = data.current.uiScale + 1.0 end;"
-                , "m.onDefaults();"
-                , "return calls"
-                ]
-            calls `shouldSatisfy` (> 0)
-
-        it "settingsMenu.onBack fans out a real scale change (from data.revert) to shell" $ \env → do
-            ls ← newBareLuaBackend env
-            calls ← evalInt ls $ luaLines
-                [ "local shell = require('scripts.shell');"
-                , "local calls = 0;"
-                , "local realHandler = shell.onFramebufferResize;"
-                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
-                , "local m = require('scripts.settings_menu');"
-                , "m.init(1,2,3,1280,720);"
-                , "local data = require('scripts.settings.data');"
-                , "data.revert = function() data.current.uiScale = data.current.uiScale + 1.0 end;"
-                , "m.onBack();"
-                , "return calls"
-                ]
-            calls `shouldSatisfy` (> 0)
-
-        it "settingsMenu.onDefaults does NOT fan out when the scale is unchanged" $ \env → do
-            ls ← newBareLuaBackend env
-            calls ← evalInt ls $ luaLines
-                [ "local shell = require('scripts.shell');"
-                , "local calls = 0;"
-                , "local realHandler = shell.onFramebufferResize;"
-                , "shell.onFramebufferResize = function(w, h) calls = calls + 1; return realHandler(w, h) end;"
-                , "local m = require('scripts.settings_menu');"
-                , "m.init(1,2,3,1280,720);"
-                , "local data = require('scripts.settings.data');"
-                , "data.loadDefaults = function() end;"  -- leaves data.current.uiScale untouched
-                , "m.onDefaults();"
-                , "return calls"
-                ]
-            calls `shouldBe` 0
-
         -- #748 round 10: shell receives LuaFramebufferResize straight
         -- from the engine (never through responsive.notifyResize,
         -- deliberately, to avoid double-routing a real resize — see
@@ -1545,6 +1469,57 @@ spec = around withMenusEngine $ do
                 Just p → do
                     rcpAfterMinimize p `shouldBe` 0
                     rcpAfterRestore p `shouldSatisfy` (> 0)
+
+    -- #2027: the four Settings actions that can change the live UI
+    -- scale are four INDEPENDENT production branches -- onDefaults
+    -- (scripts/settings_menu.lua:163, :186-192), onApply (:978-1003),
+    -- onSave (:1010-1015) and onBack (:1026-1032) -- each reaching the
+    -- same three top-level routes. Coverage used to watch only
+    -- shell.onFramebufferResize: exactly once for Apply, but at "any
+    -- positive count" for Defaults and Back, and never driving onSave
+    -- at all. So removing Save's fan-out, or delivering Defaults' or
+    -- Back's twice, left CI green.
+    --
+    -- Every pair below therefore drives ONE production entry point and
+    -- counts all three routes exactly -- 1 each on a real scale change,
+    -- 0 each when the scale does not move. That subsumes the round-7
+    -- "onApply calls shell's resize handler exactly once" case which
+    -- used to live in the #748 block above.
+    --
+    -- What this deliberately does NOT do is re-assert what
+    -- uiManager.notifyGameplayRescale then reaches: its recipient
+    -- count, ordering, readiness gating and non-positive-size guard
+    -- stay in 'Test.Headless.UI.ResponsiveGameplay.Lifecycle', which
+    -- also keeps the one case driving the REAL (unstubbed) gameplay
+    -- HUD through settingsMenu.onDefaults. This block asserts ENTRY
+    -- into that route and nothing past it.
+    describe "every Settings scale-change action fans out exactly once (#2027)" $
+        forM_ settingsScaleActions $ \act → do
+            it (T.unpack (saName act) ⧺ " reaches responsive.notifyResize, shell.onFramebufferResize and uiManager.notifyGameplayRescale exactly once on a real scale change (" ⧺ T.unpack (saHow act) ⧺ ")") $ \env → do
+                ls ← newBareLuaBackend env
+                p  ← decodeProbe "scale fan-out"
+                        =≪ evalJSON ls (scaleFanOutExpr act True)
+                -- The scale genuinely moved, so a zero count below is a
+                -- MISSING fan-out rather than an action that correctly
+                -- declined to fan anything out.
+                fopScaleAfter p `shouldSatisfy` (≢ fopScaleBefore p)
+                actionReallyRan p
+                fopResponsive p `shouldBe` 1
+                fopShell p `shouldBe` 1
+                fopGameplay p `shouldBe` 1
+
+            it (T.unpack (saName act) ⧺ " reaches none of the three routes when the scale does not move") $ \env → do
+                ls ← newBareLuaBackend env
+                p  ← decodeProbe "scale fan-out"
+                        =≪ evalJSON ls (scaleFanOutExpr act False)
+                fopScaleAfter p `shouldBe` fopScaleBefore p
+                -- Without this, three zeroes would ALSO be reported by
+                -- an action that threw before its fan-out branch, or by
+                -- a setup that never reached the action at all.
+                actionReallyRan p
+                fopResponsive p `shouldBe` 0
+                fopShell p `shouldBe` 0
+                fopGameplay p `shouldBe` 0
 
     -- #1959: the console sized itself from its scaled `middleWidth`
     -- constant and never consulted the framebuffer width, so at 1x its
@@ -3317,3 +3292,247 @@ countUI ∷ EngineEnv → IO (Int, Int)
 countUI env = do
     mgr ← readIORef (uiManagerRef env)
     pure (Map.size (upmElements mgr), Map.size (upmPages mgr))
+
+-- * #2027: the Settings scale-change fan-out matrix
+
+-- | What one Settings action reached, and the proof that the action
+--   itself ran. @responsive@ / @shell@ / @gameplay@ are the three
+--   top-level routes settings_menu.lua fans a scale change out to;
+--   the scale pair says whether the setup really moved the UI scale;
+--   the witness triple is requirement 3's positive witness (see
+--   'actionReallyRan').
+data ScaleFanOutProbe = ScaleFanOutProbe
+    { fopResponsive      ∷ Int
+    , fopShell           ∷ Int
+    , fopGameplay        ∷ Int
+    , fopScaleBefore     ∷ Double
+    , fopScaleAfter      ∷ Double
+    , fopWitnessBefore   ∷ Double
+    , fopWitnessExpected ∷ Double
+    , fopWitness         ∷ Double
+    } deriving Show
+
+instance FromJSON ScaleFanOutProbe where
+    parseJSON = withObject "ScaleFanOutProbe" $ \o → ScaleFanOutProbe
+        <$> o .: "responsive" <*> o .: "shell" <*> o .: "gameplay"
+        <*> o .: "scaleBefore" <*> o .: "scaleAfter"
+        <*> o .: "witnessBefore" <*> o .: "witnessExpected"
+        <*> o .: "witness"
+
+-- | Requirement 3's positive witness, asserted by BOTH halves of every
+--   action's pair: a non-scale field the action commits unconditionally
+--   moved from a value the setup deliberately made wrong to the value
+--   the action owes it. An action that threw before its fan-out branch,
+--   or a setup that never reached the action at all, would otherwise
+--   satisfy the three zero counts of the unchanged-scale case exactly
+--   as a correct no-op does.
+actionReallyRan ∷ ScaleFanOutProbe → Expectation
+actionReallyRan p = do
+    -- Non-vacuity: the expected value has to be one the setup did not
+    -- already leave in place, or "it arrived" proves nothing.
+    fopWitnessExpected p `shouldSatisfy` (≢ fopWitnessBefore p)
+    fopWitness p `shouldBe` fopWitnessExpected p
+
+-- | One Settings action that can change the live UI scale, as the
+--   #2027 matrix drives it.
+--
+--   Each action keeps PRODUCTION's own scale-change decision inside the
+--   test — settings_menu.lua's before/after comparison for Defaults and
+--   Back, data.apply's @scaleChanged@ result for Apply and Save — so a
+--   setup establishes the inputs that decision reads and never replaces
+--   the decision itself.
+data ScaleAction = ScaleAction
+    { saName  ∷ Text
+      -- ^ The production entry point, as the case names state it.
+    , saHow   ∷ Text
+      -- ^ How the change is established, for the case name.
+    , saSetup ∷ Bool → Text
+      -- ^ Setup Lua, run after 'scaleFanOutBoot' and BEFORE the spies.
+      --   'True' must establish a real scale change and 'False' an
+      --   unchanged scale; both must leave @scaleBefore@,
+      --   @witnessBefore@ and @witnessExpected@ bound as locals for
+      --   'scaleFanOutProbe' to read.
+    , saDrive ∷ Text
+      -- ^ The action call, plus any teardown of what the setup stubbed.
+    }
+
+-- | The four actions. Apply and Save share one setup because
+--   @data.save@ delegates to @data.apply@ (scripts/settings/data.lua:621)
+--   and both derive @scaleChanged@ from the same Graphics-tab widget
+--   value (:532-541).
+settingsScaleActions ∷ [ScaleAction]
+settingsScaleActions =
+    [ widgetScaleAction "settingsMenu.onApply" "m.onApply();"
+    , widgetScaleAction "settingsMenu.onSave"  "m.onSave();"
+    , defaultsScaleAction
+    , backScaleAction
+    ]
+
+-- | One case's complete Lua chunk. Every action is assembled from the
+--   same five pieces in the same order, so no action can quietly
+--   observe or assert less than the others.
+scaleFanOutExpr ∷ ScaleAction → Bool → Text
+scaleFanOutExpr act changed = luaLines
+    [ scaleFanOutBoot
+    , saSetup act changed
+    , scaleFanOutSpies
+    , saDrive act
+    , scaleFanOutProbe
+    ]
+
+-- | The shared boot: the real settings screen on this example's own
+--   fresh bare Lua state, at a framebuffer size no case changes (only
+--   the SCALE moves here — that is the whole point of the #750/#748
+--   scale-only path).
+scaleFanOutBoot ∷ Text
+scaleFanOutBoot = luaLines
+    [ "local m = require('scripts.settings_menu');"
+    , "m.init(1,2,3,1280,720);"
+    , "local data = require('scripts.settings.data');"
+    ]
+
+-- | Count each of the three top-level routes.
+--
+--   The technique is forced by how settings_menu.lua captures its
+--   dependencies: @responsive@ (scripts/settings_menu.lua:6), @data@
+--   (:16) and @shell@ (:21) are module-level upvalues bound at load
+--   time, so a spy must replace the FIELD on the already-required
+--   module table. Swapping @package.loaded['scripts.ui.responsive']@ or
+--   @['scripts.shell']@ after settings_menu has loaded would observe
+--   nothing at all — failing the exactly-once cases confusingly and
+--   passing the zero-call cases vacuously. @ui_manager@ is the
+--   exception: settings_menu require()s it lazily at each call site
+--   (:191, :1002, :1013, :1031), so the same field replacement reaches
+--   it — and it is required only AFTER settings_menu is loaded, keeping
+--   the load cycle that laziness exists to avoid (scripts.ui_manager →
+--   ui_manager_boot → settings_menu) out of the fixture too.
+--
+--   responsive and shell call THROUGH to the real handler, so a
+--   duplicated dispatch is counted against the same live rebuild the
+--   #748 finding was about; notifyGameplayRescale is a pure counter,
+--   because its recipient matrix belongs to
+--   'Test.Headless.UI.ResponsiveGameplay.Lifecycle' (requirement 4).
+scaleFanOutSpies ∷ Text
+scaleFanOutSpies = luaLines
+    [ "local responsive = require('scripts.ui.responsive');"
+    , "local shell = require('scripts.shell');"
+    , "local uiManager = require('scripts.ui_manager');"
+    , "_G.__fanResponsive = 0; _G.__fanShell = 0; _G.__fanGameplay = 0;"
+    , "local realNotifyResize = responsive.notifyResize;"
+    , "responsive.notifyResize = function(w, h)"
+    , "    _G.__fanResponsive = _G.__fanResponsive + 1;"
+    , "    return realNotifyResize(w, h) end;"
+    , "local realShellResize = shell.onFramebufferResize;"
+    , "shell.onFramebufferResize = function(w, h)"
+    , "    _G.__fanShell = _G.__fanShell + 1;"
+    , "    return realShellResize(w, h) end;"
+    , "uiManager.notifyGameplayRescale = function(w, h)"
+    , "    _G.__fanGameplay = _G.__fanGameplay + 1 end;"
+    ]
+
+-- | The shared result. @scaleBefore@, @witnessBefore@ and
+--   @witnessExpected@ are the locals each 'saSetup' bound;
+--   @data.current.frameLimit@ is the witness field every action commits
+--   unconditionally, independent of the UI scale.
+scaleFanOutProbe ∷ Text
+scaleFanOutProbe = luaLines
+    [ "return {responsive = _G.__fanResponsive,"
+    , "        shell = _G.__fanShell,"
+    , "        gameplay = _G.__fanGameplay,"
+    , "        scaleBefore = scaleBefore,"
+    , "        scaleAfter = data.current.uiScale,"
+    , "        witnessBefore = witnessBefore,"
+    , "        witnessExpected = witnessExpected,"
+    , "        witness = data.current.frameLimit}"
+    ]
+
+-- | Apply and Save: the change comes from the Graphics tab's uiScale
+--   textbox, which is exactly where production reads it
+--   (scripts/settings/graphics_tab.lua:790-792 → data.apply's
+--   @widgetValues.uiScale@), so data.apply's own range check and
+--   @data.current.uiScale ~= newScale@ comparison still decide whether
+--   anything changed.
+--
+--   The witness is the frame-limit textbox, a NON-scale widget value
+--   the same data.apply pass commits unconditionally
+--   (scripts/settings/data.lua:564-573) — so both halves of the pair
+--   prove the action reached data.apply at all.
+widgetScaleAction ∷ Text → Text → ScaleAction
+widgetScaleAction name call = ScaleAction
+    { saName = name
+    , saHow  = "the Graphics tab's uiScale textbox"
+    , saSetup = \changed → luaLines
+        [ "local graphicsTab = require('scripts.settings.graphics_tab');"
+        , "local textbox = require('scripts.ui.textbox');"
+        , "local scaleBefore = data.current.uiScale;"
+        , if changed
+            then "local scaleTarget = (scaleBefore >= 3.0) and 1.0 or (scaleBefore + 1.0);"
+            else "local scaleTarget = scaleBefore;"
+        , "textbox.setText(graphicsTab.uiScaleTextBoxId, tostring(scaleTarget));"
+        , "local witnessBefore = data.current.frameLimit;"
+        , "local witnessExpected = (witnessBefore == 120) and 90 or 120;"
+        , "textbox.setText(graphicsTab.frameLimitTextBoxId, tostring(witnessExpected));"
+        ]
+    , saDrive = call
+    }
+
+-- | Defaults: the change comes from the factory config
+--   @data.loadDefaults@ reads, so that module's own HiDPI
+--   auto-adjustment, clamp and assignment all still run
+--   (scripts/settings/data.lua:308-360) — only the engine call feeding
+--   it is stubbed, the same way
+--   'Test.Headless.UI.ResponsiveGameplay.Lifecycle' already stubs it.
+--
+--   1600x900 sits below that function's 1080p auto-scale threshold
+--   (:319-332), so the returned uiScale reaches data.current
+--   unmultiplied and the change is exactly the one this setup declares.
+--   The witness is the same factory call's frame limit, which
+--   data.loadDefaults assigns unconditionally (:346).
+defaultsScaleAction ∷ ScaleAction
+defaultsScaleAction = ScaleAction
+    { saName = "settingsMenu.onDefaults"
+    , saHow  = "the factory uiScale engine.loadDefaultConfig reports"
+    , saSetup = \changed → luaLines
+        [ "local scaleBefore = data.current.uiScale;"
+        , if changed
+            then "local scaleTarget = (scaleBefore >= 3.0) and 1.0 or (scaleBefore + 1.0);"
+            else "local scaleTarget = scaleBefore;"
+        , "local witnessBefore = data.current.frameLimit;"
+        , "local witnessExpected = (witnessBefore == 120) and 90 or 120;"
+        , "_G.__realLoadDefaultConfig = engine.loadDefaultConfig;"
+        , "engine.loadDefaultConfig = function()"
+        , "    return 1600, 900, 'fullscreen', scaleTarget, true,"
+        , "           witnessExpected, 1, 100, false, 'nearest' end;"
+        ]
+    , saDrive = luaLines
+        [ "m.onDefaults();"
+        , "engine.loadDefaultConfig = _G.__realLoadDefaultConfig;"
+        ]
+    }
+
+-- | Back: the REAL @data.revert@ runs (SettingsRevert.hs already proves
+--   it does so headless), reverting an applied-but-unsaved scale to the
+--   baseline @data.savedVideo@ that opening Settings captured
+--   (scripts/settings/data.lua:465, :658). Nothing about revert is
+--   stubbed; the setup only moves data.current away from that baseline,
+--   which is the state a user reaches by clicking Apply and then Back.
+--
+--   The witness is the frame limit, one of the snapshot fields revert
+--   restores unconditionally (:703-714), so it proves the real revert
+--   ran whether or not the scale moved with it.
+backScaleAction ∷ ScaleAction
+backScaleAction = ScaleAction
+    { saName = "settingsMenu.onBack"
+    , saHow  = "an applied-but-unsaved scale the real data.revert undoes"
+    , saSetup = \changed → luaLines
+        [ "local savedScale = data.savedVideo.uiScale;"
+        , if changed
+            then "data.current.uiScale = (savedScale >= 3.0) and 1.0 or (savedScale + 1.0);"
+            else "data.current.uiScale = savedScale;"
+        , "local scaleBefore = data.current.uiScale;"
+        , "local witnessExpected = data.savedVideo.frameLimit;"
+        , "local witnessBefore = (witnessExpected == 120) and 90 or 120;"
+        , "data.current.frameLimit = witnessBefore;"
+        ]
+    , saDrive = "m.onBack();"
+    }
