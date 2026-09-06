@@ -50,9 +50,10 @@ unrelated gates sharing a module prefix is how a sibling's support
 module gets imported by mistake.
 
 `deflake_diagnosis_selftest_support` is the single source of what they
-share: the assertion helpers and the ONE `FAILURES` accumulator behind
-them, the probe and worktree constants, and the real
-`probe_flake`-backed result, handoff and diagnosis documents.
+share: the probe and worktree constants, the real `probe_flake`-backed
+result, handoff and diagnosis documents, and #1922's shared assertion
+helper with the ONE `FAILURES` ledger behind it, re-exported from there
+so the owners import everything shared from one place.
 
 The aggregate run is DERIVED from those same three registries rather
 than restated as a fourth list, so a case an owner declares cannot go
@@ -94,6 +95,7 @@ import deflake_diagnosis_selftest_diagnosis as diagnosis_owner  # noqa: E402
 import deflake_diagnosis_selftest_issue as issue_owner  # noqa: E402
 import deflake_diagnosis_selftest_outcome as outcome_owner  # noqa: E402
 import deflake_diagnosis_selftest_support as support  # noqa: E402
+import selftestlib  # noqa: E402
 
 #: The three workflow owners, by selector name.
 OWNERS = {
@@ -204,7 +206,12 @@ def main(argv=None) -> int:
         "--only", choices=sorted(OWNERS), metavar="OWNER",
         help="run one workflow owner's tests only: "
              + ", ".join(sorted(OWNERS)) + ".")
+    # This module owns its own command line, so the shared verbosity
+    # flag joins that parser rather than being consumed behind its
+    # back; `begin` then starts this invocation's own count (#1922).
+    selftestlib.add_verbose_option(parser)
     args = parser.parse_args(argv)
+    selftestlib.begin(args.verbose)
 
     try:
         selected = collected(args.only)
@@ -229,19 +236,19 @@ def main(argv=None) -> int:
         try:
             test()
         except Exception as error:  # noqa: BLE001 - a crash is a failure
-            support.FAILURES.append(f"{test.__name__} raised "
+            selftestlib.record_fail(f"{test.__name__} raised "
                                     f"{type(error).__name__}: {error}")
     if support.FAILURES:
         print(f"FAILED ({len(support.FAILURES)}):")
         for failure in support.FAILURES:
             print(f"  - {failure}")
-        return 1
+        return selftestlib.concluded(1)
     if args.only is None:
-        print(f"ok - {len(selected)} deflake-diagnosis tests passed")
-    else:
-        print(f"ok - {len(selected)} deflake-diagnosis [{args.only}] tests "
-              f"passed")
-    return 0
+        return selftestlib.concluded(
+            0, f"ok - {len(selected)} deflake-diagnosis tests passed")
+    return selftestlib.concluded(
+        0, f"ok - {len(selected)} deflake-diagnosis [{args.only}] tests "
+           f"passed")
 
 
 if __name__ == "__main__":

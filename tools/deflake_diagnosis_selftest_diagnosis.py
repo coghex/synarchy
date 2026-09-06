@@ -39,6 +39,7 @@ import deflake_diagnosis as dd  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
+import selftestlib  # noqa: E402
 from deflake_diagnosis_selftest_support import (  # noqa: E402
     BASE_COMMIT, CHECKS, CLEAN_WT, FAIL, FAILURES, MISSING, OTHER, OUTSIDE,
     PASS, PRIMARY_WT, PROBE, PRODUCER_FIELD, REPAIR_COMMIT, REPAIR_WT, TOOL,
@@ -1781,7 +1782,7 @@ def test_the_baseline_replays_the_handoffs_own_conditions() -> None:
         expect("handoff 4" in message and "baseline 8" in message,
                f"the refusal names each side's own value: {message}")
     else:
-        FAILURES.append("a baseline that did not replay was accepted")
+        selftestlib.record_fail("a baseline that did not replay was accepted")
 
 
 def test_a_changed_path_is_repository_relative_and_traversal_free() -> None:
@@ -3361,7 +3362,7 @@ def test_one_invocation_opens_at_most_one_pull_request() -> None:
         expect("already opened a pull request" in str(error),
                f"the second PR is refused, got {error}")
     else:
-        FAILURES.append("a second pull request was allowed")
+        selftestlib.record_fail("a second pull request was allowed")
 
 
 def test_a_non_repair_route_opens_no_pull_request() -> None:
@@ -3376,7 +3377,8 @@ def test_a_non_repair_route_opens_no_pull_request() -> None:
         expect("opens no pull request" in str(error),
                f"a non-repair route is refused a PR, got {error}")
     else:
-        FAILURES.append("a cannot-reproduce route opened a pull request")
+        selftestlib.record_fail(
+            "a cannot-reproduce route opened a pull request")
 
 
 # ==========================================================================
@@ -3691,22 +3693,25 @@ def check_mutation(label, fragment, anchor, replacement, build,
     document = build()
     refusal = _refusal(dd, document, run)
     if refusal is None:
-        FAILURES.append(f"{label}: the shipped module ACCEPTED the fixture, "
-                        f"so this case proves nothing")
+        selftestlib.record_fail(
+            f"{label}: the shipped module ACCEPTED the fixture, "
+            f"so this case proves nothing")
         return
     if fragment not in refusal:
-        FAILURES.append(f"{label}: the shipped module refused the fixture for "
-                        f"{refusal!r} rather than {fragment!r}, so the "
-                        f"fixture does not isolate this invariant")
+        selftestlib.record_fail(
+            f"{label}: the shipped module refused the fixture for "
+            f"{refusal!r} rather than {fragment!r}, so the "
+            f"fixture does not isolate this invariant")
         return
     try:
         bypassed = mutant(anchor, replacement)
     except AssertionError as error:
-        FAILURES.append(f"{label}: {error}")
+        selftestlib.record_fail(f"{label}: {error}")
         return
     after = _refusal(bypassed, build(), run)
     if after is not None and fragment in after:
-        FAILURES.append(
+        selftestlib.record_fail(
+            
             f"{label}: with this invariant bypassed the fixture is still "
             f"refused for {after!r}, so the rejection test above is held up "
             f"by some OTHER rule and this invariant is unevidenced")

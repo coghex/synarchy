@@ -25,14 +25,15 @@ identity constants around them are genuinely shared rather than
 borrowed across a seam. They live here once instead of being imported
 sideways from the outcome unit or copied into the issue one.
 
-`FAILURES` is deliberately a module global rather than per-owner
-state: `expect` appends to it, and the facade reads exactly this list,
-so one focused run and one aggregate run report through the same
-accumulator. It stays a LOCAL helper here rather than #1922's shared
-`selftestlib` one, because #2031 is a split: the base's silent-on-
-success `expect` and its single summary line are the contract this
-change preserves, and converting this family's thirty-one direct
-`FAILURES.append` sites is #1922's own repository-wide migration.
+`FAILURES` is ONE list rather than per-owner state, and since #1922 it
+is `tools/selftestlib.py`'s own: `expect` appends to it, the facade
+reads exactly it, and one focused run and one aggregate run report
+through the same accumulator. Re-exported from here so the owners
+import the helper -- and the quiet-by-default `expect` behind it --
+from the single place they already import everything else shared from.
+Every refusal that used to append to that list directly now goes
+through `selftestlib.record_fail`, so nothing registers a failure
+behind the assertion tally `concluded` refuses a vacuous run on.
 
 Not a gate of its own. Run through the facade:
 
@@ -56,6 +57,8 @@ import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
 import probe_runner_resources  # type: ignore  # noqa: E402
+import selftestlib  # noqa: E402
+from selftestlib import FAILURES, expect  # noqa: E402
 
 TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
 
@@ -64,9 +67,6 @@ TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
 # one setting differently; the entry gate adapts at the boundary and the
 # fixtures have to know which side they are on.
 PRODUCER_FIELD = {"timeout_seconds": "timeout"}
-
-
-FAILURES: list[str] = []
 
 
 # A REGISTERED, manual-only, `probe-result/v1` probe key. A real key
@@ -126,11 +126,6 @@ PRIMARY_WT = str(Path("/tmp/synarchy-primary").resolve())
 VERIFY_ARTIFACTS = f"{OUTSIDE}/verify-artifacts"
 
 
-def expect(cond: bool, msg: str) -> None:
-    if not cond:
-        FAILURES.append(msg)
-
-
 def expect_rejected(thunk, fragment: str, msg: str) -> None:
     """`thunk` refuses at the entry gate, naming `fragment`."""
     try:
@@ -141,10 +136,11 @@ def expect_rejected(thunk, fragment: str, msg: str) -> None:
                f"{fragment!r}")
         return
     except dd.RouteRefused as error:
-        FAILURES.append(f"{msg}: refused the ROUTE ({error}) where the entry "
-                        f"gate should have rejected the input")
+        selftestlib.record_fail(
+            f"{msg}: refused the ROUTE ({error}) where the entry "
+            f"gate should have rejected the input")
         return
-    FAILURES.append(f"{msg}: accepted")
+    selftestlib.record_fail(f"{msg}: accepted")
 
 
 def expect_refused(thunk, fragment: str, msg: str) -> None:
@@ -157,10 +153,11 @@ def expect_refused(thunk, fragment: str, msg: str) -> None:
                f"{fragment!r}")
         return
     except dd.HandoffError as error:
-        FAILURES.append(f"{msg}: rejected the INPUT ({error}) where the "
-                        f"route should have been refused")
+        selftestlib.record_fail(
+            f"{msg}: rejected the INPUT ({error}) where the "
+            f"route should have been refused")
         return
-    FAILURES.append(f"{msg}: accepted")
+    selftestlib.record_fail(f"{msg}: accepted")
 
 
 # --------------------------------------------------------------------------

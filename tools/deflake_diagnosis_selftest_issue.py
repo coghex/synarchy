@@ -51,6 +51,7 @@ import deflake_issue_evidence as die  # type: ignore  # noqa: E402
 import deflake_outcome as do  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
+import selftestlib  # noqa: E402
 from deflake_diagnosis_selftest_support import (  # noqa: E402
     CLEAN_WT, FAIL, FAILURES, MISSING, OUTSIDE, PASS, PRIMARY_WT, PROBE,
     WORKTREES, _DEFAULT, census_file, diagnosis_document,
@@ -267,10 +268,11 @@ def expect_not_filed(thunk, fragment: str, msg: str) -> None:
                f"{fragment!r}")
         return
     except di.HandoffError as error:
-        FAILURES.append(f"{msg}: rejected the INPUT ({error}) where the "
-                        f"EVIDENCE should have been refused")
+        selftestlib.record_fail(
+            f"{msg}: rejected the INPUT ({error}) where the "
+            f"EVIDENCE should have been refused")
         return
-    FAILURES.append(f"{msg}: filed an issue")
+    selftestlib.record_fail(f"{msg}: filed an issue")
 
 
 def expect_nothing_published(path, before: bytes, publication, msg: str,
@@ -454,7 +456,7 @@ def test_filing_reaches_neither_the_probe_nor_the_pull_request() -> None:
             publisher({"outcome": di.OUTCOME_PRODUCTION_DEFECT})
         except di.NonSuccess:
             continue
-        FAILURES.append(f"{publisher.__name__} accepted a call")
+        selftestlib.record_fail(f"{publisher.__name__} accepted a call")
 
 
 def test_resuming_a_filed_defect_touches_the_tracker_not_at_all() -> None:
@@ -628,7 +630,7 @@ def test_the_filed_issue_enters_the_canonical_review_gate() -> None:
                    f"an unknown brand is rejected naming the marker; got "
                    f"{error}")
         else:
-            FAILURES.append("an unknown issue origin was accepted")
+            selftestlib.record_fail("an unknown issue origin was accepted")
         expect_nothing_published(path, before, publication,
                                  "an unknown issue origin", searched=0)
 
@@ -911,10 +913,11 @@ def test_a_malformed_defect_handoff_is_rejected_without_filing() -> None:
                        f"{label}: rejected, but for {str(error)!r} rather "
                        f"than {fragment!r}")
             except di.NonSuccess as error:
-                FAILURES.append(f"{label}: refused the EVIDENCE ({error}) "
-                                f"where the input should have been rejected")
+                selftestlib.record_fail(
+                    f"{label}: refused the EVIDENCE ({error}) "
+                    f"where the input should have been rejected")
             else:
-                FAILURES.append(f"{label}: accepted")
+                selftestlib.record_fail(f"{label}: accepted")
             expect_nothing_published(path, before, publication, label,
                                      searched=0)
 
@@ -934,7 +937,8 @@ def test_the_census_schema_pairs_the_outcome_with_its_issue() -> None:
         except probe_census.CensusError:
             pass
         else:
-            FAILURES.append("a production defect was recorded with no issue")
+            selftestlib.record_fail(
+                "a production defect was recorded with no issue")
         expect(not stored_outcomes(path),
                "and nothing was stored by the refusal")
 
@@ -948,7 +952,8 @@ def test_the_census_schema_pairs_the_outcome_with_its_issue() -> None:
         except probe_census.CensusError:
             pass
         else:
-            FAILURES.append("a stable outcome was recorded carrying an issue")
+            selftestlib.record_fail(
+                "a stable outcome was recorded carrying an issue")
         expect(not stored_outcomes(path),
                "and nothing was stored by that refusal either")
 
@@ -1147,10 +1152,11 @@ def test_the_diagnosis_prose_is_bounded_at_the_gate() -> None:
                        f"{label}: rejected, but for {str(error)!r} rather "
                        f"than {fragment!r}")
             except di.NonSuccess as error:
-                FAILURES.append(f"{label}: refused the EVIDENCE ({error}) "
-                                f"where the input should have been rejected")
+                selftestlib.record_fail(
+                    f"{label}: refused the EVIDENCE ({error}) "
+                    f"where the input should have been rejected")
             else:
-                FAILURES.append(f"{label}: accepted")
+                selftestlib.record_fail(f"{label}: accepted")
             expect_nothing_published(path, before, publication, label,
                                      searched=0)
     # And a body that still cannot fit refuses rather than publishing one
@@ -1293,7 +1299,7 @@ def test_quoted_content_cannot_forge_a_review_routing_marker() -> None:
                    f"{label}: refused, but for {str(error)!r} rather than "
                    f"{fragment!r}")
         else:
-            FAILURES.append(f"{label}: accepted")
+            selftestlib.record_fail(f"{label}: accepted")
     di.require_one_marker_each(f"clean body{trailer}", key=key,
                                origin="codex")
 

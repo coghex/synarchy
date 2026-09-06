@@ -37,6 +37,7 @@ import probe_census  # type: ignore  # noqa: E402
 # the object they patch.
 import probe_census_storage as census_storage  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
+import selftestlib  # noqa: E402
 from deflake_diagnosis_selftest_support import (  # noqa: E402
     ATTEMPT, BASE_COMMIT, CHECKS, CLEAN_WT, FAIL, FAILURES, MISSING,
     OTHER, OUTCOME_NOW, OUTCOME_SUMMARY, OUTSIDE, PASS, PRIMARY_WT, PROBE,
@@ -249,10 +250,11 @@ def expect_non_success(thunk, fragment: str, msg: str) -> None:
                f"{fragment!r}")
         return
     except do.HandoffError as error:
-        FAILURES.append(f"{msg}: rejected the INPUT ({error}) where the "
-                        f"EVIDENCE should have been refused")
+        selftestlib.record_fail(
+            f"{msg}: rejected the INPUT ({error}) where the "
+            f"EVIDENCE should have been refused")
         return
-    FAILURES.append(f"{msg}: recorded a stable outcome")
+    selftestlib.record_fail(f"{msg}: recorded a stable outcome")
 
 
 def expect_handoff_rejected(thunk, fragment: str, msg: str) -> None:
@@ -264,10 +266,11 @@ def expect_handoff_rejected(thunk, fragment: str, msg: str) -> None:
                f"{fragment!r}")
         return
     except do.NonSuccess as error:
-        FAILURES.append(f"{msg}: refused the EVIDENCE ({error}) where the "
-                        f"input should have been rejected")
+        selftestlib.record_fail(
+            f"{msg}: refused the EVIDENCE ({error}) where the "
+            f"input should have been rejected")
         return
-    FAILURES.append(f"{msg}: accepted")
+    selftestlib.record_fail(f"{msg}: accepted")
 
 
 def expect_nothing_recorded(path, before: bytes, publisher, msg: str) -> None:
@@ -361,8 +364,9 @@ def test_a_spotless_controlled_baseline_records_cannot_reproduce() -> None:
             probe_census.validate_document(
                 document, probe_census.CENSUS_SCHEMA, "the written census")
         except probe_census.CensusError as error:
-            FAILURES.append(f"an outcome append leaves an invalid census: "
-                            f"{error}")
+            selftestlib.record_fail(
+                f"an outcome append leaves an invalid census: "
+                f"{error}")
 
 
 def test_a_no_target_ending_is_cannot_reproduce_on_its_own_measurement()\
@@ -1044,7 +1048,7 @@ def test_no_stable_outcome_reaches_the_pull_request_publisher() -> None:
     except do.NonSuccess:
         pass
     else:
-        FAILURES.append("the default publisher accepted a call")
+        selftestlib.record_fail("the default publisher accepted a call")
 
 
 def test_a_retry_under_a_different_clock_is_still_a_resume() -> None:
@@ -1673,8 +1677,8 @@ def test_a_removed_comparison_worktree_still_bounds_the_artifacts() -> None:
                f"a removed worktree's artifacts are still refused; got "
                f"{error}")
     else:
-        FAILURES.append("an artifact inside a no-longer-registered "
-                        "comparison worktree was accepted")
+        selftestlib.record_fail("an artifact inside a no-longer-registered "
+                                "comparison worktree was accepted")
 
 
 def test_the_record_keeps_the_condition_and_the_command() -> None:
