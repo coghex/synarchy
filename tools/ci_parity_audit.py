@@ -118,6 +118,9 @@ from ci_parity_config import (
     AGGREGATE_NEEDS,
     AUDITED_JOB,
     AUDITED_JOBS,
+    CABAL_QUIET_FLAGS,
+    CABAL_QUIET_JOB,
+    CABAL_QUIET_SUBCOMMANDS,
     EXEMPT_COMMANDS,
     IMAGE_JOB,
     LOCAL_GATE_LABEL,
@@ -140,10 +143,13 @@ from ci_parity_config import (
 from ci_parity_save_compat import audit_save_compat_reproducibility_wiring
 from ci_parity_shell import (
     AuditError,
+    cabal_subcommand,
+    extract_cabal_commands,
     extract_invocations,
     split_shell_commands,
 )
 from ci_parity_workflow import (
+    audit_cabal_verbosity,
     audit_gate_sets,
     audit_parallel_gate_wiring,
     audit_unit_asset_gate_wiring,
@@ -166,6 +172,9 @@ __all__ = [
     "AGGREGATE_NEEDS",
     "AUDITED_JOB",
     "AUDITED_JOBS",
+    "CABAL_QUIET_FLAGS",
+    "CABAL_QUIET_JOB",
+    "CABAL_QUIET_SUBCOMMANDS",
     "EXEMPT_COMMANDS",
     "IMAGE_JOB",
     "LOCAL_GATE_LABEL",
@@ -183,10 +192,13 @@ __all__ = [
     "WORKFLOW_LABEL",
     "WORKFLOW_PATH",
     "WORKFLOW_UNION_LABEL",
+    "audit_cabal_verbosity",
     "audit_gate_sets",
     "audit_parallel_gate_wiring",
     "audit_save_compat_reproducibility_wiring",
     "audit_unit_asset_gate_wiring",
+    "cabal_subcommand",
+    "extract_cabal_commands",
     "extract_invocations",
     "local_gate_invocations",
     "main",
@@ -216,6 +228,10 @@ def run_repository_audit() -> int:
         # live in the split-out worker (#2272).
         problems.extend(audit_unit_asset_gate_wiring(yaml_text))
         problems.extend(audit_parallel_gate_wiring(yaml_text))
+        # Nor for the Cabal commands themselves, which the gate-set
+        # comparison deliberately does not carry (#1920): their verbosity
+        # is a cross-file contract nothing else can see.
+        problems.extend(audit_cabal_verbosity(yaml_text, shell_text))
         ci_commands: set[str] = set()
         for commands in ci_job_commands.values():
             ci_commands |= commands

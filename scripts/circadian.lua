@@ -6,8 +6,9 @@
 -- around dusk, flat (0) at midnight and at noon. Distinct from sleep
 -- pressure (scripts/unit_resource_config.lua's "sleep_pressure" entries
 -- — the LONG, multi-day debt resource that only real sleep clears):
--- this is the SHORT, cyclic pull. Nothing consumes either signal yet —
--- the AI goal that combines them is #612's job.
+-- this is the SHORT, cyclic pull. scripts/unit_ai_sleep.lua's
+-- go_to_sleep utility combines the two — sleep-pressure deficit plus
+-- this urge plus an exhaustion deficit, each at its own weight.
 --
 -- world.getSunAngleAt's convention (World.Time.Types.worldTimeToSunAngle):
 -- 0.0 = midnight, 0.25 = dawn, 0.5 = noon, 0.75 = dusk, wrapping back to

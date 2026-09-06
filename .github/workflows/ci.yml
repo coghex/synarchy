@@ -356,7 +356,7 @@ jobs:
           # check. Fixing a failure here means moving the pin back, or
           # editing .github/ci/Dockerfile so a new image with a newer
           # baked index is published — never deleting this resolve.
-          cabal build all --dry-run
+          cabal build all -v0 --dry-run
           # Incremental against the index snapshot baked into the image —
           # a delta fetch of seconds, not a full index download.
           cabal update
@@ -364,7 +364,7 @@ jobs:
           # (synarchy.cabal's `common warnings` stanza, #1057) — there is
           # nothing to configure here. --dry-run only produces
           # dist-newstyle/cache/plan.json, which the cache keys below hash.
-          cabal build all --dry-run
+          cabal build all -v0 --dry-run
 
       # Hspec is deliberately full and blocking on every non-docs-only PR. These
       # independent gates are path-selective on PRs, but always run after a
@@ -484,7 +484,7 @@ jobs:
 
       - name: Build dependencies
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        run: cabal build all --only-dependencies
+        run: cabal build all -v0 --only-dependencies
 
       # Save the store as soon as deps are built, so a later failure in
       # the package build doesn't throw away the expensive part.
@@ -503,16 +503,31 @@ jobs:
           path: /usr/local/cabal/store
           key: deps-v2-${{ runner.os }}-ghc9.12.2-${{ hashFiles('dist-newstyle/cache/plan.json') }}
 
+      # -v0 on every Cabal build/test below (#1920) drops the build plan,
+      # the Configuring/Preprocessing/Building banners and the per-module
+      # `[N of M] Compiling` line — 750 library, 270 headless-test and 6
+      # graphical-test modules of routine progress that buried the tests
+      # and audits this log exists to show. It suppresses NOTHING
+      # diagnostic: a -Werror violation still arrives with its error
+      # code, warning-flag name, source excerpt and caret, a non-fatal
+      # -Wall warning still prints, a failed build still names its
+      # package, a failed suite still names itself, a solver failure
+      # still prints its trace, and every exit status is unchanged.
+      # Whether a build was cold is reported explicitly by the
+      # cache-status step above (#1358), which is why the per-module
+      # lines were only a redundant proxy for it. Reproducing a build
+      # locally with full progress back is deleting the flag from the one
+      # command being reproduced.
       - name: Build (library + executable)
         if: steps.docs-fast-path.outputs.docs_only != 'true'
-        run: cabal build all
+        run: cabal build all -v0
 
       - name: Build test suites
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
-          cabal build synarchy-test-headless
+          cabal build synarchy-test-headless -v0
           if [ "${{ steps.expensive-gates.outputs.graphical }}" = true ]; then
-            cabal build synarchy-test-graphical
+            cabal build synarchy-test-graphical -v0
           else
             echo "Skipping graphical test-suite build: no graphics-facing paths changed."
           fi
@@ -547,10 +562,10 @@ jobs:
         run: |
           if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
             echo "worldgen gate fired: running the full tier (SYNARCHY_FULL_TESTS=1)."
-            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
+            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20'
           else
             echo "worldgen gate did not fire: full-tier examples stay pending."
-            cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
+            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20'
           fi
 
       # Guard (issue #766, save-overhaul C4 requirement 14): fails if a

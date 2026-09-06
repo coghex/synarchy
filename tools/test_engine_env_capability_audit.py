@@ -14,7 +14,7 @@ inventory grow.
 Composition (#2062)
 -------------------
 This module is composition, dispatch and reporting only -- it holds no
-test body. The test groups live with six owners, each of which keeps
+test body. The test groups live with seven owners, each of which keeps
 its own ordered inventory in `TESTS`:
 
   `test_engine_env_capability_audit_inventory`     the SS5 inventory
@@ -41,6 +41,11 @@ its own ordered inventory in `TESTS`:
       live count and first/last field span, section and procedure
       anchors, duplicate or stray totals, Markdown fences, section
       bounds, and the two real-inventory assertions (issue #1669);
+  `test_engine_env_capability_audit_record_counts` the SS2.1 audited
+      capability-record sizes: the marked table's existence,
+      uniqueness and placement, the audited column's name, a stale
+      size, a missing size, a missing or dead row, stray figures in
+      the column, and the real-repository case (issue #2269);
   `test_engine_env_capability_writers`             the SS5
       writing-module scanner, the focused owner issue #2036 gave it
       (issues #1892, #2059). It is the one owner with a command line
@@ -49,7 +54,7 @@ its own ordered inventory in `TESTS`:
       aggregate composes its `TESTS` and never calls its `main`.
 
 `test_engine_env_capability_audit_support` is the single source of what
-two or more of the first five share: the #1922 assertion facility, the
+two or more of the first six share: the #1922 assertion facility, the
 synthetic EngineEnv record and inventory-document builders, the two
 real-repository readers, and the persistence-inventory audit's
 `extract_record_fields`. Dependencies run one way -- support imports no
@@ -112,17 +117,19 @@ from selftestlib import FAILURES  # noqa: E402
 import test_engine_env_capability_audit_boundary as boundary  # noqa: E402
 import test_engine_env_capability_audit_field_total as field_total  # noqa: E402
 import test_engine_env_capability_audit_inventory as inventory  # noqa: E402
+import test_engine_env_capability_audit_record_counts as record_counts  # noqa: E402
 import test_engine_env_capability_audit_render_input as render_input  # noqa: E402
 import test_engine_env_capability_audit_save_load as save_load  # noqa: E402
 import test_engine_env_capability_writers as writers  # noqa: E402
 
-#: The six owners by name, in the order their inventories run.
+#: The seven owners by name, in the order their inventories run.
 OWNERS: dict[str, ModuleType] = {
     "inventory": inventory,
     "boundary": boundary,
     "save_load": save_load,
     "render_input": render_input,
     "field_total": field_total,
+    "record_counts": record_counts,
     "writers": writers,
 }
 
@@ -236,6 +243,7 @@ def compose() -> list:
         *save_load.TESTS,
         *render_input.TESTS,
         *field_total.TESTS,
+        *record_counts.TESTS,
         *boundary.TESTS_TRAILING,
         *writers.TESTS,
     ]
