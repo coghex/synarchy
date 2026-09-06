@@ -43,6 +43,7 @@ import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import Data.IORef (readIORef, writeIORef)
+import qualified System.Random as Random
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.State (EngineEnv(..))
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
@@ -183,11 +184,46 @@ acolyte xy knowledge inv wounds =
 medicKnowledge ∷ [(Text, Float)]
 medicKnowledge = [("bleed_control", 100), ("infection_control", 100)]
 
+-- | The treatment roll every exact count below is measured against.
+--
+--   @treatBleeding@ is not deterministic on its own. @Engine.Core.Init@
+--   seeds 'treatRNGRef' with `newStdGen` — system entropy — once per
+--   'EngineEnv', and @Spec.hs@ gives this module ONE env through
+--   `aroundAll withHeadlessEngine`, so without a pin every case here
+--   draws from a stream whose starting point differs per run.
+--
+--   That matters because the dressing cycle spends a bandage per FAILED
+--   attempt (@trBandages@ is "bandages consumed (incl. wasted on failed
+--   tries)") and its success probability is
+--   @pSucc = max 0.05 (min 0.99 (0.15 + competence))@ — clamped BELOW
+--   1. This fixture's medic is as good as the formula allows:
+--   'minimalDef' declares no @udStatTemplates@, so @resolveIntelligence@
+--   returns its 1.0 fallback, the kit carries no tweezers or scissors
+--   (@toolFactor = 0.85@), and @competence = 0.85@ puts @pSucc@ exactly
+--   on the 0.99 clamp. One run in a hundred therefore fails its first
+--   attempt and spends a second bandage, and every @shouldReturn@ here
+--   becomes a probable statement rather than a true one. That is how
+--   this spec put a red headless suite on an unrelated Python-only
+--   branch (#2440); measured over 20000 seeds the rate is 1.1%.
+--
+--   So the generator is pinned here beside the three managers and the
+--   cases read one declared roll. The seed is not a magic number: it is
+--   the ordinary case these cases are about — a competent medic
+--   dressing the wound on its FIRST attempt, for exactly one bandage.
+--   "the pinned treatment roll" below holds it to precisely that,
+--   through the production path and the engine's own counters, so a
+--   seed that drifted into a retry fails loudly there instead of
+--   quietly turning every count into a statement about another roll.
+treatSeed ∷ Int
+treatSeed = 20260906
+
 -- | Rebuild the live page, the item registry and the roster. Every
 --   case starts here: a spent bandage or a moved kit from a previous
---   one would read as a silently-passing assertion.
+--   one would read as a silently-passing assertion — and so would a
+--   treatment roll inherited from whatever ran before it.
 resetFixture ∷ EngineEnv → IO ()
 resetFixture env = do
+    writeIORef (treatRNGRef env) (Random.mkStdGen treatSeed)
     ws ← emptyWorldState
     writeIORef (worldManagerRef env) emptyWorldManager
         { wmWorlds = [(fixturePage, ws)], wmVisible = [fixturePage] }
@@ -373,6 +409,35 @@ spec = describe "medical kit instance targeting (#2302)" $ do
             bandageCount ls medicUid Nothing `shouldReturn` q "0"
             bandageCount ls medicUid (Just medicEmptyId) `shouldReturn` q "0"
             bandageCount ls medicUid (Just medicStockedId) `shouldReturn` q "3"
+
+    -- What 'treatSeed' actually pins, read from the engine's OWN
+    -- counters rather than inferred from a bandage total. The exact
+    -- counts below all assume a first-attempt success; a seed that
+    -- drifted into a retry would leave them passing for a while — the
+    -- stocked kit holds three bandages — while quietly becoming
+    -- statements about a different roll. This fails loudly instead.
+    describe "the pinned treatment roll" $ do
+
+        it "is a FIRST-attempt success: one attempt, one bandage" $ \env → do
+            ls ← medicBackend env
+            r ← evalDebug ls $ T.concat
+                [ "local r = unit.treatBleeding(", uid medicUid, ", "
+                , uid patientUid, "); "
+                , "return tostring(r and r.ok) .. '|' "
+                , ".. tostring(r and r.attempts) .. '|' "
+                , ".. tostring(r and r.bandagesUsed)" ]
+            r `shouldBe` q "true|1|1"
+
+        -- And that it is the SEED doing it, not the engine having
+        -- become deterministic underneath: the fixture reset must leave
+        -- the generator exactly where the seed puts it, every time.
+        it "restores the same generator on every fixture reset" $ \env → do
+            resetFixture env
+            before ← readIORef (treatRNGRef env)
+            _ ← medicBackend env
+            after ← readIORef (treatRNGRef env)
+            show after `shouldBe` show before
+            show before `shouldBe` show (Random.mkStdGen treatSeed)
 
     describe "the context menu" $ do
 
