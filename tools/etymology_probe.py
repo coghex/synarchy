@@ -66,9 +66,28 @@ a language that happened to come out short. Only phase 5's bound-form
 and recurrence cases are genuinely data-dependent, and only they still
 skip.
 
+Phases 6 and 8 are the only places that rebuild the HUD BY HAND, and
+both hand ``hud.init`` the live ``hud.boxTexSet`` and ``hud.menuFont``
+in the order ``scripts/hud.lua:96`` declares them (#1983). Neither
+substitutes a handle for a resource the HUD does not have: ``hud.init``
+stores what it is given straight onto those two fields, and
+``scripts/hud.lua:617-683`` propagates them into every panel rebuilt
+afterwards — so one wrong handle leaves phases 6 to 8 grading manager
+state and input routing over a HUD that renders nothing at all. The
+engine says so out loud: ``src/UI/Render.hs:223,253`` warns and draws
+NOTHING for every box whose texture set and every glyph whose font it
+cannot resolve. The engine log is therefore CHECKPOINTED immediately
+before the first manual rebuild and its suffix graded once the engine
+is gone, which covers both rebuilds, the phases they hold up and
+teardown, while excluding the boot that legitimately renders before its
+fonts and box textures finish loading. Warnings inside that window fail
+the run, and so does failing to take or read the window at all — an
+ungraded window is exactly the silence this evidence exists to remove.
+
 Needs a GPU (Vulkan device) — manual-only, never CI-gated. ``--self-test``
-is the exception: it drives the fixture classification with synthetic
-readings and boots nothing at all.
+is the exception: it drives the fixture classification and the manual
+rebuilds' resource and log-window decisions with synthetic readings, and
+boots nothing at all.
 
 Usage:
   python3 tools/etymology_probe.py
@@ -85,6 +104,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import time
 from contextlib import redirect_stdout
 
@@ -324,6 +344,235 @@ def exit_code(failed_checks: int, failed_fixtures: int) -> int:
     behavioural one (#1604 requirements 2 and 3) — a required phase that
     never ran must not report as a pass."""
     return 1 if (failed_checks or failed_fixtures) else 0
+
+
+# --------------------------------------------------------------------
+# The manual HUD rebuilds' live render resources (#1983).
+#
+# Phases 6 and 8 are the only callers of `hud.init` outside production
+# (`scripts/ui_manager_boot.lua:246`), and both rebuild a HUD the
+# phases after them then grade. The decisions below are PURE, over
+# readings, so `--self-test` drives every branch — a present resource, a
+# missing one, and each warning marker — with no engine, no world and no
+# GPU; only `hud_rebuild`, `checkpoint_rebuild_window` and
+# `grade_rebuild_window` touch the engine or its log.
+# --------------------------------------------------------------------
+
+#: The two live resources `hud.init` takes, in the order
+#: `scripts/hud.lua:96` declares them: `hud.init(boxTexSet, menuFont,
+#: width, height)`. Paired with the field each is read from so a
+#: diagnostic for an absent one names `hud.boxTexSet` or `hud.menuFont`
+#: rather than an argument position — which is what the defect this
+#: guards against got wrong in the first place.
+REBUILD_RESOURCES = (("boxTexSet", "box texture set"),
+                     ("menuFont", "menu font"))
+
+#: The engine warnings that prove a rebuilt HUD drew against an invalid
+#: render resource. `src/UI/Render.hs:223` emits the first for every box
+#: whose texture set does not resolve, `:253` the second for every text
+#: element whose font does not, and BOTH render nothing in place of the
+#: element — so a run emitting them graded manager state and input
+#: routing over a HUD with no boxes and no glyphs in it.
+REBUILD_WARNINGS = (("UI box texture set not found", "box texture set"),
+                    ("Font cache miss: UI text font not found", "menu font"))
+
+#: Phase 8's resize. Named once so the framebuffer the panel is resized
+#: to and the one the HUD is rebuilt at cannot drift apart.
+RESIZE_SIZE = (1024, 768)
+
+#: The rebuild, as ONE console command. Reading the two resources and
+#: passing them are the same statement, so nothing can be read here and
+#: a different handle passed there, and the `rebuilt` flag reports
+#: whether `hud.init` was reached rather than being assumed. An absent
+#: resource returns WITHOUT calling `hud.init`: requirement 2 forbids
+#: substituting a handle, and a rebuild that cannot happen honestly must
+#: not happen at all.
+REBUILD_LUA = (
+    "local hud = require('scripts.hud'); "
+    "local box, font = hud.boxTexSet, hud.menuFont; "
+    "if box == nil or font == nil then "
+    "return {boxTexSet = box, menuFont = font, rebuilt = false} end; "
+    "hud.init(box, font, %d, %d); "
+    "hud.createUI(); "
+    "return {boxTexSet = box, menuFont = font, rebuilt = true}")
+
+
+def is_live_handle(value) -> bool:
+    """Whether a reading is a real engine resource handle.
+
+    `hud.boxTexSet` is `UI.loadBoxTextures`'s registered set handle and
+    `hud.menuFont` is `engine.loadFont`'s font handle, and both are
+    pushed as Lua INTEGERS
+    (`src/Engine/Scripting/Lua/API/UI/Element.hs:109`), so a live one
+    always reads back as a number. A `nil` field is simply absent from
+    the console's serialized table and reads as `None`; a bool is an int
+    in Python and is not a handle.
+
+    Deliberately NOT a range check. The probe's job here is to refuse a
+    FABRICATED handle, not to second-guess which integers the engine's
+    registries hand out — whether a real handle resolves is what the
+    rebuild window's warnings answer, and answering it twice, in two
+    places, by two different rules is how the two come to disagree.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def rebuild_reading_cause(reading) -> str | None:
+    """Why a manual HUD rebuild did not run against the live resources,
+    or ``None`` when it did.
+
+    Always reached with whatever `REBUILD_LUA` answered, so this states
+    the cause rather than deciding whether there is one. Each absent
+    resource is named individually — an absent box texture set and an
+    absent menu font are different repairs — and the reading itself is
+    quoted beside them, so a shape neither branch anticipated survives
+    as evidence instead of being flattened into "something was missing".
+    """
+    if not isinstance(reading, dict):
+        return (f"the rebuild read back as {reading!r} rather than a table, "
+                f"so neither the live box texture set nor the live menu font "
+                f"was established and nothing says the HUD was rebuilt")
+    absent = [f"{label} (hud.{field})"
+              for field, label in REBUILD_RESOURCES
+              if not is_live_handle(reading.get(field))]
+    if absent:
+        return (f"the live HUD {' and '.join(absent)} "
+                f"{'are' if len(absent) > 1 else 'is'} absent (read "
+                f"{reading!r}), and a rebuild must not substitute an "
+                f"arbitrary handle for a resource the HUD does not have")
+    if reading.get("rebuilt") is not True:
+        return (f"both live resources are present, but the rebuild never "
+                f"reported reaching hud.init (read {reading!r})")
+    return None
+
+
+def rebuild_window_cause(window) -> str | None:
+    """Why the rebuild window's engine log says the manual HUD rebuilds
+    drew against invalid render resources, or ``None``.
+
+    ``window`` is only the log written after the checkpoint, so a
+    warning from BOOT — where the loading screen and menus legitimately
+    render before the fonts and box textures they use have loaded — is
+    outside it and says nothing about the rebuilds. A window that is not
+    text at all is a failure in its own right rather than an absence of
+    warnings: nothing was read, so nothing was graded.
+    """
+    if not isinstance(window, str):
+        return (f"the rebuild window's engine log read back as {window!r} "
+                f"rather than text, so nothing establishes whether the "
+                f"rebuilt HUD resolved its render resources")
+    emitted = [f"{window.count(marker)} {marker!r} ({label})"
+               for marker, label in REBUILD_WARNINGS if marker in window]
+    if not emitted:
+        return None
+    return (f"the engine emitted {' and '.join(emitted)} warning(s) after "
+            f"the HUD rebuild checkpoint, so the rebuilt HUD drew against "
+            f"an invalid render resource and every phase after the rebuild "
+            f"graded manager state over a HUD that rendered nothing")
+
+
+def read_log_window(path: str, start: int) -> str:
+    """The engine log written after byte offset ``start``.
+
+    Read as BYTES from the checkpoint and decoded leniently: the offset
+    is a file size, and the engine's captured stdout carries whatever
+    GLFW and the graphics driver print alongside the engine's own lines
+    (macOS GLFW diagnostics included). Raises ``OSError`` when the log
+    cannot be read at all, which its caller reports rather than swallows.
+    """
+    with open(path, "rb") as handle:
+        handle.seek(start)
+        return handle.read().decode("utf-8", "replace")
+
+
+#: The engine log offset the rebuild evidence is read from, taken
+#: immediately before the FIRST manual rebuild. ``None`` until then, and
+#: still ``None`` if taking it failed — which reports itself there, so
+#: grading stays silent rather than blaming the same failure twice.
+rebuild_window_start: int | None = None
+
+#: How many manual rebuilds were attempted. Zero means the run never
+#: reached one (an earlier phase's precondition failed and already said
+#: so), and there is no window to grade.
+rebuild_attempts = 0
+
+
+def checkpoint_rebuild_window() -> None:
+    """Take the engine log offset the rebuild evidence is read from.
+
+    Called once, immediately before the first manual rebuild. Everything
+    after it — both rebuilds, the phases they hold up, and teardown — is
+    inside the window; the boot before it is not.
+
+    Failing to take it FAILS the run. The warnings this window exists to
+    catch are emitted by the render thread on its own frames, so an
+    unopened window is indistinguishable from a clean one, and treating
+    the two alike is how requirement 3 would silently stop enforcing
+    anything.
+    """
+    global rebuild_window_start
+    try:
+        rebuild_window_start = os.path.getsize(LOG)
+    except OSError as error:
+        fixture_failure(
+            "the HUD rebuild window's log checkpoint could not be taken, so "
+            "nothing grades whether the rebuilt HUD resolved its render "
+            "resources",
+            f"{LOG}: {error}")
+
+
+def hud_rebuild(port: int, width: int, height: int) -> bool:
+    """Rebuild the HUD at ``width`` x ``height`` against its OWN live
+    render resources, and report whether it ran.
+
+    It does not run when either resource is absent (#1983 requirement
+    2). Counted as a FIXTURE failure for the same reason #1604 and #1608
+    are: the rebuild the phase depends on was never asked, so the checks
+    riding on it did not measure the UI behaving wrongly.
+    """
+    global rebuild_attempts
+    if rebuild_attempts == 0:
+        checkpoint_rebuild_window()
+    rebuild_attempts += 1
+    reading = send_json(port, REBUILD_LUA % (width, height), timeout=30)
+    cause = rebuild_reading_cause(reading)
+    if cause is None:
+        return True
+    fixture_failure(
+        f"the manual HUD rebuild at {width}x{height} never ran, so the "
+        f"checks that depend on it graded nothing",
+        cause)
+    return False
+
+
+def grade_rebuild_window() -> None:
+    """Grade the engine log written since the rebuild checkpoint.
+
+    Read only once the engine is GONE. The warnings come from the render
+    thread's frames rather than from the console command that triggered
+    the rebuild, so a rebuild's own warnings are still being written
+    while the phases after it run, and teardown emits its last ones after
+    the final phase has finished.
+    """
+    if rebuild_attempts == 0:
+        return
+    print("\n[6-8] the manual HUD rebuilds drew against valid resources")
+    if rebuild_window_start is None:
+        return  # the checkpoint already reported its own failure
+    try:
+        window = read_log_window(LOG, rebuild_window_start)
+    except OSError as error:
+        fixture_failure(
+            "the HUD rebuild window's engine log could not be read, so "
+            "nothing grades whether the rebuilt HUD resolved its render "
+            "resources",
+            f"{LOG} from offset {rebuild_window_start}: {error}")
+        return
+    cause = rebuild_window_cause(window)
+    check(cause is None,
+          f"the {rebuild_attempts} manual HUD rebuild(s) resolved every box "
+          f"texture set and font they rendered with",
+          cause or "")
 
 
 def panel_dump(port: int):
@@ -801,11 +1050,13 @@ def _phase6_forced_scale(port: int) -> None:
     # setup reaches, and not something a name at normal scale is
     # expected to do.
     w, h = SCROLL_FORCE_SIZE
-    send(port, f"engine.setUIScale({SCROLL_FORCE_SCALE}); "
-               f"local hud = require('scripts.hud'); "
-               f"hud.init(hud.texWorldSelect or 1, hud.boxTexSet or 2, "
-               f"{w}, {h}); "
-               f"hud.createUI()", timeout=30)
+    send(port, f"engine.setUIScale({SCROLL_FORCE_SCALE})", timeout=15)
+    # The rebuild is what manufactures the overflow, and it rebuilds
+    # against the HUD's own live resources (#1983). If it cannot, the
+    # six arrow and wheel checks below have nothing valid to drive and
+    # `hud_rebuild` has already said why.
+    if not hud_rebuild(port, w, h):
+        return
     targets = [("world", "nil")]
     rivers = send_json(port, "return world.getRivers()", timeout=45)
     for r in (rivers or [])[:8]:
@@ -897,25 +1148,28 @@ def phase8_lifecycle(port: int) -> None:
     send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                "if ep then ep.openFor('world') end", timeout=15)
     before = panel_dump(port)
-    send(port, "local ui = require('scripts.ui_manager'); "
-               "ui.onFramebufferResize(1024, 768)", timeout=20)
-    send(port, "local hud = require('scripts.hud'); "
-               "hud.init(hud.texWorldSelect or 1, hud.boxTexSet or 2, 1024, 768); "
-               "hud.createUI()", timeout=30)
-    after = panel_dump(port)
-    if isinstance(before, dict) and isinstance(after, dict):
-        check(after.get("open") is True, "the panel survives a resize")
-        check(after.get("kind") == before.get("kind")
-              and after.get("targetId") == before.get("targetId"),
-              "pointed at the SAME entity as before the resize",
-              f"before={before.get('kind')!r}/{before.get('targetId')!r} "
-              f"after={after.get('kind')!r}/{after.get('targetId')!r}")
-        check((after.get("rowCount") or 0) > 0,
-              "with valid, non-degenerate content after the rebuild")
-        rows = after.get("rows") or []
-        check(all((r.get("width") or 0) >= 0 and (r.get("height") or 0) >= 0
-                  for r in rows),
-              "every rendered row has non-degenerate bounds")
+    rw, rh = RESIZE_SIZE
+    send(port, f"local ui = require('scripts.ui_manager'); "
+               f"ui.onFramebufferResize({rw}, {rh})", timeout=20)
+    # Only the resize-survival checks ride on the rebuild; close and
+    # teardown below do not, so a rebuild that could not run honestly
+    # (#1983) costs those four checks and nothing else.
+    if hud_rebuild(port, rw, rh):
+        after = panel_dump(port)
+        if isinstance(before, dict) and isinstance(after, dict):
+            check(after.get("open") is True, "the panel survives a resize")
+            check(after.get("kind") == before.get("kind")
+                  and after.get("targetId") == before.get("targetId"),
+                  "pointed at the SAME entity as before the resize",
+                  f"before={before.get('kind')!r}/{before.get('targetId')!r} "
+                  f"after={after.get('kind')!r}/{after.get('targetId')!r}")
+            check((after.get("rowCount") or 0) > 0,
+                  "with valid, non-degenerate content after the rebuild")
+            rows = after.get("rows") or []
+            check(all((r.get("width") or 0) >= 0
+                      and (r.get("height") or 0) >= 0
+                      for r in rows),
+                  "every rendered row has non-degenerate bounds")
     send(port, "local ep = package.loaded['scripts.etymology_panel']; "
                "if ep then ep.closeIfOpen() end", timeout=15)
     closed = panel_dump(port)
@@ -959,6 +1213,15 @@ def self_test() -> int:
     breaking the configuration the phase depends on, so its readings are
     driven here instead — including the malformed and absent dumps whose
     diagnostic still has to name all three judged fields.
+
+    So are the manual rebuilds' resource and log-window decisions
+    (#1983), and there the live run is even less able to help: a live
+    negative needs a HUD with no box texture set or no font, which is
+    the state the whole probe boots in order NOT to be in. Each absent
+    resource, each warning marker, a clean window, and the checkpoint
+    that excludes the boot's own legitimate warnings are all driven here
+    — the last against a real temporary file, since excluding a prefix
+    is a property of the read rather than of the classification.
     """
     global failures, fixture_failures
     args = _FixtureArgs()
@@ -1114,6 +1377,149 @@ def self_test() -> int:
             "rowCount": 4, "scrollbar": None}:
         problems.append("the panel reading dropped an explicit null")
 
+    # --- the manual rebuilds' live resources (#1983) ------------------
+    live = {"boxTexSet": 7, "menuFont": 3, "rebuilt": True}
+    expect_none("a rebuild against both live resources",
+                rebuild_reading_cause(live))
+    # A zero handle is a HANDLE. `is_live_handle` refuses a FABRICATED
+    # one, not an integer it dislikes, and a range rule here would be a
+    # second, disagreeing opinion about what the engine's registries
+    # hand out.
+    expect_none("a zero-valued handle is still a handle",
+                rebuild_reading_cause({"boxTexSet": 0, "menuFont": 0,
+                                       "rebuilt": True}))
+
+    def expect_resource_cause(label: str, reading, named, unnamed) -> None:
+        """Each absent resource is named, and the PRESENT one is not.
+
+        The negative half is the half that matters: a diagnostic naming
+        both resources whichever is missing tells a reader nothing about
+        which handle to go and find.
+        """
+        cause = rebuild_reading_cause(reading)
+        if cause is None:
+            problems.append(f"{label}: expected a cause, got none")
+            return
+        for needle in named:
+            if needle not in cause:
+                problems.append(
+                    f"{label}: cause does not name {needle!r}: {cause!r}")
+        for needle in unnamed:
+            if needle in cause:
+                problems.append(
+                    f"{label}: cause blames {needle!r} as well: {cause!r}")
+
+    expect_resource_cause(
+        "an absent box texture set", {"menuFont": 3, "rebuilt": False},
+        ("box texture set", "hud.boxTexSet"), ("menu font", "hud.menuFont"))
+    expect_resource_cause(
+        "an absent menu font", {"boxTexSet": 7, "rebuilt": False},
+        ("menu font", "hud.menuFont"), ("box texture set", "hud.boxTexSet"))
+    expect_resource_cause(
+        "neither resource loaded", {"rebuilt": False},
+        ("box texture set", "hud.boxTexSet", "menu font", "hud.menuFont"), ())
+    # A Lua nil serializes as an ABSENT key, but an explicit null, a
+    # bool and a texture path are all "not a handle" too.
+    for label, value in (("an explicitly null box texture set", None),
+                         ("a boolean box texture set", True),
+                         ("a box texture set that came back as text",
+                          "assets/textures/ui/box")):
+        expect_resource_cause(
+            label, {"boxTexSet": value, "menuFont": 3, "rebuilt": True},
+            ("box texture set", "hud.boxTexSet"), ("hud.menuFont",))
+    # The rebuild has to REPORT reaching hud.init; live handles beside a
+    # rebuild that never happened is not a rebuild.
+    expect_cause_shape = rebuild_reading_cause(
+        {"boxTexSet": 7, "menuFont": 3, "rebuilt": False})
+    if expect_cause_shape is None or "hud.init" not in expect_cause_shape:
+        problems.append(
+            f"a rebuild that never reached hud.init was accepted: "
+            f"{expect_cause_shape!r}")
+    for label, reading in (("a rebuild that returned nothing", None),
+                           ("a rebuild that errored into text",
+                            "attempt to index a nil value"),
+                           ("a rebuild that answered with a list", [])):
+        if rebuild_reading_cause(reading) is None:
+            problems.append(f"{label} was read as a completed rebuild")
+
+    # --- the rebuild window's engine log (#1983) ----------------------
+    clean = ("[INFO] [UI] HUD created\n"
+             "[DEBUG] [Font] Font cache hit: Found UI font 3\n"
+             "[INFO] [UI] page 'main_world' shown\n")
+    expect_none("a rebuild window with no resource warnings",
+                rebuild_window_cause(clean))
+    for marker, label in REBUILD_WARNINGS:
+        others = [other for other, _ in REBUILD_WARNINGS if other != marker]
+        cause = rebuild_window_cause(f"{clean}[WARN] [UI] {marker}: 12\n")
+        if cause is None:
+            problems.append(f"{marker!r} in the rebuild window was accepted")
+            continue
+        for needle in (marker, label):
+            if needle not in cause:
+                problems.append(
+                    f"{marker!r}: cause does not name {needle!r}: {cause!r}")
+        for other in others:
+            if other in cause:
+                problems.append(
+                    f"{marker!r}: cause also blames {other!r}: {cause!r}")
+    both = rebuild_window_cause(
+        f"[WARN] [UI] {REBUILD_WARNINGS[0][0]}\n{clean}"
+        f"[WARN] [UI] {REBUILD_WARNINGS[1][0]}: 3\n"
+        f"[WARN] [UI] {REBUILD_WARNINGS[1][0]}: 3\n")
+    if both is None:
+        problems.append("a window carrying both warnings was accepted")
+    else:
+        for needle in (f"1 {REBUILD_WARNINGS[0][0]!r}",
+                       f"2 {REBUILD_WARNINGS[1][0]!r}"):
+            if needle not in both:
+                problems.append(
+                    f"the window cause miscounts {needle!r}: {both!r}")
+    # A window that was never read is a failure, not an absence of
+    # warnings: nothing was graded either way.
+    for label, window in (("an unread window", None),
+                          ("a window read as bytes", b"clean"),
+                          ("a window read as a number", 0)):
+        if rebuild_window_cause(window) is None:
+            problems.append(f"{label} was accepted as a clean window")
+
+    # --- the checkpoint really excludes the boot (#1983) --------------
+    # Written as BYTES, because the checkpoint is a file size: a text
+    # handle's `tell()` is not an offset `read_log_window` can seek to.
+    boot_noise = (f"[WARN] [UI] {REBUILD_WARNINGS[0][0]}\n"
+                  f"[WARN] [UI] {REBUILD_WARNINGS[1][0]}: 1\n").encode()
+    handle, log_path = tempfile.mkstemp(prefix="etymology_selftest_",
+                                        suffix=".log")
+    try:
+        with os.fdopen(handle, "wb") as fixture:
+            fixture.write(boot_noise)
+            checkpoint = fixture.tell()
+            fixture.write(clean.encode())
+        # The fixture has to be able to FAIL, or excluding the boot
+        # proves nothing: graded from offset 0 it must be rejected.
+        if rebuild_window_cause(read_log_window(log_path, 0)) is None:
+            problems.append(
+                "the checkpoint fixture carries no pre-checkpoint warning, "
+                "so excluding the boot was never tested")
+        window = read_log_window(log_path, checkpoint)
+        if window != clean:
+            problems.append(
+                f"the rebuild window is not the log written after the "
+                f"checkpoint: {window!r}")
+        if rebuild_window_cause(window) is not None:
+            problems.append(
+                "warnings emitted before the checkpoint were graded as the "
+                "rebuilds'")
+    finally:
+        os.unlink(log_path)
+    # And a log that cannot be read raises rather than reading as clean,
+    # which is what makes `grade_rebuild_window` report it.
+    try:
+        read_log_window(log_path, 0)
+    except OSError:
+        pass
+    else:
+        problems.append("an unreadable engine log read back as a window")
+
     # --- requirement 4: the two failures stay distinguishable ---------
     before = (failures, fixture_failures)
     captured = io.StringIO()
@@ -1148,7 +1554,8 @@ def self_test() -> int:
 
     for line in problems:
         print(f"FAIL: {line}", file=sys.stderr)
-    print(f"--- self-test ---\n  fixture classification cases: "
+    print(f"--- self-test ---\n  fixture, rebuild-resource and "
+          f"log-window cases: "
           f"{'OK' if not problems else f'{len(problems)} FAILED'}")
     return 0 if not problems else 1
 
@@ -1170,8 +1577,9 @@ def main() -> int:
     ap.add_argument("--window", default="1280x720",
                     help="offscreen render target size")
     ap.add_argument("--self-test", action="store_true",
-                    help="grade the fixture classification with synthetic "
-                         "readings; boots no engine")
+                    help="grade the fixture classification and the manual "
+                         "HUD rebuilds' resource and log-window decisions "
+                         "with synthetic readings; boots no engine")
     args = ap.parse_args()
 
     if args.self_test:
@@ -1193,6 +1601,11 @@ def main() -> int:
             phase8_lifecycle(args.port)
     finally:
         quit_engine(args.port, proc)
+
+    # Only now: the rebuild window's warnings are emitted by the render
+    # thread on its own frames, and teardown emits its last ones after
+    # the final phase has already returned (#1983).
+    grade_rebuild_window()
 
     print()
     if fixture_failures:
