@@ -195,9 +195,9 @@ local function sleepUtility(uid, s, params)
     -- exhaustion.fraction is "restedness" (1=fresh, 0=fatigued) — invert
     -- to a deficit so it stacks with sleep_pressure's deficit the same
     -- way. Short-horizon (regens with ordinary rest, per exhaustion.lua),
-    -- so it's a minor nudge on top of the sleep_pressure/urge baseline,
-    -- not an independent trigger — exhaustion.lua's own header calls out
-    -- feeding it into this utility as #612's job.
+    -- so it carries the smallest of the three weights: a minor nudge on
+    -- top of the sleep_pressure/urge baseline rather than an independent
+    -- trigger, since a hard day's labour is not sleep debt.
     local exhaustionDeficit = 1 - (exhaustion.fraction(uid) or 1.0)
     return params.sleep_base_weight
          + params.sleep_deficit_weight * deficit
