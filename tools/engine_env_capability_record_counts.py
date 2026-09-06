@@ -67,8 +67,9 @@ The contract
         container -- none of which is §2.1 carrying a table;
       * exactly one contiguous run of such lines, so no second table
         can sit in the block at a column index nothing reads;
-      * a `|---|` separator row under the header, without which GFM
-        renders the run as a paragraph of literal pipes;
+      * a `|---|` separator row under the header, with exactly as many
+        cells as the header -- GFM recognizes a table only then, and
+        renders the run as a paragraph of literal pipes otherwise;
       * no raw HTML in any row. An `<!-- ... -->` around a cell's text
         hides the record and its count from every reader while leaving
         both for a regex to find -- the block-level escape one level
@@ -317,6 +318,19 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                     f"no reader sees as a table"]
 
     header = cells(rows[0])
+    # GFM recognizes a table only when the delimiter row has EXACTLY as
+    # many cells as the header; a mismatch renders the whole run as a
+    # paragraph. Checking the delimiter's shape without its width was
+    # the round-8 escape: `|---|---|` under a three-column header
+    # satisfied every count rule over a table no reader sees.
+    delimiter = cells(rows[1])
+    if len(delimiter) != len(header):
+        return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block has a "
+                    f"separator row of {len(delimiter)} cell(s) under a "
+                    f"header of {len(header)} -- GFM recognizes a table "
+                    f"only when the two match, so this run renders as a "
+                    f"paragraph of literal pipes rather than as §2.1's "
+                    f"table"]
     matching = [position for position, cell in enumerate(header)
                 if cell == RECORD_COLUMN_HEADER]
     if not matching:

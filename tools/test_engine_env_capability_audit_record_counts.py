@@ -648,6 +648,32 @@ def test_record_counts_inline_html_in_the_real_table_rejected():
            f"{violations}")
 
 
+def test_record_counts_delimiter_width_mismatch_rejected():
+    """Round 8's finding: a delimiter row whose cell count differs from
+    the header's. GFM recognizes a table only when the two match, so
+    the run renders as a paragraph of literal pipes -- yet a delimiter
+    validated only for its `---` SHAPE satisfied every count rule."""
+    for delimiter in ("|---|---|", "|---|---|---|---|", "|---|"):
+        doc = _counts_doc().replace("|---|---|---|", delimiter, 1)
+        expect(doc != _counts_doc(), f"fixture must apply {delimiter!r}")
+        violations = audit_record_counts(_SOURCES, doc)
+        expect(any("separator row of" in v for v in violations),
+               f"a {delimiter!r} separator under a three-column header "
+               f"must be rejected, got: {violations}")
+
+
+def test_record_counts_delimiter_width_mismatch_real_rejected():
+    """The same escape against the real document."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    narrowed = document.replace("|---|---|---|", "|---|---|", 1)
+    expect(narrowed != document, "the fixture must change the real document")
+    expect(any("separator row of" in v
+               for v in audit_record_counts(sources, narrowed)),
+           "a narrowed separator row under the real header must be "
+           "rejected")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -864,6 +890,8 @@ TESTS = (
     test_record_counts_prose_about_record_contents_is_not_a_size,
     test_record_counts_fenced_block_rejected,
     test_record_counts_missing_separator_row_rejected,
+    test_record_counts_delimiter_width_mismatch_rejected,
+    test_record_counts_delimiter_width_mismatch_real_rejected,
     test_record_counts_fenced_real_block_rejected,
     test_field_total_block_in_a_fence_is_also_rejected,
     test_record_counts_indented_table_rejected,
