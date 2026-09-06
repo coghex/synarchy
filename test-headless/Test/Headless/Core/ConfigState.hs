@@ -16,7 +16,7 @@ module Test.Headless.Core.ConfigState (spec) where
 
 import UPrelude
 import Test.Hspec
-import Data.IORef (newIORef, readIORef, modifyIORef')
+import Data.IORef (newIORef, readIORef, modifyIORef', writeIORef)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 import System.IO (stderr)
@@ -24,6 +24,7 @@ import Data.Aeson (FromJSON(..), withObject, (.:))
 import Data.Proxy (Proxy(..))
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import qualified Data.Map.Strict as Map
 import qualified Data.HashMap.Strict as HM
 import Engine.Core.ConfigWrite (copyConfigFile)
 import Engine.Core.Init
@@ -31,7 +32,7 @@ import Engine.Core.Init
   , LegacyNeutralityCheck(..) )
 import Engine.Core.Log
   ( initLogger, defaultLogConfig, LogConfig(..), LogBackend(..)
-  , LoggerState, LogEntry(..), LogLevel(..) )
+  , LoggerState(..), LogEntry(..), LogLevel(..), LogCategory(..) )
 import Engine.Asset.YamlNotifications
   ( loadNotificationCfg, writeNotificationOverrides, OverridesFile )
 import Engine.PlayerEvent (CategoryCfg(..))
@@ -66,11 +67,48 @@ capturingLogger = do
 --   examples that pin it need more than the message.
 capturingLoggerLeveled ∷ IO (LoggerState, IO [(LogLevel, Text)])
 capturingLoggerLeveled = do
-    seen ← newIORef ([] ∷ [(LogLevel, Text)])
+    (logger, dumpLog) ← capturingLoggerCategorized
+    return (logger, map (\(lvl, _, msg) → (lvl, msg)) ⊚ dumpLog)
+
+-- | As 'capturingLoggerLeveled', but keeping each entry's CATEGORY as
+--   well. #1928's contract is about which level a specific 'CatEvent'
+--   line is emitted at, so an example pinning it has to be able to say
+--   "no Info entry from the notification registry" rather than "no Info
+--   entry whose text happens to look like one".
+capturingLoggerCategorized ∷ IO (LoggerState, IO [(LogLevel, LogCategory, Text)])
+capturingLoggerCategorized = do
+    seen ← newIORef ([] ∷ [(LogLevel, LogCategory, Text)])
     logger ← initLogger defaultLogConfig
         { lcBackend = LogToCallback
-            (\e → modifyIORef' seen ((leLevel e, leMessage e) :)) }
+            (\e → modifyIORef' seen ((leLevel e, leCategory e, leMessage e) :)) }
     return (logger, reverse ⊚ readIORef seen)
+
+-- | Turn on Debug for one category on an already-built logger, by
+--   writing the flag map 'Engine.Core.Log.initLogger' derives from
+--   @ENGINE_DEBUG@. Done directly rather than through the environment so
+--   the example neither depends on the developer's shell nor is
+--   silenced by one naming some other category.
+enableDebugFor ∷ LoggerState → LogCategory → IO ()
+enableDebugFor logger cat =
+    writeIORef (lsDebugEnabled logger) (Map.fromList [(cat, True)])
+
+-- | Every captured entry the notification REGISTRY produced, whatever
+--   its level — and none of the ones 'loadOverrides' produces about the
+--   overrides file beside it. Matched case-insensitively because the
+--   decode failure spells it mid-sentence ("Failed to load notification
+--   registry …") while the success and empty lines open with it.
+registryEntries ∷ [(LogLevel, LogCategory, Text)] → [(LogLevel, Text)]
+registryEntries entries =
+    [ (lvl, msg)
+    | (lvl, CatEvent, msg) ← entries
+    , "notification registry" `T.isInfixOf` T.toLower msg
+    ]
+
+-- | The fixed success sentence #1928 removed from Info. Named once so
+--   the "stays off Info" and "still available at Debug" examples cannot
+--   drift apart.
+registryCountLine ∷ Text
+registryCountLine = "Notification registry loaded: "
 
 -- | Does any captured line contain this fragment?
 logged ∷ [Text] → Text → Bool
@@ -580,6 +618,105 @@ spec = do
                 case HM.lookup "debug" cfg1 of
                     Nothing → expectationFailure "debug category missing from resolved config"
                     Just c  → ccLog c `shouldBe` True
+
+        -- #1928. The overrides file is pre-created in every example
+        -- below, so nothing here can be satisfied (or spoiled) by
+        -- 'loadOverrides''s separate first-materialization Info line,
+        -- which this issue deliberately leaves alone.
+        it "narrates an ordinary successful load at no level above \
+           \Debug, while resolving it exactly as before (#1928)" $
+            withTempDir $ \dir → do
+                (logger, dumpLog) ← capturingLoggerCategorized
+                let registryPath  = dir </> "registry.yaml"
+                    overridesPath = dir </> "notifications.local.yaml"
+                writeFile registryPath mixedRegistryYaml
+                writeFile overridesPath "categories: {}\n"
+                (cfg, order) ← loadNotificationCfg logger registryPath
+                                                   overridesPath
+                -- Requirement 6: the return value is untouched.
+                order `shouldBe`
+                    ["survival_critical", "building", "sparse_defaults"]
+                survival ← categoryOf cfg "survival_critical"
+                triple survival `shouldBe` (True, True, True)
+                building ← categoryOf cfg "building"
+                triple building `shouldBe` (True, False, False)
+                -- Requirement 1: nothing at Info or above.
+                entries ← dumpLog
+                registryEntries entries `shouldBe` []
+
+        it "still reports the resolved count under ENGINE_DEBUG=event, \
+           \so the number is recoverable rather than discarded (#1928)" $
+            withTempDir $ \dir → do
+                (logger, dumpLog) ← capturingLoggerCategorized
+                enableDebugFor logger CatEvent
+                let registryPath  = dir </> "registry.yaml"
+                    overridesPath = dir </> "notifications.local.yaml"
+                writeFile registryPath mixedRegistryYaml
+                writeFile overridesPath "categories: {}\n"
+                _ ← loadNotificationCfg logger registryPath overridesPath
+                entries ← dumpLog
+                registryEntries entries `shouldBe`
+                    [(LevelDebug, registryCountLine <> "3 categories")]
+
+        it "warns, naming the registry path, when a valid registry \
+           \declares no categories at all (#1928)" $
+            withTempDir $ \dir → do
+                (logger, dumpLog) ← capturingLoggerCategorized
+                let registryPath  = dir </> "registry.yaml"
+                    overridesPath = dir </> "notifications.local.yaml"
+                writeFile registryPath "categories: []\n"
+                writeFile overridesPath "categories: {}\n"
+                -- Requirement 6 again: the degenerate load still
+                -- returns, and returns the empty resolution.
+                (cfg, order) ← loadNotificationCfg logger registryPath
+                                                   overridesPath
+                cfg `shouldBe` HM.empty
+                order `shouldBe` []
+                entries ← dumpLog
+                case registryEntries entries of
+                    [(lvl, msg)] → do
+                        lvl `shouldSatisfy` (≥ LevelWarn)
+                        (T.pack registryPath `T.isInfixOf` msg)
+                            `shouldBe` True
+                        ("resolved no categories" `T.isInfixOf` msg)
+                            `shouldBe` True
+                        -- The quieted success sentence must not also
+                        -- be here claiming a load of 0 categories.
+                        (registryCountLine `T.isInfixOf` msg)
+                            `shouldBe` False
+                    other → expectationFailure $
+                        "expected exactly one registry entry, got: "
+                          <> show other
+
+        it "leaves the decode-failure warning, its path and its detail \
+           \exactly as they were (#1928 requirement 3)" $
+            withTempDir $ \dir → do
+                (logger, dumpLog) ← capturingLoggerCategorized
+                let registryPath  = dir </> "registry.yaml"
+                    overridesPath = dir </> "notifications.local.yaml"
+                writeFile registryPath "categories:\n  - id: [unclosed\n"
+                writeFile overridesPath "categories: {}\n"
+                (cfg, order) ← loadNotificationCfg logger registryPath
+                                                   overridesPath
+                cfg `shouldBe` HM.empty
+                order `shouldBe` []
+                entries ← dumpLog
+                case registryEntries entries of
+                    [(lvl, msg)] → do
+                        lvl `shouldBe` LevelWarn
+                        (("Failed to load notification registry "
+                            <> T.pack registryPath <> ": ")
+                              `T.isPrefixOf` msg) `shouldBe` True
+                        -- The detail is what makes the warning
+                        -- actionable, so assert it survived rather
+                        -- than only that the prefix did.
+                        (T.length msg > T.length
+                            ("Failed to load notification registry "
+                               <> T.pack registryPath <> ": "))
+                          `shouldBe` True
+                    other → expectationFailure $
+                        "expected exactly one registry entry, got: "
+                          <> show other
 
     describe "Engine.Asset.YamlNotifications sparse config overrides \
              \inherit registry defaults (#1938)" $ do
