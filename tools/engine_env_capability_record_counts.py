@@ -40,6 +40,11 @@ The contract
       * exactly one column is headed `Record / view type(s)`. Only one
         is read, so a second would be a column of the governed table
         displaying sizes nothing checks;
+      * no OTHER column states a record size either. The audited column
+        is the only one compared with the live records, and the
+        document-wide sweep below skips the whole marked span, so
+        without this the identifier and provenance columns are a blind
+        spot inside the governed table;
       * every capability record named in a backtick span states its
         size exactly once, as `` `XCapability` (<n> fields) ``;
       * `<n>` equals `capability_record_fields`' count for that record;
@@ -418,6 +423,20 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                 f"rendered cell shows something else. Row: "
                 f"{row[:70]!r}")
             continue
+        for position, cell in enumerate(row_cells):
+            if position == index:
+                continue
+            smuggled = _STRAY_COUNT_RE.search(cell)
+            if smuggled is not None:
+                violations.append(
+                    f"{_DOC} §2.1's record table row {number} states a "
+                    f"record size ({smuggled.group(0)!r}) in column "
+                    f"{position + 1}, {header[position]!r}. Only the "
+                    f"`{RECORD_COLUMN_HEADER}` column is compared with "
+                    f"the live records, so a size in any other column "
+                    f"is displayed in the governed table and checked by "
+                    f"nothing -- the same 'stated once' rule the rest "
+                    f"of the document is swept for")
         column.append(row_cells[index])
     if not column:
         violations.append(

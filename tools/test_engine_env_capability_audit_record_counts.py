@@ -748,6 +748,42 @@ def test_record_counts_real_table_uses_only_the_vocabulary():
            "a real cell moved into a link title must be rejected")
 
 
+def test_record_counts_size_in_a_non_audited_column_rejected():
+    """Round 11's finding, and the one gap that was not a rendering
+    escape. Only the `Record / view type(s)` column is compared with
+    the live records, and the document-wide sweep skips the whole
+    marked span -- so the identifier and provenance columns were a
+    blind spot INSIDE the governed table, free to display a stale size
+    that nothing checked."""
+    for column, old, new_cell in (
+            ("identifier", "| `alpha-beta` |",
+             "| `alpha-beta` `AlphaCapability` (9 fields) |"),
+            ("landed by", "| #1 (E1) / #2 (E2) |",
+             "| #1 (E1) / #2 (E2); `AlphaCapability` (9 fields) |")):
+        rows = _CLEAN_ROWS.replace(old, new_cell, 1)
+        expect(rows != _CLEAN_ROWS, f"fixture must change the {column} cell")
+        violations = audit_record_counts(_SOURCES, _counts_doc(rows))
+        expect(any("in column" in v and "checked by" in v
+                   for v in violations),
+               f"a stale size in the {column} column must be rejected, "
+               f"got: {violations}")
+
+
+def test_record_counts_size_in_a_real_non_audited_column_rejected():
+    """The same blind spot against the real document, using the stale
+    figure this change removed."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    smuggled = document.replace(
+        "| #893 (E5a) / #894 (E5b) |",
+        "| #893 (E5a) / #894 (E5b); `WorldSimCapability` (9 fields) |", 1)
+    expect(smuggled != document, "the fixture must change the real document")
+    expect(any("in column" in v for v in audit_record_counts(
+                   sources, smuggled)),
+           "a stale size in the real table's provenance column must be "
+           "rejected")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -983,6 +1019,8 @@ TESTS = (
     test_record_counts_row_vocabulary_rejects_every_hidden_construct,
     test_record_counts_vocabulary_names_the_construct,
     test_record_counts_real_table_uses_only_the_vocabulary,
+    test_record_counts_size_in_a_non_audited_column_rejected,
+    test_record_counts_size_in_a_real_non_audited_column_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
