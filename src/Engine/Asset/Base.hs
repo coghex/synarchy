@@ -13,7 +13,3 @@ data AssetStatus
   | AssetLoaded
   | AssetError Text
   deriving (Eq, Show)
-
-data AssetEvent
-  = AssetStatus AssetId
-  deriving (Show, Eq)
