@@ -11,6 +11,7 @@ ending, and it owns nothing else.
     python3 tools/deflake_issue.py --handoff <document.json> --origin claude
     python3 tools/deflake_issue.py --handoff <document.json> --dry-run
     python3 tools/test_deflake_diagnosis.py       # the deterministic gate
+    python3 tools/test_deflake_diagnosis.py --only issue      # this module's
 
 An engine race that reaches a pull request as a probe adjustment is a
 bug converted into a permanent green light. So this route publishes ONE

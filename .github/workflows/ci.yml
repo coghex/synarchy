@@ -1413,7 +1413,11 @@ jobs:
       # self-test to manual invocation, so it is run by hand when
       # tools/deflake_diagnosis.py or the document contract it was split
       # from in tools/deflake_contract.py (#2041) changes, rather than
-      # gated here.
+      # gated here. The exemption is the whole gate: since #2031 the
+      # cases live in tools/deflake_diagnosis_selftest_support.py and
+      # the three deflake_diagnosis_selftest_{diagnosis,outcome,issue}.py
+      # owners, which are absent here for the same reason and are run
+      # through that one command, optionally with --only <owner>.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test

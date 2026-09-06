@@ -2636,7 +2636,13 @@ python3 tools/deflake_diagnosis.py --handoff handoff.json      # the entry gate 
 python3 tools/deflake_diagnosis.py --diagnosis diagnosis.json  # the route its evidence supports
 python3 tools/deflake_diagnosis.py --manifest .                # a checkout's config manifest
 python3 tools/test_deflake_diagnosis.py                        # the deterministic self-test
+python3 tools/test_deflake_diagnosis.py --only diagnosis       # just this module's cases
+python3 tools/test_deflake_diagnosis.py --only outcome         # just #1439's
+python3 tools/test_deflake_diagnosis.py --only issue           # just #1438's
 ```
+
+The bare command is the gate and runs every case exactly once; the three
+focused forms are for iteration and each is self-contained.
 
 Since #2041 that work has two owners. `tools/deflake_contract.py` is the
 DOCUMENT contract — the schemas, the route and reason vocabulary,
@@ -2663,7 +2669,11 @@ this tool's input.
 **Why a tracked module rather than skill prose.** The `/deflake` workflow
 surface is not tracked in this repository (`.gitignore` ignores `.claude/`), so
 a repository test cannot cover prose. The MECHANICAL half lives here so
-`tools/test_deflake_diagnosis.py` can hold it: the entry gate and one-probe
+`tools/test_deflake_diagnosis.py` can hold it — that command is composition
+and selection only, and the cases themselves live with the workflow owner
+each belongs to (`deflake_diagnosis_selftest_diagnosis`,
+`deflake_diagnosis_selftest_outcome` and `deflake_diagnosis_selftest_issue`,
+over the shared `deflake_diagnosis_selftest_support`, #2031): the entry gate and one-probe
 enforcement, the closed producer-provenance contract (#1661),
 X-out-of-10 arithmetic, the configuration manifest including
 confirmed absence, MISSING evaluation and stable check identity,
@@ -2980,7 +2990,8 @@ envelope through the same entry gate — `deflake_handoff.py`, which owns that
 gate for both of them: `deflake_handoff.RouteOwnership` is the only part that
 differs, so every rule the two share is checked once rather than forked.
 
-The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
+The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only;
+`--only diagnosis` runs this module's cases alone.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
 rereview amendment scopes this lab's own self-test to manual invocation — so
 run it by hand when touching `tools/deflake_diagnosis.py` or
@@ -3284,7 +3295,8 @@ protocol streams and engine logs stay in the harness's artifact tree outside
 every worktree.
 
 The gate is `python3 tools/test_deflake_diagnosis.py`, the same engine-free,
-document-only self-test #1437 owns, extended with this module's cases: the
+document-only self-test #1437 owns, extended with this module's cases —
+`--only outcome` runs those alone: the
 diagnosis records they feed it are PRODUCED by `dd.evaluate` rather than
 hand-assembled, and the census they append to is a real seeded one in a
 temporary directory. Like #1437's, it is deliberately not wired into `make ci`
@@ -3435,7 +3447,8 @@ forbid it.
 
 The gate is `python3 tools/test_deflake_diagnosis.py` again — engine-free,
 GPU-free and network-free, with the tracker faked at the publication boundary
-so "exactly one issue" is a counted fact. Like #1437's and #1439's cases, it
+so "exactly one issue" is a counted fact; `--only issue` runs these cases
+alone. Like #1437's and #1439's cases, it
 is deliberately not wired into `make ci` or GitHub CI.
 
 ### `ci_expensive_gates.py` — CI worldgen/graphical/unit-assets/save-compat selection
