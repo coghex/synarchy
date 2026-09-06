@@ -221,10 +221,22 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the live ref: every material-dependent step in this initialization
     -- resolves ids against one value (#2278).
     let registry = mergedReg
+    -- #1933: the tectonic banner reaches the generation log ONLY. Nothing
+    -- parses the ordinary-Info copy — searching tools/, test-headless/,
+    -- test/ and scripts/ for its own literals (the box-drawing header,
+    -- "Tectonic Plates", "Plate #") finds no consumer — so the second
+    -- emission only duplicated every line into boot output on every
+    -- world.init. 'sendGenLog' still receives the COMPLETE list,
+    -- unfiltered and in the original order, because that queue IS a live
+    -- UI surface: LuaWorldGenLog → onWorldGenLog → create_world_menu's
+    -- loading screen. Demoting to 'logDebug CatWorld' would have hidden
+    -- the detail outright rather than gating it, since
+    -- 'Engine.Core.Log.Types.parseCategory' and ENGINE_DEBUG=all both omit
+    -- CatWorld (#1915); the generation log is the reachable sink. The
+    -- concise Info milestone for the whole initialization already exists
+    -- — the "World initialized" line at the end of this function.
     let plateLines = formatPlatesSummary seed worldSize placeCount registry
-    forM_ plateLines $ \line → do
-        logInfo logger CatWorld line
-        sendGenLog env line
+    mapM_ (sendGenLog env) plateLines
 
     -- Step 2: Ocean map — reuse the map buildTimeline already
     -- computed (and that the lake/seabed passes used), so every
@@ -248,10 +260,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             (csGlobalCO2 timelineClimate) (csSolarConst timelineClimate)
     _ ← evaluate (force climateState')
 
+    -- #1933, same reasoning as the tectonic banner above: generation log
+    -- only, with the whole formatted list still handed to 'sendGenLog'
+    -- unmodified so the loading screen's climate sections are unchanged.
     let weatherLines = formatWeather climateState'
-    forM_ weatherLines $ \line → do
-        logInfo logger CatWorld line
-        sendGenLog env line
+    mapM_ (sendGenLog env) weatherLines
 
     floraCat ← readIORef (wsFloraCatalogRef worldSim)
     logInfo logger CatWorld $ "Flora catalog snapshot: "
