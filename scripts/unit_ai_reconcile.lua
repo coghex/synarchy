@@ -377,9 +377,11 @@ function M.reconcile(aiState, survUnitIds, survBuildingIds, raw, hooks)
     --     session untouched. This broadcast is post-PUBLICATION, so a
     --     rolled-back load never reaches it.
     --   * NOTHING TICKS FIRST. onSaveLoaded is the first point the Lua
-    --     thread reaches after publish (luaTick drains luaQueue ahead
-    --     of debug commands and script updates), so no unit_ai update
-    --     can observe a row between the swap and this fill.
+    --     thread reaches after publish: its scheduler keeps consuming
+    --     luaQueue in batches but runs no script update and no ordinary
+    --     debug command until this message has been reached (#2415), so
+    --     no unit_ai update can observe a row between the swap and this
+    --     fill.
     --
     -- Version-independent by construction, too: every accepted
     -- inputVersion has already converged on live state by now, so this

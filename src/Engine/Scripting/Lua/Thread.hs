@@ -23,8 +23,6 @@ import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Shell (setupShellSandbox)
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
-import Engine.Scripting.Lua.TickPolicy
-    (schedulerSleepMicros, scriptIsDue, advanceTick)
 import Engine.Scripting.Lua.DebugServer
     ( DebugCommand, DebugConsole(..), DebugServerConfig(..)
     , cancelDebugCommand
@@ -33,24 +31,24 @@ import Engine.Scripting.Lua.DebugServer
     , DebugListenerFailure(..), ListenerAction(..), listenerAction
     , reportDebugListenerFailure, handleDebugListenerLoss
     , reportBootCleanup )
-import Engine.Scripting.Lua.Thread.Console (processDebugCommands, debugBuiltin)
+import Engine.Scripting.Lua.Thread.Console (debugBuiltin)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg, processLuaMsgs)
+import Engine.Scripting.Lua.Thread.Scheduler
+    (SchedulerContext, newSchedulerContext, runDueScripts, schedulerRound)
 import Engine.Asset.Types (AssetPool)
 import Engine.Core.Log (logWarn, logDebug, logInfo, LogCategory(..), LoggerState)
 import Engine.Core.Thread
 import Engine.Core.State
     (EngineEnv(..), requestEngineCleanup)
 import Engine.Core.Types (EngineConfig(..))
-import Engine.Save.Barrier (SaveOwner(..), ownerGated)
 import Engine.Input.Types (InputState)
 import qualified Engine.Core.Queue as Q
 import qualified HsLua as Lua
 import qualified Data.Text as T
 import qualified Data.Map.Strict as Map
 import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
-import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TQueue (TQueue, newTQueue)
-import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
+import Control.Concurrent.STM (atomically, modifyTVar')
 import Control.Concurrent.STM.TVar (newTVarIO)
 
 -- | Start the Lua scripting thread, or refuse to when the boot mode
@@ -133,6 +131,11 @@ data LuaLoopState = LuaLoopState
       --   above can stop its accept loop and its clients. Inert — no
       --   listener, a queue nothing feeds — for the port-0 sentinel and
       --   for a console-optional mode whose bind failed.
+    , llsScheduler  ∷ SchedulerContext
+      -- ^ The fair scheduling round (#2415) and the one piece of state
+      --   it carries between rounds. Built ONCE, here, because a round
+      --   that ends on the idle wait hands the message that wait
+      --   returned to the next round through it.
     }
 
 -- | Answer and discard every queued debug command with one reply.
@@ -280,13 +283,18 @@ luaStartup env stateRef = do
             -- threading 'debugQueue' through 'createLuaBackendState'
             -- and its dozen-plus test call sites, none of which
             -- exercise real debug-command handling.
-            return $ Right LuaLoopState
-                { llsBackend    = backendState
-                    { lbsDebugQueue = consoleQueue console }
-                , llsControlRef = stateRef
-                , llsDebugQueue = consoleQueue console
-                , llsConsole    = console
-                }
+            do
+                let spliced = backendState
+                        { lbsDebugQueue = consoleQueue console }
+                scheduler ← newSchedulerContext env spliced stateRef
+                                               (consoleQueue console)
+                return $ Right LuaLoopState
+                    { llsBackend    = spliced
+                    , llsControlRef = stateRef
+                    , llsDebugQueue = consoleQueue console
+                    , llsConsole    = console
+                    , llsScheduler  = scheduler
+                    }
 
 createLuaBackendState ∷ Q.Queue LuaToEngineMsg → Q.Queue LuaMsg
                       → IORef AssetPool → IORef Word32
@@ -325,180 +333,21 @@ createLuaBackendState ltem etlm apRef objIdRef inputSRef loggerR = do
     , lbsDebugQueue   = placeholderDebugQueue
     }
 
--- | One running tick of the Lua thread. The shared lifecycle
---   ('Engine.Core.Thread.workerLoop') owns the control-state dispatch,
---   the paused poll, and the per-tick catch boundary around this.
+-- | One running tick of the Lua thread: exactly one scheduling round.
+--
+--   The shared lifecycle ('Engine.Core.Thread.workerLoop') owns the
+--   control-state dispatch, the paused poll, and the per-tick catch
+--   boundary around this; everything else — the owner-park check and its
+--   bounded delay, the bounded message and console batches, the single
+--   due-script pass, and the idle wait — belongs to
+--   "Engine.Scripting.Lua.Thread.Scheduler", whose header states the
+--   ordering and the reasoning behind it (#2415).
+--
+--   The round returns as soon as admissible work remains, so the worker
+--   loop re-enters it with no wait; a round with nothing runnable takes
+--   the idle wait itself before returning. Either way this tick never
+--   fails, so the loop always gets its state back.
 luaTick ∷ EngineEnv → LuaLoopState → IO (Maybe LuaLoopState)
-luaTick env lls = do
-    let ls         = llsBackend lls
-        stateRef   = llsControlRef lls
-        debugQueue = llsDebugQueue lls
-    -- Issue #763: the Lua thread is the
-    -- one thread the save barrier never actually gated --
-    -- SaveLua's own self-ack (in saveWorldFn/handleLoadStaged)
-    -- persists across every later quiescence pass by
-    -- design (Engine.Save.Barrier.acknowledgeSave's special
-    -- casing), so this loop never needed a per-tick
-    -- acknowledgeCurrent the way Unit/Combat/Simulation/
-    -- Input do -- but that also meant nothing stopped THIS
-    -- loop's own NEXT tick from processing debug commands,
-    -- queued Lua messages, or script updates while
-    -- captureLocked was still True. Concretely: once
-    -- handleLoadStaged (dispatched from a PRIOR tick's
-    -- message processing, below) applies the required Lua
-    -- components and queues WorldLoadPublish, THIS tick
-    -- completes and the loop recurses -- and the very next
-    -- tick would resume normal processing even though the
-    -- world thread hasn't swapped the Haskell-side session
-    -- yet, letting a debug command or script observe the
-    -- new Lua singletons against the still-old Haskell
-    -- state. Checked fresh every tick (never cached), so
-    -- the SAME tick that dispatches LuaLoadStaged always
-    -- starts unlocked (the transaction only reaches
-    -- SaveSnapshotBoundary partway through
-    -- handleLoadStaged, by which point this tick has
-    -- already passed the gate) and normal processing
-    -- resumes on the first tick after the world thread
-    -- calls releaseCaptureLock.
-    --
-    -- #2221: this is the per-OWNER gate, so an ORDINARY
-    -- Lua tick is also parked from SaveLua's own
-    -- final-pass acknowledgement, not merely from the
-    -- boundary. The transaction DRIVER is deliberately
-    -- unaffected: saveWorldFn's collectLuaComponents (run
-    -- after reachSnapshot) and handleLoadStaged's
-    -- applyLuaLoad + WorldLoadPublish queueing both run
-    -- inline, synchronously, inside a call this loop is
-    -- already blocked in -- they never reach this gate, and
-    -- must not, since they are the authorized work the
-    -- transaction itself is made of.
-    locked ← ownerGated (saveBarrierRef env) SaveLua
-    if locked
-      then threadDelay 1000 >> pure (Just lls)
-      else do
-        -- releaseCaptureLock (world thread,
-        -- right after publishStagedSession) flips
-        -- captureLocked False the INSTANT publish
-        -- completes -- but LuaSaveLoaded was already queued
-        -- onto luaQueue by publishStagedSession itself,
-        -- strictly BEFORE that release. Processing debug
-        -- commands first (as this branch used to, unconditionally)
-        -- let an ALREADY-queued debug command run against
-        -- the freshly-published session before the required
-        -- onSaveLoaded reconciliation (off-page-survivor
-        -- pruning, stale nested-reference scrub, UI reset)
-        -- ever got a chance to. Draining whatever's already
-        -- in luaQueue first closes that ordering gap without
-        -- disturbing the blocking-wait-based sleep below,
-        -- which only ever blocks on genuinely NEW messages;
-        -- nothing here double-processes since each queue
-        -- read removes what it reads.
-        processLuaMsgs env ls stateRef
-
-        -- Issue #763: 'processLuaMsgs' just
-        -- above can itself dispatch 'LuaLoadStaged' —
-        -- 'handleLoadStaged' applies the prepared Lua state
-        -- (unit_ai/building_spawn singletons overwritten with
-        -- the NEW session's data) and enters the capture lock
-        -- (beginSave) SYNCHRONOUSLY, all inside this same call,
-        -- before 'WorldLoadPublish' is ever queued for the
-        -- world thread. The 'locked' value read at the top of
-        -- this tick is now stale: continuing on to
-        -- 'processDebugCommands'/script updates/the blocking
-        -- queue read below with THAT stale value would let an
-        -- already-queued debug command or a script's own
-        -- "update" callback run against the freshly-applied
-        -- Lua singletons while Haskell still exposes the OLD
-        -- session (WorldLoadPublish hasn't been processed by
-        -- the world thread yet) — exactly the mixed-state
-        -- window the ORIGINAL 'locked' check exists to keep
-        -- shut. Re-checking here and skipping the rest of
-        -- THIS tick's unlocked work the instant it flips
-        -- closes that window without needing to wait for the
-        -- next tick's own (correctly gated) iteration.
-        lockedAfterMsgs ← ownerGated (saveBarrierRef env) SaveLua
-        if lockedAfterMsgs
-          then pure (Just lls)
-          else do
-            processDebugCommands (lbsLuaState ls) debugQueue
-
-            currentSecs ← nowSeconds
-            scriptsMap ← readTVarIO (lbsScripts ls)
-            -- Sleep only as long as the next TIMED script allows.
-            -- Paused scripts never advance their nextTick and
-            -- event-only scripts (interval 0, #1695) never tick at
-            -- all; including either would pin the sleep at the floor
-            -- and busy-spin the loop at ~1 kHz. Both exclusions, the
-            -- floor, the ~60 Hz cap and the overflow-safe microsecond
-            -- conversion live in "Engine.Scripting.Lua.TickPolicy".
-            let sleepMicros = schedulerSleepMicros currentSecs
-                                                   (Map.elems scriptsMap)
-                (_, etlq) = lbsMsgQueues ls
-            -- readQueueTimeout, NOT System.Timeout around readQueue:
-            -- the timeout exception can land after the STM dequeue
-            -- commits, silently dropping the message.
-            mMsg ← Q.readQueueTimeout sleepMicros etlq
-            case mMsg of
-              Just msg → do
-                  processLuaMsg env ls stateRef msg
-                  processLuaMsgs env ls stateRef
-                  pure (Just lls)
-              Nothing → do
-                  currentSecs' ← nowSeconds
-                  runDueScripts ls currentSecs'
-                  pure (Just lls)
-
--- | One scheduler pass over the loaded scripts: reschedule every script
---   that is DUE, then call @update@ on each of them.
---
---   Which scripts those are is 'scriptIsDue''s answer and nothing else,
---   so a paused or event-only script (interval @0@, #1695) is skipped
---   here for exactly the reason it was skipped when the sleep above was
---   computed — the two can't drift. The @dt@ handed to @update@ is the
---   script's own accepted interval, unchanged.
---
---   __The reentrancy rule (#2205).__ The rescheduling happens FIRST, in
---   one transaction, BEFORE any callback of the pass runs — not after
---   each @update@ returns, which is what used to make a callback's own
---   scheduling decision get advanced a second time on top. Because the
---   scheduler never writes a deadline again once a callback has started,
---   a callback that reschedules — @engine.setTickInterval@,
---   @engine.pauseScript@ or @engine.resumeScript@, on ITSELF or on ANY
---   OTHER script, whether or not that other script has already had its
---   turn this pass — is always the last writer, and the scheduler
---   neither overwrites its decision nor adds an interval to it. When
---   several successful calls target one script, the last one wins.
---
---   So after a pass every script's stored schedule is exactly one of:
---
---   * 'advanceTick' applied to the deadline and rate the pass found it
---     with, when no callback touched it — which is also what a REFUSED
---     'Engine.Scripting.Lua.API.Core.setTickIntervalFn' leaves standing,
---     since #1695 makes a refusal store nothing at all; or
---   * whatever the last successful scheduling call of the pass stored —
---     including @engine.pauseScript@ deliberately leaving the rate and
---     the deadline exactly where they were and flipping only the pause
---     flag.
---
---   The pass SNAPSHOT is unchanged by any of this: eligibility,
---   iteration order and each @dt@ all come from the map as it was read,
---   so rescheduling a script mid-pass never adds, cancels or retimes a
---   callback this pass was already going to make — it only decides the
---   target's stored schedule afterwards. @engine.killScript@ deletes the
---   entry and no later write puts it back; @engine.loadScript@ inserts
---   one that cannot be in the already-captured snapshot, so it first
---   becomes due on a later pass.
---
---   Exported so "Test.Headless.Lua.TickInterval" can drive the real
---   pass against a bare backend rather than reproducing it.
-runDueScripts ∷ LuaBackendState → Double → IO ()
-runDueScripts ls now = do
-    scriptsMap ← readTVarIO (lbsScripts ls)
-    let due = filter (scriptIsDue now ∘ snd) (Map.toList scriptsMap)
-    unless (null due) $
-      atomically $ modifyTVar' (lbsScripts ls) $ \m →
-        foldr (Map.adjust (advanceTick now) ∘ fst) m due
-    forM_ due $ \(_, script) →
-      when (isValidRef (scriptModuleRef script)) $
-        void $ callModuleFunction ls (scriptModuleRef script) "update"
-                   [ScriptNumber (scriptTickRate script)]
+luaTick _env lls = do
+    _ ← schedulerRound (llsScheduler lls)
+    pure (Just lls)

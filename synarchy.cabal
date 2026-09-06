@@ -333,6 +333,7 @@ library
                      Engine.Scripting.Lua.Thread
                      Engine.Scripting.Lua.Thread.Console
                      Engine.Scripting.Lua.Thread.Dispatch
+                     Engine.Scripting.Lua.Thread.Scheduler
                      Engine.Scripting.Lua.Script
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
@@ -1640,6 +1641,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
                    Test.Headless.Lua.TickInterval
+                   Test.Headless.Lua.SchedulerFairness
                    Test.Headless.Lua.DragSelectDeferred
                    Test.Headless.Lua.TextWrapping
                    Test.Headless.Lua.GroupedLogRetention
