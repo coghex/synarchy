@@ -68,14 +68,14 @@ def _sibling(name: str):
         f"{__package__}.{name}" if __package__ else name)
 
 
-deflake_diagnosis = _sibling("deflake_diagnosis")
+deflake_contract = _sibling("deflake_contract")
 deflake_handoff = _sibling("deflake_handoff")
 probe_census = _sibling("probe_census")
 
 # Named from the diagnosis that produced it rather than restated, and
 # spelled the way the façade spells it: a second spelling of the outcome
 # is how a census row stops being greppable against its own diagnosis.
-OUTCOME_PRODUCTION_DEFECT = deflake_diagnosis.ROUTE_PRODUCTION_DEFECT
+OUTCOME_PRODUCTION_DEFECT = deflake_contract.ROUTE_PRODUCTION_DEFECT
 
 ROLES = deflake_handoff.ROLES
 ROLE_BASELINE = deflake_handoff.ROLE_BASELINE
