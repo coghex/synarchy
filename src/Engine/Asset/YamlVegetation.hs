@@ -1,5 +1,10 @@
 {-# LANGUAGE Strict, DeriveGeneric #-}
--- | Vegetation definitions loaded from @data/vegetation.yaml@.
+-- | Vegetation definitions loaded from @data/vegetation/*.yaml@, one
+--   caller-supplied file at a time: both entry points take the path as a
+--   parameter, so enumerating that directory and folding the results
+--   together belongs to the caller. The production path is
+--   'World.ZoomMap.ColorPalette.buildColorPalette'; the other consumer is
+--   the @engine.loadVegetationYaml@ Lua binding.
 module Engine.Asset.YamlVegetation
     ( -- * YAML types
       VegetationDef(..)

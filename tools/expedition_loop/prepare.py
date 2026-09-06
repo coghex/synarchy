@@ -110,7 +110,8 @@ def shed_to_capacity(port: int, uid: int, headroom: float = 0.0) -> int:
     fixture that had not left room for the loot.
 
     This is what a player does before an expedition, and skipping it is
-    a real flake rather than a nicety: `docs/expedition_survival_calibration.md`
+    a real flake rather than a nicety:
+    `docs/history/expedition_survival_calibration_2026-07.md`
     observation E1 recorded a small acolyte walking a whole route at
     121% of capacity, where the encumbrance penalty roughly halved its
     speed and pinned its stamina at ~2/8.5. A traveller that slow makes
@@ -195,14 +196,16 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
     which is what "hold still" has to mean here.
 
     A completed PLAYER move order does hold position since #1216
-    (SURV-4), which retires observation E3 and makes the muster far more
-    likely to converge — but it is not a substitute for the pause, and
-    the driven shape below stays. The hold sits at `follow_command`'s own
-    utility, so every interrupt that outranked the order still carries a
-    held unit off its anchor, and the muster's own history is what a
-    coincidence hunt costs when that happens: observed twice, once with
-    both units 40+ tiles out and 3.4 tiles apart after a 300 s wait, and
-    once with the muster expiring on a pair 10.0 tiles apart.
+    (SURV-4), which retires observation E3 in
+    `docs/history/expedition_survival_calibration_2026-07.md` and makes
+    the muster far more likely to converge — but it is not a substitute
+    for the pause, and the driven shape below stays. The hold sits at
+    `follow_command`'s own utility, so every interrupt that outranked the
+    order still carries a held unit off its anchor, and the muster's own
+    history is what a coincidence hunt costs when that happens: observed
+    twice, once with both units 40+ tiles out and 3.4 tiles apart after a
+    300 s wait, and once with the muster expiring on a pair 10.0 tiles
+    apart.
     Hence the shape below: re-order anyone who has stopped following and
     drifted outside the radius (convergence is driven, not awaited),
     poll for a sample satisfying the origin contract, pause the instant

@@ -70,16 +70,17 @@ data FallInjury = FallInjury
 --   (the extreme profile — 2.3/1.5/1.2 ⇒ 174.57 kg — fractures from
 --   3-z); a lighter/frailer one at a taller one (the frail profile —
 --   1.3/0.5/0.8 ⇒ 18.59 kg — from 15-z). See
---   `docs/expedition_survival_calibration.md`'s fall-calibration section
---   for the full measured record and
+--   `docs/history/expedition_survival_calibration_2026-07.md`'s
+--   fall-calibration section for the full measured record and
 --   `test-headless/Test/Headless/Unit/Fall.hs` for the regression that
 --   pins it. The shipped acolyte's only vital part (`heart`) is never
 --   the subpart `Unit.Injury.allocateSubparts` picks for the torso at
 --   ANY drop height (a deterministic consequence of its area-weighted
 --   pick landing on other organs first — a body-topology fact, not a
 --   severity-tuning one) — so a fall cannot trigger the vital-injury
---   death rule on this body plan at all; see the calibration doc rather
---   than treating that as an oversight to re-engineer around.
+--   death rule on this body plan at all; see that archived calibration
+--   record rather than treating this as an oversight to re-engineer
+--   around.
 energyToSeverity ∷ Float
 energyToSeverity = 0.006
 
