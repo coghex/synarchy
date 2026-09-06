@@ -941,12 +941,19 @@ from that tail, so every recorded failure appears exactly once:
     ... the ordinary last-25 lines follow, unchanged ...
 ```
 
-The six producers today are `location_embark_probe.py`,
+The producers today are `location_embark_probe.py`,
 `location_stamp_idempotent_probe.py`, `location_content_probe.py`,
-`location_overlay_probe.py`, `portal_location_probe.py` and
-`portal_ghost_probe.py`. As with progress records, the complete capture is
-never dumped, and a probe emitting no failure records has exactly the failure
-presentation it always had.
+`location_overlay_probe.py`, `portal_location_probe.py`,
+`portal_ghost_probe.py`, `offscreen_probe.py`,
+`scene_primitives_probe.py` and `persistence_contract_sweep.py`. The
+sweep is the one that is not a probe reporting its own terminal failure:
+since #2060 its `Checks.ok` records every failed check under the producer
+name `persistence_contract_sweep`, which keeps a sweep-own assertion
+distinguishable from the cross-referenced probes it runs. That list is
+audited against the real producers by `tools/test_run_probes.py`, so it
+cannot quietly fall behind them. As with progress records, the complete
+capture is never dumped, and a probe emitting no failure records has
+exactly the failure presentation it always had.
 
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
