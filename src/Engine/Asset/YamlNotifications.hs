@@ -14,7 +14,8 @@ import Data.Aeson (FromJSON(..), ToJSON(..), (.:), (.:?), (.!=), (.=)
                   , withObject, object)
 import System.Directory (doesFileExist)
 import Engine.Core.ConfigWrite (writeConfigYaml)
-import Engine.Core.Log (LoggerState, logInfo, logWarn, LogCategory(..))
+import Engine.Core.Log (LoggerState, logDebug, logInfo, logWarn
+                       , LogCategory(..))
 import Engine.PlayerEvent (NotificationCfg, CategoryCfg(..))
 
 -- | Per-category checkbox triple as the REGISTRY states it (under
@@ -148,6 +149,27 @@ instance ToJSON OverridesFile where
 --   log a warning and return an empty map — every 'emitEvent' will
 --   then drop with an unknown-category warning, which is the safe
 --   loud-fail mode rather than crashing the engine.
+--
+--   __What a load says (#1928).__ An ORDINARY load says nothing at
+--   Info. This runs once per engine allocation — every headless
+--   fixture, every probe, every boot — so a fixed success sentence at
+--   Info was pure boot noise that outlived the elision every log reader
+--   applies to @[Asset]@ and @[Lua]@ (it is tagged 'CatEvent'), and was
+--   the first line an engineer met when reading a failed probe. The
+--   resolved count is still reported, at DEBUG, so @ENGINE_DEBUG=event@
+--   recovers it; the resolved map itself is returned here and exposed
+--   to scripts by @engine.getNotificationCfg()@, so nothing is
+--   discarded.
+--
+--   A load resolving ZERO categories is the case that gets LOUDER
+--   rather than quieter. A syntactically valid registry declaring no
+--   entries decodes as @Right (RegistryFile [])@, which is not a decode
+--   failure and so reaches none of the warnings above; every subsequent
+--   'emitEvent' then drops with an unknown-category warning and the
+--   cause is nowhere in the log. That state now warns on its own,
+--   naming the registry path. It is reported for its emptiness, not
+--   validated further: duplicate ids, missing override entries and
+--   every other registry property keep exactly the diagnosis they had.
 loadNotificationCfg ∷ LoggerState
                     → FilePath        -- ^ registry path
                                       --   (data/notification_categories.yaml)
@@ -170,10 +192,19 @@ loadNotificationCfg logger registryPath overridesPath = do
                     [ (reId e, mkCategoryCfg e overrides) | e ← entries ]
             let resolved = HM.fromList resolvedPairs
                 order    = map reId entries
-            logInfo logger CatEvent $
-                "Notification registry loaded: "
-                  <> tshow (HM.size resolved)
-                  <> " categories"
+            -- #1928: 'HM.fromList' of a non-empty list is never empty,
+            -- so this is exactly "the registry declared no entries" —
+            -- the one degenerate load that decodes cleanly and would
+            -- otherwise pass in silence.
+            if HM.null resolved
+                then logWarn logger CatEvent $
+                    "Notification registry " <> T.pack registryPath
+                      <> " resolved no categories; every notification \
+                         \will be dropped as an unknown category"
+                else logDebug logger CatEvent $
+                    "Notification registry loaded: "
+                      <> tshow (HM.size resolved)
+                      <> " categories"
             return (resolved, order)
 
 -- | Persist the current notification overrides to disk. Strips

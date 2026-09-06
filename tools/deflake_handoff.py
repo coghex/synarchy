@@ -62,7 +62,7 @@ conclusions that a careless reading collapses into one.
 Every declared measurement goes through #1437's CANONICAL result gate
 first, not just the census validator it starts with:
 `probe_census.validate_result` owns declared shape and the cross-field
-invariants, while `deflake_diagnosis.require_result` adds the rules that
+invariants, while `deflake_contract.require_result` adds the rules that
 make a document one `probe_flake.measure` could have written — the run
 indices, the artifact topology, and the retention pairing in particular.
 `measure` deletes a run's directory the moment it passes and keeps every
@@ -158,7 +158,7 @@ them when it finishes and an artifact that sat inside one was still
 inside a worktree when it was written.
 
 Absolute is not the same as usable. Every path goes through
-`deflake_diagnosis.require_path` first — including the ones a consumer
+`deflake_contract.require_path` first — including the ones a consumer
 stores without ever resolving, a command token and a manifest entry
 among them, because those are evidence too. An embedded NUL makes
 `Path.resolve()` raise `ValueError` from `lstat` rather than `OSError`,

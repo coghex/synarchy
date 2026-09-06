@@ -10,7 +10,9 @@
 --       initializer's own entries can still be steered;
 --     * a stdout-writing boot really does put those entries on stdout —
 --       the positive control, without which the quiet case would pass
---       just as happily against a broken observation;
+--       just as happily against a broken observation (the witness entry
+--       is Debug-level since #1928, so those examples set
+--       @ENGINE_DEBUG=event@ for themselves);
 --     * the quiet boot puts nothing on either stream;
 --     * an explicitly supplied callback sees an initialization-time
 --       entry, and sees it by the time the initializer returns;
@@ -46,8 +48,20 @@ import Test.Headless.Harness.Log
 --   handed the logger directly, so this line is unreachable to any
 --   fixture that installs its backend after the initializer returns —
 --   which is what makes it the right witness here.
+--
+--   #1928 moved it from Info to Debug (an ordinary registry load is no
+--   longer narrated), so the examples that need to SEE it run under
+--   'withEventDebug'. What it witnesses is unchanged: the entry is
+--   still emitted from the same call, at the same point, through
+--   whatever backend the fixture installed.
 initTimeMarker ∷ String
 initTimeMarker = "Notification registry loaded"
+
+-- | @ENGINE_DEBUG@, which 'Engine.Core.Log.initLogger' reads once per
+--   boot. Named here so the examples below and the reason above cannot
+--   drift apart.
+engineDebugEnvVar ∷ String
+engineDebugEnvVar = "ENGINE_DEBUG"
 
 spec ∷ Spec
 spec = describe "headless fixture logging" $ do
@@ -58,37 +72,43 @@ spec = describe "headless fixture logging" $ do
         backend ← resolveFixtureLogBackend
         show backend `shouldBe` "LogToCallback"
 
+    -- Under 'withEventDebug' too, so this is not the vacuous pass it
+    -- would be if initialization had nothing to emit in the first
+    -- place: the very entry the two positive controls below SEE is the
+    -- one neither stream receives here.
     it "is installed before initialization, so no boot entry is written" $
-      withDiagnosticVar Nothing $ do
+      withEventDebug $ withDiagnosticVar Nothing $ do
         (out, err) ← capturingOutput $ void initializeEngineHeadlessQuiet
         out `shouldBe` ""
         err `shouldBe` ""
 
     -- Without this, the case above would pass just as happily against
     -- an observation that never sees anything.
-    it "really is what silences the stream — a handle backend still writes" $ do
-      (out, _) ← capturingOutput $
-        void (initializeEngineHeadlessLogging (LogToHandle stdout))
-      out `shouldSatisfy` (initTimeMarker `isInfixOf`)
+    it "really is what silences the stream — a handle backend still writes" $
+      withEventDebug $ do
+        (out, _) ← capturingOutput $
+          void (initializeEngineHeadlessLogging (LogToHandle stdout))
+        out `shouldSatisfy` (initTimeMarker `isInfixOf`)
 
   describe "an explicitly supplied backend" $
-    it "observes an initialization-time entry before the initializer returns" $ do
-      (backend, drain) ← newLogCapture
-      void (initializeEngineHeadlessLogging backend)
-      entries ← drain
-      entries `shouldSatisfy` (not ∘ null)
-      map (T.unpack ∘ leMessage) entries
-        `shouldSatisfy` any (initTimeMarker `isInfixOf`)
+    it "observes an initialization-time entry before the initializer returns" $
+      withEventDebug $ do
+        (backend, drain) ← newLogCapture
+        void (initializeEngineHeadlessLogging backend)
+        entries ← drain
+        entries `shouldSatisfy` (not ∘ null)
+        map (T.unpack ∘ leMessage) entries
+          `shouldSatisfy` any (initTimeMarker `isInfixOf`)
 
   describe "the SYNARCHY_TEST_LOG diagnostic rerun" $ do
     it "sends a quiet fixture's own boot entries to stderr, keeping stdout clean" $
-      withDiagnosticVar (Just "stderr") $ do
+      withEventDebug $ withDiagnosticVar (Just "stderr") $ do
         (out, err) ← capturingOutput $ void initializeEngineHeadlessQuiet
         err `shouldSatisfy` (initTimeMarker `isInfixOf`)
         out `shouldBe` ""
 
     it "restores the pre-#1925 stdout stream on request" $
-      withDiagnosticVar (Just "stdout") $ do
+      withEventDebug $ withDiagnosticVar (Just "stdout") $ do
         (out, _) ← capturingOutput $ void initializeEngineHeadlessQuiet
         out `shouldSatisfy` (initTimeMarker `isInfixOf`)
 
@@ -109,10 +129,25 @@ spec = describe "headless fixture logging" $ do
 -- | Run an action with 'diagnosticLogEnvVar' set to an exact value (or
 --   removed), restoring whatever the surrounding environment had.
 withDiagnosticVar ∷ Maybe String → IO α → IO α
-withDiagnosticVar value action =
-    bracket (lookupEnv diagnosticLogEnvVar) apply (\_ → apply value ≫ action)
+withDiagnosticVar = withEnvVar diagnosticLogEnvVar
+
+-- | Run an action with @ENGINE_DEBUG=event@, which is what makes
+--   'initTimeMarker' — Debug-level since #1928 — reachable at all. Set
+--   here rather than left to the ambient environment so the examples
+--   below neither depend on a developer's shell nor are silenced by one
+--   that names some other category ('loadDebugCategoriesFromEnv'
+--   REPLACES the enabled set rather than adding to it).
+withEventDebug ∷ IO α → IO α
+withEventDebug = withEnvVar engineDebugEnvVar (Just "event")
+
+-- | Set (or remove) one environment variable for the duration,
+--   restoring whatever the surrounding environment had. The suite is
+--   sequential, so this reaches exactly the example that asked for it.
+withEnvVar ∷ String → Maybe String → IO α → IO α
+withEnvVar name value action =
+    bracket (lookupEnv name) apply (\_ → apply value ≫ action)
   where
-    apply = maybe (unsetEnv diagnosticLogEnvVar) (setEnv diagnosticLogEnvVar)
+    apply = maybe (unsetEnv name) (setEnv name)
 
 -- | Everything the action writes to the process's stdout and stderr.
 --

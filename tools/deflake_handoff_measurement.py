@@ -37,7 +37,7 @@ import sys
 from typing import TYPE_CHECKING
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deflake_diagnosis  # noqa: E402
+import deflake_contract  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
@@ -295,9 +295,9 @@ def require_measurement(entry, *, probe: str, seen: set,
     # `no-confident-fix` recorded from one would be a failure nobody can
     # diagnose stored as the evidence for a diagnosis.
     try:
-        deflake_diagnosis.require_result(
+        deflake_contract.require_result(
             result, f"the {role} measurement's result document")
-    except deflake_diagnosis.HandoffError as error:
+    except deflake_contract.HandoffError as error:
         raise HandoffError(str(error)) from None
     if result["probe"] != probe:
         raise HandoffError(
@@ -355,8 +355,8 @@ def require_reproduced(handoff: Handoff, baseline: Measurement) -> None:
             f"{handoff.acceptable_failures} out of "
             f"{baseline.requested_runs} and left no target check MISSING, "
             f"so it reproduced nothing to attribute; that is the "
-            f"{deflake_diagnosis.ROUTE_CANNOT_REPRODUCE!r} evidence")
-    observed = set(deflake_diagnosis.non_pass_ids(baseline.result))
+            f"{deflake_contract.ROUTE_CANNOT_REPRODUCE!r} evidence")
+    observed = set(deflake_contract.non_pass_ids(baseline.result))
     hit = [cid for cid in handoff.targets if cid in observed]
     if not hit:
         raise NonSuccess(
@@ -364,4 +364,4 @@ def require_reproduced(handoff: Handoff, baseline: Measurement) -> None:
             f"{', '.join(handoff.targets)} as FAIL or MISSING, so it did "
             f"not reproduce the pattern the targets were identified from; "
             f"failures somewhere else are the "
-            f"{deflake_diagnosis.ROUTE_CANNOT_REPRODUCE!r} evidence for these targets")
+            f"{deflake_contract.ROUTE_CANNOT_REPRODUCE!r} evidence for these targets")
