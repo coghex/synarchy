@@ -70,10 +70,12 @@ The contract
       * a `|---|` separator row under the header, with exactly as many
         cells as the header -- GFM recognizes a table only then, and
         renders the run as a paragraph of literal pipes otherwise;
-      * no raw HTML in any row. An `<!-- ... -->` around a cell's text
-        hides the record and its count from every reader while leaving
-        both for a regex to find -- the block-level escape one level
-        down, inside a cell;
+      * no construct in any row whose source differs from what a
+        reader sees -- raw HTML, a link/image/footnote bracket, or an
+        HTML entity. Each can carry a record and its count through this
+        audit while the rendered cell displays something else or
+        nothing (`<!-- ... -->`, `[](# "...")`), which is the
+        block-level escape one level down, inside a cell;
       * neither marker inside a fenced code block or an open
         `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block -- the two
         constructs that carry following lines verbatim.
@@ -173,15 +175,31 @@ _COUNT_RE = re.compile(
 #: variant away from being bypassed (round-2 review). Same tolerance
 #: the SS1 field-total sweep already applies to its own phrase.
 _DECORATED_RECORD = r"[`*_]{0,3}[A-Z][A-Za-z0-9_']*Capability[`*_]{0,3}"
-#: Raw HTML opening inside a table row: a comment, a tag, or a
-#: processing instruction. None of it is rendered content -- an
-#: `<!-- ... -->` around a cell's text hides the record and its count
-#: from every reader while leaving both for a regex to find, and a
-#: `<span style="display:none">` does the same through CSS. The block
-#: checks refuse markup that stops the TABLE rendering; this refuses
-#: markup that stops a CELL rendering, which is the same escape one
-#: level down (round-7 review).
-_INLINE_HTML_RE = re.compile(r"<[A-Za-z/!?]")
+#: The Markdown constructs whose SOURCE differs from what a reader
+#: sees, as `(name, pattern)`. Every one of them can carry a record and
+#: its count through this audit's regexes while displaying nothing:
+#:
+#:   raw HTML       `<!-- `XCapability` (11 fields) -->` renders as
+#:                  nothing at all; `<span style="display:none">` hides
+#:                  the cell through CSS (round-7 review);
+#:   link or image  `[](# "`XCapability` (11 fields)")` puts the whole
+#:                  thing in a link TITLE and renders an empty cell.
+#:                  The same bracket form covers reference links and
+#:                  footnotes (round-10 review);
+#:   entity         `&#87;orldSimCapability` displays a name this
+#:                  audit's patterns never see.
+#:
+#: The block-level rules refuse markup that stops the TABLE rendering;
+#: these refuse markup that stops a CELL's text rendering as itself,
+#: which is the same escape one level down. The audited column states
+#: its counts as plain text, which the real table already does -- it
+#: contains no `<`, `[`, `]` or `&` at all.
+_HIDDEN_SOURCE_CONSTRUCTS = (
+    ("raw HTML", re.compile(r"<[A-Za-z/!?]")),
+    ("a link, image or footnote", re.compile(r"!?\[[^\]]*\]")),
+    ("an HTML entity", re.compile(
+        r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);")),
+)
 #: The reintroduction shape swept for outside the block, in the two
 #: orders a size is written in: parenthesised after the name
 #: (`` `XCapability` (9 fields) ``, this table's own shape, and the
@@ -361,14 +379,18 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                 f"the audited column is read by position, so a ragged row "
                 f"would move it")
             continue
-        found = _INLINE_HTML_RE.search(row)
-        if found:
+        hidden = next(
+            ((name, match) for name, pattern in _HIDDEN_SOURCE_CONSTRUCTS
+             if (match := pattern.search(row)) is not None), None)
+        if hidden is not None:
+            name, match = hidden
             violations.append(
-                f"{_DOC} §2.1's record table row {number} contains raw "
-                f"HTML ({row[found.start():found.start() + 40]!r}) -- a "
-                f"cell's text inside an `<!-- ... -->` comment, or a tag "
-                f"that hides it, is read by this audit and by no reader. "
-                f"The audited column states its counts as plain Markdown")
+                f"{_DOC} §2.1's record table row {number} contains "
+                f"{name} ({match.group(0)!r}) -- a construct whose "
+                f"source differs from what a reader sees can carry a "
+                f"record and its count through this audit while the "
+                f"rendered cell shows something else, or nothing. The "
+                f"audited column states its counts as plain text")
             continue
         column.append(row_cells[index])
     if not column:

@@ -628,7 +628,8 @@ def test_record_counts_inline_html_in_a_row_rejected():
             "(2 fields)", cell, 1)
         expect(rows != _CLEAN_ROWS, f"fixture must apply {wrap!r}")
         violations = audit_record_counts(_SOURCES, _counts_doc(rows))
-        expect(any("contains raw HTML" in v for v in violations),
+        expect(any("source differs from what a reader sees" in v
+                   for v in violations),
                f"a cell hidden behind {wrap!r} must be rejected, got: "
                f"{violations}")
 
@@ -643,7 +644,8 @@ def test_record_counts_inline_html_in_the_real_table_rejected():
     hidden = document.replace(live, f"<!-- {live} -->", 1)
     expect(hidden != document, "the fixture must change the real document")
     violations = audit_record_counts(sources, hidden)
-    expect(any("contains raw HTML" in v for v in violations),
+    expect(any("source differs from what a reader sees" in v
+               for v in violations),
            f"commenting out a real cell must be rejected, got: "
            f"{violations}")
 
@@ -710,6 +712,45 @@ def test_marked_span_body_in_a_fence_rejected_for_the_record_table():
     expect(any("fenced code block" in v
                for v in audit_record_counts(sources, fenced)),
            "fencing the real §2.1 table's body must be rejected")
+
+
+def test_record_counts_hidden_source_constructs_rejected():
+    """Round 10's finding and its family. Every construct here carries
+    the record and its count through this audit's regexes while the
+    rendered cell shows something else or nothing: a link TITLE, an
+    image's alt text, a footnote reference, and an HTML entity that
+    displays a name the patterns never see. Same escape as round 7's
+    HTML comment, one construct over, so the rule names the class."""
+    live = ("`Engine.Core.Capability.Alpha` — `AlphaCapability` "
+            "(2 fields)")
+    for label, replacement in (
+            ("link title", f'[](# "{live}")'),
+            ("image", f"![{live}](x.png)"),
+            ("footnote", f"{live} [^1]"),
+            ("entity",
+             live.replace("AlphaCapability", "&#65;lphaCapability"))):
+        rows = _CLEAN_ROWS.replace(live, replacement, 1)
+        expect(rows != _CLEAN_ROWS, f"fixture must apply {label}")
+        violations = audit_record_counts(_SOURCES, _counts_doc(rows))
+        expect(any("source differs from what a reader sees" in v
+                   for v in violations),
+               f"a cell hidden behind {label} must be rejected, got: "
+               f"{violations}")
+
+
+def test_record_counts_link_title_in_the_real_table_rejected():
+    """Round 10's exact case against the real document: the live
+    `WorldSimCapability` cell moved into a link title, which renders an
+    empty cell while every count rule is satisfied."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    live = ("`Engine.Core.Capability.WorldSim` — `WorldSimCapability` "
+            "(11 fields, the world/sim half)")
+    hidden = document.replace(live, f'[](# "{live}")', 1)
+    expect(hidden != document, "the fixture must change the real document")
+    expect(any("source differs from what a reader sees" in v
+               for v in audit_record_counts(sources, hidden)),
+           "a real cell moved into a link title must be rejected")
 
 
 def test_record_counts_ragged_row_rejected():
@@ -946,6 +987,8 @@ TESTS = (
     test_record_counts_duplicate_audited_column_rejected,
     test_record_counts_inline_html_in_a_row_rejected,
     test_record_counts_inline_html_in_the_real_table_rejected,
+    test_record_counts_hidden_source_constructs_rejected,
+    test_record_counts_link_title_in_the_real_table_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
