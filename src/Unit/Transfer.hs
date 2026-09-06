@@ -27,15 +27,18 @@
 --   atomic path A1 shipped.
 --
 --   __On the 'Data.Serialize.Serialize' instances below__ (#1246): the
---   six types a durable transfer ORDER carries — 'TransferEndpoint',
+--   seven types a durable transfer ORDER carries — 'TransferEndpoint',
 --   'TransferItemRef', 'TransferReason', 'TransferFailure',
---   'TransferState' and the 'QueuedTransfer'/'TransferBatch' pair — are
+--   'TransferState', 'QueuedTransfer' and 'TransferBatch' — are
 --   serializable ONLY so 'Unit.Transfer.Orders.TransferOrders' can ride
 --   'World.Save.Types.WorldPageSave', the transitional IN-MEMORY load
 --   bridge (which derives 'Data.Serialize.Serialize' wholesale). That is
 --   the same arrangement every other per-page gameplay layer on that
 --   record already has — 'Craft.Bills.CraftBill',
 --   'Building.Knowledge.ContainerRecord', 'Power.Types.PowerNode'.
+--   Do not conflate that seven with the six one paragraph above: this is
+--   a count of TYPES that derive 'Data.Serialize.Serialize', while the
+--   six-state lifecycle is 'TransferState''s own CONSTRUCTOR count.
 --
 --   These instances are NOT the save WIRE format and must never be used
 --   as one. The wire schema is
