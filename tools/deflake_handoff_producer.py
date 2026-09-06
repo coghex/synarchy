@@ -22,8 +22,9 @@ measurement held to it. The assembly owner INVOKES the second; it does
 not define one.
 
 It consumes the grammar and measurement owners and nothing downstream of
-itself, and imports `deflake_diagnosis` directly for the upstream names
-it uses rather than through any wrapper.
+itself, and imports `deflake_contract` directly for the upstream names
+it uses rather than through any wrapper — the document contract, not
+the diagnosis evaluator that used to re-export it (#2041).
 
     python3 tools/test_deflake_diagnosis.py       # the deterministic gate
 """
@@ -34,7 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deflake_diagnosis  # noqa: E402
+import deflake_contract  # noqa: E402
 import probe_census  # noqa: E402
 import probe_runner_registry  # noqa: E402
 from deflake_handoff_grammar import (  # noqa: E402
@@ -89,16 +90,16 @@ def require_diagnosis_outcome(document, *, worktrees=(),
             f"the diagnosis outcome is {schema!r}, expected "
             f"{DIAGNOSIS_OUTCOME_SCHEMA!r}")
     route = outcome.get("route")
-    if route not in deflake_diagnosis.ROUTES:
+    if route not in deflake_contract.ROUTES:
         raise HandoffError(
             f"the diagnosis outcome declares the route {route!r}; the "
-            f"declared routes are {', '.join(deflake_diagnosis.ROUTES)}")
+            f"declared routes are {', '.join(deflake_contract.ROUTES)}")
     if outcome.get("opens_pull_request"):
         raise HandoffError(
             f"the diagnosis outcome opens a pull request, so it is #1437's "
             f"repair ending and not a non-success this workflow records")
     if not owned.owns(route):
-        owner = deflake_diagnosis.ROUTE_OWNER.get(route)
+        owner = deflake_contract.ROUTE_OWNER.get(route)
         ending = ROUTE_ENDING.get(route, f"declares the route {route!r}")
         if owner is not None and owner != owned.issue:
             # A well-formed handoff for a route this workflow does not
@@ -117,11 +118,11 @@ def require_diagnosis_outcome(document, *, worktrees=(),
             f"this workflow owns are "
             f"{', '.join(sorted(owned.roles))}")
     reason = outcome.get("reason")
-    if reason not in deflake_diagnosis.ROUTE_REASONS.get(route, ()):
+    if reason not in deflake_contract.ROUTE_REASONS.get(route, ()):
         raise HandoffError(
             f"the diagnosis outcome declares the reason {reason!r}, which "
             f"the {route!r} route cannot be reached for; its reasons are "
-            f"{', '.join(deflake_diagnosis.ROUTE_REASONS.get(route, ()))}")
+            f"{', '.join(deflake_contract.ROUTE_REASONS.get(route, ()))}")
     probe = outcome.get("probe")
     if probe not in _registered_probes():
         raise HandoffError(
@@ -143,15 +144,15 @@ def require_diagnosis_outcome(document, *, worktrees=(),
     # its own producer had rejected: a `no-target` record naming `beta`
     # would earn an advisory de-list from a measurement that observed
     # `beta` going wrong.
-    if route == deflake_diagnosis.ROUTE_NO_TARGET and targets:
+    if route == deflake_contract.ROUTE_NO_TARGET and targets:
         raise HandoffError(
             f"the {route!r} route is what an all-PASS measurement produces, "
             f"so its record names no target; this one names "
             f"{', '.join(targets)}")
-    if route != deflake_diagnosis.ROUTE_NO_TARGET and not targets:
+    if route != deflake_contract.ROUTE_NO_TARGET and not targets:
         raise HandoffError(
             f"the diagnosis outcome names no target check, which is the "
-            f"{deflake_diagnosis.ROUTE_NO_TARGET!r} ending and not "
+            f"{deflake_contract.ROUTE_NO_TARGET!r} ending and not "
             f"{route!r}; every other route diagnoses at least one observed "
             f"non-PASS check")
     acceptable = outcome.get("acceptable_failures")
@@ -487,8 +488,8 @@ def _require_one_descriptor(measurements: dict, diagnosis: dict) -> None:
         if measurement is None or measurement.result is None:
             continue
         try:
-            deflake_diagnosis.require_descriptor(
+            deflake_contract.require_descriptor(
                 measurement.result, expected,
                 f"the {role} measurement's result document")
-        except deflake_diagnosis.HandoffError as error:
+        except deflake_contract.HandoffError as error:
             raise HandoffError(str(error)) from None

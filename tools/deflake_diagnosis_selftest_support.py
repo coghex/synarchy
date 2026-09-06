@@ -60,6 +60,7 @@ import probe_runner_resources  # type: ignore  # noqa: E402
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
 
+
 TOOL = str(Path(__file__).resolve().parent / "deflake_diagnosis.py")
 
 

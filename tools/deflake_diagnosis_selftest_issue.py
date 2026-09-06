@@ -53,11 +53,12 @@ import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import selftestlib  # noqa: E402
 from deflake_diagnosis_selftest_support import (  # noqa: E402
-    CLEAN_WT, FAIL, FAILURES, MISSING, OUTSIDE, PASS, PRIMARY_WT, PROBE,
-    WORKTREES, _DEFAULT, census_file, diagnosis_document,
-    elsewhere_failure_result, evaluate, expect, forged_aggregate_result,
-    measurement_entries, outcome_handoff, rebind_references, record_outcome,
-    short_result, spotless_result, stored_outcomes, verification_result)
+    census_file, CLEAN_WT, _DEFAULT, diagnosis_document,
+    elsewhere_failure_result, evaluate, expect, FAIL,
+    forged_aggregate_result, measurement_entries, MISSING, outcome_handoff,
+    OUTSIDE, PASS, PRIMARY_WT, PROBE, rebind_references, record_outcome,
+    short_result, spotless_result, stored_outcomes, verification_result,
+    WORKTREES)
 
 
 # ==========================================================================

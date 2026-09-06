@@ -46,6 +46,7 @@ import qualified Test.Headless.Unit.Transfer as UnitTransfer
 import qualified Test.Headless.Unit.TransferApi as UnitTransferApi
 import qualified Test.Headless.Unit.TransferOrderApi as UnitTransferOrderApi
 import qualified Test.Headless.Unit.CargoApi as UnitCargoApi
+import qualified Test.Headless.Unit.WoundsApi as UnitWoundsApi
 import qualified Test.Headless.Unit.MedicalReach as UnitMedicalReach
 import qualified Test.Headless.Unit.MedicalKitInstance as UnitMedicalKitInstance
 import qualified Test.Headless.Unit.NightPerception as NightPerception
@@ -569,6 +570,10 @@ main = hspec $ do
     -- manager, so like the two specs above they cannot share the
     -- worldgen engine.
     aroundAll withHeadlessEngine UnitCargoApi.spec
+    -- Own engine (#1969): the getWounds schema spec WRITES the unit
+    -- manager ref and the infection catalogue, so like the specs above
+    -- it cannot share the worldgen engine.
+    aroundAll withHeadlessEngine UnitWoundsApi.spec
     -- Own engine (#2297): the medical reach spec WRITES the unit
     -- manager ref and installs its own two-page world manager, for the
     -- same reason as the cargo spec above.

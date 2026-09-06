@@ -209,10 +209,19 @@ bindlessColorAttachments = 1
 --   statement counts.
 --
 --   Vulkan writes each descriptor-count rule twice, once per scope, and
---   BOTH hold at the same time — they are not two spellings of one ceiling
---   and there is no combined \"effective\" limit. The difference is only
---   which descriptors each one ranges over, which is what
---   'layoutDescriptorsInScope' records for this renderer's layout.
+--   BOTH hold at the same time, because each ranges over a DIFFERENT
+--   population of this layout's descriptors — which is what
+--   'layoutDescriptorsInScope' records for this renderer's layout. Neither
+--   statement of a pair is skipped.
+--
+--   Two populations are not, however, two independent ceilings. The
+--   all-set statements are satisfied by the EFFECTIVE MAXIMUM of a paired
+--   class — the greater of the ordinary limit and its update-after-bind
+--   counterpart — so ordinary headroom can supply the all-set total, and a
+--   paired update-after-bind field below the requirement is not on its own
+--   a refusal. What stays independent is the smaller
+--   non-update-after-bind population, measured against its ordinary limit
+--   alone. 'bindlessCapacityChecks' is where both fall out.
 data CapacityScope
   = -- | Counts ONLY descriptors in set layouts created WITHOUT
     --   @UPDATE_AFTER_BIND_POOL_BIT@ — VUIDs 03016-03018, 03028-03029, and
@@ -288,11 +297,15 @@ requiredBindlessCapacities = [minBound .. maxBound]
 --   @UPDATE_AFTER_BIND_POOL_BIT@ ('createBindlessDescriptorSetLayout'), so
 --   an ordinary sampler or sampled-image statement counts none of it. That
 --   statement is still CHECKED — 'bindlessCapacityChecks' emits it like any
---   other — it is simply satisfied by zero, at any reported value. A device
---   \"whose ordinary sampler limit supplies 16,384 descriptors\" is therefore
---   not a thing this layout can have: that limit supplies the array nothing,
---   so it can neither reject the layout nor rescue an update-after-bind
---   shortfall.
+--   other — it is simply satisfied by zero, at any reported value, so it
+--   can never reject this layout on the array's account.
+--
+--   That is a fact about the POPULATION an ordinary statement ranges over,
+--   not about what its reported value is good for. The all-set total is
+--   measured against the effective maximum of the pair, so the ordinary
+--   sampler limit's reported figure can still be the one that supplies the
+--   array's 16,384 descriptors when the update-after-bind field alone
+--   would fall short ('bindlessCapacityChecks').
 --
 --   Set 0's uniform buffer is the converse and shows the split runs both
 --   ways: it sits in an ordinary layout, so it counts in BOTH scopes and is
@@ -397,15 +410,26 @@ readUpdateAfterBindLimit props = \case
 -- | Every descriptor-count rule the device must satisfy for this layout.
 --
 --   BOTH statements of a pair are emitted and both are enforced, each
---   against the descriptors ITS OWN scope counts. That is the whole
---   contract: an ordinary limit and its update-after-bind counterpart are
---   simultaneous @must@s over different populations, so neither is skipped
---   and neither substitutes for the other. No device feature relaxes this:
---   every update-after-bind limit is enforced unconditionally, since the
---   layout puts descriptors of that class against it either way. Where a statement counts none of
---   our descriptors its check is present and satisfied by zero, which is
---   what makes \"could the ordinary limit have covered the array?\" answerable
---   in the data rather than in a comment.
+--   against the descriptors ITS OWN scope counts: an ordinary limit and
+--   its update-after-bind counterpart are simultaneous @must@s over
+--   different populations, so neither check is skipped. Emission is
+--   unconditional — no device feature suppresses a rule, since the layout
+--   puts descriptors of that class against it either way.
+--
+--   What the two are NOT is independent ceilings. The all-set check is
+--   measured against the EFFECTIVE MAXIMUM of a paired class — the greater
+--   of the two reported limits — so ordinary headroom can supply the
+--   all-layout total, and a paired update-after-bind field below the
+--   requirement is not on its own a refusal. The ordinary check is retained
+--   rather than folded in because it ranges over a smaller population that
+--   no update-after-bind headroom answers for. A class with no ordinary
+--   counterpart — @maxUpdateAfterBindDescriptorsInAllPools@, whose
+--   'ordinaryCapacityField' is 'Nothing' — has no pair to maximise over and
+--   is enforced at exactly the value the device reports.
+--
+--   Where a statement counts none of our descriptors its check is present
+--   and satisfied by zero, which is what makes \"which limit covered the
+--   array?\" answerable in the data rather than in a comment.
 bindlessCapacityChecks
   ∷ PhysicalDeviceLimits
   → PhysicalDeviceVulkan12Properties

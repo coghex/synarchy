@@ -60,7 +60,7 @@ capability count, and whose verification failure count is strictly lower
 than the baseline's while STILL failing #1437's acceptance gate for the
 reason #1437 named. `verification-over-tolerance` is re-derived from the
 verification's own failure count, and `verification-missing-rule` by
-CALLING `deflake_diagnosis.missing_problems` — whose scoped rule has
+CALLING `deflake_contract.missing_problems` — whose scoped rule has
 four clauses of which only one is about targets, so a PASSING run that
 omits a NON-target check fails it too and a paraphrase of "no target
 went MISSING" would call such a verification passing. The other two
@@ -142,7 +142,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deflake_diagnosis  # noqa: E402
+import deflake_contract  # noqa: E402
 import deflake_handoff  # noqa: E402
 import probe_census  # noqa: E402
 
@@ -196,9 +196,9 @@ reuse_stored_timestamp = deflake_handoff.reuse_stored_timestamp
 # because a stable outcome IS the route it was handed, and two
 # vocabularies for one concept is how a census row stops being
 # greppable against the diagnosis that produced it.
-OUTCOME_CANNOT_REPRODUCE = deflake_diagnosis.ROUTE_CANNOT_REPRODUCE
-OUTCOME_NO_CONFIDENT_FIX = deflake_diagnosis.ROUTE_NO_CONFIDENT_FIX
-OUTCOME_PARTIAL_IMPROVEMENT = deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT
+OUTCOME_CANNOT_REPRODUCE = deflake_contract.ROUTE_CANNOT_REPRODUCE
+OUTCOME_NO_CONFIDENT_FIX = deflake_contract.ROUTE_NO_CONFIDENT_FIX
+OUTCOME_PARTIAL_IMPROVEMENT = deflake_contract.ROUTE_PARTIAL_IMPROVEMENT
 STABLE_OUTCOMES = (OUTCOME_CANNOT_REPRODUCE, OUTCOME_NO_CONFIDENT_FIX,
                    OUTCOME_PARTIAL_IMPROVEMENT)
 
@@ -230,10 +230,10 @@ OPENS_PULL_REQUEST = {
 # a consumer that let either through would classify against a premise
 # its own producer had rejected.
 ROUTE_TO_OUTCOME = {
-    deflake_diagnosis.ROUTE_NO_TARGET: OUTCOME_CANNOT_REPRODUCE,
-    deflake_diagnosis.ROUTE_CANNOT_REPRODUCE: OUTCOME_CANNOT_REPRODUCE,
-    deflake_diagnosis.ROUTE_NO_CONFIDENT_FIX: OUTCOME_NO_CONFIDENT_FIX,
-    deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT: OUTCOME_PARTIAL_IMPROVEMENT,
+    deflake_contract.ROUTE_NO_TARGET: OUTCOME_CANNOT_REPRODUCE,
+    deflake_contract.ROUTE_CANNOT_REPRODUCE: OUTCOME_CANNOT_REPRODUCE,
+    deflake_contract.ROUTE_NO_CONFIDENT_FIX: OUTCOME_NO_CONFIDENT_FIX,
+    deflake_contract.ROUTE_PARTIAL_IMPROVEMENT: OUTCOME_PARTIAL_IMPROVEMENT,
 }
 
 # The measurement whose evidence each route's stable outcome is judged
@@ -244,17 +244,17 @@ ROUTE_TO_OUTCOME = {
 # pre-fix baseline, which is what "#1437's controlled pre-fix
 # measurement" names.
 ROUTE_ROLES = {
-    deflake_diagnosis.ROUTE_NO_TARGET: {
+    deflake_contract.ROUTE_NO_TARGET: {
         "designated": ROLE_HANDOFF,
         "required": (ROLE_HANDOFF,),
         "forbidden": (ROLE_BASELINE, ROLE_VERIFICATION),
     },
-    deflake_diagnosis.ROUTE_CANNOT_REPRODUCE: {
+    deflake_contract.ROUTE_CANNOT_REPRODUCE: {
         "designated": ROLE_BASELINE,
         "required": (ROLE_BASELINE,),
         "forbidden": (ROLE_VERIFICATION,),
     },
-    deflake_diagnosis.ROUTE_NO_CONFIDENT_FIX: {
+    deflake_contract.ROUTE_NO_CONFIDENT_FIX: {
         "designated": ROLE_BASELINE,
         "required": (ROLE_BASELINE,),
         # #1437 refuses a `no-confident-fix` diagnosis that carries a
@@ -264,7 +264,7 @@ ROUTE_ROLES = {
         # keeps the two ends of the handoff describing one invocation.
         "forbidden": (ROLE_VERIFICATION,),
     },
-    deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT: {
+    deflake_contract.ROUTE_PARTIAL_IMPROVEMENT: {
         "designated": ROLE_BASELINE,
         "required": (ROLE_BASELINE, ROLE_VERIFICATION),
         "forbidden": (),
@@ -342,7 +342,7 @@ def _classify_cannot_reproduce(handoff: Handoff) -> dict:
     reason = handoff.reason
     role = ROUTE_ROLES[handoff.route]["designated"]
     measurement = handoff.measurement(role)
-    if reason not in deflake_diagnosis.CONTROLLED_REASONS:
+    if reason not in deflake_contract.CONTROLLED_REASONS:
         return {"recommendation": None, "comparison": None}
     problems = measurement.defect_problems()
     if problems:
@@ -462,10 +462,10 @@ def _require_gate_failure(handoff: Handoff, verification: Measurement) -> None:
     """
     reason = handoff.reason
     over = verification.failure_count > handoff.acceptable_failures
-    missing = deflake_diagnosis.missing_problems(
+    missing = deflake_contract.missing_problems(
         verification.result, targets=set(handoff.targets),
         what="the verification batch")
-    if reason == deflake_diagnosis.REASON_VERIFICATION_OVER_TOLERANCE:
+    if reason == deflake_contract.REASON_VERIFICATION_OVER_TOLERANCE:
         if not over:
             raise NonSuccess(
                 f"the diagnosis outcome names {reason!r}, but the "
@@ -475,7 +475,7 @@ def _require_gate_failure(handoff: Handoff, verification: Measurement) -> None:
                 f"{verification.requested_runs}; a record whose own evidence "
                 f"denies the condition it names is not a stable outcome")
         return
-    if reason == deflake_diagnosis.REASON_VERIFICATION_MISSING_RULE:
+    if reason == deflake_contract.REASON_VERIFICATION_MISSING_RULE:
         if not missing:
             raise NonSuccess(
                 f"the diagnosis outcome names {reason!r}, but the "
@@ -667,8 +667,8 @@ def main(argv=None) -> int:
     try:
         handoff = require_handoff(
             _load(args.handoff, "outcome handoff"),
-            worktrees=deflake_diagnosis.worktree_paths(),
-            primary=deflake_diagnosis.primary_checkout())
+            worktrees=deflake_contract.worktree_paths(),
+            primary=deflake_contract.primary_checkout())
         census_path = (Path(args.census) if args.census
                        else probe_census.manifest_path())
         recorded = record(handoff, census_path=census_path, now=utc_now())

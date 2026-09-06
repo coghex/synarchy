@@ -21,10 +21,13 @@ Not a gate of its own. Run through the facade:
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -39,14 +42,14 @@ import probe_census_storage as census_storage  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import selftestlib  # noqa: E402
 from deflake_diagnosis_selftest_support import (  # noqa: E402
-    ATTEMPT, BASE_COMMIT, CHECKS, CLEAN_WT, FAIL, FAILURES, MISSING,
-    OTHER, OUTCOME_NOW, OUTCOME_SUMMARY, OUTSIDE, PASS, PRIMARY_WT, PROBE,
-    Publisher, REPAIR_COMMIT, REPAIR_WT, VERIFY_ARTIFACTS, WORKTREES,
-    census_file, command, config_entries, diagnosis_document,
-    elsewhere_failure_result, evaluate, expect, failing_runs,
-    forged_aggregate_result, handoff_document, manifest, outcome_handoff,
-    produced, record_outcome, result_document, route_diagnosis, short_result,
-    spotless_result, stored_outcomes, verification_result)
+    ATTEMPT, BASE_COMMIT, census_file, CHECKS, CLEAN_WT, command,
+    config_entries, diagnosis_document, elsewhere_failure_result, evaluate,
+    expect, FAIL, failing_runs, forged_aggregate_result, handoff_document,
+    manifest, MISSING, OTHER, outcome_handoff, OUTCOME_NOW,
+    OUTCOME_SUMMARY, OUTSIDE, PASS, PRIMARY_WT, PROBE, produced, Publisher,
+    record_outcome, REPAIR_COMMIT, REPAIR_WT, result_document,
+    route_diagnosis, short_result, spotless_result, stored_outcomes,
+    verification_result, VERIFY_ARTIFACTS, WORKTREES)
 
 
 UNMET = ("the verification stayed above the acceptable-failure ceiling the "

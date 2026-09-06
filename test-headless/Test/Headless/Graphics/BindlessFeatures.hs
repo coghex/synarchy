@@ -367,8 +367,10 @@ spec = describe "Vulkan bindless feature requirements" $ do
     it "checks BOTH statements of every paired capacity" $
       -- The contract in one assertion: an ordinary limit and its
       -- update-after-bind counterpart are simultaneous rules over different
-      -- populations, so both are emitted and both are enforced. Neither is
-      -- skipped, and neither is folded into the other.
+      -- populations, so both checks are emitted and both are enforced, and
+      -- neither is skipped. What the all-set check MEASURES against is the
+      -- effective maximum of the pair — see "lets ordinary headroom supply
+      -- the all-layout total" below.
       forM_ capacityFields $ \(cap, _, _) → do
         let scopes = map ccScope
               (bindlessCapacityChecks generousBaseLimits generousProperties cap)
@@ -383,8 +385,10 @@ spec = describe "Vulkan bindless feature requirements" $ do
       -- counts "only descriptors in descriptor set layouts created WITHOUT"
       -- that bit. The array therefore contributes NOTHING to an ordinary
       -- sampler or sampled-image limit: that rule is still checked, and is
-      -- satisfied by zero at any reported value. So no ordinary limit can
-      -- supply the array's 16384 descriptors — it does not range over them.
+      -- satisfied by zero at any reported value, so it cannot reject the
+      -- layout over the array. That is about the POPULATION the statement
+      -- ranges over, not about its reported value, which still serves as
+      -- the effective maximum the all-set total is measured against.
       forM_ [CapPerStageSamplers, CapSetSamplers
             ,CapPerStageSampledImages, CapSetSampledImages] $ \cap → do
         (cap, layoutDescriptorsInScope ScopeWithoutUpdateAfterBind cap)
@@ -566,9 +570,10 @@ spec = describe "Vulkan bindless feature requirements" $ do
     it "enforces every update-after-bind limit whatever the features say" $
       -- The layout puts descriptors of each class against its limit however
       -- the device advertises its descriptorBinding…UpdateAfterBind
-      -- features, so no feature boolean relaxes a rule. A device reporting
-      -- zero for a uniform- or storage-buffer update-after-bind limit is
-      -- refused even with every optional feature off.
+      -- features, so no feature boolean suppresses a rule. A device
+      -- reporting zero on BOTH sides of a uniform- or storage-buffer pair —
+      -- nothing for the effective maximum to draw on — is refused even with
+      -- every optional feature off.
       forM_ [CapPerStageUniformBuffers, CapSetUniformBuffers
             ,CapPerStageStorageBuffers, CapSetStorageBuffers] $ \cap →
         forM_ [zero ∷ PhysicalDeviceVulkan12Features

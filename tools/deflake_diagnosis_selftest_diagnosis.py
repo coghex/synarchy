@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """#1437's cases: the entry gate, the routes, and the diagnosis CLI.
 
-The 185 cases covering `tools/deflake_diagnosis.py` — the handoff entry
+The 195 cases covering `tools/deflake_diagnosis.py` — the handoff entry
 gate, X out of ten, the no-retries rule, the configuration manifest,
 controlled reproduction, same-environment verification, stable check
 identity, MISSING, every route, assertion weakening, the frozen repair,
 the one-PR limit, the command line, the constants that must not drift,
 and the mutation evidence behind all of it.
+
+The last eight are #2041's, and they belong to this owner rather than
+to #1438's despite sitting below its section in the pre-split file:
+`tools/deflake_contract.py` is the document contract this evaluator was
+split from, so what those cases hold — that the facade re-exports the
+contract's own objects, that no fact has two definitions, and that the
+dependency edge runs one way — is this module's ownership boundary, not
+the publication workflow's.
 
 `mutant` and `check_mutation` live HERE rather than in the shared
 support module. Every one of their call sites is a diagnosis case, and
@@ -23,8 +31,11 @@ Not a gate of its own. Run through the facade:
 """
 from __future__ import annotations
 
+import ast
 import copy
+import importlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,19 +46,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import deflake  # type: ignore  # noqa: E402
+import deflake_contract as dc  # type: ignore  # noqa: E402
 import deflake_diagnosis as dd  # type: ignore  # noqa: E402
 import probe_census  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 import selftestlib  # noqa: E402
 from deflake_diagnosis_selftest_support import (  # noqa: E402
-    BASE_COMMIT, CHECKS, CLEAN_WT, FAIL, FAILURES, MISSING, OTHER, OUTSIDE,
-    PASS, PRIMARY_WT, PROBE, PRODUCER_FIELD, REPAIR_COMMIT, REPAIR_WT, TOOL,
-    VERIFY_ARTIFACTS, WORKTREES, batch_section, command, config_entries,
+    BASE_COMMIT, batch_section, CHECKS, CLEAN_WT, command, config_entries,
     deflake_argv, deflake_invocation, diagnosis_document, evaluate, expect,
-    expect_refused, expect_rejected, failing_runs, handoff_document,
-    invocation, manifest, relocate_section, resource_hold, result_document,
-    verification_result)
+    expect_refused, expect_rejected, FAIL, failing_runs, handoff_document,
+    invocation, manifest, MISSING, OTHER, OUTSIDE, PASS, PRIMARY_WT, PROBE,
+    PRODUCER_FIELD, relocate_section, REPAIR_COMMIT, REPAIR_WT,
+    resource_hold, result_document, TOOL, verification_result,
+    VERIFY_ARTIFACTS, WORKTREES)
 
 #: A directory with no `config/*.local.yaml` family at all, so
 #: `deflake.configuration_manifest` answers with the empty list that is
@@ -1656,6 +1668,7 @@ def test_a_repair_may_not_change_the_measurement_apparatus() -> None:
         "tools/probe_runner_scheduler.py",
         "tools/deflake.py",
         "tools/deflake_diagnosis.py",
+        "tools/deflake_contract.py",
     ), f"the measurement apparatus is exactly this inventory: "
        f"{dd.HARNESS_MODULES}")
     expect("tools/role_probe.py" not in dd.HARNESS_MODULES,
@@ -1996,10 +2009,10 @@ def test_a_recorded_count_carries_the_producers_positive_constraint()\
     # itself, which is where the constraint lives.
     for token in ("0", "-1", "-10"):
         expect_rejected(
-            lambda t=token: dd._integer(t, "a count", positive=True),
+            lambda t=token: dc._integer(t, "a count", positive=True),
             "must be a positive count",
             f"a parsed count of {token}")
-        expect(dd._integer(token, "a count") == int(token),
+        expect(dc._integer(token, "a count") == int(token),
                f"and {token} is still a perfectly good integer otherwise")
 
     for token in ("0", "-4"):
@@ -3486,7 +3499,7 @@ def test_a_path_no_filesystem_can_name_is_refused_not_a_traceback() -> None:
            "a command destination carrying a NUL is refused")
 
     # And the helper is total for it directly.
-    forms = dd._path_forms("/tmp/\x00a")
+    forms = dc._path_forms("/tmp/\x00a")
     expect(bool(forms),
            f"_path_forms answers for an unnameable path: {forms}")
 
@@ -3605,12 +3618,29 @@ def test_the_measurement_contract_comes_from_its_owners() -> None:
 
 
 def test_x_arithmetic_is_delegated_rather_than_reimplemented() -> None:
-    """Guards against a second copy of `failures <= X` drifting from the census."""
-    source = Path(dd.__file__).read_text(encoding="utf-8")
-    expect("probe_census.tolerance_state" in source,
+    """Guards against a second copy of `failures <= X` drifting from the census.
+
+    Read across BOTH owners: #2041 left the tolerance comparison with
+    `evaluate` and took X's validation to the contract with
+    `require_handoff`, so a scan of either file alone would now pass
+    while the other reimplemented its half.
+    """
+    sources = {module.__name__:
+               Path(module.__file__).read_text(encoding="utf-8")
+               for module in (dc, dd)}
+    combined = "".join(sources.values())
+    expect("probe_census.tolerance_state" in combined,
            "the tolerance comparison is the census policy's own")
-    expect("probe_census.require_acceptable_failures" in source,
+    expect("probe_census.require_acceptable_failures" in combined,
            "and so is X's validation")
+    # Exactly one owner delegates each, so neither can grow a private
+    # second copy beside the other's call.
+    for call in ("probe_census.tolerance_state(",
+                 "probe_census.require_acceptable_failures("):
+        owners = [name for name, source in sources.items() if call in source]
+        expect(len(owners) == 1,
+               f"{call} must have exactly one caller among the two owners, "
+               f"got {owners}")
 
 
 # ==========================================================================
@@ -3632,27 +3662,75 @@ def test_x_arithmetic_is_delegated_rather_than_reimplemented() -> None:
 # to support it: a production hook a test could flip would be a second
 # code path in the thing under test, which is exactly what this suite is
 # for catching.
-def mutant(anchor: str, replacement: str):
-    """`deflake_diagnosis` with one invariant neutralised, as a module.
+# Since #2041 the apparatus these anchors sit in spans TWO source files:
+# `deflake_contract` owns the document rules and `deflake_diagnosis`
+# owns the diagnosis, the apparatus inventory and the compatibility
+# façade. `MUTATION_OWNERS` is that pair, in dependency order.
+MUTATION_OWNERS = (dc, dd)
 
-    The anchor must appear EXACTLY once. A silently-missed replacement
+
+def _rebuilt(module, source: str, contract=None):
+    """`module`'s source, compiled into a throwaway module.
+
+    `contract` substitutes the de-flake contract for the duration of the
+    build, so a rebuilt `deflake_diagnosis` binds the MUTATED contract's
+    objects through its re-export block instead of the ones already
+    imported here.
+    """
+    built = types.ModuleType(
+        f"{module.__name__}_mutant_{abs(hash(source))}")
+    built.__file__ = module.__file__
+    previous = sys.modules.get(dc.__name__)
+    if contract is not None:
+        sys.modules[dc.__name__] = contract
+    try:
+        exec(compile(source, module.__file__, "exec"), built.__dict__)
+    finally:
+        if contract is not None:
+            if previous is None:
+                sys.modules.pop(dc.__name__, None)
+            else:
+                sys.modules[dc.__name__] = previous
+    return built
+
+
+def mutant(anchor: str, replacement: str):
+    """The de-flake apparatus with one invariant neutralised, as a module.
+
+    The anchor must appear EXACTLY once across the two owners — once in
+    one of them and never in the other. A silently-missed replacement
     would produce an unmodified module, whose faithful rejection would
     then read as "the bypass changed nothing" — evidence for the
-    invariant where none was gathered — so a drifted anchor is a loud
-    failure rather than a quiet pass.
+    invariant where none was gathered — so a drifted anchor, or one that
+    the split left in both files, is a loud failure rather than a quiet
+    pass.
+
+    What comes back is always a rebuilt `deflake_diagnosis`, because
+    that is where every entry point the cases drive lives: `evaluate`
+    and `require_handoff`, and `HandoffError`/`RouteRefused` for
+    `_refusal` to catch. When the anchor belongs to the CONTRACT the
+    contract is rebuilt first and the façade is rebuilt AGAINST it —
+    handing back the mutated contract alone would leave `evaluate`
+    closed over the original rules, and every case whose bypass has to
+    reach the evaluator would silently stop gathering evidence.
     """
-    source = Path(dd.__file__).read_text(encoding="utf-8")
-    found = source.count(anchor)
-    if found != 1:
+    sources = {module: Path(module.__file__).read_text(encoding="utf-8")
+               for module in MUTATION_OWNERS}
+    counts = {module: source.count(anchor)
+              for module, source in sources.items()}
+    total = sum(counts.values())
+    if total != 1:
+        tally = ", ".join(f"{module.__name__}: {count}"
+                          for module, count in counts.items())
         raise AssertionError(
-            f"the mutation anchor appears {found} times, not once: "
-            f"{anchor!r}. It has drifted from the module and this case is "
-            f"gathering no evidence.")
-    module = types.ModuleType(f"deflake_diagnosis_mutant_{abs(hash(anchor))}")
-    module.__file__ = dd.__file__
-    exec(compile(source.replace(anchor, replacement), dd.__file__, "exec"),
-         module.__dict__)
-    return module
+            f"the mutation anchor appears {total} times ({tally}), not "
+            f"once: {anchor!r}. It has drifted from the apparatus and this "
+            f"case is gathering no evidence.")
+    owner = next(module for module, count in counts.items() if count == 1)
+    mutated = sources[owner].replace(anchor, replacement)
+    if owner is dd:
+        return _rebuilt(dd, mutated)
+    return _rebuilt(dd, sources[dd], contract=_rebuilt(dc, mutated))
 
 
 def _through_evaluate(module, document):
@@ -4195,6 +4273,438 @@ def test_the_apparatus_inventory_is_what_refuses_a_harness_repair() -> None:
         lambda: diagnosis_document(repair={
             "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
             "changed_paths": ["tools/role_probe.py", "tools/probe_flake.py"]}))
+
+
+def _apparatus_repair(module: str):
+    """A repair touching `module` beside a probe that is fair game."""
+    return lambda: diagnosis_document(repair={
+        "commit_sha": REPAIR_COMMIT, "base_sha": BASE_COMMIT,
+        "changed_paths": ["tools/role_probe.py", module]})
+
+
+def test_the_inventory_protects_the_diagnosis_evaluator_by_name() -> None:
+    """#2041: dropping the evaluator from the inventory is a bypass, not a tidy.
+
+    The exact-tuple pin above already fails if any entry leaves, but it
+    fails as a comparison — "the tuple is not what was written down" —
+    which is equally true of a deliberate, reviewed removal. This case
+    states the CONSEQUENCE instead: with `tools/deflake_diagnosis.py`
+    out of the inventory, a probe-repair branch that rewrote the route
+    evaluator is accepted, and the diagnosis of the very measurement it
+    changed reports nothing about it.
+    """
+    check_mutation(
+        "the evaluator's place in the apparatus inventory",
+        "measurement apparatus",
+        '    "tools/deflake_diagnosis.py",\n',
+        "",
+        _apparatus_repair("tools/deflake_diagnosis.py"))
+
+
+def test_the_inventory_protects_the_document_contract_by_name() -> None:
+    """#2041: extraction must not have widened what a repair may change.
+
+    Before the split these rules were lines inside
+    `tools/deflake_diagnosis.py`, so the inventory covered them by
+    covering that file. Moving them to their own module would silently
+    hand every one of them — the launcher grammar, the topology rules,
+    the retention rules, the identity delegations — to any repair branch
+    that wanted a calmer verification, unless the new file is named too.
+    """
+    check_mutation(
+        "the contract's place in the apparatus inventory",
+        "measurement apparatus",
+        '    "tools/deflake_contract.py",\n',
+        "",
+        _apparatus_repair("tools/deflake_contract.py"))
+
+
+# ==========================================================================
+# #2041: the document contract behind the diagnosis facade
+# ==========================================================================
+#
+# `tools/deflake_contract.py` owns the interchange format and
+# `tools/deflake_diagnosis.py` owns the decision procedure over it. The
+# cases below hold that ownership to three things a green suite would
+# otherwise not establish: that the facade re-exports the contract's own
+# objects rather than copies, that no fact has two definitions, and that
+# the dependency edge runs one way in a real interpreter rather than
+# only in a bytecode compile.
+
+# Every contract-owned name a repository module read through
+# `deflake_diagnosis` before #2041 migrated its consumers. Written out
+# rather than derived, because a derived list is exactly as wrong as the
+# facade when the facade drops one: this is the compatibility promise
+# requirement 3 makes to a caller that has not migrated, and the
+# `/deflake` workflow surface that reads them is not tracked here.
+FACADE_COMPATIBILITY_EXPORTS = (
+    "CONTROLLED_REASONS",
+    "HandoffError",
+    "OUTCOME_SCHEMA",
+    "REASON_VERIFICATION_MISSING_RULE",
+    "REASON_VERIFICATION_OVER_TOLERANCE",
+    "ROUTES",
+    "ROUTE_CANNOT_REPRODUCE",
+    "ROUTE_HANDOFF_REJECTED",
+    "ROUTE_NO_CONFIDENT_FIX",
+    "ROUTE_NO_TARGET",
+    "ROUTE_OWNER",
+    "ROUTE_PARTIAL_IMPROVEMENT",
+    "ROUTE_PRODUCTION_DEFECT",
+    "ROUTE_REASONS",
+    "ROUTE_REPAIR",
+    "inside_any_worktree",
+    "missing_problems",
+    "non_pass_ids",
+    "primary_checkout",
+    "require_descriptor",
+    "require_manifest",
+    "require_path",
+    "require_result",
+    "worktree_paths",
+)
+
+
+# The modules that read the contract directly. `deflake_outcome` and
+# `deflake_issue` are requirement 4's two; the `deflake_handoff*` family
+# and `deflake_issue_record` arrived after #2041 was written and read
+# the same contract-owned names, so they migrated with them.
+CONTRACT_CONSUMERS = (
+    "deflake_outcome.py",
+    "deflake_issue.py",
+    "deflake_issue_record.py",
+    "deflake_handoff_grammar.py",
+    "deflake_handoff_measurement.py",
+    "deflake_handoff_producer.py",
+)
+
+
+def _top_level_definitions(source: str) -> dict:
+    """Every name a module source binds at module level, to its node."""
+    defined = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defined[node.name] = node
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined[target.id] = node
+    return defined
+
+
+def test_the_diagnosis_facade_binds_the_contracts_own_objects() -> None:
+    """#2041: the facade re-exports; it does not redefine.
+
+    A facade that declared its own `class HandoffError(Exception)`
+    beside the contract's would compile, satisfy an attribute-presence
+    check, and silently stop catching what the contract raises — and
+    `deflake_outcome` catches that exception in four places. So identity
+    is the assertion, for every compatibility export and not only the
+    two exceptions: a copied constant is a second definition free to
+    drift, and a copied validator is a second rule.
+    """
+    for name in FACADE_COMPATIBILITY_EXPORTS:
+        expect(hasattr(dd, name),
+               f"deflake_diagnosis.{name} was consumed before #2041 and the "
+               f"facade must still export it")
+        expect(hasattr(dc, name),
+               f"{name} is a contract-owned name; deflake_contract must "
+               f"define it")
+        expect(getattr(dd, name) is getattr(dc, name),
+               f"deflake_diagnosis.{name} must BE deflake_contract.{name}, "
+               f"not a copy")
+
+    # The whole re-export block, not only the names above: the evaluator
+    # reads most of it too, and a copy anywhere in it is the same defect.
+    facade = _top_level_definitions(
+        Path(dd.__file__).read_text(encoding="utf-8"))
+    contract = _top_level_definitions(
+        Path(dc.__file__).read_text(encoding="utf-8"))
+    for name, node in sorted(facade.items()):
+        if name not in contract:
+            continue
+        expect(isinstance(node, ast.Assign),
+               f"the facade defines {name} with a "
+               f"{type(node).__name__}; it belongs to deflake_contract and "
+               f"a second definition is free to drift from it")
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        expect(isinstance(value, ast.Attribute)
+               and isinstance(value.value, ast.Name)
+               and value.value.id == "_contract"
+               and value.attr == name,
+               f"the facade binds {name} to something other than "
+               f"`_contract.{name}`, so it is not the contract's own object")
+        expect(getattr(dd, name) is getattr(dc, name),
+               f"deflake_diagnosis.{name} is not deflake_contract.{name}")
+
+
+def test_the_diagnosis_evaluator_keeps_only_the_diagnosis() -> None:
+    """#2041: the split has a stated boundary, and it is asserted here.
+
+    Named rather than inferred from file positions, because the previous
+    boundary WAS a file position and it did not survive contact: the
+    section marker the extraction started from sat below four symbols
+    `require_result` and `require_handoff` call, which had to come with
+    them or the contract would import the evaluator.
+    """
+    facade = _top_level_definitions(
+        Path(dd.__file__).read_text(encoding="utf-8"))
+    contract = _top_level_definitions(
+        Path(dc.__file__).read_text(encoding="utf-8"))
+    for name in ("HARNESS_MODULES", "CAUSE_CATEGORIES", "ATTESTATIONS",
+                 "EXIT_OK", "EXIT_REJECTED", "EXIT_REFUSED", "Outcome",
+                 "Diagnosis", "evaluate", "declared_worktrees",
+                 "resource_hold_problems", "_require_batch",
+                 "_require_evidence", "_require_repair", "main"):
+        expect(name in facade,
+               f"{name} is the diagnosis evaluator's; it must stay in "
+               f"deflake_diagnosis.py")
+        expect(name not in contract,
+               f"deflake_contract defines {name}, which is diagnosis "
+               f"semantics rather than the document contract")
+    for name in ("require_handoff", "require_result", "require_manifest",
+                 "require_topology", "result_paths", "_check_paths",
+                 "_require_canonical", "require_path", "parse_command",
+                 "Launcher", "LAUNCHERS", "HandoffError", "RouteRefused",
+                 "ROUTE_OWNER", "ROUTE_REASONS", "HANDOFF_SCHEMA"):
+        expect(name in contract,
+               f"{name} is document-contract work; deflake_contract must "
+               f"own it")
+
+
+def test_each_contract_fact_has_exactly_one_definition() -> None:
+    """#2041: requirement 6 — no fact is spelled twice across the family.
+
+    A route table, a schema string, a launcher definition or a
+    validation regex copied into a consumer is the drift the extraction
+    exists to remove: the copy keeps working, keeps passing, and answers
+    differently the day the owner changes.
+
+    A shared NAME is not the defect — `deflake_handoff_grammar` owns a
+    `HANDOFF_SCHEMA` of its own, and it is a different envelope
+    (`deflake-outcome-handoff/v1`, not `deflake-handoff/v1`). What is
+    forbidden is a second definition holding the CONTRACT'S value, so
+    each module's actual object is compared to the contract's and a
+    module that re-binds the contract's own object is exactly what
+    passes.
+    """
+    owned = _top_level_definitions(
+        Path(dc.__file__).read_text(encoding="utf-8"))
+    facts = sorted(
+        name for name in owned
+        if name.startswith(("ROUTE", "REASON", "LAUNCHER", "INTERPRETER",
+                            "INVOCATION", "HARNESS_", "DESTINATION_OPTIONS",
+                            "REQUIRED_OPTIONS", "POSITIVE_OPTIONS",
+                            "DEFLAKE_LAUNCHER", "CONTROLLED_REASONS",
+                            "SHA256_RE", "CONFIG_GLOB"))
+        or name.endswith("_SCHEMA"))
+    expect(len(facts) > 30,
+           f"the fact families should cover the vocabulary, matched "
+           f"{len(facts)}")
+    family = ["deflake_diagnosis"] + [name[:-len(".py")]
+                                      for name in CONTRACT_CONSUMERS]
+    for name in family:
+        module = importlib.import_module(name)
+        defined = _top_level_definitions(
+            Path(module.__file__).read_text(encoding="utf-8"))
+        for fact in facts:
+            if fact not in defined:
+                continue
+            theirs = getattr(module, fact, None)
+            ours = getattr(dc, fact)
+            if theirs is ours:
+                continue
+            expect(theirs != ours,
+                   f"{name}.{fact} holds deflake_contract's own value under "
+                   f"a separate definition; the contract owns that fact and "
+                   f"a copy is free to drift from it")
+
+
+def test_every_consumer_reads_the_contract_not_the_evaluator() -> None:
+    """#2041 requirement 4: consumers import the owner, not the facade.
+
+    Reaching a document rule through `deflake_diagnosis` still WORKS —
+    that is what the compatibility block is for — so nothing fails when
+    a consumer keeps doing it, and the dependency on a module holding
+    the route decision, the evidence requirements and a CLI stays
+    invisible. This is the assertion that makes it visible.
+    """
+    directory = Path(dc.__file__).resolve().parent
+    for name in CONTRACT_CONSUMERS:
+        source = (directory / name).read_text(encoding="utf-8")
+        imported = set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Import):
+                imported |= {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module or "")
+            elif (isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Name)
+                  and node.func.id == "_sibling"
+                  and node.args
+                  and isinstance(node.args[0], ast.Constant)):
+                imported.add(node.args[0].value)
+        expect("deflake_contract" in imported,
+               f"{name} reads contract-owned names but does not import "
+               f"deflake_contract")
+        expect("deflake_diagnosis" not in imported,
+               f"{name} still imports deflake_diagnosis; every name it "
+               f"reads belongs to deflake_contract")
+        for node in ast.walk(ast.parse(source)):
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == "deflake_diagnosis"):
+                expect(False,
+                       f"{name} reads deflake_diagnosis.{node.attr}; the "
+                       f"contract module is that name's owner")
+
+
+def test_the_contract_imports_neither_evaluator_nor_consumer() -> None:
+    """#2041 requirement 7: the dependency edge runs one way.
+
+    A contract that imported the evaluator would need the decision
+    procedure in order to describe the format, and the two would be one
+    module again with an import statement between them. Asserted on the
+    contract's own source, including under `TYPE_CHECKING`: a guarded
+    back-edge is still a statement that the format depends on the
+    procedure, and a later annotation evaluation would make it a runtime
+    one.
+    """
+    tree = ast.parse(Path(dc.__file__).read_text(encoding="utf-8"))
+    forbidden = {"deflake_diagnosis", "deflake_outcome", "deflake_issue",
+                 "deflake_handoff"}
+    for node in ast.walk(tree):
+        names = set()
+        if isinstance(node, ast.Import):
+            names = {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            names = {node.module or ""}
+        for name in sorted(names & forbidden):
+            expect(False,
+                   f"deflake_contract imports {name}; the document contract "
+                   f"depends on neither the evaluator nor a consumer")
+
+
+def test_the_contract_family_imports_in_a_fresh_interpreter() -> None:
+    """#2041: a compile is not an import, so this actually imports them.
+
+    `py_compile` turns source into bytecode without executing it, so a
+    circular import between the contract, the facade and the two
+    consumers compiles perfectly and is discovered by the first caller
+    at run time. Each spelling is exercised in its OWN interpreter,
+    contract-first and facade-first, because an order that happens to
+    work says nothing about the other one.
+    """
+    root = Path(dc.__file__).resolve().parent.parent
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    orders = {
+        "contract first": ["deflake_contract", "deflake_diagnosis",
+                           "deflake_outcome", "deflake_issue"],
+        "facade first": ["deflake_diagnosis", "deflake_contract",
+                         "deflake_outcome", "deflake_issue"],
+        "consumer first": ["deflake_outcome", "deflake_issue",
+                           "deflake_contract", "deflake_diagnosis"],
+    }
+    for label, order in orders.items():
+        program = "import sys\nsys.path.insert(0, 'tools')\n" + "\n".join(
+            f"import {name}" for name in order)
+        done = subprocess.run([sys.executable, "-c", program], cwd=str(root),
+                              capture_output=True, text=True, timeout=120,
+                              env=environment)
+        expect(done.returncode == 0,
+               f"importing the family {label} must succeed; exited "
+               f"{done.returncode}\n{done.stderr[-400:]}")
+
+
+def test_the_contract_is_one_module_under_either_spelling() -> None:
+    """#2041: `tools.deflake_contract` and the bare name must be one module.
+
+    `tools/` is an implicit namespace package, so a facade loaded as
+    `tools.deflake_diagnosis` that resolved its contract by BARE name
+    would bind a second copy of every rule. Nothing would look wrong:
+    both modules import, both define `HandoffError`, and
+    `except tools.deflake_diagnosis.HandoffError` simply stops catching
+    what `tools.deflake_contract` raises — which is the one guarantee
+    the re-export block exists to make.
+
+    Asserted in one fresh interpreter per spelling, because that is the
+    only place the defect exists; every other case here runs under the
+    bare spelling, where a bare-name resolution looks correct.
+    """
+    root = Path(dc.__file__).resolve().parent.parent
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    programs = {
+        "the tools. spelling": """
+import sys
+import tools.deflake_contract as contract
+import tools.deflake_diagnosis as facade
+assert facade.HandoffError is contract.HandoffError, "HandoffError"
+assert facade.RouteRefused is contract.RouteRefused, "RouteRefused"
+assert facade.require_handoff is contract.require_handoff, "require_handoff"
+assert facade.ROUTE_OWNER is contract.ROUTE_OWNER, "ROUTE_OWNER"
+stray = sorted(name for name in sys.modules
+               if name == "deflake_contract")
+assert not stray, f"a bare copy loaded beside the package one: {stray}"
+""",
+        "the bare spelling": """
+import sys
+sys.path.insert(0, "tools")
+import deflake_contract as contract
+import deflake_diagnosis as facade
+assert facade.HandoffError is contract.HandoffError, "HandoffError"
+assert facade.require_result is contract.require_result, "require_result"
+stray = sorted(name for name in sys.modules
+               if name == "tools.deflake_contract")
+assert not stray, f"a package copy loaded beside the bare one: {stray}"
+""",
+    }
+    for label, program in programs.items():
+        done = subprocess.run([sys.executable, "-c", program], cwd=str(root),
+                              capture_output=True, text=True, timeout=120,
+                              env=environment)
+        expect(done.returncode == 0,
+               f"under {label} the contract and its facade must be ONE "
+               f"module; exited {done.returncode}\n{done.stderr[-400:]}")
+
+
+def test_the_diagnosis_cli_still_answers_as_a_subprocess() -> None:
+    """#2041: the extraction moved code out from under a shipped command.
+
+    Every other case here drives imported functions, which a facade can
+    satisfy while the script itself no longer runs — a split that left
+    the CLI reaching for a name it no longer defines fails only when
+    something executes the file. Both routes are exercised as the
+    command a caller types, and the exit statuses are the contract.
+    """
+    root = Path(dc.__file__).resolve().parent.parent
+    manifest = subprocess.run(
+        [sys.executable, "tools/deflake_diagnosis.py", "--manifest",
+         str(root)],
+        cwd=str(root), capture_output=True, text=True, timeout=120)
+    expect(manifest.returncode == dd.EXIT_OK,
+           f"`--manifest` must exit {dd.EXIT_OK}, got "
+           f"{manifest.returncode}\n{manifest.stderr[-400:]}")
+    document = json.loads(manifest.stdout)
+    expect(document.get("schema") == dc.MANIFEST_SCHEMA,
+           f"`--manifest` must print a {dc.MANIFEST_SCHEMA!r} document, got "
+           f"{document.get('schema')!r}")
+
+    with tempfile.TemporaryDirectory() as directory:
+        malformed = Path(directory) / "diagnosis.json"
+        malformed.write_text(json.dumps({"schema": "not-a-diagnosis"}),
+                             encoding="utf-8")
+        refused = subprocess.run(
+            [sys.executable, "tools/deflake_diagnosis.py", "--diagnosis",
+             str(malformed)],
+            cwd=str(root), capture_output=True, text=True, timeout=120)
+        expect(refused.returncode == dd.EXIT_REJECTED,
+               f"a malformed diagnosis must exit {dd.EXIT_REJECTED}, got "
+               f"{refused.returncode}\n{refused.stdout[-200:]}"
+               f"{refused.stderr[-200:]}")
 
 
 def _collect() -> tuple:

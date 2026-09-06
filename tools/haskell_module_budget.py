@@ -49,10 +49,8 @@ def check(repo_root: Path = REPO_ROOT,
             continue
         for path in sorted(matched):
             n = sum(1 for _ in path.open("r", encoding="utf-8"))
-            rel = path.relative_to(repo_root)
-            status = "OK" if n <= budget else "FAIL"
-            print(f"  {status}: {rel} -- {n}/{budget} lines")
             if n > budget:
+                rel = path.relative_to(repo_root)
                 failures.append(
                     f"{rel} is {n} lines, over the {budget}-line budget "
                     f"for {label}")
@@ -62,11 +60,11 @@ def check(repo_root: Path = REPO_ROOT,
 def main() -> int:
     failures = check()
     if failures:
-        print(f"\n{len(failures)} budget violation(s):")
+        print(f"{len(failures)} budget violation(s):")
         for f in failures:
             print(f"  {f}")
         return 1
-    print("\nAll budgeted Haskell modules are within their line budget")
+    print("All budgeted Haskell modules are within their line budget")
     return 0
 
 

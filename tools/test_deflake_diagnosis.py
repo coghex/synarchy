@@ -36,7 +36,9 @@ they belong to, each of which derives its own registry into `TESTS`:
 
   `deflake_diagnosis_selftest_diagnosis`
       the entry gate, the routes and the diagnosis CLI, for
-      `tools/deflake_diagnosis.py`;
+      `tools/deflake_diagnosis.py` — and #2041's contract-vs-facade
+      cases for `tools/deflake_contract.py`, which the pre-split file
+      appended below #1438's section but which are this evaluator's;
   `deflake_diagnosis_selftest_outcome`
       the stable non-success outcome record, for
       `tools/deflake_outcome.py`;
@@ -109,13 +111,13 @@ OWNERS = {
 #: these numbers only refuse a run whose collection has drifted from
 #: what the gate is known to hold. Adding or removing a case is a
 #: deliberate edit here.
-EXPECTED_TESTS = {"diagnosis": 185, "outcome": 36, "issue": 34}
+EXPECTED_TESTS = {"diagnosis": 195, "outcome": 36, "issue": 34}
 
 #: Spelled independently of the allocation above rather than derived
 #: from it, so an edit that MOVES a case between owners — or that
 #: adjusts one owner's number to absorb a case another owner lost —
 #: still has to state the new total out loud.
-EXPECTED_TOTAL = 255
+EXPECTED_TOTAL = 265
 
 
 class CompositionError(Exception):
