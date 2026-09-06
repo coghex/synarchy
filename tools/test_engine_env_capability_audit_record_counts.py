@@ -674,6 +674,44 @@ def test_record_counts_delimiter_width_mismatch_real_rejected():
            "rejected")
 
 
+def test_marked_span_body_in_a_fence_rejected():
+    """Round 9's finding, on the shared helper. Checking only the
+    OPENING marker's context left a fence opened immediately after it
+    and closed immediately before the closing marker: both markers sit
+    in ordinary prose while the whole governed paragraph renders as an
+    example. Proven on §1, whose body is prose -- §2.1's own
+    block-content rule already refuses a non-table line, so §1 is where
+    this escape was live."""
+    live = extract_record_fields(real_engine_env_source(),
+                                 ENGINE_ENV_PATTERN)
+    document = real_inventory_text()
+    fenced = document.replace(
+        FIELD_TOTAL_OPEN, FIELD_TOTAL_OPEN + "\n~~~markdown", 1)
+    fenced = fenced.replace(
+        FIELD_TOTAL_CLOSE, "~~~\n" + FIELD_TOTAL_CLOSE, 1)
+    expect(fenced != document, "the fixture must change the real document")
+    expect(audit_field_total(live, document) == [],
+           "the unfenced real §1 block must still pass")
+    expect(any("fenced code block" in v
+               for v in audit_field_total(live, fenced)),
+           "fencing the real §1 block's BODY must be rejected, not just "
+           "fencing its markers")
+
+
+def test_marked_span_body_in_a_fence_rejected_for_the_record_table():
+    """The same escape on §2.1, where two rules now refuse it."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    fenced = document.replace(
+        RECORD_COUNTS_OPEN, RECORD_COUNTS_OPEN + "\n~~~markdown", 1)
+    fenced = fenced.replace(
+        RECORD_COUNTS_CLOSE, "~~~\n" + RECORD_COUNTS_CLOSE, 1)
+    expect(fenced != document, "the fixture must change the real document")
+    expect(any("fenced code block" in v
+               for v in audit_record_counts(sources, fenced)),
+           "fencing the real §2.1 table's body must be rejected")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -894,6 +932,8 @@ TESTS = (
     test_record_counts_delimiter_width_mismatch_real_rejected,
     test_record_counts_fenced_real_block_rejected,
     test_field_total_block_in_a_fence_is_also_rejected,
+    test_marked_span_body_in_a_fence_rejected,
+    test_marked_span_body_in_a_fence_rejected_for_the_record_table,
     test_record_counts_indented_table_rejected,
     test_record_counts_blockquoted_table_rejected,
     test_record_counts_indented_real_table_rejected,

@@ -174,7 +174,11 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
     as the malformed markup it is rather than silently matching some
     other pair's text.
 
-    A pair inside a fenced code block is REPORTED and not returned.
+    A pair whose markers OR BODY lie in a verbatim region is REPORTED
+    and not returned. Checking only the opening marker was not enough:
+    a fence opened immediately after it and closed immediately before
+    the closing marker turns the whole governed paragraph into a
+    rendered example while both markers sit in ordinary prose.
     Fenced content renders as an example rather than as the document's
     own prose, so a governed block moved into a fence would leave the
     real text ungoverned while every rule that reads the returned span
@@ -210,14 +214,20 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
                 f"offset {nested} before the first closes) -- the "
                 f"governed prose must be one flat block")
         cursor = end + len(close_marker)
-        line = text.count("\n", 0, start)
-        if line < len(fenced) and fenced[line]:
+        first = text.count("\n", 0, start)
+        last = text.count("\n", 0, cursor)
+        verbatim = [index for index in range(first, min(last + 1, len(fenced)))
+                    if fenced[index]]
+        if verbatim:
+            where = ("is itself inside" if verbatim[0] == first
+                     else "encloses")
             violations.append(
                 f"`{open_marker}` at offset {start} in "
-                f"docs/{INVENTORY_PATH.name} is inside a fenced code "
-                f"block -- fenced content is a rendered EXAMPLE, not the "
-                f"governed prose, so a pair moved there governs nothing "
-                f"while the real text goes unchecked")
+                f"docs/{INVENTORY_PATH.name} {where} a fenced code block "
+                f"or raw-HTML block (line {verbatim[0] + 1}) -- such "
+                f"content is a rendered EXAMPLE, not the document's own "
+                f"prose, so the governed text is displayed to nobody "
+                f"while every rule that reads this span still passes")
             continue
         spans.append(MarkedSpan(text[body_start:end], start, cursor))
     return spans, violations
