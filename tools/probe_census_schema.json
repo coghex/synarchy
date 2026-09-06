@@ -322,7 +322,7 @@
                    "production-defect"]
         },
         "reason": {
-          "$comment": "WHY #1437 took the route this outcome answers, in its own machine-readable vocabulary (deflake_diagnosis.REASONS). `outcome` says what was concluded; this says what the invocation actually established. A `cannot-reproduce` whose condition could not be recreated carries no de-list recommendation precisely because of this field. Deliberately NOT enumerated here: the vocabulary is tools/deflake_diagnosis.py's and grows with its routes, and a second copy in a data file would be the one that went stale.",
+          "$comment": "WHY #1437 took the route this outcome answers, in its own machine-readable vocabulary (deflake_contract.REASONS). `outcome` says what was concluded; this says what the invocation actually established. A `cannot-reproduce` whose condition could not be recreated carries no de-list recommendation precisely because of this field. Deliberately NOT enumerated here: the vocabulary is tools/deflake_contract.py's and grows with its routes, and a second copy in a data file would be the one that went stale.",
           "type": "string", "minLength": 1, "maxLength": 128
         },
         "probe": {
@@ -376,7 +376,7 @@
     },
 
     "outcome_issue": {
-      "$comment": "Exactly what deflake_issue.require_issue_identity() stores: the tracker issue this attempt was filed as, the STABLE publication key it was filed under, and the issue-origin brand the canonical review gate routes on. The key is what a resume reconciles against the tracker, so an issue created before a crash is reused rather than duplicated; it is DERIVED from the handoff, never supplied by a caller. `origin` IS enumerated here, unlike the sibling `reason` field: that vocabulary is tools/deflake_diagnosis.py's and grows with its routes, while this one is the closed pair approve_issues.py's own ORIGIN_RE matches, and tools/test_deflake_diagnosis.py holds the two spellings to each other.",
+      "$comment": "Exactly what deflake_issue.require_issue_identity() stores: the tracker issue this attempt was filed as, the STABLE publication key it was filed under, and the issue-origin brand the canonical review gate routes on. The key is what a resume reconciles against the tracker, so an issue created before a crash is reused rather than duplicated; it is DERIVED from the handoff, never supplied by a caller. `origin` IS enumerated here, unlike the sibling `reason` field: that vocabulary is tools/deflake_contract.py's and grows with its routes, while this one is the closed pair approve_issues.py's own ORIGIN_RE matches, and tools/test_deflake_diagnosis.py holds the two spellings to each other.",
       "type": "object",
       "required": ["number", "url", "publication_key", "origin"],
       "additionalProperties": false,

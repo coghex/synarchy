@@ -595,7 +595,8 @@ python3 tools/world_check.py --quick
 # this list as well, and from the CI job it mirrors: that issue's
 # approved rereview amendment scopes the diagnosis lab's own self-test
 # to manual invocation. It is engine-free and takes seconds -- run it by
-# hand when touching tools/deflake_diagnosis.py.
+# hand when touching tools/deflake_diagnosis.py or the document contract
+# it was split from in tools/deflake_contract.py (#2041).
 step "probe runner self-tests"
 python3 tools/ci_probes.py --self-test
 python3 tools/ci_expensive_gates.py --self-test
