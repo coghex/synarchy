@@ -132,8 +132,6 @@ data LogConfig = LogConfig
   , lcCategoryLevels   ∷ Map.Map LogCategory LogLevel
   , lcDebugCategories  ∷ [LogCategory]  -- ^ Categories enabled for debug by default
   , lcEnableByDefault  ∷ Bool
-  , lcShowThreadId     ∷ Bool
-  , lcShowTimestamp    ∷ Bool
   , lcShowLocation     ∷ Bool  -- ^ Show source location (file:line)?
   } deriving (Show)
 
@@ -144,7 +142,5 @@ defaultLogConfig = LogConfig
   , lcCategoryLevels = Map.empty  -- Use global minimum by default
   , lcDebugCategories = []  -- No debug categories enabled by default
   , lcEnableByDefault = True
-  , lcShowThreadId = True
-  , lcShowTimestamp = True
   , lcShowLocation = True
   }
