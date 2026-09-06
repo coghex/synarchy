@@ -22,14 +22,15 @@ the contention is real and the count of winners is the assertion.
 Composition (#2100)
 -------------------
 This module is composition and selection only -- it holds no case body.
-The 29 cases live with three independently changing contract owners,
+The 30 cases live with three independently changing contract owners,
 each of which keeps its own inventory in `CASES`:
 
   `probe_claim_selftest_claim`          the atomic claim and lease
                                         lifecycle (12 cases);
   `probe_claim_selftest_census`         the census collection, its
                                         schema, and the collaborator
-                                        boundaries (4 cases);
+                                        and structural boundaries
+                                        (5 cases);
   `probe_claim_selftest_orchestration`  the claimed measurement, its
                                         retained result and the CLI
                                         (13 cases).
@@ -43,7 +44,7 @@ subprocess programs the concurrency cases race.
 `AGGREGATE_ORDER` below is the run sequence this gate has always used.
 It is deliberately spelled out rather than derived by concatenating the
 three inventories, because it interleaves them: three census cases run
-early and the fourth runs second-to-last, and two orchestration cases
+early and the other two run near the end, and two orchestration cases
 run out of their own source order.
 
 Two checks run before any case does, on every invocation including a
@@ -118,6 +119,7 @@ AGGREGATE_ORDER = (
     ("orchestration", "test_commit_while_held_renews_and_refuses"),
     ("orchestration", "test_a_completed_measurement_is_never_lost"),
     ("census", "test_probe_flake_needs_no_docs_worktree"),
+    ("census", "test_owner_direction_and_command_seams"),
     ("orchestration", "test_cli"),
 )
 
