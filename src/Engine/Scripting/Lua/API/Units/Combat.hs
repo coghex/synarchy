@@ -68,11 +68,85 @@ unitGetWoundSeverityOnFn env = do
                 Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
 
--- | unit.getWounds(uid) → array of { part, kind, severity, at } | nil
+-- | unit.getWounds(uid) → array of wound tables | nil
 --
 --   Newest-first. Sub-cleanup-threshold wounds are removed by the
 --   per-tick wound subsystem so this only returns currently-active
 --   wounds. Returns nil if unit doesn't exist.
+--
+--   Every returned wound carries EXACTLY the following 19 keys, and it
+--   carries all of them unconditionally: nothing is omitted for a wound
+--   with no dressing or no infection, and nothing extra is ever added.
+--   This list is the COMPLETE set.
+--
+--     * @part@ (string) — body-part id the wound sits on (a
+--       'Unit.Types.BodyPart' @bpId@ of the unit's def).
+--     * @macro@ (string) — nearest TARGETABLE ancestor of @part@: the
+--       limb the combat log names, so Lua can roll a subpart wound up
+--       without walking the body tree. Equals @part@ when @part@ is
+--       itself targetable or is not a part of this unit's def; falls
+--       back to the highest ancestor reached when no ancestor is
+--       targetable.
+--     * @vital@ (boolean) — whether @part@ itself is a vital organ
+--       (NOT @macro@). False for a part not in this unit's def.
+--     * @kind@ (string) — "slash" / "stab" / "blunt" / ….
+--     * @severity@ (number) — ACUTE severity; see the three severities
+--       below.
+--     * @severityEffective@ (number) — engine-effective severity; see
+--       below.
+--     * @severityInflicted@ (number) — the severity originally
+--       inflicted, 0..1, static for the wound's lifetime.
+--     * @heal@ (number) — healing progress; 1 = mended, 0 = fresh. This
+--       is NOT a 0..1 fraction: a festering wound drives it NEGATIVE
+--       (worsening past the inflicted value), floored at
+--       Combat.Wounds.Infection.woundHealFloor, currently −0.5.
+--     * @at@ (number) — gameTime, in seconds, when the wound was
+--       inflicted.
+--     * @bandage@ (number) — the fraction of this wound's natural bleed
+--       that still seeps after first aid: 1.0 untreated, lower once
+--       dressed, 0.0 fully stopped.
+--     * @clot@ (number) — clotting progress 0..1; the per-wound bleed
+--       scales by (1 − clot), so 1.0 means the bleed has stopped.
+--     * @dressing@ (string) — "" (none) / "bandage" / "tourniquet".
+--       Record only; @bandage@ is what scales the bleed.
+--     * @infection@ (number) — infection level 0..1, driving the sepsis
+--       meter; antibiotics cure it.
+--     * @clean@ (boolean) — disinfected; a clean wound never
+--       accumulates @infection@.
+--     * @infectionType@ (string) — the 'Infection.Types.InfectionDef'
+--       id that took hold ("staph", …), or "" before any has.
+--     * @infectionName@ (string) — that def's display name, resolved
+--       from the catalogue. "" when @infectionType@ is "" OR names no
+--       catalogue entry.
+--     * @infectionIcon@ (string) — that def's icon basename, same ""
+--       rule as @infectionName@.
+--     * @infectionCategory@ (string) — that def's category
+--       ("bacterial" / "parasitic" / …), same "" rule.
+--     * @necrosis@ (number) — dead tissue 0..1 from a necrotic
+--       infection; permanent, and drives the gangrene death cause.
+--
+--   THREE SEVERITIES, and reading the wrong one changes behavior:
+--
+--     * @severity@ is the ACUTE/mechanical trauma,
+--       @severityInflicted × (1 − heal)@. It deliberately EXCLUDES the
+--       necrosis floor, because rot is a separate failure mode with its
+--       own death path, reported separately as @necrosis@. Read this
+--       for acute-trauma consumers (the suffocation / neuro / shock /
+--       visceral organ-failure meters), so a rotting wound does not
+--       spuriously drive an acute meter.
+--     * @severityEffective@ is 'Unit.Types.woundEffSeverity',
+--       @max(acute, necrosis)@ — it INCLUDES the necrosis floor and is
+--       the SAME value the Haskell bleed / pain / impairment paths
+--       (bleedRateFor, painFor, injurySpeedMult, …) use. Read this for
+--       anything that must stay in lockstep with engine behavior
+--       (locomotion limp/crawl, injured-anim, bleeding badge), so a
+--       healed-but-necrotic wound still impairs.
+--     * @severityInflicted@ is the original inflicted value, untouched
+--       by healing or rot.
+--
+--   The key set above is locked by the headless spec @Unit.WoundsApi@
+--   (@test-headless/Test/Headless/Unit/WoundsApi.hs@): adding,
+--   removing, renaming or retyping a key fails it.
 unitGetWoundsFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitGetWoundsFn env = do
     idArg ← Lua.tointeger 1
