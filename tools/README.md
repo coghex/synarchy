@@ -3563,7 +3563,8 @@ probe and cache sections marked unavailable and the batch continues.
 run with no probe job, a cancelled run with no log, and a runner killed
 mid-attempt), cross-checks the estimator, round-trips the probe-attempt
 identity against `probe_runner_diagnostics.attempt_identity`, and
-statically verifies the three `--print-slow-items=20` command sites below.
+statically verifies the three headless `--test-options` command sites
+below.
 
 Layers: `tools/ci_timing_model.py` (every pure rule — timestamp endpoints,
 log framing, probe/cache diagnostics, the estimator, the aggregates),
@@ -3571,29 +3572,56 @@ log framing, probe/cache diagnostics, the estimator, the aggregates),
 `tools/test_ci_timing_report.py` (every check, reached through
 `--self-test`).
 
-### The headless suite's slowest-examples list (#2277)
+### The headless suite's CI test options (#2277, #1916)
 
 Both of `.github/workflows/ci.yml`'s conditional headless invocations and
-`tools/ci-local.sh`'s full-tier one pass Hspec's `--print-slow-items=20`
-through cabal's `--test-options`:
+`tools/ci-local.sh`'s full-tier one pass the same two Hspec flags through
+cabal's `--test-options`:
 
 ```bash
-cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
+cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
 ```
 
-`--print-slow-items` is **Hspec's** flag, not cabal's, so `--test-options`
-is the only way it reaches the runner. Every one of those steps' logs
-therefore ends with the twenty slowest spec items and their durations,
-just before cabal's own footer — which is what names the handful of world
-generations that account for about four of the headless suite's five
-minutes, without diffing log timestamps by hand. Default per-example
-output is otherwise unchanged, and no threshold here fails a run.
+Both are **Hspec's** flags, not cabal's, so `--test-options` is the only
+way either reaches the runner.
+
+`--print-slow-items=20` (#2277) ends every one of those steps' logs with
+the twenty slowest spec items and their durations, just before cabal's
+own footer — which is what names the handful of world generations that
+account for about four of the headless suite's five minutes, without
+diffing log timestamps by hand. It is a diagnostic: no threshold here
+fails a run. Hspec applies it around whichever formatter is selected, so
+it is unaffected by the flag below.
+
+`--format=failed-examples` (#1916) replaces Hspec's default `specdoc`
+formatter, which prints a description for every example that PASSES —
+over five thousand of them under `test-headless/`, all forwarded into the
+job log by `--test-show-details=direct`. `failed-examples` prints nothing
+per example, neither a description nor a progress mark, so a passing
+run's formatter output is bounded by a constant instead of by the example
+count. It costs no failure detail: a failing run still prints the full
+`Failures:` block — each failing example's `describe`/`it` path, source
+location and expectation diff — plus the seed, and both runs still end
+with `Finished in …` and `N examples, M failures`, which is what keeps a
+passing run distinguishable from one that executed nothing.
+`--test-show-details=direct` is retained at every site precisely so that
+footer reaches the log.
+
+The formatter is selected on the two CI **command lines** and nowhere
+else. Neither `test-headless/Spec.hs` (which still calls plain `hspec`)
+nor a repo-root `.hspec` (which does not exist) selects one, so a
+developer running `cabal test synarchy-test-headless --test-options='--match "…"'`
+still gets the default per-example output.
 
 `ci_parity_audit.py` cannot police these three sites: it compares
 `python3 tools/*.py` commands and deliberately ignores every `cabal test`
-line. `test_ci_timing_report.py`'s `slow-items wiring` check does, reading
-all three statically — a PR's own CI run executes only ONE of the
-workflow's two conditional branches.
+line. `test_ci_timing_report.py`'s `headless test-options wiring` check
+does, reading all three statically — a PR's own CI run executes only ONE
+of the workflow's two conditional branches — and reads them against one shared
+constant, so a site left on the default formatter fails the check rather
+than quietly emitting five thousand success lines on half the runs. The
+same check asserts that no `.hspec` file and no `Spec.hs` formatter
+selection has appeared to leak the compact presentation into local runs.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 
