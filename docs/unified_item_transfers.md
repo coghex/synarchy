@@ -71,51 +71,117 @@ C5→UIT-5A/5B, D1→UIT-6.
 
 ## Current state and evidence
 
-The foundations landed; the interaction layer did not, and was never filed.
+**The arc is complete.** All 17 children of epic [#1013] are closed: the five
+foundations (#1000, #1014, #1085, #1087, #1088) and the twelve UIT delivery
+slices the processing ledger above records, closing with the end-to-end gate
+[#1255]. `docs/epic_review_1013.md` reviewed the delivered arc at
+`master@a7b296ea4` and found the transfer policy, both player modes,
+persistence, container knowledge, the nested window stack, and the integrated
+gate composing as intended on the covered acolyte/technomule paths.
 
-- **A1 (#1000, closed)** established the queued transaction foundation: the
-  `TransferScene` projection, create-time and commit-time revalidation, the
-  structured `TransferReason` vocabulary, order-preserving rollback via
-  `tpIndex`, the recursive `itemTotalWeight` capacity measure, and the
-  footprint-aware Chebyshev ≤ 1 proximity rule.
-- **A2 (#1085, closed)** applied all five of its planned corrections to A1,
-  verified at HEAD: `trSource ∷ TransferEndpoint` gives both ends one endpoint
-  type (`src/Unit/Transfer.hs:158`); `trQuantity` is gone entirely, replaced by
-  instance sets; the `transfer_receiver` data marker is deleted and eligibility
-  is `faction.isPlayerCommandable`; `TransferBatch` (`:301`) carries a
-  partial-batch outcome; and the endpoint-info verb was both enriched **and
-  renamed** — it is now `unit.transferEndpointInfo`
-  (`Engine/Scripting/Lua/API/Register/Unit.hs:73`), not
-  `unit.transferReceiverInfo`.
-- **A3 (#1087, closed)** added the player-global stale container-knowledge layer
-  as the first OPTIONAL save component, `container-knowledge`, keyed by
-  `BuildingId` (`World/Save/Component/Knowledge.hs`). An absent payload reads as
-  never-inspected, never as known-empty.
-- **C0 (#1088, closed)** extracted `scripts/ui/item_list.lua` from the three
-  duplicated panels, which shrank from 792/499/435 lines to **506/398/185**.
-  `scripts/item_contents_panel.lua` now `require`s the widget rather than
-  carrying its own rows, and `scripts/cargo_inventory_panel.lua:399` confirms its
-  tab strip moved to the shared `scripts/ui/tabbar`. `truncateToWidth`
-  consolidation was only partly in C0's scope — `item_list.lua:172` delegates to
-  the shared `textWrap.truncateToWidth`, and open #1157 explicitly sequences
-  itself against #1088 to own the remaining copies.
-- **Nothing after C0 exists.** C1 through C5 and D1 are named in #1013's work
-  order without issue numbers, and no open issue covers them. The epic therefore
-  reads as stalled when it is merely unfiled.
-- **The player-facing paths those slices retire are still live**, correctly:
-  "Store in \<cargo\>" (`scripts/unit_info_v2_context_menu.lua:234`) and
-  "Withdraw with \<unit\>" (`scripts/cargo_inventory_panel.lua:436`). #1013
-  removes each only once its replacement exists.
-- **B1's single-unit rule is gone (UIT-3A, #1239, landed).**
-  `scripts/transfer_session.lua`'s `resolveSource` now implements D-8's
+The as-built *behavior* contract is
+[`docs/engine_contracts.md`](engine_contracts.md) § "Player transfers: the
+three player-facing modes". This document remains the *design* authority — the
+decisions below, and the ledger above as the processing cursor.
+
+### What shipped
+
+- **One pure policy.** `src/Unit/Transfer.hs` decides whether exact item
+  instances may move between two endpoints — a unit inventory or a built
+  building's loose storage, on both sides, direction derived from the pair.
+  Chebyshev ≤ 1 between occupied rectangles, capacity weighs the actual
+  instance, batches are ordered and report per-item outcomes, and no item ever
+  half-moves. `trSource ∷ TransferEndpoint` gives both ends one endpoint type,
+  instance sets replaced `trQuantity`, `TransferBatch` carries the
+  partial-batch outcome, eligibility is `faction.isPlayerCommandable` rather
+  than a data marker, and the endpoint-info verb is `unit.transferEndpointInfo`
+  (#1085).
+- **Mode B — queued gestures** (`scripts/transfer_gestures.lua`, [#1249]). One
+  builder serves both directions: **Store 1 / Store all** from a unit-info row
+  into the open container window's active level, and **Retrieve 1 / Retrieve
+  all** from a container row into the unit `transfer_session.resolveSource`
+  picks. Neither requires adjacency — that is the whole promotion. Granularity
+  is 1-and-all only, and a gesture is omitted, never disabled, whenever it
+  could not run. Durable order state and persistence are [#1246]; the unit job
+  that walks and commits on arrival, revalidating because the world moved, is
+  [#1247].
+- **Mode A — escort** (`scripts/transfer_session.lua`, [#1250]/[#1251]). Walk
+  first, then choose items: `unit_ai_escort.lua`'s `escort_transfer` walks the
+  source to the destination's footprint and stops. The two flanking panes are
+  fitted as a pair and placed as one split rect; rows commit immediately while
+  the pair is held, with the **commit** authoritative, so drift out of reach is
+  refused with the contract's own proximity reason and the session stays open.
+  A unit destination is held too ([#1251]) — unit-to-unit is the one pairing
+  where both ends can walk away.
+- **Failure handling** landed as [#1253] (Mode B orders) and [#1254] (Mode A
+  sessions), over the `TransferCancelled` / `TransferFailed` / `TransferReason`
+  vocabulary #1000 established. Orders the executor cannot reach are dropped
+  engine-side from both destroy and kill.
+- **Container knowledge** is the player-global `container-knowledge` optional
+  save component keyed by `BuildingId`
+  (`World/Save/Component/Knowledge.hs`, #1087). An absent payload reads as
+  never-inspected, never as known-empty; its stale rendering and age indicator
+  are [#1237], and `building.refreshContainerKnowledge` is called from the Mode
+  A open transition alone.
+- **The container-window stack** generalized `scripts/cargo_inventory_panel.lua`
+  from a `BuildingId` to any endpoint kind ([#1234]) and then added the nested
+  level stack, absorbing `scripts/item_contents_panel.lua` into it ([#1238]) —
+  D-12 and D-13 as designed.
+- **The shared item-list widget** is `scripts/ui/item_list.lua`, extracted in
+  #1088 from the three duplicated panels.
+
+### Retirements and corrections
+
+- **The immediate player-facing paths are gone.** [#1249] retired the
+  adjacent-cargo "Store in \<cargo\>" enumeration that called
+  `unit.depositToCargo` and the container window's "Withdraw with \<unit\>"
+  that called `unit.withdrawFromCargo`, replacing both with the queued
+  Store/Retrieve gestures above; `scripts/transfer_gestures.lua`'s module
+  header records the substitution, and neither replacement requires adjacency.
+  The lax AI verbs themselves stay registered and untouched (D-7) — the
+  surviving `depositToCargo` / `withdrawFromCargo` call sites belong to the AI
+  fetch and logistics ladders, not to a live player path.
+- **#1157 is closed.** The `truncateToWidth` consolidation C0 left partly
+  undone is finished: `scripts/ui/text_wrap.lua` owns the one implementation
+  and `scripts/ui/item_list.lua` delegates to it.
+- **B1's single-unit rule is gone** ([#1239], UIT-3A).
+  `scripts/transfer_session.lua`'s `M.resolveSource` implements D-8's
   nearest-of-N: a multi-unit selection is allowed, the nearest eligible
   candidate to the endpoint's own `gridX`/`gridY` becomes the source, exact
   distance ties break on lowest uid, and distance is measured in the target's
   local u-alias frame (`world.localizeTile`, #1175). Zero eligible candidates
-  still omits "Transfer" rather than disabling it. The comments in
-  `transfer_session.lua` and both `init_context_menu.lua` call sites that
-  asserted the single-unit rule as intended were corrected with it. See D-11
-  for why that comment was misleading rather than authoritative.
+  still omits "Transfer" rather than disabling it. The comments that asserted
+  the single-unit rule as intended were corrected with it; see D-11 and its
+  amendment for why that comment was misleading rather than authoritative.
+
+### Post-epic corrective work
+
+Defects found **after** the epic closed are not unfinished epic slices — the
+ledger above is terminal — and are tracked separately. `docs/epic_review_1013.md`
+is their record:
+
+- **ER-1 — Mode B executor eligibility** ([#2030], closed). The Mode B gesture
+  ([#1249]) and its executor ([#1247]) disagreed about which
+  player-commandable units can carry a durable order, a gap Mode A had already
+  closed for `escort_transfer`. An eligible source is now one whose species
+  actually registered the action (`scripts/unit_ai_actions.lua`), and an empty
+  action inventory means no AI is loaded and answers yes to everything rather
+  than a refusal invented from absence.
+- **ER-2 — steering-document drift** ([#2033]). This correction.
+
+### Authoritative gates
+
+- **Hspec:** `Transfer context menu (Mode B Store/Retrieve gestures, #1249)`,
+  which carries `Executor capability — the order's own AI action (#2030)`;
+  `Transfer context menu (Mode A escort session, #1250)` with its escort
+  lifecycle, registration and creation-boundary groups; `Transfer context menu`
+  itself for cancellation, exactly-once outcome reporting and session creation;
+  and `Unit transfer Lua API` for the request vocabulary.
+- **Probes:** `tools/unified_transfer_probe.py` is [#1255]'s end-to-end gate,
+  reporting eight stages (`setup`, `knowledge`, `modeB`, `modeA`, `batch`,
+  `widget`, `save`, `load`) across two engine processes.
+  `tools/transfer_order_probe.py` and `tools/transfer_context_menu_probe.py`
+  cover the order lifecycle and the menu surface on their own.
 
 ## Desired experience
 
@@ -391,12 +457,24 @@ nearest-of-N elsewhere in the codebase, so the pattern is not novel here.
 the code would conclude the single-unit rule is intended and leave it. Correcting
 it is part of UIT-3, not optional cleanup.
 
+> **2026-09-06 — delivered by [#1239] (UIT-3A).** The decision stands as
+> written; only its present tense has expired. `scripts/transfer_session.lua`
+> no longer hard-requires one selected unit and no longer carries the comment
+> asserting that rule as deliberate — `M.resolveSource(selectedUids, ...)` is
+> D-8's nearest-of-N with the lowest-uid tiebreak, and the current-state section
+> above records it. The two line coordinates in this decision's first paragraph
+> (`:158`, `:155-156`) are historical: they locate the code the decision was
+> written against, not code that still exists.
+
 ## Open questions
 
 None currently blocking. Every decision above carries prior signoff from epic
 #1013 except D-11, which was signed off on 2026-08-11.
 
 ## Verification strategy
+
+This is the strategy the arc was planned against, and it was carried out: the
+gates it asks for are the ones named under **Authoritative gates** above.
 
 - Preserve the focused pure coverage A1 and A2 established for the transfer
   contract: endpoint symmetry, instance-set requests, create-time and
@@ -410,7 +488,7 @@ None currently blocking. Every decision above carries prior signoff from epic
 - Verify the partial-batch contract at the boundary: twelve into room for eight
   stores eight, reports the remainder, and half-moves nothing.
 - Verify nearest-of-N selection and the lowest-uid tiebreak deterministically,
-  since D-11 replaces a rule the current code documents as intentional.
+  since D-11 replaced a rule the code of the time documented as intentional.
 - Keep the existing AI fetch, deliver, repair, medic, and expedition transfer
   probes green — D-7 means none of their verbs change.
 - Use offscreen/manual verification only for the panel geometry, camera snap,

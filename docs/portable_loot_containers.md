@@ -96,10 +96,16 @@ concrete precondition
 - Closed #1087 added page-scoped, player-global stale knowledge for building
   containers keyed by `BuildingId`. Portable items can move between pages and
   owners, and no equivalent knowledge owner keyed by item-instance ID exists.
-- Open epic #1013 owns the remaining unified unit/building transfer windows and
-  movement modes. It explicitly excludes item-containers as transfer endpoints,
-  so it is adjacent upstream work rather than a duplicate portable-container
-  epic.
+- **Closed epic #1013 delivered the unified unit/building transfer windows and
+  movement modes**, all 17 children through the end-to-end gate #1255: the
+  container-window stack with nested levels, Mode A escort sessions, Mode B
+  persisted orders, failure handling, and the shared commit policy. Its
+  as-built contract is `docs/engine_contracts.md` § "Player transfers: the
+  three player-facing modes", and its design authority is
+  `docs/unified_item_transfers.md`. It explicitly excludes item-containers as
+  transfer endpoints, so it is the settled upstream substrate PLC-9 extends
+  rather than a duplicate portable-container epic. D-14's external
+  precondition is therefore met.
 - **Eight independent item-creation sites exist** and none materializes authored
   default contents: `Unit/Thread/Command/Spawn.hs:314/386/449`,
   `World/Thread/Command/Edit/Dig.hs:248`,
@@ -177,7 +183,8 @@ inventory interface.
 - Replacing #917's guaranteed progression reward with random crate loot.
 - Changing the lax AI transfer verbs or making all ground piles generalized
   transfer endpoints.
-- Reimplementing the unit/building transfer modes still owned by epic #1013.
+- Reimplementing the unit/building transfer modes epic #1013 already
+  delivered.
 
 ## Design
 
@@ -261,7 +268,7 @@ checks.
 
 Portable contents should extend #1085's exact endpoint identity and #1088's
 shared item-list widget. They should not add a fourth transfer policy or list
-renderer. PLC-9 waits for #1013's shared transfer surfaces and adopts its
+renderer. PLC-9 extends #1013's delivered transfer surfaces and adopts its
 partial-batch semantics, per D-14 and D-15.
 
 ### Extensible open boundary
@@ -343,9 +350,9 @@ the separate progression reward.
 ### D-11. Extend the unified player-transfer substrate
 
 Portable containers reuse exact-instance endpoint requests, structured
-outcomes, the shared item-list widget, and the eventual container-window
-manager from epic #1013. Container-specific interaction code owns realization
-and knowledge refresh, not a competing transfer stack.
+outcomes, the shared item-list widget, and the container-window manager epic
+#1013 delivered. Container-specific interaction code owns realization and
+knowledge refresh, not a competing transfer stack.
 
 ### D-12. Keep fillable containers and physical item storage separate
 
@@ -367,11 +374,25 @@ projection without sharing an incompatible durable owner.
 
 ### D-14. Make the shared transfer surfaces an external precondition for PLC-9
 
-PLC-1 through PLC-8 may proceed while epic #1013 remains open. PLC-9 stops until
-#1013 has supplied its container window and persisted unit/building order
-lifecycle, unless those phases are explicitly reassigned. Portable containers
-then extend the settled surfaces with an item-container endpoint instead of
-shipping temporary or duplicate transfer UI.
+As filed this read *"PLC-1 through PLC-8 may proceed while epic #1013 remains
+open. PLC-9 stops until #1013 has supplied its container window and persisted
+unit/building order lifecycle, unless those phases are explicitly reassigned.
+Portable containers then extend the settled surfaces with an item-container
+endpoint instead of shipping temporary or duplicate transfer UI."*
+
+**The precondition was satisfied on its own terms, not reassigned.** PLC-9
+extends the settled unit/building transfer surfaces with an item-container
+endpoint instead of shipping temporary or duplicate transfer UI — unchanged.
+What has ended is the external wait.
+
+> **2026-09-06 — the precondition is met.** Epic #1013 closed with all 17
+> children complete, supplying exactly what this decision waited on: the
+> generalized container window and its nested level stack (#1234, #1237,
+> #1238), the persisted Mode B order lifecycle (#1246, #1247, #1249), the
+> Mode A escort session (#1250, #1251), failure handling (#1253, #1254), and
+> the end-to-end gate (#1255). No phase was reassigned to this arc. PLC-9's
+> remaining dependencies are the internal `PLC-4`, `PLC-7` and `PLC-8`, and
+> PLC-1 through PLC-8 were never gated on #1013 in the first place.
 
 ### D-15. Use per-item atomic partial batches for portable transfers
 
@@ -549,6 +570,12 @@ epics, create duplicate tracker scope, and likely leave temporary UI to remove
 later. Reassignment is viable only if it is explicit; silent duplication is
 not.
 
+> **2026-09-06 — the scheduling risk did not materialize.** #1013 reached and
+> passed the needed phases, so the rejected alternative was never invoked: no
+> #1013 phase was moved into this epic, no temporary transfer UI was built,
+> and ownership of the transfer experience stayed in one epic. The proposal's
+> reasoning stands as the record of why the boundary was drawn where it was.
+
 ## Open questions
 
 ### Q-1. Does physical item storage use a sibling component?
@@ -568,6 +595,10 @@ shared UI.
 Resolved by D-14: PLC-1 through PLC-8 can proceed independently, but processing
 PLC-9 stops until #1013's container window and persisted unit/building order
 lifecycle exist or are explicitly reassigned to this arc.
+
+> **2026-09-06:** answered in practice — #1013's container window and persisted
+> order lifecycle now exist, so the wait D-14 imposed has ended. PLC-9 remains
+> gated on its own `PLC-4`, `PLC-7` and `PLC-8` dependencies.
 
 ### Q-4. Is `Grab all` partial or all-or-nothing when capacity changed?
 
@@ -765,14 +796,16 @@ one contract across every endpoint without weakening per-item atomicity.
   knowledge refresh after player-controlled commits.
 - **Phase:** Transfer integration
 - **Depends on:** `PLC-4`, `PLC-7`, `PLC-8`
-- **Ordering:** `critical path after external transfer-surface precondition`
+- **Ordering:** `critical path` — D-14's external transfer-surface
+  precondition is met (epic #1013 closed); only the three dependencies above
+  remain
 - **Relevant decisions:** D-1, D-5, D-7, D-11, D-14, D-15
 - **Acceptance signals:** Ground and carried containers use the same endpoint
   request/outcome vocabulary and item-list widget as unit/building transfers;
   stale missing items cannot mutate live state; capacity failures follow one
   settled batch policy; nested traversal never flattens ownership.
-- **Out of scope:** Rebuilding #1013's unit/building modes, lax AI verbs,
-  numeric quantity pickers, and generalized ground piles.
+- **Out of scope:** Rebuilding the unit/building modes #1013 delivered, lax AI
+  verbs, numeric quantity pickers, and generalized ground piles.
 - **Open questions:** None
 
 ### PLC-10. Author the first wooden-crate ruin content

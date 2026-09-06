@@ -213,37 +213,62 @@ figure above. The worst single attempt anywhere was 233.1 s
 | `thermo_altitude` | 0.000 (0/8) | 0.000 (0/8) | 0.000 (0/8) | 0.000 (0/8) |
 | `position_hold` | 0.125 (1/8) | 0.125 (1/8) | 0.125 (1/8) | 0.000 (0/8) |
 
-**Failure rates do not move with concurrency; they are properties of the
-probes.** Three separate observations support that reading:
+**No monotonic concurrency-related degradation was observed across the
+twelve eight-attempt primary cells, and both probes that failed at all
+were already failing at concurrency 1.** That is the observational
+result this table supports:
 
 - `thermo_altitude` is 0/8 at every level — 32 of 32 passes across the
   whole `-N4` column.
-- `position_hold` sits at 1/8 for C=1, 2 and 4 and 0/8 at C=8 — flat, or
-  if anything better under load.
-- `role` is heavily flaky **at concurrency 1**: 6/8 solo. Its C=4 and C=8
-  cells (4/8) are *lower* than its C=1 cell (6/8), which no concurrency
-  mechanism explains.
+- `position_hold` sits at 1/8 for C=1, 2 and 4 and 0/8 at C=8 — no rise
+  under load.
+- `role` is already heavily flaky **at concurrency 1**: 6/8 solo. Its
+  C=4 and C=8 cells (4/8) are *lower* than its C=1 cell (6/8), so the
+  column does not ascend with concurrency.
 
-The drift control settles that last point. `n4-c1-role` was repeated
-identically 1 h 42 m later:
+**That is not evidence that failure rates are invariant to concurrency.**
+At n = 8 these cells cannot be distinguished from one another. The
+Wilson 95% intervals for `role` are 0.409–0.929 (6/8), 0.529–0.978 (7/8)
+and 0.215–0.785 (4/8, both cells); every one of them overlaps every
+other, and each is wider than the whole range of rates it is being asked
+to separate. Overlap at this denominator is what a design with no power
+to detect a rate effect produces whether or not an effect exists, so a
+concurrency effect on failure rate is **unresolved here, not excluded**,
+and the four `role` cells are not in agreement — they are
+uninformative about each other. Establishing invariance would require a
+stated practical equivalence margin and a randomized, repeated-cohort
+design at far larger denominators. Neither was measured, and no such
+result is claimed.
+
+The drift control is a single same-cell retest. `n4-c1-role` was
+repeated identically 1 h 42 m later:
 
 | cell | started | failure rate | elapsed median |
 |---|---|---|---|
 | `n4-c1-role` | 01:59:44Z | 0.750 (6/8) | 146.4 s |
 | `n4-c1-role-retest` | 03:41:32Z | 0.625 (5/8) | 141.8 s |
 
-One attempt of test-retest spread at the *same* cell, and 3% of elapsed
-drift over the whole session. So `role`'s rate carries at least +/- 1
-attempt of noise at n = 8, and the 6/8 -> 4/8 swing across the
-concurrency column is within it. Machine drift over the session is
-negligible.
+Two endpoint samples 1 h 42 m apart differ by 3% in elapsed median and
+by one attempt in rate. That is one observed difference, not an estimate
+of spread: a single pair has no dispersion to measure, so it supplies
+neither a general "+/- 1 attempt" noise bound nor any account of the
+7/8 -> 4/8 difference between the C=2 and C=4 cells. What it does show is
+that the first and last `n4-c1-role` samples of the session did not
+differ greatly in elapsed median — a much weaker statement than a
+bounded noise level, and it is offered only as that. It does not bound
+session drift, and §7 no longer treats it as bounding the monotonic
+scheduling confound.
 
-The checks that failed are a small, recurring set, and concurrency does
-not change which ones they are. `role`'s three (`steer_miner`,
-`steer_woodcutter`, `demote_laborer`) appear at every level including
-C=1; `position_hold`'s single failure per cell is `work_resumes` at C=1
-and C=2 and `control_works` at C=4 — both AI-timing checks, and no check
-appears only under load:
+The checks that failed are a small, recurring set. `role`'s failures are
+drawn from three checks (`steer_miner`, `steer_woodcutter`,
+`demote_laborer`) and `position_hold`'s single failure per cell is
+`work_resumes` at C=1 and C=2 and `control_works` at C=4 — all
+AI-timing checks. Which of them appears in a given cell is not stable:
+`demote_laborer` is absent from `n4-c1-role` and present only in its
+retest, and `control_works` appears only in the C=4 cell. At one to five
+occurrences per check per cell, this composition carries even less
+resolution than the cell rates above, and no conclusion about which
+checks concurrency affects should be drawn from it:
 
 | cell | failing checks |
 |---|---|
@@ -402,12 +427,19 @@ One cohort at a time, in this order. Cohorts 1-13 are the primary matrix
 
 Total measurement wall time: 3 h 11 m, plus the 2 m 14 s warm build.
 
-Concurrency ascends monotonically within the primary matrix, so in
-principle any monotone machine drift could alias onto the concurrency
-effect. The drift control in §4.3 is what bounds that: repeating the
-*first* cell as cohort 13, at the end of the session, moved its elapsed
-median by 3% and its rate by one attempt — far smaller than the
-concurrency effect it could be confused with.
+Concurrency ascends monotonically within the primary matrix, so any
+monotone machine drift over the session aliases onto the concurrency
+effect and **this design cannot separate the two**. The drift control in
+§4.3 does not bound that confound: repeating the *first* cell as cohort
+13, at the end of the session, is a single pair of samples, and one pair
+estimates no spread. Its 3% elapsed-median difference is small relative
+to the elapsed effects in §4.2, which is a reason to think those
+particular effects are not drift artifacts; it establishes nothing
+comparable for the failure-rate column, where the putative signal and the
+cell-level uncertainty are the same size (§4.3). Interleaving or
+randomizing the concurrency order across cohorts would remove the
+confound by design; this run did not, and the confound therefore stands
+unresolved.
 
 ## 8. Reproducing this
 
@@ -465,10 +497,14 @@ at the shipped `-N4` default, after a warm build.**
 
 The decision rule, and what each part of the evidence contributes:
 
-1. **Stability does not constrain the choice.** No failure rate moved
-   with concurrency (§4.3), and concurrency 8 produced zero timeouts,
-   zero setup failures and zero harness errors (§5). Stability alone
-   would permit 8.
+1. **Stability neither supports nor rules out a higher cap.** No
+   monotonic rate degradation was observed up to concurrency 8, and
+   concurrency 8 produced zero timeouts, zero setup failures and zero
+   harness errors (§5) — but at n = 8 per cell the failure-rate column
+   cannot resolve a concurrency effect either way (§4.3), so it carries
+   no weight here. **The cap rests entirely on the elapsed-tail,
+   throughput and oversubscription evidence in items 2–4**, which is
+   independent of the rate column and unaffected by its limits.
 2. **Timeout headroom does constrain it.** The binding number is
    `thermo_altitude`'s elapsed tail: p90 81.2 s solo -> 206.1 s at C=8, a
    2.5x inflation on the most CPU-bound workload. That is still only 23%
@@ -492,12 +528,13 @@ The decision rule, and what each part of the evidence contributes:
 
 **4 is a recommended cap among the tested levels for agents running this
 probe harness on this host, not an established maximum.** Concurrency 8
-remained healthy for these three workloads and is simply the highest
-level tested; nothing here establishes where the true ceiling is. The
-result is specific to a 16-core Apple M3 Max with a warm build, and to
-these three probes — it does not transfer to other hardware, to CI's
-Linux runners, or to unrelated repository workloads such as `cabal
-build`, the hspec suite or `make ci`.
+produced no timeout, setup failure or harness error for these three
+workloads and is simply the highest level tested; nothing here
+establishes where the true ceiling is. The result is specific to a
+16-core Apple M3 Max with a warm build, and to these three probes — it
+does not transfer to other hardware, to CI's Linux runners, or to
+unrelated repository workloads such as `cabal build`, the hspec suite or
+`make ci`.
 
 **#1425's `-N4` default needs no change, so no follow-up decision issue
 is filed.** Every cell that could have indicted it exonerated it. At
@@ -515,13 +552,20 @@ any concurrency; the run's only setup failure was at `-N1`.
   span worldgen-heavy and real-time-AI classes, but they are not a
   sample of the ~85 registered probes, and the slowest probes in the
   registry are legacy and unmeasurable by this harness.
-- n = 8 per cell. Enough to show `role`'s rate is noisy at the
-  +/- 1-attempt level and that `thermo_altitude`'s elapsed shift is far
-  outside that noise; not enough to resolve a rate difference smaller
-  than about 1/8.
-- Concurrency ascends monotonically within the primary matrix; the §4.3
-  drift control bounds the resulting confound rather than eliminating it
-  by design.
+- n = 8 per cell. One attempt (0.125) is a cell's *granularity*, not its
+  resolution. The Wilson 95% interval at n = 8 is 0.324 wide at the
+  extremes (0/8, 8/8) and 0.570 wide mid-range (4/8) — roughly 2.6 to
+  4.6 times that granularity. Cell-level rate uncertainty is therefore
+  broad enough that the entire `role` column is mutually
+  indistinguishable and no rate comparison in §4.3 is resolved. These
+  widths describe that uncertainty; they are not a minimum detectable
+  effect, which would additionally depend on the comparison chosen, the
+  equivalence margin and the study design. `thermo_altitude`'s elapsed
+  shift is a separate quantity and is far outside n = 8 noise.
+- Concurrency ascends monotonically within the primary matrix, so
+  session drift is confounded with the concurrency effect. The §4.3
+  drift control does not bound that confound (§7); only an interleaved
+  or randomized cohort order would remove it.
 - The `-N1`/`-N8` sweep covers concurrency 1 and 4 only, and its C=1 half
   covers `thermo_altitude` only.
 - `peak_concurrency` is sampled at three instants in a `--runs 1`

@@ -397,8 +397,8 @@ it if it is not visible rather than introducing a second ghost-color path.
 ## Implementation status
 
 The embark-to-discovery slice of this loop — steps 1-3 below, scoped to a
-single reliable ruin type with no combat encounter or reward yet — is
-implemented, under the parent locations epic #159:
+single reliable ruin type with no combat encounter or reward yet — was the
+original delivery of the parent locations epic #159:
 
 - location spatial bounds — #777
 - portal placement exclusion + white/red ghost feedback — #778
@@ -407,11 +407,30 @@ implemented, under the parent locations epic #159:
 - paired discovered/undiscovered zoom-map icons — #781
 - end-to-end embark-to-discovery integration probe — #782
 
-The terminology above matches what shipped: "remote-start threshold" is the
-`building.remoteCheck` distance gate, "discovery" is the expanded-bounds
-approach margin firing a `location_discovery` player event, and the
-undiscovered/discovered icon pair is what `World.Render.Zoom.Icons` renders
-from each location's persisted lifecycle state.
+> **Superseded 2026-08-15 by #1230.** That list is #159's shipped scope and
+> remains accurate as history, but two of its terms no longer name runtime
+> behavior. #780's "discovery" was a point-in-halo test against the bounding
+> box expanded by a stored `discovery_margin`, and #781's undiscovered and
+> discovered icons were a per-definition texture pair. Both were replaced;
+> what is current is the paragraph below.
+
+Of that terminology, "remote-start threshold" is still the
+`building.remoteCheck` distance gate. Discovery is still the one-way,
+page-scoped, persisted promotion firing exactly one `location_discovery`
+player event that #780 established, but #1230 replaced both what triggers it
+and what the map draws afterwards. The trigger is player-owned-unit SIGHT:
+`Location.Discovery.findDiscoveries` intersects a unit's visible-tile set —
+perception range scaled by the page-local night factor, a 120° facing cone,
+and terrain-Z occlusion, all from the one shared enumeration
+`Unit.LineOfSight.visibleTilesOnPage` owns — with the instance's stored
+`liBounds`, and `discovery_margin` is gone from the location YAML, the
+runtime definition, the instance, both Lua tables and the `world-pages` wire.
+The icons are not a pair:
+`World.Render.Zoom.Icons.locationIconAppearance` maps all six lifecycle
+states onto three appearances — the single shared unknown marker for
+`unknown` and `hinted`, the definition's own type icon for `discovered` and
+`active`, and that same icon tinted by `clearedIconTint` for `cleared` and
+`depleted`.
 
 **Step 2 (instance identity and lifecycle) — #911.** Each placed location is
 now a first-class persisted record (`Location.Instance.LocationInstance`),
@@ -425,10 +444,31 @@ content-spawn flag, and its lifecycle
 
 Two deliberate boundaries on what #911 landed:
 
-- **The states past `discovered` are defined, persisted, and reachable
-  programmatically (`world.setLocationLifecycle`), but nothing in the game
-  drives an instance into them yet.** The encounter (step 4), reward
-  (step 5), and retrieval (step 6) work is what they exist to serve.
+- **The states past `discovered` are now driven by gameplay, except
+  `depleted`.** When #911 landed they were merely defined, persisted, and
+  reachable programmatically through `world.setLocationLifecycle`; the
+  encounter (step 4), reward (step 5), and retrieval (step 6) work is what
+  they existed to serve, and steps 4 and 5 have since delivered it.
+
+  > **Superseded 2026-09-01 by #916 and #917.** This bullet used to end by
+  > saying that nothing in the game drove an instance past `discovered`.
+  > Two states now have producers.
+  > `Location.Instance.setLocationEncounterEpisodeState` promotes an
+  > already-visible location to `active` when its encounter enters combat
+  > (#916). Clearance is compound (#917): `markLocationEncounterCleared`
+  > records death-only ENCOUNTER completion and deliberately moves no
+  > lifecycle, the guaranteed-significant-item obligations latch at the
+  > pickup boundary, and `resolveLocationClearance` — the sole writer of the
+  > transition and of its one-shot `location_clearance` notice — promotes to
+  > `cleared` once `locationClearanceSatisfied` holds over the conditions
+  > the location actually authors. `locationDiscoveryLifecycle` applies that
+  > same predicate on the discovery edge, so a location already satisfied
+  > when it is first seen is discovered straight into `active` or `cleared`.
+  > `World.Thread.Discovery.tickLocationDiscovery` runs a separately gated
+  > clearance pass before its sight pass. `docs/engine_contracts.md`
+  > §Guaranteed significant contents and compound clearance owns the
+  > mechanism. `depleted` still has no gameplay producer and remains
+  > reachable only through `world.setLocationLifecycle`.
 - **`hinted` is currently unreachable, and that is correct.** Every location
   is cartographically visible from world generation and stays that way for
   now — a deliberate development-phase simplification: the player can always
@@ -446,9 +486,25 @@ Two deliberate boundaries on what #911 landed:
   > `unknown` does. The state is still documented here so it is not
   > later mistaken for dead weight.
 
-Display names are a placeholder derived from each definition's `label`.
-Wiring them to the language/naming system (#708) is deliberately separate
-work.
+> **Superseded 2026-08-07 by #1101.** Display names were a placeholder
+> derived from each definition's `label`, and wiring them to the
+> language/naming system (#708) was deliberately separate work. That work
+> landed; what follows is current.
+
+Each instance's display name is generated in its world page's own language
+and written ONCE, at construction.
+`Location.Instance.newLocationInstanceWithSeed` is the only place a name is
+ever produced — save/load restores the stored `liDisplayName`, `liGloss` and
+`liEtymology` rather than re-drawing them — and it takes all three from
+`Location.Naming.nameLocationInstance`, which draws a `Modifier` compound
+over the definition's authored head and modifier pools deterministically
+from the stable `LocationInstanceId`, the definition id, and the language's
+own seed and version. A page with no language provenance instead gets the
+definition's `ldLabel` with no gloss and no etymology source.
+`nameLocationInstance` also falls back to `ldLabel` if rendering a drawn
+expression fails, but `locationNamingErrors` rejects a bad naming scheme
+when the definition file loads, so for valid authored content that second
+path is unreachable.
 
 **Step 8 (the first-session objective) — tutorial epic #956.** The objective
 panel shipped as a reusable, data-authored *tutorial* system rather than a
@@ -500,15 +556,17 @@ currently visible.
   runs the whole loop as one session, described under "9. Gate the full slice"
   below.
 
-**Step 4 is implemented by #916.** `ruin_small` now owns a uniform persistent
-0–3 nomad encounter, death-only clearance, and the first autonomous hostile
-combat loop. #917 keeps step 5's slot but its
-premise changed on 2026-08-11: it is no longer "a reward that changes what the
-colony can do" but "guaranteed significant contents that must be taken before a
-location counts as cleared" (D-17, D-18). Its issue body was rewritten to match
-on the same day (D-21). Together they add the **confront** verb and give
-**invest** an objective rather than a stockpile entry. Everything
-else in the first-30-minutes sequence is implemented.
+**Steps 4 and 5 are implemented, by #916 and #917.** #916 gave `ruin_small` a
+uniform persistent 0–3 nomad encounter, the first autonomous hostile combat
+loop, and death-only ENCOUNTER completion. #917 filled step 5's slot, whose
+premise had changed on 2026-08-11 from "a reward that changes what the colony
+can do" to "guaranteed significant contents that must be taken before a
+location counts as cleared" (D-17, D-18); its issue body was rewritten to
+match on the same day (D-21). It added the per-item obligation latch and made
+location clearance the CONJUNCTION of both halves, so a dead roster on its own
+no longer promotes an instance to `cleared`. Together they add the
+**confront** verb and give **invest** an objective rather than a stockpile
+entry. Everything else in the first-30-minutes sequence is implemented.
 
 ## Design
 
