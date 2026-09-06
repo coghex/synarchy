@@ -24,15 +24,20 @@ Single-capability profiling runs are the only ones used below.
 
 ## Gotcha 2: don't use `--dump` for a profiled run — its watchdog isn't caller-controlled
 
-`--dump` mode's `waitForInit` (`app/Main.hs:353`) has a hardcoded budget —
-`max 300 (worldSize * 4)` seconds — sized for normal prod throughput. A
-`-N1`+`-fprof-late` run is both parallelism-starved (loses the ~6.9×
-`parListChunk` speedup) and instrumented, so it routinely blows through that
-budget. On timeout, `waitForInit` returns `False`, `runDump` throws
-`TimeoutError`, and the `Left` branch of `runDump` (`app/Main.hs:470`) calls
-`shutdownThread` on every thread in sequence — a fixed 10 s cooperative wait
-(`Engine.Core.Thread.shutdownThread`, `src/Engine/Core/Thread.hs:26`) before
-`killThread`. **This does not reliably give a profiled `buildTimeline` call
+`--dump` mode's `waitForInit` (internal to `app/App/Dump.hs`, called from
+`runDump`) has a hardcoded budget — `max 300 (worldSize * 4)` seconds —
+sized for normal prod throughput. A `-N1`+`-fprof-late` run is both
+parallelism-starved (loses the ~6.9× `parListChunk` speedup) and
+instrumented, so it routinely blows through that budget. On timeout,
+`waitForInit` returns `False` and `runDump` throws `TimeoutError`, which
+`runEngineM` surfaces as a `Left` to `App.Boot.handleBootResult`'s own
+`Left` branch — the shared fatal-error tail every boot mode's result runs
+through, distinct from `App.Boot.luaThreadOrAbort`'s `Left` branch for the
+unrelated required-debug-console failure (#1190) that `--dump` never takes.
+That tail calls `shutdownEngineWorkers`, which runs every thread through
+`Engine.Core.Thread.shutdownThread` in sequence — a fixed 10 s cooperative
+wait before `killThread`. **This does not reliably give a profiled
+`buildTimeline` call
 enough time to finish** — an earlier draft of this doc claimed the world
 thread "keeps running and finishes shortly after," inferred from log lines
 that turned out to be logger-buffered output landing in file order, not
