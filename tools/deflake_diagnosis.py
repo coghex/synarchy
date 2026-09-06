@@ -10,6 +10,7 @@ not, which declared non-repair route the invocation must take instead.
     python3 tools/deflake_diagnosis.py --diagnosis <document.json>
     python3 tools/deflake_diagnosis.py --manifest <checkout-root>
     python3 tools/test_deflake_diagnosis.py       # the deterministic gate
+    python3 tools/test_deflake_diagnosis.py --only diagnosis  # this module's
 
 Nothing here boots an engine, runs a probe, opens a port, edits a file
 in a worktree, or talks to GitHub. It reads documents and answers

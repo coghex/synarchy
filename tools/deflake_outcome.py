@@ -12,6 +12,7 @@ outcome durably to the probe's census row.
 
     python3 tools/deflake_outcome.py --handoff <document.json>
     python3 tools/test_deflake_diagnosis.py       # the deterministic gate
+    python3 tools/test_deflake_diagnosis.py --only outcome    # this module's
 
 Nothing here boots an engine, runs a probe, opens a port, edits a file
 in a worktree, or talks to GitHub. It reads documents, answers questions
