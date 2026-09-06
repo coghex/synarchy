@@ -18,7 +18,7 @@ artifact references are parsed with.
 It is a LEAF WITHIN the handoff family: it imports no other handoff
 owner, neither consumer, and not the façade. It is deliberately not a
 leaf of the repository — the upstream rules it applies are called rather
-than copied. `deflake_diagnosis.require_path`, `.inside_any_worktree`
+than copied. `deflake_contract.require_path`, `.inside_any_worktree`
 and `.require_manifest`, and `probe_census.require_commit_identity` and
 `.require_acceptable_failures`, each stay one definition owned upstream;
 what happens here is that their refusals are re-raised as this family's
@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import deflake_diagnosis  # noqa: E402
+import deflake_contract  # noqa: E402
 import probe_census  # noqa: E402
 import probe_flake  # noqa: E402
 
@@ -42,7 +42,7 @@ HANDOFF_SCHEMA = "deflake-outcome-handoff/v1"
 # The producer record this consumes, named from the producer rather than
 # restated: a second copy that drifted would accept a document #1437
 # never writes.
-DIAGNOSIS_OUTCOME_SCHEMA = deflake_diagnosis.OUTCOME_SCHEMA
+DIAGNOSIS_OUTCOME_SCHEMA = deflake_contract.OUTCOME_SCHEMA
 
 # The measurement roles a handoff may declare.
 ROLE_HANDOFF = "handoff"
@@ -57,23 +57,23 @@ PRE_FIX_ROLES = (ROLE_HANDOFF, ROLE_BASELINE)
 # What each of #1437's endings IS, in a sentence. A consumer that does
 # not own a route still has to say what it was handed, and a bare
 # identifier is not that; the workflow that DOES own it comes from
-# `deflake_diagnosis.ROUTE_OWNER` rather than from a second table here.
+# `deflake_contract.ROUTE_OWNER` rather than from a second table here.
 ROUTE_ENDING = {
-    deflake_diagnosis.ROUTE_NO_TARGET:
+    deflake_contract.ROUTE_NO_TARGET:
         "observed no non-PASS check at all",
-    deflake_diagnosis.ROUTE_CANNOT_REPRODUCE:
+    deflake_contract.ROUTE_CANNOT_REPRODUCE:
         "could not reproduce the failure under the handoff's own condition",
-    deflake_diagnosis.ROUTE_PRODUCTION_DEFECT:
+    deflake_contract.ROUTE_PRODUCTION_DEFECT:
         "identifies a production-code or shipped-script defect",
-    deflake_diagnosis.ROUTE_NO_CONFIDENT_FIX:
+    deflake_contract.ROUTE_NO_CONFIDENT_FIX:
         "reproduced the failure and established no one bounded probe-side "
         "repair",
-    deflake_diagnosis.ROUTE_PARTIAL_IMPROVEMENT:
+    deflake_contract.ROUTE_PARTIAL_IMPROVEMENT:
         "measurably improved the failure count without passing the "
         "acceptance gate",
-    deflake_diagnosis.ROUTE_REPAIR:
+    deflake_contract.ROUTE_REPAIR:
         "is #1437's confidently diagnosed repair",
-    deflake_diagnosis.ROUTE_HANDOFF_REJECTED:
+    deflake_contract.ROUTE_HANDOFF_REJECTED:
         "never reached a diagnosis at all",
 }
 
@@ -213,13 +213,13 @@ def _require_usable_path(value, what: str) -> str:
 
     Being a non-empty absolute-looking string is not enough. An embedded
     NUL makes `Path.resolve()` raise `ValueError` from `lstat` rather
-    than `OSError`, and `deflake_diagnosis.inside_any_worktree` resolves
+    than `OSError`, and `deflake_contract.inside_any_worktree` resolves
     every form it compares — so a NUL-bearing string would sail past the
     absoluteness test, name no filesystem location for the containment
     check to find, and be stored in the census as an artifact reference
     or an invocation directory.
 
-    `deflake_diagnosis.require_path` is that module's own rule for
+    `deflake_contract.require_path` is that module's own rule for
     exactly this, applied at every point a document-supplied path is
     first read. Calling it keeps one definition of "a path a recorded
     measurement could have used"; its refusal is re-raised as this
@@ -227,8 +227,8 @@ def _require_usable_path(value, what: str) -> str:
     escaping from a consumer it did not invoke.
     """
     try:
-        return deflake_diagnosis.require_path(value, what)
-    except deflake_diagnosis.HandoffError as error:
+        return deflake_contract.require_path(value, what)
+    except deflake_contract.HandoffError as error:
         raise HandoffError(str(error)) from None
 
 
@@ -257,7 +257,7 @@ def require_artifact_reference(value, what: str, *, worktrees=()) -> str:
         raise HandoffError(
             f"{what} must be an absolute path, got {text!r}; the census "
             f"stores artifact references, and a relative one names nothing")
-    tree = deflake_diagnosis.inside_any_worktree(text, worktrees)
+    tree = deflake_contract.inside_any_worktree(text, worktrees)
     if tree is not None:
         raise HandoffError(
             f"{what} is {text!r}, inside the worktree {tree}; raw probe "
@@ -288,8 +288,8 @@ def require_configuration(value, what: str) -> list:
     nothing to a later reader of the census.
     """
     try:
-        manifest = deflake_diagnosis.require_manifest(value, what)
-    except deflake_diagnosis.HandoffError as error:
+        manifest = deflake_contract.require_manifest(value, what)
+    except deflake_contract.HandoffError as error:
         raise HandoffError(str(error)) from None
     for position, entry in enumerate(manifest["entries"]):
         # #1437's family rule is a shape rule — `fnmatch` and

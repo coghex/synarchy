@@ -1388,7 +1388,9 @@ jobs:
       # too, and from tools/ci-local.sh's mirrored list: that issue's
       # approved rereview amendment scopes the diagnosis lab's own
       # self-test to manual invocation, so it is run by hand when
-      # tools/deflake_diagnosis.py changes rather than gated here.
+      # tools/deflake_diagnosis.py or the document contract it was split
+      # from in tools/deflake_contract.py (#2041) changes, rather than
+      # gated here.
       - name: probe runner self-tests
         run: |
           python3 tools/ci_probes.py --self-test
