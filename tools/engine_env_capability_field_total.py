@@ -32,12 +32,31 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from engine_env_capability_common import (  # type: ignore
-    BACKTICK_RE, ENGINE_ENV_FILE, INVENTORY_PATH, SECTION_6_2_HEADING,
+    BACKTICK_RE, ENGINE_ENV_FILE, INTEGER_RE, INVENTORY_PATH, MarkedSpan,
+    SECTION_6_2_HEADING, SECTION_REF_RE, extract_marked_spans,
+    section_bounds, stray_numbers_outside_code,
 )
+
+# Re-exported: `MarkedSpan`, `extract_marked_spans` and `section_bounds`
+# were this owner's until issue #2269 gave the SS2.1 record-count owner
+# a second use for them, at which point they moved to the shared
+# substrate. They are still part of this module's surface, because this
+# owner's self-test drives them directly and the marker contract below
+# is what documents them.
+__all__ = [
+    "FIELD_TOTAL_CLOSE",
+    "FIELD_TOTAL_OPEN",
+    "MarkedSpan",
+    "ONE_ROW_PHRASE",
+    "PROCEDURE_ITEM_ANCHOR",
+    "SECTION_1_HEADING",
+    "audit_field_total",
+    "extract_marked_spans",
+    "section_bounds",
+]
 
 
 # ===========================================================================
@@ -106,140 +125,9 @@ PROCEDURE_ITEM_ANCHOR = "`EngineEnv` field names from §5"
 # survives explicitly rather than by accident.
 ONE_ROW_PHRASE = "exactly one row in §5"
 
-_SECTION_REF_RE = re.compile(r"§\d+(?:\.\d+)*")
-_INTEGER_RE = re.compile(r"\d+")
-
-
-class MarkedSpan(NamedTuple):
-    """One marker pair: its inner prose and where the whole block sits.
-
-    `start`/`end` bracket the block INCLUDING both markers, which is
-    what the section-containment check needs -- a pair whose opening
-    marker is inside its section but whose closing marker is not has
-    not kept its prose there.
-    """
-    body: str
-    start: int
-    end: int
-
-
-def extract_marked_spans(text: str, open_marker: str, close_marker: str
-                         ) -> tuple[list[MarkedSpan], list[str]]:
-    """Return `(spans, violations)` for one marker pair.
-
-    Deliberately literal string scanning, not a regex: the markers are
-    fixed literals, and an unbalanced or nested pair must be reported
-    as the malformed markup it is rather than silently matching some
-    other pair's text.
-
-    The inventory document is the only text this is applied to, so the
-    diagnostics name it directly.
-    """
-    spans: list[MarkedSpan] = []
-    violations: list[str] = []
-    cursor = 0
-    while True:
-        start = text.find(open_marker, cursor)
-        if start < 0:
-            break
-        body_start = start + len(open_marker)
-        end = text.find(close_marker, body_start)
-        if end < 0:
-            violations.append(
-                f"`{open_marker}` at offset {start} in "
-                f"docs/{INVENTORY_PATH.name} is never closed by "
-                f"`{close_marker}`")
-            break
-        nested = text.find(open_marker, body_start, end)
-        if nested >= 0:
-            violations.append(
-                f"`{open_marker}` blocks are nested in "
-                f"docs/{INVENTORY_PATH.name} (a second one opens at "
-                f"offset {nested} before the first closes) -- the "
-                f"governed prose must be one flat block")
-        spans.append(MarkedSpan(text[body_start:end], start,
-                                end + len(close_marker)))
-        cursor = end + len(close_marker)
-    return spans, violations
-
-
 def _countable_numbers(body: str) -> list[str]:
     """Every decimal integer in `body` that is not a section reference."""
-    return _INTEGER_RE.findall(_SECTION_REF_RE.sub("", body))
-
-
-_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
-
-
-def _fence_states(text: str) -> "list[bool]":
-    """Per line, whether that line is INSIDE a fenced code block.
-
-    A fence opens on a line of three or more backticks or tildes and
-    closes on a later line of at least as many of the SAME character.
-    The opening and closing fence lines themselves count as inside, so
-    a heading can never be read out of fenced content.
-
-    This exists because `section_bounds` decides where a section ends,
-    and a fenced block containing a line like `## example` would
-    otherwise end the section early -- while Markdown still renders
-    everything after it inside the real section. That gap was a live
-    bypass of the scope rules below: prose past the fake heading was
-    outside the audit and inside the document.
-    """
-    inside: list[bool] = []
-    open_char = ""
-    open_len = 0
-    for line in text.splitlines():
-        stripped = line.strip()
-        match = _FENCE_RE.match(stripped)
-        if not open_char:
-            if match:
-                open_char = match.group(1)[0]
-                open_len = len(match.group(1))
-                inside.append(True)
-                continue
-            inside.append(False)
-            continue
-        inside.append(True)
-        if (match and match.group(1)[0] == open_char
-                and len(match.group(1)) >= open_len
-                and not stripped[len(match.group(1)):].strip()):
-            open_char = ""
-            open_len = 0
-    return inside
-
-
-def section_bounds(text: str, heading: str,
-                   stop_prefixes: tuple[str, ...]) -> tuple[int, int] | None:
-    """Character bounds of one Markdown section's body, or `None` when
-    the heading is absent.
-
-    The body runs from just after the heading line to just before the
-    next line whose stripped form starts with one of `stop_prefixes`
-    (or to end of document). `"## "` does NOT match `"### "` -- the
-    third character is a `#`, not the required space -- so a top-level
-    section legitimately contains its own subsections.
-
-    Lines inside a fenced code block are not headings, in either role:
-    a fenced `## 1. Scope` does not start the section, and a fenced
-    `## anything` does not end it.
-    """
-    fenced = _fence_states(text)
-    start: int | None = None
-    offset = 0
-    for index, line in enumerate(text.splitlines(keepends=True)):
-        stripped = line.strip()
-        in_fence = fenced[index] if index < len(fenced) else False
-        if start is None:
-            if stripped == heading and not in_fence:
-                start = offset + len(line)
-        elif not in_fence and any(stripped.startswith(prefix)
-                                  for prefix in stop_prefixes):
-            return start, offset
-        offset += len(line)
-    if start is None:
-        return None
-    return start, offset
+    return INTEGER_RE.findall(SECTION_REF_RE.sub("", body))
 
 
 def _audit_scope_block_placement(inventory_text: str,
@@ -295,7 +183,7 @@ def _audit_scope_block_placement(inventory_text: str,
         if start <= span.start and span.end <= end:
             remainder = remainder.replace(
                 inventory_text[span.start:span.end], "", 1)
-    stray = _stray_numbers_outside_code(remainder)
+    stray = stray_numbers_outside_code(remainder)
     if stray:
         violations.append(
             f"{doc}'s `{SECTION_1_HEADING}` states number(s) "
@@ -307,37 +195,6 @@ def _audit_scope_block_placement(inventory_text: str,
             f"`src/Engine/Core/State.hs:446` -- but a bare `83` is a field "
             f"total in code font, not a citation")
     return violations
-
-
-# A backtick span whose digits are a SOURCE LOCATION -- a repository
-# path, optionally with a line or line-range anchor. This is the only
-# code span whose numbers are exempt from the no-stray-count rule.
-#
-# Exempting code spans wholesale was the third rereview's finding: it
-# let `` `83` `` stand in the governed prose, which reads to a human as
-# exactly the stale total this audit exists to remove. A span has to
-# LOOK like a source reference to be excused, and a bare number does
-# not.
-_SOURCE_SPAN_RE = re.compile(
-    r"^[A-Za-z0-9_./+\-]+\.(?:hs|lua|py|md|json|yaml|yml|cabal|sh)"
-    r"(?::\d+(?:-\d+)?)?$")
-
-
-def _stray_numbers_outside_code(text: str) -> list[str]:
-    """Decimal integers in `text` that are neither a section reference,
-    an issue reference, nor part of a source-location code span.
-
-    A code span that is NOT a source location keeps its digits in the
-    scan: `` `83` `` is a field total wearing a code font, not a
-    citation.
-    """
-    def _strip_span(match: re.Match[str]) -> str:
-        inner = match.group(1).strip()
-        return "" if _SOURCE_SPAN_RE.match(inner) else match.group(1)
-
-    without_code = re.sub(r"`([^`]*)`", _strip_span, text)
-    without_refs = re.sub(r"#\d+", "", _SECTION_REF_RE.sub("", without_code))
-    return _INTEGER_RE.findall(without_refs)
 
 
 _NUMBERED_ITEM_RE = re.compile(r"^(\d+)\.[ \t]", re.MULTILINE)
@@ -396,7 +253,7 @@ def _audit_procedure_item_binding(inventory_text: str) -> list[str]:
             f"audited for the field total it used to repeat, so it may "
             f"not be reworded past recognition or displaced by a new "
             f"item 1. Item 1 currently reads {content.strip()[:80]!r}...")
-    stray = _stray_numbers_outside_code(content)
+    stray = stray_numbers_outside_code(content)
     if stray:
         violations.append(
             f"{doc}'s `{SECTION_6_2_HEADING}` item 1 states number(s) "

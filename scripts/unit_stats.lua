@@ -99,9 +99,10 @@ local derived = {
 
     -- Sleep-pressure pool size (circadian epic #479 / #611) — same
     -- reuse-stamina's-scale reasoning as max_exhaustion: only the
-    -- sleep_pressure/max_sleep_pressure RATIO is ever read (currently by
-    -- nothing — #611 is instrumentation only; #612 is the first
-    -- consumer), so there's no separate calibration to invent here.
+    -- sleep_pressure/max_sleep_pressure RATIO is ever read (by
+    -- scripts/unit_ai_sleep.lua's go_to_sleep utility, which turns it
+    -- into a deficit, #612), so there's no separate calibration to
+    -- invent here.
     max_sleep_pressure = function(uid)
         local e = unit.getStat(uid, "endurance")
         return e and e * 10 or nil

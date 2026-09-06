@@ -64,8 +64,14 @@ from ci_parity_save_compat import (  # noqa: E402
     LOCAL_BLOCK_END,
     audit_save_compat_reproducibility_wiring,
 )
-from ci_parity_shell import AuditError, extract_invocations  # noqa: E402
+from ci_parity_shell import (  # noqa: E402
+    AuditError,
+    cabal_subcommand,
+    extract_cabal_commands,
+    extract_invocations,
+)
 from ci_parity_workflow import (  # noqa: E402
+    audit_cabal_verbosity,
     audit_gate_sets,
     audit_parallel_gate_wiring,
     audit_unit_asset_gate_wiring,
@@ -329,6 +335,11 @@ def _self_test() -> list[str]:
 
     # 14b. The unit-asset gate's selector and guard travelled together.
     failures.extend(_unit_asset_wiring_self_test())
+
+    # 14c. Both entry points keep every Cabal build and test quiet
+    #      (#1920) -- a contract the gate-set comparison cannot see,
+    #      because `cabal` steps are outside the compared set.
+    failures.extend(_cabal_verbosity_self_test())
 
     return failures
 
@@ -659,6 +670,185 @@ def _unit_asset_wiring_self_test() -> list[str]:
         got = problems(mutated)
         _expect(failures, any(needle in problem for problem in got),
                 f"{label} should fail with {needle!r}, got {got}")
+    return failures
+
+
+# --------------------------------------------------------------------------
+# Cabal build/test verbosity (#1920)
+# --------------------------------------------------------------------------
+# `cabal` steps are outside the gate-set comparison by that section's
+# documented scope, so a command that quietly went verbose again compares
+# equal to nothing at all. These fixtures are mutations of one known-good
+# pair covering both entry points, both covered subcommands, the shapes
+# that must NOT be covered, and vacuity on each side separately.
+
+_CABAL_WORKFLOW_GOOD = """\
+name: fixture
+on: [push]
+jobs:
+  test-and-audits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Toolchain
+        run: /usr/local/.ghcup/bin/cabal --version
+      - name: Resolve dependency plan
+        run: |
+          cabal build all -v0 --dry-run
+          cabal update
+      - name: Build
+        run: cabal build all -v0
+      - name: Build test suites
+        run: |
+          cabal build synarchy-test-headless -v0
+          if [ "${{ steps.gates.outputs.graphical }}" = true ]; then
+            cabal build synarchy-test-graphical -v0
+          else
+            echo "CABAL_DIR=/usr/local/cabal"
+          fi
+      - name: Headless test suite
+        run: |
+          SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct
+  behavior-probes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe build
+        run: cabal build exe:synarchy synarchy-test-headless
+"""
+
+_CABAL_LOCAL_GOOD = """#!/usr/bin/env bash
+set -euo pipefail
+step "cabal library module inventory audit"
+cabal build all -v0
+cabal build synarchy-test-headless -v0
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct
+"""
+
+
+def _cabal_verbosity_self_test() -> list[str]:
+    """Every way the quiet setting can come undone, and one that cannot.
+
+    The good pair must pass while carrying each shape the real files
+    carry: an env-prefixed command, a path-qualified `cabal --version`
+    that is not a build, a bare `cabal update`, a quoted mention, an
+    `echo` of a value ending in `cabal`, and a verbose `behavior-probes`
+    job that is deliberately out of scope.
+    """
+    failures: list[str] = []
+
+    def problems(workflow: str = _CABAL_WORKFLOW_GOOD,
+                 local: str = _CABAL_LOCAL_GOOD) -> list[str]:
+        return audit_cabal_verbosity(workflow, local)
+
+    _expect(failures, problems() == [],
+            f"the known-good Cabal pair should pass, got {problems()}")
+
+    # The out-of-scope job really is out of scope: the good pair passes
+    # with `behavior-probes` verbose, and stays passing when that job is
+    # made MORE verbose, so this is coverage of the exclusion rather than
+    # an accident of the fixture.
+    louder = _CABAL_WORKFLOW_GOOD.replace(
+        "        run: cabal build exe:synarchy synarchy-test-headless\n",
+        "        run: |\n"
+        "          cabal build exe:synarchy synarchy-test-headless\n"
+        "          cabal test synarchy-test-headless\n")
+    _expect(failures, problems(workflow=louder) == [],
+            "the behavior-probes job is out of scope for #1920 and must not "
+            f"be audited, got {problems(workflow=louder)}")
+
+    # The long-form spelling is the same setting, not drift.
+    long_form = _CABAL_WORKFLOW_GOOD.replace("cabal build all -v0\n",
+                                             "cabal build all --verbose=0\n")
+    _expect(failures, problems(workflow=long_form) == [],
+            "`--verbose=0` is verbosity 0 too and must be accepted, got "
+            f"{problems(workflow=long_form)}")
+
+    workflow_mutations = (
+        ("the CI library build re-verbosed",
+         _CABAL_WORKFLOW_GOOD.replace("run: cabal build all -v0\n",
+                                      "run: cabal build all\n"),
+         "cabal build all"),
+        ("the CI dependency-plan dry run re-verbosed",
+         _CABAL_WORKFLOW_GOOD.replace("cabal build all -v0 --dry-run",
+                                      "cabal build all --dry-run"),
+         "--dry-run"),
+        ("the CI test-suite build re-verbosed",
+         _CABAL_WORKFLOW_GOOD.replace("cabal build synarchy-test-headless -v0",
+                                      "cabal build synarchy-test-headless"),
+         "cabal build synarchy-test-headless"),
+        ("the CI graphical build re-verbosed",
+         _CABAL_WORKFLOW_GOOD.replace(
+             "cabal build synarchy-test-graphical -v0",
+             "cabal build synarchy-test-graphical"),
+         "cabal build synarchy-test-graphical"),
+        ("the CI headless test step re-verbosed",
+         _CABAL_WORKFLOW_GOOD.replace(
+             "cabal test synarchy-test-headless -v0",
+             "cabal test synarchy-test-headless"),
+         "cabal test synarchy-test-headless"),
+        ("a near-miss verbosity flag",
+         _CABAL_WORKFLOW_GOOD.replace("run: cabal build all -v0\n",
+                                      "run: cabal build all -v1\n"),
+         "cabal build all -v1"),
+        ("every covered CI command removed",
+         _CABAL_WORKFLOW_GOOD.replace("cabal build", "cabal update #")
+                             .replace("cabal test", "cabal update #"),
+         "no `cabal build`/`cabal test` command was found"),
+    )
+    for label, mutated, needle in workflow_mutations:
+        got = problems(workflow=mutated)
+        _expect(failures, any(needle in problem for problem in got),
+                f"{label} should fail naming {needle!r}, got {got}")
+
+    local_mutations = (
+        ("the local library build re-verbosed",
+         _CABAL_LOCAL_GOOD.replace("cabal build all -v0", "cabal build all"),
+         "cabal build all"),
+        ("the local test-suite build re-verbosed",
+         _CABAL_LOCAL_GOOD.replace("cabal build synarchy-test-headless -v0",
+                                   "cabal build synarchy-test-headless"),
+         "cabal build synarchy-test-headless"),
+        ("the local suite run re-verbosed",
+         _CABAL_LOCAL_GOOD.replace("cabal test synarchy-test-headless -v0",
+                                   "cabal test synarchy-test-headless"),
+         "cabal test synarchy-test-headless"),
+        ("every covered local command removed",
+         "#!/usr/bin/env bash\nset -euo pipefail\ncabal update\n",
+         "no `cabal build`/`cabal test` command was found"),
+    )
+    for label, mutated, needle in local_mutations:
+        got = problems(local=mutated)
+        _expect(failures, any(needle in problem for problem in got),
+                f"{label} should fail naming {needle!r}, got {got}")
+
+    # The extractor's own contract, asserted where it is owned. A quoted
+    # mention is text; a value token ending in `cabal` is a value; an
+    # env-prefixed command is the command; `cabal --version` has no
+    # subcommand at all and is therefore never covered.
+    _expect(failures,
+            extract_cabal_commands('step "cabal module audit"', "fixture")
+            == [],
+            "a quoted mention should not be read as a Cabal command")
+    _expect(failures,
+            extract_cabal_commands('echo "CABAL_DIR=/usr/local/cabal"',
+                                   "fixture") == [],
+            "an echoed value ending in `cabal` should not be read as a "
+            "Cabal command")
+    _expect(failures,
+            extract_cabal_commands("SYNARCHY_FULL_TESTS=1 cabal test x -v0",
+                                   "fixture") == [["cabal", "test", "x",
+                                                   "-v0"]],
+            "a leading environment assignment should be stripped")
+    _expect(failures,
+            cabal_subcommand(["/usr/local/.ghcup/bin/cabal", "--version"])
+            is None,
+            "`cabal --version` names no subcommand and must not be covered")
+    _expect(failures,
+            cabal_subcommand(["cabal", "build", "all", "-v0"]) == "build",
+            "`cabal build all -v0` should read as the `build` subcommand")
+    _raises(failures, "a cabal not at the head of its command",
+            lambda: extract_cabal_commands("xargs cabal build all", "fixture"),
+            "other than the head")
+
     return failures
 
 

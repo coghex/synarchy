@@ -120,12 +120,18 @@ SAVE_COMPAT_PATHS="$(python3 tools/ci_expensive_gates.py --local-changed-paths)"
 # needs to be injected here.
 printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 
+# -v0 on each Cabal build/test here matches CI (#1920): routine build
+# plans, phase banners and per-module `[N of M] Compiling` lines go, and
+# nothing diagnostic does -- warnings, -Werror failures, Cabal's own
+# build/test failure lines and every exit status survive it. The `step`
+# banners above are what keep a silent build legible locally. To watch a
+# build compile again, delete the -v0 from that one command.
 step "build (library + executable, -Werror)"
-cabal build all
+cabal build all -v0
 
 step "build test suites"
-cabal build synarchy-test-headless
-cabal build synarchy-test-graphical
+cabal build synarchy-test-headless -v0
+cabal build synarchy-test-graphical -v0
 
 step "headless hspec suite (full tier)"
 # SYNARCHY_FULL_TESTS=1 turns the full-tier examples from pending into
@@ -141,7 +147,7 @@ step "headless hspec suite (full tier)"
 # --test-options carries Hspec's --print-slow-items=20 (#2277), matching
 # both of CI's branches, so this step ends with the twenty slowest spec
 # items locally too. It is a diagnostic: no threshold here fails the gate.
-SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20'
 
 step "test audit"
 python3 tools/test_audit.py

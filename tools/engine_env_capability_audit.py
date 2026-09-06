@@ -52,6 +52,14 @@ The owners, in the order `main` composes them
       and field span (issue #1669): the marked scope block states the
       live count and the record's first and last field, once, and
       SS6.2's procedure sentence states no total at all.
+  `engine_env_capability_record_counts.py` the SS2.1 audited
+      capability-record sizes (issue #2269): the marked record table
+      states one size per live record, each equal to that record's
+      declaration, and no other number in its record column. It reads
+      the live record set, so it runs AFTER
+      `audit_capability_projection_completeness`, whose
+      `undiscovered_capability_declarations` half is what makes that
+      set fail-closed.
   `engine_env_capability_access.py`      the SS6 full-access ratchet
       and the SS6.1 permanent-boundary comparison (issues #889, #899):
       the live unrestricted `Engine.Core.State` importer set equals
@@ -146,6 +154,9 @@ from engine_env_capability_boundaries import (  # type: ignore
 )
 from engine_env_capability_field_total import audit_field_total  # type: ignore
 from engine_env_capability_inventory import audit  # type: ignore
+from engine_env_capability_record_counts import (  # type: ignore
+    audit_record_counts,
+)
 from engine_env_capability_saveload import (  # type: ignore
     audit_save_load_projection,
 )
@@ -210,6 +221,20 @@ def main() -> int:
         print(f"{len(projection_violations)} capability projection "
               f"completeness violation(s):")
         for v in projection_violations:
+            print(f"  - {v}")
+        return 1
+
+    # SS2.1's per-record sizes (#2269). Placed HERE deliberately: it
+    # reads the live capability-record set, and the completeness group
+    # immediately above is what proves that set is complete. Run before
+    # it, a record whose declaration the parser cannot read would simply
+    # not be required in SS2.1's table.
+    record_count_violations = audit_record_counts(
+        production_sources, inventory_text)
+    if record_count_violations:
+        print(f"{len(record_count_violations)} SS2.1 capability-record "
+              f"size violation(s):")
+        for v in record_count_violations:
             print(f"  - {v}")
         return 1
 
@@ -283,7 +308,8 @@ def main() -> int:
           f"naming `inputBarrierNextRef`/`currentKeyDownRef` (SS7.3), "
           f"{len(capability_records)} capability record(s) whose "
           f"{projected_fields} projected field(s) all canonicalize onto a "
-          f"live EngineEnv accessor (SS2.1), "
+          f"live EngineEnv accessor and whose sizes all match SS2.1's "
+          f"audited record table, "
           f"{mapped_fields}/{total_fields} field(s) carrying a non-empty "
           f"writing-module map covering {mapped_pairs} field-module pair(s) "
           f"with no undeclared or stale entry (SS5) over "

@@ -38,6 +38,17 @@ image as `test-and-audits`) and the unit-asset gate's guard-to-selector
 wiring in its new home; the save-compatibility wiring checks still inspect
 `test-and-audits`, which is where those Cabal-backed commands stayed.
 
+`cabal build`/`cabal test` steps are outside the COMPARED gate set by that
+scope, so their verbosity gets a pin of its own (#1920): every direct
+`cabal build` and `cabal test` in `test-and-audits` and in this file must
+carry `-v0` (or `--verbose=0`), and an empty side fails rather than passing
+vacuously. That flag drops the build plan, the phase banners and the
+per-module `[N of M] Compiling` line and nothing else -- warnings, `-Werror`
+failures, Cabal's own package- and suite-naming failure lines and every exit
+status survive it, and whether a build was cold is reported explicitly by
+the cache-status step (#1358). `cabal update`, `cabal --version` and
+`cabal sdist` emit no progress and are left alone, as is `behavior-probes`.
+
 The PR-only `behavior-probes` job is deliberately outside that parity
 contract: it owns `ci_probes.py --stdin` and `run_probes.py`, restores the
 same build caches on an independent runner, and runs in parallel with the
@@ -930,12 +941,19 @@ from that tail, so every recorded failure appears exactly once:
     ... the ordinary last-25 lines follow, unchanged ...
 ```
 
-The six producers today are `location_embark_probe.py`,
+The producers today are `location_embark_probe.py`,
 `location_stamp_idempotent_probe.py`, `location_content_probe.py`,
-`location_overlay_probe.py`, `portal_location_probe.py` and
-`portal_ghost_probe.py`. As with progress records, the complete capture is
-never dumped, and a probe emitting no failure records has exactly the failure
-presentation it always had.
+`location_overlay_probe.py`, `portal_location_probe.py`,
+`portal_ghost_probe.py`, `offscreen_probe.py`,
+`scene_primitives_probe.py` and `persistence_contract_sweep.py`. The
+sweep is the one that is not a probe reporting its own terminal failure:
+since #2060 its `Checks.ok` records every failed check under the producer
+name `persistence_contract_sweep`, which keeps a sweep-own assertion
+distinguishable from the cross-referenced probes it runs. That list is
+audited against the real producers by `tools/test_run_probes.py`, so it
+cannot quietly fall behind them. As with progress records, the complete
+capture is never dumped, and a probe emitting no failure records has
+exactly the failure presentation it always had.
 
 **Timeouts are per probe.** Most registered probes use the ordinary 900-second
 default. A scenario whose complete expected workload structurally exceeds that
