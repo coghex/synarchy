@@ -79,8 +79,13 @@ unitGetWoundSeverityOnFn env = do
 --   with no dressing or no infection, and nothing extra is ever added.
 --   This list is the COMPLETE set.
 --
---     * @part@ (string) — body-part id the wound sits on (a
---       'Unit.Types.BodyPart' @bpId@ of the unit's def).
+--     * @part@ (string) — the body-part id STORED on the wound.
+--       Usually a 'Unit.Types.BodyPart' @bpId@ of the unit's def, but
+--       NOT guaranteed to be one: @unit.injure@ stores whatever part
+--       string it is handed without validating it against the def. The
+--       @macro@ and @vital@ fallbacks below exist for exactly that
+--       case, so treat this as an opaque id rather than a key that is
+--       certain to resolve.
 --     * @macro@ (string) — nearest TARGETABLE ancestor of @part@: the
 --       limb the combat log names, so Lua can roll a subpart wound up
 --       without walking the body tree. Equals @part@ when @part@ is
@@ -95,7 +100,15 @@ unitGetWoundSeverityOnFn env = do
 --     * @severityEffective@ (number) — engine-effective severity; see
 --       below.
 --     * @severityInflicted@ (number) — the severity originally
---       inflicted, 0..1, static for the wound's lifetime.
+--       inflicted, static for the wound's lifetime. NOT bounded by 1:
+--       combat and falls both clamp through
+--       Unit.Injury.capInjurySeverity, whose ceiling is
+--       Unit.Injury.bruiseCap (0.4) for a @"blunt"@ wound and
+--       Unit.Injury.maxInjurySeverity (1.6) for every other kind, and a
+--       value ≥ 1 is the LETHAL (crushed / fatal) outcome. Do not clamp
+--       it to 1 — that erases exactly the injuries that kill. Only
+--       @unit.injure@ clamps, and it clamps its own ARGUMENT rather
+--       than what combat and falls store.
 --     * @heal@ (number) — healing progress; 1 = mended, 0 = fresh. This
 --       is NOT a 0..1 fraction: a festering wound drives it NEGATIVE
 --       (worsening past the inflicted value), floored at
@@ -143,6 +156,12 @@ unitGetWoundSeverityOnFn env = do
 --       healed-but-necrotic wound still impairs.
 --     * @severityInflicted@ is the original inflicted value, untouched
 --       by healing or rot.
+--
+--   All three carry @severityInflicted@'s upper bound, not 1: @severity@
+--   is a multiple of it (and a NEGATIVE @heal@ pushes it above it), and
+--   @severityEffective@ is at least @severity@. A Lua consumer that
+--   normalises any of them against 1 will saturate on precisely the
+--   lethal wounds it most needs to distinguish.
 --
 --   The key set above is locked by the headless spec @Unit.WoundsApi@
 --   (@test-headless/Test/Headless/Unit/WoundsApi.hs@): adding,

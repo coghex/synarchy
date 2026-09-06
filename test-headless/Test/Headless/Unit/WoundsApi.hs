@@ -16,7 +16,7 @@
 --   rather than against a restatement, so adding, removing, renaming or
 --   retyping a key fails this spec.
 --
---   The fixture's three wounds are chosen so no assertion can pass by
+--   The fixture's four wounds are chosen so no assertion can pass by
 --   accident:
 --
 --     * the newest is a ROTTING subpart stab whose three severities all
@@ -24,10 +24,12 @@
 --       whose infection resolves against the catalogue,
 --     * the middle one is a clean, undressed, untyped torso wound —
 --       vital part, no infection, all three catalogue fields empty,
---     * the oldest is FESTERING (@heal@ = −0.5, so acute severity
---       climbs ABOVE the inflicted value) on a part the unit's def does
---       not declare, carrying an infection id that is not in the
---       catalogue.
+--     * the third is FESTERING (@heal@ = −0.5, so acute severity climbs
+--       ABOVE the inflicted value) on a part the unit's def does not
+--       declare, carrying an infection id that is not in the catalogue,
+--     * the oldest is LETHAL at @capInjurySeverity@'s 1.6 ceiling, so
+--       all three severities come back above 1 — the band a caller that
+--       assumed 0..1 would saturate away.
 --
 --   No worldgen: @unit.getWounds@ reads the unit manager and the
 --   infection catalogue and nothing else, so the fixture writes exactly
@@ -165,6 +167,19 @@ festeringWound = Wound
     , woundClean = False, woundInfectionType = "not_in_catalogue"
     , woundNecrosis = 0.0 }
 
+-- | Oldest of all, and the reason no consumer may normalise against 1:
+--   a lethal slash at 'Unit.Injury.maxInjurySeverity'. Combat and falls
+--   clamp there, not at 1, so all three severities come back ABOVE 1 and
+--   a doc or a caller that promised 0..1 is wrong about the injuries
+--   that actually kill.
+lethalWound ∷ Wound
+lethalWound = Wound
+    { woundPart = "torso", woundKind = "slash", woundSeverity = 1.6
+    , woundAt = 25, woundBandage = 1.0, woundClot = 0.0
+    , woundHeal = 0.0, woundDressing = "", woundInfection = 0.0
+    , woundClean = False, woundInfectionType = ""
+    , woundNecrosis = 0.0 }
+
 staph ∷ InfectionDef
 staph = InfectionDef
     { infId = "staph", infName = "Staph Infection", infIcon = "staph_icon"
@@ -185,7 +200,8 @@ resetWorld env = do
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.singleton "acolyte" woundedDef
         , umInstances = HM.fromList
-            [ (woundedUid, wounded [handWound, torsoWound, festeringWound])
+            [ (woundedUid
+              , wounded [handWound, torsoWound, festeringWound, lethalWound])
             , (unwoundedUid, wounded []) ] }
   where
     wounded ws = (mkUnit "acolyte" FactionPlayer (10, 10) 100 [] [])
@@ -285,14 +301,14 @@ spec = describe "Unit.WoundsApi" $ do
         it "carries the documented keys and NO others, on every wound" $ \env → do
             resetWorld env
             ls ← newHelpers env
-            forM_ [1 ∷ Int, 2, 3] $ \i →
+            forM_ [1 ∷ Int, 2, 3, 4] $ \i →
                 readShape ls "__wkeys" woundedUid i
                     `shouldReturn` q expectedKeys
 
         it "gives each key its documented Lua type, on every wound" $ \env → do
             resetWorld env
             ls ← newHelpers env
-            forM_ [1 ∷ Int, 2, 3] $ \i →
+            forM_ [1 ∷ Int, 2, 3, 4] $ \i →
                 readShape ls "__wtypes" woundedUid i
                     `shouldReturn` q expectedTypes
 
@@ -314,6 +330,17 @@ spec = describe "Unit.WoundsApi" $ do
             readW ls "__wnum" 2 "severityInflicted" `shouldReturn` q "0.250000"
             readW ls "__wnum" 2 "severity"          `shouldReturn` q "0.250000"
             readW ls "__wnum" 2 "severityEffective" `shouldReturn` q "0.250000"
+
+        it "reports the LETHAL band above 1, unclamped" $ \env → do
+            resetWorld env
+            ls ← newHelpers env
+            -- capInjurySeverity's non-blunt ceiling is 1.6, and combat
+            -- and falls write that straight onto the wound. All three
+            -- severities must come back above 1: clamping any of them
+            -- would erase the fatal outcomes.
+            readW ls "__wnum" 4 "severityInflicted" `shouldReturn` q "1.600000"
+            readW ls "__wnum" 4 "severity"          `shouldReturn` q "1.600000"
+            readW ls "__wnum" 4 "severityEffective" `shouldReturn` q "1.600000"
 
         it "passes a NEGATIVE heal through, so severity climbs above inflicted" $ \env → do
             resetWorld env
@@ -387,10 +414,11 @@ spec = describe "Unit.WoundsApi" $ do
             resetWorld env
             ls ← newHelpers env
             call ls ("__wcount(" <> uidOf woundedUid <> ")")
-                `shouldReturn` q "3"
+                `shouldReturn` q "4"
             readW ls "__wnum" 1 "at" `shouldReturn` q "200.000000"
             readW ls "__wnum" 2 "at" `shouldReturn` q "100.000000"
             readW ls "__wnum" 3 "at" `shouldReturn` q "50.000000"
+            readW ls "__wnum" 4 "at" `shouldReturn` q "25.000000"
 
         it "is EMPTY for a live unwounded unit and nil for a missing one" $ \env → do
             resetWorld env
