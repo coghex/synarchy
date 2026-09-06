@@ -51,7 +51,7 @@ import Engine.Scripting.Lua.Thread (createLuaBackendState, processLuaMsgs)
 import Engine.Scripting.Lua.Thread.Console
     (processDebugCommands, processDebugCommandsBounded)
 import Engine.Scripting.Lua.Thread.Scheduler
-    ( RoundResult(..), SchedulerContext(..)
+    ( RoundResult(..), SchedulerContext(..), SchedulerLimits(..)
     , SchedulerSeam(..), consoleCommandBudget, defaultSchedulerLimits
     , engineMessageBudget, processLuaMsgsBounded, schedulerRound )
 import Engine.Scripting.Lua.TickPolicy (maxSleepMicros)
@@ -364,6 +364,15 @@ timerServiceSpec = describe "timers are served independently of queue emptiness"
 
 engineBatchSpec ∷ SpecWith EngineEnv
 engineBatchSpec = describe "the engine-message batch is bounded" $ do
+    it "ships the named initial limits the contract asks for" $ \_ → do
+        -- Every other example is written against these names rather than
+        -- against 32 and 8, so this is the one place a silent change to
+        -- the shipped defaults becomes visible.
+        engineMessageBudget `shouldBe` 32
+        consoleCommandBudget `shouldBe` 8
+        slEngineMessages defaultSchedulerLimits `shouldBe` engineMessageBudget
+        slConsoleEntries defaultSchedulerLimits `shouldBe` consoleCommandBudget
+
     it "dispatches exactly the budget, in order, once each, and leaves \
        \the rest queued while timers and console work still get a turn" $ \env → do
         rig ← newRig env
