@@ -196,14 +196,16 @@ def muster_travellers(port: int, uids, staging, ruin_xy, seconds: float = 420.0)
     which is what "hold still" has to mean here.
 
     A completed PLAYER move order does hold position since #1216
-    (SURV-4), which retires observation E3 and makes the muster far more
-    likely to converge — but it is not a substitute for the pause, and
-    the driven shape below stays. The hold sits at `follow_command`'s own
-    utility, so every interrupt that outranked the order still carries a
-    held unit off its anchor, and the muster's own history is what a
-    coincidence hunt costs when that happens: observed twice, once with
-    both units 40+ tiles out and 3.4 tiles apart after a 300 s wait, and
-    once with the muster expiring on a pair 10.0 tiles apart.
+    (SURV-4), which retires observation E3 in
+    `docs/history/expedition_survival_calibration_2026-07.md` and makes
+    the muster far more likely to converge — but it is not a substitute
+    for the pause, and the driven shape below stays. The hold sits at
+    `follow_command`'s own utility, so every interrupt that outranked the
+    order still carries a held unit off its anchor, and the muster's own
+    history is what a coincidence hunt costs when that happens: observed
+    twice, once with both units 40+ tiles out and 3.4 tiles apart after a
+    300 s wait, and once with the muster expiring on a pair 10.0 tiles
+    apart.
     Hence the shape below: re-order anyone who has stopped following and
     drifted outside the radius (convergence is driven, not awaited),
     poll for a sample satisfying the origin contract, pause the instant

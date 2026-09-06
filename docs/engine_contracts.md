@@ -2414,7 +2414,8 @@ down to compensate just moves the blackout to the first meal's salt bolus
 live while building the gate.
 
 **Two instrument gotchas.** A completed PLAYER move order now holds
-position (#1216, SURV-4) — E3's "it does not" is retired — so the pause
+position (#1216, SURV-4), retiring the "it does not" of observation E3 in
+`docs/history/expedition_survival_calibration_2026-07.md` — so the pause
 pinning here is belt-and-braces rather than the only thing keeping an
 arrival in place. Do not lean on the hold alone: it yields to the same
 survival ladder the move order did, so an interrupted traveller still
