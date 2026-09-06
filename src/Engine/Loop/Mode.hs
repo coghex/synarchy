@@ -214,9 +214,23 @@ promoteToRunning env =
 --   boundary and the publish only after it returns. That is why the
 --   'acknowledgeCurrent' below is UNCONDITIONAL — it is this thread's
 --   half of that handshake — and why the function has the same "check
---   locked, do unlocked work if not locked, always ack" shape every
---   other owner uses (Unit/Building/Combat/Simulation, see e.g.
---   'Unit.Thread').
+--   gated, do unlocked work if not gated, always ack" shape used by
+--   Unit/Building, Simulation, and Input (see e.g. 'Unit.Thread'); not
+--   every owner shares it verbatim — 'SaveWorld' acks only on its
+--   unlocked branch, and 'SaveLua' has no per-tick ack at all.
+--
+--   'SaveCombat' is a third variant: 'Combat.Thread.combatTick'
+--   branches on the engine's pause flag rather than the owner gate, and
+--   calls 'acknowledgeCurrent' only inside its paused branch. That
+--   still satisfies the barrier, because a save or load transaction
+--   imposes the engine pause before it ever calls
+--   'Engine.Save.Barrier.waitForOwners': a save's
+--   'Engine.Scripting.Lua.API.Save.acceptSaveRequest' imposes it first,
+--   and 'engine.loadSave' imposes its own pause at acceptance, before
+--   staging and the later publish-barrier wait in
+--   'Engine.Scripting.Lua.Thread.Dispatch.handleLoadStaged'. Either way
+--   Combat is already in its paused, acknowledging branch by the time
+--   the wait needs it.
 --
 --   Owner participation establishes that WAIT; it is the per-tick gate
 --   read below, not the handshake, that decides whether THIS tick's
