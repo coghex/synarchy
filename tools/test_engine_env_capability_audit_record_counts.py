@@ -261,7 +261,8 @@ def test_record_counts_second_table_in_the_block_rejected():
     doc = _counts_doc().replace(RECORD_COUNTS_CLOSE,
                                 smuggled + RECORD_COUNTS_CLOSE, 1)
     violations = audit_record_counts(_SOURCES, doc)
-    expect(any("Markdown tables -- exactly one" in v for v in violations),
+    expect(any("Markdown tables -- exactly one" in v
+               or "are not table rows" in v for v in violations),
            f"a second table inside the marked block must be rejected, "
            f"got: {violations}")
 
@@ -300,9 +301,73 @@ def test_record_counts_size_in_the_blocks_prose_rejected():
         "\nHistorically `AlphaCapability` (9 fields).\n\n"
         + RECORD_COUNTS_CLOSE, 1)
     violations = audit_record_counts(_SOURCES, doc)
-    expect(any("but outside its table" in v for v in violations),
+    expect(any("are not table rows" in v for v in violations),
            f"a record size in the block's own prose must be rejected, "
            f"got: {violations}")
+
+
+def test_record_counts_emphasised_size_in_the_block_rejected():
+    """Round 2's first variant: the same smuggled size wrapped in
+    Markdown emphasis. `**`XCapability`**` renders as the same name, so
+    a rule that only recognized the bare code span was one formatting
+    choice away from being bypassed."""
+    doc = _counts_doc().replace(
+        RECORD_COUNTS_CLOSE,
+        "\nHistorical **`AlphaCapability`** (9 fields).\n\n"
+        + RECORD_COUNTS_CLOSE, 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(violations != [],
+           "an emphasised record size inside the block must be rejected")
+
+
+def test_record_counts_pipeless_table_in_the_block_rejected():
+    """Round 2's second variant: a valid GFM table written WITHOUT
+    leading pipes, which `_pipe_runs` does not see as a table at all.
+    The structural rule reaches it because its lines are not table rows,
+    which is why that rule is structural rather than another scan."""
+    doc = _counts_doc().replace(
+        RECORD_COUNTS_CLOSE,
+        "\nIdentifier | Landed by | Record / view type(s)\n"
+        "---|---|---\n"
+        "`alpha-beta` | epic E-one | **`AlphaCapability`** (9 fields)\n\n"
+        + RECORD_COUNTS_CLOSE, 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any("are not table rows" in v for v in violations),
+           f"a pipe-less GFM table inside the block must be rejected, "
+           f"got: {violations}")
+
+
+def test_record_counts_decorated_size_outside_the_block_rejected():
+    """The document-wide sweep tolerates the same decoration, in both
+    orders a size is written: parenthesised after the name, and the
+    number plus the word `field` reached across punctuation."""
+    for trailing in ("Historical **`AlphaCapability`** (9 fields).",
+                     "Historical _AlphaCapability_ — 9 fields.",
+                     "Record | Size\n---|---\n"
+                     "**`AlphaCapability`** (9 fields) | x"):
+        violations = audit_record_counts(
+            _SOURCES, _counts_doc(trailing=trailing))
+        expect(any("outside its" in v and RECORD_COUNTS_OPEN in v
+                   for v in violations),
+               f"a decorated second copy of a size must be rejected: "
+               f"{trailing!r} gave {violations}")
+
+
+def test_record_counts_prose_about_record_contents_is_not_a_size():
+    """The other direction of the widened sweep. §3.1's "a strict subset
+    -- the 16 fields of ..." and §7.6's "`XCapability` over exactly the
+    7 fields" are legitimate descriptions of what a record contains; a
+    rule that flagged them is a rule maintainers route around."""
+    for trailing in (
+            "`AlphaCapability`'s worker-safe view is a strict subset — "
+            "the 2 fields it keeps are read-only.",
+            "`Engine.Core.Capability.Alpha` exports `AlphaCapability` "
+            "over exactly the 2 fields E1 found."):
+        violations = audit_record_counts(
+            _SOURCES, _counts_doc(trailing=trailing))
+        expect(violations == [],
+               f"prose describing a record's contents must be accepted: "
+               f"{trailing!r} gave {violations}")
 
 
 def test_record_counts_ragged_row_rejected():
@@ -515,6 +580,10 @@ TESTS = (
     test_record_counts_second_table_in_the_block_rejected,
     test_record_counts_second_table_smuggling_a_stale_size_rejected,
     test_record_counts_size_in_the_blocks_prose_rejected,
+    test_record_counts_emphasised_size_in_the_block_rejected,
+    test_record_counts_pipeless_table_in_the_block_rejected,
+    test_record_counts_decorated_size_outside_the_block_rejected,
+    test_record_counts_prose_about_record_contents_is_not_a_size,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,

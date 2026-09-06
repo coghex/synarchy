@@ -52,17 +52,31 @@ The contract
         "4 registries ... + `crvInfectionManagerRef` raw" -- two cells
         whose count a reader could not state unambiguously.
 
+      The block holds that table and NOTHING else -- one contiguous run
+      of `|`-leading lines, no second table, no prose, no raw HTML.
+      Only the one table's record column is compared with the live
+      records, so anything else inside the markers is governed markup
+      nothing verifies. Both review rounds of this change found an
+      instance of that class (a second pipe-delimited table read at the
+      first table's column index; a size written in the block's prose),
+      which is why the rule is structural rather than another scan for
+      the next arrangement of characters a reader would read as a
+      count. Prose ABOUT the table belongs outside the markers, where
+      the document-wide sweep below reaches it.
+
 The other two columns are unconstrained: the identifier column is §2.1's
 own vocabulary and the "Landed by" column is epic-step provenance
 (`#893 (E5a)`), whose digits are neither counts nor citations this
 scan could usefully separate.
 
-Outside the block, the whole document is swept for the one unambiguous
-reintroduction shape, `` `XCapability` (<n> `` -- a second copy of a
-record's size in a form that reads as this table's. Prose that names a
-count WITHOUT attaching it to a record in that shape is deliberately not
-matched: §6.2 and §7.4 legitimately describe what #893 and #894 landed
-("the nine world/sim fields"), and a rule that flagged those is a rule
+Outside the block, the whole document is swept for a second copy of a
+record's size written in a form that reads as this table's: the record
+name -- backticked, emphasised, or bare -- followed by a parenthesised
+number, or by a number and the word `field` reached across punctuation.
+Prose that names a count WITHOUT attaching it to a record that way is
+deliberately not matched: §3.1's "a strict subset -- the 16 fields of
+..." and §7.4's "the nine world/sim fields" are legitimate descriptions
+of what a record contains, and a rule that flagged those is a rule
 maintainers route around.
 
 Ordering
@@ -121,11 +135,32 @@ _RECORD_NAME_RE = re.compile(r"[A-Z][A-Za-z0-9_']*Capability")
 _COUNT_RE = re.compile(
     r"`(?P<record>[A-Z][A-Za-z0-9_']*Capability)`\s*"
     r"\(\s*(?P<count>\d+)\s+fields?\b")
-#: The reintroduction shape swept for outside the block: a record's
-#: backtick span followed by a parenthesised number, whatever word
-#: follows it.
+#: A record name as a reader meets it, tolerant of the decoration
+#: Markdown lets a writer wrap it in. Backticks are the convention, but
+#: `**`XCapability`**` and `_XCapability_` render as the same name, and
+#: a rule that only recognized the bare code span was a formatting
+#: variant away from being bypassed (round-2 review). Same tolerance
+#: the SS1 field-total sweep already applies to its own phrase.
+_DECORATED_RECORD = r"[`*_]{0,3}[A-Z][A-Za-z0-9_']*Capability[`*_]{0,3}"
+#: The reintroduction shape swept for outside the block, in the two
+#: orders a size is written in: parenthesised after the name
+#: (`` `XCapability` (9 fields) ``, this table's own shape, and the
+#: older `` (22, `MainRender`-only) `` shape it replaced), or the number
+#: and the word `field` reached across punctuation (`` `XCapability` —
+#: 9 fields ``).
+#:
+#: Deliberately NOT "a number anywhere near a record name": SS3.1's
+#: "a strict subset -- the 16 fields of ..." and SS7.6's
+#: "`ContentRegistriesCapability` over exactly the 7 fields" are
+#: legitimate prose about what a record contains, and a rule that
+#: flagged those is a rule maintainers route around. Both stay outside
+#: these two shapes because the words between the name and the number
+#: are letters.
 _STRAY_COUNT_RE = re.compile(
-    r"`[A-Z][A-Za-z0-9_']*Capability`\s*\(\s*\d+")
+    _DECORATED_RECORD + r"(?:"
+    r"\s*\(\s*[`*_]{0,2}\d+"
+    r"|[^A-Za-z0-9\n]{0,6}[`*_]{0,2}\d+[`*_]{0,2}\s*[`*_]{0,2}fields?\b"
+    r")")
 
 _DOC = f"docs/{INVENTORY_PATH.name}"
 
@@ -299,18 +334,38 @@ def _audit_stray_counts(inventory_text: str, spans: list) -> list[str]:
             f"{_DOC} states {found} outside its `{RECORD_COUNTS_OPEN}` "
             f"block -- a record's size is stated once, in that block's "
             f"table, and nowhere else in this document")
+    violations.extend(_audit_block_holds_only_its_table(spans))
+    return violations
+
+
+def _audit_block_holds_only_its_table(spans: list) -> list[str]:
+    """Every non-blank line inside a marked block is a table row.
+
+    The structural rule, rather than a widening scan for the shapes a
+    smuggled size can take. Only the table's record column is compared
+    with the live records, so ANY other content in the block is a
+    region of the governed markup that nothing verifies -- prose
+    (`Historically `XCapability` (9 fields).`), a GFM table written
+    without leading pipes, raw HTML. Both review rounds found an
+    instance of that class, one table-shaped and one prose-shaped; this
+    closes the class instead of the next instance, and it is decidable
+    by looking at each line rather than by guessing which arrangement
+    of characters a reader would read as a count.
+    """
+    violations: list[str] = []
     for span in spans:
-        prose = "\n".join(line for line in span.body.splitlines()
-                          if not line.strip().startswith("|"))
-        smuggled = [match.group(0)
-                    for match in _STRAY_COUNT_RE.finditer(prose)]
-        if smuggled:
+        stray = [line.strip() for line in span.body.splitlines()
+                 if line.strip() and not line.strip().startswith("|")]
+        if stray:
             violations.append(
-                f"{_DOC} states {smuggled} inside its "
-                f"`{RECORD_COUNTS_OPEN}` block but outside its table -- "
-                f"only the table's record column is checked against the "
-                f"live records, so a size in the block's prose is a "
-                f"displayed figure nothing verifies")
+                f"{_DOC}'s `{RECORD_COUNTS_OPEN}` block holds "
+                f"{len(stray)} line(s) that are not table rows, the "
+                f"first being {stray[0][:70]!r} -- the block holds its "
+                f"one table and nothing else. Only that table's record "
+                f"column is checked against the live records, so any "
+                f"other content inside the markers is a displayed "
+                f"figure nothing verifies. Prose about the table goes "
+                f"outside the markers")
     return violations
 
 
