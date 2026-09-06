@@ -18,13 +18,33 @@
 --   zero for each timeline, so a river id is only ever meaningful
 --   against the page it came from.
 --
---   /Write-once./ #708 principle 5. A name is rendered when the page's
---   table is BUILT, at world init, and read thereafter. No load, no
---   migration, and no later catalogue growth re-derives one — which
---   matters because 'Language.Generated.Root.assignLanguageRoots'
---   collision-resolves over the complete concept set, so adding a
---   concept can move a later concept's root for some seeds. A river
---   named under one catalogue keeps that name forever.
+--   /Write-once./ #708 principle 5, which forbids re-deriving a
+--   persisted name on load or migration however stable assignment
+--   happens to be. A name is rendered when the page's table is BUILT,
+--   at world init, and read thereafter.
+--
+--   What the rule guards against is worth stating precisely, because
+--   the obvious answer is not the real one. Root assignment is NOT the
+--   drift: 'Language.Generated.Root.assignLanguageRoots' places
+--   concepts in the catalogue's append-only ordinal order (#1868), so
+--   an addition leaves every existing concept's FREE root exactly as
+--   it was. What a stable free root does not buy is a stable
+--   RE-RENDERING, and at least two mechanisms behind these names read
+--   the catalogue as it stands at the moment they run.
+--   'riverModifierPool' is every concept the catalogue can express
+--   attributively, and 'riverNameExpr' draws from it with
+--   'Language.Generated.Hash.pickIndex' against that pool's CURRENT
+--   length, so one eligible concept added anywhere can re-point the
+--   draw, changing the modifier, the gloss and the native name. That
+--   index is taken modulo the length, so an addition need not move any
+--   particular river — only that none is guaranteed to stay put. And
+--   from generator version 4 on, bound-form selection ranks the complete
+--   current concept set ('Language.Generated.Bound.assignBoundForms',
+--   #1096), so an addition can still move a selected bound form and
+--   every rendered name that uses one. That describes the mechanisms
+--   as built rather than promising anything of a future change to
+--   them; the rule holds either way. A river named under one catalogue
+--   keeps that name forever.
 --
 --   /No language, no invention./ Provenance is optional by design
 --   (#1092 requirement 2): a custom-named world has no language, and a
