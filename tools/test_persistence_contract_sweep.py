@@ -25,12 +25,27 @@ record they emit has to be recognizable to `probe_runner_diagnostics`'s
 timeout attribution -- the consumer at the other end of the pipe. These
 tests hold both halves against each other without booting anything.
 
+The #2060 half is the failing counterpart. `Checks.ok` used to retain a
+COUNT and nothing else, so a failed check that enough sweep output
+followed was truncated out of `run_probes.py`'s bounded `--tail 25`
+presentation and its identity was simply gone -- which is what the
+2026-08-31 artifact lost. `Checks` now emits one durable
+`#probe-failure#` record per failed check, and these tests drive the
+REAL `Checks` through the REAL `FailureEmitter` print path, bury the
+records under far more than a tail's worth of ordinary output, and
+require `probe_runner_diagnostics.failure_attribution` to name every one
+of them back -- the same reader the runner applies to the complete
+capture in both its sequential and its `--jobs N` mode, so neither mode
+needs a real 900 s sweep run to be covered.
+
 Usage:
   python3 tools/test_persistence_contract_sweep.py
 Exit codes: 0 = all tests passed, 1 = one or more failed.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -38,10 +53,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from persistence_contract_sweep import (  # type: ignore
     SELECTABLE_CROSS_REFERENCED_PROBE_KEYS,
     SWEEP_CYCLE_LETTERS,
+    SWEEP_FAILURE_PRODUCER,
     SWEEP_PHASE_COMPARISON,
     SWEEP_PHASE_CROSS_PROBES,
     SWEEP_PHASE_ENGINE_A,
     SWEEP_PHASE_IDENTITIES,
+    Checks,
     announce_phase,
     engine_cycle_phase,
     unregistered_selectable_probe_keys,
@@ -185,6 +202,244 @@ def test_the_latest_sweep_phase_survives_a_long_tail() -> None:
            f"the attribution does not dump the capture (got {got!r})")
 
 
+# --------------------------------------------------------------------------
+# Durable failed-check records (#2060)
+#
+# The runner's default presentation prints a bounded tail of the capture,
+# so what is retained about a failure is whatever `failure_attribution`
+# recovers from the COMPLETE capture plus the last `--tail` ORDINARY
+# lines. Every case below therefore drives the real `Checks` through the
+# real `FailureEmitter` print path and then buries its records under more
+# ordinary output than that tail can hold: a `Checks` that only counted
+# would leave nothing for the reader to find.
+# --------------------------------------------------------------------------
+def runner_default_tail() -> int:
+    """`tools/run_probes.py`'s OWN default `--tail`, read from its parser.
+
+    The burial below has to be measured against the number the runner
+    really uses, not a copy of it: a default raised past the burial size
+    would leave every case here passing while proving nothing, because
+    the printed `[FAIL]` lines would still be sitting in the tail. The
+    runner builds its parser inside `main` and exposes it nowhere, so the
+    default is taken at the moment it would be used and the parse is
+    abandoned -- nothing is selected, launched, or run.
+    """
+    import argparse
+    import run_probes  # type: ignore
+
+    captured: list[int] = []
+
+    def intercept(self, *args, **kwargs):
+        captured.append(self.get_default("tail"))
+        raise SystemExit(0)
+
+    real = argparse.ArgumentParser.parse_args
+    argparse.ArgumentParser.parse_args = intercept   # type: ignore[method-assign]
+    try:
+        argv, sys.argv = sys.argv, ["run_probes.py", "--list"]
+        try:
+            run_probes.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = argv
+    finally:
+        argparse.ArgumentParser.parse_args = real   # type: ignore[method-assign]
+    if len(captured) != 1 or not isinstance(captured[0], int):
+        raise AssertionError(
+            f"could not read run_probes.py's default --tail (got "
+            f"{captured!r}); these cases cannot claim a record is outside "
+            f"the retained tail without it")
+    return captured[0]
+
+
+#: `tools/run_probes.py`'s default `--tail`, so a case can say "outside the
+#: retained tail" in the units the runner actually uses.
+DEFAULT_TAIL = runner_default_tail()
+
+#: One realistic failing sweep assertion per long phase, deliberately more
+#: than one so "the SECOND failure was unrecoverable" -- the loss #2060 is
+#: about -- is what these cases reproduce.
+SAMPLE_FAILURES = [
+    "gen1 saved page 'contract_sweep_page' back with its own visibility",
+    "the craft bill survived the second load->save cycle intact",
+    "cross-referenced probes (chop, till, crop) all passed",
+]
+SAMPLE_PASSES = [
+    "the mine designation round-tripped",
+    "the camera position is not the default",
+]
+
+
+def run_checks_capturing(failures, passes=()) -> tuple[Checks, str]:
+    """Drive the REAL `Checks` and keep everything it wrote.
+
+    `Checks()` builds its own real `FailureEmitter`, which prints, so the
+    capture here is byte-for-byte what the sweep would push into the
+    runner's pipe -- the emitter's flushing and formatting are under test
+    rather than stood in for.
+    """
+    checks = Checks()
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        for label in passes:
+            checks.ok(True, label)
+        for label in failures:
+            checks.ok(False, label)
+    return checks, buffer.getvalue()
+
+
+def bury(capture: str, lines: int | None = None) -> str:
+    """`capture` followed by more ordinary output than the tail holds.
+
+    Sized from the runner's real default rather than a fixed number, so
+    the burial stays a burial if that default ever moves.
+    """
+    lines = DEFAULT_TAIL * 2 + 10 if lines is None else lines
+    return capture + "".join(
+        f"  [PASS] later sweep assertion {i}\n" for i in range(lines))
+
+
+def retained_tail(capture: str) -> list[str]:
+    """The ordinary lines the runner would actually print beside the block."""
+    ordinary = probe_runner_diagnostics.without_failure_records(capture)
+    return ordinary.splitlines()[-DEFAULT_TAIL:]
+
+
+def test_a_failed_sweep_check_records_its_own_label() -> None:
+    print("\n-- one failed check produces exactly one durable record, "
+          "carrying the whole label and naming the sweep as its producer")
+    checks, capture = run_checks_capturing(SAMPLE_FAILURES[:1])
+    records = probe_runner_diagnostics.failure_records(capture)
+    expect(len(records) == 1,
+           f"exactly one record, so the runner names it once (got "
+           f"{records!r})")
+    expect(records[0].kind == "check",
+           f"in the 'check' vocabulary, not 'setup' -- a sweep assertion "
+           f"is a product failure, not a fixture one (got {records[0]!r})")
+    expect(records[0].identity == SWEEP_FAILURE_PRODUCER,
+           f"naming {SWEEP_FAILURE_PRODUCER!r} as its producer, so a "
+           f"sweep-own assertion stays distinguishable from a nested "
+           f"probe's (got {records[0].identity!r})")
+    expect(records[0].detail == SAMPLE_FAILURES[0],
+           f"and carrying the COMPLETE label, which is the only thing "
+           f"identifying which check this was (got {records[0].detail!r})")
+    expect(checks.failed == 1,
+           f"the numeric counter the terminal summary reports is unchanged "
+           f"(got {checks.failed})")
+
+
+def test_a_passing_sweep_check_emits_no_failure_marker() -> None:
+    print("\n-- a passing check adds no record and no marker, so a green "
+          "run is exactly as quiet as it was")
+    checks, capture = run_checks_capturing([], SAMPLE_PASSES)
+    expect(probe_runner_diagnostics.FAILURE_MARKER not in capture,
+           f"no failure marker appears anywhere in a passing run (got "
+           f"{capture!r})")
+    expect(probe_runner_diagnostics.failure_records(capture) == [],
+           "and therefore no records at all")
+    expect(probe_runner_diagnostics.failure_attribution(capture) == [],
+           "so the runner's presentation gains nothing for a passing run")
+    expect(capture.splitlines()
+           == [f"  [PASS] {label}" for label in SAMPLE_PASSES],
+           f"the printed verdict lines keep their exact shape, one per "
+           f"check and nothing else (got {capture.splitlines()!r})")
+    expect(checks.failed == 0, f"and nothing is counted (got {checks.failed})")
+
+
+def test_a_passing_check_beside_failing_ones_stays_unrecorded() -> None:
+    print("\n-- among failures, only the FAILED checks are recorded")
+    checks, capture = run_checks_capturing(SAMPLE_FAILURES, SAMPLE_PASSES)
+    details = [record.detail
+               for record in probe_runner_diagnostics.failure_records(capture)]
+    expect(details == SAMPLE_FAILURES,
+           f"every failed label, in order, and no passing one (got "
+           f"{details!r})")
+    for label in SAMPLE_PASSES:
+        expect(label not in "\n".join(
+                   probe_runner_diagnostics.failure_attribution(capture)),
+               f"the passing check {label!r} is named nowhere in the "
+               f"failure presentation")
+    expect(checks.failed == len(SAMPLE_FAILURES),
+           f"the counter still counts only failures (got {checks.failed})")
+
+
+def test_every_failed_check_survives_outside_the_retained_tail() -> None:
+    print("\n-- every failed check is named even when the runner's default "
+          "--tail 25 has long since scrolled past all of them")
+    _, capture = run_checks_capturing(SAMPLE_FAILURES, SAMPLE_PASSES)
+    buried = bury(capture)
+
+    # The precondition: without it this case would pass on a `Checks` that
+    # records nothing, purely because the tail still happened to hold the
+    # printed [FAIL] lines.
+    tail = "\n".join(retained_tail(buried))
+    for label in SAMPLE_FAILURES:
+        expect(label not in tail,
+               f"{label!r} really is outside the retained tail, so only a "
+               f"durable record can bring it back")
+
+    got = probe_runner_diagnostics.failure_attribution(buried)
+    text = "\n".join(got)
+    for label in SAMPLE_FAILURES:
+        expect(text.count(label) == 1,
+               f"{label!r} is named exactly once by the attribution (got "
+               f"{got!r})")
+    expect(f"{len(SAMPLE_FAILURES)} recorded failure(s)" in text,
+           f"the block counts every one of them (got {got!r})")
+    expect(SWEEP_FAILURE_PRODUCER in text,
+           f"and attributes them to the sweep (got {got!r})")
+    expect("later sweep assertion 0" not in text,
+           f"without dumping the capture it read (got {got!r})")
+
+
+def test_sweep_failure_records_are_not_consumed_by_phase_attribution() -> None:
+    print("\n-- the failed-check records and #1768's phase records stay on "
+          "separate channels, and neither reader eats the other's")
+    emitter = CapturedEmitter()
+    for identity in SWEEP_PHASE_IDENTITIES:
+        announce_phase(emitter, identity, f"detail for {identity}")
+    _, failures = run_checks_capturing(SAMPLE_FAILURES)
+    combined = bury("\n".join(emitter.lines) + "\n" + failures)
+
+    progress = probe_runner_diagnostics.progress_attribution(combined)
+    progress_text = "\n".join(progress)
+    for label in SAMPLE_FAILURES:
+        expect(label not in progress_text,
+               f"phase attribution does not report {label!r}: 'where was "
+               f"it' is not 'what failed' (got {progress!r})")
+    expect(SWEEP_PHASE_IDENTITIES[-1] in progress_text,
+           f"while still naming the latest phase (got {progress!r})")
+
+    failure_text = "\n".join(
+        probe_runner_diagnostics.failure_attribution(combined))
+    for identity in SWEEP_PHASE_IDENTITIES:
+        expect(f"detail for {identity}" not in failure_text,
+               f"and the failure block does not report the {identity!r} "
+               f"phase record (got {failure_text!r})")
+
+    # Records-only captures, so neither result can be carried by the other
+    # convention's lines happening to be present.
+    expect(probe_runner_diagnostics.failure_attribution(
+               "\n".join(emitter.lines) + "\n") == [],
+           "phase records alone yield no failure attribution")
+    expect(probe_runner_diagnostics.progress_attribution(failures) == [],
+           "and failed-check records alone yield no phase attribution")
+
+
+def test_the_failure_records_are_removed_from_the_ordinary_tail() -> None:
+    print("\n-- the records are presented in the failure block and taken "
+          "out of the tail beside it, never printed twice")
+    _, capture = run_checks_capturing(SAMPLE_FAILURES)
+    ordinary = probe_runner_diagnostics.without_failure_records(capture)
+    expect(probe_runner_diagnostics.FAILURE_MARKER not in ordinary,
+           f"no raw record reaches the ordinary tail (got {ordinary!r})")
+    expect(ordinary.splitlines()
+           == [f"  [FAIL] {label}" for label in SAMPLE_FAILURES],
+           f"which keeps exactly the printed verdict lines the sweep "
+           f"always had (got {ordinary.splitlines()!r})")
+
+
 def main() -> int:
     selftestlib.parse_verbose()
     test_todays_selectable_keys_are_all_registered()
@@ -195,14 +450,20 @@ def main() -> int:
     test_an_undeclared_phase_is_refused_rather_than_emitted()
     test_every_declared_phase_emits_a_record_the_runner_recognizes()
     test_the_latest_sweep_phase_survives_a_long_tail()
+    test_a_failed_sweep_check_records_its_own_label()
+    test_a_passing_sweep_check_emits_no_failure_marker()
+    test_a_passing_check_beside_failing_ones_stays_unrecorded()
+    test_every_failed_check_survives_outside_the_retained_tail()
+    test_sweep_failure_records_are_not_consumed_by_phase_attribution()
+    test_the_failure_records_are_removed_from_the_ordinary_tail()
     if FAILURES:
         print(f"\n{len(FAILURES)} test(s) failed:")
         for failure in FAILURES:
             print(f"  {failure}")
         return selftestlib.concluded(1)
     return selftestlib.concluded(
-        0, "\nAll persistence_contract_sweep registry-drift and "
-        "phase-record tests passed")
+        0, "\nAll persistence_contract_sweep registry-drift, phase-record "
+        "and failed-check-record tests passed")
 
 
 if __name__ == "__main__":

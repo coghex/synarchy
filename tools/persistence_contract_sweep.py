@@ -88,7 +88,7 @@ from pathlib import Path
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
 from persistence_snapshot import compare_session_files
-from probe_runner_diagnostics import ProgressEmitter
+from probe_runner_diagnostics import FailureEmitter, ProgressEmitter
 from probe_runner_registry import PROBES as REGISTERED_PROBES
 from save_compat_audit import dump_canonical_summary
 
@@ -220,14 +220,58 @@ def unregistered_selectable_probe_keys(
     return [k for k in selectable if k not in registered_keys]
 
 
+# ── Durable failed-check records (#2060) ──────────────────────────────
+#
+# `Checks.ok` below prints one `[PASS]`/`[FAIL]` line per check, and the
+# terminal summary at the end of `main` retains only a COUNT: `FAIL: N
+# check(s) failed`. `tools/run_probes.py` launches this sweep as a plain
+# `python3` into a pipe it drains at exit and then presents a bounded
+# `--tail 25` of it, so a failed check with more than that much output
+# after it is truncated out of the retained artifact entirely. The
+# 2026-08-31 run (`20260831T001852Z-probe-persistence-contract-sweep-
+# 296b3d`) is exactly that: it reports two failed checks and names one of
+# them nowhere, and the second is unrecoverable.
+#
+# #1982 already built the remedy and this sweep had simply not adopted
+# it: ONE flushed `#probe-failure#` record per failed check, which
+# `failure_attribution` reads back from the COMPLETE capture in both the
+# sequential and the `--jobs N` presentation, independent of tail length.
+# So position in the stream stops mattering here for the same reason it
+# stopped mattering there.
+#
+# This is a DIFFERENT question from the phase records above, and the two
+# markers stay disjoint so neither consumer reads the other's records:
+# `progress_attribution` answers "where was it" (#1768), and
+# `failure_attribution` answers "what failed". A record emitted here
+# names this script as its producer, so a sweep-own assertion stays
+# distinguishable from a failure attributed to a cross-referenced probe.
+SWEEP_FAILURE_PRODUCER = "persistence_contract_sweep"
+
+
 class Checks:
-    def __init__(self) -> None:
+    """The sweep's own assertions: printed, counted, and durably recorded.
+
+    `failure` is this run's `FailureEmitter` (#2060). It is a parameter
+    rather than a module global so `main` can hand over one whose elapsed
+    offsets are measured from the same moment as the phase records', and
+    so the engine-free tests can drive the real emitter without a real
+    run. Omitting it constructs the sweep's own.
+    """
+
+    def __init__(self, failure: FailureEmitter | None = None) -> None:
         self.failed = 0
+        self.failure = (FailureEmitter(SWEEP_FAILURE_PRODUCER)
+                        if failure is None else failure)
 
     def ok(self, cond: bool, label: str) -> None:
         print(f"  [{'PASS' if cond else 'FAIL'}] {label}")
         if not cond:
             self.failed += 1
+            # Only a FAILED check emits: a passing check keeps exactly the
+            # single printed line it always had, so a green run gains no
+            # output at all. The label is passed whole -- it is the only
+            # thing that identifies which check this was.
+            self.failure.check(label)
 
 
 def make_isolated_root(base: str) -> str:
@@ -582,10 +626,12 @@ def main() -> int:
                           "as reduced coverage, never the default)")
     args = ap.parse_args()
     port = args.port
-    chk = Checks()
     # #1768: every phase offset below is measured from here -- argument
     # parsing onward is this run's whole occupancy of the runner's budget.
     progress = ProgressEmitter()
+    # #2060: the failed-check records share that start, so a record's
+    # "+412.7s" and the phase it landed in read against one clock.
+    chk = Checks(FailureEmitter(SWEEP_FAILURE_PRODUCER, start=progress.start))
 
     # Registry-drift guard (#1321) -- unconditional, cheap, and engine-free:
     # a stale SELECTABLE_CROSS_REFERENCED_PROBE_KEYS entry must fail loudly
