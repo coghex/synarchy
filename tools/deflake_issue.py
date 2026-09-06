@@ -212,7 +212,7 @@ def _sibling(name: str):
         f"{__package__}.{name}" if __package__ else name)
 
 
-deflake_diagnosis = _sibling("deflake_diagnosis")
+deflake_contract = _sibling("deflake_contract")
 deflake_handoff = _sibling("deflake_handoff")
 probe_census = _sibling("probe_census")
 
@@ -292,9 +292,9 @@ require_reconciled_issue = _tracker.require_reconciled_issue
 # how a census row stops being greppable against the diagnosis that
 # produced it.
 HANDOFF_SCHEMA = deflake_handoff.HANDOFF_SCHEMA
-ROUTE = deflake_diagnosis.ROUTE_PRODUCTION_DEFECT
+ROUTE = deflake_contract.ROUTE_PRODUCTION_DEFECT
 OUTCOME_PRODUCTION_DEFECT = ROUTE
-OWNER_ISSUE = deflake_diagnosis.ROUTE_OWNER[ROUTE]
+OWNER_ISSUE = deflake_contract.ROUTE_OWNER[ROUTE]
 
 ROLE_HANDOFF = deflake_handoff.ROLE_HANDOFF
 ROLE_BASELINE = deflake_handoff.ROLE_BASELINE
@@ -700,8 +700,8 @@ def main(argv=None) -> int:
 
     try:
         handoff = accept(_load(args.handoff, "outcome handoff"),
-                         worktrees=deflake_diagnosis.worktree_paths(),
-                         primary=deflake_diagnosis.primary_checkout())
+                         worktrees=deflake_contract.worktree_paths(),
+                         primary=deflake_contract.primary_checkout())
         if args.origin is None:
             # Required by a dry run too: the marker is part of the body,
             # so a preview rendered under an assumed brand would not be

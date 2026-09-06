@@ -28,7 +28,10 @@ data Wound = Wound
       -- ^ "slash" / "stab" / "blunt" — drives bleed_factor, pain
       --   factor, healing characteristics, and combat-log flavor.
     , woundSeverity ∷ !Float
-      -- ^ inflicted severity 0..1, static for the wound's lifetime.
+      -- ^ inflicted severity, static for the wound's lifetime. Bounded
+      --   by 'Unit.Injury.capInjurySeverity' at the combat and fall
+      --   sources — 0.4 for "blunt", 1.6 otherwise — so it is NOT
+      --   limited to 1: >= 1 is the lethal (crushed/fatal) outcome.
       --   This is NOT the number that drives pain, bleed and
       --   impairment: those read the EFFECTIVE severity, which
       --   'woundEffSeverity' owns (healing eases it, necrosis floors

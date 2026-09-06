@@ -1288,6 +1288,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.TransferOrderApi
                    Test.Headless.Unit.CargoApi
+                   Test.Headless.Unit.WoundsApi
                    Test.Headless.Unit.MedicalReach
                    Test.Headless.Unit.MedicalKitInstance
                    Test.Headless.Unit.NightPerception
@@ -1477,6 +1478,8 @@ test-suite synarchy-test-headless
                    Test.Headless.Event.PopupCoordPage
                    Test.Headless.UI.PopupQueueTeardown
                    Test.Headless.UI.ResponsiveMenus
+                   Test.Headless.UI.ResponsiveMenus.Fixture
+                   Test.Headless.UI.ResponsiveMenus.DebugConsole
                    Test.Headless.UI.ResponsiveGameplay
                    Test.Headless.UI.ResponsiveGameplay.Fixture
                    Test.Headless.UI.ResponsiveGameplay.Lifecycle
