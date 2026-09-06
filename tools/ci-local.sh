@@ -147,7 +147,19 @@ step "headless hspec suite (full tier)"
 # --test-options carries Hspec's --print-slow-items=20 (#2277), matching
 # both of CI's branches, so this step ends with the twenty slowest spec
 # items locally too. It is a diagnostic: no threshold here fails the gate.
-SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20'
+#
+# It also carries --format=failed-examples (#1916), again matching both
+# of CI's branches -- this gate mirrors the workflow, so the two entry
+# points must request the SAME presentation. That formatter prints
+# nothing per example, so a passing run's output is a constant handful
+# of lines rather than one per each of test-headless/'s five-thousand-odd
+# examples, while a failing run still prints every failure in full (path,
+# location, diff) and both runs still end with the `Finished in ...` /
+# `N examples, M failures` footer that --test-show-details=direct
+# forwards. It deliberately does NOT live in test-headless/Spec.hs or a
+# repo-root .hspec, either of which would also silence a developer's own
+# targeted `cabal test`.
+SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
 
 step "test audit"
 python3 tools/test_audit.py

@@ -557,15 +557,38 @@ jobs:
       # world generations; that list is what names them without diffing
       # log timestamps by hand. It is a DIAGNOSTIC, not a gate: no
       # threshold here fails a run.
+      #
+      # The same --test-options carries Hspec's --format=failed-examples
+      # (#1916). test-headless/ holds over five thousand examples, and
+      # the default `specdoc` formatter prints a line for every one of
+      # them that PASSES, which --test-show-details=direct forwards
+      # straight into this log. `failed-examples` prints nothing per
+      # example -- no description and no progress mark -- so a passing
+      # run's formatter output is a constant handful of lines instead of
+      # one per example, and a failure is no longer buried in thousands
+      # of successes. It costs no failure detail: the formatter still
+      # emits the full Failures block (each failing example's
+      # describe/it path, source location and expectation diff), the
+      # seed, and the `Finished in ...` / `N examples, M failures`
+      # footer -- which is also what keeps a passing run distinguishable
+      # from a run that executed nothing. --print-slow-items is applied
+      # by the runner around whatever formatter is selected, so the
+      # slowest-items list above survives unchanged.
+      #
+      # This lives on the two CI command lines ON PURPOSE, and not in
+      # test-headless/Spec.hs or a repo-root .hspec: either of those
+      # would also silence a developer's own `cabal test`, where the
+      # per-example descriptions are the point. --test-show-details=direct
+      # stays on both branches so the footer still reaches this log.
       - name: Headless test suite
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |
           if [ "${{ steps.expensive-gates.outputs.worldgen }}" = true ]; then
             echo "worldgen gate fired: running the full tier (SYNARCHY_FULL_TESTS=1)."
-            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20'
+            SYNARCHY_FULL_TESTS=1 cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
           else
             echo "worldgen gate did not fire: full-tier examples stay pending."
-            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20'
+            cabal test synarchy-test-headless -v0 --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
           fi
 
       # Guard (issue #766, save-overhaul C4 requirement 14): fails if a
