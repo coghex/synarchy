@@ -174,8 +174,9 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
     as the malformed markup it is rather than silently matching some
     other pair's text.
 
-    A pair whose markers OR BODY lie in a verbatim region is REPORTED
-    and not returned. Checking only the opening marker was not enough:
+    A pair whose markers or body lie in a verbatim region, or whose
+    BODY carries an HTML comment delimiter of its own, is REPORTED and
+    not returned. Checking only the opening marker was not enough:
     a fence opened immediately after it and closed immediately before
     the closing marker turns the whole governed paragraph into a
     rendered example while both markers sit in ordinary prose.
@@ -214,6 +215,27 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
                 f"offset {nested} before the first closes) -- the "
                 f"governed prose must be one flat block")
         cursor = end + len(close_marker)
+        body = text[body_start:end]
+        # An HTML comment opened INSIDE the span hides everything to
+        # its `-->`. `fenced_line_flags` cannot see this one: it
+        # deliberately excludes type-2 comments, because the markers
+        # themselves are comments and would otherwise be read as
+        # opening a block over their own content. So the body is held
+        # to carrying no comment delimiter at all -- which also
+        # subsumes the nested-pair case above, since a nested opening
+        # marker is a comment too.
+        stray_comment = next(
+            (token for token in ("<!--", "-->") if token in body), None)
+        if stray_comment is not None:
+            violations.append(
+                f"`{open_marker}` at offset {start} in "
+                f"docs/{INVENTORY_PATH.name} has {stray_comment!r} in "
+                f"its body -- a comment opened between the markers "
+                f"hides the governed text from every reader while "
+                f"leaving it for this audit to parse, and one closed "
+                f"there ends the marker pair early. The markers are the "
+                f"only comments the block may contain")
+            continue
         first = text.count("\n", 0, start)
         last = text.count("\n", 0, cursor)
         verbatim = [index for index in range(first, min(last + 1, len(fenced)))

@@ -690,7 +690,9 @@ def test_record_counts_row_vocabulary_rejects_every_hidden_construct():
     live = ("`Engine.Core.Capability.Alpha` \u2014 `AlphaCapability` "
             "(2 fields)")
     reported = {
-        "HTML comment": f"<!-- {live} -->",
+        # An HTML COMMENT in a cell is refused one level up, by the
+        # span rule that allows no comment delimiter in a body, so it
+        # is tested there rather than here.
         "CSS-hidden span": f'<span style="display:none">{live}</span>',
         "link title": f'[](# "{live}")',
         "image": f"![{live}](x.png)",
@@ -724,7 +726,8 @@ def test_record_counts_vocabulary_names_the_construct():
     maintainer who writes `<span>` is told it is raw HTML."""
     live = ("`Engine.Core.Capability.Alpha` \u2014 `AlphaCapability` "
             "(2 fields)")
-    rows = _CLEAN_ROWS.replace(live, f"<!-- {live} -->", 1)
+    rows = _CLEAN_ROWS.replace(
+        live, f'<span style="display:none">{live}</span>', 1)
     violations = audit_record_counts(_SOURCES, _counts_doc(rows))
     expect(any("raw HTML or an autolink" in v for v in violations),
            f"the diagnostic must name the construct, got: {violations}")
@@ -824,6 +827,47 @@ def test_record_counts_real_header_row_is_governed_too():
     expect(any("header" in v for v in audit_record_counts(
                    sources, smuggled)),
            "a stale size in the real table's header must be rejected")
+
+
+def test_marked_span_body_may_not_carry_a_comment_delimiter():
+    """Round 13's finding. `fenced_line_flags` excludes CommonMark
+    type-2 comments by design -- the markers ARE comments, and reading
+    one as opening a block over its own content would fail every clean
+    document. So a `<!--` opened just inside a span hid the whole
+    governed paragraph from every reader while this audit went on
+    parsing the hidden source.
+
+    Proven on §1, whose body is prose: §2.1's row vocabulary already
+    refuses a `<` in a table row, so §1 is where the escape was live.
+    """
+    live = extract_record_fields(real_engine_env_source(),
+                                 ENGINE_ENV_PATTERN)
+    document = real_inventory_text()
+    commented = document.replace(
+        FIELD_TOTAL_OPEN, FIELD_TOTAL_OPEN + "\n<!--", 1)
+    commented = commented.replace(
+        FIELD_TOTAL_CLOSE, "-->\n" + FIELD_TOTAL_CLOSE, 1)
+    expect(commented != document, "the fixture must change the document")
+    expect(audit_field_total(live, document) == [],
+           "the uncommented real §1 block must still pass")
+    expect(any("in its body" in v
+               for v in audit_field_total(live, commented)),
+           "commenting out the real §1 block's BODY must be rejected")
+
+
+def test_marked_span_comment_rule_covers_the_record_table_too():
+    """The same rule on §2.1, where it is the second line of defence
+    behind the row vocabulary."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    commented = document.replace(
+        RECORD_COUNTS_OPEN, RECORD_COUNTS_OPEN + "\n<!--", 1)
+    commented = commented.replace(
+        RECORD_COUNTS_CLOSE, "-->\n" + RECORD_COUNTS_CLOSE, 1)
+    expect(commented != document, "the fixture must change the document")
+    expect(any("in its body" in v
+               for v in audit_record_counts(sources, commented)),
+           "commenting out the real §2.1 table must be rejected")
 
 
 def test_record_counts_ragged_row_rejected():
@@ -1065,6 +1109,8 @@ TESTS = (
     test_record_counts_size_in_a_real_non_audited_column_rejected,
     test_record_counts_header_row_is_governed_too,
     test_record_counts_real_header_row_is_governed_too,
+    test_marked_span_body_may_not_carry_a_comment_delimiter,
+    test_marked_span_comment_rule_covers_the_record_table_too,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
