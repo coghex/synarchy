@@ -421,20 +421,23 @@ function M.register(aiState)
         end,
     })
 
-    -- The unit-AI family's TRANSIENT coordination tables (#1329): the
-    -- five coordinate claim registries, repairClaims/repairPriority, and
-    -- #916's three same-tick encounter overlays. None lives in aiState or
-    -- is persisted. registerResetHook fires unconditionally on every
-    -- load -- including a load whose envelope carries no data for this
-    -- module family at all -- which is exactly the contract these need:
-    -- a load REPLACES the session, both id allocators rewind, and the
-    -- loaded clock can be EARLIER than the session that wrote a claim,
-    -- so the `now - c.at > timeout` expiry would not fire until game
-    -- time caught up. onSaveLoaded is the wrong hook for the same job:
-    -- it only reconciles aiState, and it is a post-publication
-    -- broadcast, so a load rejected before publication must leave the
-    -- live session's claims intact -- which it does, because applyAll
-    -- runs reset hooks only after every component has committed.
+    -- The unit-AI family's ELEVEN TRANSIENT coordination tables
+    -- (#1329): the five coordinate claim registries,
+    -- repairClaims/repairPriority, and #916's four same-tick encounter
+    -- overlays (localEpisodeActive, localEpisodeAggression,
+    -- localEpisodeDisengaged, localParticipation). None lives in
+    -- aiState or is persisted. registerResetHook fires unconditionally
+    -- on every load -- including a load whose envelope carries no data
+    -- for this module family at all -- which is exactly the contract
+    -- these need: a load REPLACES the session, both id allocators
+    -- rewind, and the loaded clock can be EARLIER than the session that
+    -- wrote a claim, so the `now - c.at > timeout` expiry would not
+    -- fire until game time caught up. onSaveLoaded is the wrong hook
+    -- for the same job: it only reconciles aiState, and it is a
+    -- post-publication broadcast, so a load rejected before publication
+    -- must leave the live session's claims intact -- which it does,
+    -- because applyAll runs reset hooks only after every component has
+    -- committed.
     --
     -- Its id is NOT "unit_ai": that belongs to the persistent component
     -- registered above, and saveModules refuses a reset-hook/component
