@@ -229,12 +229,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- world.init. 'sendGenLog' still receives the COMPLETE list,
     -- unfiltered and in the original order, because that queue IS a live
     -- UI surface: LuaWorldGenLog → onWorldGenLog → create_world_menu's
-    -- loading screen. Demoting to 'logDebug CatWorld' would have hidden
-    -- the detail outright rather than gating it, since
-    -- 'Engine.Core.Log.Types.parseCategory' and ENGINE_DEBUG=all both omit
-    -- CatWorld (#1915); the generation log is the reachable sink. The
-    -- concise Info milestone for the whole initialization already exists
-    -- — the "World initialized" line at the end of this function.
+    -- loading screen, and it is what keeps the detail available for
+    -- diagnosis rather than dropping it. No 'logDebug CatWorld' copy is
+    -- added alongside it: that would put the same lines back on a second
+    -- sink, which is the duplication being removed here. The concise Info
+    -- milestone for the whole initialization already exists — the
+    -- "World initialized" line at the end of this function.
     let plateLines = formatPlatesSummary seed worldSize placeCount registry
     mapM_ (sendGenLog env) plateLines
 
