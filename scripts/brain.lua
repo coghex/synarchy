@@ -42,13 +42,40 @@
 --   consciousness formula used, extended one level up. It does NOT drive
 --   the collapse/delirious/confused machinery (that stays physiological-
 --   only, on purpose — a heartbroken-but-healthy unit shouldn't pass
---   out); it's the read-only summary value for logs, UI, and future
---   tie-ins (thoughts #351, mood-gated efficiency #353).
+--   out) — but it is not inert either. It is DERIVED HERE: brain.tick
+--   below computes and stores it (this file holds its only production
+--   writer and its brain.stateOfMind accessor), and #352's mental-state
+--   threshold machine (scripts/mental_state.lua) reads that stored
+--   value as a live behavioural input — the stressed label and its
+--   hysteresis band, euphoria entry/exit, and the break roll's severity
+--   are all thresholds on it.
+--
+--   A break episode therefore has AI consequences: it preempts ordinary
+--   AI scoring through the same short-circuit delirium uses
+--   (scripts/unit_ai_mental.lua), then runs its own break behaviour —
+--   wander, flee, catatonia, or lash-out — so the two branches
+--   short-circuit alike without acting alike.
+--
+--   Ordering (scripts/unit_resources.lua): brain.tick → thoughts.tick →
+--   mental.tick. mental.tick thresholds the state_of_mind brain.tick
+--   computed on that same tick; a thought's mood nudge in between only
+--   reaches state_of_mind on the NEXT brain.tick, per the drift
+--   contract.
+--
+--   brain.summary / mental.summary also expose the value, but only for
+--   the debug console and the probes — nothing about logs or UI gates
+--   on it. And the neighbouring systems read the SUBSTRATE rather than
+--   the aggregate: #351's thoughts (scripts/thoughts.lua) read mood
+--   plus the normalized pain / hunger / stamina fractions, the ambient
+--   environment, and the mental state, and may write mood back;
+--   #353's canonical multiplier
+--   (Combat.Resolution.Common.mentalEffectiveness) reads concentration
+--   plus mental_state == 3 (EUPHORIC). Neither one reads state_of_mind.
 --
 -- This is what makes a unit PASS OUT before a temperature/hypoxia/salt
 -- death meter finishes — the "cooks in the desert, passes out, then
 -- dies" arc — and, on the psychological side, what gives #351's thought
--- system a mood/emotional_pain substrate to read and move.
+-- system a mood substrate to read and move.
 
 local stats = require("scripts.unit_stats")
 
@@ -203,7 +230,11 @@ end
 
 -- Unified aggregate: the worst of the physiological floor (consciousness)
 -- and the psychological one (mood, dragged down by lingering emotional
--- pain). Read-only summary — nothing gates on this directly.
+-- pain). Derived here and stored by brain.tick below; #352's threshold
+-- machine (scripts/mental_state.lua) then gates the stressed label, the
+-- euphoria band, and the break roll on that stored value. It still does
+-- not drive collapse/delirious/confused — see the file header for the
+-- full ownership chain.
 local function computeStateOfMind(consciousness, mood, emotionalPain)
     local wellbeing = clamp(mood - 0.5 * emotionalPain, 0, 1)
     return math.min(consciousness, wellbeing)
