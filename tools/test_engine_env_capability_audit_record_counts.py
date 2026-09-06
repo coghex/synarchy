@@ -246,6 +246,50 @@ def test_record_counts_block_without_a_table_rejected():
            f"{violations}")
 
 
+def test_record_counts_second_table_in_the_block_rejected():
+    """The round-1 review's finding: a second table inside the marked
+    block. Its rows used to be appended to the first table's and read
+    at the FIRST table's column index, so a stale size sitting in a
+    differently-ordered second table was displayed in the governed
+    block and checked by nothing."""
+    smuggled = (
+        "\nHistorical, for reference:\n\n"
+        f"| Identifier | Landed by | {RECORD_COLUMN_HEADER} |\n"
+        "|---|---|---|\n"
+        "| `alpha-beta` | epic E-one | `Engine.Core.Capability.Alpha` — "
+        "`AlphaCapability` (9 fields) |\n")
+    doc = _counts_doc().replace(RECORD_COUNTS_CLOSE,
+                                smuggled + RECORD_COUNTS_CLOSE, 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any("Markdown tables -- exactly one" in v for v in violations),
+           f"a second table inside the marked block must be rejected, "
+           f"got: {violations}")
+
+
+def test_record_counts_second_table_smuggling_a_stale_size_rejected():
+    """The same hole against the REAL document and the REAL records: a
+    second table displaying `WorldSimCapability` (9 fields) -- the very
+    figure issue #2269 removed -- inside the marked block. Nothing else
+    in this owner catches it: the audited column of the first table
+    still reads 11, and the outside-the-block sweep does not reach
+    inside the block."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    smuggled = document.replace(
+        RECORD_COUNTS_CLOSE,
+        "\nHistorical, for reference:\n\n"
+        f"| Identifier | Landed by | {RECORD_COLUMN_HEADER} |\n"
+        "|---|---|---|\n"
+        "| `world-sim-render-handoff` | epic E-five-a | "
+        "`Engine.Core.Capability.WorldSim` — `WorldSimCapability` "
+        "(9 fields) |\n\n" + RECORD_COUNTS_CLOSE, 1)
+    expect(smuggled != document, "the fixture must actually change the "
+                                 "real document")
+    expect(audit_record_counts(sources, smuggled) != [],
+           "a stale record size displayed in a second table inside the "
+           "real marked block must be rejected")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -453,6 +497,8 @@ TESTS = (
     test_record_counts_renamed_column_rejected,
     test_record_counts_empty_table_rejected,
     test_record_counts_block_without_a_table_rejected,
+    test_record_counts_second_table_in_the_block_rejected,
+    test_record_counts_second_table_smuggling_a_stale_size_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,

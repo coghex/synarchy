@@ -164,6 +164,34 @@ def live_record_sizes(sources: dict[str, str]
     return sizes, violations
 
 
+def _pipe_runs(block: str) -> list[list[str]]:
+    """The block's maximal runs of consecutive `|`-leading lines.
+
+    A Markdown table is exactly such a run: a blank line or a line of
+    prose ends it. Grouping rather than filtering is what makes a
+    SECOND table in the block visible. Collecting every pipe-leading
+    line into one list instead -- the first shape of this parser --
+    silently appended the second table's header and rows to the first
+    table's, where they were read at the FIRST table's column index. A
+    second three-column table whose columns are ordered differently
+    then displayed a stale record size in the governed block, in the
+    cell this owner never looked at, and the audit passed.
+    """
+    runs: list[list[str]] = []
+    current: list[str] = []
+    for line in block.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            current.append(stripped)
+            continue
+        if current:
+            runs.append(current)
+            current = []
+    if current:
+        runs.append(current)
+    return runs
+
+
 def parse_record_column(block: str) -> tuple[list[str], list[str]]:
     """`(cells, violations)` -- the record column of the block's one
     Markdown table.
@@ -176,12 +204,19 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
     sees in that column and not whatever a regex happened to reach.
     """
     violations: list[str] = []
-    rows = [line.strip() for line in block.splitlines()
-            if line.strip().startswith("|")]
-    if not rows:
+    runs = _pipe_runs(block)
+    if not runs:
         return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block contains "
                     f"no Markdown table -- the audited record/view table "
                     f"must be inside it"]
+    if len(runs) > 1:
+        return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block contains "
+                    f"{len(runs)} Markdown tables -- exactly one may be "
+                    f"inside it. Only the audited column of ONE table is "
+                    f"read, so a second table is a place inside the "
+                    f"governed block for a record size that nothing "
+                    f"checks"]
+    rows = runs[0]
 
     def cells(row: str) -> list[str]:
         return [cell.strip() for cell in row.strip("|").split("|")]
