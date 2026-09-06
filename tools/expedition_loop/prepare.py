@@ -110,7 +110,8 @@ def shed_to_capacity(port: int, uid: int, headroom: float = 0.0) -> int:
     fixture that had not left room for the loot.
 
     This is what a player does before an expedition, and skipping it is
-    a real flake rather than a nicety: `docs/expedition_survival_calibration.md`
+    a real flake rather than a nicety:
+    `docs/history/expedition_survival_calibration_2026-07.md`
     observation E1 recorded a small acolyte walking a whole route at
     121% of capacity, where the encumbrance penalty roughly halved its
     speed and pinned its stamina at ~2/8.5. A traveller that slow makes

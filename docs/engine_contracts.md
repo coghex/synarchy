@@ -2373,7 +2373,8 @@ theatre — and the traps found while building it.
    `foraging_probe.py`.
 2. **BOTH travellers shed to inside carrying capacity first.** An
    over-encumbered acolyte crawls, its order stall-times-out, and it never
-   arrives (`docs/expedition_survival_calibration.md` E1).
+   arrives (`docs/history/expedition_survival_calibration_2026-07.md`
+   observation E1).
 3. **The control gets NO retrieval target of its own** — a ruin can roll
    food, and a control that eats what it finds destroys the measurement.
 4. **The travel VERB matches.** `commandMove` walks at

@@ -66,8 +66,9 @@ end
 --
 -- Constant while a session names this unit, which is the whole point.
 -- unit.setFrozen is NOT this (it only pins the render publish while the
--- sim keeps walking) -- docs/expedition_survival_calibration.md E3
--- measured that. Neither is #1216's position hold, which is a different
+-- sim keeps walking) -- observation E3 in
+-- docs/history/expedition_survival_calibration_2026-07.md measured
+-- that. Neither is #1216's position hold, which is a different
 -- thing that looks similar: it stands a unit on the tile its own
 -- COMPLETED move order named, at follow_command's 7.0 rather than this
 -- 7.5, so a session still outranks and supersedes it (M.create clears

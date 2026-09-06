@@ -85,11 +85,12 @@ observation point.
 
 The gated metric is FOOD, not water, and that is a deliberate choice
 grounded in this repository's own calibration record rather than a
-convenience. `docs/expedition_survival_calibration.md` measured a real
-48-tile round trip and found that hunger pressure genuinely becomes live
-on it — both acolytes crossed `eat_max_fraction` and ate on the return
-leg, one finishing with no rations at all — while hydration pressure
-never did: a unit at ~85% never reaches `drink_min_thirst`, so its
+convenience. `docs/history/expedition_survival_calibration_2026-07.md`
+measured a real 48-tile round trip and found that hunger pressure
+genuinely becomes live on it — both acolytes crossed `eat_max_fraction`
+and ate on the return leg, one finishing with no rations at all — while
+hydration pressure never did: a unit at ~85% never reaches
+`drink_min_thirst`, so its
 canteen is never touched. Forcing thirst live would mean seeding a
 dehydration deep enough that a *different* mechanism takes over:
 `scripts/salts.lua` derives blood salt concentration as
@@ -152,8 +153,9 @@ order is issued only AFTERWARDS, in the extract stage.
 
 What CANNOT also be equalised is elapsed time, and that is a deliberate
 choice rather than an oversight. Acolyte walking speed varies with body
-mass by roughly 1.5x (`docs/expedition_survival_calibration.md`), so
-two travellers covering the same distance necessarily take different
+mass by roughly 1.5x
+(`docs/history/expedition_survival_calibration_2026-07.md`), so two
+travellers covering the same distance necessarily take different
 amounts of it; equalising place and equalising time are mutually
 exclusive. Place is the one that is fixed, because it is the one the
 scenario is about — "the party got to the ruin" — and because the
@@ -176,7 +178,8 @@ to provide. The control is a control for the JOURNEY; extraction is
 #920's probe's job.
 
 Encumbrance is levelled too: both travellers are shed to inside their
-carrying capacity before departure. `docs/expedition_survival_calibration.md`
+carrying capacity before departure.
+`docs/history/expedition_survival_calibration_2026-07.md`
 observation E1 recorded a small acolyte walking a whole route at 121% of
 capacity at roughly half speed, and a traveller that slow makes no new
 closest approach inside `pickup_timeout`, so its order is correctly
