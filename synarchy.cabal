@@ -1288,6 +1288,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.TransferApi
                    Test.Headless.Unit.TransferOrderApi
                    Test.Headless.Unit.CargoApi
+                   Test.Headless.Unit.WoundsApi
                    Test.Headless.Unit.MedicalReach
                    Test.Headless.Unit.MedicalKitInstance
                    Test.Headless.Unit.NightPerception
