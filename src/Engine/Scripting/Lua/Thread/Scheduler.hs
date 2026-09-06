@@ -80,6 +80,23 @@
 --   failure path releases the gate and then terminalises the load, which
 --   clears the predicate through 'lsOutcome'.
 --
+--   == The carry never survives a load cutover
+--
+--   'handleLoadStaged' flushes @luaQueue@ on THIS thread, after the Lua
+--   apply succeeds and before @WorldLoadPublish@ is queued, so that a
+--   click or console call queued for the REPLACED session cannot fire
+--   against its replacement. The scheduler's one buffered message must
+--   not escape that flush.
+--
+--   It cannot, and the ordering inside 'engineBatch' is what guarantees
+--   it: the carry slot is read and CLEARED before the round takes
+--   anything off the queue, so by the time any dispatched handler can
+--   flush, the slot is already empty. A future edit that drains the
+--   queue first, or that defers the carry past a dispatch, would let a
+--   stale message outlive the cutover — the one thing this buffer must
+--   never do. A save-only park is the opposite case and keeps its
+--   deferred work: nothing is discarded there.
+--
 --   == What is NOT gated
 --
 --   'Engine.Load.Status.loadInProgress' is deliberately not the
@@ -298,6 +315,10 @@ schedulerRound ctx = continue emptyRoundResult $ \r0 → do
             running ← workerRunning ctx
             if running then k r else pure r { rrHalted = True }
 
+    -- The carry is dispatched BEFORE the queue is read, and cleared
+    -- before it is dispatched. See the module header: a handler that
+    -- flushes @luaQueue@ (the load cutover) must never find a message
+    -- buffered outside the queue for it to miss.
     engineBatch r = do
         carried ← readIORef (scCarryRef ctx)
         nCarry ← case carried of

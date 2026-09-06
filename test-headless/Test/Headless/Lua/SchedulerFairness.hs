@@ -614,6 +614,12 @@ parkSpec = describe "the save/load owner gate and worker control" $ do
         rrConsole r `shouldBe` 2
         rrParked r `shouldBe` True
         joined rig "__cmds" `shouldReturn` "first"
+        -- The console batch is the round's LAST work class, so what the
+        -- recheck after it prevents is the idle wait and the round's own
+        -- continuation: neither may run with the gate shut.
+        rrWaited r `shouldBe` Nothing
+        readIORef (rigWaits rig) `shouldReturn` []
+        readIORef (rigParks rig) `shouldReturn` 1
         leftovers ← drainQueuedCommands rig
         map dcCommand leftovers `shouldBe` ["__cmds[#__cmds+1] = 'third'"]
 
@@ -655,6 +661,51 @@ parkSpec = describe "the save/load owner gate and worker control" $ do
         joined rig "__msgs"
             `shouldReturn` T.intercalate "," [T.pack ('m' : show i)
                                              | i ← [1 .. 10 ∷ Int]]
+
+    it "keeps nothing buffered outside the queue for a load cutover to \
+       \miss" $ \env → do
+        rig ← newRig env
+        registerModule rig 1 "scripts/fairness_witness.lua" 1.0 1e9 witnessChunk
+
+        -- First put a message in the carry slot — the one place this
+        -- scheduler holds a message that is no longer on the queue.
+        writeIORef (rigWaitImpl rig)
+            (\_ → pure (Just (LuaWorldGenLog "carried")))
+        r1 ← round1 rig
+        rrWoke r1 `shouldBe` True
+        writeIORef (rigWaitImpl rig) (\_ → pure Nothing)
+
+        -- Then a handler that flushes the engine queue mid-batch, which
+        -- is what 'handleLoadStaged' does on this same thread once a
+        -- load's Lua apply succeeds, so that work queued for the
+        -- REPLACED session cannot fire against its replacement. The
+        -- flush is the real 'Q.flushQueue' call that handler makes; only
+        -- the handler making it is stood in for, since standing up a
+        -- whole load transaction is not what this example is about.
+        dispatches ← newIORef (0 ∷ Int)
+        discarded ← newIORef (0 ∷ Int)
+        installHook rig "__hook" $ do
+            -- The fourth dispatch is 'm3': carried, m1, m2, m3.
+            k ← atomicModifyIORef' dispatches (\n → (n + 1, n + 1))
+            when (k ≡ 4) $ do
+                stale ← Q.flushQueue (engineQueue rig)
+                writeIORef discarded (length stale)
+        queueMsgs rig [T.pack ('m' : show i) | i ← [1 .. 10 ∷ Int]]
+
+        r2 ← round1 rig
+
+        -- The carried message was dispatched FIRST, ahead of anything
+        -- taken off the queue, so the slot was already empty when the
+        -- flush ran and nothing outlived the cutover.
+        joined rig "__msgs" `shouldReturn` "carried,m1,m2,m3"
+        readIORef discarded `shouldReturn` 7
+        rrMessages r2 `shouldBe` 4
+        queuedMessages rig `shouldReturn` 0
+
+        -- And no later round resurrects the discarded work.
+        r3 ← round1 rig
+        rrMessages r3 `shouldBe` 0
+        joined rig "__msgs" `shouldReturn` "carried,m1,m2,m3"
 
     it "re-checks the gate between individual dispatches inside the \
        \bounded drains themselves" $ \env → do
@@ -826,6 +877,29 @@ preservedContractsSpec = describe "the unbounded drains its other callers need" 
 
         queuedMessages rig `shouldReturn` 0
         joined rig "__msgs" `shouldReturn` T.intercalate "," sent
+
+    it "keeps processLuaMsgs draining past a mid-drain worker stop, \
+       \which the bounded path deliberately does not" $ \env → do
+        rig ← newRig env
+        registerModule rig 1 "scripts/fairness_witness.lua" 1.0 1e9 witnessChunk
+        -- 'LuaThreadKill' is the in-thread writer of ThreadStopped, and
+        -- the exhaustive helper has never read the control ref: messages
+        -- queued behind a kill are still dispatched in the same drain,
+        -- and synchronous input settlement depends on that whole-queue
+        -- contract. The bounded path stopping there (above) must not
+        -- leak into this one.
+        seen ← newIORef (0 ∷ Int)
+        installHook rig "__hook" $ do
+            k ← atomicModifyIORef' seen (\n → (n + 1, n + 1))
+            when (k ≡ 2) $ writeIORef (rigControl rig) ThreadStopped
+        let sent = [T.pack ('m' : show i) | i ← [1 .. 10 ∷ Int]]
+        queueMsgs rig sent
+
+        processLuaMsgs env (rigBackend rig) (rigControl rig)
+
+        queuedMessages rig `shouldReturn` 0
+        joined rig "__msgs" `shouldReturn` T.intercalate "," sent
+        readIORef (rigControl rig) `shouldReturn` ThreadStopped
 
     it "leaves processDebugCommands draining the whole console queue" $ \env → do
         rig ← newRig env
