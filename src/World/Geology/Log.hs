@@ -135,8 +135,11 @@ plateCoord p = GeoCoord (plateCenterX p) (plateCenterY p)
 -- * Full Timeline Formatting
 
 -- | Format the entire timeline as a list of text lines.
---   Returns a [Text] so callers can send each line to
---   both logInfo and sendGenLog without re-parsing.
+--   Returns a [Text] rather than logging directly, so the caller
+--   chooses the sink: 'logTimeline' below takes an arbitrary
+--   @Text → m ()@ callback, and a caller may fan one list out to
+--   several sinks without re-parsing. It names no sink of its own
+--   (#1933).
 formatTimeline ∷ GeoTimeline → [Text]
 formatTimeline tl =
     let summary = summarizeTimeline tl
