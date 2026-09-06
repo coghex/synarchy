@@ -470,8 +470,11 @@ def test_record_counts_indented_real_table_rejected():
     document = real_inventory_text()
     start = document.index(RECORD_COUNTS_OPEN)
     end = document.index(RECORD_COUNTS_CLOSE)
-    indented = document[:start] + "\n".join(
-        "    " + line if line.startswith("|") else line
+    # `splitlines()` drops the trailing newline, which would run the
+    # closing marker onto the last table row -- a DIFFERENT violation
+    # (a marker sharing its line) that would mask the one under test.
+    indented = document[:start] + "".join(
+        ("    " + line if line.startswith("|") else line) + "\n"
         for line in document[start:end].splitlines()) + document[end:]
     expect(indented != document, "the fixture must change the real document")
     expect(any("column-zero table rows" in v
@@ -870,6 +873,33 @@ def test_marked_span_comment_rule_covers_the_record_table_too():
            "commenting out the real §2.1 table must be rejected")
 
 
+def test_marked_span_markers_must_be_alone_on_their_lines():
+    """Round 14's finding. Markers were found as literal text, so a
+    `` `` `` before the opening marker and another after the closing
+    one wrapped the whole governed block in a multiline two-backtick
+    inline code span -- which the table's own single backticks do not
+    close -- and §2.1 rendered no table while every rule that reads the
+    span still passed. A marker alone on its line cannot be the
+    interior of any inline construct, which refuses the family rather
+    than the backtick spelling of it."""
+    sources = scan_production_sources(REPO_ROOT)
+    live = extract_record_fields(real_engine_env_source(),
+                                 ENGINE_ENV_PATTERN)
+    document = real_inventory_text()
+    for label, opener, closer, audit, argument in (
+            ("§2.1", RECORD_COUNTS_OPEN, RECORD_COUNTS_CLOSE,
+             audit_record_counts, sources),
+            ("§1", FIELD_TOTAL_OPEN, FIELD_TOTAL_CLOSE,
+             audit_field_total, live)):
+        wrapped = document.replace(opener, "``" + opener, 1)
+        wrapped = wrapped.replace(closer, closer + "``", 1)
+        expect(wrapped != document, f"fixture must change {label}")
+        expect(any("shares its line" in v
+                   for v in audit(argument, wrapped)),
+               f"wrapping {label}'s block in an inline code span must "
+               f"be rejected")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -1111,6 +1141,7 @@ TESTS = (
     test_record_counts_real_header_row_is_governed_too,
     test_marked_span_body_may_not_carry_a_comment_delimiter,
     test_marked_span_comment_rule_covers_the_record_table_too,
+    test_marked_span_markers_must_be_alone_on_their_lines,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,

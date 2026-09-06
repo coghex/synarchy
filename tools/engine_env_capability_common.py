@@ -174,9 +174,10 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
     as the malformed markup it is rather than silently matching some
     other pair's text.
 
-    A pair whose markers or body lie in a verbatim region, or whose
-    BODY carries an HTML comment delimiter of its own, is REPORTED and
-    not returned. Checking only the opening marker was not enough:
+    A pair is REPORTED and not returned when either marker shares its
+    line with other content, when either marker or the body lies in a
+    verbatim region, or when the BODY carries an HTML comment
+    delimiter of its own. Checking only the opening marker was not enough:
     a fence opened immediately after it and closed immediately before
     the closing marker turns the whole governed paragraph into a
     rendered example while both markers sit in ordinary prose.
@@ -235,6 +236,35 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
                 f"leaving it for this audit to parse, and one closed "
                 f"there ends the marker pair early. The markers are the "
                 f"only comments the block may contain")
+            continue
+        # Each marker must be the ONLY non-whitespace content on its
+        # line. Finding the marker text literally was enough for a
+        # `` `` `` before the opening marker and another after the
+        # closing one to wrap the whole governed block in a multiline
+        # two-backtick inline code span -- which the table's own single
+        # backticks do not close -- so §2.1 rendered no table while
+        # every rule that reads the span still passed (round-14
+        # review). A marker alone on its line cannot be the interior of
+        # any inline construct, which refuses that whole family rather
+        # than the backtick spelling of it.
+        alone = None
+        for marker, offset in ((open_marker, start), (close_marker, end)):
+            line_start = text.rfind("\n", 0, offset) + 1
+            line_end = text.find("\n", offset)
+            line = text[line_start:len(text) if line_end < 0 else line_end]
+            if line.strip() != marker:
+                alone = (marker, line)
+                break
+        if alone is not None:
+            marker, line = alone
+            violations.append(
+                f"`{marker}` in docs/{INVENTORY_PATH.name} shares its "
+                f"line with other content ({line.strip()[:70]!r}) -- a "
+                f"marker must be the only thing on its line. Text "
+                f"around it can put the whole governed block inside an "
+                f"inline construct, such as the multiline code span a "
+                f"pair of double backticks makes, so that nothing "
+                f"between the markers renders at all")
             continue
         first = text.count("\n", 0, start)
         last = text.count("\n", 0, cursor)
