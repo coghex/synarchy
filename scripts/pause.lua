@@ -102,7 +102,7 @@ function pause.set(b)
     if liveScale then
         pause.prevTimeScale = liveScale
     end
-    engine.logInfo("Game " .. (b and "paused" or "resumed"))
+    engine.logDebug("Game " .. (b and "paused" or "resumed"))
 end
 
 function pause.toggle()

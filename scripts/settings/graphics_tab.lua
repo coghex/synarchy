@@ -240,7 +240,7 @@ function graphicsTab.create(params)
             if w and h then
                 pending.width  = tonumber(w)
                 pending.height = tonumber(h)
-                engine.logInfo("Resolution pending: " .. text)
+                engine.logDebug("Resolution pending: " .. text)
             end
         end,
     }))
@@ -296,7 +296,7 @@ function graphicsTab.create(params)
         maxVisibleOptions = 3,
         onChange = function(value, text, id, name)
             pending.windowMode = value
-            engine.logInfo("Window mode pending: " .. text)
+            engine.logDebug("Window mode pending: " .. text)
         end,
     }))
 
@@ -346,7 +346,7 @@ function graphicsTab.create(params)
         zIndex  = zWidgets,
         onChange = function(checked, id, name)
             pending.vsync = checked
-            engine.logInfo("VSync pending: " .. tostring(checked))
+            engine.logDebug("VSync pending: " .. tostring(checked))
         end,
     }))
     local vsCbId = graphicsTab.vsyncCheckboxId
@@ -444,7 +444,7 @@ function graphicsTab.create(params)
         maxVisibleOptions = 4,
         onChange = function(value, text, id, name)
             pending.msaa = data.msaaFromString(value)
-            engine.logInfo("MSAA pending: " .. text)
+            engine.logDebug("MSAA pending: " .. text)
         end,
     }))
 
@@ -595,7 +595,7 @@ function graphicsTab.create(params)
         zIndex  = zWidgets,
         onChange = function(checked, id, name)
             pending.pixelSnap = checked
-            engine.logInfo("Pixel snap pending: " .. tostring(checked))
+            engine.logDebug("Pixel snap pending: " .. tostring(checked))
         end,
     }))
     local psCbId = graphicsTab.pixelSnapCheckboxId
@@ -650,7 +650,7 @@ function graphicsTab.create(params)
         maxVisibleOptions = 2,
         onChange = function(value, text, id, name)
             pending.textureFilter = value
-            engine.logInfo("Texture filter pending: " .. text)
+            engine.logDebug("Texture filter pending: " .. text)
         end,
     }))
 
@@ -810,7 +810,7 @@ end
 -----------------------------------------------------------
 
 function graphicsTab.onTextBoxSubmit(name, value)
-    engine.logInfo("TextBox submit: " .. tostring(name)
+    engine.logDebug("TextBox submit: " .. tostring(name)
         .. " = " .. tostring(value))
 
     local validated, fallback = data.validateTextBoxSubmit(name, value)

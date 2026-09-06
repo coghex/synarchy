@@ -948,8 +948,6 @@ function createWorldMenu.onWorldGenLog(text)
 end
 
 function createWorldMenu.onWorldPreviewReady(textureHandle)
-    engine.logInfo("Updating world preview with texture handle: "
-        .. tostring(textureHandle))
     createWorldMenu.worldPreviewTexture = textureHandle
     if createWorldMenu.page and UI.isPageVisible(createWorldMenu.page) then
         local savedGenState = createWorldMenu.genState
@@ -1110,13 +1108,8 @@ function createWorldMenu.onDefaults()
 end
 
 function createWorldMenu.onGenerateWorld()
-    engine.logInfo("onGenerateWorld called, current genState=" .. tostring(createWorldMenu.genState))
     generation.start(createWorldMenu, logPanelMod)
-    engine.logInfo("After generation.start, genState=" .. tostring(createWorldMenu.genState))
-    engine.logInfo("btnLayout=" .. tostring(createWorldMenu.btnLayout))
-    engine.logInfo("barTextures=" .. tostring(createWorldMenu.barTextures))
     createWorldMenu.buildButtonsGenerating()
-    engine.logInfo("After buildButtonsGenerating, genBarId=" .. tostring(createWorldMenu.genBarId))
 end
 
 function createWorldMenu.onContinue()
