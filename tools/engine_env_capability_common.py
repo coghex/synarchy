@@ -226,16 +226,25 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 
 
-#: The four HTML block tags CommonMark treats as VERBATIM: an
-#: unclosed one of these swallows every following line, blank lines
-#: included, until its closing tag. Every other raw-HTML block --
-#: including the `<!-- ... -->` comment the markers themselves are --
-#: ends at a blank line or at its own close and cannot swallow the
-#: document, so only these four matter here.
+#: The four HTML block tags CommonMark treats as VERBATIM (block type
+#: 1): an unclosed one of these swallows every following line, blank
+#: lines included, until its closing tag.
 _VERBATIM_HTML_OPEN_RE = re.compile(
     r"<(?:pre|script|style|textarea)\b", re.IGNORECASE)
 _VERBATIM_HTML_CLOSE_RE = re.compile(
     r"</(?:pre|script|style|textarea)\s*>", re.IGNORECASE)
+#: A raw-HTML block of CommonMark type 6 or 7 -- `<div>`, `<table>`,
+#: `<section>`, or any other complete tag on a line of its own. It
+#: opens on a line whose first non-space character is `<` followed by
+#: a tag name or `/`, at an indent of at most three spaces, and it runs
+#: to the next BLANK line. Everything in it is raw HTML: Markdown
+#: inside is not parsed, so a table there does not render as a table.
+#:
+#: The `<!-- ... -->` comment the markers themselves are is block type
+#: 2, which ends at its own `-->` and therefore never reaches the line
+#: after it. Excluding `<!` here is what keeps the markers from being
+#: read as openers of a block that swallows their own table.
+_HTML_BLOCK_OPEN_RE = re.compile(r"^ {0,3}<[A-Za-z/]")
 
 
 def fenced_line_flags(text: str) -> "list[bool]":
@@ -248,9 +257,14 @@ def fenced_line_flags(text: str) -> "list[bool]":
     * a fenced code block -- three or more backticks or tildes, closed
       by a later line of at least as many of the SAME character. The
       opening and closing fence lines themselves count as inside;
-    * an open `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block,
-      which CommonMark carries across blank lines until its closing
-      tag.
+    * an open `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block
+      (CommonMark type 1), which carries across blank lines until its
+      closing tag;
+    * any other raw-HTML block (`<div>`, `<table>`, `<section>` --
+      CommonMark types 6 and 7), which runs to the next blank line.
+      Markdown inside one is not parsed, so a table there renders as
+      literal text. The marker comments are type 2 and end at their own
+      `-->`, so they never open one.
 
     This exists because `section_bounds` decides where a section ends,
     and a block containing a line like `## example` would otherwise end
@@ -265,6 +279,7 @@ def fenced_line_flags(text: str) -> "list[bool]":
     open_char = ""
     open_len = 0
     html_open = False
+    html_until_blank = False
     for line in text.splitlines():
         stripped = line.strip()
         match = _FENCE_RE.match(stripped)
@@ -281,6 +296,13 @@ def fenced_line_flags(text: str) -> "list[bool]":
             if _VERBATIM_HTML_CLOSE_RE.search(line):
                 html_open = False
             continue
+        if html_until_blank:
+            if not stripped:
+                html_until_blank = False
+                inside.append(False)
+                continue
+            inside.append(True)
+            continue
         if match:
             open_char = match.group(1)[0]
             open_len = len(match.group(1))
@@ -289,6 +311,10 @@ def fenced_line_flags(text: str) -> "list[bool]":
         if (_VERBATIM_HTML_OPEN_RE.search(line)
                 and not _VERBATIM_HTML_CLOSE_RE.search(line)):
             html_open = True
+            inside.append(True)
+            continue
+        if _HTML_BLOCK_OPEN_RE.match(line):
+            html_until_blank = True
             inside.append(True)
             continue
         inside.append(False)

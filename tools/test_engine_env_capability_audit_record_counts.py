@@ -484,7 +484,8 @@ def test_record_counts_html_verbatim_block_rejected():
     open `<pre>` HTML block. CommonMark carries it across blank lines
     until its closing tag, so it swallows the markers and their table
     exactly as a fence does."""
-    doc = _counts_doc(prefix="<pre>").replace(
+    doc = _counts_doc().replace(
+        RECORD_COUNTS_OPEN, "<pre>\n" + RECORD_COUNTS_OPEN, 1).replace(
         RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n</pre>", 1)
     violations = audit_record_counts(_SOURCES, doc)
     expect(any("fenced code block" in v for v in violations),
@@ -509,6 +510,51 @@ def test_parse_record_column_refuses_indented_rows():
            f"must report NO TABLE rather than a malformed one -- "
            f"anything else means it read the rows and objected to their "
            f"shape, got: {violations}")
+
+
+def test_record_counts_raw_html_block_rejected():
+    """Round 5's finding: a CommonMark type-6 raw HTML block. `<div>`
+    with no blank line before the marker encloses the markers and the
+    table; Markdown inside a raw HTML block is not parsed, so §2.1
+    carries no rendered table while the markers and pipe rows are still
+    found as plain text. Type 1 (`<pre>`) was already refused; this is
+    the family that ends at a blank line rather than at a closing tag.
+    """
+    for tag in ("div", "section", "table"):
+        # No blank line between the tag and the marker: a type-6 block
+        # ends at the first blank line, so an adjacent tag is what
+        # actually encloses the markers and the table.
+        doc = _counts_doc().replace(
+            RECORD_COUNTS_OPEN, f"<{tag}>\n" + RECORD_COUNTS_OPEN, 1).replace(
+            RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + f"\n</{tag}>", 1)
+        violations = audit_record_counts(_SOURCES, doc)
+        expect(any("fenced code block" in v for v in violations),
+               f"markers inside a <{tag}> raw HTML block must be "
+               f"rejected, got: {violations}")
+
+
+def test_record_counts_raw_html_real_block_rejected():
+    """The same escape against the real document."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    wrapped = document.replace(
+        RECORD_COUNTS_OPEN, "<div>\n" + RECORD_COUNTS_OPEN, 1)
+    wrapped = wrapped.replace(
+        RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n</div>", 1)
+    expect(wrapped != document, "the fixture must change the real document")
+    expect(any("fenced code block" in v
+               for v in audit_record_counts(sources, wrapped)),
+           "wrapping the real §2.1 block in a <div> must be rejected")
+
+
+def test_record_counts_marker_comments_do_not_open_an_html_block():
+    """The other direction, and the reason the rule excludes `<!`: the
+    markers ARE raw HTML. Read as type-6 openers they would swallow
+    their own table and fail the real document, so the type-2 comment
+    form is excluded and the clean fixture must still pass."""
+    expect(audit_record_counts(_SOURCES, _counts_doc()) == [],
+           "the marker comments must not be read as opening a raw HTML "
+           "block over their own table")
 
 
 def test_record_counts_ragged_row_rejected():
@@ -733,6 +779,9 @@ TESTS = (
     test_record_counts_blockquoted_table_rejected,
     test_record_counts_indented_real_table_rejected,
     test_record_counts_html_verbatim_block_rejected,
+    test_record_counts_raw_html_block_rejected,
+    test_record_counts_raw_html_real_block_rejected,
+    test_record_counts_marker_comments_do_not_open_an_html_block,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
