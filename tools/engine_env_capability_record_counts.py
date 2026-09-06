@@ -37,6 +37,9 @@ The contract
       Exactly one block, inside §2.1, containing exactly one Markdown
       table with a `Record / view type(s)` column. In that column:
 
+      * exactly one column is headed `Record / view type(s)`. Only one
+        is read, so a second would be a column of the governed table
+        displaying sizes nothing checks;
       * every capability record named in a backtick span states its
         size exactly once, as `` `XCapability` (<n> fields) ``;
       * `<n>` equals `capability_record_fields`' count for that record;
@@ -301,12 +304,22 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                     f"no reader sees as a table"]
 
     header = cells(rows[0])
-    if RECORD_COLUMN_HEADER not in header:
+    matching = [position for position, cell in enumerate(header)
+                if cell == RECORD_COLUMN_HEADER]
+    if not matching:
         return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block has no "
                     f"`{RECORD_COLUMN_HEADER}` column (header row: "
                     f"{header}) -- that column is what carries the audited "
                     f"sizes, so it may not be renamed or removed"]
-    index = header.index(RECORD_COLUMN_HEADER)
+    if len(matching) > 1:
+        return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block has "
+                    f"{len(matching)} `{RECORD_COLUMN_HEADER}` columns "
+                    f"(at positions {matching}) -- exactly one column "
+                    f"carries the audited sizes. With two, only the "
+                    f"first is read, so the second is a column of the "
+                    f"governed table displaying record sizes that "
+                    f"nothing checks"]
+    index = matching[0]
     width = len(header)
 
     column: list[str] = []

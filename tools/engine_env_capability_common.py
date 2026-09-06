@@ -245,6 +245,23 @@ _VERBATIM_HTML_CLOSE_RE = re.compile(
 #: after it. Excluding `<!` here is what keeps the markers from being
 #: read as openers of a block that swallows their own table.
 _HTML_BLOCK_OPEN_RE = re.compile(r"^ {0,3}<[A-Za-z/]")
+#: The raw-HTML blocks that end at an explicit TERMINATOR rather than
+#: at a blank line, as `(opener, terminator)` pairs -- CommonMark block
+#: types 3 (`<?` ... `?>`), 5 (`<![CDATA[` ... `]]>`) and 4 (`<!` plus a
+#: letter ... `>`). Like type 1 they carry every following line,
+#: including blank ones, until their terminator, so each can enclose
+#: the markers and a whole table.
+#:
+#: CDATA is listed before the type-4 declaration deliberately, though
+#: the two cannot collide: `<![CDATA[` has `[` where type 4 requires a
+#: letter. The `<!--` comment the markers are is type 2 and matches
+#: neither -- its third character is `-` -- which is what keeps a
+#: marker line from opening a block over its own table.
+_TERMINATED_HTML_BLOCKS = (
+    (re.compile(r"<\?"), re.compile(r"\?>")),
+    (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>")),
+    (re.compile(r"<![A-Za-z]"), re.compile(r">")),
+)
 
 
 def fenced_line_flags(text: str) -> "list[bool]":
@@ -260,11 +277,17 @@ def fenced_line_flags(text: str) -> "list[bool]":
     * an open `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block
       (CommonMark type 1), which carries across blank lines until its
       closing tag;
+    * a raw-HTML block that ends at an explicit terminator rather than
+      a blank line -- CommonMark types 3 (`<?` ... `?>`), 4 (`<!` plus
+      a letter ... `>`) and 5 (`<![CDATA[` ... `]]>`);
     * any other raw-HTML block (`<div>`, `<table>`, `<section>` --
       CommonMark types 6 and 7), which runs to the next blank line.
       Markdown inside one is not parsed, so a table there renders as
       literal text. The marker comments are type 2 and end at their own
       `-->`, so they never open one.
+
+    Types 1 and 3 through 7 are therefore all covered; type 2 is the
+    markers themselves and is excluded by construction.
 
     This exists because `section_bounds` decides where a section ends,
     and a block containing a line like `## example` would otherwise end
@@ -280,6 +303,7 @@ def fenced_line_flags(text: str) -> "list[bool]":
     open_len = 0
     html_open = False
     html_until_blank = False
+    html_terminator = None
     for line in text.splitlines():
         stripped = line.strip()
         match = _FENCE_RE.match(stripped)
@@ -295,6 +319,11 @@ def fenced_line_flags(text: str) -> "list[bool]":
             inside.append(True)
             if _VERBATIM_HTML_CLOSE_RE.search(line):
                 html_open = False
+            continue
+        if html_terminator is not None:
+            inside.append(True)
+            if html_terminator.search(line):
+                html_terminator = None
             continue
         if html_until_blank:
             if not stripped:
@@ -312,6 +341,14 @@ def fenced_line_flags(text: str) -> "list[bool]":
                 and not _VERBATIM_HTML_CLOSE_RE.search(line)):
             html_open = True
             inside.append(True)
+            continue
+        opened = next(
+            (close for open_re, close in _TERMINATED_HTML_BLOCKS
+             if open_re.search(line)), None)
+        if opened is not None:
+            inside.append(True)
+            if not opened.search(line, line.index("<")):
+                html_terminator = opened
             continue
         if _HTML_BLOCK_OPEN_RE.match(line):
             html_until_blank = True

@@ -557,6 +557,61 @@ def test_record_counts_marker_comments_do_not_open_an_html_block():
            "block over their own table")
 
 
+def test_record_counts_terminated_html_blocks_rejected():
+    """Round 6's first finding: the raw-HTML blocks that end at an
+    explicit terminator rather than a blank line -- CommonMark types 3
+    (`<?` ... `?>`), 4 (`<!` plus a letter ... `>`) and 5 (`<![CDATA[`
+    ... `]]>`). Like type 1 they carry every following line, so each
+    encloses the markers and the whole table."""
+    for opener, closer in (("<?xml version=\"1.0\"", "?>"),
+                           ("<![CDATA[", "]]>"),
+                           ("<!DOCTYPE html", ">")):
+        doc = _counts_doc().replace(
+            RECORD_COUNTS_OPEN, opener + "\n" + RECORD_COUNTS_OPEN, 1).replace(
+            RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n" + closer, 1)
+        violations = audit_record_counts(_SOURCES, doc)
+        expect(any("fenced code block" in v for v in violations),
+               f"markers inside a {opener!r} raw HTML block must be "
+               f"rejected, got: {violations}")
+
+
+def test_record_counts_terminated_html_block_real_rejected():
+    """The same family against the real document."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    wrapped = document.replace(
+        RECORD_COUNTS_OPEN, "<?xml version=\"1.0\"\n" + RECORD_COUNTS_OPEN, 1)
+    wrapped = wrapped.replace(
+        RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n?>", 1)
+    expect(wrapped != document, "the fixture must change the real document")
+    expect(any("fenced code block" in v
+               for v in audit_record_counts(sources, wrapped)),
+           "wrapping the real §2.1 block in a `<?xml` block must be "
+           "rejected")
+
+
+def test_record_counts_duplicate_audited_column_rejected():
+    """Round 6's second finding: two columns headed
+    `Record / view type(s)`. Only the first is read, so the second is a
+    column of the GOVERNED table free to display sizes nothing checks
+    -- correct counts in column one, stale ones in column two."""
+    rows = (
+        "| `alpha-beta` | `Engine.Core.Capability.Alpha` — "
+        "`AlphaCapability` (2 fields); `Engine.Core.Capability.Beta` — "
+        "`BetaCapability` (3 fields) | `AlphaCapability` (9 fields) "
+        "| #1 (E1) |\n"
+        "| `gamma` | `Engine.Core.Capability.Gamma` — "
+        "`GammaCapability` (1 field) | — | #3 (E3) |\n")
+    header = (f"| Identifier | {RECORD_COLUMN_HEADER} "
+              f"| {RECORD_COLUMN_HEADER} | Landed by |")
+    doc = _counts_doc(rows=rows, header=header).replace(
+        "|---|---|---|", "|---|---|---|---|", 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any(f"{RECORD_COLUMN_HEADER}` columns" in v
+               for v in violations),
+           f"a second audited column must be rejected, got: {violations}")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -782,6 +837,9 @@ TESTS = (
     test_record_counts_raw_html_block_rejected,
     test_record_counts_raw_html_real_block_rejected,
     test_record_counts_marker_comments_do_not_open_an_html_block,
+    test_record_counts_terminated_html_blocks_rejected,
+    test_record_counts_terminated_html_block_real_rejected,
+    test_record_counts_duplicate_audited_column_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
