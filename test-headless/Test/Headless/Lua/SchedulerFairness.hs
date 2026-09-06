@@ -760,6 +760,27 @@ reconciliationSpec = describe "the post-publication reconciliation hold" $ do
         rrConsole r2 `shouldBe` 1
         joined rig "__cmds" `shouldReturn` "after"
 
+    it "falls through to the idle wait, rather than spinning, when the \
+       \only work left is a timer the hold is withholding" $ \env → do
+        rig ← newRig env
+        registerModule rig 1 "scripts/fairness_witness.lua" 1.0 0.0 witnessChunk
+        requestId ← enterWaitingPublish env
+        -- Nothing queued at all, and a script that IS due: exactly the
+        -- state in which treating a withheld timer as "work remains"
+        -- would repeat the round forever with nothing runnable.
+        advanceClock rig 10.0
+
+        r ← round1 rig `finallyReopen` clearLoad env requestId
+
+        rrMessages r `shouldBe` 0
+        rrConsole r `shouldBe` 0
+        rrDuePasses r `shouldBe` 0
+        counted rig "__ticks" `shouldReturn` "0"
+        -- It slept on the queue. A round that came straight back here is
+        -- what a 100%-CPU hold looks like; the overdue script pins the
+        -- bound at the sleep floor, which is the existing policy.
+        rrWaited r `shouldBe` Just 1000
+
     it "does not gate diagnostics across asynchronous load STAGING, \
        \which touches no live session state" $ \env → do
         rig ← newRig env
