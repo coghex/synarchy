@@ -90,10 +90,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import deflake_diagnosis_selftest_diagnosis as diagnosis_owner  # type: ignore  # noqa: E402
-import deflake_diagnosis_selftest_issue as issue_owner  # type: ignore  # noqa: E402
-import deflake_diagnosis_selftest_outcome as outcome_owner  # type: ignore  # noqa: E402
-import deflake_diagnosis_selftest_support as support  # type: ignore  # noqa: E402
+import deflake_diagnosis_selftest_diagnosis as diagnosis_owner  # noqa: E402
+import deflake_diagnosis_selftest_issue as issue_owner  # noqa: E402
+import deflake_diagnosis_selftest_outcome as outcome_owner  # noqa: E402
+import deflake_diagnosis_selftest_support as support  # noqa: E402
 
 #: The three workflow owners, by selector name.
 OWNERS = {
