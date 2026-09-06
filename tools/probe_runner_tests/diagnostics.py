@@ -21,6 +21,7 @@ conflict cases count the same lines.
 """
 from __future__ import annotations
 
+import re
 import sys
 import time
 from pathlib import Path
@@ -654,6 +655,79 @@ def test_a_probes_setup_exit_is_recorded_and_recoverable() -> None:
            f"with its detail (got {derived!r})")
 
 
+#: The paragraph in `tools/README.md` that inventories the producers of
+#: durable failure records, anchored on its opening words.
+README_PRODUCER_ANCHOR = "The producers today are"
+
+
+def failure_record_producers() -> list[str]:
+    """Every tools/ file that constructs a `FailureEmitter`, by filename.
+
+    Derived from the sources rather than listed, because a hand-kept
+    inventory is exactly what went stale: the README claimed six
+    producers while `offscreen_probe.py` and `scene_primitives_probe.py`
+    had already become the seventh and eighth.
+    """
+    tools = Path(TOOLS_DIR)
+    owner = Path(probe_runner_diagnostics.__file__).name
+    producers = []
+    for path in sorted(tools.rglob("*.py")):
+        if path.name == owner or "probe_runner_tests" in path.parts:
+            continue
+        if "FailureEmitter(" in path.read_text(encoding="utf-8"):
+            producers.append(path.name)
+    return producers
+
+
+def readme_producer_paragraph() -> str:
+    """The inventory paragraph itself, so the scan cannot match elsewhere.
+
+    Probe filenames appear all over this README; only this paragraph
+    claims to be the complete list, so only this paragraph is searched.
+    """
+    text = (Path(TOOLS_DIR) / "README.md").read_text(encoding="utf-8")
+    start = text.find(README_PRODUCER_ANCHOR)
+    expect(start != -1,
+           f"tools/README.md still opens its failure-record inventory with "
+           f"{README_PRODUCER_ANCHOR!r}; if it was reworded, this audit "
+           f"needs its new anchor rather than a silent pass")
+    if start == -1:
+        return ""
+    end = text.find("\n\n", start)
+    return text[start:] if end == -1 else text[start:end]
+
+
+def test_the_readme_names_every_failure_record_producer() -> None:
+    print("\n-- tools/README.md's failure-record producer inventory names "
+          "every file that actually emits one, and invents none")
+    producers = failure_record_producers()
+    paragraph = readme_producer_paragraph()
+
+    # The control: the derivation has to actually find producers, or an
+    # empty set would satisfy the inventory vacuously.
+    expect(len(producers) >= len(REPAIRED_PROBES),
+           f"the derivation finds at least #1982's own adopters (got "
+           f"{producers!r})")
+    for script in REPAIRED_PROBES:
+        expect(script in producers,
+               f"including {script} (got {producers!r})")
+
+    for script in producers:
+        expect(script in paragraph,
+               f"{script} emits durable failure records and must be named "
+               f"in the README's inventory (paragraph: {paragraph!r})")
+
+    # And nothing the inventory names has since stopped being one, which
+    # would send an operator looking for records that are never emitted.
+    named = re.findall(r"`([A-Za-z0-9_]+\.py)`", paragraph)
+    expect(named != [], f"the inventory names files at all ({paragraph!r})")
+    for script in named:
+        expect(script in producers,
+               f"the README names {script} as a producer, but nothing in it "
+               f"constructs a FailureEmitter (real producers: "
+               f"{producers!r})")
+
+
 #: This family's complete ordered inventory. The aggregate runs it as one
 #: block at the end of the sweep, so it needs no fragments.
 TESTS = (
@@ -668,4 +742,5 @@ TESTS = (
     test_failed_checks_survive_the_parallel_presentation,
     test_no_repaired_probe_still_reports_a_failure_to_stderr,
     test_a_probes_setup_exit_is_recorded_and_recoverable,
+    test_the_readme_names_every_failure_record_producer,
 )
