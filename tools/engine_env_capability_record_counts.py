@@ -40,12 +40,18 @@ The contract
       * exactly one column is headed `Record / view type(s)`. Only one
         is read, so a second would be a column of the governed table
         displaying sizes nothing checks;
-      * no OTHER cell of the table states a record size either --
-        every non-audited data cell AND every header cell. The audited
+      * no other cell of the table NAMES a capability record at all --
+        every non-audited data cell and every header cell. The audited
         column is the only thing compared with the live records, and
         the document-wide sweep below skips the whole marked span, so
-        without this the identifier column, the provenance column and
-        the header row are all blind spots inside the governed table;
+        the identifier column, the provenance column and the header row
+        would otherwise be blind spots inside the governed table.
+        Refusing the NAME rather than a size-shaped phrase beside it is
+        what makes the rule independent of wording: `XCapability is 9
+        fields` states a size as plainly as `` `XCapability` (9
+        fields) `` does, and no non-audited cell has any reason to name
+        a record -- the identifier column carries kebab-case
+        identifiers, the provenance column issue references;
       * every capability record named in a backtick span states its
         size exactly once, as `` `XCapability` (<n> fields) ``;
       * `<n>` equals `capability_record_fields`' count for that record;
@@ -425,14 +431,15 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
     # matched by NAME, not read for a count. So every header cell is
     # swept, the audited one included.
     for position, cell in enumerate(header):
-        smuggled = _STRAY_COUNT_RE.search(cell)
-        if smuggled is not None:
+        named = _RECORD_NAME_RE.search(cell)
+        if named is not None:
             violations.append(
-                f"{_DOC} §2.1's record table header states a record "
-                f"size ({smuggled.group(0)!r}) in column "
-                f"{position + 1}, {cell[:40]!r}. A header cell is "
-                f"displayed in the governed table and compared with no "
-                f"live record, so a size there is checked by nothing")
+                f"{_DOC} §2.1's record table header names "
+                f"`{named.group(0)}` in column {position + 1}, "
+                f"{cell[:40]!r}. A header cell is displayed in the "
+                f"governed table and compared with no live record, so "
+                f"a record named there can state a size beside it that "
+                f"nothing checks")
 
     column: list[str] = []
     for number, row in enumerate(rows[2:], start=3):
@@ -449,17 +456,19 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
         for position, cell in enumerate(row_cells):
             if position == index:
                 continue
-            smuggled = _STRAY_COUNT_RE.search(cell)
-            if smuggled is not None:
+            named = _RECORD_NAME_RE.search(cell)
+            if named is not None:
                 violations.append(
-                    f"{_DOC} §2.1's record table row {number} states a "
-                    f"record size ({smuggled.group(0)!r}) in column "
-                    f"{position + 1}, {header[position]!r}. Only the "
+                    f"{_DOC} §2.1's record table row {number} names "
+                    f"`{named.group(0)}` in column {position + 1}, "
+                    f"{header[position]!r}. Only the "
                     f"`{RECORD_COLUMN_HEADER}` column is compared with "
-                    f"the live records, so a size in any other column "
-                    f"is displayed in the governed table and checked by "
-                    f"nothing -- the same 'stated once' rule the rest "
-                    f"of the document is swept for")
+                    f"the live records, so a record named anywhere else "
+                    f"in the table can state a size beside it that "
+                    f"nothing checks -- in any wording, not only the "
+                    f"parenthesised one. The identifier column carries "
+                    f"kebab-case identifiers and the provenance column "
+                    f"issue references; neither names a record")
         column.append(row_cells[index])
     if not column:
         violations.append(

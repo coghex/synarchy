@@ -765,11 +765,16 @@ def test_record_counts_size_in_a_non_audited_column_rejected():
             ("identifier", "| `alpha-beta` |",
              "| `alpha-beta` `AlphaCapability` (9 fields) |"),
             ("landed by", "| #1 (E1) / #2 (E2) |",
-             "| #1 (E1) / #2 (E2); `AlphaCapability` (9 fields) |")):
+             "| #1 (E1) / #2 (E2); `AlphaCapability` (9 fields) |"),
+            # Round 15: the same size stated as PROSE. The rule refuses
+            # the record NAME, so the wording between it and the number
+            # cannot matter.
+            ("landed by, in prose", "| #3 (E3) |",
+             "| #3 (E3); GammaCapability is 9 fields |")):
         rows = _CLEAN_ROWS.replace(old, new_cell, 1)
         expect(rows != _CLEAN_ROWS, f"fixture must change the {column} cell")
         violations = audit_record_counts(_SOURCES, _counts_doc(rows))
-        expect(any("in column" in v and "checked by" in v
+        expect(any("in column" in v and "names" in v
                    for v in violations),
                f"a stale size in the {column} column must be rejected, "
                f"got: {violations}")
@@ -898,6 +903,49 @@ def test_marked_span_markers_must_be_alone_on_their_lines():
                    for v in audit(argument, wrapped)),
                f"wrapping {label}'s block in an inline code span must "
                f"be rejected")
+
+
+def test_record_counts_prose_size_outside_the_audited_column_rejected():
+    """Round 15's first finding, against the real document.
+    `_STRAY_COUNT_RE` deliberately does not match a count reached
+    across WORDS -- §3.1 and §7.6 legitimately write that way -- so
+    `WorldSimCapability is 9 fields` in the provenance column stated a
+    visible stale size that no pattern caught. Inside the governed
+    table the answer is stronger than a better pattern: no non-audited
+    cell may NAME a record at all, whatever follows it."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    smuggled = document.replace(
+        "| #893 (E5a) / #894 (E5b) |",
+        "| #893 (E5a) / #894 (E5b); WorldSimCapability is 9 fields |", 1)
+    expect(smuggled != document, "the fixture must change the real document")
+    expect(any("names `WorldSimCapability`" in v
+               for v in audit_record_counts(sources, smuggled)),
+           "a record named in the real table's provenance column must "
+           "be rejected however its size is worded")
+
+
+def test_marked_span_markers_may_not_be_indented():
+    """Round 15's second finding. The marker-alone rule compared
+    `line.strip()`, so four leading spaces passed -- and four spaces
+    make an indented code block, a construct `fenced_line_flags` does
+    not model. Indenting §1's whole span rendered its audited
+    paragraph as a code example while its audit stayed green."""
+    live = extract_record_fields(real_engine_env_source(),
+                                 ENGINE_ENV_PATTERN)
+    document = real_inventory_text()
+    start = document.index(FIELD_TOTAL_OPEN)
+    end = document.index(FIELD_TOTAL_CLOSE) + len(FIELD_TOTAL_CLOSE)
+    indented = document[:start] + "".join(
+        "    " + line + "\n"
+        for line in document[start:end].splitlines()) + document[end:]
+    expect(indented != document, "the fixture must change the document")
+    expect(audit_field_total(live, document) == [],
+           "the unindented real §1 block must still pass")
+    expect(any("shares its line" in v
+               for v in audit_field_total(live, indented)),
+           "indenting the real §1 span into a code block must be "
+           "rejected")
 
 
 def test_record_counts_ragged_row_rejected():
@@ -1142,6 +1190,8 @@ TESTS = (
     test_marked_span_body_may_not_carry_a_comment_delimiter,
     test_marked_span_comment_rule_covers_the_record_table_too,
     test_marked_span_markers_must_be_alone_on_their_lines,
+    test_marked_span_markers_may_not_be_indented,
+    test_record_counts_prose_size_outside_the_audited_column_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,

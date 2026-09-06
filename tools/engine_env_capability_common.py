@@ -237,8 +237,11 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
                 f"there ends the marker pair early. The markers are the "
                 f"only comments the block may contain")
             continue
-        # Each marker must be the ONLY non-whitespace content on its
-        # line. Finding the marker text literally was enough for a
+        # Each marker must be the whole of its line, at column zero.
+        # Leading whitespace is refused as well as trailing content:
+        # four spaces make an indented code block, which renders the
+        # governed text as an example, and `fenced_line_flags` does not
+        # model that construct (round-15 review). Finding the marker text literally was enough for a
         # `` `` `` before the opening marker and another after the
         # closing one to wrap the whole governed block in a multiline
         # two-backtick inline code span -- which the table's own single
@@ -252,7 +255,7 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
             line_start = text.rfind("\n", 0, offset) + 1
             line_end = text.find("\n", offset)
             line = text[line_start:len(text) if line_end < 0 else line_end]
-            if line.strip() != marker:
+            if line.rstrip() != marker:
                 alone = (marker, line)
                 break
         if alone is not None:
