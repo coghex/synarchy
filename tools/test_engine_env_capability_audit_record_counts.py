@@ -492,6 +492,25 @@ def test_record_counts_html_verbatim_block_rejected():
            f"{violations}")
 
 
+def test_parse_record_column_refuses_indented_rows():
+    """`parse_record_column`'s own half of the column-zero rule, pinned
+    directly. The block-content rule rejects an indented block first in
+    an end-to-end run, which would leave this function free to go back
+    to stripping -- and it is public, so its contract is its own."""
+    indented = ("    | Identifier | " + RECORD_COLUMN_HEADER + " | Landed by |\n"
+                "    |---|---|---|\n"
+                "    | `gamma` | `Engine.Core.Capability.Gamma` — "
+                "`GammaCapability` (1 field) | #3 (E3) |\n")
+    column, violations = parse_record_column(indented)
+    expect(column == [], f"an indented run must yield no audited cells, "
+                         f"got: {column}")
+    expect(any("no Markdown table" in v for v in violations),
+           f"an indented run is an indented code block, so this parser "
+           f"must report NO TABLE rather than a malformed one -- "
+           f"anything else means it read the rows and objected to their "
+           f"shape, got: {violations}")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -723,6 +742,7 @@ TESTS = (
     test_record_counts_unreadable_record_is_not_size_zero,
     test_record_counts_duplicate_declaration_rejected,
     test_parse_record_column_reads_the_named_column,
+    test_parse_record_column_refuses_indented_rows,
     test_record_counts_row_and_total_audits_do_not_catch_a_stale_size,
     test_record_counts_against_the_real_repo,
 )
