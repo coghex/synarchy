@@ -70,12 +70,14 @@ The contract
       * a `|---|` separator row under the header, with exactly as many
         cells as the header -- GFM recognizes a table only then, and
         renders the run as a paragraph of literal pipes otherwise;
-      * no construct in any row whose source differs from what a
-        reader sees -- raw HTML, a link/image/footnote bracket, or an
-        HTML entity. Each can carry a record and its count through this
-        audit while the rendered cell displays something else or
-        nothing (`<!-- ... -->`, `[](# "...")`), which is the
-        block-level escape one level down, inside a cell;
+      * every row drawn from ONE permitted character vocabulary
+        (`_ROW_VOCABULARY`). This is a whitelist rather than a list of
+        refused constructs, so raw HTML, links, images, footnotes,
+        entities, backslash escapes, tabs, emphasis and non-ASCII
+        homoglyphs are all excluded because the characters they need
+        are absent -- including the ones nobody has thought of. The
+        block-level rules keep the TABLE rendering; this keeps each
+        CELL rendering as the text it is written as;
       * neither marker inside a fenced code block or an open
         `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block -- the two
         constructs that carry following lines verbatim.
@@ -175,31 +177,52 @@ _COUNT_RE = re.compile(
 #: variant away from being bypassed (round-2 review). Same tolerance
 #: the SS1 field-total sweep already applies to its own phrase.
 _DECORATED_RECORD = r"[`*_]{0,3}[A-Z][A-Za-z0-9_']*Capability[`*_]{0,3}"
-#: The Markdown constructs whose SOURCE differs from what a reader
-#: sees, as `(name, pattern)`. Every one of them can carry a record and
-#: its count through this audit's regexes while displaying nothing:
+#: The COMPLETE character vocabulary a governed table row may use.
 #:
-#:   raw HTML       `<!-- `XCapability` (11 fields) -->` renders as
-#:                  nothing at all; `<span style="display:none">` hides
-#:                  the cell through CSS (round-7 review);
-#:   link or image  `[](# "`XCapability` (11 fields)")` puts the whole
-#:                  thing in a link TITLE and renders an empty cell.
-#:                  The same bracket form covers reference links and
-#:                  footnotes (round-10 review);
-#:   entity         `&#87;orldSimCapability` displays a name this
-#:                  audit's patterns never see.
+#: A whitelist, deliberately, and it replaced a growing blocklist. Ten
+#: rounds of review of this change each named one more construct whose
+#: source differs from what a reader sees -- an `<!-- ... -->` comment
+#: around a cell, a `<span>` hidden by CSS, `[](# "...")` putting the
+#: count in a link title -- and each was rejected by adding a pattern
+#: for it. That argument is only ever as good as the enumeration
+#: behind it, which is the shape #1309 and #1463 burned review rounds
+#: on here before.
 #:
-#: The block-level rules refuse markup that stops the TABLE rendering;
-#: these refuse markup that stops a CELL's text rendering as itself,
-#: which is the same escape one level down. The audited column states
-#: its counts as plain text, which the real table already does -- it
-#: contains no `<`, `[`, `]` or `&` at all.
-_HIDDEN_SOURCE_CONSTRUCTS = (
-    ("raw HTML", re.compile(r"<[A-Za-z/!?]")),
-    ("a link, image or footnote", re.compile(r"!?\[[^\]]*\]")),
-    ("an HTML entity", re.compile(
-        r"&(?:#[0-9]+|#[xX][0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);")),
-)
+#: This inverts it. Only these characters may appear in a row, so
+#: every construct that could hide a record or its count is excluded
+#: because the characters it needs are absent, whether or not anyone
+#: thought of it:
+#:
+#:   `<` `>`   raw HTML, autolinks
+#:   `[` `]`   links, images, footnotes, reference links
+#:   `&`       HTML entities (`&#87;orldSimCapability`)
+#:   `\`       backslash escapes (an escaped `|` or backtick)
+#:   tab       GFM expands it to four columns: an indented code block
+#:   `*` `_`   emphasis, which decorates a name past the count pattern
+#:   `~`       strikethrough, and fences
+#:   `"`       link titles
+#:   anything non-ASCII but the two below -- zero-width spaces and
+#:             homoglyphs, which render as a name this audit never sees
+#:
+#: The real table uses exactly this set and nothing else. Widening it
+#: is a deliberate edit here, and the cost of each addition is the
+#: constructs it re-admits -- which is the point: the vocabulary is
+#: the argument, so it is stated in one place and reviewed as one.
+_ROW_VOCABULARY = " #(),-./:;`|'§—"
+_FORBIDDEN_ROW_CHAR_RE = re.compile(
+    r"[^0-9A-Za-z" + re.escape(_ROW_VOCABULARY) + r"]")
+#: What a rejected character would most likely have been, so the
+#: diagnostic names the construct rather than only the codepoint. A
+#: character absent from this map is still rejected -- the vocabulary
+#: decides, this only explains.
+_EXCLUDED_CHAR_REASONS = {
+    "<": "raw HTML or an autolink", ">": "raw HTML or an autolink",
+    "[": "a link, image or footnote", "]": "a link, image or footnote",
+    "&": "an HTML entity", "\\": "a backslash escape",
+    "\t": "a tab, which GFM expands into an indented code block",
+    "*": "emphasis", "_": "emphasis",
+    "~": "strikethrough or a code fence", '"': "a link title",
+}
 #: The reintroduction shape swept for outside the block, in the two
 #: orders a size is written in: parenthesised after the name
 #: (`` `XCapability` (9 fields) ``, this table's own shape, and the
@@ -379,18 +402,21 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                 f"the audited column is read by position, so a ragged row "
                 f"would move it")
             continue
-        hidden = next(
-            ((name, match) for name, pattern in _HIDDEN_SOURCE_CONSTRUCTS
-             if (match := pattern.search(row)) is not None), None)
-        if hidden is not None:
-            name, match = hidden
+        forbidden = _FORBIDDEN_ROW_CHAR_RE.search(row)
+        if forbidden is not None:
+            character = forbidden.group(0)
+            reason = _EXCLUDED_CHAR_REASONS.get(character)
+            because = (f", which is {reason}" if reason else
+                       ", which is outside the permitted vocabulary")
             violations.append(
-                f"{_DOC} §2.1's record table row {number} contains "
-                f"{name} ({match.group(0)!r}) -- a construct whose "
+                f"{_DOC} §2.1's record table row {number} uses "
+                f"{character!r} (U+{ord(character):04X}){because}. A "
+                f"governed row is plain text: only the characters in "
+                f"`_ROW_VOCABULARY` may appear, so no construct whose "
                 f"source differs from what a reader sees can carry a "
-                f"record and its count through this audit while the "
-                f"rendered cell shows something else, or nothing. The "
-                f"audited column states its counts as plain text")
+                f"record or its count past this audit while the "
+                f"rendered cell shows something else. Row: "
+                f"{row[:70]!r}")
             continue
         column.append(row_cells[index])
     if not column:

@@ -612,44 +612,6 @@ def test_record_counts_duplicate_audited_column_rejected():
            f"a second audited column must be rejected, got: {violations}")
 
 
-def test_record_counts_inline_html_in_a_row_rejected():
-    """Round 7's finding: raw HTML inside a table CELL. An
-    `<!-- ... -->` around a cell's text hides the record and its count
-    from every reader while leaving both for a regex to find, so the
-    rendered §2.1 table no longer displays that record at all; a tag
-    that hides the cell through CSS does the same. This is the
-    block-level non-rendered-markup escape one level down."""
-    for wrap in ("<!-- {} -->",
-                 "<span style=\"display:none\">{}</span>"):
-        cell = wrap.format("`Engine.Core.Capability.Alpha` — "
-                           "`AlphaCapability` (2 fields)")
-        rows = _CLEAN_ROWS.replace(
-            "`Engine.Core.Capability.Alpha` — `AlphaCapability` "
-            "(2 fields)", cell, 1)
-        expect(rows != _CLEAN_ROWS, f"fixture must apply {wrap!r}")
-        violations = audit_record_counts(_SOURCES, _counts_doc(rows))
-        expect(any("source differs from what a reader sees" in v
-                   for v in violations),
-               f"a cell hidden behind {wrap!r} must be rejected, got: "
-               f"{violations}")
-
-
-def test_record_counts_inline_html_in_the_real_table_rejected():
-    """The same escape against the real document, over the record whose
-    stale size this change removed."""
-    sources = scan_production_sources(REPO_ROOT)
-    document = real_inventory_text()
-    live = ("`Engine.Core.Capability.WorldSim` — `WorldSimCapability` "
-            "(11 fields, the world/sim half)")
-    hidden = document.replace(live, f"<!-- {live} -->", 1)
-    expect(hidden != document, "the fixture must change the real document")
-    violations = audit_record_counts(sources, hidden)
-    expect(any("source differs from what a reader sees" in v
-               for v in violations),
-           f"commenting out a real cell must be rejected, got: "
-           f"{violations}")
-
-
 def test_record_counts_delimiter_width_mismatch_rejected():
     """Round 8's finding: a delimiter row whose cell count differs from
     the header's. GFM recognizes a table only when the two match, so
@@ -714,41 +676,74 @@ def test_marked_span_body_in_a_fence_rejected_for_the_record_table():
            "fencing the real §2.1 table's body must be rejected")
 
 
-def test_record_counts_hidden_source_constructs_rejected():
-    """Round 10's finding and its family. Every construct here carries
-    the record and its count through this audit's regexes while the
-    rendered cell shows something else or nothing: a link TITLE, an
-    image's alt text, a footnote reference, and an HTML entity that
-    displays a name the patterns never see. Same escape as round 7's
-    HTML comment, one construct over, so the rule names the class."""
-    live = ("`Engine.Core.Capability.Alpha` — `AlphaCapability` "
+def test_record_counts_row_vocabulary_rejects_every_hidden_construct():
+    """The whitelist, driven by every construct ten review rounds named
+    plus five nobody did.
+
+    Each of these can carry a record and its count through the count
+    patterns while the rendered cell shows something else or nothing.
+    None is refused by a rule of its own any more: each needs a
+    character `_ROW_VOCABULARY` does not contain, so the single rule
+    covers the ones that were reported AND the ones that were not --
+    which is the whole reason the blocklist became a whitelist.
+    """
+    live = ("`Engine.Core.Capability.Alpha` \u2014 `AlphaCapability` "
             "(2 fields)")
-    for label, replacement in (
-            ("link title", f'[](# "{live}")'),
-            ("image", f"![{live}](x.png)"),
-            ("footnote", f"{live} [^1]"),
-            ("entity",
-             live.replace("AlphaCapability", "&#65;lphaCapability"))):
-        rows = _CLEAN_ROWS.replace(live, replacement, 1)
+    reported = {
+        "HTML comment": f"<!-- {live} -->",
+        "CSS-hidden span": f'<span style="display:none">{live}</span>',
+        "link title": f'[](# "{live}")',
+        "image": f"![{live}](x.png)",
+        "footnote": f"{live} [^1]",
+        "HTML entity": live.replace("AlphaCapability",
+                                    "&#65;lphaCapability"),
+        "emphasis": live.replace("`AlphaCapability`",
+                                 "**`AlphaCapability`**"),
+    }
+    never_reported = {
+        "backslash escape": live.replace("(2", "\\(2"),
+        "tab": live.replace(" (2 fields", "\t(2 fields"),
+        "zero-width space": live.replace("AlphaCapability",
+                                         "Alpha\u200bCapability"),
+        "homoglyph": live.replace("AlphaCapability",
+                                  "Alpha\u0421apability"),
+        "strikethrough": f"~~{live}~~",
+    }
+    for label, variant in {**reported, **never_reported}.items():
+        rows = _CLEAN_ROWS.replace(live, variant, 1)
         expect(rows != _CLEAN_ROWS, f"fixture must apply {label}")
         violations = audit_record_counts(_SOURCES, _counts_doc(rows))
-        expect(any("source differs from what a reader sees" in v
+        expect(any("permitted vocabulary" in v or "which is " in v
                    for v in violations),
-               f"a cell hidden behind {label} must be rejected, got: "
+               f"{label} must be rejected by the row vocabulary, got: "
                f"{violations}")
 
 
-def test_record_counts_link_title_in_the_real_table_rejected():
-    """Round 10's exact case against the real document: the live
-    `WorldSimCapability` cell moved into a link title, which renders an
-    empty cell while every count rule is satisfied."""
+def test_record_counts_vocabulary_names_the_construct():
+    """The diagnostic names the construct, not only the codepoint: a
+    maintainer who writes `<span>` is told it is raw HTML."""
+    live = ("`Engine.Core.Capability.Alpha` \u2014 `AlphaCapability` "
+            "(2 fields)")
+    rows = _CLEAN_ROWS.replace(live, f"<!-- {live} -->", 1)
+    violations = audit_record_counts(_SOURCES, _counts_doc(rows))
+    expect(any("raw HTML or an autolink" in v for v in violations),
+           f"the diagnostic must name the construct, got: {violations}")
+
+
+def test_record_counts_real_table_uses_only_the_vocabulary():
+    """The live §2.1 table complies -- the case that keeps the
+    vocabulary honest rather than merely strict. A vocabulary the real
+    document could not satisfy would have to be widened, and every
+    widening re-admits constructs."""
     sources = scan_production_sources(REPO_ROOT)
     document = real_inventory_text()
-    live = ("`Engine.Core.Capability.WorldSim` — `WorldSimCapability` "
-            "(11 fields, the world/sim half)")
+    expect(audit_record_counts(sources, document) == [],
+           "the real §2.1 table must satisfy the row vocabulary")
+    live = ("`Engine.Core.Capability.WorldSim` \u2014 "
+            "`WorldSimCapability` (11 fields, the world/sim half)")
     hidden = document.replace(live, f'[](# "{live}")', 1)
     expect(hidden != document, "the fixture must change the real document")
-    expect(any("source differs from what a reader sees" in v
+    expect(any("a link, image or footnote" in v
                for v in audit_record_counts(sources, hidden)),
            "a real cell moved into a link title must be rejected")
 
@@ -985,10 +980,9 @@ TESTS = (
     test_record_counts_terminated_html_blocks_rejected,
     test_record_counts_terminated_html_block_real_rejected,
     test_record_counts_duplicate_audited_column_rejected,
-    test_record_counts_inline_html_in_a_row_rejected,
-    test_record_counts_inline_html_in_the_real_table_rejected,
-    test_record_counts_hidden_source_constructs_rejected,
-    test_record_counts_link_title_in_the_real_table_rejected,
+    test_record_counts_row_vocabulary_rejects_every_hidden_construct,
+    test_record_counts_vocabulary_names_the_construct,
+    test_record_counts_real_table_uses_only_the_vocabulary,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
