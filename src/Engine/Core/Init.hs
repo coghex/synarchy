@@ -319,10 +319,13 @@ initializeEngine = initializeEngineWith (LogToHandle stdout)
 
 -- | As 'initializeEngine' but with an explicit log backend. Dump mode
 --   passes 'stderr' here so the logger is born writing to stderr —
---   init-time logging (e.g. 'loadNotificationCfg') can never reach
---   stdout, which dump mode reserves for clean JSON. Redirecting the
---   backend after init returns would be too late (the line is already
---   emitted).
+--   init-time logging (e.g. 'loadNotificationCfg', which still reports
+--   a first materialization of the overrides file and every load
+--   failure) can never reach stdout, which dump mode reserves for clean
+--   JSON. Redirecting the backend after init returns would be too late:
+--   whatever initialization logged has already been emitted. #1928
+--   quieted one such line — the notification registry's success
+--   sentence — which narrows what init emits without changing that.
 initializeEngineWith ∷ LogBackend → IO EngineInitResult
 initializeEngineWith logBackend = do
   inputQueue ← Q.newQueue

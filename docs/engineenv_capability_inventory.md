@@ -116,7 +116,7 @@ minimum bucket.
 | `core-init` | Core initialization and orchestration: boot configuration, the shared logger, the engine lifecycle flag, boot-profile-derived facts. |
 | `render-gpu-asset` | Render, window, Vulkan, and asset state: the nested main-thread-private `EngineState`, video/window/framebuffer settings, the bindless texture system, sampler cache, font cache, asset pool, the render camera(s). |
 | `input-lua-transport` | Input, keybindings, lifecycle, and Lua message transport: the input event queue, input-barrier tokens, live input device state, key bindings, and the two Lua↔engine message queues. |
-| `world-sim-render-handoff` | World, simulation, time, worldgen, and render handoff. Two halves (§7.4): the **world/sim** fields — the world manager, the world and sim command queues, sun angle, the flora and material registries, worldgen config, pause flag and game clock (migrated to `WorldSimCapability` by #893, E5a) — and the **coupled render-handoff set** (#894, E5b): the single-slot world-preview and zoom-atlas staging refs plus the preview generation counter, the layered world quads the frame loop merges, the blood-texture dispose queue, and the persistent structure texture palette with its runtime paletteId→handle table. |
+| `world-sim-render-handoff` | World, simulation, time, worldgen, and render handoff. Two halves (§7.4): the **world/sim** fields — the world manager and its command queues, worldgen and simulation-clock state, and the registries the world thread owns (migrated to `WorldSimCapability` by #893, E5a) — and the **coupled render-handoff set** (#894, E5b), the world thread's staging surface for `MainRender` GPU uploads: the single-slot preview and atlas staging refs with their generation counters, the layered world quads the frame loop merges, the dispose queues, and the persistent structure texture and art catalogs. Neither half is enumerated here: §5's `world-sim-render-handoff` table is the field-by-field authority, and §2.1's record table below states each half's size. |
 | `units-buildings-combat` | Units, combat, buildings, and pathing: the unit and building managers and their command queues, unit sim state, stat RNG, combat/injury/thought/action-outcome event streams, pathing tunables. |
 | `content-registries` | Items, crafting, equipment, substances, infections, locations, loot, and the tutorial definition tree: static, YAML-backed content registries loaded once and queried thereafter. |
 | `ui-hud-events` | UI, focus, HUD, selections, events, notifications, and popups: the UI page manager, focus manager, HUD active-page tracking, text-input buffers, the player-event store, notification config and category order. (Popups reach Lua as a `luaQueue` message; #2285 removed the write-only engine-side queue that used to sit beside it.) |
@@ -142,16 +142,26 @@ wider record), one by consumer coupling, and one by **mutation
 authority** (a field's legitimate writer and its many readers need
 different *field types*, not different field *sets*):
 
+<!-- capability-record-counts -->
 | Identifier | Record / view type(s) | Landed by |
 |---|---|---|
 | `core-init` | `Engine.Core.Capability.Core` — `CoreCapability` (4 fields) | #889 (E1) |
-| `render-gpu-asset` | `Engine.Core.Capability.Render` — `RenderCapability` (22, `MainRender`-only, carries `engineStateRef`); `Engine.Core.Capability.RenderView` — `RenderViewCapability` (worker-safe, never names `engineStateRef`) | #891 (E3) |
-| `input-lua-transport` | `Engine.Core.Capability.Input` — `InputCapability` (8, `LuaThread`-only); `Engine.Core.Capability.InputView` — `InputViewCapability` (worker-safe, carries neither `inputBarrierNextRef` nor `currentKeyDownRef`) | #892 (E4) |
-| `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` — `WorldSimCapability` (9 world/sim fields); `Engine.Core.Capability.RenderHandoff` — `RenderHandoffCapability` (7 coupled handoff fields) | #893 (E5a) / #894 (E5b) |
-| `units-buildings-combat` | `Engine.Core.Capability.UnitCombat` — `UnitCombatCapability` (10); `Engine.Core.Capability.Building` — `BuildingCapability` (3) | #895 (E6a) / #896 (E6b) |
-| `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (8 registries, the raw WRITER interface); `Engine.Core.Capability.ContentRegistriesView` — `ContentRegistriesViewCapability` (the reader-facing view: 4 registries as `ReadOnlyRef`s + `crvInfectionManagerRef` raw) | #890 (E2) / #1896 (CMA-2) |
-| `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 UI/focus/HUD fields); `Engine.Core.Capability.Events` — `EventsCapability` (3 event/notification fields; a 4th, the write-only popup queue, was removed by #2285) | #897 (E7a) / #898 (E7b) |
-| `save-load-coordination` | `Engine.Core.Capability.SaveLoad` — `SaveLoadCapability` (5 coordination handles) | #899 (E8) |
+| `render-gpu-asset` | `Engine.Core.Capability.Render` — `RenderCapability` (22 fields, `MainRender`-only, carries `engineStateRef`); `Engine.Core.Capability.RenderView` — `RenderViewCapability` (16 fields, worker-safe, never names `engineStateRef`) | #891 (E3) |
+| `input-lua-transport` | `Engine.Core.Capability.Input` — `InputCapability` (8 fields, `LuaThread`-only); `Engine.Core.Capability.InputView` — `InputViewCapability` (5 fields, worker-safe, carries neither `inputBarrierNextRef` nor `currentKeyDownRef`) | #892 (E4) |
+| `world-sim-render-handoff` | `Engine.Core.Capability.WorldSim` — `WorldSimCapability` (11 fields, the world/sim half); `Engine.Core.Capability.RenderHandoff` — `RenderHandoffCapability` (10 fields, the coupled handoff half) | #893 (E5a) / #894 (E5b) |
+| `units-buildings-combat` | `Engine.Core.Capability.UnitCombat` — `UnitCombatCapability` (11 fields); `Engine.Core.Capability.Building` — `BuildingCapability` (3 fields) | #895 (E6a) / #896 (E6b) |
+| `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (8 fields, the registries as the raw WRITER interface); `Engine.Core.Capability.ContentRegistriesView` — `ContentRegistriesViewCapability` (5 fields, the reader-facing view: four registries as `ReadOnlyRef`s plus `crvInfectionManagerRef` raw) | #890 (E2) / #1896 (CMA-2) |
+| `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 fields, UI/focus/HUD); `Engine.Core.Capability.Events` — `EventsCapability` (3 fields, event/notification; the write-only popup queue that used to sit beside them was removed by #2285) | #897 (E7a) / #898 (E7b) |
+| `save-load-coordination` | `Engine.Core.Capability.SaveLoad` — `SaveLoadCapability` (5 fields, the coordination handles) | #899 (E8) |
+<!-- /capability-record-counts -->
+
+Each size in that table is checked against the record it names by
+`tools/engine_env_capability_audit.py` (issue #2269), which is why its
+`Record / view type(s)` column carries no number that is not one: a
+count stated there and nowhere else cannot drift the way
+`WorldSimCapability`'s and `RenderHandoffCapability`'s did across five
+landed change sets while every gate stayed green. §5 remains the
+field-by-field authority; the table states each record's size.
 
 The `world-sim-render-handoff` split is the one that is not a §3.1
 thread-privacy split: neither half carries a thread-private field, and
@@ -559,22 +569,20 @@ not attempt the role claim.
 ### `world-sim-render-handoff`
 
 This group migrated in two halves (§7.4), both landed. Since #893 (E5a)
-the nine **world/sim** fields — `worldManagerRef`, `worldQueue`,
-`sunAngleRef`, `floraCatalogRef`, `materialRegistryRef`,
-`worldGenConfigRef`, `gameTimeRef`, `enginePausedRef`, `simQueue` — are
-reached through
+the **world/sim** fields are reached through
 `Engine.Core.Capability.WorldSim.WorldSimCapability` rather than an
-`EngineEnv` field; since #894 (E5b) the rest —
-`worldPreviewRef`, `worldPreviewGenerationRef`, `zoomAtlasDataRef`,
-`worldQuadsRef`, `bloodDisposeQueue`, `texPaletteRef`,
-`texPaletteHandlesRef`, since #1712 `structureWallCatalogRef`, and since
-#1921 `sceneStatsRef`, the
-**coupled render-handoff** half (the world
-thread's staging surface for `MainRender` GPU uploads plus the
-structure-palette translation table, the packs' directional wall art
-and the scene-assembly telemetry measured while building the published
-quads) — are reached through
-`Engine.Core.Capability.RenderHandoff.RenderHandoffCapability`. Both
+`EngineEnv` field; since #894 (E5b) the rest — the **coupled
+render-handoff** half (the world thread's staging surface for
+`MainRender` GPU uploads plus the structure-palette translation table,
+the packs' directional wall art, the structure art catalog and the
+scene-assembly telemetry measured while building the published quads) —
+are reached through
+`Engine.Core.Capability.RenderHandoff.RenderHandoffCapability`. The two
+records' own declarations are which-half authority — the table below
+holds every field of both, and §2.1's audited record table states how
+many each carries. This paragraph enumerates neither, because the
+enumeration it used to carry is what silently fell five fields behind
+the live records between #893 and #1921. Both records
 hold for every reader and writer below EXCEPT the §6.1 permanent
 orchestration modules, which keep whole-environment access by job
 description. Every per-field contract in the table below holds
