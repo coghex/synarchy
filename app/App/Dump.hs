@@ -96,8 +96,10 @@ runDump layers gen region = do
                    ⧺ show (crY2 region) ⧺ ")"
 
   -- Logger is born writing to stderr (not redirected after the fact),
-  -- so init-time logging (e.g. loadNotificationCfg) can't pollute the
-  -- JSON on stdout.
+  -- so init-time logging can't pollute the JSON on stdout. That is
+  -- about init-time logging as a class, not any one line: #1928 quieted
+  -- the notification registry's success sentence, and loadNotificationCfg
+  -- can still report a first materialization or a load failure here.
   EngineInitResult env ← initializeEngineHeadlessWith (LogToHandle stderr)
 
   -- Port 0 is dump's own contract, not a CLI default: it tells

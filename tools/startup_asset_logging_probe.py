@@ -101,9 +101,12 @@ AGGREGATE_RE = re.compile(
 #: Info lines the startup path emits that are NOT aggregates. Their
 #: presence is asserted, so "the aggregate matcher counted 12" cannot be
 #: satisfied by a log that simply has nothing else in it.
+#:
+#: "Notification registry loaded" used to sit here too; #1928 moved it
+#: to Debug (an ordinary registry load is no longer narrated at Info),
+#: so it is no longer an Info line this probe can witness.
 UNRELATED_INFO_MARKERS = (
     "Startup loader queued ",
-    "Notification registry loaded",
 )
 
 
