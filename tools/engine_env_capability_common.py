@@ -226,41 +226,72 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 
 
-def fenced_line_flags(text: str) -> "list[bool]":
-    """Per line, whether that line is INSIDE a fenced code block.
+#: The four HTML block tags CommonMark treats as VERBATIM: an
+#: unclosed one of these swallows every following line, blank lines
+#: included, until its closing tag. Every other raw-HTML block --
+#: including the `<!-- ... -->` comment the markers themselves are --
+#: ends at a blank line or at its own close and cannot swallow the
+#: document, so only these four matter here.
+_VERBATIM_HTML_OPEN_RE = re.compile(
+    r"<(?:pre|script|style|textarea)\b", re.IGNORECASE)
+_VERBATIM_HTML_CLOSE_RE = re.compile(
+    r"</(?:pre|script|style|textarea)\s*>", re.IGNORECASE)
 
-    A fence opens on a line of three or more backticks or tildes and
-    closes on a later line of at least as many of the SAME character.
-    The opening and closing fence lines themselves count as inside, so
-    a heading can never be read out of fenced content.
+
+def fenced_line_flags(text: str) -> "list[bool]":
+    """Per line, whether Markdown renders that line VERBATIM rather
+    than as document content.
+
+    Two constructs, because they are the two that swallow following
+    lines whole:
+
+    * a fenced code block -- three or more backticks or tildes, closed
+      by a later line of at least as many of the SAME character. The
+      opening and closing fence lines themselves count as inside;
+    * an open `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block,
+      which CommonMark carries across blank lines until its closing
+      tag.
 
     This exists because `section_bounds` decides where a section ends,
-    and a fenced block containing a line like `## example` would
-    otherwise end the section early -- while Markdown still renders
-    everything after it inside the real section. That gap was a live
-    bypass of the scope rules below: prose past the fake heading was
-    outside the audit and inside the document.
+    and a block containing a line like `## example` would otherwise end
+    the section early -- while Markdown still renders everything after
+    it inside the real section. That gap was a live bypass of the scope
+    rules below: prose past the fake heading was outside the audit and
+    inside the document. `extract_marked_spans` reads the same flags to
+    refuse a governed block that has been moved somewhere it renders as
+    an example instead of as the document's own text.
     """
     inside: list[bool] = []
     open_char = ""
     open_len = 0
+    html_open = False
     for line in text.splitlines():
         stripped = line.strip()
         match = _FENCE_RE.match(stripped)
-        if not open_char:
-            if match:
-                open_char = match.group(1)[0]
-                open_len = len(match.group(1))
-                inside.append(True)
-                continue
-            inside.append(False)
+        if open_char:
+            inside.append(True)
+            if (match and match.group(1)[0] == open_char
+                    and len(match.group(1)) >= open_len
+                    and not stripped[len(match.group(1)):].strip()):
+                open_char = ""
+                open_len = 0
             continue
-        inside.append(True)
-        if (match and match.group(1)[0] == open_char
-                and len(match.group(1)) >= open_len
-                and not stripped[len(match.group(1)):].strip()):
-            open_char = ""
-            open_len = 0
+        if html_open:
+            inside.append(True)
+            if _VERBATIM_HTML_CLOSE_RE.search(line):
+                html_open = False
+            continue
+        if match:
+            open_char = match.group(1)[0]
+            open_len = len(match.group(1))
+            inside.append(True)
+            continue
+        if (_VERBATIM_HTML_OPEN_RE.search(line)
+                and not _VERBATIM_HTML_CLOSE_RE.search(line)):
+            html_open = True
+            inside.append(True)
+            continue
+        inside.append(False)
     return inside
 
 

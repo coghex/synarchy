@@ -263,7 +263,7 @@ def test_record_counts_second_table_in_the_block_rejected():
                                 smuggled + RECORD_COUNTS_CLOSE, 1)
     violations = audit_record_counts(_SOURCES, doc)
     expect(any("Markdown tables -- exactly one" in v
-               or "are not table rows" in v for v in violations),
+               or "are not column-zero table rows" in v for v in violations),
            f"a second table inside the marked block must be rejected, "
            f"got: {violations}")
 
@@ -302,7 +302,7 @@ def test_record_counts_size_in_the_blocks_prose_rejected():
         "\nHistorically `AlphaCapability` (9 fields).\n\n"
         + RECORD_COUNTS_CLOSE, 1)
     violations = audit_record_counts(_SOURCES, doc)
-    expect(any("are not table rows" in v for v in violations),
+    expect(any("are not column-zero table rows" in v for v in violations),
            f"a record size in the block's own prose must be rejected, "
            f"got: {violations}")
 
@@ -333,7 +333,7 @@ def test_record_counts_pipeless_table_in_the_block_rejected():
         "`alpha-beta` | epic E-one | **`AlphaCapability`** (9 fields)\n\n"
         + RECORD_COUNTS_CLOSE, 1)
     violations = audit_record_counts(_SOURCES, doc)
-    expect(any("are not table rows" in v for v in violations),
+    expect(any("are not column-zero table rows" in v for v in violations),
            f"a pipe-less GFM table inside the block must be rejected, "
            f"got: {violations}")
 
@@ -433,6 +433,63 @@ def test_field_total_block_in_a_fence_is_also_rejected():
     expect(any("inside a fenced code block" in v
                for v in audit_field_total(live, fenced)),
            "fencing the real §1 field-total block must be rejected too")
+
+
+def test_record_counts_indented_table_rejected():
+    """Round 4's finding: indenting every table row by four spaces.
+    GFM renders that as an indented code block -- literal pipes, no
+    table -- yet the stripped rows used to parse and match the live
+    counts, so §2.1 carried no rendered table and the audit passed."""
+    doc = _counts_doc()
+    indented = "\n".join(
+        "    " + line if line.startswith("|") else line
+        for line in doc.splitlines()) + "\n"
+    expect(indented != doc, "the fixture must actually indent the table")
+    violations = audit_record_counts(_SOURCES, indented)
+    expect(any("column-zero table rows" in v for v in violations),
+           f"an indented table is an indented code block, not a table, "
+           f"and must be rejected, got: {violations}")
+
+
+def test_record_counts_blockquoted_table_rejected():
+    """The same construct family: a `>` prefix moves the table inside a
+    blockquote rather than leaving it as §2.1's own content. The
+    column-zero rule refuses the family, not just the one member."""
+    doc = _counts_doc()
+    quoted = "\n".join(
+        "> " + line if line.startswith("|") else line
+        for line in doc.splitlines()) + "\n"
+    violations = audit_record_counts(_SOURCES, quoted)
+    expect(any("column-zero table rows" in v for v in violations),
+           f"a blockquoted table must be rejected, got: {violations}")
+
+
+def test_record_counts_indented_real_table_rejected():
+    """The indentation escape against the real document."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    start = document.index(RECORD_COUNTS_OPEN)
+    end = document.index(RECORD_COUNTS_CLOSE)
+    indented = document[:start] + "\n".join(
+        "    " + line if line.startswith("|") else line
+        for line in document[start:end].splitlines()) + document[end:]
+    expect(indented != document, "the fixture must change the real document")
+    expect(any("column-zero table rows" in v
+               for v in audit_record_counts(sources, indented)),
+           "indenting the real §2.1 table must be rejected")
+
+
+def test_record_counts_html_verbatim_block_rejected():
+    """The other construct that carries following lines verbatim: an
+    open `<pre>` HTML block. CommonMark carries it across blank lines
+    until its closing tag, so it swallows the markers and their table
+    exactly as a fence does."""
+    doc = _counts_doc(prefix="<pre>").replace(
+        RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n</pre>", 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any("fenced code block" in v for v in violations),
+           f"markers inside an open <pre> block must be rejected, got: "
+           f"{violations}")
 
 
 def test_record_counts_ragged_row_rejected():
@@ -653,6 +710,10 @@ TESTS = (
     test_record_counts_missing_separator_row_rejected,
     test_record_counts_fenced_real_block_rejected,
     test_field_total_block_in_a_fence_is_also_rejected,
+    test_record_counts_indented_table_rejected,
+    test_record_counts_blockquoted_table_rejected,
+    test_record_counts_indented_real_table_rejected,
+    test_record_counts_html_verbatim_block_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,

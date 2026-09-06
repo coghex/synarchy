@@ -52,13 +52,31 @@ The contract
         "4 registries ... + `crvInfectionManagerRef` raw" -- two cells
         whose count a reader could not state unambiguously.
 
-      The block holds that table and NOTHING else -- one contiguous run
-      of `|`-leading lines under a `|---|` separator row, no second
-      table, no prose, no raw HTML. The markers themselves may not sit
-      in a fenced code block (`extract_marked_spans` refuses that):
-      fenced markup renders as an example, so a block moved into a
-      fence would leave §2.1 with no rendered table at all while every
-      rule below still passed.
+      The block holds that table and NOTHING else, and the table must
+      RENDER as one. There is no Markdown parser available to this
+      audit, so the contract is pinned to the narrowest arrangement
+      that is unambiguously a rendered GFM table, and each rule names
+      the construct it refuses:
+
+      * every non-blank line between the markers begins with `|` in
+        COLUMN ZERO. Four or more leading spaces make an indented code
+        block, a `>` prefix a blockquote, a list marker a nested
+        container -- none of which is §2.1 carrying a table;
+      * exactly one contiguous run of such lines, so no second table
+        can sit in the block at a column index nothing reads;
+      * a `|---|` separator row under the header, without which GFM
+        renders the run as a paragraph of literal pipes;
+      * neither marker inside a fenced code block or an open
+        `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block -- the two
+        constructs that carry following lines verbatim.
+        `extract_marked_spans` refuses those, and the owner then also
+        reports the block as missing.
+
+      Rounds 1 through 4 of this change's review each found one
+      instance of the same class -- a second piped table, a size in the
+      block's prose, an emphasised size and a pipe-less table, an
+      indented table -- which is why the contract is now stated as what
+      is ACCEPTED rather than as a list of what is rejected.
       Only the one table's record column is compared with the live
       records, so anything else inside the markers is governed markup
       nothing verifies. Both review rounds of this change found an
@@ -208,7 +226,12 @@ def _pipe_runs(block: str) -> list[list[str]]:
     """The block's maximal runs of consecutive `|`-leading lines.
 
     A Markdown table is exactly such a run: a blank line or a line of
-    prose ends it. Grouping rather than filtering is what makes a
+    prose ends it. The `|` must be at COLUMN ZERO -- four or more
+    leading spaces make the line an indented code block in GFM, which
+    renders the pipes literally and leaves §2.1 with no table at all,
+    and a `>` or list marker in front of it moves the table inside
+    another container. Accepting a stripped line was the round-4
+    escape. Grouping rather than filtering is what makes a
     SECOND table in the block visible. Collecting every pipe-leading
     line into one list instead -- the first shape of this parser --
     silently appended the second table's header and rows to the first
@@ -220,9 +243,8 @@ def _pipe_runs(block: str) -> list[list[str]]:
     runs: list[list[str]] = []
     current: list[str] = []
     for line in block.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("|"):
-            current.append(stripped)
+        if line.startswith("|"):
+            current.append(line.rstrip())
             continue
         if current:
             runs.append(current)
@@ -376,18 +398,20 @@ def _audit_block_holds_only_its_table(spans: list) -> list[str]:
     """
     violations: list[str] = []
     for span in spans:
-        stray = [line.strip() for line in span.body.splitlines()
-                 if line.strip() and not line.strip().startswith("|")]
+        stray = [line for line in span.body.splitlines()
+                 if line.strip() and not line.startswith("|")]
         if stray:
             violations.append(
                 f"{_DOC}'s `{RECORD_COUNTS_OPEN}` block holds "
-                f"{len(stray)} line(s) that are not table rows, the "
-                f"first being {stray[0][:70]!r} -- the block holds its "
-                f"one table and nothing else. Only that table's record "
-                f"column is checked against the live records, so any "
-                f"other content inside the markers is a displayed "
-                f"figure nothing verifies. Prose about the table goes "
-                f"outside the markers")
+                f"{len(stray)} line(s) that are not column-zero table "
+                f"rows, the first being {stray[0][:70]!r} -- the block "
+                f"holds its one table and nothing else, every row "
+                f"starting with `|` in column zero. Only that table's "
+                f"record column is checked against the live records, so "
+                f"any other content inside the markers is a displayed "
+                f"figure nothing verifies, and an indented row is an "
+                f"indented code block rather than a table. Prose about "
+                f"the table goes outside the markers")
     return violations
 
 
