@@ -2187,8 +2187,10 @@ reaches for `acquire`, `Claim`, `read_claim`, `retain_measurement`,
 `LEASE_SECONDS` or an exit constant imports the owner and assigning to it
 changes the state the implementation reads. Owners reach one another's seams
 module-qualified at call time (`storage.read_payload(...)`), never through a
-`from ... import`, for the same reason. That direction is asserted
-mechanically by the `claim` self-test owner rather than left to inspection.
+`from ... import`, for the same reason. Both properties are asserted
+mechanically by the `census` self-test owner rather than left to inspection
+(#2375): the whole four-module direction, and the command holding each owner
+as the module OBJECT and no member of one under any name, renamed or private.
 `tools/deflake.py` consumes the owners directly.
 
 The claim is a FILE, created `O_CREAT|O_EXCL` at
@@ -2304,20 +2306,20 @@ them, because a claim that must hold between OS processes cannot be proved by
 threads.
 
 That bare invocation is the whole gate and the only one CI or `make ci` runs.
-Its 29 cases live with three independently changing contract owners, and
+Its 30 cases live with three independently changing contract owners, and
 `--only` runs one owner's cases for iteration (#2100):
 
 ```bash
 python3 tools/test_probe_claim.py --only claim          # 12 cases, ~7 s
-python3 tools/test_probe_claim.py --only census         #  4 cases
+python3 tools/test_probe_claim.py --only census         #  5 cases
 python3 tools/test_probe_claim.py --only orchestration  # 13 cases
 ```
 
 | Owner module | `--only` | Owns |
 |---|---|---|
-| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, the three owners' one-way import direction (#2148), exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
-| `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, and `probe_flake` staying usable with no `docs-wip` worktree |
-| `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI |
+| `probe_claim_selftest_claim.py` | `claim` | the atomic claim and its lease: namespace and key validation, exclusive acquisition, cross-process contention, expiry, renewal, stale reclaim, owner-safe release, acquisition timing, malformed claims, managed exit, crash recovery, the renewer |
+| `probe_claim_selftest_census.py` | `census` | acquisition recording, the claim log kept separate from the measurement log, lossless schema migration, `probe_flake` staying usable with no `docs-wip` worktree, and #2148's structural seam (#2375): the four-module import direction and the command's empty re-export surface |
+| `probe_claim_selftest_orchestration.py` | `orchestration` | the claimed measurement end to end: denied and audit-failure paths, harness-error ingestion, pre-claim rejection, lease validation, lost claims, serialized audit and ingestion, the retained result and its `--result` destination, the CLI and its surviving script entry point |
 
 `probe_claim_selftest_support.py` is the single source of everything the three
 share — the assertion helpers and the ONE failure accumulator behind them, the
