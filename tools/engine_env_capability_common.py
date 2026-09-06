@@ -48,6 +48,12 @@ did. Nothing here is duplicated into them.) The shared substrate:
   * the policy-free inventory-document primitives -- `_is_placeholder`,
     `BACKTICK_RE`, `SEPARATOR_ROW_RE` and SS6.2's heading -- that more
     than one document-reading owner would otherwise duplicate;
+  * the marked-block and section mechanics (`MarkedSpan`,
+    `extract_marked_spans`, `fenced_line_flags`, `section_bounds` and
+    `stray_numbers_outside_code`), which the SS1 field-total owner
+    (#1669) and the SS2.1 record-count owner (#2269) both read. A
+    second fence-aware section reader is exactly the hand-rolled
+    format validator this repository has twice paid review rounds for;
   * the projection canonicalizer (`canonical_projection_accessor`,
     `parse_projection_binding_expressions`, `parse_projection_bindings`
     and `ALIAS_PRESERVING_WRAPPERS`), which the E8 save-load check and
@@ -72,6 +78,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -121,6 +128,363 @@ SEPARATOR_ROW_RE = re.compile(r":?-{2,}:?")
 # hold separate copies of the literal and drift apart. SS1's and SS6.1's
 # headings have one owner each and stay with it.
 SECTION_6_2_HEADING = "### 6.2 Temporary compatibility boundary (production)"
+
+
+# ---------------------------------------------------------------------------
+# Marked-block and section mechanics (issue #1669; shared by issue #2269)
+# ---------------------------------------------------------------------------
+#
+# An HTML-comment marker pair delimiting governed prose, the fence-aware
+# section reader that decides whether a pair sits in the section it
+# governs, and the number scan that says which digits in a governed span
+# are a count rather than a citation. All three arrived with the SS1
+# field total (#1669) and all three are now read by a second owner --
+# SS2.1's audited capability-record counts (#2269) -- so they live here
+# rather than in either owner. They remain policy-free: what a marker is
+# CALLED, which section it must sit in, and what its numbers must equal
+# are each the calling owner's rule.
+#
+# `§5` and `#1669` are excluded from every number scan below. They are
+# navigation and provenance, not counts, and the governed prose
+# necessarily carries both.
+
+SECTION_REF_RE = re.compile(r"§\d+(?:\.\d+)*")
+INTEGER_RE = re.compile(r"\d+")
+
+
+class MarkedSpan(NamedTuple):
+    """One marker pair: its inner prose and where the whole block sits.
+
+    `start`/`end` bracket the block INCLUDING both markers, which is
+    what the section-containment check needs -- a pair whose opening
+    marker is inside its section but whose closing marker is not has
+    not kept its prose there.
+    """
+    body: str
+    start: int
+    end: int
+
+
+def extract_marked_spans(text: str, open_marker: str, close_marker: str
+                         ) -> tuple[list[MarkedSpan], list[str]]:
+    """Return `(spans, violations)` for one marker pair.
+
+    Deliberately literal string scanning, not a regex: the markers are
+    fixed literals, and an unbalanced or nested pair must be reported
+    as the malformed markup it is rather than silently matching some
+    other pair's text.
+
+    A pair is REPORTED and not returned when either marker shares its
+    line with other content, when either marker or the body lies in a
+    verbatim region, or when the BODY carries an HTML comment
+    delimiter of its own. Checking only the opening marker was not enough:
+    a fence opened immediately after it and closed immediately before
+    the closing marker turns the whole governed paragraph into a
+    rendered example while both markers sit in ordinary prose.
+    Fenced content renders as an example rather than as the document's
+    own prose, so a governed block moved into a fence would leave the
+    real text ungoverned while every rule that reads the returned span
+    still passed -- the same class of escape `section_bounds` already
+    refuses for headings. Reporting rather than silently skipping it
+    keeps the owner's "the block is missing" and "the block is here"
+    diagnostics from both being technically true at once.
+
+    The inventory document is the only text this is applied to, so the
+    diagnostics name it directly.
+    """
+    spans: list[MarkedSpan] = []
+    violations: list[str] = []
+    fenced = fenced_line_flags(text)
+    cursor = 0
+    while True:
+        start = text.find(open_marker, cursor)
+        if start < 0:
+            break
+        body_start = start + len(open_marker)
+        end = text.find(close_marker, body_start)
+        if end < 0:
+            violations.append(
+                f"`{open_marker}` at offset {start} in "
+                f"docs/{INVENTORY_PATH.name} is never closed by "
+                f"`{close_marker}`")
+            break
+        nested = text.find(open_marker, body_start, end)
+        if nested >= 0:
+            violations.append(
+                f"`{open_marker}` blocks are nested in "
+                f"docs/{INVENTORY_PATH.name} (a second one opens at "
+                f"offset {nested} before the first closes) -- the "
+                f"governed prose must be one flat block")
+        cursor = end + len(close_marker)
+        body = text[body_start:end]
+        # An HTML comment opened INSIDE the span hides everything to
+        # its `-->`. `fenced_line_flags` cannot see this one: it
+        # deliberately excludes type-2 comments, because the markers
+        # themselves are comments and would otherwise be read as
+        # opening a block over their own content. So the body is held
+        # to carrying no comment delimiter at all -- which also
+        # subsumes the nested-pair case above, since a nested opening
+        # marker is a comment too.
+        stray_comment = next(
+            (token for token in ("<!--", "-->") if token in body), None)
+        if stray_comment is not None:
+            violations.append(
+                f"`{open_marker}` at offset {start} in "
+                f"docs/{INVENTORY_PATH.name} has {stray_comment!r} in "
+                f"its body -- a comment opened between the markers "
+                f"hides the governed text from every reader while "
+                f"leaving it for this audit to parse, and one closed "
+                f"there ends the marker pair early. The markers are the "
+                f"only comments the block may contain")
+            continue
+        # Each marker must be the whole of its line, at column zero.
+        # Leading whitespace is refused as well as trailing content:
+        # four spaces make an indented code block, which renders the
+        # governed text as an example, and `fenced_line_flags` does not
+        # model that construct (round-15 review). Finding the marker text literally was enough for a
+        # `` `` `` before the opening marker and another after the
+        # closing one to wrap the whole governed block in a multiline
+        # two-backtick inline code span -- which the table's own single
+        # backticks do not close -- so §2.1 rendered no table while
+        # every rule that reads the span still passed (round-14
+        # review). A marker alone on its line cannot be the interior of
+        # any inline construct, which refuses that whole family rather
+        # than the backtick spelling of it.
+        alone = None
+        for marker, offset in ((open_marker, start), (close_marker, end)):
+            line_start = text.rfind("\n", 0, offset) + 1
+            line_end = text.find("\n", offset)
+            line = text[line_start:len(text) if line_end < 0 else line_end]
+            if line.rstrip() != marker:
+                alone = (marker, line)
+                break
+        if alone is not None:
+            marker, line = alone
+            violations.append(
+                f"`{marker}` in docs/{INVENTORY_PATH.name} shares its "
+                f"line with other content ({line.strip()[:70]!r}) -- a "
+                f"marker must be the only thing on its line. Text "
+                f"around it can put the whole governed block inside an "
+                f"inline construct, such as the multiline code span a "
+                f"pair of double backticks makes, so that nothing "
+                f"between the markers renders at all")
+            continue
+        first = text.count("\n", 0, start)
+        last = text.count("\n", 0, cursor)
+        verbatim = [index for index in range(first, min(last + 1, len(fenced)))
+                    if fenced[index]]
+        if verbatim:
+            where = ("is itself inside" if verbatim[0] == first
+                     else "encloses")
+            violations.append(
+                f"`{open_marker}` at offset {start} in "
+                f"docs/{INVENTORY_PATH.name} {where} a fenced code block "
+                f"or raw-HTML block (line {verbatim[0] + 1}) -- such "
+                f"content is a rendered EXAMPLE, not the document's own "
+                f"prose, so the governed text is displayed to nobody "
+                f"while every rule that reads this span still passes")
+            continue
+        spans.append(MarkedSpan(text[body_start:end], start, cursor))
+    return spans, violations
+
+
+_FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
+
+
+#: The four HTML block tags CommonMark treats as VERBATIM (block type
+#: 1): an unclosed one of these swallows every following line, blank
+#: lines included, until its closing tag.
+_VERBATIM_HTML_OPEN_RE = re.compile(
+    r"<(?:pre|script|style|textarea)\b", re.IGNORECASE)
+_VERBATIM_HTML_CLOSE_RE = re.compile(
+    r"</(?:pre|script|style|textarea)\s*>", re.IGNORECASE)
+#: A raw-HTML block of CommonMark type 6 or 7 -- `<div>`, `<table>`,
+#: `<section>`, or any other complete tag on a line of its own. It
+#: opens on a line whose first non-space character is `<` followed by
+#: a tag name or `/`, at an indent of at most three spaces, and it runs
+#: to the next BLANK line. Everything in it is raw HTML: Markdown
+#: inside is not parsed, so a table there does not render as a table.
+#:
+#: The `<!-- ... -->` comment the markers themselves are is block type
+#: 2, which ends at its own `-->` and therefore never reaches the line
+#: after it. Excluding `<!` here is what keeps the markers from being
+#: read as openers of a block that swallows their own table.
+_HTML_BLOCK_OPEN_RE = re.compile(r"^ {0,3}<[A-Za-z/]")
+#: The raw-HTML blocks that end at an explicit TERMINATOR rather than
+#: at a blank line, as `(opener, terminator)` pairs -- CommonMark block
+#: types 3 (`<?` ... `?>`), 5 (`<![CDATA[` ... `]]>`) and 4 (`<!` plus a
+#: letter ... `>`). Like type 1 they carry every following line,
+#: including blank ones, until their terminator, so each can enclose
+#: the markers and a whole table.
+#:
+#: CDATA is listed before the type-4 declaration deliberately, though
+#: the two cannot collide: `<![CDATA[` has `[` where type 4 requires a
+#: letter. The `<!--` comment the markers are is type 2 and matches
+#: neither -- its third character is `-` -- which is what keeps a
+#: marker line from opening a block over its own table.
+_TERMINATED_HTML_BLOCKS = (
+    (re.compile(r"<\?"), re.compile(r"\?>")),
+    (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>")),
+    (re.compile(r"<![A-Za-z]"), re.compile(r">")),
+)
+
+
+def fenced_line_flags(text: str) -> "list[bool]":
+    """Per line, whether Markdown renders that line VERBATIM rather
+    than as document content.
+
+    Two constructs, because they are the two that swallow following
+    lines whole:
+
+    * a fenced code block -- three or more backticks or tildes, closed
+      by a later line of at least as many of the SAME character. The
+      opening and closing fence lines themselves count as inside;
+    * an open `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block
+      (CommonMark type 1), which carries across blank lines until its
+      closing tag;
+    * a raw-HTML block that ends at an explicit terminator rather than
+      a blank line -- CommonMark types 3 (`<?` ... `?>`), 4 (`<!` plus
+      a letter ... `>`) and 5 (`<![CDATA[` ... `]]>`);
+    * any other raw-HTML block (`<div>`, `<table>`, `<section>` --
+      CommonMark types 6 and 7), which runs to the next blank line.
+      Markdown inside one is not parsed, so a table there renders as
+      literal text. The marker comments are type 2 and end at their own
+      `-->`, so they never open one.
+
+    Types 1 and 3 through 7 are therefore all covered; type 2 is the
+    markers themselves and is excluded by construction.
+
+    This exists because `section_bounds` decides where a section ends,
+    and a block containing a line like `## example` would otherwise end
+    the section early -- while Markdown still renders everything after
+    it inside the real section. That gap was a live bypass of the scope
+    rules below: prose past the fake heading was outside the audit and
+    inside the document. `extract_marked_spans` reads the same flags to
+    refuse a governed block that has been moved somewhere it renders as
+    an example instead of as the document's own text.
+    """
+    inside: list[bool] = []
+    open_char = ""
+    open_len = 0
+    html_open = False
+    html_until_blank = False
+    html_terminator = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = _FENCE_RE.match(stripped)
+        if open_char:
+            inside.append(True)
+            if (match and match.group(1)[0] == open_char
+                    and len(match.group(1)) >= open_len
+                    and not stripped[len(match.group(1)):].strip()):
+                open_char = ""
+                open_len = 0
+            continue
+        if html_open:
+            inside.append(True)
+            if _VERBATIM_HTML_CLOSE_RE.search(line):
+                html_open = False
+            continue
+        if html_terminator is not None:
+            inside.append(True)
+            if html_terminator.search(line):
+                html_terminator = None
+            continue
+        if html_until_blank:
+            if not stripped:
+                html_until_blank = False
+                inside.append(False)
+                continue
+            inside.append(True)
+            continue
+        if match:
+            open_char = match.group(1)[0]
+            open_len = len(match.group(1))
+            inside.append(True)
+            continue
+        if (_VERBATIM_HTML_OPEN_RE.search(line)
+                and not _VERBATIM_HTML_CLOSE_RE.search(line)):
+            html_open = True
+            inside.append(True)
+            continue
+        opened = next(
+            (close for open_re, close in _TERMINATED_HTML_BLOCKS
+             if open_re.search(line)), None)
+        if opened is not None:
+            inside.append(True)
+            if not opened.search(line, line.index("<")):
+                html_terminator = opened
+            continue
+        if _HTML_BLOCK_OPEN_RE.match(line):
+            html_until_blank = True
+            inside.append(True)
+            continue
+        inside.append(False)
+    return inside
+
+
+def section_bounds(text: str, heading: str,
+                   stop_prefixes: tuple[str, ...]) -> tuple[int, int] | None:
+    """Character bounds of one Markdown section's body, or `None` when
+    the heading is absent.
+
+    The body runs from just after the heading line to just before the
+    next line whose stripped form starts with one of `stop_prefixes`
+    (or to end of document). `"## "` does NOT match `"### "` -- the
+    third character is a `#`, not the required space -- so a top-level
+    section legitimately contains its own subsections.
+
+    Lines inside a fenced code block are not headings, in either role:
+    a fenced `## 1. Scope` does not start the section, and a fenced
+    `## anything` does not end it.
+    """
+    fenced = fenced_line_flags(text)
+    start: int | None = None
+    offset = 0
+    for index, line in enumerate(text.splitlines(keepends=True)):
+        stripped = line.strip()
+        in_fence = fenced[index] if index < len(fenced) else False
+        if start is None:
+            if stripped == heading and not in_fence:
+                start = offset + len(line)
+        elif not in_fence and any(stripped.startswith(prefix)
+                                  for prefix in stop_prefixes):
+            return start, offset
+        offset += len(line)
+    if start is None:
+        return None
+    return start, offset
+
+
+# A backtick span whose digits are a SOURCE LOCATION -- a repository
+# path, optionally with a line or line-range anchor. This is the only
+# code span whose numbers are exempt from the no-stray-count rule.
+#
+# Exempting code spans wholesale was the third rereview's finding: it
+# let `` `83` `` stand in the governed prose, which reads to a human as
+# exactly the stale total this audit exists to remove. A span has to
+# LOOK like a source reference to be excused, and a bare number does
+# not.
+SOURCE_SPAN_RE = re.compile(
+    r"^[A-Za-z0-9_./+\-]+\.(?:hs|lua|py|md|json|yaml|yml|cabal|sh)"
+    r"(?::\d+(?:-\d+)?)?$")
+
+
+def stray_numbers_outside_code(text: str) -> list[str]:
+    """Decimal integers in `text` that are neither a section reference,
+    an issue reference, nor part of a source-location code span.
+
+    A code span that is NOT a source location keeps its digits in the
+    scan: `` `83` `` is a field total wearing a code font, not a
+    citation.
+    """
+    def _strip_span(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        return "" if SOURCE_SPAN_RE.match(inner) else match.group(1)
+
+    without_code = re.sub(r"`([^`]*)`", _strip_span, text)
+    without_refs = re.sub(r"#\d+", "", SECTION_REF_RE.sub("", without_code))
+    return INTEGER_RE.findall(without_refs)
 
 
 # ===========================================================================
