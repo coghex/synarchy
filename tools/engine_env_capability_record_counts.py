@@ -69,6 +69,10 @@ The contract
         can sit in the block at a column index nothing reads;
       * a `|---|` separator row under the header, without which GFM
         renders the run as a paragraph of literal pipes;
+      * no raw HTML in any row. An `<!-- ... -->` around a cell's text
+        hides the record and its count from every reader while leaving
+        both for a regex to find -- the block-level escape one level
+        down, inside a cell;
       * neither marker inside a fenced code block or an open
         `<pre>`/`<script>`/`<style>`/`<textarea>` HTML block -- the two
         constructs that carry following lines verbatim.
@@ -168,6 +172,15 @@ _COUNT_RE = re.compile(
 #: variant away from being bypassed (round-2 review). Same tolerance
 #: the SS1 field-total sweep already applies to its own phrase.
 _DECORATED_RECORD = r"[`*_]{0,3}[A-Z][A-Za-z0-9_']*Capability[`*_]{0,3}"
+#: Raw HTML opening inside a table row: a comment, a tag, or a
+#: processing instruction. None of it is rendered content -- an
+#: `<!-- ... -->` around a cell's text hides the record and its count
+#: from every reader while leaving both for a regex to find, and a
+#: `<span style="display:none">` does the same through CSS. The block
+#: checks refuse markup that stops the TABLE rendering; this refuses
+#: markup that stops a CELL rendering, which is the same escape one
+#: level down (round-7 review).
+_INLINE_HTML_RE = re.compile(r"<[A-Za-z/!?]")
 #: The reintroduction shape swept for outside the block, in the two
 #: orders a size is written in: parenthesised after the name
 #: (`` `XCapability` (9 fields) ``, this table's own shape, and the
@@ -333,6 +346,15 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                 f"{len(row_cells)} cell(s) against the header's {width} -- "
                 f"the audited column is read by position, so a ragged row "
                 f"would move it")
+            continue
+        found = _INLINE_HTML_RE.search(row)
+        if found:
+            violations.append(
+                f"{_DOC} §2.1's record table row {number} contains raw "
+                f"HTML ({row[found.start():found.start() + 40]!r}) -- a "
+                f"cell's text inside an `<!-- ... -->` comment, or a tag "
+                f"that hides it, is read by this audit and by no reader. "
+                f"The audited column states its counts as plain Markdown")
             continue
         column.append(row_cells[index])
     if not column:

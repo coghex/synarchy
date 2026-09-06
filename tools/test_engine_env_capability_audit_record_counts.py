@@ -612,6 +612,42 @@ def test_record_counts_duplicate_audited_column_rejected():
            f"a second audited column must be rejected, got: {violations}")
 
 
+def test_record_counts_inline_html_in_a_row_rejected():
+    """Round 7's finding: raw HTML inside a table CELL. An
+    `<!-- ... -->` around a cell's text hides the record and its count
+    from every reader while leaving both for a regex to find, so the
+    rendered §2.1 table no longer displays that record at all; a tag
+    that hides the cell through CSS does the same. This is the
+    block-level non-rendered-markup escape one level down."""
+    for wrap in ("<!-- {} -->",
+                 "<span style=\"display:none\">{}</span>"):
+        cell = wrap.format("`Engine.Core.Capability.Alpha` — "
+                           "`AlphaCapability` (2 fields)")
+        rows = _CLEAN_ROWS.replace(
+            "`Engine.Core.Capability.Alpha` — `AlphaCapability` "
+            "(2 fields)", cell, 1)
+        expect(rows != _CLEAN_ROWS, f"fixture must apply {wrap!r}")
+        violations = audit_record_counts(_SOURCES, _counts_doc(rows))
+        expect(any("contains raw HTML" in v for v in violations),
+               f"a cell hidden behind {wrap!r} must be rejected, got: "
+               f"{violations}")
+
+
+def test_record_counts_inline_html_in_the_real_table_rejected():
+    """The same escape against the real document, over the record whose
+    stale size this change removed."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    live = ("`Engine.Core.Capability.WorldSim` — `WorldSimCapability` "
+            "(11 fields, the world/sim half)")
+    hidden = document.replace(live, f"<!-- {live} -->", 1)
+    expect(hidden != document, "the fixture must change the real document")
+    violations = audit_record_counts(sources, hidden)
+    expect(any("contains raw HTML" in v for v in violations),
+           f"commenting out a real cell must be rejected, got: "
+           f"{violations}")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -840,6 +876,8 @@ TESTS = (
     test_record_counts_terminated_html_blocks_rejected,
     test_record_counts_terminated_html_block_real_rejected,
     test_record_counts_duplicate_audited_column_rejected,
+    test_record_counts_inline_html_in_a_row_rejected,
+    test_record_counts_inline_html_in_the_real_table_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
