@@ -306,6 +306,30 @@ def retained_tail(capture: str) -> list[str]:
     return ordinary.splitlines()[-DEFAULT_TAIL:]
 
 
+def test_the_producer_identity_names_this_script() -> None:
+    print("\n-- the producer a sweep record carries is this script's own "
+          "name, not some other spelling of it")
+
+    # Asserted against the filename rather than a copy of the constant:
+    # comparing the records below to the constant alone would hold only
+    # that the sweep agrees with itself, and an operator reading
+    # "N recorded failure(s) from <producer>" needs the name to be the
+    # tool they would rerun. It is also the name that keeps a sweep-own
+    # assertion apart from a cross-referenced probe's own records.
+    import persistence_contract_sweep  # type: ignore
+    expect(SWEEP_FAILURE_PRODUCER == "persistence_contract_sweep",
+           f"the sweep records itself under the name #2060 names (got "
+           f"{SWEEP_FAILURE_PRODUCER!r})")
+    expect(SWEEP_FAILURE_PRODUCER
+           == Path(persistence_contract_sweep.__file__).stem,
+           f"which is the script's own filename (got "
+           f"{SWEEP_FAILURE_PRODUCER!r})")
+    expect(SWEEP_FAILURE_PRODUCER
+           not in SELECTABLE_CROSS_REFERENCED_PROBE_KEYS,
+           f"and is not one of the cross-referenced probe keys it would "
+           f"be confused with (got {SWEEP_FAILURE_PRODUCER!r})")
+
+
 def test_a_failed_sweep_check_records_its_own_label() -> None:
     print("\n-- one failed check produces exactly one durable record, "
           "carrying the whole label and naming the sweep as its producer")
@@ -450,6 +474,7 @@ def main() -> int:
     test_an_undeclared_phase_is_refused_rather_than_emitted()
     test_every_declared_phase_emits_a_record_the_runner_recognizes()
     test_the_latest_sweep_phase_survives_a_long_tail()
+    test_the_producer_identity_names_this_script()
     test_a_failed_sweep_check_records_its_own_label()
     test_a_passing_sweep_check_emits_no_failure_marker()
     test_a_passing_check_beside_failing_ones_stays_unrecorded()
