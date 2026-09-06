@@ -2638,6 +2638,22 @@ python3 tools/deflake_diagnosis.py --manifest .                # a checkout's co
 python3 tools/test_deflake_diagnosis.py                        # the deterministic self-test
 ```
 
+Since #2041 that work has two owners. `tools/deflake_contract.py` is the
+DOCUMENT contract — the schemas, the route and reason vocabulary,
+`HandoffError` and `RouteRefused`, the configuration manifest, the launcher
+grammar and invocation records, the path and worktree-containment rules, the
+result-document, descriptor, controlled-result and MISSING rules, and
+`Handoff`/`require_handoff` itself. It is a library with no CLI, and it imports
+neither the evaluator nor any consumer of it. `tools/deflake_diagnosis.py` is
+the DIAGNOSIS evaluator and the commands above: `HARNESS_MODULES`,
+`CAUSE_CATEGORIES` and `ATTESTATIONS`, the `EXIT_*` table, `Outcome` and
+`Diagnosis`, the two-batch topology, `evaluate`, the evidence, preservation and
+repair requirements, and the CLI. It also stays the COMPATIBILITY façade: it
+BINDS the contract's own objects rather than copying them, so
+`deflake_diagnosis.HandoffError is deflake_contract.HandoffError` and a caller
+that has not migrated keeps reading the one definition there has ever been.
+Both are gated by `python3 tools/test_deflake_diagnosis.py`.
+
 Nothing here boots an engine, runs a probe, opens a port, edits a worktree or
 talks to GitHub: it reads documents and answers questions about them. The
 expensive half — twenty real runs across two worktrees — is `probe_flake.py`
@@ -2689,8 +2705,9 @@ than counted here — a hand-written total is the drift #1584 already cost
 this file once: `probe_flake`, `probe_protocol`, `probe_census`,
 `probe_claim` and its three `probe_claim_*` owners, `probe_resource_lock`,
 `probe_select`, `probe_engine`,
-`probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`
-and `deflake_diagnosis`, each of which owns probe selection, launch, port
+`probelib`, `run_probes` and its five `probe_runner_*` owners, `deflake`,
+and `deflake_diagnosis` with the `deflake_contract` document rules it was
+split from, each of which owns probe selection, launch, port
 or resource leasing, protocol reconciliation, measurement timing and
 construction, result recording or census intake, or diagnosis semantics.
 
@@ -2966,7 +2983,8 @@ differs, so every rule the two share is checked once rather than forked.
 The gate is `tools/test_deflake_diagnosis.py`, engine-free and document-only.
 It is deliberately NOT wired into `make ci` or GitHub CI — #1437's approved
 rereview amendment scopes this lab's own self-test to manual invocation — so
-run it by hand when touching `tools/deflake_diagnosis.py`. It takes seconds and
+run it by hand when touching `tools/deflake_diagnosis.py` or
+`tools/deflake_contract.py`. It takes seconds and
 boots nothing. (`tools/test_deflake.py`, the #1436 orchestrator's self-test,
 IS in both; the two issues scoped their gates differently.)
 
@@ -3016,7 +3034,7 @@ without either workflow being rebuilt around it:
 
 | Owner | What it defines |
 |---|---|
-| `deflake_handoff_grammar.py` | The envelope vocabulary: the schemas, the roles, `ROUTE_ENDING`, `RouteOwnership`, `EXIT_CONTRACT`, the limits, `HandoffError` and `NonSuccess`, the object/text/identity/list/NUL/usable-path grammar, `delegate_census_grammar`, and the artifact-reference, configuration, input-identity and invocation-identity validators. A leaf WITHIN this family only — the upstream `deflake_diagnosis` and `probe_census` rules it applies are called, never copied. |
+| `deflake_handoff_grammar.py` | The envelope vocabulary: the schemas, the roles, `ROUTE_ENDING`, `RouteOwnership`, `EXIT_CONTRACT`, the limits, `HandoffError` and `NonSuccess`, the object/text/identity/list/NUL/usable-path grammar, `delegate_census_grammar`, and the artifact-reference, configuration, input-identity and invocation-identity validators. A leaf WITHIN this family only — the upstream `deflake_contract` and `probe_census` rules it applies are called, never copied. |
 | `deflake_handoff_measurement.py` | `Measurement`, `require_measurement` and `require_reproduced`: trustworthiness from the harness exit and the document's own status, the run and aggregate reconciliation, the per-check and target-hit reading, and the durable per-measurement summary. Consumes the grammar owner and #1437's result validators. |
 | `deflake_handoff_producer.py` | `require_diagnosis_outcome`, `REFERENCE_FIELDS` and the per-batch reference parsing, the measurement-to-producer binding, `require_worktree_boundary`, `declared_worktrees`, the artifact-list rebuild, and BOTH descriptor rules. Consumes the grammar and measurement owners. |
 | `deflake_handoff_assembly.py` | `Handoff`, `require_handoff`, `utc_now` and `reuse_stored_timestamp`: the whole-document assembly, the per-route role inventory, the cross-role checks, and the retry reconciler. Consumes all three, and INVOKES the producer owner's descriptor rules rather than defining a second copy. |
@@ -3107,7 +3125,7 @@ exists and parses establishes nothing, and every classification reads the
 document's own `status`, `error_run`, `completed_runs` and per-check tallies.
 Every declared measurement goes through #1437's CANONICAL result gate first,
 not just the census validator it starts with:
-`deflake_diagnosis.require_result` adds the run indices, the artifact topology
+`deflake_contract.require_result` adds the run indices, the artifact topology
 and the retention pairing on top of declared shape and the cross-field
 invariants. `probe_flake.measure` deletes a run's directory the moment it
 passes and keeps every unsuccessful one, so a non-PASS run with a null
@@ -3186,7 +3204,7 @@ count and the SAME RTS capability count, the verification's failure count
 strictly lower, and the verification STILL failing #1437's acceptance gate for
 the reason #1437 named. `verification-over-tolerance` is re-derived from the
 failure count and `verification-missing-rule` by CALLING
-`deflake_diagnosis.missing_problems`, whose scoped rule has four clauses of
+`deflake_contract.missing_problems`, whose scoped rule has four clauses of
 which only one is about targets — a PASSING run omitting a NON-target check
 fails it too, and a paraphrase of "no target went MISSING" would call such a
 verification passing while `evaluate` had just routed it here. The other two
@@ -3223,7 +3241,7 @@ time; restating it here is what stops a self-consistent handoff putting a
 worktree-resident tree into a durable record.
 
 Absolute is also not the same as usable, so every recorded path goes through
-`deflake_diagnosis.require_path` first — including the ones stored without ever
+`deflake_contract.require_path` first — including the ones stored without ever
 being resolved, a `/deflake` command token and a configuration manifest entry
 among them, because those are evidence too. An embedded NUL makes
 `Path.resolve()` raise `ValueError` from `lstat` rather than `OSError`, so such
@@ -3545,7 +3563,8 @@ probe and cache sections marked unavailable and the batch continues.
 run with no probe job, a cancelled run with no log, and a runner killed
 mid-attempt), cross-checks the estimator, round-trips the probe-attempt
 identity against `probe_runner_diagnostics.attempt_identity`, and
-statically verifies the three `--print-slow-items=20` command sites below.
+statically verifies the three headless `--test-options` command sites
+below.
 
 Layers: `tools/ci_timing_model.py` (every pure rule — timestamp endpoints,
 log framing, probe/cache diagnostics, the estimator, the aggregates),
@@ -3553,29 +3572,56 @@ log framing, probe/cache diagnostics, the estimator, the aggregates),
 `tools/test_ci_timing_report.py` (every check, reached through
 `--self-test`).
 
-### The headless suite's slowest-examples list (#2277)
+### The headless suite's CI test options (#2277, #1916)
 
 Both of `.github/workflows/ci.yml`'s conditional headless invocations and
-`tools/ci-local.sh`'s full-tier one pass Hspec's `--print-slow-items=20`
-through cabal's `--test-options`:
+`tools/ci-local.sh`'s full-tier one pass the same two Hspec flags through
+cabal's `--test-options`:
 
 ```bash
-cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20'
+cabal test synarchy-test-headless --test-show-details=direct --test-options='--print-slow-items=20 --format=failed-examples'
 ```
 
-`--print-slow-items` is **Hspec's** flag, not cabal's, so `--test-options`
-is the only way it reaches the runner. Every one of those steps' logs
-therefore ends with the twenty slowest spec items and their durations,
-just before cabal's own footer — which is what names the handful of world
-generations that account for about four of the headless suite's five
-minutes, without diffing log timestamps by hand. Default per-example
-output is otherwise unchanged, and no threshold here fails a run.
+Both are **Hspec's** flags, not cabal's, so `--test-options` is the only
+way either reaches the runner.
+
+`--print-slow-items=20` (#2277) ends every one of those steps' logs with
+the twenty slowest spec items and their durations, just before cabal's
+own footer — which is what names the handful of world generations that
+account for about four of the headless suite's five minutes, without
+diffing log timestamps by hand. It is a diagnostic: no threshold here
+fails a run. Hspec applies it around whichever formatter is selected, so
+it is unaffected by the flag below.
+
+`--format=failed-examples` (#1916) replaces Hspec's default `specdoc`
+formatter, which prints a description for every example that PASSES —
+over five thousand of them under `test-headless/`, all forwarded into the
+job log by `--test-show-details=direct`. `failed-examples` prints nothing
+per example, neither a description nor a progress mark, so a passing
+run's formatter output is bounded by a constant instead of by the example
+count. It costs no failure detail: a failing run still prints the full
+`Failures:` block — each failing example's `describe`/`it` path, source
+location and expectation diff — plus the seed, and both runs still end
+with `Finished in …` and `N examples, M failures`, which is what keeps a
+passing run distinguishable from one that executed nothing.
+`--test-show-details=direct` is retained at every site precisely so that
+footer reaches the log.
+
+The formatter is selected on the two CI **command lines** and nowhere
+else. Neither `test-headless/Spec.hs` (which still calls plain `hspec`)
+nor a repo-root `.hspec` (which does not exist) selects one, so a
+developer running `cabal test synarchy-test-headless --test-options='--match "…"'`
+still gets the default per-example output.
 
 `ci_parity_audit.py` cannot police these three sites: it compares
 `python3 tools/*.py` commands and deliberately ignores every `cabal test`
-line. `test_ci_timing_report.py`'s `slow-items wiring` check does, reading
-all three statically — a PR's own CI run executes only ONE of the
-workflow's two conditional branches.
+line. `test_ci_timing_report.py`'s `headless test-options wiring` check
+does, reading all three statically — a PR's own CI run executes only ONE
+of the workflow's two conditional branches — and reads them against one shared
+constant, so a site left on the default formatter fails the check rather
+than quietly emitting five thousand success lines on half the runs. The
+same check asserts that no `.hspec` file and no `Spec.hs` formatter
+selection has appeared to leak the compact presentation into local runs.
 
 ## Manual gameplay scenarios (`gameplay_scenarios.py`, #925)
 

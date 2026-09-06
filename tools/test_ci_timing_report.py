@@ -32,9 +32,12 @@ Beside those, three groups of checks that need no fixture: the
 estimator (cross-checked against `statistics.quantiles`, not merely
 restated), the round trip against
 `probe_runner_diagnostics.attempt_identity`, and the STATIC repository
-checks -- the three `--print-slow-items=20` command sites, the workflow
-comment, the two selection markers this report greps for, and this
-command's deliberate absence from both gate files.
+checks -- the three headless `--test-options` command sites (the
+`--print-slow-items=20` diagnostic of #2277 and the
+`--format=failed-examples` presentation of #1916, which must agree
+across every site), the workflow comment, the two selection markers this
+report greps for, and this command's deliberate absence from both gate
+files.
 
 Assertions go through `tools/selftestlib.py` (#1922) like every other
 `tools/test_*.py`: a satisfied one is silent, a failed one always
@@ -65,11 +68,27 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "ci_timing"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LOCAL_GATE_PATH = REPO_ROOT / "tools" / "ci-local.sh"
 
-#: The exact flag every headless-suite invocation must carry, and the
-#: spelling it must carry it in. `--print-slow-items` is Hspec's, not
-#: cabal's, so it can only reach the runner through `--test-options`.
-SLOW_ITEMS_FLAG = "--test-options='--print-slow-items=20'"
-#: The invocation the flag has to sit on, at every site.
+#: The exact `--test-options` blob every headless-suite invocation must
+#: carry, and the spelling it must carry it in. Both flags inside it are
+#: Hspec's, not cabal's, so `--test-options` is the only way either
+#: reaches the runner -- and they share ONE occurrence of it, so this is
+#: a whole-blob match rather than two independent substring checks.
+#: `--print-slow-items=20` is #2277's slowest-items diagnostic;
+#: `--format=failed-examples` is #1916's compact presentation, which must
+#: be identical at every site so that neither entry point is compact
+#: while another is verbose.
+TEST_OPTIONS_FLAG = (
+    "--test-options='--print-slow-items=20 --format=failed-examples'")
+#: The formatter that suppresses per-example output, checked separately
+#: from the blob above so a run that loses only the compact presentation
+#: says so by name.
+FORMATTER_FLAG = "--format=failed-examples"
+#: `--test-show-details=direct` is what forwards the formatter's footer
+#: (`Finished in ...` / `N examples, M failures`) into the log at all.
+#: Dropping it alongside a silent formatter would leave a passing run
+#: indistinguishable from a run that executed nothing.
+SHOW_DETAILS_FLAG = "--test-show-details=direct"
+#: The invocation those flags have to sit on, at every site.
 HEADLESS_INVOCATION = "cabal test synarchy-test-headless"
 #: How many sites there are, and where. Two conditional branches in the
 #: workflow (full tier and fast tier) and one in the local gate. The
@@ -455,8 +474,24 @@ def _headless_invocations(text: str) -> list[str]:
             and HEADLESS_INVOCATION in line]
 
 
-def check_slow_items_wiring() -> None:
-    """All three command sites carry the flag, plus the step comment.
+def _check_site(site: str, where: str) -> None:
+    """One headless invocation carries the whole agreed option set."""
+    expect(TEST_OPTIONS_FLAG in site,
+           f"{where}'s headless invocation carries "
+           f"{TEST_OPTIONS_FLAG}: {site}")
+    # Named separately from the blob so the failure says WHICH way a
+    # site drifted: losing the formatter fails both checks, while merely
+    # reordering or respacing the two flags fails only the blob one.
+    expect(FORMATTER_FLAG in site,
+           f"{where}'s headless invocation carries {FORMATTER_FLAG}, so a "
+           f"passing run prints no per-example output: {site}")
+    expect(SHOW_DETAILS_FLAG in site,
+           f"{where}'s headless invocation retains {SHOW_DETAILS_FLAG}, so "
+           f"the formatter's summary still reaches the log: {site}")
+
+
+def check_headless_options_wiring() -> None:
+    """All three command sites carry the flags, plus the step comment.
 
     Static on purpose. The PR's own CI run executes exactly ONE of the
     workflow's two conditional branches -- whichever its worldgen
@@ -464,6 +499,11 @@ def check_slow_items_wiring() -> None:
     verified by reading the files. `tools/ci_parity_audit.py` cannot
     help either: it compares `python3 tools/*.py` commands and
     deliberately ignores every `cabal test` line.
+
+    Reading every site against ONE constant is also what enforces #1916's
+    requirement that the entry points request the same presentation:
+    a branch left on the default formatter fails here rather than
+    silently emitting five thousand success lines on half the runs.
     """
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
     local = LOCAL_GATE_PATH.read_text(encoding="utf-8")
@@ -472,22 +512,31 @@ def check_slow_items_wiring() -> None:
     expect(len(sites) == EXPECTED_WORKFLOW_SITES,
            f"{WORKFLOW_PATH.name} runs the headless suite "
            f"{EXPECTED_WORKFLOW_SITES} time(s); got {len(sites)}, and a new "
-           "site needs the slow-items flag too")
+           "site needs the same test options too")
     for site in sites:
-        expect(SLOW_ITEMS_FLAG in site,
-               f"{WORKFLOW_PATH.name}'s headless invocation carries "
-               f"{SLOW_ITEMS_FLAG}: {site}")
+        _check_site(site, WORKFLOW_PATH.name)
 
     local_sites = _headless_invocations(local)
     expect(len(local_sites) == EXPECTED_LOCAL_SITES,
            f"{LOCAL_GATE_PATH.name} runs the headless suite "
            f"{EXPECTED_LOCAL_SITES} time(s); got {len(local_sites)}")
     for site in local_sites:
-        expect(SLOW_ITEMS_FLAG in site,
-               f"{LOCAL_GATE_PATH.name}'s headless invocation carries "
-               f"{SLOW_ITEMS_FLAG}: {site}")
+        _check_site(site, LOCAL_GATE_PATH.name)
 
-    # The step's own comment has to tell a reader why the list is there.
+    # The suite's own formatter selection must not migrate into the
+    # sources, where it would also silence a developer's targeted run.
+    expect(not (REPO_ROOT / ".hspec").exists(),
+           "no repo-root .hspec file exists, so the compact formatter "
+           "stays scoped to the two CI entry points")
+    spec = (REPO_ROOT / "test-headless" / "Spec.hs").read_text(
+        encoding="utf-8")
+    expect("failed-examples" not in spec and "hspecWith" not in spec,
+           "test-headless/Spec.hs still calls plain `hspec` with no "
+           "formatter selection, so a direct `cabal test` keeps its "
+           "per-example output")
+
+    # The step's own comment has to tell a reader why the list is there,
+    # and why the run is otherwise quiet.
     step = re.search(r"\n((?:      #[^\n]*\n)+)      - name: Headless test "
                      r"suite\n", workflow)
     if expect(step is not None,
@@ -495,6 +544,9 @@ def check_slow_items_wiring() -> None:
         expect("slow" in step.group(1).lower(),
                "the `Headless test suite` step comment mentions the "
                "slowest-examples list")
+        expect("failed-examples" in step.group(1),
+               "the `Headless test suite` step comment explains the "
+               "compact formatter")
 
 
 def check_selection_markers() -> None:
@@ -588,7 +640,7 @@ CHECKS = (
     ("aggregate categories", check_aggregate_categories),
     ("log framing", check_log_framing),
     ("attempt identity round trip", check_identity_round_trip),
-    ("slow-items wiring", check_slow_items_wiring),
+    ("headless test-options wiring", check_headless_options_wiring),
     ("selection markers", check_selection_markers),
     ("not a gate", check_not_a_gate),
     ("report rendering", check_report_renders),
