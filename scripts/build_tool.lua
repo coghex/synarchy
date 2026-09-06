@@ -912,7 +912,10 @@ end
 -- F4 (#646): every exit records its outcome so a silent placement
 -- rejection (no carrying unit, item exhausted) is visible to the
 -- playtest oracle even though the player only ever sees the
--- engine.logInfo line at the handleMouseDown call site below.
+-- "could not place" engine.logInfo line at the handleMouseDown call
+-- site below. #1935: the matching success line there is logDebug, so
+-- the recorded outcome is the only accepted-placement signal off
+-- ENGINE_DEBUG=Lua.
 function buildTool.commitPlacement(defName, gx, gy)
     if not power.isPlaceable(defName) then
         debug.recordOutcome{
@@ -976,7 +979,7 @@ function buildTool.commitStartingPlacement(defName, gx, gy, bindPage, bindGen)
         return "stale"
     end
     if id then
-        engine.logInfo("BuildTool: placed " .. defName ..
+        engine.logDebug("BuildTool: placed " .. defName ..
             " (id=" .. tostring(id) ..
             ") at " .. gx .. "," .. gy)
         debug.recordOutcome{
@@ -1067,7 +1070,7 @@ function buildTool.handleMouseDown(button, x, y)
                 if power.isPlaceable(target.def) then
                     local id, err = buildTool.commitPlacement(target.def, igx, igy)
                     if id then
-                        engine.logInfo("BuildTool: placed " .. target.def ..
+                        engine.logDebug("BuildTool: placed " .. target.def ..
                             " (id=" .. tostring(id) ..
                             ") at " .. igx .. "," .. igy)
                         buildTool.exitPlacement()
