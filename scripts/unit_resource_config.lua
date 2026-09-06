@@ -131,12 +131,13 @@ local config = {
         },
         -- Exhaustion (circadian epic #479 / #610): short-horizon physical
         -- fatigue, separate from stamina (per-action exertion, regens fast)
-        -- and from the future sleep-pressure meter (#611, multi-day debt
-        -- only real sleep clears). Drains under sustained exertion, recovers
-        -- with rest. No collapse/kill/death threshold here — exhaustion
-        -- never forces a unit down on its own; its only effect this issue
-        -- is the movement-speed penalty in scripts/exhaustion.lua. Feeding
-        -- into the "go to sleep" AI utility is #612's job, once #611 lands.
+        -- and from the sleep-pressure resource below (#611, the multi-day
+        -- debt only real sleep clears). Drains under sustained exertion,
+        -- recovers with rest. No collapse/kill/death threshold here —
+        -- exhaustion never forces a unit down on its own. Its effects are
+        -- the movement-speed penalty in scripts/exhaustion.lua and a
+        -- weighted term in scripts/unit_ai_sleep.lua's go_to_sleep utility
+        -- (#612), the smallest of that utility's three signals.
         exhaustion = {
             max_from = "max_exhaustion",
             -- Baseline drain scaled by exertion, same shape as hydration's

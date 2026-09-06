@@ -96,8 +96,8 @@ local config = {
         --   day's labour without meaningful sleep debt yet):
         --     0 + 9·0.35 + 4·0 + 2·1 = 5.15 — still below
         --     follow_command; exhaustion alone is a nudge, never the
-        --     dominant term (matches exhaustion.lua's own "doesn't
-        --     collapse or seek rest on its own").
+        --     dominant term — a hard day's labour is not sleep debt, and
+        --     ordinary rest clears it without a sleep goal.
         --   deficit high (0.78+), any time of day:
         --     0 + 9·0.78 ≈ 7.0+ — genuine multi-day sleep deprivation
         --     forces sleep even under a standing order, mirroring
