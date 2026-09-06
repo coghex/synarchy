@@ -230,3 +230,72 @@ def extract_invocations(text: str, where: str) -> list[str]:
                 f"`python3 {head}`.")
     return invocations
 
+
+
+_ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _is_cabal(token: str) -> bool:
+    """True for `cabal` and for a path-qualified `.../bin/cabal`.
+
+    Path-qualified so the workflow's pinned `/usr/local/.ghcup/bin/cabal`
+    is recognised as the same program rather than quietly ignored. A
+    token carrying `=` is a value, not a program: `CABAL_DIR=/usr/local/
+    cabal` ends in `cabal` and names no command, so excluding it is what
+    keeps the not-at-the-head rule below from firing on an `echo`.
+    """
+    return "=" not in token and token.rsplit("/", 1)[-1] == "cabal"
+
+
+def extract_cabal_commands(text: str, where: str) -> list[list[str]]:
+    """Every direct `cabal ...` command in `text`, as token lists.
+
+    Leading `VAR=value` assignments are stripped, so
+    `SYNARCHY_FULL_TESTS=1 cabal test ...` is the same command as
+    `cabal test ...` for the caller's purposes; the tokens returned start
+    at `cabal` itself.
+
+    Fail-loud in the same shape as `extract_invocations`: a `cabal` that
+    is not the head of its command once assignments are stripped -- `env
+    cabal build`, `xargs cabal build` -- is an error naming the offending
+    text, never a quietly smaller result. A quoted mention (`step "cabal
+    module audit"`) is one token that is not `cabal`, so it is text and
+    matches nothing.
+    """
+    commands: list[list[str]] = []
+    for segment in split_shell_commands(text, where):
+        stripped = segment.strip()
+        if not stripped:
+            continue
+        try:
+            tokens = shlex.split(stripped)
+        except ValueError as error:
+            raise AuditError(
+                f"{where}: could not tokenize shell command {stripped!r} "
+                f"({error}).") from error
+        while tokens and _ENV_ASSIGNMENT_RE.match(tokens[0]):
+            tokens = tokens[1:]
+        if not tokens:
+            continue
+        if _is_cabal(tokens[0]):
+            commands.append(tokens)
+            continue
+        if any(_is_cabal(token) for token in tokens):
+            raise AuditError(
+                f"{where}: `cabal` appears somewhere other than the head of "
+                f"a command, in {stripped!r}. This audit reads the verbosity "
+                "of direct Cabal commands; rewrite the step as a plain "
+                "invocation, or teach this audit the new shape deliberately.")
+    return commands
+
+
+def cabal_subcommand(tokens: list[str]) -> str | None:
+    """A Cabal command's subcommand, or None when it has none.
+
+    The first token after `cabal` that is not an option, so
+    `cabal build all -v0` is `build` while `cabal --version` is None.
+    """
+    for token in tokens[1:]:
+        if not token.startswith("-"):
+            return token
+    return None

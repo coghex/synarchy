@@ -65,6 +65,9 @@ from ci_parity_config import (
     AGGREGATE_NEEDS,
     AUDITED_JOB,
     AUDITED_JOBS,
+    CABAL_QUIET_FLAGS,
+    CABAL_QUIET_JOB,
+    CABAL_QUIET_SUBCOMMANDS,
     EXEMPT_COMMANDS,
     IMAGE_JOB,
     LOCAL_GATE_LABEL,
@@ -81,7 +84,12 @@ from ci_parity_config import (
     WORKFLOW_UNION_LABEL,
     workflow_label,
 )
-from ci_parity_shell import AuditError, extract_invocations
+from ci_parity_shell import (
+    AuditError,
+    cabal_subcommand,
+    extract_cabal_commands,
+    extract_invocations,
+)
 
 
 #: Shells whose `run:` bodies ci_parity_shell.py's lexer actually
@@ -486,4 +494,56 @@ def audit_unit_asset_gate_wiring(yaml_text: str) -> list[str]:
             f"`{UNIT_ASSET_GATE}=` output, so its guard reads an "
             "always-empty value and the gate silently stops running on "
             "pull requests.")
+    return problems
+
+
+def audit_cabal_verbosity(yaml_text: str, shell_text: str) -> list[str]:
+    """Both entry points keep every Cabal build and test quiet (#1920).
+
+    Requirement 6 of #1920 is that neither entry point is quiet while the
+    other is verbose, and the gate-set comparison above cannot see it:
+    `cabal` steps are outside the compared set by that section's
+    documented scope, so a re-verbosed command compares equal to nothing
+    at all and drift here is invisible to every other check.
+
+    Covered: `cabal build` and `cabal test` in the Cabal-owning audited
+    job and in the local gate. Not covered, because neither emits
+    compilation progress: `cabal update`, `cabal --version`, `cabal
+    sdist`. Not audited at all: the `behavior-probes` job, out of scope
+    for #1920 and deliberately left at its own verbosity.
+
+    Vacuity is a failure on each side separately, so a covered command
+    deleted from one file fails here rather than shrinking the audit to
+    the half that still passes.
+    """
+    where_ci = workflow_label(CABAL_QUIET_JOB)
+    problems: list[str] = []
+    sides: list[tuple[str, list[list[str]]]] = []
+
+    ci_commands: list[list[str]] = []
+    for block in workflow_run_blocks(yaml_text, CABAL_QUIET_JOB, where_ci):
+        ci_commands.extend(extract_cabal_commands(block, where_ci))
+    sides.append((where_ci, ci_commands))
+    sides.append((LOCAL_GATE_LABEL,
+                  extract_cabal_commands(shell_text, LOCAL_GATE_LABEL)))
+
+    allowed = ", ".join(f"`{flag}`" for flag in CABAL_QUIET_FLAGS)
+    for where, commands in sides:
+        covered = [tokens for tokens in commands
+                   if cabal_subcommand(tokens) in CABAL_QUIET_SUBCOMMANDS]
+        if not covered:
+            problems.append(
+                f"{where}: no `cabal "
+                f"{'`/`cabal '.join(sorted(CABAL_QUIET_SUBCOMMANDS))}` "
+                "command was found at all. This audit pins their verbosity; "
+                "an empty side would pass vacuously, so it fails instead.")
+            continue
+        for tokens in covered:
+            if any(flag in tokens for flag in CABAL_QUIET_FLAGS):
+                continue
+            problems.append(
+                f"{where}: `{' '.join(tokens)}` carries none of {allowed}, "
+                "so it prints the build plan, the phase banners and one "
+                "`[N of M] Compiling` line per module again (#1920). Both "
+                "entry points stay quiet together or neither does.")
     return problems

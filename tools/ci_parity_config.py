@@ -93,6 +93,35 @@ UNIT_ASSET_CI_IF = (
     "github.event_name != 'pull_request' "
     "|| steps.expensive-gates.outputs.unit-assets == 'true'")
 
+#: Cabal build/test verbosity (#1920). At Cabal's default verbosity a cold
+#: build prints the resolved plan, a Configuring/Preprocessing/Building
+#: banner per component and one `[N of M] Compiling` line per module --
+#: 750 library, 270 headless-test and 6 graphical-test modules of routine
+#: progress that buried the tests and audits both logs exist to show.
+#: `-v0` drops exactly that and nothing else: a -Werror violation still
+#: arrives with its error code, warning-flag name, source excerpt and
+#: caret, a non-fatal -Wall warning still prints, a failed build still
+#: names its package, a failed suite still names itself, a solver failure
+#: still prints its trace, and every exit status is unchanged. Whether a
+#: build was cold is reported explicitly by the cache-status step (#1358).
+#:
+#: Requirement 6 of #1920 is that neither entry point is quiet while the
+#: other is verbose, and nothing else enforces it: `cabal` steps are
+#: outside the gate-set comparison above by that section's documented
+#: scope, so a re-verbosed command there would compare equal to nothing
+#: at all. Only `build` and `test` are covered -- `cabal update`,
+#: `cabal --version` and `cabal sdist` emit no compilation progress and
+#: are left alone -- and only in the Cabal-owning audited job and the
+#: local gate: the `behavior-probes` job is out of scope for #1920 and is
+#: deliberately NOT audited here.
+#:
+#: Both spellings Cabal accepts for verbosity 0 are allowed, so a long-form
+#: edit reads as compliant rather than as drift; nothing else counts, and a
+#: `-v1` restored on one side alone is the regression this pins.
+CABAL_QUIET_FLAGS = ("-v0", "--verbose=0")
+CABAL_QUIET_SUBCOMMANDS = frozenset({"build", "test"})
+CABAL_QUIET_JOB = AUDITED_JOB
+
 # Invocations one side deliberately runs and the other does not, each
 # keyed on the EXACT command so a neighbouring form is not exempted with
 # it. Most run only in CI; the exemption is direction-agnostic, and the
