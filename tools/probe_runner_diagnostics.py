@@ -9,8 +9,8 @@ formatted and parsed HERE and nowhere else, so a producer anywhere in the
 tree and the aggregate runner's presentation cannot drift apart.
 
 This is a LEAF owner (#2074): it imports nothing of the runner's, which
-is what lets the six probes that emit `FailureEmitter` records, and
-`tools/persistence_contract_sweep.py`'s `ProgressEmitter`, take the
+is what lets every probe that emits `FailureEmitter` records, and
+`tools/persistence_contract_sweep.py` (which emits both kinds), take the
 protocol without taking the runner.
 
 The formats are frozen. Requirement 6 of #2074: existing probes and
