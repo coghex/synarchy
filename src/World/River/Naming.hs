@@ -34,9 +34,11 @@
 --   'riverModifierPool' is every concept the catalogue can express
 --   attributively, and 'riverNameExpr' draws from it with
 --   'Language.Generated.Hash.pickIndex' against that pool's CURRENT
---   length, so one eligible concept added anywhere re-points the draw
---   and changes the modifier, the gloss and the native name. And from
---   generator version 4 on, bound-form selection ranks the complete
+--   length, so one eligible concept added anywhere can re-point the
+--   draw, changing the modifier, the gloss and the native name. That
+--   index is taken modulo the length, so an addition need not move any
+--   particular river — only that none is guaranteed to stay put. And
+--   from generator version 4 on, bound-form selection ranks the complete
 --   current concept set ('Language.Generated.Bound.assignBoundForms',
 --   #1096), so an addition can still move a selected bound form and
 --   every rendered name that uses one. That describes the mechanisms
