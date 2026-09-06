@@ -40,11 +40,12 @@ The contract
       * exactly one column is headed `Record / view type(s)`. Only one
         is read, so a second would be a column of the governed table
         displaying sizes nothing checks;
-      * no OTHER column states a record size either. The audited column
-        is the only one compared with the live records, and the
-        document-wide sweep below skips the whole marked span, so
-        without this the identifier and provenance columns are a blind
-        spot inside the governed table;
+      * no OTHER cell of the table states a record size either --
+        every non-audited data cell AND every header cell. The audited
+        column is the only thing compared with the live records, and
+        the document-wide sweep below skips the whole marked span, so
+        without this the identifier column, the provenance column and
+        the header row are all blind spots inside the governed table;
       * every capability record named in a backtick span states its
         size exactly once, as `` `XCapability` (<n> fields) ``;
       * `<n>` equals `capability_record_fields`' count for that record;
@@ -343,6 +344,30 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                     f"checks"]
     rows = runs[0]
 
+    # The vocabulary and the "stated once" sweep below run over EVERY
+    # row of the run -- header and separator included, not only the
+    # data rows. The header is part of the governed table and renders
+    # in it, so a size or a hiding construct placed there is displayed
+    # and checked by nothing, which was the round-12 escape.
+    for number, row in enumerate(rows, start=1):
+        forbidden = _FORBIDDEN_ROW_CHAR_RE.search(row)
+        if forbidden is None:
+            continue
+        character = forbidden.group(0)
+        reason = _EXCLUDED_CHAR_REASONS.get(character)
+        because = (f", which is {reason}" if reason else
+                   ", which is outside the permitted vocabulary")
+        violations.append(
+            f"{_DOC} §2.1's record table row {number} uses "
+            f"{character!r} (U+{ord(character):04X}){because}. A "
+            f"governed row is plain text: only the characters in "
+            f"`_ROW_VOCABULARY` may appear, so no construct whose "
+            f"source differs from what a reader sees can carry a "
+            f"record or its count past this audit while the "
+            f"rendered cell shows something else. Row: {row[:70]!r}")
+    if violations:
+        return [], violations
+
     def cells(row: str) -> list[str]:
         return [cell.strip() for cell in row.strip("|").split("|")]
 
@@ -395,6 +420,20 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
     index = matching[0]
     width = len(header)
 
+    # The header renders inside the governed table too, and no header
+    # cell is ever compared with a live record -- the audited one is
+    # matched by NAME, not read for a count. So every header cell is
+    # swept, the audited one included.
+    for position, cell in enumerate(header):
+        smuggled = _STRAY_COUNT_RE.search(cell)
+        if smuggled is not None:
+            violations.append(
+                f"{_DOC} §2.1's record table header states a record "
+                f"size ({smuggled.group(0)!r}) in column "
+                f"{position + 1}, {cell[:40]!r}. A header cell is "
+                f"displayed in the governed table and compared with no "
+                f"live record, so a size there is checked by nothing")
+
     column: list[str] = []
     for number, row in enumerate(rows[2:], start=3):
         row_cells = cells(row)
@@ -406,22 +445,6 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
                 f"{len(row_cells)} cell(s) against the header's {width} -- "
                 f"the audited column is read by position, so a ragged row "
                 f"would move it")
-            continue
-        forbidden = _FORBIDDEN_ROW_CHAR_RE.search(row)
-        if forbidden is not None:
-            character = forbidden.group(0)
-            reason = _EXCLUDED_CHAR_REASONS.get(character)
-            because = (f", which is {reason}" if reason else
-                       ", which is outside the permitted vocabulary")
-            violations.append(
-                f"{_DOC} §2.1's record table row {number} uses "
-                f"{character!r} (U+{ord(character):04X}){because}. A "
-                f"governed row is plain text: only the characters in "
-                f"`_ROW_VOCABULARY` may appear, so no construct whose "
-                f"source differs from what a reader sees can carry a "
-                f"record or its count past this audit while the "
-                f"rendered cell shows something else. Row: "
-                f"{row[:70]!r}")
             continue
         for position, cell in enumerate(row_cells):
             if position == index:

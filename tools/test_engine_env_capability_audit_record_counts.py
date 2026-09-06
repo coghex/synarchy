@@ -784,6 +784,48 @@ def test_record_counts_size_in_a_real_non_audited_column_rejected():
            "rejected")
 
 
+def test_record_counts_header_row_is_governed_too():
+    """Round 12's finding: the header row renders inside the governed
+    table but was scanned by neither the vocabulary rule nor the
+    "stated once" sweep, which both started at the data rows. A size or
+    a hiding construct in a header cell was therefore displayed in §2.1
+    and checked by nothing -- including in the AUDITED column's own
+    header, which is matched by name and never read for a count."""
+    plain = f"| Identifier | {RECORD_COLUMN_HEADER} | Landed by |"
+    for label, header in (
+            ("identifier header",
+             f"| Identifier `AlphaCapability` (9 fields) "
+             f"| {RECORD_COLUMN_HEADER} | Landed by |"),
+            ("audited column's own header",
+             f"| Identifier | {RECORD_COLUMN_HEADER} "
+             f"`AlphaCapability` (9 fields) | Landed by |"),
+            ("raw HTML in a header",
+             f"| Identifier <!-- hidden --> "
+             f"| {RECORD_COLUMN_HEADER} | Landed by |")):
+        expect(header != plain, f"fixture must change the header for "
+                                f"{label}")
+        violations = audit_record_counts(
+            _SOURCES, _counts_doc(header=header))
+        expect(violations != [],
+               f"a governed header carrying {label} must be rejected, "
+               f"got: {violations}")
+
+
+def test_record_counts_real_header_row_is_governed_too():
+    """The same escape against the real document, with the stale figure
+    this change removed placed in the live header."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    smuggled = document.replace(
+        f"| Identifier | {RECORD_COLUMN_HEADER} | Landed by |",
+        f"| Identifier `WorldSimCapability` (9 fields) "
+        f"| {RECORD_COLUMN_HEADER} | Landed by |", 1)
+    expect(smuggled != document, "the fixture must change the real document")
+    expect(any("header" in v for v in audit_record_counts(
+                   sources, smuggled)),
+           "a stale size in the real table's header must be rejected")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -1021,6 +1063,8 @@ TESTS = (
     test_record_counts_real_table_uses_only_the_vocabulary,
     test_record_counts_size_in_a_non_audited_column_rejected,
     test_record_counts_size_in_a_real_non_audited_column_rejected,
+    test_record_counts_header_row_is_governed_too,
+    test_record_counts_real_header_row_is_governed_too,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,
