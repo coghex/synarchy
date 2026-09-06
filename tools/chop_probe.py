@@ -4,7 +4,20 @@
 Boots a headless engine on a real generated world (tree placement needs
 worldgen; the arena has no flora), then checks:
 
-  1. API: world.findHarvestableFlora(..., 'wood') locates a tree;
+  0. Fixture: the probe registers its OWN wood-tagged tree species,
+     `probe_chop_pine`, after the shipped data/flora and before
+     world.init (#2058), so every stage below has a choppable subject
+     on ANY seed instead of waiting for worldgen to happen to drop an
+     oak, birch or maple inside the scanned region — which seed 42's
+     default fixture does not. See PROBE_CHOP_YAML for why its
+     placement is certain rather than merely likely, and why it still
+     leaves the bare construction tile stage 5 needs. Setup then
+     positively verifies REGISTRATION (the loader's own count, via
+     probelib.load_fixture_yaml) and PLACEMENT (a tile whose sole
+     plant is the fixture, with a live build spot beside it) before
+     anything is graded; either one missing is a loud setup failure
+     that grades nothing (#1342), never a chop-pipeline verdict.
+  1. API: world.findHarvestableFlora(..., 'wood') locates the fixture;
      world.getFloraAt reports it with a 'wood' tag and no live
      regrowth timer (its 'harvestable' flag is the FORAGE signal,
      gated on the #332 growth window — the chop path keys on
@@ -31,14 +44,26 @@ worldgen; the arena has no flora), then checks:
      the stump gets built by the same acolyte, consuming a log off
      the ground (the #97 acceptance that wood is a usable build
      material). Posts need a floor under them (findConstructJob's
-     floorZAt guard), so a steel floor goes down first.
+     floorZAt guard), so a steel floor goes down first. The tile is
+     the one stage 0 reserved, inside the same box this stage has
+     always searched.
 
 Usage: python3 tools/chop_probe.py [--port 9177] [--seed 42]
        [--size 64] [--plates 3]
+
+       python3 tools/chop_probe.py --fail-fixture register|place
+         The NEGATIVE CONTROL for stage 0 (#2058): deliberately breaks
+         the fixture's registration (an undeclared ungated tag the
+         loader must reject) or its placement (a temperature window no
+         terrain reaches), and must exit nonzero having printed a
+         SETUP FAILURE and NO [PASS]/[FAIL] grade at all. Requirement 2
+         is otherwise unobservable from a passing run.
 """
 import argparse, glob, os, shutil, socket, subprocess, sys, tempfile, time
 from pathlib import Path
-from probelib import clear_find_water, quit_engine, boot, send, send_json, wait_load_published
+from probelib import (FixtureNotRegistered, clear_find_water, quit_engine,
+                      boot, load_fixture_yaml, send, send_json,
+                      wait_load_published)
 
 SPROOT = "/tmp"
 REPO = Path(__file__).resolve().parent.parent
@@ -60,7 +85,166 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
-def bootstrap(port):
+# --------------------------------------------------------------------
+# The probe's OWN choppable tree (#2058)
+# --------------------------------------------------------------------
+# Registered after the shipped data/flora and before world.init, which
+# is what makes it visible to worldgen at all. Since #2241 a placement
+# roll is salted from the species' own authored NAME, so adding this
+# fixture cannot move a shipped species' roll whatever order it
+# registers in — what it CAN still do is occupy a tile a shipped
+# species would otherwise have taken, which is deliberate cross-species
+# competition, not a defect.
+#
+# Its whole job is to make "is there a choppable tree in the loaded
+# region?" a property of the PROBE rather than of the seed: the default
+# seed 42 / size 64 / 3 plates fixture supplies none, which is why
+# every stage below used to be unreachable. Field by field:
+#
+#   * `tags: [wood]` + `ungated_tags: [wood]` — the #97 chop key and
+#     the #2212 growth-window exemption the three shipped tree species
+#     author. `floraHarvestAdmits` takes the tagged path when either
+#     the tag is ungated OR the plant is in its harvest window, so this
+#     tree is findable by world.findHarvestableFlora(..., 'wood') and
+#     fellable by world.harvestFloraInstance(..., 'wood') on any
+#     calendar day, which is precisely the authority stage 1 asserts.
+#   * `yield: wood_log` — a SHIPPED item (data/items/wood_log.yaml) and an
+#     INEDIBLE one, which is load-bearing twice over. Stage 1's bare
+#     (food) findHarvestableFlora only counts species whose yield holds
+#     an edible item, so an edible yield would break the #97 tag split
+#     this probe exists to prove; and stage 5 builds a dungeon_1 post
+#     out of exactly this item, so any other yield would leave the
+#     construction phase with nothing to consume.
+#   * `lifecycle: evergreen` — World.Flora.Growth.instanceLifespan
+#     returns Nothing for an evergreen, so no instance ever wraps into
+#     the 60-day dead window and stage 4's felled/regrowing assertions
+#     read one plant's own timer rather than a generational wrap.
+#   * one `matured` phase at age 0 — findActivePhase picks the
+#     highest-age phase whose lpAge <= age, and this is the only one,
+#     so every instance presents `matured` at every age and inherits
+#     the block's own yield roll. A shipped tree authors
+#     `phase_yield: {sprout: []}` because a freshly-rolled placement age
+#     can land on its sprout phase and a felled sprout must drop
+#     nothing; with no sprout phase to reach, this fixture cannot roll
+#     a log-less fell into stage 4.
+#   * NO annualCycle — nothing to poke world.setDate for.
+#   * ranges far outside anything terrain produces, and `maxSlope: 15`
+#     (the whole slope bitmask) — speciesFitnessDetail hard-kills a
+#     species when ANY factor's asymBell hits 0, which happens at or
+#     past a range endpoint. Endpoints this far out keep every factor
+#     strictly positive on every land tile.
+#   * `density: 1000.0` — placement is `roll < density * fitness` with
+#     roll in [0,1). This is the field that turns "likely" into
+#     "certain": with fitness held well above 0.001 by the ranges
+#     above, the product exceeds 1 and the strict `<` can never fail.
+#   * `footprint: 64` — and this is the field that keeps that certainty
+#     from paving the region. World.Flora.Placement marks a placed
+#     tile's neighbourhood occupied out to
+#     `ceiling(footprint/32) - 1` tiles, and an occupied tile is skipped
+#     before any species rolls on it, so footprint 64 reserves a
+#     one-tile apron of GUARANTEED flora-free ground around every
+#     fixture tree. Copying the foraging fixture's footprint 0 would
+#     place on every eligible tile and leave stage 5 — which rejects
+#     any tile where world.getFloraAt succeeds — with nowhere to build.
+#   * `category: tree` — instanceCount is exactly 1 for a tree, so a
+#     fixture tile holds ONE plant. Stage 2's cancel-by-id assertion
+#     ("the tile has no designation left") reads a tile with a single
+#     designated plant, and stage 2's co-tenant assertion gets its
+#     second plant from a neighbouring fixture tree instead.
+#   * `regrowth_time: 345600` — four game-days, what white_oak uses.
+#     Stage 4 requires the felled tile to carry a LIVE timer at time
+#     scale 1, and stage 5 then keeps building on a stump that has not
+#     grown back underneath it.
+#
+# Placement stays subject to the tile being land at all (worldgen skips
+# fluid, barren material and unset columns), which no species can opt
+# out of; a region with no eligible tile is reported as the fixture
+# failure it is, never as advice to try another seed.
+PROBE_CHOP_YAML = """flora:
+  - name: probe_chop_pine
+    type: evergreen_tree
+    texDir: "assets/textures/flora/white_oak"
+    lifecycle: evergreen
+    phases:
+      - {tag: matured, texture: "matured.png", age: 0}
+    harvestable:
+      tags: [wood]
+      ungated_tags: [wood]
+      yield:
+        - id: wood_log
+          count: [3, 6]
+      regrowth_time: 345600
+      harvested_texture: "dead.png"
+    worldGen:
+      category: tree
+      minTemp: -200
+      maxTemp: 200
+      idealTemp: 0
+      minPrecip: -10.0
+      maxPrecip: 20.0
+      idealPrecip: 5.0
+      minAlt: -20000
+      maxAlt: 20000
+      idealAlt: 0
+      minHumidity: -10.0
+      maxHumidity: 10.0
+      idealHumidity: 0.0
+      maxSlope: 15
+      density: 1000.0
+      footprint: 64
+"""
+
+# The two negative controls (#2058 requirement 2). Each breaks ONE of
+# the two things stage 0 verifies, so a run under --fail-fixture must
+# stop at setup with a nonzero exit and no grade printed. Without them
+# a green default run says nothing about the fail-loud path.
+#
+#   register: `ungated_tags` names a tag `tags:` does not declare, which
+#     Engine.Asset.YamlFlora's requireUngatedTags rejects — the whole
+#     file fails to parse, engine.loadFloraYaml registers 0, and
+#     probelib.load_fixture_yaml raises FixtureNotRegistered.
+#   place: a temperature window no terrain reaches. The YAML is valid
+#     and registers, so registration passes and PLACEMENT is what
+#     fails — speciesFitnessDetail hard-kills the species on every
+#     tile, and the region holds no fixture tree to find.
+PROBE_CHOP_UNREGISTERABLE_YAML = PROBE_CHOP_YAML.replace(
+    "ungated_tags: [wood]", "ungated_tags: [wodo]")
+PROBE_CHOP_UNPLACEABLE_YAML = (PROBE_CHOP_YAML
+                               .replace("minTemp: -200", "minTemp: 900")
+                               .replace("maxTemp: 200", "maxTemp: 901")
+                               .replace("idealTemp: 0", "idealTemp: 900"))
+
+FIXTURE_YAML = {
+    None: PROBE_CHOP_YAML,
+    "register": PROBE_CHOP_UNREGISTERABLE_YAML,
+    "place": PROBE_CHOP_UNPLACEABLE_YAML,
+}
+
+PROBE_SPECIES = "probe_chop_pine"
+PROBE_YIELD = "wood_log"
+
+# The tile span the probe's own `loadChunksInRegion(-4,-4,4,4)` covers:
+# chunkSize is 16, so chunks -4..4 are global tiles -64..79 on both
+# axes. The inset keeps every tile stages 2-5 reach — the co-tenant
+# box, the acolyte's spawn, stage 5's search — inside those loaded
+# chunks, so an unloaded tile can never read as "nothing here".
+SCAN_LO, SCAN_HI = -64, 79
+SCAN_INSET = 8
+
+# Stage 5 searches r=2..5 around the stump; stage 0 reserves its build
+# tile inside the innermost of those boxes, so the tile it verified is
+# one this stage was always entitled to use.
+BUILD_RADIUS = 2
+# Where the woodcutter is spawned, relative to the tree. Kept out of the
+# build-tile search so the two never name the same tile.
+SPAWN_DX = 2
+# How far stage 2 will look for a SECOND fixture tree to leave standing.
+# The footprint apron above puts the nearest one at Chebyshev 2 or more,
+# so the 3x3 the cancel-by-id assertion uses can no longer supply it.
+CO_TENANT_RADIUS = 4
+
+
+def bootstrap(port, fixture_path, fixture_mode=None):
     for pattern, fn in [
         ("data/substances/*.yaml", "engine.loadSubstanceYaml"),
         ("data/infections/*.yaml", "engine.loadInfectionYaml"),
@@ -72,18 +256,101 @@ def bootstrap(port):
     ]:
         for path in sorted(glob.glob(pattern)):
             send(port, f"{fn}('{path}'); return 'ok'")
+    # The probe's own species, LAST and before world.init: worldgen reads
+    # the catalog when it generates a chunk, so a fixture registered
+    # afterwards would place nothing. `load_fixture_yaml` reads the
+    # loader's count and raises FixtureNotRegistered on a rejection
+    # (#1342), which is the difference between "the engine refused this
+    # YAML" and "the YAML registered but nothing placed" — the two
+    # failures are reported separately for exactly that reason.
+    with open(fixture_path, "w") as f:
+        f.write(FIXTURE_YAML[fixture_mode])
+    load_fixture_yaml(port, "engine.loadFloraYaml", fixture_path)
 
 
-def find_wood(port, span=4):
-    """Scan sample points across the loaded region for the nearest
-    wood-tagged harvestable tile; returns (gx, gy, species) or None."""
-    for sx in range(-span * 16, span * 16 + 1, 32):
-        for sy in range(-span * 16, span * 16 + 1, 32):
-            r = send_json(port,
-                          f"return world.findHarvestableFlora({sx},{sy},64,'wood')")
-            if isinstance(r, dict):
-                return r["gx"], r["gy"], r["id"]
-    return None
+def setup_failure(detail):
+    """The one report for a stage-0 failure, and the only exit that is
+    allowed to be silent about the chop pipeline.
+
+    Nothing downstream of a fixture that did not place can pass, so the
+    probe stops HERE and grades nothing (#1342) rather than letting a
+    fixture gap arrive as a chop-pipeline verdict — which is exactly
+    how #2058's missing tree used to read. Never advice to re-roll the
+    seed: placement is certain on every eligible land tile (see
+    PROBE_CHOP_YAML), so reaching this means the region holds no
+    eligible land at all, or the placement/harvest contract the fixture
+    is built on has changed."""
+    print(f"\nSETUP FAILURE: {detail}")
+    return 1
+
+
+def find_fixture_target(port, inset=SCAN_INSET):
+    """Locate the one tile every stage below works, and the build tile
+    stage 5 needs, in a single engine-side scan.
+
+    A tile qualifies only when ALL of this holds, which is what makes
+    the target the PROBE's own fixture rather than whatever worldgen
+    happened to leave nearby:
+
+      * `world.getFloraAt` reports the fixture species, a 'wood' tag and
+        no live regrowth timer. getFloraAt names the instance a bare
+        harvest would take, so requiring the fixture here is what stops
+        an unrelated co-located plant answering for the tile.
+      * `world.getFloraGrowthAt` reports EXACTLY ONE plant on it. Stage
+        2 cancels one designation by id and then requires the tile to
+        hold none, which a second designated co-tenant would defeat;
+        and stage 1's bare (food) search must not resolve to this tile,
+        which an edible plant sharing it would defeat.
+      * a build tile exists within BUILD_RADIUS that is flat, dry and
+        flora-free — the same three conditions stage 5 tests, checked
+        while there is still a setup failure to report it as. The
+        fixture's footprint apron is what guarantees the flora-free
+        part; slope and fluid belong to the terrain.
+
+    A second fixture tree within CO_TENANT_RADIUS is reported when one
+    is there (stage 2's co-tenant assertion designates it) and is
+    optional: its absence narrows that one assertion, it does not make
+    the fixture unusable.
+
+    Returns a dict of ints, or None when the region holds no such tile.
+    """
+    lo, hi = SCAN_LO + inset, SCAN_HI - inset
+    lua = (
+        "local S='" + PROBE_SPECIES + "' "
+        "local function tagged(f) for _,t in ipairs(f.tags or {}) do "
+        "if t=='wood' then return true end end return false end "
+        "local function sole(x,y) local g=world.getFloraGrowthAt(x,y) "
+        "if not g or #g~=1 then return false end return g[1].id==S end "
+        "local function spot(x,y) "
+        "for dx=-" + str(BUILD_RADIUS) + "," + str(BUILD_RADIUS) + " do "
+        "for dy=-" + str(BUILD_RADIUS) + "," + str(BUILD_RADIUS) + " do "
+        "if not (dx==0 and dy==0) and not (dx==" + str(SPAWN_DX)
+        + " and dy==0) then local bx,by=x+dx,y+dy "
+        "if world.getSlopeAt(bx,by)==0 and not world.getFluidAt(bx,by) "
+        "and not world.getFloraAt(bx,by) then return bx,by end end "
+        "end end return nil end "
+        "local function mate(x,y) "
+        "for r=2," + str(CO_TENANT_RADIUS) + " do for dx=-r,r do "
+        "for dy=-r,r do "
+        "if math.max(math.abs(dx),math.abs(dy))==r then "
+        "local f=world.getFloraAt(x+dx,y+dy) "
+        "if f and f.id==S and f.instanceId then return x+dx,y+dy end "
+        "end end end end return nil end "
+        "for gx=" + str(lo) + "," + str(hi) + " do "
+        "for gy=" + str(lo) + "," + str(hi) + " do "
+        "local f=world.getFloraAt(gx,gy) "
+        "if f and f.id==S and (f.regrowthRemaining or 0)<=0 and tagged(f) "
+        "and sole(gx,gy) then local bx,by=spot(gx,gy) "
+        "if bx then local mx,my=mate(gx,gy) "
+        "return {gx=gx,gy=gy,bx=bx,by=by,mx=mx,my=my} end end "
+        "end end return nil")
+    r = send_json(port, lua, timeout=180.0)
+    if not isinstance(r, dict) or "gx" not in r:
+        return None
+    out = {k: int(r[k]) for k in ("gx", "gy", "bx", "by")}
+    if "mx" in r and "my" in r:
+        out["mx"], out["my"] = int(r["mx"]), int(r["my"])
+    return out
 
 
 def count_logs_near(port, gx, gy, radius=4):
@@ -91,7 +358,7 @@ def count_logs_near(port, gx, gy, radius=4):
     if not isinstance(ground, list):
         return 0
     return sum(1 for g in ground
-               if g.get("defName") == "wood_log"
+               if g.get("defName") == PROBE_YIELD
                and abs(g.get("x", 1e9) - gx) <= radius
                and abs(g.get("y", 1e9) - gy) <= radius)
 
@@ -105,8 +372,12 @@ def count_logs_near(port, gx, gy, radius=4):
 # to the same authority the gesture reaches. This is deliberately not a
 # tile-keyed runtime path: the ids are what is designated, and the tile
 # walk is only how this probe chooses them.
+# The Lua table constructor is written `{{}}` because this template is
+# consumed through `str.format`, which reads a bare `{}` as a positional
+# field. Nothing reached the call before #2058 gave the probe a fixture,
+# so the `IndexError` that shape raises had never been thrown.
 _COLLECT_IDS = (
-    "local ids = {} "
+    "local ids = {{}} "
     "for x = {x1}, {x2} do for y = {y1}, {y2} do "
     "  local f = world.getFloraAt(x, y) "
     "  if f and f.instanceId then ids[#ids+1] = f.instanceId end "
@@ -127,6 +398,11 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--fail-fixture", choices=("register", "place"),
+                    default=None,
+                    help="negative control (#2058): break the fixture's "
+                         "registration or its placement and require a "
+                         "setup-classified nonzero exit that grades nothing")
     args = ap.parse_args()
     port = args.port
     passed = True
@@ -134,16 +410,22 @@ def main():
     tmpdir = tempfile.mkdtemp(prefix="chop_probe_")
     try:
         root = make_isolated_root(tmpdir)
+        # The fixture YAML lives in THIS invocation's own tree (beside
+        # the resource root rather than inside it — the engine only ever
+        # reads it through the absolute path passed to the loader), so
+        # the rmtree below takes it away on every exit path, including a
+        # FixtureNotRegistered raised out of `bootstrap`.
+        fixture_path = os.path.join(tmpdir, "probe_chop_flora.yaml")
         proc = boot(port, f"{SPROOT}/chop_probe_engine.log",
                     args=["--resource-root", root])
-        return _run(port, proc, args, passed)
+        return _run(port, proc, args, passed, fixture_path)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _run(port, proc, args, passed):
+def _run(port, proc, args, passed, fixture_path):
     try:
-        bootstrap(port)
+        bootstrap(port, fixture_path, args.fail_fixture)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
                    f"{args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
@@ -151,21 +433,41 @@ def _run(port, proc, args, passed):
         send(port, "return world.loadChunksInRegion(-4, -4, 4, 4)", timeout=30)
         send(port, "return world.waitForChunks(120)", timeout=125)
 
-        # --- 1. Find a tree + tag reporting + forage-tag guard ---
-        found = find_wood(port)
-        if not found:
-            print("  [FAIL] no wood-harvestable flora in the loaded region "
-                  "(seed/climate has no oak/birch/maple here — try another "
-                  "seed)")
-            return 1
-        tx, ty, species = found
+        # --- 0. The fixture placed, and stage 5 has somewhere to build ---
+        target = find_fixture_target(port)
+        if target is None:
+            return setup_failure(
+                f"no usable '{PROBE_SPECIES}' tile in the loaded region "
+                f"(chunks -4..4 = global tiles {SCAN_LO}..{SCAN_HI}, inset "
+                f"by {SCAN_INSET}). The probe's own fixture registered but "
+                f"did not place a sole, wood-tagged, un-regrowing instance "
+                f"with a flat, dry, flora-free tile within {BUILD_RADIUS} "
+                f"of it, so nothing below can be graded.")
+        tx, ty = target["gx"], target["gy"]
+        bx, by = target["bx"], target["by"]
+        mate = ((target["mx"], target["my"])
+                if "mx" in target and "my" in target else None)
+        print(f"  fixture target: {PROBE_SPECIES} at ({tx},{ty}); build "
+              f"tile ({bx},{by}); co-tenant tree "
+              f"{mate if mate else 'none within ' + str(CO_TENANT_RADIUS)}")
+
+        # --- 1. Tag reporting + forage-tag guard ---
+        found = send_json(port,
+                          f"return world.findHarvestableFlora({tx},{ty},1,'wood')")
+        ok0 = isinstance(found, dict) and found.get("gx") == tx \
+              and found.get("gy") == ty and found.get("id") == PROBE_SPECIES
+        passed &= ok0
+        print(f"  [{'PASS' if ok0 else 'FAIL'}] the wood search finds the "
+              f"fixture at ({tx},{ty}): {found}")
+
         fl = send_json(port, f"return world.getFloraAt({tx},{ty})")
-        ok1 = isinstance(fl, dict) and "wood" in (fl.get("tags") or []) \
+        ok1 = isinstance(fl, dict) and fl.get("id") == PROBE_SPECIES \
+              and "wood" in (fl.get("tags") or []) \
               and fl.get("regrowthRemaining", -1) == 0
         passed &= ok1
         print(f"  [{'PASS' if ok1 else 'FAIL'}] getFloraAt reports a "
               f"choppable tree (wood tag, no regrowth timer): "
-              f"{species} at ({tx},{ty}) → {fl}")
+              f"{PROBE_SPECIES} at ({tx},{ty}) → {fl}")
 
         bare = send_json(port,
                          f"return world.findHarvestableFlora({tx},{ty},2)")
@@ -191,7 +493,9 @@ def _run(port, proc, args, passed):
         # tile-wide fallback that exists for restored jobs and legacy
         # migration, which would clear every designation standing there
         # and so could not tell a working exact-identity cancel from a
-        # working tile sweep.
+        # working tile sweep. Stage 0 established that this tile carries
+        # exactly one plant, so "the tile has no designation left" is a
+        # statement about the cancel rather than about the tile's census.
         cancel_iid = d.get("instanceId") if isinstance(d, dict) else None
         ok2b = isinstance(cancel_iid, (int, float)) \
                and not isinstance(cancel_iid, bool)
@@ -208,18 +512,24 @@ def _run(port, proc, args, passed):
         print(f"  [{'PASS' if ok2b else 'FAIL'}] cancelDesignation clears "
               f"exactly the named plant: {d2}")
 
-        # And it clears ONLY that plant. Designate two co-tenants of the
-        # same tile — a tile key cannot tell them apart (#1854) — cancel
-        # one by id, and require the other to survive.
-        pair = send_json(port, (
-            "local ids = {} "
-            "for x = " + str(tx - 1) + ", " + str(tx + 1) + " do "
-            "  for y = " + str(ty - 1) + ", " + str(ty + 1) + " do "
-            "    local f = world.getFloraAt(x, y) "
-            "    if f and f.instanceId then ids[#ids+1] = f.instanceId end "
-            "  end end "
-            "chop.designateInstances('probe', ids) "
-            "return ids"))
+        # And it clears ONLY that plant. Designate two plants — a tile
+        # key alone cannot tell two designations apart (#1854) — cancel
+        # one by id, and require the other to survive. The fixture's
+        # footprint apron (see PROBE_CHOP_YAML) ordinarily leaves the
+        # 3x3 above holding one tree — the occupancy map is per-chunk,
+        # so a chunk edge can still stand two side by side — which is
+        # why the second plant comes from the neighbouring fixture tree
+        # stage 0 found rather than from that box. Widening the 3x3 to
+        # reach it keeps this box a SUPERSET of the one the cancel-by-id
+        # assertion used, so the erase below has nothing outside it to
+        # miss.
+        cx1, cy1, cx2, cy2 = tx - 1, ty - 1, tx + 1, ty + 1
+        if mate:
+            cx1, cy1 = min(cx1, mate[0]), min(cy1, mate[1])
+            cx2, cy2 = max(cx2, mate[0]), max(cy2, mate[1])
+        pair = send_json(port,
+                         _COLLECT_IDS.format(x1=cx1, y1=cy1, x2=cx2, y2=cy2)
+                         + "chop.designateInstances('probe', ids) return ids")
         time.sleep(0.5)
         ids = [int(i) for i in pair if isinstance(i, (int, float))] \
               if isinstance(pair, list) else []
@@ -233,8 +543,8 @@ def _run(port, proc, args, passed):
                     and after == before - 1)
             detail = f"{before} -> {after}"
         else:
-            # Not a contract failure: this seed's region simply has no
-            # second designatable plant to leave standing.
+            # Not a contract failure: the fixture's own spacing left no
+            # second plant inside the widened box to leave standing.
             ok2c = True
             detail = f"skipped, only {len(ids)} designatable plant(s) nearby"
         passed &= ok2c
@@ -282,8 +592,8 @@ def _run(port, proc, args, passed):
                    "return 'ok'")
         send(port, "engine.loadScript('scripts/unit_ai.lua', 0.1); "
                    "return 'ok'")
-        uid_s = send(port, f"local u=unit.spawn('acolyte',{tx + 2},{ty}); "
-                           f"return u")
+        uid_s = send(port, f"local u=unit.spawn('acolyte',{tx + SPAWN_DX},"
+                           f"{ty}); return u")
         try:
             uid = int(float(uid_s.strip('"')))
         except ValueError:
@@ -370,24 +680,28 @@ def _run(port, proc, args, passed):
             return 1
 
         # --- 5. Chopped logs satisfy construction (#96 wiring) ---
-        # A dungeon_1 POST costs 1 wood_log (its build: block). Find a
-        # flat, dry, flora-free tile near the stump; the post needs a
-        # floor under it (findConstructJob skips floorless posts), so
-        # the acolyte first lays a steel floor from inventory, then
-        # builds the post from a felled log it hauls off the ground.
-        spot = send(port,
-                    f"for r=2,5 do for dx=-r,r do for dy=-r,r do "
-                    f"local x,y={tx}+dx,{ty}+dy; "
-                    f"if world.getSlopeAt(x,y)==0 and not world.getFluidAt(x,y)"
-                    f" and not world.getFloraAt(x,y)"
-                    f" and not chop.getDesignationAt('probe',x,y) then "
-                    f"return x..','..y end end end end; return 'none'"
-                    ).strip('"')
-        if spot == "none":
-            print("  [FAIL] no flat buildable tile near the stump")
+        # A dungeon_1 POST costs 1 wood_log (its build: block). The
+        # flat, dry, flora-free tile is the one stage 0 reserved inside
+        # this stage's own r=2 box — the fixture's footprint apron is
+        # what guarantees the region has one at all (#2058). It is
+        # re-read here rather than trusted: nothing should have changed
+        # it, and a changed one is a real finding rather than a reason
+        # to go looking for another tile.
+        px, py = bx, by
+        still = send(port,
+                     f"if world.getSlopeAt({px},{py})==0 "
+                     f"and not world.getFluidAt({px},{py}) "
+                     f"and not world.getFloraAt({px},{py}) "
+                     f"and not chop.getDesignationAt('probe',{px},{py}) "
+                     f"then return 'yes' end return 'no'").strip('"')
+        if still != "yes":
+            print(f"  [FAIL] the build tile ({px},{py}) stage 0 reserved is "
+                  f"no longer flat, dry, flora-free and undesignated")
             print("\nSOME FAILED")
             return 1
-        px, py = (int(v) for v in spot.split(","))
+        # Posts need a floor under them (findConstructJob skips floorless
+        # posts), so the acolyte first lays a steel floor from inventory,
+        # then builds the post from a felled log it hauls off the ground.
         send(port, f"unit.addItem({uid},'steel_plate',0); return 'ok'")
         send(port, f"construction.designate('probe',{px},{py},{px},{py},"
                    f"'structure','dungeon_1','floor'); return 'ok'")
@@ -437,4 +751,12 @@ def _run(port, proc, args, passed):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A fixture the engine loader REFUSED is a setup failure, distinct
+    # from a registered fixture that placed nothing (`setup_failure`).
+    # `main`'s own `finally` has already shut the engine down and removed
+    # this run's tree by the time it lands here (#1342).
+    try:
+        sys.exit(main())
+    except FixtureNotRegistered as exc:
+        print(f"\n{exc}")
+        sys.exit(1)
