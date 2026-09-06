@@ -5,7 +5,7 @@ The thirteen cases covering the successful and denied measurements, the
 acquisition-audit failure, harness-error ingestion, pre-claim rejection,
 lease validation, lost-claim handling, serialized audit and ingestion,
 retained results and their `--result` destination validation, and the
-CLI's outcomes and exit codes.
+CLI's outcomes, exit codes and surviving script entry point.
 
 Not a gate of its own. Run through the aggregate:
 
@@ -32,8 +32,8 @@ import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
 import probe_runner_registry  # type: ignore  # noqa: E402
 from probe_claim_selftest_support import (  # noqa: E402
-    CONTENDER, claim_root, expect, expect_raises, fake_measurement, registry,
-    scratch, scratch_repo, seeded_census, skip)
+    CONTENDER, TOOLS, claim_root, expect, expect_raises, fake_measurement,
+    registry, scratch, scratch_repo, seeded_census, skip)
 
 
 def test_orchestration_happy_path() -> None:
@@ -866,7 +866,11 @@ def test_a_completed_measurement_is_never_lost() -> None:
 
 
 def test_cli() -> None:
-    """The CLI's outcomes, exit codes and read-only status view."""
+    """The CLI's outcomes, exit codes and read-only status view.
+
+    Closes with the one assertion the in-process driver structurally
+    cannot make: that `tools/probe_claim.py` is still a runnable script.
+    """
     print("\n-- the command line --")
     import io
     from contextlib import redirect_stdout, redirect_stderr
@@ -908,6 +912,37 @@ def test_cli() -> None:
         code, _out, err = cli("--runs", "2")
         expect(code != claim_orchestration.EXIT_OK,
                "--runs without --probe is a usage error")
+
+    # Every case above drives `main(argv)` in process, because the
+    # fixtures have to substitute the registry and the claim root -- so
+    # none of them can observe whether the SCRIPT still has an entry
+    # point. A `probe_claim.py` that lost its `if __name__ ==
+    # "__main__":` guard imports cleanly, exits 0 and writes nothing, so
+    # the assertion has to read STDOUT; the exit status below is
+    # additional evidence and could not substitute for it.
+    #
+    # `--status --json` is the only read-only argv the command takes and
+    # needs no fixture: it reports this repository's real claims, which
+    # may legitimately be any number, and `probe_claim_lease.status_rows`
+    # does not create the claim directory when it is absent.
+    script = Path(TOOLS, "probe_claim.py")
+    done = subprocess.run([sys.executable, "-B", str(script),
+                           "--status", "--json"],
+                          text=True, capture_output=True, timeout=120)
+    document = None
+    try:
+        document = json.loads(done.stdout)
+    except json.JSONDecodeError:
+        pass
+    expect(isinstance(document, dict)
+           and isinstance(document.get("claims"), list),
+           f"the SCRIPT still has an entry point: run as a real subprocess "
+           f"it writes a probe-claim status document to stdout, not zero "
+           f"bytes (got {done.stdout[:200]!r}, stderr "
+           f"{done.stderr.strip()[:200]!r})")
+    expect(done.returncode == claim_orchestration.EXIT_OK,
+           f"...and exits {claim_orchestration.EXIT_OK} doing it (got "
+           f"{done.returncode})")
 
 
 #: This owner's inventory, in the relative order these cases hold within

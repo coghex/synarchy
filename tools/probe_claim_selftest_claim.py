@@ -17,7 +17,6 @@ Not a gate of its own. Run through the aggregate:
 """
 from __future__ import annotations
 
-import ast
 import json
 import os
 import signal
@@ -34,45 +33,15 @@ from probe_claim_selftest_support import (  # noqa: E402
     CONTENDER, LOCK_HOLDER, claim_root, expect, expect_raises, race,
     registry, scratch, scratch_repo)
 
-#: Requirement 11's one-way dependency direction between #2148's three
-#: owners: storage is the filesystem leaf, lease builds on storage,
-#: orchestration builds on both, and nothing builds upward. Each key
-#: maps an owner to the owners it may NOT import.
-OWNER_DIRECTION = {
-    "probe_claim_storage": ("probe_claim_lease", "probe_claim_orchestration"),
-    "probe_claim_lease": ("probe_claim_orchestration",),
-    "probe_claim_orchestration": (),
-}
-
-
-def _module_imports(module_name: str) -> set:
-    """Every module named by an import statement in `module_name`'s source.
-
-    Parsed rather than read off the imported module's `__dict__`: an
-    aliased `import probe_claim_storage as storage` hides the real name
-    from the attribute table, and a `from ... import` leaves no module
-    object there at all -- and a `from` is exactly the shape an upward
-    dependency would take, since it is also the one #2148 forbids for
-    reaching another owner's seams.
-    """
-    source = (Path(__file__).resolve().parent
-              / f"{module_name}.py").read_text(encoding="utf-8")
-    named = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            named.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            named.add(node.module)
-    return named
-
-
 def test_namespace() -> None:
     """One repository, one claim namespace, whatever worktree asks.
 
-    Also the structural claim the whole #2148 split rests on: the three
-    owners' imports run one way only. Nothing else in the tree enforces
-    that, and an upward import is how the exit codes, the lease bounds
-    or the claim schema would quietly end up defined in two places.
+    The structural half of what this case once held -- #2148's one-way
+    import direction between the owners -- moved to
+    `probe_claim_selftest_census.test_owner_direction_and_command_seams`
+    in #2375, which checks the whole four-module topology alongside the
+    command's empty re-export surface rather than the single upward
+    exclusion this file could state on its own.
     """
     print("\n-- the claim namespace is repository-common --")
     with registry(), scratch_repo() as (main_wt, other_wt, _census):
@@ -108,15 +77,6 @@ def test_namespace() -> None:
                       "unknown probe")
         expect(claim_lease.require_probe_key("alpha") == "alpha",
                "a canonical key is accepted")
-
-    # Checked mechanically rather than by inspection. This is the ONE
-    # assertion #2148 adds to this gate; all 275 it inherited are
-    # preserved, so the tally reads 276.
-    upward = {owner: sorted(_module_imports(owner) & set(forbidden))
-              for owner, forbidden in OWNER_DIRECTION.items()}
-    expect(not any(upward.values()),
-           f"the claim owners import one way only -- storage, then lease, "
-           f"then orchestration (upward imports found: {upward})")
 
 
 def test_exclusive_acquisition() -> None:
