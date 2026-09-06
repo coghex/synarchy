@@ -17,10 +17,11 @@
 --
 --   Time is advanced by hand and replenishment is finite, so no example
 --   depends on how fast the machine runs.
-module Test.Headless.Lua.SchedulerFairness (spec) where
+module Test.Headless.Lua.SchedulerFairness (spec, cutoverSpec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Concurrent.MVar (tryTakeMVar)
 import Control.Exception (finally)
 import Control.Concurrent.STM (atomically, modifyTVar')
@@ -43,6 +44,7 @@ import Engine.Load.Status
 import Engine.Save.Barrier
     ( SaveOwner(..), SaveStatus(..), acknowledgeSave, beginSave, failSave
     , ownerGated, readSaveStatus, saveInProgress )
+import qualified World.Command.Types as WC
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.DebugServer
     ( DebugCommand(..), DebugCommandState(..), cancelDebugCommand
@@ -123,6 +125,21 @@ newRig env = do
         , rigParks    = parks
         , rigControl  = control
         }
+
+-- | A rig on the engine's OWN Lua queues rather than private ones.
+--
+--   'handleLoadStaged' flushes @luaQueue env@ by name, so the load
+--   cutover can only be exercised against a scheduler that is really
+--   reading that queue. Same technique as
+--   "Test.Headless.Lua.DebugQueue"'s bare backend; the debug queue stays
+--   private, and the example drains what it queued.
+newRigOnEngineQueues ∷ EngineEnv → IO Rig
+newRigOnEngineQueues env = do
+    rig ← newRig env
+    let ls = (rigBackend rig)
+            { lbsMsgQueues = (luaToEngineQueue env, luaQueue env) }
+    pure rig { rigBackend = ls
+             , rigCtx = (rigCtx rig) { scBackend = ls } }
 
 round1 ∷ Rig → IO RoundResult
 round1 rig = schedulerRound (rigCtx rig)
@@ -935,3 +952,121 @@ preservedContractsSpec = describe "the unbounded drains its other callers need" 
 --   example.
 finallyReopen ∷ IO α → IO () → IO α
 finallyReopen = finally
+
+-- | The load cutover, driven through the REAL transaction (#2415).
+--
+--   Kept apart from 'spec' because it needs a world-thread-FREE engine:
+--   a successful cutover ends in 'commitLoadPublish', which queues
+--   @WorldLoadPublish@, and a running world worker would pick that up
+--   and try to publish a staged session that does not exist. With no
+--   worker draining @worldQueue@ the command simply sits there, which is
+--   all this example needs from it.
+cutoverSpec ∷ SpecWith EngineEnv
+cutoverSpec = describe "Lua scheduler fairness (#2415), the real load cutover" $ do
+    it "lets handleLoadStaged discard the stale messages behind it, with \
+       \nothing buffered outside the queue to escape the flush" $ \env → do
+        rig ← newRigOnEngineQueues env
+        registerModule rig 1 "scripts/fairness_witness.lua" 1.0 1e9 witnessChunk
+        prepareEmptyLuaLoad rig
+        requestId ← enterLoadRequested env
+
+        -- Put a message in the carry slot first: the one place this
+        -- scheduler holds a message that is no longer on the queue, and
+        -- therefore the one thing that could outlive the flush.
+        writeIORef (rigWaitImpl rig)
+            (\_ → pure (Just (LuaWorldGenLog "carried")))
+        r1 ← round1 rig
+        rrWoke r1 `shouldBe` True
+        writeIORef (rigWaitImpl rig) (\_ → pure Nothing)
+
+        -- Two live messages, the staging handoff, then work queued for
+        -- the session the publish is about to replace.
+        queueMsgs rig ["m1", "m2"]
+        Q.writeQueue (engineQueue rig) (LuaLoadStaged requestId)
+        queueMsgs rig [T.pack ("stale" ⧺ show i) | i ← [1 .. 5 ∷ Int]]
+
+        r2 ← withPublishOwnerAcks env (round1 rig)
+
+        -- The carried message and the two live ones ran; nothing behind
+        -- the handoff did, and nothing is left to run later.
+        joined rig "__msgs" `shouldReturn` "carried,m1,m2"
+        queuedMessages rig `shouldReturn` 0
+        rrMessages r2 `shouldBe` 4
+        -- The publish barrier is at its snapshot boundary by now, so the
+        -- round parks rather than carrying on past the cutover.
+        rrParked r2 `shouldBe` True
+        rrDuePasses r2 `shouldBe` 0
+        rrConsole r2 `shouldBe` 0
+
+        -- The transaction really did commit: the phase advanced and the
+        -- world thread's publish command was queued.
+        status ← readLoadStatus (loadStatusRef env)
+        (lsPhase ⊚ status) `shouldBe` Just LoadWaitingPublish
+        published ← Q.flushQueue (worldQueue env)
+        let isPublish cmd = case cmd of
+                WC.WorldLoadPublish n → n ≡ requestId
+                _                     → False
+        map isPublish published `shouldBe` [True]
+
+        -- And no later round resurrects the discarded work.
+        barrier ← readSaveStatus (saveBarrierRef env)
+        forM_ barrier $ \b →
+            failSave (saveBarrierRef env) (ssRequestId b) "spec teardown"
+        r3 ← round1 rig
+        rrMessages r3 `shouldBe` 0
+        joined rig "__msgs" `shouldReturn` "carried,m1,m2"
+        clearLoad env requestId
+
+-- | Register a real, EMPTY prepared load through @scripts/lib/
+--   save_modules.lua@, so the @applyAll@ that 'handleLoadStaged' calls
+--   succeeds. A bare backend has registered no persistent components, so
+--   an empty component list is the honest input: prepare and apply both
+--   do their real work over an empty registry rather than being stubbed.
+prepareEmptyLuaLoad ∷ Rig → IO ()
+prepareEmptyLuaLoad rig = do
+    ok ← evalLua rig
+        "(function() local sm = require('scripts.lib.save_modules') \
+        \  local r = sm.prepareLoad({}, 1, false, nil) \
+        \  return tostring(r.ok) .. ':' .. tostring(r.errors and #r.errors or 0) \
+        \end)()"
+    ok `shouldBe` "true:0"
+
+-- | Begin a real load transaction and leave it in flight, the state
+--   'handleLoadStaged' expects to be dispatched in.
+enterLoadRequested ∷ EngineEnv → IO Int
+enterLoadRequested env = do
+    clearStaleLoad env
+    started ← beginLoad (loadStatusRef env) "spec-cutover"
+    case started of
+        Left err → do
+            expectationFailure $ "could not begin a load: " ⧺ T.unpack err
+            pure 0
+        Right n → pure n
+
+-- | Acknowledge the publish barrier's OTHER owners from another thread
+--   for the duration of @act@, exactly as their worker loops' per-tick
+--   'Engine.Save.Barrier.acknowledgeCurrent' does.
+--
+--   'handleLoadStaged' acknowledges 'SaveLua' itself and then blocks in
+--   'waitForOwners' until every other owner has drained
+--   'requiredQuiescencePasses' times. No worker runs here, so this
+--   stands in for their acknowledgements and nothing else — the barrier,
+--   the phases and the wait are all the production ones.
+withPublishOwnerAcks ∷ EngineEnv → IO α → IO α
+withPublishOwnerAcks env act = do
+    stop ← newIORef False
+    tid ← forkIO (loop stop)
+    act `finally` (writeIORef stop True ≫ killThread tid)
+  where
+    others = [ SaveWorld, SaveUnit, SaveBuilding, SaveCombat
+             , SaveSimulation, SaveRender, SaveInput ]
+    loop stop = do
+        done ← readIORef stop
+        unless done $ do
+            current ← readSaveStatus (saveBarrierRef env)
+            forM_ current $ \s → when (isNothing (ssOutcome s)) $
+                forM_ others $ \owner →
+                    when (Set.member owner (ssOwners s)) $
+                        acknowledgeSave (saveBarrierRef env) (ssRequestId s) owner
+            threadDelay 2000
+            loop stop

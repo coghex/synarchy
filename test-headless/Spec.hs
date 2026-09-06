@@ -636,6 +636,11 @@ main = hspec $ do
     -- only observable while no world worker is draining worldQueue. It
     -- installs its own single-page manager and finishes each accepted
     -- call by invoking the production command handler directly.
+    -- #2415: the scheduler's load cutover needs a world-thread-FREE
+    -- engine. A successful cutover ends in commitLoadPublish, which
+    -- queues WorldLoadPublish; a running world worker would pick that
+    -- up and try to publish a staged session that does not exist.
+    aroundAll withHeadlessEngineNoWorld LuaSchedulerFairness.cutoverSpec
     aroundAll withHeadlessEngineNoWorld TimeScaleDomain.spec
     -- #2310: which PAGE bulk chunk work is admitted to, and which page
     -- the wait watches. The defect lives entirely in the window between
