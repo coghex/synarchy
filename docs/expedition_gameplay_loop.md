@@ -488,9 +488,11 @@ currently visible.
   pickup, see whether the item fits, identify its carrier, walk home, deposit.
   No caravan interface was added. Gate: `tools/expedition_retrieval_probe.py`.
 - **Step 7 (survival tuning) — #925 and #919, epic #918.** Recorded in
-  `docs/expedition_survival_calibration.md` as an observation log; the
-  project-owner decision was to land the calibration with **zero** balance
-  changes and file the mechanic-level findings as follow-ups instead. The
+  `docs/history/expedition_survival_calibration_2026-07.md` as an observation
+  log, since processed into `docs/expedition_survival_calibration.md` as the
+  SURV-N findings ledger; the project-owner decision was to land the
+  calibration with **zero** balance changes and file the mechanic-level
+  findings as follow-ups instead. The
   `expedition` and `first-aid` scenarios in `tools/gameplay_scenarios.py` are
   diagnostic utilities, deliberately outside CI and the probe registry, and
   their exit status never carries a balance verdict.

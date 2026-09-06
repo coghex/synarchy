@@ -73,3 +73,14 @@ the live code and the agent memory notes instead.
   deepest as-built mechanics into the live `docs/engine_contracts.md`.
   Every contract survives in one of those two files — consult this
   snapshot only for wording the trim rephrased.
+
+- **`expedition_survival_calibration_2026-07.md`** — the #919 expedition
+  survival calibration run record (runs 2026-07-25 against revision
+  `cca19b1101`, landed by PR #937; #998's fall-trauma addendum appended
+  2026-07-31, archived 2026-09 by #2185). SUPERSEDED as the actionable
+  record by `docs/expedition_survival_calibration.md`, which commit
+  `9eda1412b` rewrote in place as the fully dispositioned SURV-1..SURV-10
+  findings ledger. This snapshot is kept because live code and docs cite
+  its observations E1-E7 and its fall-calibration section (#998), none of
+  which survive in the ledger; its balance numbers, tunables, and open
+  follow-ups are July 2026 state, not current.

@@ -1,9 +1,13 @@
 # Expedition survival mechanics findings
 
 This report extracts the remaining actionable mechanics and scenario-quality
-concerns from the 2026-07-25 expedition survival calibration. It is intended for
-one-at-a-time re-verification and disposition through `process-report`, not as a
-new balance verdict.
+concerns from the 2026-07-25 expedition survival calibration, whose run record
+is archived verbatim as
+[`docs/history/expedition_survival_calibration_2026-07.md`](history/expedition_survival_calibration_2026-07.md)
+— that archive, not this ledger, carries observations E1-E7 and the
+fall-calibration section. This report is intended for one-at-a-time
+re-verification and disposition through `process-report`, not as a new balance
+verdict.
 
 Status legend: `[ ]` unprocessed · `[#N]` filed as issue N · `[no-issue]`
 reviewed and deliberately never to be filed · `[deferred]` blocked on a
