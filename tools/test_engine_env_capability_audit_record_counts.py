@@ -36,7 +36,7 @@ from engine_env_capability_common import (  # type: ignore  # noqa: E402
     ENGINE_ENV_PATTERN, scan_production_sources, REPO_ROOT,
 )
 from engine_env_capability_field_total import (  # type: ignore  # noqa: E402
-    audit_field_total,
+    FIELD_TOTAL_CLOSE, FIELD_TOTAL_OPEN, audit_field_total,
 )
 from engine_env_capability_inventory import audit_source  # type: ignore  # noqa: E402
 from engine_env_capability_record_counts import (  # type: ignore  # noqa: E402
@@ -46,7 +46,8 @@ from engine_env_capability_record_counts import (  # type: ignore  # noqa: E402
 )
 from test_engine_env_capability_audit_support import (  # noqa: E402
     FIELD_THREE_ROW, FIELD_TWO_ROW, SYNTHETIC_ENGINE_ENV, expect,
-    extract_record_fields, inventory_doc, real_inventory_text,
+    extract_record_fields, inventory_doc, real_engine_env_source,
+    real_inventory_text,
 )
 
 
@@ -370,6 +371,70 @@ def test_record_counts_prose_about_record_contents_is_not_a_size():
                f"{trailing!r} gave {violations}")
 
 
+def test_record_counts_fenced_block_rejected():
+    """Round 3's finding: wrapping the marker pair and its table in a
+    ```` ```markdown ```` fence. The markers still parse, but the fenced
+    content renders as an EXAMPLE -- §2.1 would carry no capability
+    table at all while every rule that reads the returned span still
+    passed."""
+    doc = _counts_doc()
+    doc = doc.replace(RECORD_COUNTS_OPEN, "```markdown\n" + RECORD_COUNTS_OPEN, 1)
+    doc = doc.replace(RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n```", 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any("inside a fenced code block" in v for v in violations),
+           f"a marker pair moved into a fence governs nothing and must "
+           f"be rejected, got: {violations}")
+    expect(any("has no" in v and RECORD_COUNTS_OPEN in v
+               for v in violations),
+           f"a fenced pair must also leave §2.1 reported as having no "
+           f"audited table, got: {violations}")
+
+
+def test_record_counts_missing_separator_row_rejected():
+    """A run of pipe-leading lines is only a RENDERED table when a
+    separator row follows the header; GFM renders it as a paragraph of
+    literal pipes otherwise."""
+    doc = _counts_doc().replace("|---|---|---|\n", "", 1)
+    violations = audit_record_counts(_SOURCES, doc)
+    expect(any("separator row" in v for v in violations),
+           f"a pipe run with no separator row is not a table and must "
+           f"be rejected, got: {violations}")
+
+
+def test_record_counts_fenced_real_block_rejected():
+    """The same fence escape against the real document."""
+    sources = scan_production_sources(REPO_ROOT)
+    document = real_inventory_text()
+    fenced = document.replace(
+        RECORD_COUNTS_OPEN, "```markdown\n" + RECORD_COUNTS_OPEN, 1)
+    fenced = fenced.replace(
+        RECORD_COUNTS_CLOSE, RECORD_COUNTS_CLOSE + "\n```", 1)
+    expect(fenced != document, "the fixture must change the real document")
+    expect(any("inside a fenced code block" in v
+               for v in audit_record_counts(sources, fenced)),
+           "fencing the real §2.1 block must be rejected")
+
+
+def test_field_total_block_in_a_fence_is_also_rejected():
+    """`extract_marked_spans` is shared, so the same escape was open on
+    §1's field-total block (#1669). Fixing it at the primitive fixes
+    both; this pins the other owner's half so the shared change is not
+    an untested behaviour change."""
+    live = extract_record_fields(real_engine_env_source(),
+                                 ENGINE_ENV_PATTERN)
+    document = real_inventory_text()
+    fenced = document.replace(
+        FIELD_TOTAL_OPEN, "```markdown\n" + FIELD_TOTAL_OPEN, 1)
+    fenced = fenced.replace(
+        FIELD_TOTAL_CLOSE, FIELD_TOTAL_CLOSE + "\n```", 1)
+    expect(fenced != document, "the fixture must change the real document")
+    expect(audit_field_total(live, document) == [],
+           "the unfenced real §1 block must still pass")
+    expect(any("inside a fenced code block" in v
+               for v in audit_field_total(live, fenced)),
+           "fencing the real §1 field-total block must be rejected too")
+
+
 def test_record_counts_ragged_row_rejected():
     rows = _CLEAN_ROWS + (
         "| `delta` | `Engine.Core.Capability.Delta` — `DeltaCapability` "
@@ -584,6 +649,10 @@ TESTS = (
     test_record_counts_pipeless_table_in_the_block_rejected,
     test_record_counts_decorated_size_outside_the_block_rejected,
     test_record_counts_prose_about_record_contents_is_not_a_size,
+    test_record_counts_fenced_block_rejected,
+    test_record_counts_missing_separator_row_rejected,
+    test_record_counts_fenced_real_block_rejected,
+    test_field_total_block_in_a_fence_is_also_rejected,
     test_record_counts_ragged_row_rejected,
     test_record_counts_stray_number_in_the_column_rejected,
     test_record_counts_column_references_are_not_counts,

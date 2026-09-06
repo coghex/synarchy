@@ -49,7 +49,7 @@ did. Nothing here is duplicated into them.) The shared substrate:
     `BACKTICK_RE`, `SEPARATOR_ROW_RE` and SS6.2's heading -- that more
     than one document-reading owner would otherwise duplicate;
   * the marked-block and section mechanics (`MarkedSpan`,
-    `extract_marked_spans`, `section_bounds` and
+    `extract_marked_spans`, `fenced_line_flags`, `section_bounds` and
     `stray_numbers_outside_code`), which the SS1 field-total owner
     (#1669) and the SS2.1 record-count owner (#2269) both read. A
     second fence-aware section reader is exactly the hand-rolled
@@ -174,11 +174,21 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
     as the malformed markup it is rather than silently matching some
     other pair's text.
 
+    A pair inside a fenced code block is REPORTED and not returned.
+    Fenced content renders as an example rather than as the document's
+    own prose, so a governed block moved into a fence would leave the
+    real text ungoverned while every rule that reads the returned span
+    still passed -- the same class of escape `section_bounds` already
+    refuses for headings. Reporting rather than silently skipping it
+    keeps the owner's "the block is missing" and "the block is here"
+    diagnostics from both being technically true at once.
+
     The inventory document is the only text this is applied to, so the
     diagnostics name it directly.
     """
     spans: list[MarkedSpan] = []
     violations: list[str] = []
+    fenced = fenced_line_flags(text)
     cursor = 0
     while True:
         start = text.find(open_marker, cursor)
@@ -199,16 +209,24 @@ def extract_marked_spans(text: str, open_marker: str, close_marker: str
                 f"docs/{INVENTORY_PATH.name} (a second one opens at "
                 f"offset {nested} before the first closes) -- the "
                 f"governed prose must be one flat block")
-        spans.append(MarkedSpan(text[body_start:end], start,
-                                end + len(close_marker)))
         cursor = end + len(close_marker)
+        line = text.count("\n", 0, start)
+        if line < len(fenced) and fenced[line]:
+            violations.append(
+                f"`{open_marker}` at offset {start} in "
+                f"docs/{INVENTORY_PATH.name} is inside a fenced code "
+                f"block -- fenced content is a rendered EXAMPLE, not the "
+                f"governed prose, so a pair moved there governs nothing "
+                f"while the real text goes unchecked")
+            continue
+        spans.append(MarkedSpan(text[body_start:end], start, cursor))
     return spans, violations
 
 
 _FENCE_RE = re.compile(r"^(`{3,}|~{3,})")
 
 
-def _fence_states(text: str) -> "list[bool]":
+def fenced_line_flags(text: str) -> "list[bool]":
     """Per line, whether that line is INSIDE a fenced code block.
 
     A fence opens on a line of three or more backticks or tildes and
@@ -261,7 +279,7 @@ def section_bounds(text: str, heading: str,
     a fenced `## 1. Scope` does not start the section, and a fenced
     `## anything` does not end it.
     """
-    fenced = _fence_states(text)
+    fenced = fenced_line_flags(text)
     start: int | None = None
     offset = 0
     for index, line in enumerate(text.splitlines(keepends=True)):

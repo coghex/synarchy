@@ -53,7 +53,12 @@ The contract
         whose count a reader could not state unambiguously.
 
       The block holds that table and NOTHING else -- one contiguous run
-      of `|`-leading lines, no second table, no prose, no raw HTML.
+      of `|`-leading lines under a `|---|` separator row, no second
+      table, no prose, no raw HTML. The markers themselves may not sit
+      in a fenced code block (`extract_marked_spans` refuses that):
+      fenced markup renders as an example, so a block moved into a
+      fence would leave §2.1 with no rendered table at all while every
+      rule below still passed.
       Only the one table's record column is compared with the live
       records, so anything else inside the markers is governed markup
       nothing verifies. Both review rounds of this change found an
@@ -256,6 +261,23 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
     def cells(row: str) -> list[str]:
         return [cell.strip() for cell in row.strip("|").split("|")]
 
+    def is_separator(row: str) -> bool:
+        parsed = cells(row)
+        return bool(parsed) and all(SEPARATOR_ROW_RE.fullmatch(cell)
+                                    for cell in parsed)
+
+    # A run of pipe-leading lines is only a RENDERED table when a
+    # separator row follows the header; without one GFM renders the
+    # whole run as a paragraph of literal pipes. Requiring it is what
+    # stops the audited column being read out of markup no reader sees
+    # as a table.
+    if len(rows) < 2 or not is_separator(rows[1]):
+        return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block has no "
+                    f"`|---|` separator row under its header -- without "
+                    f"one the lines are not a rendered Markdown table, "
+                    f"and the audited column would be read out of markup "
+                    f"no reader sees as a table"]
+
     header = cells(rows[0])
     if RECORD_COLUMN_HEADER not in header:
         return [], [f"{_DOC} §2.1's `{RECORD_COUNTS_OPEN}` block has no "
@@ -266,9 +288,9 @@ def parse_record_column(block: str) -> tuple[list[str], list[str]]:
     width = len(header)
 
     column: list[str] = []
-    for number, row in enumerate(rows[1:], start=2):
+    for number, row in enumerate(rows[2:], start=3):
         row_cells = cells(row)
-        if all(SEPARATOR_ROW_RE.fullmatch(cell) for cell in row_cells):
+        if is_separator(row):
             continue
         if len(row_cells) != width:
             violations.append(
