@@ -972,14 +972,20 @@ def same_pass_completion_phase(port: int, shots: str) -> None:
          "tp.setSubobjectiveChecked('first_session_prepare_food',true); "
          "tp.completeObjectives({'first_session_recover','first_session_secure','first_session_clear'}); "
          "return 'ok'", timeout=15.0)
+    # Force the evaluator interleaving that can uncheck supplies and return
+    # preparation rows. The three outcome rows must survive it in order.
+    send(port, "require('scripts.tutorial_eval').evaluate(); return 'ok'",
+         timeout=15.0)
     pending = dump(port)
     check("a closed panel preserves all three same-batch completions",
-          pending.get("activeIds") == rows and not pending.get("rows"), str(pending))
+          [rid for rid in pending.get("activeIds", []) if rid in rows] == rows
+          and not pending.get("rows"), str(pending))
     paths = [os.path.join(shots, name) for name in
              ("expedition_completed.png", "expedition_recover_hidden.png",
               "expedition_completed_again.png", "expedition_warm.png")]
     captured = open_and_capture_build(port, *paths)
-    shown = captured.get("rows") or []
+    shown = [row for row in (captured.get("rows") or [])
+             if row.get("id") in rows]
     check("the rendered open panel contains every same-batch completion in order",
           [r.get("id") for r in shown] == rows
           and [r.get("marker") for r in shown] == ["[x]"] * 3,

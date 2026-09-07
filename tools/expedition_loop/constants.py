@@ -111,11 +111,11 @@ OBJ_EXPEDITION = "first_session_prepare_expedition"
 SUB_WATER = "first_session_prepare_water"
 SUB_FOOD = "first_session_prepare_food"
 
-#: What this scenario is designed to leave latched, exactly. All three
-#: are FULL objectives, so they latch permanently and must survive the
-#: reload; the two subobjectives are live checks and are asserted
-#: separately (they are recomputed from the loaded world, not restored).
-EXPECTED_COMPLETED = {OBJ_PORTAL, OBJ_WATER, OBJ_EXPEDITION}
+#: Preparation latches required by this survival-control scenario. Later
+#: expedition objectives may also complete during the trip (#2301); EXP-3
+#: owns extending the integrated gate to require them. These three latches
+#: must survive reload; the two supply subobjectives remain live checks.
+REQUIRED_PREPARATION_COMPLETED = {OBJ_PORTAL, OBJ_WATER, OBJ_EXPEDITION}
 
 STAGES = ["setup", "prepare", "travel", "extract", "return",
           "save", "load", "control"]
