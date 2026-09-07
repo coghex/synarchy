@@ -16,9 +16,9 @@ Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]` del
 
 ## Processing status
 
-- [ ] EPIC. Advance coupled gameplay through one coordinated simulation clock
-- [ ] GT-1. Define the step protocol and pure clock accounting
-- [ ] GT-2. Add lifecycle and transaction coordination at completed-step boundaries
+- [x] EPIC. Advance coupled gameplay through one coordinated simulation clock — [#2478]
+- [x] GT-1. Define the step protocol and pure clock accounting — [#2482]
+- [ ] GT-2. Add lifecycle and transaction coordination at completed-step boundaries — [deferred]: #2482 must merge with docs/gameplay_timing_protocol.md on master, and Q-2 must record the owner's acceptance of its phase/wait graph
 - [ ] GT-3. Bound unit and combat command service for granted work
 - [ ] GT-4. Separate world and fluid control work from timed advancement
 - [ ] GT-5. Separate Lua gameplay callbacks from ordinary script scheduling
@@ -429,6 +429,8 @@ Phase A establishes dormant infrastructure; Phase B migrates owners under the is
 - **Open questions:** Q-2/Q-4 are deliberately investigated here under the gate table; Q-3 values remain parameterized. Q-1's behavioral direction is resolved by D-7.
 
 ### GT-2. Add lifecycle and transaction coordination at completed-step boundaries
+
+> Deferred 2026-09-07: the Q-2 gate blocks this slice until GT-1 (#2482) has merged with `docs/gameplay_timing_protocol.md` on master and the owner has accepted its recorded phase and wait graph. Checkable precondition: #2482 closed as merged, the file present on master, and the owner's acceptance recorded under Q-2 through `/design-epic`. Remove this note when the slice advances.
 
 - **Outcome:** A boundary/control permit protocol that cannot deadlock on Lua save or park halfway through an admitted step.
 - **Scope:** Pause intent versus settlement, owner control service, transaction entry, fault/shutdown modes and in-step blocking-call refusal. Existing production save path remains active.

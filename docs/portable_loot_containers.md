@@ -7,6 +7,18 @@ has landed since the design was written.
 
 Design state: `ready for issue processing`
 
+> **2026-09-07 — PLC-6 returned from processing as not one PR.** Measured
+> against the current tree it spans five subsystems, three of which do not
+> exist (loot-profile registry, container content entries, pending-shell
+> persistence), plus a pure lot algorithm and the realization transition at
+> the pickup boundary — the same shape D-16 split PLC-3 for. The same day
+> D-17 placed the pending descriptor on the location instance (Q-5), D-18
+> made container entries incidental content (Q-6), and D-19 accepted P-5's
+> split into PLC-12 through PLC-15, inserted after PLC-6 so every key stays
+> stable and ends in a number. PLC-6 stays in the ledger for processing to
+> disposition as `[no-issue]: split`, which also rewrites epic #1231's
+> checklist. PLC-1 through PLC-5 are processed and unaffected.
+
 > **2026-08-11 — PLC-3 was split, and the new boundaries were signed off the same
 > day.** Repository investigation showed the original slice spanned eight
 > workstreams across seven files, three of which are subsystems that do not exist
@@ -29,9 +41,13 @@ concrete precondition
 - [x] PLC-1. Load item definitions from logical subdirectories — [#1232]
 - [x] PLC-2. Add physical bulk and portable-storage capacity data — [#1233]
 - [x] PLC-3. Converge every item-creation path on one materializer — [#1418]
-- [ ] PLC-4. Enforce capacity-safe, acyclic nested ownership moves
-- [ ] PLC-5. Enumerate nested item trees in the save integrity graph
+- [x] PLC-4. Enforce capacity-safe, acyclic nested ownership moves — [#2487]
+- [x] PLC-5. Enumerate nested item trees in the save integrity graph — [no-issue]: already delivered by #1090 (flattenItemInstances + pageItemContainers) and pinned by the nested allocator/duplicate tests
 - [ ] PLC-6. Add lazy, deterministic loot-profile realization
+- [ ] PLC-12. Load loot-profile definitions
+- [ ] PLC-13. Realize a loot profile deterministically into a container
+- [ ] PLC-14. Spawn pending container shells from location content entries
+- [ ] PLC-15. Realize pending shells on physical pickup
 - [ ] PLC-7. Persist player knowledge of portable containers
 - [ ] PLC-8. Add unit-mediated opening and capacity-aware ground pickup
 - [ ] PLC-9. Extend unified transfers to portable item-container endpoints
@@ -430,6 +446,49 @@ tuple list to a recursive one carries no migration cost, though it also means
 "no path drops defaults" is currently unobservable in shipped data and needs a
 fixture to test against.
 
+### D-17. Persist the pending descriptor as a slot on the placed location instance
+
+Signed off 2026-09-07 (resolves Q-5). A pending container's
+`Pending(profile, source)` descriptor lives on the placed `LocationInstance`
+in gen-params, mirroring #917's significant-item obligations: the instance
+persists `{slot, container definition, profile, item_instance_id, realized}`;
+the spawn pass binds the shell's `iiInstanceId` to its slot in the one engine
+call that spawns it; realization latches the slot from `pickupGroundOnPage`
+in the same synchronous step as removal, exactly as
+`latchLocationSignificantTaken` does. The stable source identity is the
+`(LocationInstanceId, slot)` pair #911 already persists.
+
+*Consequences:* `ItemInstanceDTO` and every component that freezes it are
+untouched. The change is one gen-params/world-pages component bump with a
+frozen DTO, migration, baseline fixture, inventory row, and the existing
+`RefItemInstance` outer-ground-item-only rule applied to the bound id. A
+hand-stamped location with no placed instance can spawn no pending
+container, the same rule #917 applies to obligations. After realization the
+slot keeps only `realized = true` and its bound id; profile and source are
+discarded per D-3.
+
+### D-18. Spawn container entries as incidental content
+
+Signed off 2026-09-07 (resolves Q-6). A container content entry spawns
+through the ordinary incidental pass with the same lifecycle as a `loot_table`
+or fixed `kind: item` entry: an unknown container definition or profile, or a
+registration the engine refuses, logs a warning and skips the entry, and
+`contents_spawned` is marked exactly as it is today. There is no
+retry-until-spawned obligation and no participation in #917's clearance
+predicate. D-17's slot is the descriptor's persistence home only; it confers
+no guarantee.
+
+### D-19. Split PLC-6 into four one-PR slices
+
+Signed off 2026-09-07 (accepts P-5). PLC-6 is dispositioned
+`[no-issue]: split` and replaced by PLC-12 (loot-profile data, registry and
+loader), PLC-13 (deterministic lot realization, pure), PLC-14 (container
+content entries and pending shells) and PLC-15 (realize on physical pickup),
+inserted directly after PLC-6 in both the ledger and the delivery plan so
+ledger order stays dependency-valid. No processed key changes. Every later
+dependency on `PLC-6` becomes a dependency on `PLC-15`, which transitively
+carries the other three; PLC-7 depended on PLC-3 alone and is unaffected.
+
 ## Accepted proposals and rejected alternatives
 
 ### P-1. Add a sibling `storage:` item component
@@ -576,6 +635,51 @@ not.
 > and ownership of the transfer experience stayed in one epic. The proposal's
 > reasoning stands as the record of why the boundary was drawn where it was.
 
+### P-5. Split PLC-6 into four one-PR slices
+
+Accepted by D-19 (2026-09-07); the slices are PLC-12 through PLC-15 in the
+delivery plan. Repository evidence for why PLC-6 was not one PR:
+
+- **No loot-profile subsystem exists.** The closest analogue is the loot-table
+  subsystem (`src/LootTable/Types.hs`, `src/LootTable/Roll.hs`,
+  `Engine.Asset.YamlLootTables`, `Engine.Scripting.Lua.API.LootTables`, 461
+  lines, landed inside PR #431 at +1160 across 26 files). Nothing of it is
+  reusable for D-6: a loot table is one weighted draw, a profile is
+  independent appearance chances plus factor-sized lots.
+- **No container content entry exists.** `validContentKinds` in
+  `Engine.Asset.YamlLocations` is the closed four-kind vocabulary (#1708),
+  `Location.Types.LocationContent` has no container or profile field, and
+  `scripts/locations.lua`'s `dispatchContent` has no branch for one.
+- **No pending descriptor exists, and every home is a save-component
+  change.** `ItemInstanceDTO` is frozen across `world-activity`, `buildings`,
+  `units`, `container-knowledge` and the v90 legacy tree, so a field on
+  `ItemInstance` re-versions all of them. Any other home is one component
+  bump with a frozen DTO, migration, baseline fixture, inventory row, and a
+  typed `RefItemInstance` classification. Which home is Q-5.
+- **The only physical-handling seam is `pickupGroundOnPage`.** It is the
+  authoritative ground→inventory boundary where #917 latches a significant
+  item, written synchronously on the Lua thread precisely so the latch lands
+  in the same step as removal; realization must land there the same way.
+- **The lot algorithm is pure and separable**, exactly like #948's
+  `rollLootTableFor`: a function of the world seed, `LocationInstanceId`,
+  content-source id, profile, and container capacities, reading no generator.
+
+Proposed slices, in delivery order, all under the Population phase:
+
+| Proposed slice | Outcome | Depends on |
+| --- | --- | --- |
+| Loot-profile data, registry and loader | `data/loot_profiles/` YAML, parser, registry, `engine.loadLootProfileYaml`, startup routing, validation, docs | PLC-1 |
+| Deterministic lot realization (pure) | Stream derivation, appearance and multiplier rolls, seed-shuffled lots, admission through PLC-4's boundary, fixed-vector suite, the calibration simulation the population algorithm asks for | the registry slice, PLC-4 |
+| Container content entries and pending shells | New content kind, YAML vocabulary, `LocationContent` fields, spawn pass, persisted pending descriptor with migration, fixture, inventory and integrity rows | the registry slice, PLC-2, PLC-3, Q-5, Q-6 |
+| Realize on physical pickup | Atomic `Pending → Realized` at `pickupGroundOnPage`, concurrent-caller convergence, exactly-once across save/load, `tools/location_content_probe.py` extension | the two slices above |
+
+Stable-ID handling (proposed): PLC-6 itself is dispositioned `[no-issue]:
+split`, and the four slices take the next free numeric keys, inserted directly
+after PLC-6 in both the ledger and the delivery plan so ledger order stays
+dependency-valid. No processed key changes. PLC-7 depends on PLC-3 alone and
+is unaffected; PLC-8, PLC-10 and PLC-11's `PLC-6` dependency becomes the
+realize-on-pickup slice.
+
 ## Open questions
 
 ### Q-1. Does physical item storage use a sibling component?
@@ -605,6 +709,48 @@ lifecycle exist or are explicitly reassigned to this arc.
 Resolved by D-15: process the snapshot's exact instance IDs in stable order,
 commit every individually valid move, and report what remained. This preserves
 one contract across every endpoint without weakening per-item atomicity.
+
+### Q-5. Where does the pending population descriptor persist?
+
+Open (2026-09-07). The design says the shell and its `Pending(profile,
+source)` descriptor "persist together" but names no owner. Three candidate
+homes, each a different persistence change:
+
+1. **A field on `ItemInstance`.** The descriptor travels with the item
+   everywhere. Cost: `ItemInstanceDTO` is frozen across four components plus
+   the v90 legacy tree, so this re-versions all of them; and a pending item
+   can only ever sit on the ground (pickup realizes), so the field is dead
+   weight on every other item.
+2. **A page-level sidecar keyed by `iiInstanceId`** beside the ground items
+   in `world-activity`. Cost: one component bump; the descriptor must be
+   dropped in the same synchronous step the item leaves the ground, and a
+   descriptor whose item is no longer a ground item is a new integrity
+   error class.
+3. **A slot on the placed `LocationInstance`**, mirroring #917's significant
+   obligations: the instance persists `{slot, profile, item_instance_id,
+   realized}` in gen-params, the spawn pass binds the instance id exactly as
+   `world.spawnLocationSignificantItem` does, and realization latches the
+   slot from `pickupGroundOnPage` exactly as `latchLocationSignificantTaken`
+   does. Cost: the descriptor is found by scanning the page's location
+   instances (the same lookup #917 already performs on every pickup); a
+   hand-stamped ruin with no placed instance can spawn no pending container.
+   Gain: `ItemInstanceDTO` is untouched, the stable source identity is the
+   `(instance, slot)` pair #911/#917 already persist, and the typed
+   reference and outer-ground-item-only rule already exist.
+
+Resolved by D-17: option 3, a slot on the placed location instance.
+
+### Q-6. Does a container entry spawn as an obligation or as incidental content?
+
+Open (2026-09-07). Today a `loot_table` or fixed `kind: item` entry warns and
+skips on failure (`dispatchContent`), while a `significant: true` item is an
+obligation whose spawn must succeed before `contents_spawned` is marked
+(`spawnSignificantContent`), so a failed spawn retries on the next chunk load.
+A pending container that failed to spawn is a location that never yields its
+authored cargo, which is the #917 argument for the obligation lifecycle; but
+an obligation also participates in nothing else here, since clearance stays
+#917's. Resolved by D-18: incidental, treated no differently from any other
+spawned item; D-17's slot is a persistence home, not a guarantee.
 
 ## Verification strategy
 
@@ -694,6 +840,11 @@ one contract across every endpoint without weakening per-item atomicity.
 
 ### PLC-4. Enforce capacity-safe, acyclic nested ownership moves
 
+> Tracked as #2487 (2026-09-07). Signed off for this slice: an absent
+> `iiStorage` or `iiBulk` fails closed, kit consumption stays outside the
+> move boundary, and the slice ships the pure boundary with PLC-8/PLC-9 as
+> its first callers.
+
 - **Outcome:** Every nested insert and remove preserves exact instance identity,
   respects both capacities, and fails atomically.
 - **Scope:** Capacity-safe insert/remove enforcing PLC-2's internal weight AND
@@ -715,6 +866,11 @@ one contract across every endpoint without weakening per-item atomicity.
 
 ### PLC-5. Enumerate nested item trees in the save integrity graph
 
+> Not tracked (2026-09-07): #1090 landed one recursive item enumeration on
+> 2026-08-06, and `validateSessionSnapshot` already runs it at both the
+> capture and load boundaries with nested-duplicate and nested-allocator
+> coverage. No enforcement was added, so PLC-4's boundary is unaffected.
+
 - **Outcome:** The shared integrity graph sees every nested item instance rather
   than only top-level ones.
 - **Scope:** Walking `iiContents` during integrity enumeration at both the save
@@ -735,19 +891,113 @@ one contract across every endpoint without weakening per-item atomicity.
 
 ### PLC-6. Add lazy, deterministic loot-profile realization
 
-- **Outcome:** A location-authored container shell realizes one seed-stable,
-  capacity-valid cargo set only when physically handled.
-- **Scope:** Loot-profile data/registry, container/profile location entry,
-  pending descriptor and source identity, deterministic lot algorithm, atomic
-  realization, concurrent callers, and pending/realized persistence.
+> Split by D-19 (2026-09-07) into PLC-12 through PLC-15 below; the original
+> outcome — a location-authored container shell realizes one seed-stable,
+> capacity-valid cargo set only when physically handled — is delivered by
+> PLC-15 on top of the other three. Disposition `[no-issue]: split`.
+
+- **Outcome:** Superseded by PLC-12 through PLC-15.
+- **Scope:** Superseded.
 - **Phase:** Population
 - **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`, `PLC-4`
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-2, D-3, D-6
-- **Acceptance signals:** Chunk loading does not roll; open/pickup yields the
-  same fixed-vector contents across process and load order; one empty result is
-  permanent; concurrent attempts cannot roll twice; every accepted lot fits.
-- **Out of scope:** Player-facing commands, knowledge UI, and crate tuning.
+- **Relevant decisions:** D-2, D-3, D-6, D-19
+- **Acceptance signals:** Superseded.
+- **Out of scope:** Superseded.
+- **Open questions:** None
+
+### PLC-12. Load loot-profile definitions
+
+- **Outcome:** Loot profiles are authored YAML under `data/loot_profiles/`,
+  loaded at startup into their own registry, and validated at the YAML
+  boundary.
+- **Scope:** Profile definition type (entries with item id, appearance chance,
+  quantity factor; a profile-level quantity-multiplier range); parser and
+  validation (unknown item id, non-finite or out-of-range chance, non-positive
+  factor, empty entries, duplicate profile id); registry and capability field;
+  `engine.loadLootProfileYaml`; `scripts/startup_loader.lua` routing;
+  read-only Lua query for tests; documentation.
+- **Phase:** Population
+- **Depends on:** `PLC-1`
+- **Ordering:** `independent` — no runtime consumer until PLC-13
+- **Relevant decisions:** D-2, D-6, D-12, D-19
+- **Acceptance signals:** A shipped-shaped fixture profile loads with
+  deterministic id and entry order; each invalid shape is rejected naming file
+  and profile; the loader follows the same failure policy as loot tables; no
+  gameplay behaviour changes.
+- **Out of scope:** Rolling, admission, location entries, persistence, and the
+  first shipped profile (PLC-10 authors it).
+- **Open questions:** None
+
+### PLC-13. Realize a loot profile deterministically into a container
+
+- **Outcome:** A pure function turns `(world seed, LocationInstanceId, slot,
+  profile, container definition)` into one exact, capacity-valid content
+  tree, seed-stable across processes and load order.
+- **Scope:** Stable stream derivation with an explicit tie/order contract
+  (the #948 `rollLootTableFor` discipline); per-entry appearance roll;
+  multiplier roll; factor-sized lots in seed-shuffled order; admission of
+  whole lots through PLC-4's capacity-safe insert against both internal
+  capacities; materialization of admitted items through `Item.Materialize`;
+  a fixed-vector suite; and the pure distribution simulation the population
+  algorithm asks for (empty, occupancy, saturated, rejected lots by item).
+- **Phase:** Population
+- **Depends on:** `PLC-3`, `PLC-4`, `PLC-12`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-3, D-4, D-5, D-6, D-19
+- **Acceptance signals:** Fixed vectors reproduce byte-identical trees; a
+  rejected lot never evicts admitted cargo; an empty realization is a valid
+  result; reordering registry or map iteration cannot change a result; the
+  simulation reports the four distributions for a fixture pairing.
+- **Out of scope:** Where the descriptor lives, when realization is
+  triggered, and persistence (PLC-14, PLC-15).
+- **Open questions:** None
+
+### PLC-14. Spawn pending container shells from location content entries
+
+- **Outcome:** A location content entry pairs a container definition with a
+  loot profile, spawns an unrolled shell on first chunk load, and the shell's
+  pending descriptor persists on the placed location instance.
+- **Scope:** New content kind in `validContentKinds` and `LocationContent`;
+  D-17's slot record on `LocationInstance` with its frozen DTO, component
+  migration, baseline fixture, inventory row and integrity classification;
+  the spawn call that mints the shell through the materializer and binds its
+  instance id to the slot; D-18's incidental warn-and-skip lifecycle; the
+  `world.listPlacedLocations` / `world.getLocationInstance` exposure of
+  pending slots.
+- **Phase:** Population
+- **Depends on:** `PLC-2`, `PLC-3`, `PLC-12`
+- **Ordering:** `critical path` — lands in parallel with PLC-13
+- **Relevant decisions:** D-1, D-2, D-3, D-17, D-18, D-19
+- **Acceptance signals:** Chunk loading spawns a shell with empty contents and
+  a bound slot and rolls nothing; the slot survives save/load with its
+  profile and bound id; a bound id that is not an outer ground item is the
+  existing integrity error; an unknown definition or profile warns and skips
+  without burning the content lifecycle differently from a loot table.
+- **Out of scope:** Realization, pickup behaviour, and the shipped crate
+  content.
+- **Open questions:** None
+
+### PLC-15. Realize pending shells on physical pickup
+
+- **Outcome:** The first successful physical pickup of a pending shell
+  atomically consumes its slot and installs PLC-13's exact contents; every
+  later action sees the realized tree.
+- **Scope:** The `Pending → Realized` transition inside `pickupGroundOnPage`
+  in the same synchronous step as removal; slot latch per D-17; convergence
+  of concurrent callers on one committed result; realization before the
+  carried-weight test; save/load of a realized container with no descriptor;
+  `tools/location_content_probe.py` extension for exactly-once across
+  process restarts and reversed load order.
+- **Phase:** Population
+- **Depends on:** `PLC-13`, `PLC-14`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-3, D-8, D-17, D-19
+- **Acceptance signals:** Two fresh processes realize the same crate to the
+  same tree; a realized empty crate stays empty; a second realization attempt
+  is a no-op; a pickup refused after realization leaves the realized tree on
+  the ground; the `Open` path is left as an explicit PLC-8 hook.
+- **Out of scope:** `Open`, knowledge, transfer endpoints, and crate tuning.
 - **Open questions:** None
 
 ### PLC-7. Persist player knowledge of portable containers
@@ -759,7 +1009,7 @@ one contract across every endpoint without weakening per-item atomicity.
   query/refresh surfaces, lifecycle cleanup, and persistence documentation.
 - **Phase:** Knowledge
 - **Depends on:** `PLC-3`
-- **Ordering:** `can land in parallel with PLC-6`
+- **Ordering:** `can land in parallel with PLC-12 through PLC-15`
 - **Relevant decisions:** D-1, D-7, D-13
 - **Acceptance signals:** Never-weighed, weight-only, known-empty, and known-
   contents states remain distinct; records survive moves and save/load; stale
@@ -776,7 +1026,7 @@ one contract across every endpoint without weakening per-item atomicity.
   based cancellation, open result boundary, pending-pickup exception, arrival
   capacity check, knowledge refresh, event feedback, and carried/nested open.
 - **Phase:** World interaction
-- **Depends on:** `PLC-6`, `PLC-7`
+- **Depends on:** `PLC-15`, `PLC-7`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-3, D-7, D-8, D-9
 - **Acceptance signals:** No-selection and selected-set assignment are
@@ -816,7 +1066,7 @@ one contract across every endpoint without weakening per-item atomicity.
   profile entries/quantity factors, fixed location position, distribution
   simulator/fixture, and authored-data validation.
 - **Phase:** Content vertical slice
-- **Depends on:** `PLC-1`, `PLC-2`, `PLC-6`, `PLC-8`, `PLC-9`
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-15`, `PLC-8`, `PLC-9`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-2, D-4, D-6, D-10
 - **Acceptance signals:** The profile references canonical item IDs; the crate
@@ -835,8 +1085,8 @@ one contract across every endpoint without weakening per-item atomicity.
   headless lifecycle probe, one manual offscreen interaction probe, probe
   registration, and load-bearing documentation updates.
 - **Phase:** Integration gate
-- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`, `PLC-4`, `PLC-5`, `PLC-6`,
-  `PLC-7`, `PLC-8`, `PLC-9`, `PLC-10`
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`, `PLC-4`, `PLC-5`, `PLC-12`,
+  `PLC-13`, `PLC-14`, `PLC-15`, `PLC-7`, `PLC-8`, `PLC-9`, `PLC-10`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8, D-9,
   D-10, D-11, D-12, D-13, D-14, D-15
