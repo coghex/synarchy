@@ -16,9 +16,9 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Make flora condition persistent and texture fallback expressive
-- [ ] EFM-1. Publish the canonical flora visual-state and fallback contract
-- [ ] EFM-2. Load and audit sparse flora visual and corpse-policy declarations
+- [x] EPIC. Make flora condition persistent and texture fallback expressive — [#2526]
+- [x] EFM-1. Publish the canonical flora visual-state and fallback contract — [#2530]
+- [x] EFM-2. Load and audit sparse flora visual and corpse-policy declarations — [#2539]
 - [ ] EFM-3. Resolve flora textures through the canonical fallback lattice
 - [ ] EFM-4. Give flora occurrences stable identity and explicit render context
 - [ ] EFM-5. Persist wild and row-flora condition records across regeneration and saves
@@ -89,9 +89,16 @@ concrete precondition
   texture. Ten have one generic `dead.png`; coconut palm, red mangrove, Scots
   pine, and white spruce have no dead art. Juvenile canvases range from 4×4 to
   128×128, so one shared dead-sprout bitmap is not a viable substitute.
-- Saguaro issue #1688 and PR #1725 add a 48×48 sprout, mature seasonal variants,
-  and one adult dead skeleton, but deliberately do not add dead-juvenile or
-  cause-specific art.
+- Saguaro issue #1688 and PR #1725 (merged) added a 48×48 sprout, mature
+  seasonal variants, and one adult dead skeleton, but deliberately did not add
+  dead-juvenile or cause-specific art.
+- PR #2136 (merged 2026-09-01, closing #1787) added approved wild and
+  cultivated wheat families under `assets/textures/flora/wheat/{wild,cultivated}/`,
+  each with sprout, dormant, budding, flowering, senescing, and dead art.
+  `data/flora/crops.yaml` still points wheat at white clover because no
+  wild/cultivated selector exists; #1787's blocked follow-on items 1–3 are
+  what EFM-2 through EFM-4 deliver, and pointing wheat at the art remains a
+  separate content-integration issue after this arc.
 
 ### Wild and cultivated flora
 
@@ -145,10 +152,14 @@ concrete precondition
   it with externally caused persistent condition rather than duplicating it.
 - Closed #334 owns the two cultivated growth forms; this arc gives those forms
   explicit render context and persistent condition rather than replacing them.
-- Saguaro issue #1688 and PR #1725 remain open. They own the base saguaro
+- Saguaro issue #1688 and PR #1725 are merged. They own the base saguaro
   texture set, while this arc owns mortality state, fallback, retention, and
-  the later pilot extensions; they are a prerequisite input, not an overlapping
-  epic.
+  the later pilot extensions; they were a prerequisite input, not an
+  overlapping epic.
+- Epic #2236 (flora species identity by authored name; children #2241 and
+  #2243 merged) is adjacent: this arc consumes name-keyed species identity and
+  adds per-occurrence identity without reopening it.
+- This arc's umbrella is epic #2526; EFM-1 is #2530.
 
 ## Desired experience
 
@@ -408,8 +419,15 @@ art exists. The accepted species-level declaration shape is:
 corpsePolicy:
   visibility: transient       # transient | persistent
   durationDays: 60            # required only for transient remains
-  successor: reseed           # reseed | absent | await_replanting
+  successor: reseed           # reseed | absent — the WILD-context outcome
 ```
+
+`successor` names what follows a transient corpse in the `wild` render context
+only (D-19). A `cultivated` occurrence never reads it: at the end of its corpse
+window a dead row crop or groundcover plot becomes empty and awaits deliberate
+replanting by rule (D-13). `await_replanting` is therefore a documented
+cultivated outcome, not a species-level YAML token, and a definition that
+declares it is rejected like any other unknown vocabulary.
 
 Sparse phase/cause overrides are added only where a real behavior needs
 them—for example, a tree sprout is transient even when a mature woody corpse is
@@ -427,7 +445,10 @@ category at runtime. Mature trees persist regardless of death cause; tree
 sprouts, wildflowers, grasses, ferns, and crops are transient. Individual bush
 policies are explicit: the current bracken fern and red raspberry definitions
 are both transient for 60 days, while future woody shrubs may opt into
-persistent remains.
+persistent remains. Cacti are a distinct structural class rather than a kind
+of tree, but take the tree default (D-20): saguaro, the only shipped cactus and
+the pilot species, declares a persistent mature corpse with a transient
+60-day reseeding sprout override and keeps its perennial growth lifecycle.
 
 ### Stable occurrence identity
 
@@ -554,6 +575,7 @@ whether age, fire, drought, disease, or damage killed them. Tree sprouts,
 wildflowers, grasses, ferns, and crops use the 60-day transient policy. Bushes
 are intentionally decided per species rather than forced into either class.
 Cause changes the preferred art but does not override this structural default.
+Cacti are their own class under D-20 and take the same default as trees.
 
 ### D-13. Transient wild flora reseeds; cultivated flora awaits replanting
 
@@ -561,7 +583,9 @@ At the end of its corpse window, transient wild flora advances to a new
 generation, preserving the existing ecological behavior and allowing the
 condition record to be compacted. Cultivated row and groundcover crops instead
 become empty and remain so until deliberately replanted; death never replants a
-field for the player.
+field for the player. The cultivated outcome is a rule of the render context,
+not authored content: see D-19 for how the species-level `successor` relates
+to it.
 
 ### D-14. Corpse policy is explicit species data
 
@@ -602,10 +626,54 @@ Their shared `bush` placement category does not imply that every future shrub
 must do the same; a genuinely woody shrub can explicitly declare persistent
 remains under D-14.
 
+### D-19. The species `successor` names the wild-context outcome only
+
+`corpsePolicy.successor` accepts `reseed` or `absent` and describes what
+follows a transient corpse when the occurrence is `wild`. A `cultivated`
+occurrence ignores it: by D-13 it becomes empty and awaits deliberate
+replanting. `await_replanting` is documented as that cultivated outcome and is
+rejected as a species-level token. Consequences: a crop species that can also
+grow wild (wheat, tomato) declares only its wild successor; the schema stays
+one scalar; and D-13 remains a rule rather than content. Rejected
+alternatives: a per-context map (`successor: {wild: …, cultivated: …}`),
+which would let content contradict D-13; and a single scalar applied in every
+context, which would force each crop to choose between reseeding a field and
+never reseeding in the wild. Decided 2026-09-07.
+
+### D-20. Cacti are a structural class with the tree retention default
+
+Cacti are their own structural class under D-12 rather than trees or
+herbaceous flora, but their corpse policy is the tree default: mature remains
+are `persistent` until cleared or replaced regardless of cause, matching the
+landed adult skeleton art, and the sprout carries a transient 60-day `reseed`
+override exactly as tree sprouts do. Their growth lifecycle is unchanged:
+saguaro keeps `lifecycle: perennial` with its authored lifespan range, and no
+new `lifecycle:` vocabulary is added. The class exists so a future cactus is
+authored deliberately rather than by analogy to a tree, and so a later
+cactus-specific behavior has a named home; it introduces no new mechanism in
+this arc. Saguaro, the pilot (D-16), is therefore authored with a persistent
+mature corpse and a transient sprout, and EFM-9 proves both boundaries.
+Rejected alternative: a new cactus `lifecycle:` value changing how cacti age
+and die, which would have reached the loader vocabulary, growth code, and
+schema tests for no behavior the design needs. Decided 2026-09-07.
+
 ## Open questions
 
-All ten design questions are resolved below; they remain listed to preserve the
-decision history and rejected alternatives.
+All eleven design questions are resolved below; they remain listed to preserve
+the decision history and rejected alternatives.
+
+### Q-11. What is the cactus class's lifecycle?
+
+Resolved by D-20. Saguaro today declares `lifecycle: perennial` with
+`minLife: 18000`, `maxLife: 54000`, and a `deathChance` the growth code
+ignores, so it dies at a rolled lifespan, shows `dead.png` for the universal
+60-day window, and reseeds like every other mortal species. The question was
+whether "its own lifecycle" meant a new `lifecycle:` value changing how cacti
+age and die, or only a class-level corpse-retention default. The second
+reading won: cacti keep perennial growth and take the tree retention default
+(persistent mature skeleton, transient sprout). The rejected new-lifecycle
+reading would have reached the loader vocabulary, growth code, schema tests,
+and possibly worldgen output for no behavior the design needs.
 
 ### Q-1. Does indefinite persistence replace natural lifecycle reseeding?
 
@@ -647,14 +715,17 @@ drought/frost art.
 
 Resolved by D-12. Mature trees persist for every cause. Tree sprouts,
 wildflowers, grasses, ferns, and crops are transient for 60 days. Bushes are
-authored individually; the current bush manifest remains Q-10.
+authored individually; the current bush manifest remains Q-10. Cacti were not
+covered and are now their own class under D-20, taking the tree default
+(Q-11).
 
 ### Q-8. What succeeds a transient corpse after its 60-day window?
 
 Resolved by D-13. Wild flora reseeds, preserving the current generational
 behavior. Cultivated crops become empty and await deliberate replanting. The
 rejected uniform-reseed alternative would have made crop death automatically
-replant the player's field.
+replant the player's field. D-19 settles how the species-level `successor`
+relates to the cultivated rule.
 
 ### Q-9. Is corpse policy always declared per species?
 
@@ -735,13 +806,17 @@ remains.
 - **Phase:** Foundation
 - **Depends on:** EFM-1
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-2, D-3, D-5, D-7, D-9 through D-15, D-18
+- **Relevant decisions:** D-2, D-3, D-5, D-7, D-9 through D-15, D-18 through
+  D-20
 - **Acceptance signals:** Duplicate and unknown selectors fail clearly; a
   one-texture species and every current flora definition still load; invalid
-  duration/successor combinations fail clearly; repository-owned definitions
-  declare policy while a legacy omission receives the compatibility default.
+  duration/successor combinations fail clearly, including `await_replanting`
+  as a species token; every one of the sixteen repository-owned definitions
+  declares its policy while a legacy omission receives the compatibility
+  default.
 - **Out of scope:** Choosing variants during rendering or adding assets.
-- **Open questions:** None
+- **Open questions:** None; saguaro's policy follows D-20 and no `lifecycle:`
+  vocabulary changes.
 
 ### EFM-3. Resolve flora textures through the canonical fallback lattice
 
@@ -838,9 +913,12 @@ remains.
 - **Depends on:** EFM-7
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-5, D-6, D-9, D-10, D-12 through D-14, D-18
+  through D-20
 - **Acceptance signals:** A 60-day transient corpse crosses its boundary once
   without accidental revival; a persistent corpse survives that boundary,
-  eviction, and reload; expired state is compacted when its successor permits.
+  eviction, and reload; expired state is compacted when its successor permits;
+  a cultivated corpse becomes an empty awaiting-replanting site regardless of
+  the species' wild `successor`.
 - **Out of scope:** Hazard simulation, staged decomposition, nutrients,
   salvage, and unit cleanup jobs.
 - **Open questions:** None
@@ -872,13 +950,14 @@ remains.
 - **Phase:** Pilot
 - **Depends on:** EFM-10, EFM-8
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-2 through D-17
+- **Relevant decisions:** D-2 through D-17, D-19, D-20
 - **Acceptance signals:** Exact dead-juvenile art wins when present; a deliberately
   omitted combination follows the documented fallback; a base-only fixture
-  remains renderable; the selected corpse policy crosses or survives its
+  remains renderable; the cactus-class corpse policy crosses or survives its
   retention boundary correctly; persistence and preview pass.
 - **Out of scope:** Real environmental hazard producers and bulk art backfill.
-- **Open questions:** None
+- **Open questions:** None; the pilot proves the persistent mature corpse and
+  the transient sprout that D-20 authors.
 
 ## Future texture-family backfill candidates
 
