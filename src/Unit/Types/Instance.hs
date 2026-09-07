@@ -52,12 +52,12 @@ data UnitInstance = UnitInstance
       --   higher-depth pose to a lower-depth one (the same asset is
       --   shared with the forward direction).
     , uiActivity    ∷ !Text
-      -- ^ Mirror of sim usState as a Text label: "idle" / "walking" /
-      --   "drinking" / "pickup" / "transitioning". Pose is published
+      -- ^ Mirror of sim usState as a Text label; the full label set is
+      --   owned by `Unit.Thread.activityLabel`. Pose is published
       --   separately as `uiPose`.
     , uiPose        ∷ !Text
-      -- ^ Mirror of sim usPose: "standing" / "crouching" / "crawling"
-      --   / "collapsed". Read by Lua via `unit.getPose`.
+      -- ^ Mirror of sim usPose as a Text label; the full label set is
+      --   owned by `Unit.Anim.poseTag`. Read by Lua via `unit.getPose`.
     , uiAnimStride  ∷ !Int
       -- ^ Frame stride for the current anim. 1 = play all frames.
       --   N>1 = skip frames (render every Nth), making the anim
