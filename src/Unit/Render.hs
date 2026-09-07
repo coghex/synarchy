@@ -292,20 +292,22 @@ unitToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst mDef
             -- Far-side climb occlusion: while climbing onto a cliff
             -- column whose faced row is ahead of the unit's base tile,
             -- override the key instead of using normalSort. normalSort
-            -- follows the unit's CURRENT continuous foot row (faF+fbF —
+            -- is the unit's CURRENT continuous foot row (faF+fbF —
             -- frozen at the base during the wall phase, interpolating
-            -- toward dest during pullup; see Climb.tickClimbZ/tickPullup),
-            -- which can still place the climber ahead of the destination
+            -- toward dest during pullup; see Climb.tickClimbZ/tickPullup)
+            -- plus its z tiebreak and 2x nudge above; though the foot
+            -- row itself stays between base and dest, those added terms
+            -- can still push normalSort ahead of the destination
             -- column's row. destRow - 0.5 instead fixes the key just
-            -- behind the integer destination row: against integer screen
-            -- rows it sorts after every row through destRow-1 and before
-            -- destRow itself, for both a one-row cardinal climb and a
-            -- two-row diagonal one — so the cliff hides the climber
-            -- instead (no sprite-height term does this; see :277-285).
-            -- Only applies while the unit is still on the base side (its
-            -- tile ≠ the dest column); once the pullup carries its xy
-            -- onto the top tile it falls back to normalSort and emerges
-            -- in front.
+            -- behind the integer destination row: against integer
+            -- screen rows it sorts after every row through destRow-1
+            -- and before destRow itself, for both a one-row cardinal
+            -- climb and a two-row diagonal one — so the cliff hides the
+            -- climber instead (no sprite-height term does this; see
+            -- :277-285). Only applies while the unit is still on the
+            -- base side (its tile ≠ the dest column); once the pullup
+            -- carries its xy onto the top tile it falls back to
+            -- normalSort and emerges in front.
             baseTile = (floor (uiGridX inst) ∷ Int, floor (uiGridY inst) ∷ Int)
             sortKey = case uiClimbDest inst of
                 Just dest@(dx, dy) | baseTile ≢ dest →
