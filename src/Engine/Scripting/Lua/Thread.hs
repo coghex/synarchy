@@ -339,9 +339,10 @@ luaTick env lls = do
     -- persists across every later quiescence pass by
     -- design (Engine.Save.Barrier.acknowledgeSave's special
     -- casing), so this loop never needed a per-tick
-    -- acknowledgeCurrent the way Unit/Combat/Simulation/
-    -- Input do -- but that also meant nothing stopped THIS
-    -- loop's own NEXT tick from processing debug commands,
+    -- acknowledgeCurrent the way owners such as
+    -- Unit/Building/Simulation/Input do -- but that also meant
+    -- nothing stopped THIS loop's own NEXT tick from processing
+    -- debug commands,
     -- queued Lua messages, or script updates while
     -- captureLocked was still True. Concretely: once
     -- handleLoadStaged (dispatched from a PRIOR tick's
