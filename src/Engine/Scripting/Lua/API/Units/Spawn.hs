@@ -579,10 +579,13 @@ unitKillFn env = do
             return 1
 
 -- | unit.transitionTo(uid, poseName, stride?) — initiate a pose
---   transition. poseName is one of "standing", "crouching", "crawling",
---   "collapsed". Optional stride defaults to 1; pass 2 (or higher) to
---   skip frames when chaining transitions back-to-back.
---   No-op if the unit is already in that pose or mid-transition.
+--   transition. poseName is any value `parsePose` accepts: "standing",
+--   "crouching", "crawling", "collapsed", "climbing", "falling",
+--   "sleeping". "dead" is refused — `Dead` is terminal and is entered
+--   only via `UnitKill`, never via a pose transition. Optional stride
+--   defaults to 1; pass 2 (or higher) to skip frames when chaining
+--   transitions back-to-back. No-op if the unit is already in that pose
+--   or mid-transition.
 unitTransitionToFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 unitTransitionToFn env = do
     idArg     ← Lua.tointeger 1
