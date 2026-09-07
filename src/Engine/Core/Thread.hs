@@ -236,8 +236,17 @@ data WorkerSpec ε σ = WorkerSpec
     , wsStartingMsg ∷ T.Text
       -- ^ Logged at info level as the first thing inside the guard.
     , wsStartedMsg  ∷ Maybe T.Text
-      -- ^ Logged at info level after the fork. 'Nothing' for the two
-      --   workers (Input, Lua) that have never emitted a post-fork line.
+      -- ^ Logged at info level after the fork. 'Nothing' for every
+      --   production worker since #1934: a healthy boot logs ONE info
+      --   line per worker, 'wsStartingMsg'. The post-fork line was
+      --   never the only evidence of either outcome — the five workers
+      --   started through 'startWorkerThread' cannot refuse, so what
+      --   remains is success or an exception, and an exception is
+      --   already announced by 'logStartFailure' at the worker's own
+      --   'wsFailLevel' before the typed 'EngineException' is
+      --   rethrown. Kept as the per-worker knob the lifecycle specs
+      --   exercise, and as where a debug-level post-fork line would
+      --   attach if thread-race diagnosis ever needs one back.
     , wsFailMsg     ∷ T.Text
       -- ^ Prefix of the startup-failure line; the exception's own text
       --   is appended.
