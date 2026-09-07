@@ -18,10 +18,10 @@
 --       bytes (the compiler encodes them; the tables below are already
 --       @ByteString@s).
 --
---   Prefixing all four of those components — tag, and every label and
---   value — is what makes the stream injective: a bare concatenation
---   would let a character move across a field boundary without
---   changing the hash.
+--   Prefixing EVERY one of those byte strings — the tag, and each
+--   field's label as well as its value — is what makes the stream
+--   injective: a bare concatenation would let a character move across
+--   a field boundary without changing the hash.
 --
 --     * 'atlasContentDigest' — over one atlas's decoded RGBA8 CONTENT
 --       (dimensions + samples), never its file bytes, so it stays
