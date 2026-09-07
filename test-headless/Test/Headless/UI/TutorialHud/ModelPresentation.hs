@@ -146,6 +146,42 @@ instance FromJSON BoundaryProbe where
 spec ∷ SpecWith Fixture
 spec = do
 
+    describe "same-pass expedition completion (#2301)" $
+        it "shows all three completed shipped rows until an open panel is rendered" $ \(env, ls) → do
+            resetFixture env ls
+            prepared ← evalOk ls $ luaLines
+                [ bootAt 1280 720 "nil"
+                , "engine.loadTutorialDir('data/tutorials'); tp.setTree(engine.getTutorialTree());"
+                , "tp.setSubobjectiveChecked('first_session_prepare_water', true);"
+                , "tp.setSubobjectiveChecked('first_session_prepare_food', true);"
+                , "for _, id in ipairs({'place_portal','secure_water','prepare_expedition','confront'}) do"
+                , "  tp.completeObjective('first_session_'..id) end;"
+                , "tp.completeObjectives({'first_session_recover','first_session_secure','first_session_clear'});"
+                , "th.update(0); th.update(0);"
+                , "assert(#th.dump().rows == 0);"
+                , "assert(tp.stickyActive.first_session_recover and tp.stickyActive.first_session_secure"
+                , "       and tp.stickyActive.first_session_clear); return true"
+                ]
+            prepared `shouldBe` "true"
+            opened ← evalOk ls $ luaLines
+                [ reModules
+                , "th.setOpen(true); th.update(0); th.update(0); local d=th.dump();"
+                , "assert(table.concat(d.rowIds, ',') =="
+                , " 'first_session_recover,first_session_secure,first_session_clear');"
+                , "local labels={'Recover significant loot','Secure the recovered item','Clear a location'};"
+                , "for i,r in ipairs(d.rows) do assert(r.marker=='[x]' and r.label==labels[i] and r.depth==i+3) end;"
+                , "assert(tp.stickyActive.first_session_recover); return true"
+                ]
+            opened `shouldBe` "true"
+            renderSnapshot env
+            retired ← evalOk ls $ luaLines
+                [ reModules
+                , "th.update(0); th.update(0); assert(#th.dump().rows==0);"
+                , "for _,id in ipairs({'recover','secure','clear'}) do"
+                , " assert(tp.isCompleted('first_session_'..id)) end; return true"
+                ]
+            retired `shouldBe` "true"
+
     describe "rendering the #958 view model (requirements 1/3/4)" $ do
         it "renders the shipped YAML tree's own labels and tooltips, revealing rows as objectives latch" $ \(env, ls) → do
             resetFixture env ls

@@ -41,6 +41,13 @@ EXPEDITION_WATER_L = 2.0
 OBJ_PORTAL = "first_session_place_portal"
 OBJ_WATER = "first_session_secure_water"
 OBJ_EXPEDITION = "first_session_prepare_expedition"
+OBJ_CONFRONT = "first_session_confront"
+OBJ_RECOVER = "first_session_recover"
+OBJ_SECURE = "first_session_secure"
+OBJ_CLEAR = "first_session_clear"
+# A completed preparation still waits for its child and shows live supplies.
+PREP_CONTINUATION = [OBJ_EXPEDITION, OBJ_CONFRONT, "first_session_prepare_water",
+                     "first_session_prepare_food"]
 SUB_WATER = "first_session_prepare_water"
 SUB_FOOD = "first_session_prepare_food"
 

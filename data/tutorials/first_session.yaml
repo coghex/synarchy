@@ -11,7 +11,7 @@
 # is what makes "unknown reference", "multiple parents", and "cycle"
 # real, checkable failure classes.
 #
-# Two structural relationships, mutually exclusive per objective:
+# Two structural relationships (a composite may declare both):
 #   children       — full objectives gated by this objective's completion.
 #   subobjectives  — the live component requirements of a COMPOSITE
 #                    objective (different completion semantics; the
@@ -20,7 +20,7 @@
 # `kind` is explicit so it can disagree with the relationship authored
 # (an invalid combination is a load-time error, not a silent coercion):
 #   full          — may declare `children`, never `subobjectives`.
-#   composite     — must declare `subobjectives`, never `children`.
+#   composite     — must declare `subobjectives`, may declare `children`.
 #   subobjective  — a leaf; may only be named from a `subobjectives` list.
 #
 # `evaluator` is the stable key the Lua tutorial runtime will dispatch on
@@ -34,8 +34,13 @@
 #   Place portal
 #     -> Secure water source
 #       -> Prepare an expedition
+#            -> Resolve a ruin encounter
+#                 -> Recover significant loot
+#                      -> Secure the recovered item
+#                           -> Clear a location
 #            - Prepare water
 #            - Prepare food
+# Children precede subobjectives in the exposed pre-order.
 id: first_session
 
 objectives:
@@ -63,6 +68,8 @@ objectives:
     tooltip: "Stock enough supplies for an acolyte to travel and return."
     evaluator: prepare_expedition
     order: 1
+    children:
+      - first_session_confront
     subobjectives:
       - first_session_prepare_water
       - first_session_prepare_food
@@ -80,3 +87,37 @@ objectives:
     tooltip: "Carry enough food for the trip out and back."
     evaluator: prepare_food
     order: 2
+
+  - id: first_session_confront
+    kind: full
+    label: "Resolve a ruin encounter"
+    tooltip: "Discover an empty ruin, or engage and defeat the occupants of an occupied ruin."
+    evaluator: confront
+    order: 1
+    children:
+      - first_session_recover
+
+  - id: first_session_recover
+    kind: full
+    label: "Recover significant loot"
+    tooltip: "A known location’s significant item must be picked up."
+    evaluator: recover
+    order: 1
+    children:
+      - first_session_secure
+
+  - id: first_session_secure
+    kind: full
+    label: "Secure the recovered item"
+    tooltip: "Have a living player acolyte carry that exact recovered item."
+    evaluator: secure
+    order: 1
+    children:
+      - first_session_clear
+
+  - id: first_session_clear
+    kind: full
+    label: "Clear a location"
+    tooltip: "Finish a known location’s encounter and take its significant loot."
+    evaluator: clear
+    order: 1

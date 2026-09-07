@@ -196,6 +196,45 @@ withTP pre body = lns (pre : body)
 spec ∷ Spec
 spec = describe "Tutorial progress" $ do
 
+    describe "composite continuation and completion batches (#2301)" $ do
+        it "preserves both composite relationships and child-before-subobjective order" $ runsOk $ withTP prelude
+            [ "local t=fixtureTree(); local prep=t.root.children[1].children[1]"
+            , "local clear={id='clear',kind='full',children={},subobjectives={}}"
+            , "local secure={id='secure',kind='full',children={clear},subobjectives={}}"
+            , "local recover={id='recover',kind='full',children={secure},subobjectives={}}"
+            , "local confront={id='confront',kind='full',children={recover},subobjectives={}}"
+            , "prep.children={confront}; TP.setTree(t)"
+            , "TP.completeObjective('place_portal'); TP.completeObjective('secure_water')"
+            , "TP.setSubobjectiveChecked('prepare_water',true); TP.setSubobjectiveChecked('prepare_food',true)"
+            , "TP.completeObjective('prepare_expedition')"
+            , "local m=TP.getViewModel()"
+            , "assert(activeIds(m)=='prepare_expedition,confront,prepare_water,prepare_food',activeIds(m))"
+            , "TP.completeObjective('confront'); m=TP.getViewModel()"
+            , "assert(activeIds(m)=='confront,recover',activeIds(m))"
+            , "TP.setSubobjectiveChecked('prepare_water',false)"
+            , "assert(rowById(TP.getViewModel(),'prepare_expedition').active)"
+            ]
+
+        it "retains a same-batch cascade but hides ordinary later completions" $ runsOk $ withTP prelude
+            [ "local t=fixtureTree(); local prep=t.root.children[1].children[1]"
+            , "local clear={id='clear',kind='full',children={},subobjectives={}}"
+            , "local secure={id='secure',kind='full',children={clear},subobjectives={}}"
+            , "local recover={id='recover',kind='full',children={secure},subobjectives={}}"
+            , "local confront={id='confront',kind='full',children={recover},subobjectives={}}"
+            , "prep.children={confront}; TP.setTree(t)"
+            , "TP.completeObjective('place_portal'); TP.completeObjective('secure_water')"
+            , "TP.setSubobjectiveChecked('prepare_water',true); TP.setSubobjectiveChecked('prepare_food',true)"
+            , "TP.completeObjective('prepare_expedition'); TP.completeObjective('confront')"
+            , "TP.completeObjectives({'recover','secure','clear'})"
+            , "assert(activeIds(TP.getViewModel())=='recover,secure,clear',activeIds(TP.getViewModel()))"
+            , "TP.acknowledgePresented({'recover','secure','clear'})"
+            , "assert(activeIds(TP.getViewModel())=='')"
+            , "TP.reset(); TP.setTree(t); TP.completeObjective('place_portal'); TP.completeObjective('secure_water')"
+            , "TP.completeObjective('prepare_expedition'); TP.completeObjective('confront')"
+            , "TP.completeObjective('recover'); TP.completeObjective('secure'); TP.completeObjective('clear')"
+            , "assert(not rowById(TP.getViewModel(),'clear').active, 'later completion was incorrectly suppressed')"
+            ]
+
     describe "fresh state" $ do
         it "starts with nothing completed and only the root \
            \display-eligible" $ runsOk $ withTP prelude
