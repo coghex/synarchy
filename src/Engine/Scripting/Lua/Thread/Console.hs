@@ -3,6 +3,7 @@
 --   of ordinary debug-console commands (handled on it).
 module Engine.Scripting.Lua.Thread.Console
   ( processDebugCommands
+  , processDebugCommandsBounded
   , debugBuiltin
   , executeDebugLua
   ) where
@@ -54,6 +55,42 @@ processDebugCommands lst debugQueue = do
                 result ← executeDebugLua lst (dcCommand cmd)
                 completeDebugCommand cmd result
             processDebugCommands lst debugQueue
+
+-- | 'processDebugCommands', bounded and interruptible (#2415).
+--
+--   Answers with how many entries it DEQUEUED, cancelled ones included.
+--   A cancelled entry is skipped unrun exactly as above, but it still
+--   costs a slot: dequeuing is the work being budgeted, and a client
+--   cancelling faster than this drain runs would otherwise be an
+--   unbounded source of free work that the budget never sees.
+--
+--   @admitted@ is consulted BEFORE each poll and never after, so an
+--   entry this drain has taken off the queue is always resolved —
+--   claimed and run, or found already cancelled — and a save or load
+--   transaction that a preceding command started stops the batch without
+--   stranding a dequeued command. Everything left is still queued, in
+--   order.
+--
+--   The exhaustive drain above is untouched and remains what its own
+--   callers use; this is the scheduler's entry point and nothing else's.
+processDebugCommandsBounded ∷ Lua.State → TQueue DebugCommand → Int
+                            → IO Bool → IO Int
+processDebugCommandsBounded lst debugQueue limit admitted = go 0
+  where
+    go n
+      | n ≥ limit = return n
+      | otherwise = do
+          ok ← admitted
+          if not ok then return n else do
+            mCmd ← pollDebugCommand debugQueue
+            case mCmd of
+                Nothing → return n
+                Just cmd → do
+                    claimed ← claimDebugCommand cmd
+                    when claimed $ do
+                        result ← executeDebugLua lst (dcCommand cmd)
+                        completeDebugCommand cmd result
+                    go (n + 1)
 
 -- | Debug-console BUILT-INS, run on the per-connection client thread
 --   (see 'startDebugServer') so they never block the single Lua thread.

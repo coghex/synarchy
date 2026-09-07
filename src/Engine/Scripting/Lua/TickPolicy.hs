@@ -69,8 +69,8 @@ minTickInterval ∷ Double
 minTickInterval = 0.001
 
 -- | The scheduler's sleep floor, in seconds. Kept here rather than
---   inline in "Engine.Scripting.Lua.Thread" so 'minTickInterval' and
---   the floor cannot drift apart.
+--   inline in "Engine.Scripting.Lua.Thread.Scheduler" so
+--   'minTickInterval' and the floor cannot drift apart.
 minSleepSeconds ∷ Double
 minSleepSeconds = 0.001
 

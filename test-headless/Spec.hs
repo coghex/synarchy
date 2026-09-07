@@ -145,6 +145,7 @@ import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Equipment.Reconcile as EquipmentReconcile
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
+import qualified Test.Headless.Lua.SchedulerFairness as LuaSchedulerFairness
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
 import qualified Test.Headless.Input.LayerA as InputLayerA
 import qualified Test.Headless.Input.WheelPolicy as InputWheelPolicy
@@ -437,6 +438,7 @@ main = hspec $ do
         describe "Lua.PauseGate" LuaPauseGate.spec
         describe "Lua.ScriptState" LuaScriptState.spec
         LuaTickInterval.spec
+        LuaSchedulerFairness.spec
         -- Same technique as Input.Followup above: F4 (#730) Layer A's
         -- non-click producers live inside Engine.Input.Thread's real
         -- processInputs, driven directly against the live EngineEnv.
@@ -634,6 +636,11 @@ main = hspec $ do
     -- only observable while no world worker is draining worldQueue. It
     -- installs its own single-page manager and finishes each accepted
     -- call by invoking the production command handler directly.
+    -- #2415: the scheduler's load cutover needs a world-thread-FREE
+    -- engine. A successful cutover ends in commitLoadPublish, which
+    -- queues WorldLoadPublish; a running world worker would pick that
+    -- up and try to publish a staged session that does not exist.
+    aroundAll withHeadlessEngineNoWorld LuaSchedulerFairness.cutoverSpec
     aroundAll withHeadlessEngineNoWorld TimeScaleDomain.spec
     -- #2310: which PAGE bulk chunk work is admitted to, and which page
     -- the wait watches. The defect lives entirely in the window between
