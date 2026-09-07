@@ -4,10 +4,24 @@
 --   them.
 --
 --   Both are @sha256@ over a canonical, length-prefixed stream of
---   labelled fields (the compiler's @digest_stream@): the domain tag,
---   then each field as @\<u64 LE length\>\<bytes\>@. The length prefixes
---   are what make the stream injective — a bare concatenation would let
---   a character move across a field boundary without changing the hash.
+--   labelled fields, byte for byte the one the compiler's
+--   @digest_stream@ builds (@tools\/pack_atlas_compiler.py@ since
+--   #2054; @tools\/pack_atlas.py@ is now only the CLI facade over it).
+--   Every length is a @u64@ LITTLE-ENDIAN count of the bytes
+--   IMMEDIATELY FOLLOWING it, and the whole stream is:
+--
+--     * @\<u64 LE len(tag)\>\<tag\>@ — the domain tag is itself
+--       prefixed, before any field;
+--     * then, per field in order, TWO prefixed byte strings, the label
+--       first: @\<u64 LE len(label)\>\<label\>@ immediately followed
+--       by @\<u64 LE len(value)\>\<value\>@. Labels are their UTF-8
+--       bytes (the compiler encodes them; the tables below are already
+--       @ByteString@s).
+--
+--   Prefixing all four of those components — tag, and every label and
+--   value — is what makes the stream injective: a bare concatenation
+--   would let a character move across a field boundary without
+--   changing the hash.
 --
 --     * 'atlasContentDigest' — over one atlas's decoded RGBA8 CONTENT
 --       (dimensions + samples), never its file bytes, so it stays
