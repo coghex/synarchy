@@ -1,10 +1,18 @@
 {-# LANGUAGE Strict #-}
 -- | Screen-pixel → UnitId hit testing.
 --
--- Given mouse coordinates in framebuffer pixels, find which (if any)
--- spawned unit is under the cursor. Mirrors the screen→world projection
--- in `World/Render/CursorQuads.hs::renderWorldCursorQuads::hitTest` and
--- the per-unit sprite math in `Unit/Render.hs::unitToQuad`.
+-- Given mouse coordinates in window pixels, find which (if any) spawned
+-- unit is under the cursor, mirroring the per-unit sprite math in
+-- `Unit/Render.hs::unitToQuad`. The world's tile projection lives in
+-- `World.Render.HitTest.pickWorldTile`; this module keeps its OWN copy
+-- of the screen→world step below rather than calling it, deriving the
+-- aspect ratio from the WINDOW size and guarding with `windowDegenerate`
+-- rather than `pickWorldTile`'s framebuffer aspect and
+-- `viewportDegenerate` — the two guard families
+-- `Engine.Graphics.Viewport` documents. So this hit test, unlike the
+-- synchronous Lua tile pick (`world.pickTile`), is NOT covered by
+-- `pickWorldTile`'s can't-drift guarantee: it is a third, independent
+-- consumer of the same kind of projection.
 --
 -- The hit box is sized from the frame the renderer is DRAWING
 -- (`Unit.Render.pickFrame`, via `unitHitRect`), not from the static
@@ -47,7 +55,7 @@ import Unit.Types
 import Unit.Render (pickFrame)
 import Unit.Sprite (resolveTexture)
 
--- | Hit test at framebuffer-pixel coordinates. Returns the topmost
+-- | Hit test at window-pixel coordinates. Returns the topmost
 --   (highest-Z) unit whose sprite quad contains the click, or Nothing.
 hitTestUnitAt ∷ EngineEnv → Double → Double → IO (Maybe UnitId)
 hitTestUnitAt env pixX pixY = do
@@ -79,8 +87,9 @@ hitTestUnitAt env pixX pixY = do
                                (max 8 (round (zoom * 80.0 + 8.0 ∷ Float)))
                 (camX, camY) = camPosition camera
 
-                -- Screen pixel → world coord. Same math as the tile
-                -- hit-test in `renderWorldCursorQuads::hitTest`:
+                -- Screen pixel → world coord: this module's own copy of
+                -- the projection (see the module haddock above for how
+                -- it differs from `pickWorldTile`'s):
                 --   normX/Y in [0..1]
                 --   viewX/Y in [-vw..vw] / [-vh..vh] world units
                 --   worldX/Y = camera position + view offset

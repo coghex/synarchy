@@ -286,13 +286,24 @@ resolveItemDir root item
                                     then Right candidate
                                     else Left ItemDirEscapesRoot
 
--- | True if 'root' followed by any prefix of 'segs' (checked
---   incrementally, root-outward) is itself a symlink — every ancestor
---   directory as well as the final leaf, so a symlinked directory
---   further up the chain can't smuggle a file discovery would never
---   have reached (walkFiles skips a symlinked directory the moment it's
---   encountered, at whatever depth; this mirrors that one level at a
---   time instead of jumping straight to the final candidate path).
+-- | True if any NON-EMPTY prefix of 'segs', joined onto 'root' and
+--   checked incrementally root-outward, is itself a symlink — that is,
+--   every directory strictly below 'root' along the way plus the final
+--   leaf, so a symlinked directory further up the chain can't smuggle a
+--   file discovery would never have reached ('walkFiles' skips a
+--   symlinked directory the moment it's encountered, at whatever depth;
+--   this mirrors that one level at a time instead of jumping straight
+--   to the final candidate path).
+--
+--   'root' ITSELF is deliberately NOT tested: the empty prefix is the
+--   @go _ [] = pure False@ base case, which answers before any lstat.
+--   That is the boundary the two paths have to share, and they do —
+--   'discoverEntries' accepts a symlinked category root the same way,
+--   applying only 'doesDirectoryExist' to 'root' (which follows
+--   symlinks) and leaving 'walkFiles' to begin its own symlink checks
+--   one level below, at @root \</\> name@. So a bare category listing
+--   and a typed-out item target agree about the root exactly as they
+--   agree about every level beneath it (see 'FocusSymlink').
 anySegmentIsSymlink ∷ FilePath → [String] → IO Bool
 anySegmentIsSymlink root = go root
   where
