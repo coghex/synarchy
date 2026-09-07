@@ -45,7 +45,9 @@ startWorldThread env = startWorkerThread WorkerSpec
     , wsLifecycleRef = ccLifecycleRef (toCoreCapability env)
     , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting world thread..."
-    , wsStartedMsg  = Just "World thread started"
+      -- No worker logs a post-fork line (#1934); a healthy boot's
+      -- one info line per worker is 'wsStartingMsg'.
+    , wsStartedMsg  = Nothing
     , wsFailMsg     = "Failed starting world thread: "
     , wsFailLevel   = WorkerFailError
     , wsFailFatal   = "World thread start failure."

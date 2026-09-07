@@ -74,7 +74,9 @@ startUnitThread env = startWorkerThread WorkerSpec
     , wsLifecycleRef = lifecycleRef env
     , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting unit thread..."
-    , wsStartedMsg  = Just "Unit thread started"
+      -- No worker logs a post-fork line (#1934); a healthy boot's
+      -- one info line per worker is 'wsStartingMsg'.
+    , wsStartedMsg  = Nothing
     , wsFailMsg     = "Failed starting unit thread: "
     , wsFailLevel   = WorkerFailError
     , wsFailFatal   = "Unit thread start failure."
