@@ -6,15 +6,15 @@ Status legend: `[ ]` unprocessed · `[#N]` filed · `[no-issue]` deliberately no
 
 ## Status
 
-- [ ] CH-1. Lua stance recovery can overwrite a concurrent combat charge
-- [ ] CH-2. Lua stamina updates can erase combat costs and bypass exhaustion checks
+- [x] CH-1. Lua stance recovery can overwrite a concurrent combat charge — [#2468]
+- [x] CH-2. Lua stamina updates can erase combat costs and bypass exhaustion checks — [#2470]
 - [x] CH-3. Timed Lua updates can starve behind sustained message traffic — [#2415]
-- [ ] CH-4. The world calendar discards fractional minutes and cannot advance at default speed
-- [ ] CH-5. Movement discards remaining elapsed time when reaching a path waypoint
+- [x] CH-4. The world calendar discards fractional minutes and cannot advance at default speed — [#2471]
+- [x] CH-5. Movement discards remaining elapsed time when reaching a path waypoint — [#2473]
 
 ## Shared unit resource mutations
 
-### CH-1. Lua stance recovery can overwrite a concurrent combat charge
+### [#2468] CH-1. Lua stance recovery can overwrite a concurrent combat charge
 
 **Severity:** Medium
 
@@ -45,7 +45,7 @@ Observed: initial stance 0.600; concurrent charge leaves 0.350; recovery writes 
 - **Deduplication:** Searched primary and docs-worktree findings/designs and the live tracker for stance and shared-stat overwrite concerns. Closed #2328 covers atomic strike admission/cost, not this subsequent Lua overwrite. #1890 is related mutation-authority infrastructure. No matching open issue was identified; no issue was filed.
 - **Remaining uncertainty:** This is a deterministic reproduction of the actual Lua calculation with a simulated engine-boundary interleaving. It does not exercise the full combat resolver or establish occurrence frequency under live thread scheduling. Other resource fields need separate verification.
 
-### CH-2. Lua stamina updates can erase combat costs and bypass exhaustion checks
+### [#2470] CH-2. Lua stamina updates can erase combat costs and bypass exhaustion checks
 
 **Severity:** High — the reproduced interleaving affects resource conservation and the existing exhaustion-death rule.
 
@@ -78,11 +78,11 @@ All assertions passed. The zero control distinguishes the failure from an intent
 **Handoff context:**
 
 - **Current behavior:** Physiology can refund a committed attack and miss exhaustion consequences in the same update.
-- **Expected direction:** Commit a signed stamina adjustment against current stored stamina; enforce its current effective maximum; return the authoritative before/after values and maximum for the existing threshold checks. First-observation initialization must only fill a still-absent pool at commit, never refill a pool combat created in the meantime.
-- **Scope and constraints:** One stamina-specific repair, including initialization, ordinary drain/recovery, zero-delta ticks, and threshold checks. Preserve existing rates, kill-before-collapse ordering, maximum/modifier semantics, and the cross-resource revive gate. No broad resource migration, new simulation clock, page-policy change, or save schema change is needed merely to repair this path. Decide threshold inputs from the committed result; changing only the final setter is insufficient.
-- **Verification:** Exercise the real Lua caller and engine mutation boundary with controlled production spending. Pin both serial orders, dynamic maxima, initialization races, zero-delta/zero-stamina behavior, and death/collapse checks. A cost arriving after the resource operation's commit may be handled on the next ordinary tick, as today; this proposal does not promise a latched event for every transient zero between ticks.
+- **Expected direction:** Commit the signed physiology delta against current stored stamina and the committing unit's current effective maximum in one authoritative update. Return one coherent result containing the stored value before the update (or absence), the committed value, the maximum used, and whether this commit initialized a still-absent pool. Existing death/collapse checks consume that result; an earlier Lua observation must never authorize a refill or threshold decision.
+- **Scope and constraints:** One stamina-specific repair, including commit-time initialization, ordinary drain/recovery, zero-delta ticks, and threshold checks. Preserve explicit `max_stamina` precedence, the effective `endurance * 10` fallback, modifier expiry at one captured game time, stored-base stamina semantics, kill-before-collapse ordering, pose guards, and the cross-resource revive gate. Invalid IDs, missing units, non-finite deltas or stored values, and invalid maxima refuse without mutation; large finite deltas saturate safely. No broad resource migration, new simulation clock, page-policy change, or save schema change is needed merely to repair this path.
+- **Verification:** Exercise the real Lua caller and registered engine mutation boundary with controlled production spending. The 6 → debit 2.5 → recovery 0.05 schedule must finish at 3.55; the 2 → debit to zero → recovery 0.05 schedule must report before 0 and after 0.05 and request death without also requesting collapse. Pin both serial orders, explicit and endurance-derived dynamic maxima, modifier changes, initialization races, zero/negligible deltas, saturation, refusals, stored-base behavior, and the three shipped stamina configurations. A cost arriving after the operation's commit may be handled on the next ordinary tick, as today; this proposal does not promise a latched event for every transient zero between ticks.
 - **Deduplication:** Searched both current findings/designs and tracker results for stamina. Closed #1735 owns effective combat maximum resolution and #2328 owns strike admission/commit; neither owns this later physiology overwrite. No matching open issue identified and no tracker issue created. `stance_recovery_design.md` intentionally excludes stamina; do not file this as completion of its SR-1 slice.
-- **Remaining uncertainty:** The actual Lua function/configuration were executed, but combat spending was simulated at an engine API boundary. This is not a live-thread frequency measurement or a full resolver reproduction. The authoritative engine operation and its exact API contract remain to be designed; the issue must account for thresholds and initialization rather than assuming the stance primitive can be reused unchanged.
+- **Remaining uncertainty:** The actual Lua function/configuration were executed, but combat spending was simulated at an engine API boundary. This is not a live-thread frequency measurement or a full resolver reproduction. Exact binding and helper names remain implementation choices; the commit-result, initialization, refusal, and threshold semantics above are the retained contract and must not be replaced with the stance primitive unchanged.
 
 ## Lua scheduling fairness
 
@@ -120,7 +120,7 @@ The production Lua loop calls `runDueScripts` only when its blocking engine-mess
 
 ## Calendar accumulation
 
-### CH-4. The world calendar discards fractional minutes and cannot advance at default speed
+### [#2471] CH-4. The world calendar discards fractional minutes and cannot advance at default speed
 
 **Severity:** High — autonomous day/night and calendar progression are blocked at the default speed.
 
@@ -153,7 +153,7 @@ Run the [retained GHCi script](audit_evidence/2026-09-05/gameplay_timing.ghci) t
 
 ## Movement time consumption
 
-### CH-5. Movement discards remaining elapsed time when reaching a path waypoint
+### [#2473] CH-5. Movement discards remaining elapsed time when reaching a path waypoint
 
 **Severity:** Medium — movement rate depends on update partition when a path waypoint is reached; larger updates lose more available motion.
 

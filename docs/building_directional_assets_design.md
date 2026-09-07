@@ -26,10 +26,10 @@ concrete precondition
 - [x] BDA-1. Introduce camera-facing building asset declarations and distinct lifecycle roles — [#2080]
 - [x] BDA-2. Render and hit-test the correct building view at every camera facing — [#2088]
 - [x] BDA-3. Add a non-looping building destruction presentation lifecycle — [#2091]
-- [ ] BDA-18. Render structure construction from authored progress frames
-- [ ] BDA-14. Add immediate structure teardown with transient destruction playback
-- [ ] BDA-4. Make the building preview inspect every direction and lifecycle role
-- [ ] BDA-17. Make structure preview inspect construction and destruction sets
+- [x] BDA-18. Render structure construction from authored progress frames — [#2488]
+- [x] BDA-14. Add immediate structure teardown with transient destruction playback — [#2491]
+- [x] BDA-4. Make the building preview inspect every direction and lifecycle role — [#2492]
+- [x] BDA-17. Make structure preview inspect construction and destruction sets — [#2495]
 - [ ] BDA-5. Author the directional Workbench asset set
 - [ ] BDA-6. Author the directional Cargo Hold asset set
 - [ ] BDA-7. Author the directional Acolyte Portal asset set
