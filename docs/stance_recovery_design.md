@@ -4,20 +4,20 @@ Stance recovery must preserve stance spent by combat while Lua is calculating th
 
 **Delivery recommendation: one issue, one PR.** The engine operation, Lua migration, and regression tests form one complete repair. An umbrella epic would add tracking without a separate deliverable. Stamina, a general resource API, simulation ticks, and chunk residency remain later work.
 
-Design state: `exploring`
+Design state: `ready for issue processing`
 
-This is the requested review draft. Owner direction is recorded under Decisions; the detailed API contract below is the proposed implementation of that direction. No tracker artifact has been created.
+Owner direction is recorded under Decisions; the API contract under "The engine receives an amount" was signed off as D-5 on 2026-09-07. SR-1 was filed as [#2468](https://github.com/coghex/synarchy/issues/2468) on 2026-09-07. Re-verified against `d0c03cf86a97357e214e7f857988f83004470574` on 2026-09-07: none of the cited files changed since the original examination.
 
 Status legend: `[ ]` unprocessed · `[#N]` linked to issue N · `[no-issue]` deliberately not tracked separately · `[deferred]` blocked on a stated precondition.
 
 ## Processing status
 
 - [x] EPIC. Preserve combat spending during stance recovery — [no-issue]: one standalone delivery slice; no umbrella needed
-- [ ] SR-1. Apply stance recovery atomically against the current stored value
+- [x] SR-1. Apply stance recovery atomically against the current stored value — [#2468]
 
 Processing note: the terminal EPIC row records the decision to avoid an umbrella, not completed implementation. Process SR-1 as one standalone issue, with no parent issue or epic checklist to update. The owner expressly requested a judgment on whether an epic was necessary.
 
-## Outcome contract
+## Epic contract
 
 - **Goal:** Every accepted stance recovery applies to the value current at its commit, preserving intervening combat spending.
 - **Done when:** Ordinary recovery uses the new operation; a controlled combat/recovery interleaving preserves both effects; rate, bounds, absence behavior, and existing combat admission remain covered by focused tests.
@@ -27,7 +27,7 @@ Processing note: the terminal EPIC row records the decision to avoid an umbrella
 
 ## Verified current state
 
-Source examined at `da96202c863b7d563f4968d34cb685d2e622e73c`, 2026-09-05. No matching design document or matching open stance-recovery issue was found in the creation-time search. Recheck the tracker when filing.
+Source examined at `da96202c863b7d563f4968d34cb685d2e622e73c`, 2026-09-05, and re-examined at `d0c03cf86a97357e214e7f857988f83004470574`, 2026-09-07 (line anchors below are from the later revision; `git log` shows no change to any cited file between them). No matching design document or matching open stance-recovery issue was found in the creation-time search, and the 2026-09-07 recheck found none either: open epics #1890 (mutation authority) and #1995 (Lua API contract) plan no child for this, and the only stance-related closed issue, #2328, is the strike-admission transaction. Recheck the tracker when filing.
 
 `scripts/unit_resource_injury.lua:20` reads stance, reads effective dexterity and agility, calculates recovery, and calls `unit.setStat` with an absolute replacement. Recovery currently equals:
 
@@ -37,9 +37,11 @@ Source examined at `da96202c863b7d563f4968d34cb685d2e622e73c`, 2026-09-05. No ma
 
 An absent dexterity or agility contributes 1. Lua currently skips recovery when stance is absent or already at least 1. The normal physiology loop calls this function for living units (`scripts/unit_resources.lua:77`).
 
-`unit.setStat` uses `atomicModifyIORef'`, but inserts the supplied value rather than adjusting the current one (`src/Engine/Scripting/Lua/API/Units/Stats.hs:343`). The preceding Lua read is outside that transaction. In addition, `getStat` reads a modifier-adjusted value while `setStat` writes the stored base (`Stats.hs:292,628`). Those are distinct semantics.
+`unit.setStat` uses `atomicModifyIORef'`, but inserts the supplied value rather than adjusting the current one (`src/Engine/Scripting/Lua/API/Units/Stats.hs:343-362`). The preceding Lua read is outside that transaction. In addition, `getStat` reads a modifier-adjusted value while `setStat` writes the stored base (`Stats.hs:295` versus `:343`); a separate `unit.getStatBase` verb (`Stats.hs:319`) exposes the stored base, which is the value combat spends. Those are distinct semantics. All three verbs are registered in `src/Engine/Scripting/Lua/API/Register/Unit.hs:57-59`, and the setter narrows its ID with `Lua.tointeger` without a prior `Lua.ltype` check, so a numeric string is accepted as an ID today.
 
-Combat admission and spending use stored stance directly; absence means 1 (`src/Combat/Resolution/Admission.hs:111`, `src/Combat/Resolution/Wear.hs:164`). A quick attack spends 0.25 and a heavy attack spends 0.5 (`src/Combat/Resolution/Constants.hs:178`). Strike admission and its unit-manager effects now commit in one atomic update (`Admission.hs:183`).
+Combat admission and spending use stored stance directly; absence means 1 (`src/Combat/Resolution/Admission.hs:112`, `src/Combat/Resolution/Wear.hs:172-174`). A quick attack spends 0.25 and a heavy attack spends 0.5 (`src/Combat/Resolution/Constants.hs:178-180`). Strike admission and its unit-manager effects commit in one atomic update (`Admission.hs:199`), and `spendStrikeCost` is exported from `Combat.Resolution.Wear` (`Wear.hs:13`), so a test can apply production spending directly. The existing headless group `Combat admission revalidates at commit (#2328)` in `test-headless/Test/Headless/Combat/Admission.hs:306` already covers stance spent between admission and commit.
+
+Two repository gates bind a new Lua verb: `python3 tools/lua_registration_audit.py` (#1996) fails when any `scripts/**/*.lua` reference names a verb its namespace does not register, so the caller migration and the registration must land together; and `python3 tools/lua_module_budget.py` caps the `scripts/unit_resource*.lua` family at 500 lines, which `unit_resource_injury.lua` belongs to.
 
 The [retained reproduction](audit_evidence/2026-09-05/stance_interleaving.lua) runs the actual recovery module with a simulated engine-boundary interleaving:
 
@@ -81,7 +83,7 @@ The operation executes synchronously using the existing unit-manager atomic upda
 | Amount negative, nonnumeric, NaN, or infinite | Return `nil, "invalid_amount"`; write nothing |
 | Existing stored stance non-finite | Return `nil, "invalid_stance"`; write nothing |
 
-Validate the ID as an integral value in the actual `UnitId` range before narrowing it; invalid IDs must not wrap onto another unit. Validate the amount before mutation. Large finite amounts must saturate safely, without publishing a non-finite intermediate. Stable reason tokens are sufficient; this does not require a new event/notification system. Invalid argument checks precede unit lookup.
+Validate the ID as an integral value in the actual `UnitId` range before narrowing it; invalid IDs must not wrap onto another unit. Check argument types with `Lua.ltype` before `Lua.tointeger` / `Lua.tonumber`, so a numeric string is refused rather than coerced as the existing setter does. Validate the amount before mutation. Large finite amounts must saturate safely, without publishing a non-finite intermediate. Stable reason tokens are sufficient; this does not require a new event/notification system. Invalid argument checks precede unit lookup.
 
 Recovery changes stored stance, exactly the value combat spends. It does not apply a stance modifier and write that effective result back into the base. Tests should pin this distinction explicitly. Dexterity and agility remain effective readings used to determine the rate. This deliberately resolves recovery's existing base/effective ambiguity; it is not a general redesign of modifier semantics.
 
@@ -113,7 +115,7 @@ The owner accepted the stance-first recommendation and requested a design draft.
 
 ### D-2. Relative mutation is the selected direction
 
-The owner proposed supplying an offset so the engine applies it against its current value. The design adopts that direction and places bounds enforcement in the same commit. The precise API signature and edge-case table remain proposals in this review draft.
+The owner proposed supplying an offset so the engine applies it against its current value. The design adopts that direction and places bounds enforcement in the same commit. The precise API signature and edge-case table were proposals in the review draft and are decided in D-5.
 
 ### D-3. Exact deterministic ordering is unnecessary
 
@@ -122,6 +124,10 @@ The owner accepts small execution-order fluctuations. Preserve operations rather
 ### D-4. One issue is sufficient
 
 The owner delegated the single-issue-versus-epic judgment. This design chooses one standalone issue because the binding, Lua migration, and tests are inseparable parts of one result. There is no independently useful infrastructure phase to land first.
+
+### D-5. The `unit.recoverStance(uid, amount)` contract is decided as written
+
+Signed off by the owner on 2026-09-07, resolving Q-1. The table under "The engine receives an amount" is the contract, not a proposal: the engine adds `amount` to the stored stance in one atomic unit-manager update, clamps to `[0, 1]`, and returns the committed stored value; absent stance stays absent and returns 1; a zero amount is a successful no-op; `no_such_unit`, `invalid_unit_id`, `invalid_amount`, and `invalid_stance` are returned as `nil, reason` and write nothing; large finite amounts saturate without publishing a non-finite intermediate. The binding name and reason-token spellings are part of the decision, so the SR-1 issue is written from the table verbatim. Consequence: recovery targets the stored base that combat spends, never an effective value, and the Lua caller no longer reads stance at all.
 
 ## Alternatives considered
 
@@ -132,7 +138,11 @@ The owner delegated the single-issue-versus-epic judgment. This design chooses o
 
 ## Open questions
 
-No product decision prevents completing this draft. Review the proposed API/result contract and explicit stored-stance semantics before treating the document as ready for issue processing. There are no dependencies on art, world-page policy, clock redesign, or residency design. Exact module and test-file placement can be settled in the implementation issue.
+### Q-1. Is the proposed `unit.recoverStance` contract the decided API? — Resolved by D-5
+
+D-2 selected relative mutation but left the exact signature, result table, refusal tokens, and stored-base semantics as proposals. This matters because the issue's requirements and acceptance are written from that table: the absent-stays-absent rule, the stored-base (not effective) target, the `nil, reason` refusal shape, and saturation behavior each change what the solver builds and what the tests pin. Options were: (a) sign off the contract as written under "The engine receives an amount", making it a decision; (b) sign off the semantics but leave the binding name and reason-token spellings as implementation choices; (c) keep the table open, in which case the issue must tell the solver to stop and ask before choosing the absent/stored-base behavior. The owner chose (a) on 2026-09-07; see D-5.
+
+No product decision is pending. There are no dependencies on art, world-page policy, clock redesign, or residency design. Exact module and test-file placement can be settled in the implementation issue.
 
 ## Verification strategy
 
@@ -146,21 +156,23 @@ Use controlled scheduling rather than probabilistic race loops:
 
 Use the existing quiet headless harness and bare Lua fixtures; no generated world or graphical run is necessary. The standalone audit reproduction is historical evidence, not the production regression gate.
 
-During implementation, run the new targeted Hspec describe(s), the existing combat-admission describe, and `python3 tools/lua_module_budget.py` because `unit_resource_injury.lua` belongs to its capped resource family. Run other gates only when their actual inputs change. The new registration and shipped caller should be exercised by the integration test itself. Do not require full CI, all behavior probes, worldgen baselines, or save compatibility regeneration for this repair. Exact commands and discovered describe names belong in the eventual issue.
+During implementation, run the new targeted Hspec describe(s), the existing combat-admission describe (`cabal test synarchy-test-headless --test-options='--match "Combat admission revalidates at commit (#2328)"'`), `python3 tools/lua_registration_audit.py` because the caller now names a new verb, and `python3 tools/lua_module_budget.py` because `unit_resource_injury.lua` belongs to its capped resource family. Run other gates only when their actual inputs change. The new registration and shipped caller should be exercised by the integration test itself. Do not require full CI, all behavior probes, worldgen baselines, or save compatibility regeneration for this repair. The new describe's exact name belongs in the eventual issue.
 
 ## Delivery plan
 
 ### SR-1. Apply stance recovery atomically against the current stored value
+
+> **Tracker:** [#2468](https://github.com/coghex/synarchy/issues/2468), filed 2026-09-07 as the standalone issue for this slice.
 
 - **Outcome:** Combat spending survives ordinary Lua stance recovery, including an intervening strike during recovery calculation.
 - **Scope:** Engine operation and direct registration; Lua caller migration; focused tests; concise contract documentation for stored-value and absence semantics.
 - **Phase:** Complete repair.
 - **Depends on:** None.
 - **Ordering:** Can land first; independent of timing, background-page, and residency work.
-- **Relevant decisions:** D-1 through D-4.
-- **Acceptance signals:** The production-boundary interleaving yields 0.409; normal rates and caps remain correct; missing-unit/implicit-full behavior is explicit; invalid inputs write nothing; existing combat admission still passes.
+- **Relevant decisions:** D-1 through D-5.
+- **Acceptance signals:** The production-boundary interleaving yields 0.409; normal rates and caps remain correct; missing-unit/implicit-full behavior is explicit; invalid inputs write nothing; existing combat admission still passes; `tools/lua_registration_audit.py` and `tools/lua_module_budget.py` stay green.
 - **Out of scope:** Stamina and other resources; generic API rollout; deterministic replay; worker ownership overhaul; tick scheduling; chunk caching; report disposition fields.
-- **Open questions:** No unresolved product dependency; the proposed contract is subject to this draft's review. Helper placement does not require another slice.
+- **Open questions:** None. Helper placement does not require another slice.
 
 ## Later work retained outside this delivery
 
