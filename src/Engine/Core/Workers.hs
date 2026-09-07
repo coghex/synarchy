@@ -50,10 +50,18 @@ type WorkerSlot = (Text, Maybe ThreadState)
 
 -- | The workers that stop /before/ Vulkan and GLFW teardown, in order.
 --
---   Combat and sim lead because they are producers for the unit thread:
---   wound ticks enqueue UnitKill\/UnitCollapse onto the unit queue, so
---   they have to stop before the consumer does. They also stop ahead of
---   the render teardown, which is where the windowed modes have always
+--   Each leads its own consumer. Combat is a producer for the unit
+--   thread: wound ticks and combat resolution enqueue
+--   UnitCollapse\/UnitKill onto the unit queue, so combat has to stop
+--   before the thread that drains it. Sim is a producer for the world
+--   thread: its fluid writebacks go onto the world command queue, which
+--   the world thread alone drains, so sim has to stop before that
+--   thread.
+--
+--   Neither dependency picks this phase on its own — both of those
+--   consumers stop after the render teardown, so the later phase would
+--   order them just as correctly. They stop ahead of the render
+--   teardown because that is where the windowed modes have always
 --   stopped them.
 preRenderWorkers ∷ EngineWorkers → [WorkerSlot]
 preRenderWorkers w = [ ("combat", ewCombat w)

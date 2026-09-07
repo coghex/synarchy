@@ -36,16 +36,17 @@ import App.Preview.Config
 -- | Run the engine in preview mode: GLFW window + Vulkan, but no world,
 --   unit, sim, or combat thread. The input thread is kept so the OS
 --   window-close button and the debug console (started inside the Lua
---   thread, same as headless) both work normally. 'mBrowse' is the
+--   thread, same as headless) both work normally. 'browse' is the
 --   browsing state @app/Main.hs@ already resolved (discovery,
 --   containment, and default selection all done pre-boot — #886/#887/
---   #888); as of #888 every canonical target supplies one, so a
---   'Nothing' here is only the degenerate no-target case.
-runPreview ∷ (Text, Maybe Text) → Maybe PreviewBrowse → Maybe Int → IO ()
-runPreview target mBrowse mPort = do
+--   #888); as of #888 every canonical target supplies one, and a
+--   target-less @--preview@ exits in @app/Main.hs@ before this function
+--   is reached, so it is required rather than optional (#2208).
+runPreview ∷ (Text, Maybe Text) → PreviewBrowse → Maybe Int → IO ()
+runPreview target browse mPort = do
   EngineInitResult env ← initializeEngine
 
-  let env' = previewBootConfig target mBrowse mPort env
+  let env' = previewBootConfig target browse mPort env
 
   inputThreadState ← startInputThread env'
   -- Preview keeps graphical's tolerance of a failed listener (#1190
