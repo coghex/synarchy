@@ -85,8 +85,10 @@ spec = do
                         p95 = if null sorted then 0
                               else sorted !! min (total - 1) (total * 95 `div` 100)
 
-                    -- Diagnostic so a future test failure has context.
-                    putStrLn $ "PARITY: total=" ⧺ show total
+                    -- Diagnostic so a failure has context; only ever
+                    -- surfaced via expectationFailure below, never
+                    -- printed on a passing run.
+                    let diag = "PARITY: total=" ⧺ show total
                             ⧺ " within±5=" ⧺ show within5
                             ⧺ " within±15=" ⧺ show within15
                             ⧺ " within±40=" ⧺ show within40
@@ -95,7 +97,9 @@ spec = do
                             ⧺ " top5=" ⧺ show topN
 
                     -- Sanity: we actually sampled some tiles.
-                    total `shouldSatisfy` (> 0)
+                    unless (total > 0) $ expectationFailure $
+                        diag ⧺ "\ntotal = " ⧺ show total
+                             ⧺ " fails threshold (> 0)"
 
                     -- Thresholds are a regression net, not a tight
                     -- physical bound — the fast path lacks cliff
@@ -120,6 +124,12 @@ spec = do
                     -- meaningfully changed semantics.
                     let frac5  = fromIntegral within5  / fromIntegral total ∷ Double
                         frac40 = fromIntegral within40 / fromIntegral total ∷ Double
-                    frac5  `shouldSatisfy` (≥ 0.55)
-                    frac40 `shouldSatisfy` (≥ 0.85)
-                    p95    `shouldSatisfy` (< 80)
+                    unless (frac5 ≥ 0.55) $ expectationFailure $
+                        diag ⧺ "\nfrac5 = " ⧺ show frac5
+                             ⧺ " fails threshold (≥ 0.55)"
+                    unless (frac40 ≥ 0.85) $ expectationFailure $
+                        diag ⧺ "\nfrac40 = " ⧺ show frac40
+                             ⧺ " fails threshold (≥ 0.85)"
+                    unless (p95 < 80) $ expectationFailure $
+                        diag ⧺ "\np95 = " ⧺ show p95
+                             ⧺ " fails threshold (< 80)"
