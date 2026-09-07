@@ -71,7 +71,8 @@ startLuaThread env = startWorkerThreadEither WorkerSpec
     , wsLifecycleRef = lifecycleRef env
     , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting Lua scripting thread..."
-      -- This worker has never logged a post-fork line.
+      -- No worker logs a post-fork line (#1934); a healthy boot's
+      -- one info line per worker is 'wsStartingMsg'.
     , wsStartedMsg  = Nothing
     , wsFailMsg     = "Lua thread failed to start: "
       -- The one worker whose start failure has always been a warning.

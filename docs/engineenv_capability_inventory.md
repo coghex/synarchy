@@ -135,12 +135,15 @@ see §6.4(c).
 
 **Eight identifiers, fourteen record/view types.** The record set is
 finer-grained than the identifier set, because six capabilities are
-deliberately split, for three distinct reasons — four of them by
+deliberately split, for four distinct reasons — two of them by
 §3.1's pointer-record visibility rule (a thread-private field forces a
-strictly narrower worker-safe view, never a documented restriction on a
-wider record), one by consumer coupling, and one by **mutation
-authority** (a field's legitimate writer and its many readers need
-different *field types*, not different field *sets*):
+strictly narrower worker-safe view, never a documented restriction on
+a wider record: `render-gpu-asset`, `input-lua-transport`), one by
+consumer coupling (`world-sim-render-handoff`), one by **mutation
+authority** (`content-registries`; a field's legitimate writer and its
+many readers need different *field types*, not different field
+*sets*), and two by domain separation with no thread-private field
+behind either half (`units-buildings-combat`, `ui-hud-events`):
 
 <!-- capability-record-counts -->
 | Identifier | Record / view type(s) | Landed by |
@@ -163,10 +166,13 @@ count stated there and nowhere else cannot drift the way
 landed change sets while every gate stayed green. §5 remains the
 field-by-field authority; the table states each record's size.
 
-The `world-sim-render-handoff` split is the one that is not a §3.1
-thread-privacy split: neither half carries a thread-private field, and
-it exists because the render-handoff fields' consumers straddle
-this group and `render-gpu-asset` (§7.4).
+The `world-sim-render-handoff` split is a consumer-coupling split, not
+a §3.1 thread-privacy split: neither half carries a thread-private
+field, and it exists because the render-handoff fields' consumers
+straddle this group and `render-gpu-asset` (§7.4). It is one of four
+non-privacy splits alongside `content-registries`,
+`units-buildings-combat` and `ui-hud-events`; only `render-gpu-asset`
+and `input-lua-transport` are §3.1 splits.
 
 The `content-registries` split is the third kind, and the only one so
 far (#1896, CMA-2 of the mutation-authority epic #1890). Both records
@@ -182,6 +188,20 @@ one module mixing a selected registry with an out-of-scope one and must
 not keep the raw record merely to reach infection. Infection, locations,
 loot tables and tutorials are deliberately OUTSIDE the pilot's
 structural boundary; whether it is worth extending is CMA-3's call.
+
+The `units-buildings-combat` and `ui-hud-events` splits are the fourth
+kind: domain separation, with no thread-private field behind either
+half. `src/Engine/Core/Capability/Building.hs` states it outright —
+"'Building' is a domain, not a thread" — and that is precisely why
+`BuildingCapability` is kept separate from
+`UnitCombatCapability` rather than folded into it. `ui-hud-events`
+follows the same pattern one level down: `Engine.Core.Capability.Ui`
+and `Engine.Core.Capability.Events` each carry their own "No
+thread-private field, so no split record" section stating there is one
+record in that half, not a main-only/worker-safe pair; the two halves
+sit side by side because UI/focus/HUD state and event/notification
+state are separate domains, not because either one privately owns a
+thread-restricted field.
 
 **The capability-record convention (canonical statement).** Every
 record/view in the table above — and any future one — follows exactly
