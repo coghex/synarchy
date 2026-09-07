@@ -141,7 +141,7 @@ import Engine.Scripting.Lua.DebugServer (DebugCommand)
 import Engine.Scripting.Lua.Thread.Console (processDebugCommandsBounded)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
 import Engine.Core.Log (logDebug, LogCategory(..))
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv, loadStatusRef, loggerRef, saveBarrierRef)
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Load.Status
     (LoadPhase(..), LoadStatus(..), readLoadStatus)
