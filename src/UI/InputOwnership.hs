@@ -124,9 +124,37 @@ data InputRoute
 
 -- | The topmost visible input-exclusive page — the modal boundary
 --   pointer input cannot cross. 'getVisiblePages' paints bottom to
---   top, so the boundary is the LAST exclusive page in that order
---   (when two modals are visible, the more recently shown one — the
---   higher 'PageHandle' — paints on top and owns the boundary).
+--   top, so the boundary is the LAST exclusive page in that order.
+--
+--   What decides "last" when two modals are visible is the paint sort
+--   and nothing else: 'UI.Manager.Page.getVisiblePages' sorts the
+--   visible set with @sortOn@ on the pair ('upLayer', 'upZIndex').
+--   Equal layer AND equal zIndex is a TIE, and @sortOn@ is stable, so
+--   a tie keeps the order of the list it sorted — which is
+--   @Set.toList 'upmVisiblePages'@, a 'Data.Set.Set' of 'PageHandle'
+--   and therefore in ascending handle order. Handles are allocated at
+--   CREATION ('UI.Manager.Page.createPage', from 'upmNextPageId'), so
+--   the tie is won by the later-CREATED page.
+--
+--   Show order plays no part whatsoever.
+--   'UI.Manager.Page.showPage' sets 'upVisible' and inserts the handle
+--   into 'upmVisiblePages'; it records nothing about WHEN it was
+--   called, and the manager stores show ordering nowhere. Create A,
+--   then create B, then show B and afterwards show A, and B — created
+--   later, shown earlier — still owns the boundary.
+--
+--   That tie is currently universal. 'UI.Manager.Page.createPage'
+--   initialises 'upZIndex' to zero and the tracked tree contains no
+--   setter for it and no other write (its four read sites are
+--   'UI.Manager.Page.getVisiblePages' here, the two band computations
+--   in 'UI.Manager.Query', and 'UI.Render'), so every page ties at
+--   zero and creation order settles every contest between same-layer
+--   exclusive pages. Adding a setter would not by itself change any of
+--   that; ASSIGNING two visible same-layer modals UNEQUAL z-indices
+--   would — the higher zIndex would then own the boundary irrespective
+--   of creation order. @Test.Headless.UI.InputOwnership@'s
+--   reverse-show example pins today's rule, so a future change here
+--   has to preserve it deliberately or change it deliberately.
 inputBoundaryPage ∷ UIPageManager → Maybe UIPage
 inputBoundaryPage mgr = case filter upInputExclusive (getVisiblePages mgr) of
     [] → Nothing
