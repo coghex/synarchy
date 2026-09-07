@@ -74,7 +74,9 @@ startCombatThread env = startWorkerThread WorkerSpec
     , wsLifecycleRef = lifecycleRef env
     , wsCrashSink   = workerCrashStderrSink
     , wsStartingMsg = "Starting combat thread..."
-    , wsStartedMsg  = Just "Combat thread started"
+      -- No worker logs a post-fork line (#1934); a healthy boot's
+      -- one info line per worker is 'wsStartingMsg'.
+    , wsStartedMsg  = Nothing
     , wsFailMsg     = "Failed starting combat thread: "
     , wsFailLevel   = WorkerFailError
     , wsFailFatal   = "Combat thread start failure."
