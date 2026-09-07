@@ -34,10 +34,10 @@
 #   Place portal
 #     -> Secure water source
 #       -> Prepare an expedition
-#            -> Resolve a ruin encounter
-#                 -> Recover significant loot
-#                      -> Secure the recovered item
-#                           -> Clear a location
+#            -> Confront
+#                 -> Recover
+#                      -> Secure
+#                           -> Clear
 #            - Prepare water
 #            - Prepare food
 # Children precede subobjectives in the exposed pre-order.
@@ -90,7 +90,7 @@ objectives:
 
   - id: first_session_confront
     kind: full
-    label: "Resolve a ruin encounter"
+    label: "Confront"
     tooltip: "Discover an empty ruin, or engage and defeat the occupants of an occupied ruin."
     evaluator: confront
     order: 1
@@ -99,7 +99,7 @@ objectives:
 
   - id: first_session_recover
     kind: full
-    label: "Recover significant loot"
+    label: "Recover"
     tooltip: "A known location’s significant item must be picked up."
     evaluator: recover
     order: 1
@@ -108,7 +108,7 @@ objectives:
 
   - id: first_session_secure
     kind: full
-    label: "Secure the recovered item"
+    label: "Secure"
     tooltip: "Have a living player acolyte carry that exact recovered item."
     evaluator: secure
     order: 1
@@ -117,7 +117,7 @@ objectives:
 
   - id: first_session_clear
     kind: full
-    label: "Clear a location"
+    label: "Clear"
     tooltip: "Finish a known location’s encounter and take its significant loot."
     evaluator: clear
     order: 1

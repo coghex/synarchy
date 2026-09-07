@@ -168,7 +168,7 @@ spec = do
                 , "th.setOpen(true); th.update(0); th.update(0); local d=th.dump();"
                 , "assert(table.concat(d.rowIds, ',') =="
                 , " 'first_session_recover,first_session_secure,first_session_clear');"
-                , "local labels={'Recover significant loot','Secure the recovered item','Clear a location'};"
+                , "local labels={'Recover','Secure','Clear'};"
                 , "for i,r in ipairs(d.rows) do assert(r.marker=='[x]' and r.label==labels[i] and r.depth==i+3) end;"
                 , "assert(tp.stickyActive.first_session_recover); return true"
                 ]
