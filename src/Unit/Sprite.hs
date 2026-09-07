@@ -46,14 +46,15 @@ screenDirOf ∷ CameraFacing → Direction → Direction
 screenDirOf camFacing unitFacing =
     indexToDir ((dirIndex unitFacing - cameraRotSteps camFacing) `mod` 8)
 
--- | Pick the correct directional sprite for a unit given its world-space
---   facing and the current camera rotation.
+-- | Pick the correct directional sprite for a unit's T-pose
+--   (`directional_sprites`) given its world-space facing and the current
+--   camera rotation.
 --
 --   Lookup order: requested screen direction → its `mirrorDir` (returned
 --   with `flipX = True` so the renderer flips UVs) → fallback default
---   (no flip). The mirror step lets animations ship 5 directional
---   sprites (S/SE/E/NE/N) instead of 8 — SW/W/NW are produced by
---   horizontal mirror at draw time.
+--   (no flip). This mirror step is unconditional and has no opt-out.
+--   Animation mirroring is a separate mechanism — gated per-animation by
+--   `aFlip` — that lives in `Unit.Render.pickFrame`.
 resolveTexture
     ∷ CameraFacing
     → Direction                          -- ^ unit world facing
