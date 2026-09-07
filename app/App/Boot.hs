@@ -56,10 +56,15 @@ bootConfig mode profile mPort = patchBootConfig mode profile mPort Nothing Nothi
 --   'BootPreview'), plus the two preview-only fields: the requested
 --   @category[\/item]@ target and the browsing state @app\/Main.hs@
 --   already resolved (#886).
-previewBootConfig ∷ (Text, Maybe Text) → Maybe PreviewBrowse → Maybe Int
+--
+--   Both are required here and become the @Just@s 'ecPreviewTarget' and
+--   'ecPreviewBrowse' carry: this is the boundary where preview's
+--   always-present values meet the shared patch's per-mode 'Maybe's
+--   (#2208), which every non-preview mode leaves 'Nothing'.
+previewBootConfig ∷ (Text, Maybe Text) → PreviewBrowse → Maybe Int
                   → EngineEnv → EngineEnv
-previewBootConfig target mBrowse mPort =
-    patchBootConfig ModePreview BootPreview mPort (Just target) mBrowse
+previewBootConfig target browse mPort =
+    patchBootConfig ModePreview BootPreview mPort (Just target) (Just browse)
 
 -- | The one definition of the patch. Every mode reaches it through
 --   'bootConfig' or 'previewBootConfig'; the preview fields stay at

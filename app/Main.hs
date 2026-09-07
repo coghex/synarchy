@@ -175,7 +175,7 @@ runPreviewTarget cat mItem port = case classifyPreviewCategory cat of
         -- directory in this repo).
         Nothing → do
             entries ← discoverEntries (textureCategoryRoot cat)
-            runPreview (T.pack cat, Nothing) (Just (PreviewList entries)) port
+            runPreview (T.pack cat, Nothing) (PreviewList entries) port
         -- Focused item: resolve + validate BEFORE ever creating a
         -- window (#886 Requirement 4) — absolute paths, ".." traversal,
         -- symlink escapes, directories, unsupported extensions, and
@@ -187,7 +187,7 @@ runPreviewTarget cat mItem port = case classifyPreviewCategory cat of
                 exitWith (ExitFailure 1)
             Right entry →
                 runPreview (T.pack cat, Just (T.pack item))
-                           (Just (PreviewItem entry)) port
+                           (PreviewItem entry) port
 
 -- | Dispatch a @--preview \<grouped category\>/\<item\>@ target (#888
 --   completes the set). Every branch resolves and validates the item
@@ -208,18 +208,18 @@ runGroupedPreview cat item port
     | cat ≡ "units" =
         buildPreviewUnit unitsCategoryRoot item ⌦ \case
             Left err → rejectItem (unitFocusErrorMessage err)
-            Right unit → runPreview target (Just (PreviewUnitAnims unit)) port
+            Right unit → runPreview target (PreviewUnitAnims unit) port
     | cat ≡ "buildings" =
         buildPreviewBuilding (textureCategoryRoot cat) item ⌦ \case
             Left err → rejectItem (itemDirErrorMessage err)
             Right building →
-                runPreview target (Just (PreviewBuildingAssets building)) port
+                runPreview target (PreviewBuildingAssets building) port
     | otherwise =
         resolveItemDir (textureCategoryRoot cat) item ⌦ \case
             Left err → rejectItem (itemDirErrorMessage err)
             Right dir → do
                 entries ← discoverEntries dir
-                runPreview target (Just (PreviewList entries)) port
+                runPreview target (PreviewList entries) port
   where
     target = (T.pack cat, Just (T.pack item))
     rejectItem msg = do

@@ -20,8 +20,8 @@ concrete precondition
 
 - [x] EPIC. Give the Lua API a checked contract instead of a manually maintained ABI — [#1995]
 - [x] LAC-1. Gate every Lua call site against the engine's real registration set — [#1996]
-- [ ] LAC-2. Pilot a declarative registration contract on the `UI` namespace
-- [ ] LAC-3. Profile the boundary and record the rollout verdict
+- [x] LAC-2. Pilot a declarative registration contract on the `UI` namespace — [#2479]
+- [x] LAC-3. Profile the boundary and record the rollout verdict — [#2483]
 
 ## Epic contract
 
@@ -453,6 +453,8 @@ lane rather than an implementation PR.
 
 ### LAC-2. Pilot a declarative registration contract on the `UI` namespace
 
+> Filed as #2479 on 2026-09-07.
+
 - **Outcome:** The `UI` namespace's 80 registrations carry a Haskell descriptor
   record, and LAC-1's gate recognizes that shape.
 - **Scope:** The descriptor type and a new registrar function taking it (D-5);
@@ -473,6 +475,8 @@ lane rather than an implementation PR.
 - **Open questions:** `None`
 
 ### LAC-3. Profile the boundary and record the rollout verdict
+
+> Filed as #2483 on 2026-09-07.
 
 - **Outcome:** A measured call-frequency and duration profile of the Lua
   boundary, and a recorded verdict on further rollout and on any bulk interface.
