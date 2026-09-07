@@ -216,16 +216,23 @@ buildingToQuad lookupSlot defFmSlot facing zSlice effDepth tileAlpha isSel inst 
 --   demolition changes nothing about where its footprint sorts — the
 --   one its destruction effect carries too (#2091).
 --
---   Sort by the iso depth of the GROUND TILE, not the sprite top.
---   Adding spriteRowSpan (the sprite's vertical extent) to the sort
---   key as units do made tall buildings — e.g. a 96×96 cargo hold has
---   spriteRowSpan ≈ 2.0 — outrank units at the same tile, drawing the
---   building on top of a unit standing in front of it. Keeping just
---   the iso bottom plus the +0.0005 tiebreaker means a unit at the
---   same row sorts in front (their key has +0.0006), and units north
---   of the building still get obscured because their key is lower
---   (north = smaller faF + fbF). Texture-independent, so a facing
---   whose canvas differs cannot move a placed building in the sort.
+--   Sort by the iso depth of the GROUND TILE, not the sprite top. A
+--   sprite-height forward push once made tall buildings — e.g. a
+--   96×96 cargo hold has a ~2.0-row sprite extent — outrank units at
+--   the same tile, drawing the building on top of a unit standing in
+--   front of it. A unit's normal sort key (Unit.Render's
+--   'unitToQuad', :277-285) deliberately omits that push too, for the
+--   same reason — but the two keys are not identical: this one is the
+--   ground tile's float iso depth plus an integer relative-z term,
+--   while a unit's is its continuous foot row plus a real-valued z
+--   term and a separate climb override (Unit.Render :292-309). At the
+--   same row and elevation they differ only in their constant
+--   tiebreakers: the +0.0005 below against a unit's +0.0006. Keeping
+--   just the iso bottom plus that tiebreaker means a unit at the same
+--   row sorts in front, and units north of the building still get
+--   obscured because their key is lower (north = smaller faF + fbF).
+--   Texture-independent, so a facing whose canvas differs cannot move
+--   a placed building in the sort.
 placedBuildingSortKey ∷ Float → Int → Float
 placedBuildingSortKey isoDepth relativeZ =
     isoDepth + fromIntegral relativeZ * 0.001 + 0.0005
