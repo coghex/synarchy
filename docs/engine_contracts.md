@@ -960,11 +960,19 @@ resize behavior below is part of the probe's contract.
 
 ### Buildings viewer (#888)
 
-- **The filesystem is authoritative**, the same split the units viewer
-  uses. The building's own folder decides which entries exist and, in an
-  animation directory, the numeric `frame_NNN.png` order;
-  `data/buildings/<name>.yaml` only AUGMENTS a matched animation with
-  `fps`/`loop` and supplies the default-selection hints. A missing,
+- **The filesystem is authoritative** — the OPPOSITE of the units
+  viewer's split, not the same one. #888 amended #887's filesystem-first
+  units viewer, but #1261 then replaced that half: for units the
+  `data/units/<name>.yaml` declaration and its compiled
+  `atlas/index.json` decide which animations exist and how their frames
+  are stored, so an animation folder on disk and absent from the YAML is
+  EXCLUDED rather than browsed. The contrast is about DISCOVERY and
+  frame storage only — a unit target must still contain a real,
+  unsymlinked asset tree, and those containment checks remain pre-boot
+  requirements. Here the building's own folder decides which entries
+  exist and, in an animation directory, the numeric `frame_NNN.png`
+  order; `data/buildings/<name>.yaml` only AUGMENTS a matched animation
+  with `fps`/`loop` and supplies the default-selection hints. A missing,
   malformed, or unmatched YAML never rejects a valid asset folder
   (`dungeon_1` has no YAML at all; `cargo_hold_S`/`furnace` ship a
   `demolish/` folder no YAML mentions).
