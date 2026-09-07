@@ -103,6 +103,60 @@ spec = do
             routePointer PointerLeftClick pt mgrModalBlocks `shouldBe` RouteMiss
         it "empty modal space blocks a lower HUD control (right-click)" $
             routePointer PointerRightClick pt mgrModalBlocks `shouldBe` RouteMiss
+
+        -- #2223: every OTHER two-modal fixture in this suite shows each
+        -- page as it creates it (the `page` helper above), so creation
+        -- order and show order always agree and neither can falsify the
+        -- other. This one deliberately separates them, matching the
+        -- ordinary modal lifecycle: pages are created once when the HUD
+        -- is built, then shown and hidden repeatedly afterwards.
+        --
+        -- Both pages are created BEFORE either is shown, then the
+        -- LATER-created page is shown FIRST and the earlier-created one
+        -- second. The tie-break is `getVisiblePages`' stable
+        -- `sortOn (upLayer, upZIndex)` over `Set.toList
+        -- upmVisiblePages` — ascending PageHandle, i.e. creation order
+        -- — so the later-CREATED page owns the boundary despite having
+        -- been shown first. A boundary that instead followed show
+        -- recency would pick `modalEarly`, whose own control at `pt`
+        -- would then fire "earlyClick" instead of being blocked.
+        let reverseShowOrder =
+                let (earlyH, m1) = createPage "modalEarly" LayerModal
+                                              emptyUIPageManager
+                    (lateH, m2) = createPage "modalLate" LayerModal m1
+                    -- Only the EARLIER-created page has a control at
+                    -- `pt`; the later-created boundary owner has none,
+                    -- so the two orderings give different routes.
+                    m3 = clickableAt "earlyBtn" pt (100, 100) "earlyClick"
+                                     earlyH m2
+                    -- Reverse show order: later-created first.
+                    m4 = showPage lateH m3
+                    m5 = showPage earlyH m4
+                in (earlyH, lateH, m5)
+
+        it "the later-CREATED modal owns the boundary even when it was shown FIRST" $
+            let (_, lateH, mgr) = reverseShowOrder
+            in do
+                routePointer PointerLeftClick pt mgr `shouldBe` RouteMiss
+                -- Non-vacuity: prove that miss is the BOUNDARY blocking
+                -- a control which is really present and really
+                -- reachable at `pt`, not an empty fixture missing
+                -- everything. Hiding the later-created owner (nothing
+                -- about show order changes) lets "earlyClick" through.
+                case routePointer PointerLeftClick pt (hidePage lateH mgr) of
+                    RouteElement _ cb → cb `shouldBe` "earlyClick"
+                    other → expectationFailure
+                        ("expected modalEarly's control, got " ⧺ show other)
+
+        it "the earlier-created modal is out of scope despite being shown most recently" $
+            let (earlyH, lateH, mgr) = reverseShowOrder
+            in do
+                isPageInScope lateH mgr `shouldBe` True
+                isPageInScope earlyH mgr `shouldBe` False
+
+        it "handles really were allocated in the order this example assumes" $
+            let (earlyH, lateH, _) = reverseShowOrder
+            in (earlyH < lateH) `shouldBe` True
         -- Wheel/scroll routing (#743) no longer shares the click callback
         -- machinery — it's tested separately via 'routeScroll' in
         -- Test.Headless.UI.ElementInputPolicy, including its own
