@@ -219,12 +219,12 @@ promoteToRunning env =
 --   every owner shares it verbatim — 'SaveWorld' acks only on its
 --   unlocked branch, and 'SaveLua' has no per-tick ack at all.
 --
---   'SaveCombat' is a third variant: @Combat.Thread.combatTick@
---   branches on the engine's pause flag rather than the owner gate, and
---   calls 'acknowledgeCurrent' only inside its paused branch. That
---   still satisfies the barrier, because a save or load transaction
---   imposes the engine pause before it ever calls
---   'Engine.Save.Barrier.waitForOwners': a save's
+--   'SaveCombat' is a third variant: @Combat.Thread.combatTick@'s outer
+--   branch discriminates on the engine's pause flag, not the owner
+--   gate — only inside that paused branch does it read 'ownerGated'
+--   and call 'acknowledgeCurrent'. That still satisfies the barrier,
+--   because a save or load transaction imposes the engine pause before
+--   it ever calls 'Engine.Save.Barrier.waitForOwners': a save's
 --   'Engine.Scripting.Lua.API.Save.acceptSaveRequest' imposes it first,
 --   and 'engine.loadSave' imposes its own pause at acceptance, before
 --   staging and the later publish-barrier wait in
