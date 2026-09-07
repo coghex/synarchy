@@ -187,7 +187,8 @@ error. `crvInfectionManagerRef` rides on the view as the ordinary
 one module mixing a selected registry with an out-of-scope one and must
 not keep the raw record merely to reach infection. Infection, locations,
 loot tables and tutorials are deliberately OUTSIDE the pilot's
-structural boundary; whether it is worth extending is CMA-3's call.
+structural boundary. §6.6 records CMA-3's verdict: retain the pilot and
+do not roll out beyond it.
 
 The `units-buildings-combat` and `ui-hud-events` splits are the fourth
 kind: domain separation, with no thread-private field behind either
@@ -1393,7 +1394,7 @@ per source occurrence, with its path, line, accessor and canonical
 field. It is **non-blocking, counted but never resolved to an
 originating module**, and it is printed *before* every blocking check
 so a failure elsewhere never costs the measurement. That count is the
-evidence CMA-2's pilot and CMA-3's verdict turn on: a small residue
+evidence used by CMA-2's pilot and the recorded CMA-3 verdict (§6.6): a small residue
 means a textual gate is nearly sufficient, a large one argues for a
 mechanism that travels with the handle.
 
@@ -1509,6 +1510,117 @@ module and field, so the edit is mechanical once the decision is made —
 run `python3 tools/engine_env_capability_audit.py` and read the
 violation. Do not silence a violation by widening a rule above; a
 surprising write is the finding, not the noise.
+
+### 6.6 Read-only capability pilot verdict (#2240, CMA-3)
+
+**Verdict:** Do not roll out beyond this pilot.
+
+The owner decided on 2026-09-07 to retain the existing `ContentRegistries`
+read-only protection and stop expansion for now. Keep the direct-writer audit
+and the four protected registries. No other capability or field is selected
+for migration. Future expansion requires a separately approved proposal
+showing the specific protection gained, the affected readers and writers,
+and the migration and maintenance cost. This verdict authorizes no further
+implementation.
+
+**Evidence base.** Measurements below were refreshed on 2026-09-07 against
+`3e158738bbe3a47f662b1099ed88f8a0d94d46b1`. The capability audit passes; §1 owns
+the total field inventory. The writer map covers 55 fields with non-empty
+entries and 137 field-module pairs, with 732 classified mutation sites,
+no shadow exemptions, and 344 pass-on residue uses.
+
+Of the 732 classified sites, 338 resolve to an `EngineEnv` field; 394 do not.
+The field-resolved breakdown is:
+
+| Accessor used | Enforced writes | Exempt/definer writes | Total |
+|---|---:|---:|---:|
+| Raw `EngineEnv` selector | 4 | 48 | 52 |
+| Capability selector | 285 | 1 | 286 |
+| Total | 289 | 49 | 338 |
+
+Derivation: run `scan_capability_writes` over `scan_production_sources` and
+the live `EngineEnv` fields. Revisit each field-resolved `MutationSite` at
+its source path and line, tokenize with the scanner's syntax helpers, and
+identify the applied accessor using `classify_mutation_site`. Classify a
+live `EngineEnv` selector as raw and a selector in `capability_accessor_map`
+as capability-based, checking its canonical field against the site. Each
+site resolves to exactly one matching accessor. The site's `write` kind
+identifies the enforced subset; the remaining field-resolved sites belong
+to the exempt/definer path. `MutationSite` itself retains no accessor
+spelling. These totals do not count the 394 unresolved sites as raw or
+capability writes.
+
+**Where the audit cannot follow a handle.** Grouping its residue by the
+accessor's owning capability gives:
+
+| Capability | Pass-on uses |
+|---|---:|
+| WorldSim | 167 |
+| InputView | 52 |
+| UnitCombat | 46 |
+| Render | 20 |
+| RenderView | 15 |
+| Core | 12 |
+| RenderHandoff | 7 |
+| Building | 7 |
+| Input | 6 |
+| SaveLoad | 5 |
+| Events | 5 |
+| ContentRegistries, including its reader view | 2 |
+| Ui | 0 |
+| Total | 344 |
+
+Representative shapes include `Building.Knowledge.Live` putting
+`crvItemManagerRef` into `ContainerObserver.coItems`, `API.Items.Defs`
+passing `crItemManagerRef` to `registerItemDefs`, and world-thread helpers
+passing `ivLuaQueue` onward. The first remains structurally read-only; the
+second belongs to a legitimate writer. Residue measures the direct scan's
+limits, not unauthorized writes or confirmed bugs.
+
+**What the pilot bought and cost.** PR #2007's merge
+`9f947f6870489ae3a4b304f338ec109d6ac6766d`, compared with its first parent,
+changed 47 files (+1,413/−245): 35 production modules (+471/−172), six
+headless-test files (+156/−6), three tools (+531/−18), two documents
+(+252/−49), and `synarchy.cabal` (+3/−0). Its accessor census was 31
+read-only module-field pairs across 26 modules, not the original seven-pair
+estimate. Additional reach included the carrier modules
+`Building.Thread.Command`, `Unit.Thread`, `API.Buildings.Progress`, and
+`World.Thread.Command.BoundSpawn`; the raw-accessor reader
+`World.Render.GroundItemQuads`; and the `Building.Knowledge` and
+`Item.NestedContents` headless constructors. `containerObserver`'s third
+parameter changed to the reader view.
+
+At the evidence base, `cabal test synarchy-test-headless
+--test-options='--match "ReadOnlyRef"'` passes all 12 examples, including
+observing later writer changes through the same live read-only alias.
+`python3 tools/test_read_only_ref_compile.py` passes all five fixtures:
+two permitted reads compile; direct writes, writes through `coItems`, and
+constructor unwrapping are rejected for the expected reasons. This fixture
+command is manual-only, absent from both CI and `tools/ci-local.sh`.
+Ordinary compilation enforces the read-only types, but the negative
+regression fixtures are not a continuously running gate.
+
+**Maintenance burden and limits.** CMA-1's PR #1905 added 3,408 lines and
+removed 16 across its two audit/tool-test files. Follow-up extraction and
+split work #2036 (PR #2158), #2128, #2062, #2064, #2228, and #2230 has
+landed. #2059 also required projection discovery to fail closed when it
+cannot read a binding. At the evidence base, the files matching
+`tools/engine_env_capability_*.py`, `tools/test_engine_env_capability_*.py`,
+and `tools/test_read_only_ref_compile.py` total 13,527 lines across 28
+files, versus 9,529 across six at historical base `f4f2bb699`. These are
+whole-family maintenance measurements, not lines all attributable to the
+read-only wrapper.
+
+`ContentRegistries` is a favorable catalogue-shaped pilot with one writer
+per selected field. Its two residue uses were two of 343 at `f4f2bb699`
+and are two of 344 now; nearly half the current residue is in `WorldSim`.
+The pilot demonstrates a useful restriction that survives a helper
+handoff. It does not establish the benefit or migration cost for
+multi-writer capabilities, and the residue count does not supply that
+missing evidence. Retaining the pilot preserves its proven protection;
+stopping expansion avoids generalizing that favorable result into a broad
+migration. The existing §2.1 and §6.4 extension and approval rules remain
+in force.
 
 ## 7. Migration roadmap
 

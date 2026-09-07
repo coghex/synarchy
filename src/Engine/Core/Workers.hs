@@ -5,7 +5,8 @@
 --   it via 'Engine.Loop.Shutdown.shutdownEngine', which stops
 --   'preRenderWorkers' before its Vulkan\/GLFW teardown and
 --   'postRenderWorkers' after; the fatal-error tail
---   (@App.Boot.handleBootResult@, #1021) and the two windowless modes
+--   (@App.Boot.handleBootResult@, #1021) and the two modes that
+--   initialize neither Vulkan nor GLFW (@App.Headless@ and @App.Dump@)
 --   reach it via 'shutdownEngineWorkers', which stops every worker in
 --   one pass. Neither writes an order of its own: the record lives
 --   library-side (#1036) precisely so there is nothing to keep in

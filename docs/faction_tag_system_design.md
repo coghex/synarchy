@@ -15,11 +15,11 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Replace single factions with composable unit identity and relations
-- [ ] FTS-1. Add the pure faction identity and relation policy model
-- [ ] FTS-2. Add validated faction-tag definitions and legacy mappings
-- [ ] FTS-3. Migrate runtime units, spawning, and save data to faction profiles
-- [ ] FTS-4. Port ownership, commandability, and discovery consumers
+- [x] EPIC. Replace single factions with composable unit identity and relations — [#2496]
+- [x] FTS-1. Add the pure faction identity and relation policy model — [#2500]
+- [x] FTS-2. Add validated faction-tag definitions and legacy mappings — [#2506]
+- [x] FTS-3. Migrate runtime units, spawning, and save data to faction profiles — [#2515]
+- [x] FTS-4. Port ownership, commandability, and discovery consumers — [#2518]
 - [ ] FTS-5. Port alliance, hostility, combat, and AI consumers
 - [ ] FTS-6. Expose mutable faction profiles and directed order hostility
 - [ ] FTS-6A. Propagate directed hostility through orders and team knowledge
