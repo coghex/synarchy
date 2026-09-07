@@ -115,6 +115,9 @@ spec = do
                     plate `shouldSatisfy` inBounds
 
     describe "Worldgen input normalization" $ do
+        it "fixes the minimum world size at 8 chunks" $ \_env →
+            minimumWorldSize `shouldBe` 8
+
         it "snaps world size to a minimum region multiple" $ \_env → do
             let m = minimumWorldSize
             map normalizeWorldSize [negate m, 0, 1, m - 1, m, m + 1, 2 * m - 1, 2 * m]
