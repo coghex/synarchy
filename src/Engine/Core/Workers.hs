@@ -80,9 +80,15 @@ allWorkers ∷ EngineWorkers → [WorkerSlot]
 allWorkers w = preRenderWorkers w ⧺ postRenderWorkers w
 
 -- | Stop one phase's workers in list order, announcing each by name
---   first. The only traversal of a 'WorkerSlot' list in the tree —
---   'shutdownEngine' splits its two phases through it, and
---   'shutdownEngineWorkers' runs the whole list through it.
+--   first, and calling 'shutdownThread' for every slot that started
+--   one. It is production's one caller of 'shutdownThread' outside
+--   'Engine.Core.Thread' itself:
+--   'Engine.Loop.Shutdown.shutdownEngineWith' calls it once per phase,
+--   'shutdownEngineWorkers' calls it once for @allWorkers@ with a
+--   no-op announce, and @App.Boot.luaThreadOrAbort@ calls it with the
+--   already-started slots filtered down to the ones a partial boot
+--   actually forked. 'announce' runs for every slot, 'Nothing'
+--   included; only the join beneath it is conditional.
 --
 --   'shutdownThread' is idempotent, so a mode whose error path fires
 --   after a partial clean shutdown re-stops nothing.
