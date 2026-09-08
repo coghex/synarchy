@@ -40,6 +40,7 @@ Usage: python3 tools/crop_probe.py [--port 9195] [--seed 42]
 import argparse, copy, glob, os, shutil, socket, subprocess, sys, tempfile, time
 import yaml
 from pathlib import Path
+import probe_protocol
 from probelib import (FixtureNotRegistered, quit_engine, boot,
                       load_fixture_yaml, send, send_json, wait_load_published)
 
@@ -203,34 +204,71 @@ def growth_entries(port, gx, gy, species):
     return []
 
 
+PROBE_CHECKS = [
+    ('content_loads', 'shipped crop content loads cleanly'),
+    ('row_count', 'row-crop category places exactly 3 instances per tile (rowOffset)'),
+    ('row_growth', 'row-crop instances report derived growth state'),
+    ('row_unripe', 'row crop not harvestable before its fruiting window'),
+    ('row_ripe', 'row crop harvestable in its fruiting window'),
+    ('row_yield', 'row-crop harvest yields tomato'),
+    ('untilled_gate', "untilled tile refuses plantCropAt's gate before tilling"),
+    ('untilled_refused', 'plantCropAt refuses on untilled soil'),
+    ('tilled_gate', 'tile plantable after tilling (vegTilledSoil)'),
+    ('row_refused', 'plantCropAt refuses a row_crop species (tomato_plant) on tilled soil'),
+    ('row_plot_absent', 'the refused tomato_plant plant left no crop plot behind'),
+    ('wheat_planted', "plantCropAt plants the real 'wheat' species"),
+    ('wheat_sprout', 'freshly planted crop plot starts at age ~0, sprout phase'),
+    ('wheat_growth', 'groundcover crop visibly advances under the game clock and becomes harvestable'),
+    ('wheat_yield', 'groundcover-crop harvest yields wheat_grain'),
+    ('harvest_clears', 'harvest clears the plot (annual, one-shot)'),
+    ('plot_restored', 'planted crop plot survives save/load'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('crop', PROBE_CHECKS)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9195)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
     port = args.port
     passed = True
 
     tmpdir = tempfile.mkdtemp(prefix="crop_probe_")
     try:
         root = make_isolated_root(tmpdir)
-        proc = boot(port, f"{SPROOT}/crop_probe_engine.log",
-                    args=["--resource-root", root])
-        return _run(port, proc, args, passed)
+        proc = boot(port, rep.engine_log_path("crop_engine.log", f"{SPROOT}/crop_probe_engine.log"),
+                    args=["--resource-root", root] + rep.engine_args())
+        return _exercise(port, proc, args, passed, rep)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _run(port, proc, args, passed):
+def _exercise(port, proc, args, passed, rep):
     try:
         checked = bootstrap(port)
         ok0 = all(v not in (0, None, "") for v in checked.values()) \
             and len(checked) >= 3
         passed &= ok0
-        print(f"  [{'PASS' if ok0 else 'FAIL'}] shipped crop content loads "
-              f"cleanly: {checked}")
+        rep.check('content_loads', ok0, f'shipped crop content loads cleanly: {checked}')
 
         send(port, f"world.init('probe', {args.seed}, {args.size}, {args.plates}); return 'ok'")
         send(port, "return world.waitForInit(300)", timeout=310)
@@ -242,20 +280,21 @@ def _run(port, proc, args, passed):
         set_date(port, "probe", 2, 1, 5)  # dormant/budding season baseline
         tile = find_species_tile(port, PROBE_ROW_CROP)
         if not tile:
-            print(f"  [FAIL] {PROBE_ROW_CROP} not found in region — "
-                  f"try another seed")
+            rep.abort(f'{PROBE_ROW_CROP} not found in region — try another seed')
             return 1
 
         es = growth_entries(port, *tile, PROBE_ROW_CROP)
         ok1a = len(es) == 3
         passed &= ok1a
-        print(f"  [{'PASS' if ok1a else 'FAIL'}] row-crop category places "
-              f"exactly 3 instances per tile (rowOffset): found {len(es)}")
+        rep.check(
+            'row_count',
+            ok1a,
+            f'row-crop category places exactly 3 instances per tile (rowOffset): found {len(es)}'
+        )
 
         ok1b = all(0.0 <= e["health"] <= 1.0 and e["age"] >= 0.0 for e in es)
         passed &= ok1b
-        print(f"  [{'PASS' if ok1b else 'FAIL'}] row-crop instances report "
-              f"derived growth state: {es}")
+        rep.check('row_growth', ok1b, f'row-crop instances report derived growth state: {es}')
 
         # Season window (the shipped tomato_plant annualCycle this copy
         # carries verbatim: dormant@0 /
@@ -264,46 +303,44 @@ def _run(port, proc, args, passed):
         ok1c = all(e.get("stage") in ("dormant", "budding")
                    and not e.get("harvestable") for e in es)
         passed &= ok1c
-        print(f"  [{'PASS' if ok1c else 'FAIL'}] row crop not harvestable "
-              f"before its fruiting window: {es}")
+        rep.check('row_unripe', ok1c, f'row crop not harvestable before its fruiting window: {es}')
         set_date(port, "probe", 2, 7, 21)  # day-of-year ~202, in [90,240)
         es2 = growth_entries(port, *tile, PROBE_ROW_CROP)
         ok1d = any(e.get("stage") == "fruiting" and e.get("harvestable")
                    for e in es2)
         passed &= ok1d
-        print(f"  [{'PASS' if ok1d else 'FAIL'}] row crop harvestable in its "
-              f"fruiting window: {es2}")
+        rep.check('row_ripe', ok1d, f'row crop harvestable in its fruiting window: {es2}')
 
         y1 = send_json(port, f"return world.harvestFlora({tile[0]},{tile[1]})")
         ok1e = isinstance(y1, list) and len(y1) >= 1 \
             and all(it.get("id") == "tomato" for it in y1)
         passed &= ok1e
-        print(f"  [{'PASS' if ok1e else 'FAIL'}] row-crop harvest yields "
-              f"tomato: {y1}")
+        rep.check('row_yield', ok1e, f'row-crop harvest yields tomato: {y1}')
 
         # ======= 2. Groundcover crop (planted via world.plantCropAt) =======
         found = find_dry_tile(port, tile[0] + 3, tile[1] + 3)
         if not found:
-            print("  [FAIL] no dry tile found near the row-crop site")
+            rep.abort('no dry tile found near the row-crop site')
             return 1
         gx0, gy0, z0 = found
 
         pre = send_json(port, f"return world.isPlantable({gx0},{gy0})")
         ok2a = pre is False
         passed &= ok2a
-        print(f"  [{'PASS' if ok2a else 'FAIL'}] untilled tile refuses "
-              f"plantCropAt's gate before tilling: isPlantable={pre}")
+        rep.check(
+            'untilled_gate',
+            ok2a,
+            f"untilled tile refuses plantCropAt's gate before tilling: isPlantable={pre}"
+        )
         refused = send_json(port,
             f"return world.plantCropAt({gx0},{gy0},'wheat')")
         ok2b = refused in (None, False)
         passed &= ok2b
-        print(f"  [{'PASS' if ok2b else 'FAIL'}] plantCropAt refuses on "
-              f"untilled soil: {refused}")
+        rep.check('untilled_refused', ok2b, f'plantCropAt refuses on untilled soil: {refused}')
 
         ok2c = till_and_wait(port, "probe", gx0, gy0, z0)
         passed &= ok2c
-        print(f"  [{'PASS' if ok2c else 'FAIL'}] tile plantable after tilling "
-              f"(vegTilledSoil): {ok2c}")
+        rep.check('tilled_gate', ok2c, f'tile plantable after tilling (vegTilledSoil): {ok2c}')
 
         # plantCropAt is a CropPlot-only primitive: a row_crop species
         # (tomato_plant is an ordinary FloraInstance, not a CropPlot) must
@@ -312,26 +349,30 @@ def _run(port, proc, args, passed):
             f"return world.plantCropAt({gx0},{gy0},'tomato_plant')")
         ok2r = row_refused in (None, False)
         passed &= ok2r
-        print(f"  [{'PASS' if ok2r else 'FAIL'}] plantCropAt refuses a "
-              f"row_crop species (tomato_plant) on tilled soil: {row_refused}")
+        rep.check(
+            'row_refused',
+            ok2r,
+            f'plantCropAt refuses a row_crop species (tomato_plant) on tilled soil: {row_refused}'
+        )
         cleared_row = send_json(port, f"return world.getCropPlotAt({gx0},{gy0})")
         ok2s = cleared_row is None
         passed &= ok2s
-        print(f"  [{'PASS' if ok2s else 'FAIL'}] the refused tomato_plant "
-              f"plant left no crop plot behind: {cleared_row}")
+        rep.check(
+            'row_plot_absent',
+            ok2s,
+            f'the refused tomato_plant plant left no crop plot behind: {cleared_row}'
+        )
 
         planted = send_json(port, f"return world.plantCropAt({gx0},{gy0},'wheat')")
         ok2d = planted is True
         passed &= ok2d
-        print(f"  [{'PASS' if ok2d else 'FAIL'}] plantCropAt plants the real "
-              f"'wheat' species: {planted}")
+        rep.check('wheat_planted', ok2d, f"plantCropAt plants the real 'wheat' species: {planted}")
 
         p0 = send_json(port, f"return world.getCropPlotAt({gx0},{gy0})")
         ok2e = isinstance(p0, dict) and p0.get("id") == "wheat" \
             and p0.get("phase") == "sprout" and p0.get("age") < 5.0
         passed &= ok2e
-        print(f"  [{'PASS' if ok2e else 'FAIL'}] freshly planted crop plot "
-              f"starts at age ~0, sprout phase: {p0}")
+        rep.check('wheat_sprout', ok2e, f'freshly planted crop plot starts at age ~0, sprout phase: {p0}')
 
         # Advance the REAL game clock (not a calendar jump — CropPlot age
         # is measured relative to its OWN planted day, see
@@ -344,27 +385,27 @@ def _run(port, proc, args, passed):
         ok2f = isinstance(p1, dict) and p1.get("age", 0) > p0.get("age", 0) \
             and p1.get("phase") != "sprout" and p1.get("harvestable") is True
         passed &= ok2f
-        print(f"  [{'PASS' if ok2f else 'FAIL'}] groundcover crop visibly "
-              f"advances under the game clock and becomes harvestable: "
-              f"{p0} -> {p1}")
+        rep.check(
+            'wheat_growth',
+            ok2f,
+            f'groundcover crop visibly advances under the game clock and becomes harvestable: {p0} -> {p1}'
+        )
 
         y2 = send_json(port, f"return world.harvestFlora({gx0},{gy0})")
         ok2g = isinstance(y2, list) and len(y2) >= 1 \
             and all(it.get("id") == "wheat_grain" for it in y2)
         passed &= ok2g
-        print(f"  [{'PASS' if ok2g else 'FAIL'}] groundcover-crop harvest "
-              f"yields wheat_grain: {y2}")
+        rep.check('wheat_yield', ok2g, f'groundcover-crop harvest yields wheat_grain: {y2}')
 
         cleared = send_json(port, f"return world.getCropPlotAt({gx0},{gy0})")
         ok2h = cleared is None
         passed &= ok2h
-        print(f"  [{'PASS' if ok2h else 'FAIL'}] harvest clears the plot "
-              f"(annual, one-shot): {cleared}")
+        rep.check('harvest_clears', ok2h, f'harvest clears the plot (annual, one-shot): {cleared}')
 
         # ============== 3. Groundcover plot survives save/load ==============
         found2 = find_dry_tile(port, gx0 + 2, gy0 + 2)
         if not found2:
-            print("  [FAIL] no dry tile found for the save/load plot")
+            rep.abort('no dry tile found for the save/load plot')
             return 1
         gx1, gy1, z1 = found2
         till_and_wait(port, "probe", gx1, gy1, z1)
@@ -376,7 +417,7 @@ def _run(port, proc, args, passed):
         send(port, "engine.loadSave('crop_plot_check'); return 'ok'")
         published, load_status = wait_load_published(port, 200)
         if not published:
-            print(f"  [FAIL] load transaction did not publish: {load_status}")
+            rep.abort(f'load transaction did not publish: {load_status}')
             return 1
         send(port, "world.show('probe'); return 'ok'")
         after = send_json(port, f"return world.getCropPlotAt({gx1},{gy1})")
@@ -384,10 +425,9 @@ def _run(port, proc, args, passed):
             and before.get("id") == after.get("id") == "wheat" \
             and after.get("age", -1) >= 0.0
         passed &= ok3
-        print(f"  [{'PASS' if ok3 else 'FAIL'}] planted crop plot survives "
-              f"save/load: {before} -> {after}")
+        rep.check('plot_restored', ok3, f'planted crop plot survives save/load: {before} -> {after}')
 
-        print("\n" + ("ALL CROP CHECKS PASSED" if passed else "SOME FAILED"))
+        rep.note('\n' + ('ALL CROP CHECKS PASSED' if passed else 'SOME FAILED'))
         return 0 if passed else 1
     finally:
         quit_engine(port, proc)

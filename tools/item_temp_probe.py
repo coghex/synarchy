@@ -26,6 +26,7 @@ Usage: python3 tools/item_temp_probe.py [--port 9177] [--seed 42]
 """
 import argparse, glob, math, os, shutil, socket, stat, subprocess, sys
 import tempfile, time, uuid
+import probe_protocol
 from probelib import (boot, capture_request_id, quit_engine, send,
                       wait_load_published, wait_save_complete)
 
@@ -122,7 +123,7 @@ def make_isolated_root(base: str) -> str:
     return root
 
 
-def remove_run_root(base: str) -> bool:
+def remove_run_root(base: str, rep=None) -> bool:
     """Delete this invocation's own throwaway tree, save artifacts and
     all, and say whether it is really gone.
 
@@ -136,14 +137,17 @@ def remove_run_root(base: str) -> bool:
     leftover saves is precisely the outcome this isolation exists to
     prevent, so it must not be reported as a pass.
     """
+    # Keep teardown diagnostic-only: it can run after an early abort,
+    # when emitting a later check would jump over unreached assertions.
+    emit = rep.abort if rep is not None else print
     try:
         shutil.rmtree(base)
     except OSError as exc:
-        print(f"  [FAIL] could not remove this run's resource root "
+        emit(f"  [FAIL] could not remove this run's resource root "
               f"{base}: {exc}")
         return False
     if os.path.exists(base):
-        print(f"  [FAIL] this run's resource root survived removal: {base}")
+        emit(f"  [FAIL] this run's resource root survived removal: {base}")
         return False
     return True
 
@@ -307,13 +311,43 @@ def bootstrap(port):
             send(port, f"{fn}('{path}'); return 'ok'")
 
 
+PROBE_CHECKS = [
+    ('ambient_default', 'bare spawn reads ambient'),
+    ('hot_cools', 'hot item cools monotonically toward ambient'),
+    ('cold_warms', 'cold item warms toward ambient'),
+    ('newtonian_rate', 'hotter item sheds more °C in the same time'),
+    ('pause_freezes', 'pause freezes cooling'),
+    ('held_ambient', 'untracked held item reads holder-tile ambient'),
+    ('held_inventory', 'setItemTemp surfaces in getInventory row'),
+    ('held_cools', 'held item cools in inventory'),
+    ('temperature_restored', 'tracked temp survives save/load'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('item_temp', PROBE_CHECKS)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9177)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--plates", type=int, default=3)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
     port = args.port
     passed = True
 
@@ -344,11 +378,11 @@ def main():
         # Unique per invocation as well as per root, so the slot NAME alone
         # identifies this run even in a log shared with another.
         slot = f"item_temp_v68_check_{uuid.uuid4().hex[:8]}"
-        print(f"isolated resource root: {root}", flush=True)
-        print(f"save slot: {slot}", flush=True)
+        rep.note(f'isolated resource root: {root}')
+        rep.note(f'save slot: {slot}')
 
-        proc = boot(port, f"{SPROOT}/item_temp_probe_engine.log",
-                    args=["--resource-root", root])
+        proc = boot(port, rep.engine_log_path("item_temp_engine.log", f"{SPROOT}/item_temp_probe_engine.log"),
+                    args=["--resource-root", root] + rep.engine_args())
         bootstrap(port)
         send(port, f"world.init('probe', {args.seed}, {args.size}, "
                    f"{args.plates}); return 'ok'")
@@ -365,8 +399,7 @@ def main():
         ok1 = amb is not None and t_plain is not None \
               and abs(t_plain - amb) < 0.01
         passed &= ok1
-        print(f"  [{'PASS' if ok1 else 'FAIL'}] bare spawn reads ambient: "
-              f"getGroundTemp={t_plain} ambient={amb}")
+        rep.check('ambient_default', ok1, f'bare spawn reads ambient: getGroundTemp={t_plain} ambient={amb}')
 
         # Phase 3 places its fixture relative to THIS reading, so an
         # unusable ambient is a fixture failure to report rather than a
@@ -375,10 +408,7 @@ def main():
         # `amb` too, and a None would raise out of phase 2 before the
         # rate fixture ever got to explain itself.
         if not finite(amb):
-            print(f"  [FAIL] the ambient at (2, 2) is unusable ({amb!r}); "
-                  f"the rate fixture places its two items at "
-                  f"ambient+{RATE_NEAR_OFFSET:.0f}°C and "
-                  f"ambient+{RATE_FAR_OFFSET:.0f}°C and can locate neither")
+            rep.abort(f'the ambient at (2, 2) is unusable ({amb!r}); the rate fixture places its two items at ambient+{RATE_NEAR_OFFSET:.0f}°C and ambient+{RATE_FAR_OFFSET:.0f}°C and can locate neither')
             return 1
 
         # --- 2. Hot cools / cold warms on the game clock ---
@@ -415,10 +445,12 @@ def main():
               and hot_series[-1] > amb
         ok2b = t1_cold > -40 and t1_cold < amb
         passed &= ok2 and ok2b
-        print(f"  [{'PASS' if ok2 else 'FAIL'}] hot item cools monotonically "
-              f"toward ambient: {[round(t, 1) for t in hot_series]}")
-        print(f"  [{'PASS' if ok2b else 'FAIL'}] cold item warms toward "
-              f"ambient: -40 → {t1_cold}")
+        rep.check(
+            'hot_cools',
+            ok2,
+            f'hot item cools monotonically toward ambient: {[round(t, 1) for t in hot_series]}'
+        )
+        rep.check('cold_warms', ok2b, f'cold item warms toward ambient: -40 → {t1_cold}')
 
         # --- 3. Newtonian rate: bigger ΔT closes more °C ---
         # Asserted at every ambient (#1611): the pair was derived from the
@@ -426,22 +458,23 @@ def main():
         # reports success without comparing the two closures.
         if rate_setup:
             ok3 = False
-            print(f"  [FAIL] rate comparison has no usable fixture: "
-                  f"{rate_setup}")
+            rep.check("newtonian_rate", False, f'rate comparison has no usable fixture: {rate_setup}')
         elif not finite(t1_near) or not finite(t1_far):
             ok3 = False
-            print(f"  [FAIL] rate comparison could not read both items back "
-                  f"after the interval ({t1_near!r}, {t1_far!r}) — started "
-                  f"at {deg(t0_near)}°C and {deg(t0_far)}°C over ambient "
-                  f"{deg(amb)}°C")
+            rep.check(
+                "newtonian_rate",
+                False,
+                f'rate comparison could not read both items back after the interval ({t1_near!r}, {t1_far!r}) — started at {deg(t0_near)}°C and {deg(t0_far)}°C over ambient {deg(amb)}°C'
+            )
         else:
             drop_near = t0_near - t1_near
             drop_far = t0_far - t1_far
             ok3 = drop_far > drop_near > 0
-            print(f"  [{'PASS' if ok3 else 'FAIL'}] hotter item sheds more "
-                  f"°C in the same time: over ambient {amb:.1f}°C, "
-                  f"{t0_far:.1f}°C shed {drop_far:.1f} vs {t0_near:.1f}°C "
-                  f"shed {drop_near:.1f}")
+            rep.check(
+                'newtonian_rate',
+                ok3,
+                f'hotter item sheds more °C in the same time: over ambient {amb:.1f}°C, {t0_far:.1f}°C shed {drop_far:.1f} vs {t0_near:.1f}°C shed {drop_near:.1f}'
+            )
         passed &= ok3
 
         # --- 4. Pause freezes cooling ---
@@ -451,15 +484,14 @@ def main():
         p1 = num(port, f"return item.getGroundTemp({gid_hot})")
         ok4 = p0 is not None and p0 == p1
         passed &= ok4
-        print(f"  [{'PASS' if ok4 else 'FAIL'}] pause freezes cooling: "
-              f"{p0} == {p1}")
+        rep.check('pause_freezes', ok4, f'pause freezes cooling: {p0} == {p1}')
         send(port, "engine.setPaused(false); return 'ok'")
 
         # --- 5. Held item: set / get / getInventory / cools ---
         send(port, "world.setTimeScale('probe', 10); return 'ok'")
         uid = int(num(port, "local u=unit.spawn('acolyte', 2, 2); return u"))
         if uid < 0:
-            print("  [FAIL] could not spawn unit")
+            rep.abort('could not spawn unit')
             return 1
         time.sleep(1.0)
         send(port, f"unit.addItem({uid}, 'steel_bar'); return 'ok'")
@@ -483,12 +515,13 @@ def main():
         t_held1 = num(port, f"return unit.getItemTemp({uid}, {iid})")
         ok5c = t_held1 is not None and amb_u < t_held1 < 88
         passed &= ok5a and ok5b and ok5c
-        print(f"  [{'PASS' if ok5a else 'FAIL'}] untracked held item reads "
-              f"holder-tile ambient: {t_held0} vs {amb_u}")
-        print(f"  [{'PASS' if ok5b else 'FAIL'}] setItemTemp surfaces in "
-              f"getInventory row: temp={row_t}")
-        print(f"  [{'PASS' if ok5c else 'FAIL'}] held item cools in "
-              f"inventory: 90 → {t_held1}")
+        rep.check(
+            'held_ambient',
+            ok5a,
+            f'untracked held item reads holder-tile ambient: {t_held0} vs {amb_u}'
+        )
+        rep.check('held_inventory', ok5b, f'setItemTemp surfaces in getInventory row: temp={row_t}')
+        rep.check('held_cools', ok5c, f'held item cools in inventory: 90 → {t_held1}')
 
         # --- 6. Tracked temp survives save/load ---
         send(port, "engine.setPaused(true); return 'ok'")
@@ -497,7 +530,7 @@ def main():
         pre = num(port, f"return item.getGroundTemp({gid_save})")
         failure = save_and_reload(port, "probe", slot)
         if failure:
-            print(f"  [FAIL] {failure}")
+            rep.abort(f'{failure}')
             return 1
         send(port, "world.show('probe'); return 'ok'")
         post = num(port, f"return item.getGroundTemp({gid_save})")
@@ -505,11 +538,9 @@ def main():
         # exactly what the pre-save (paused) read saw.
         ok6 = pre is not None and post is not None and abs(post - pre) < 0.5
         passed &= ok6
-        print(f"  [{'PASS' if ok6 else 'FAIL'}] tracked temp survives "
-              f"save/load: {pre} → {post}")
+        rep.check('temperature_restored', ok6, f'tracked temp survives save/load: {pre} → {post}')
 
-        print("\n" + ("ALL ITEM-TEMP CHECKS PASSED" if passed
-                      else "SOME FAILED"))
+        rep.note('\n' + ('ALL ITEM-TEMP CHECKS PASSED' if passed else 'SOME FAILED'))
         rc = 0 if passed else 1
     finally:
         # Orderly shutdown FIRST: the root must still exist while the
@@ -526,7 +557,7 @@ def main():
         # root stays unconditional: that directory is ours either way.
         if proc is not None:
             quit_engine(port, proc)
-        cleaned = remove_run_root(base)
+        cleaned = remove_run_root(base, rep)
     return rc if cleaned else 1
 
 
