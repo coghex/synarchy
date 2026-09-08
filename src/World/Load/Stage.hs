@@ -26,6 +26,7 @@ module World.Load.Stage
     , repairSavedCameraView
     , stagedCameraWarning
     , stagedWorldDateWarning
+    , stagedTimeRemainderWarning
     ) where
 
 import UPrelude
@@ -426,6 +427,18 @@ stagedWorldDateWarning pid raw canonical =
       <> " is outside the page's calendar; loading it as "
       <> renderWorldDate canonical
 
+-- | The warning one out-of-domain stored sub-minute remainder produces
+--   (#2471): the page it came from and the value the save carried. The
+--   repaired value is not named because there is only one — no retained
+--   progress — and it is stated in the message. Exposed for the same
+--   reason its date, camera and gen-params siblings are: a spec pins the
+--   whole line without staging a save.
+stagedTimeRemainderWarning ∷ WorldPageId → Double → Text
+stagedTimeRemainderWarning pid raw =
+    "Saved page '" <> unWorldPageId pid
+      <> "': the stored sub-minute clock progress " <> tshow raw
+      <> " is not a fraction of a game-minute; loading it as 0"
+
 -- | The warning one dropped ground item produces (#2336): the page it
 --   came from, its PAGE-LOCAL ground-item id, what it was, and the
 --   position the save stored. Exposed for the same reason its
@@ -569,6 +582,18 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         savedDate = WorldDate (wpsDateYear wps) (wpsDateMonth wps)
                               (wpsDateDay wps)
         stagedDate = canonicalWorldDate (wgpCalender params) savedDate
+        -- #2471: the stored sub-minute progress, judged at this same
+        -- boundary and for the same reason. A value that is not a
+        -- fraction of a minute — NaN, an infinity, negative, or a whole
+        -- minute or more — cannot have come from this build's clock, so
+        -- it loads as no progress at all and says so. It is a REPAIR
+        -- rather than a decode refusal because at most one game-minute
+        -- is at stake and the rest of the save is perfectly good; the
+        -- @world-pages@ validator deliberately does not judge it, so
+        -- every such payload reaches this one repair.
+        savedRemainder = wpsTimeRemainder wps
+        (stagedRemainder, remainderRepaired) =
+            repairClockRemainder savedRemainder
 
     logInfo logger CatWorld $ "Staging saved page: " <> unWorldPageId pid
     forM_ genRejections $ logWarn logger CatWorld . stagedGenParamsWarning pid
@@ -578,6 +603,8 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         logWarn logger CatWorld . stagedGroundItemWarning pid
     when (stagedDate ≢ savedDate) $
         logWarn logger CatWorld (stagedWorldDateWarning pid savedDate stagedDate)
+    when remainderRepaired $
+        logWarn logger CatWorld (stagedTimeRemainderWarning pid savedRemainder)
 
     worldState ← emptyWorldState
     let phaseRef   = wsLoadPhaseRef worldState
@@ -601,8 +628,12 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     forM_ (wpsGeneratedId wps) $ writeIORef (wsGeneratedIdRef worldState)
     writeIORef (wsCameraRef worldState)
         (WorldCamera (wpsCameraX wps) (wpsCameraY wps))
-    writeIORef (wsTimeRef worldState)
-        (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
+    -- #2471: the sub-minute progress is restored WITH the whole minutes
+    -- it belongs to, in one write, so a session resumed mid-minute keeps
+    -- the progress it had. A pre-v11 save migrates to no progress, which
+    -- is exactly what it recorded.
+    writeIORef (wsTimeRef worldState) (PreciseWorldTime
+        (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps)) stagedRemainder)
     writeIORef (wsDateRef worldState) stagedDate
     -- Never restore a player's previous simulation speed from a save.
     writeIORef (wsTimeScaleRef worldState) 1

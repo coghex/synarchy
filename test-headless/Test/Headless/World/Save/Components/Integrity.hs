@@ -736,6 +736,7 @@ minimalWorldPageSave pid = WorldPageSave
     , wpsCameraX      = 0, wpsCameraY = 0, wpsCameraZoom = 1
     , wpsCameraFacing = FaceSouth
     , wpsTimeHour     = 0, wpsTimeMinute = 0
+    , wpsTimeRemainder = 0
     , wpsDateYear     = 1, wpsDateMonth = 1, wpsDateDay = 1
     , wpsTimeScale    = 1
     , wpsMapMode      = ZMDefault

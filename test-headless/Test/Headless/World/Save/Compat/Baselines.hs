@@ -203,6 +203,7 @@ data ExpectedPage = ExpectedPage
     , epUnitSimStateCount ∷ !Int, epCraftBillCount ∷ !Int
     , epPowerNodeCount ∷ !Int, epGroundItemCount ∷ !Int
     , epTimeHour ∷ !Int, epTimeMinute ∷ !Int
+    , epTimeRemainder ∷ !Double
     , epDateYear ∷ !Int, epDateMonth ∷ !Int, epDateDay ∷ !Int
     , epMapMode ∷ !Text
     , epBuildings ∷ ![ExpectedBuilding]
@@ -218,6 +219,13 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .: "unitSimStateCount" <*> o .: "craftBillCount"
         <*> o .: "powerNodeCount" <*> o .: "groundItemCount"
         <*> o .: "timeHour" <*> o .: "timeMinute"
+        -- #2471: OPTIONAL, defaulting to no retained progress. Every
+        -- summary generated before world-pages v11 predates the key, and
+        -- 0 is precisely what 'migrateWorldPagesV10' gives those payloads
+        -- back -- so the default is the pre-v11 contract rather than a
+        -- convenience. A v11 fixture declares its own value and this
+        -- reader then pins it exactly.
+        <*> o .:? "timeRemainder" .!= 0
         <*> o .: "dateYear" <*> o .: "dateMonth" <*> o .: "dateDay"
         <*> o .: "mapMode"
         <*> o .:? "buildings" .!= []
@@ -367,6 +375,13 @@ manifestFixturesSpec =
                                         `shouldBe` epGroundItemCount ep
                                     pgsTimeHour page `shouldBe` epTimeHour ep
                                     pgsTimeMinute page `shouldBe` epTimeMinute ep
+                                    -- #2471: pinned exactly, so a v11
+                                    -- fixture proves its recorded
+                                    -- sub-minute progress survives decode
+                                    -- and every pre-v11 fixture proves
+                                    -- its migration yields none.
+                                    pgsTimeRemainder page
+                                        `shouldBe` epTimeRemainder ep
                                     pgsDateYear page `shouldBe` epDateYear ep
                                     pgsDateMonth page `shouldBe` epDateMonth ep
                                     pgsDateDay page `shouldBe` epDateDay ep

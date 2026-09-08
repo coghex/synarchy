@@ -36,7 +36,8 @@ import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.State.Types
     ( WorldState(..), emptyWorldState, WorldManager(..), emptyWorldManager )
 import World.Page.Types (WorldPageId(..))
-import World.Time.Types (WorldTime(..), worldTimeToSunAngle)
+import World.Time.Types
+    (WorldTime(..), worldTimeToSunAngle, preciseWorldTime)
 import World.Time.Local (localSunAngle)
 
 -- ---- Terrain fixtures (mirrors Test.Headless.Unit.Pathing.AStar) ----
@@ -124,11 +125,11 @@ setupPages ∷ [WorldPageId] → IO WorldManager
 setupPages visibleOrder = do
     wsA ← emptyWorldState
     writeIORef (wsTilesRef wsA) (wtdWith (flatChunk 5))
-    writeIORef (wsTimeRef wsA) (WorldTime 12 0)   -- noon
+    writeIORef (wsTimeRef wsA) (preciseWorldTime (WorldTime 12 0))   -- noon
     writeIORef (wsGenParamsRef wsA) (Just defaultWorldGenParams { wgpWorldSize = 4 })
     wsB ← emptyWorldState
     writeIORef (wsTilesRef wsB) (wtdWith (wallChunk 5 40))
-    writeIORef (wsTimeRef wsB) (WorldTime 0 0)    -- midnight
+    writeIORef (wsTimeRef wsB) (preciseWorldTime (WorldTime 0 0))    -- midnight
     writeIORef (wsGenParamsRef wsB) (Just defaultWorldGenParams { wgpWorldSize = 256 })
     pure (emptyWorldManager
         { wmWorlds = [(pageA, wsA), (pageB, wsB)]
@@ -227,11 +228,11 @@ spec = beforeAll initEnv $ do
             -- gx /= gy so the longitude-local term is nonzero.
             wsA ← emptyWorldState
             writeIORef (wsTilesRef wsA) (wtdWith (flatChunk 5))
-            writeIORef (wsTimeRef wsA) (WorldTime 3 0)
+            writeIORef (wsTimeRef wsA) (preciseWorldTime (WorldTime 3 0))
             writeIORef (wsGenParamsRef wsA) (Just defaultWorldGenParams { wgpWorldSize = 4 })
             wsB ← emptyWorldState
             writeIORef (wsTilesRef wsB) (wtdWith (flatChunk 5))
-            writeIORef (wsTimeRef wsB) (WorldTime 3 0)
+            writeIORef (wsTimeRef wsB) (preciseWorldTime (WorldTime 3 0))
             writeIORef (wsGenParamsRef wsB) (Just defaultWorldGenParams { wgpWorldSize = 256 })
             writeIORef (worldManagerRef env)
                 (emptyWorldManager
@@ -266,12 +267,12 @@ spec = beforeAll initEnv $ do
             clockPages = do
                 wsDay ← emptyWorldState
                 writeIORef (wsTilesRef wsDay) (wtdWith (flatChunk 5))
-                writeIORef (wsTimeRef wsDay) (WorldTime 12 0)
+                writeIORef (wsTimeRef wsDay) (preciseWorldTime (WorldTime 12 0))
                 writeIORef (wsGenParamsRef wsDay)
                     (Just defaultWorldGenParams { wgpWorldSize = 256 })
                 wsNight ← emptyWorldState
                 writeIORef (wsTilesRef wsNight) (wtdWith (flatChunk 5))
-                writeIORef (wsTimeRef wsNight) (WorldTime 0 0)
+                writeIORef (wsTimeRef wsNight) (preciseWorldTime (WorldTime 0 0))
                 writeIORef (wsGenParamsRef wsNight)
                     (Just defaultWorldGenParams { wgpWorldSize = 256 })
                 pure (emptyWorldManager

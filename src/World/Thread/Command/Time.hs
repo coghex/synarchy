@@ -23,8 +23,17 @@ handleWorldSetTimeCommand wsc logger pageId hour minute = do
         Just worldState → do
             let clampedH = max 0 (min 23 hour)
                 clampedM = max 0 (min 59 minute)
+            -- #2471: this command names a WHOLE minute, so any
+            -- sub-minute progress the page was carrying is spent — it
+            -- belonged to the time this command just replaced, and
+            -- keeping it would make the very next tick roll a minute the
+            -- caller never asked for. Both halves go in ONE write, so a
+            -- reader on another thread can never see the new minute
+            -- beside the old progress. 'handleWorldSetDateCommand' below
+            -- deliberately changes neither: a date poke leaves the time
+            -- of day, and therefore its progress, exactly where it was.
             atomicModifyIORef' (wsTimeRef worldState) $ \_ →
-                (WorldTime clampedH clampedM, ())
+                (preciseWorldTime (WorldTime clampedH clampedM), ())
         Nothing →
             logDebug logger CatWorld $
                 "World not found for time update: " <> unWorldPageId pageId

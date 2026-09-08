@@ -71,7 +71,9 @@ import World.State.Types
 import World.Thread.Command.UI (handleWorldShowCommand)
 import World.Thread.Time (tickWorldTime)
 import World.Tile.Types (WorldTileData(..), emptyWorldTileData)
-import World.Time.Types (WorldTime(..), worldTimeToSunAngle)
+import World.Time.Types
+    ( WorldTime(..), worldTimeToSunAngle, PreciseWorldTime(..)
+    , preciseWorldTime, repairClockRemainder )
 import World.ZoomMap.Types (ZoomChunkEntry(..))
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 
@@ -224,7 +226,7 @@ setUpPage ws worldSize time = do
     writeIORef (wsTilesRef ws) fixtureTiles
     writeIORef (wsGenParamsRef ws)
         (Just defaultWorldGenParams { wgpWorldSize = worldSize })
-    writeIORef (wsTimeRef ws) time
+    writeIORef (wsTimeRef ws) (preciseWorldTime time)
     writeIORef (wsQuadCacheRef ws) Nothing
 
 installPages ∷ EngineEnv → Camera2D → [WorldPageId]
@@ -410,7 +412,7 @@ livenessSpec = describe "advancing a page's clock" $
             beforeOne ← cacheOf wsOne
             blankTiles wsOne wsTwo
             let laterOne = WorldTime 7 15
-            writeIORef (wsTimeRef wsOne) laterOne
+            writeIORef (wsTimeRef wsOne) (preciseWorldTime laterOne)
             -- Reinstall to restore the camera the caches were stamped
             -- against: the pass itself writes @camZSlice@ while
             -- z-tracking, and a moved camera is a rebuild reason of its
@@ -573,6 +575,7 @@ restoreSpec = describe "a restored multi-page session" $
                     , pcCameraY    = 0
                     , pcTimeHour   = wtHour time
                     , pcTimeMinute = wtMinute time
+                    , pcTimeRemainder = 0
                     , pcDateYear   = 1
                     , pcDateMonth  = 1
                     , pcDateDay    = 1
@@ -594,8 +597,15 @@ restoreSpec = describe "a restored multi-page session" $
                         writeIORef (wsTilesRef ws) fixtureTiles
                         writeIORef (wsGenParamsRef ws)
                             (Just (fromWorldGenParamsDTO (pcGenParams page)))
-                        writeIORef (wsTimeRef ws)
+                        -- #2471: rebuilt the way load staging does,
+                        -- from the decoded remainder as well as the
+                        -- decoded minutes, so this restore is the real
+                        -- shape rather than one that drops half the
+                        -- clock.
+                        writeIORef (wsTimeRef ws) (PreciseWorldTime
                             (WorldTime (pcTimeHour page) (pcTimeMinute page))
+                            (fst (repairClockRemainder
+                                     (pcTimeRemainder page))))
                         pure (pcPageId page, ws)
                     -- The restored PRIMARY heads the visible list, which
                     -- under the old head-page attribution is exactly what

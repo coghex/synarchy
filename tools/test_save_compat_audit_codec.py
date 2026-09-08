@@ -286,6 +286,12 @@ _EXPECTED_DESCRIPTORS: dict[str, str] = {
         'lua.unit_ai:9:R metadata:3:R power-nodes:2:R texture-palette:1:R '
         'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:6:R '
         'world-edits:3:R world-pages:10:R',
+    "y1-subminute-clock-remainder.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:9:R metadata:3:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:6:R '
+        'world-edits:3:R world-pages:11:R',
 }
 
 
@@ -338,15 +344,47 @@ def _with_path(bin_dir: Path):
     return _Scope()
 
 
+def _summary_deltas(tracked, helper, path: str = "") -> list[tuple[str, str]]:
+    """Every way the helper's summary differs from a tracked expectation.
+
+    Labelled by KIND, because the three kinds are not equally allowed:
+    a value that changed or a key that vanished is always a regression,
+    while a key the helper adds may be a field that postdates the
+    expectation's capture (see the member below).
+    """
+    out: list[tuple[str, str]] = []
+    if isinstance(tracked, dict) and isinstance(helper, dict):
+        for key in sorted(set(tracked) | set(helper)):
+            where = f"{path}/{key}"
+            if key not in helper:
+                out.append(("DROPPED", where))
+            elif key not in tracked:
+                out.append(("ADDED", where))
+            else:
+                out += _summary_deltas(tracked[key], helper[key], where)
+    elif isinstance(tracked, list) and isinstance(helper, list):
+        if len(tracked) != len(helper):
+            out.append(("LENGTH", f"{path}: {len(tracked)} -> {len(helper)}"))
+        else:
+            for i, (a, b) in enumerate(zip(tracked, helper)):
+                out += _summary_deltas(a, b, f"{path}[{i}]")
+    elif tracked != helper:
+        out.append(("CHANGED", f"{path}: {tracked!r} -> {helper!r}"))
+    return out
+
+
 def test_helper_summary_matches_every_generated_expectation() -> None:
-    print("issue #2273: the COMPILED helper's canonical summary is "
-          "byte-identical to every tracked *.expected.json the tool itself "
-          "generated -- the parity requirement the GHCi removal turns on")
+    print("issue #2273: the COMPILED helper reproduces every tracked "
+          "*.expected.json the tool itself generated -- byte-for-byte where "
+          "that expectation is current-schema, and on every field it "
+          "declares otherwise. A dropped key, a changed value or a changed "
+          "list length is a regression in all cases")
     pairs = _tool_generated_expectations()
     expect(len(pairs) >= 20,
            f"expected the tracked corpus to still carry a substantial set of "
            f"tool-generated expectations to compare against, found "
            f"{len(pairs)} (a vacuous pass otherwise)")
+    byte_identical = 0
     with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
         out = Path(d) / "summary.json"
         for fixture, expected in pairs:
@@ -354,9 +392,33 @@ def test_helper_summary_matches_every_generated_expectation() -> None:
             if not ok:
                 expect(False, f"expected {fixture.name} to dump, got: {tail}")
                 continue
-            expect(out.read_bytes() == expected.read_bytes(),
-                   f"expected the helper's summary for {fixture.name} to be "
-                   f"byte-identical to its tracked {expected.name}")
+            if out.read_bytes() == expected.read_bytes():
+                byte_identical += 1
+                continue
+            # Not byte-identical: the ONLY tolerated reason is a summary
+            # field that postdates this fixture's expectation. #2471 added
+            # `timeRemainder`, and deliberately did not regenerate the
+            # pre-world-pages-v11 expectations, because a migrated pre-v11
+            # payload really does carry 0 there and the Baselines reader
+            # defaults the missing key to exactly that. So a NEW key is
+            # schema evolution; anything else is the helper getting the
+            # decode wrong.
+            deltas = _summary_deltas(
+                json.loads(expected.read_text(encoding="utf-8")),
+                json.loads(out.read_text(encoding="utf-8")))
+            regressions = [(k, w) for (k, w) in deltas if k != "ADDED"]
+            expect(not regressions,
+                   f"expected {fixture.name}'s summary to differ from its "
+                   f"tracked {expected.name} only by fields added since that "
+                   f"expectation was captured, got {regressions}")
+            expect(deltas,
+                   f"expected {fixture.name} to be byte-identical when "
+                   f"nothing about it differs structurally -- a difference "
+                   f"only in encoding would be a real drift")
+    expect(byte_identical >= 1,
+           "expected at least the current-schema expectation(s) to be "
+           "byte-identical, which is what pins the helper's ENCODING rather "
+           "than only its structure")
 
 
 def test_normalizing_a_tracked_fixture_reproduces_its_tracked_bytes() -> None:
@@ -544,15 +606,23 @@ def test_a_pre_existing_summary_is_never_mistaken_for_this_runs_output() -> None
                "rollback relies on")
 
         # ... and the successful direction really does replace it, so the
-        # staging above is not quietly swallowing the write.
-        ok, tail = codec.dump_canonical_summary(
-            common.FIXTURE_DATA_DIR / "u1-generated-world-identity.bin", out)
+        # staging above is not quietly swallowing the write. Compared
+        # against a FRESH dump of the same fixture rather than its tracked
+        # expectation: the tracked file's schema vintage is a separate
+        # concern (see the parity member above), and this assertion is
+        # about replacement happening at all.
+        fixture = common.FIXTURE_DATA_DIR / "u1-generated-world-identity.bin"
+        reference = tmp / "reference.json"
+        ok, tail = codec.dump_canonical_summary(fixture, reference)
+        expect(ok, f"expected the reference dump to succeed, got: {tail}")
+        ok, tail = codec.dump_canonical_summary(fixture, out)
         expect(ok, f"expected the real helper to succeed, got: {tail}")
-        expect(out.read_bytes() == (
-                   common.FIXTURE_DATA_DIR
-                   / "u1-generated-world-identity.expected.json").read_bytes(),
+        expect(out.read_bytes() != stale.encode("utf-8"),
+               "expected the pre-existing content to be gone after a "
+               "successful run")
+        expect(out.read_bytes() == reference.read_bytes(),
                "expected a successful run to replace the pre-existing content "
-               "with this fixture's real canonical summary")
+               "with exactly this fixture's real canonical summary")
 
 
 def test_descriptor_success_without_written_output_is_reported_as_failure() -> None:
