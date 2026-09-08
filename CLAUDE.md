@@ -87,6 +87,18 @@ run, and test in that profile. Debug logging: `ENGINE_DEBUG=Vulkan,Graphics,...`
 Keep build parallelism in `ghc-options: -j`; Cabal's `semaphore:` jobserver
 can deadlock concurrent worktree builds.
 
+**Build-lock contention: wait in a foreground 60-second wake loop for up to
+30 minutes.** This applies to every agent workflow, including probes and art
+captures waiting for `cabal-build`. Keep an existing preparation helper running;
+wake every 60 seconds to check its result and the actual lock-holder metadata,
+give a brief progress update, and continue the pending operation automatically
+when the lock clears. Count the 30-minute timeout from the first lock wait;
+holder changes do not restart it. An apparent or diagnosed external nested
+deadlock is not a reason to abandon the wait early. At timeout, stop only your
+own pending attempt, retain its evidence, and report the blocker through the
+workflow's normal mechanism. Never bypass the lock, delete its files, or stop
+another owner's processes. User cancellation still ends the wait immediately.
+
 ### Testing tiers
 
 - **Choose validation by changed behavior.** Before reporting done, run the
