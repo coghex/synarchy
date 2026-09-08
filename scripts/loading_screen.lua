@@ -458,7 +458,7 @@ function loadingScreen.update(dt)
     -- the main menu.
     if loadingScreen.mode == "startup" then
         local startupLoader = require("scripts.startup_loader")
-        startupLoader.tick(dt)
+        startupLoader.tick(dt, true)
         loadingScreen.paintStartup(startupLoader)
 
         -- #2203: terminal. getProgress() froze at the failing family
