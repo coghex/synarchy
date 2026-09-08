@@ -14,11 +14,11 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Make unlike-fluid contact react: lava + water solidifies to stone
-- [ ] FR-1. Detect unlike-fluid contact and resolve it with the reaction rule in every transfer path
-- [ ] FR-2. Solidify the reaction product into durable stone terrain through the world edit log
-- [ ] FR-3. Resolve units and items caught at a solidifying cell
-- [ ] FR-4. Present the reaction: contact effects and map refresh
+- [x] EPIC. Make unlike-fluid contact react: lava + water solidifies to stone — [#2480]
+- [x] FR-1. Detect unlike-fluid contact and resolve it with the reaction rule in every transfer path — [#2481]
+- [x] FR-2. Solidify the reaction product into durable stone terrain through the world edit log — [#2485]
+- [x] FR-3. Resolve units and items caught at a solidifying cell — [#2490]
+- [x] FR-4. Present the reaction: contact effects and map refresh — [no-issue]: visually silent (D-7); refresh evidence folded into #2485
 
 ## Epic contract
 
@@ -173,15 +173,33 @@ Owner decision 2026-08-31 (resolves Q-3). FR-1 ships the reaction directly;
 the silent-retype defect is fixed by the reaction itself rather than by a
 preliminary blocking behavior.
 
-### D-5. The product predicate is local submersion/subterranean state
+### D-5. The product predicate is local submersion, decided at the reaction
 
-Owner decision 2026-08-31 (resolves Q-5). After annihilation, the new stone
-cell forms as **basalt** when it is still submerged (a water-type fluid cell
-remains directly above the new stone top, or the water side of the contact
-was `Ocean`) or subterranean (the new stone top sits below the column's
-terrain surface, inside carved interior space); otherwise **obsidian**.
-Deterministic, purely local to the contact cell, no climate/biome lookup.
-Rejected: Ocean-only basalt (coarser).
+Owner decision 2026-08-31, amended 2026-09-07 (resolves Q-5). The sim and
+the world model fluid per column on top of the terrain surface
+(`Sim.Fluid.Types.volumeToSurface`, `World.Chunk.Types.lcTerrainSurfaceMap`
+= topmost non-air z), and the reaction consumes the solidifying column's
+own lava, so the original wording — water "directly above the new stone
+top", or a stone top "below the column's terrain surface" — could never
+hold at the reaction and would have collapsed to the rejected Ocean-only
+rule. The predicate is therefore evaluated inside the sim at the moment of
+annihilation, from the two contacting cells plus the page-wide constant
+`World.Constants.seaLevel`. The new stone top is the lava column's terrain
+top plus one. The stone forms as **basalt** when any of these holds:
+
+- the water side of the contact was `Ocean`;
+- the contacting water cell's fluid surface after annihilation
+  (`volumeToSurface` of its terrain and remaining volume) is above the new
+  stone top — the stone will be under the lake or river once the water
+  equalizes onto it;
+- the new stone top is at or below `seaLevel`, the codebase's own subsea
+  test.
+
+Otherwise **obsidian**. Deterministic, no climate or biome lookup, and no
+dependence on writeback ordering. Rejected: Ocean-only basalt (coarser);
+evaluating submersion later against the live chunk (timing-dependent); a
+subterranean clause (fluid cannot sit below a column's terrain surface in
+the column model, so it is unreachable).
 
 ### D-6. Units and items at a solidifying cell are destroyed instantly
 
@@ -191,6 +209,19 @@ destroyed. Rejected: displacement to an adjacent tile (needs a displacement
 rule, can cascade), damage-and-lift (most machinery). Today's `WeAddTile`
 path has no occupant handling at all, so FR-3 is new mechanism, not a
 change to existing behavior.
+
+### D-7. The contact site is visually silent
+
+Owner decision 2026-09-07 (resolves Q-4). The stone simply appears; no
+side-deco marker, effect, or notification accompanies a solidification.
+A steam or sizzle marker would need a new `SideDecoType`, four new decal
+textures (an art issue with owner signoff; no steam, smoke, or bubble asset
+exists), a render hookup, and a lifetime rule, none of which the arc needs
+to deliver its outcome. The refresh half of FR-4 is already provided by the
+add-tile path FR-2 reuses, which invalidates the live quad cache and both
+zoom-map quad caches. Rejected: a side-deco steam/sizzle marker; a
+per-solidification event-log entry (not adopted; a later finding may
+revisit it).
 
 ## Open questions
 
@@ -216,10 +247,7 @@ Resolved by D-6.
 
 ### Q-4. What does the player see at the contact site?
 
-The side-deco channel (`scsSideDeco`, waterfall-style decals) could carry a
-steam/sizzle marker, or the contact could be visually silent (stone just
-appears). Affects FR-3's size only. Resolved by owner preference; can stay
-deliberately open until FR-3 is drafted.
+Resolved by D-7.
 
 ## Verification strategy
 
@@ -297,6 +325,9 @@ deliberately open until FR-3 is drafted.
 
 ### FR-4. Present the reaction: contact effects and map refresh
 
+> Disposition 2026-09-07: `[no-issue]` — the contact is visually silent
+> (D-7); the refresh evidence is requested on #2485.
+
 - **Outcome:** The contact site reads as a reaction to the player (per Q-4's
   answer), and live render + zoom map reflect the new stone promptly.
 - **Scope:** Side-deco/effect at contact, cache invalidation verification,
@@ -307,7 +338,7 @@ deliberately open until FR-3 is drafted.
 - **Relevant decisions:** D-1
 - **Acceptance signals:** per Q-4's resolution; zoom/live render show stone
   without a reload.
-- **Open questions:** Q-4 — may stay open until this slice is drafted.
+- **Open questions:** None (D-7).
 
 ## Source notes
 
