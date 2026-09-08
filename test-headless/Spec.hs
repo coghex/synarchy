@@ -128,6 +128,7 @@ import qualified Test.Headless.Magma.Shape as MagmaShape
 import qualified Test.Headless.Sim.Admission as SimAdmission
 import qualified Test.Headless.Sim.Seam as SimSeam
 import qualified Test.Headless.Sim.Conservation as SimConservation
+import qualified Test.Headless.Sim.Reaction as SimReaction
 import qualified Test.Headless.Input.KeyNames as InputKeyNames
 import qualified Test.Headless.Input.Bindings as InputBindings
 import qualified Test.Headless.Input.State as InputState
@@ -883,6 +884,7 @@ main = hspec $ do
     describe "World.Magma.Shape" MagmaShape.spec
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Sim.Fluid.Conservation" SimConservation.spec
+    describe "unlike-fluid reaction" SimReaction.spec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec
