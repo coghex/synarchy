@@ -38,7 +38,6 @@ import Control.Concurrent (threadDelay)
 import Data.IORef (readIORef)
 import Data.List (nub, sort)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 
@@ -48,7 +47,8 @@ import Sim.Chunk (applyChunkEdit, loadedChunkState)
 import Sim.Command.Types (SimCommand(..))
 import Sim.Fluid.Active (simulateActiveTick)
 import Sim.Fluid.Types (ActiveFluidCell(..))
-import Sim.State.Types (SimChunkState(..), SimWorldState(..))
+import Sim.State.Types (SimChunkState(..), SimWorldState(..)
+                       , emptySimWorldState)
 import Sim.Topology
     (SimTopology, simCardinalNeighbors, simTopologyForParams)
 import Test.Headless.Harness
@@ -260,10 +260,11 @@ cycleFor pid cmds =
 replaySeeds ∷ SimTopology → [Seed] → SimWorldState
 replaySeeds topo = foldl' step empty
   where
-    empty = SimWorldState
-        { swsChunks      = HM.empty
-        , swsDirtyChunks = HS.empty
-        , swsActive      = True
+    -- Built from 'emptySimWorldState' so a new transient field on
+    -- 'SimWorldState' (e.g. #2481's solidification-event history) is
+    -- initialized here exactly as the production boot initializes it.
+    empty = emptySimWorldState
+        { swsActive      = True
         , swsTopology    = topo
         }
     step sws s = sws

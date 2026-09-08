@@ -6,10 +6,12 @@ module Sim.Fluid.Active
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Sequence as Seq
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as MV
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Vector.Unboxed.Mutable as MVU
+import Data.List (sortOn)
 import Data.Maybe (mapMaybe)
 import Control.Monad.ST (ST, runST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef, modifySTRef')
@@ -18,6 +20,9 @@ import World.Fluid.Types (FluidCell(..))
 import World.SideFace.Base (SideDecoType(..), sideDecoBase)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
+import Sim.Fluid.Reaction
+    (CellSite(..), SolidificationEvent, TransferOutcome(..)
+    , applyTransfer, dedupeEvents)
 import Sim.Topology (SimTopology, simSeamNeighbor)
 
 -- | Ticks at equilibrium before a chunk is deactivated.
@@ -26,14 +31,28 @@ equilThreshold = 200
 
 -- | Run one tick of volume-conserving simulation for all active chunks
 --   of ONE world. The engine-level pause guard is the caller's job.
+--
+--   Unlike-fluid contact (#2481) is resolved by every transfer branch
+--   below through 'Sim.Fluid.Reaction.applyTransfer', which also bounds
+--   ordinary transfers by the LIVE source volume and the destination's
+--   remaining 'Word16' capacity. A tick's solidification events are
+--   deduplicated to at most one per canonical coordinate and appended to
+--   this world's 'swsSolidEvents'; nothing here drains that collection.
 simulateActiveTick ∷ SimWorldState → SimWorldState
 simulateActiveTick sws =
         let chunks = swsChunks sws
             activeChunks = HM.filter scsActive chunks
         in if HM.null activeChunks
+           -- An inactive world still carries whatever it has already
+           -- emitted: the event history is output, not scratch.
            then sws
-           else let results = reconcileSeams (swsTopology sws)
-                                 (HM.mapWithKey (simulateActiveChunk chunks) activeChunks)
+           else let ticked = HM.mapWithKey (simulateActiveChunk chunks) activeChunks
+                    phased = HM.map (\(scs, ch, _) → (scs, ch)) ticked
+                    -- Chunk-key order, so a tick's events (and therefore
+                    -- the dedupe below) do not depend on hash iteration.
+                    chunkEvents = concatMap (\(_, _, evs) → evs)
+                        (map snd (sortOn fst (HM.toList ticked)))
+                    (results, seamEvents) = reconcileSeams (swsTopology sws) phased
                     dirty = HM.foldlWithKey' (\acc cc (_, changed) →
                         if changed then HS.insert cc acc else acc
                         ) (swsDirtyChunks sws) results
@@ -48,8 +67,14 @@ simulateActiveTick sws =
                                     else scs'
                         in HM.insert cc scs'' acc
                         ) chunks results
+                    -- At most ONE event per canonical coordinate per tick.
+                    -- A deactivating tick bakes its grid to passive fluid,
+                    -- but the events it already produced are kept.
+                    fresh = dedupeEvents (chunkEvents <> seamEvents)
                 in sws { swsChunks = newChunks
                        , swsDirtyChunks = dirty
+                       , swsSolidEvents =
+                           swsSolidEvents sws <> Seq.fromList fresh
                        }
 
 -- | Deactivate a chunk: bake active volumes back to passive fluid.
@@ -70,24 +95,35 @@ deactivateInPlace scs =
            , scsEquilTicks  = 0
            }
 
--- | Simulate one tick for a single active chunk.
+-- | One side of a contact inside a single chunk's grid.
+siteIn ∷ ChunkCoord → VU.Vector Int → Int → CellSite
+siteIn cc terrainV idx = CellSite { csChunk   = cc
+                                  , csIndex   = idx
+                                  , csTerrain = terrainV VU.! idx
+                                  }
+{-# INLINE siteIn #-}
+
+-- | Simulate one tick for a single active chunk. The chunk's own stored
+--   key names any solidification event its phases emit (#2481).
 simulateActiveChunk ∷ HM.HashMap ChunkCoord SimChunkState
-                    → ChunkCoord → SimChunkState → (SimChunkState, Bool)
-simulateActiveChunk _allChunks _coord scs =
+                    → ChunkCoord → SimChunkState
+                    → (SimChunkState, Bool, [SolidificationEvent])
+simulateActiveChunk _allChunks coord scs =
     let terrainV = scsTerrain scs
-        (newActive, newDeco, changed) = runST $ do
+        (newActive, newDeco, changed, events) = runST $ do
             mv ← V.thaw (scsActiveFluid scs)
             decoMv ← VU.thaw (scsSideDeco scs)
             changedRef ← newSTRef False
+            eventsRef ← newSTRef ([] ∷ [SolidificationEvent])
 
             -- Phase A: Gravity (downhill flow)
-            phaseGravity mv terrainV changedRef
+            phaseGravity coord mv terrainV changedRef eventsRef
 
             -- Phase B: Lateral pressure equalization
-            phaseLateral mv terrainV changedRef
+            phaseLateral coord mv terrainV changedRef eventsRef
 
             -- Phase C: Waterfall detection + downward transfer
-            phaseWaterfall mv decoMv terrainV changedRef
+            phaseWaterfall coord mv decoMv terrainV changedRef eventsRef
 
             -- Phase D: Dry-out (remove zero-volume cells)
             phaseDryOut mv changedRef
@@ -95,7 +131,8 @@ simulateActiveChunk _allChunks _coord scs =
             result ← V.freeze mv
             decoResult ← VU.freeze decoMv
             ch ← readSTRef changedRef
-            pure (result, decoResult, ch)
+            evs ← readSTRef eventsRef
+            pure (result, decoResult, ch, reverse evs)
 
         -- Also derive passive FluidMap for writeback
         newFluid = deriveFluidMap terrainV newActive
@@ -103,7 +140,19 @@ simulateActiveChunk _allChunks _coord scs =
     in (scs { scsActiveFluid = newActive
             , scsFluid       = newFluid
             , scsSideDeco    = newDeco
-            }, changed)
+            }, changed, events)
+
+-- | Record one applied request's outcome: any event it produced, and
+--   whether it changed the grid at all (a reaction counts).
+noteOutcome ∷ STRef s Bool → STRef s [SolidificationEvent] → TransferOutcome
+            → ST s ()
+noteOutcome changedRef eventsRef outcome = do
+    when (toMoved outcome > 0 ∨ toConsumed outcome > 0) $
+        writeSTRef changedRef True
+    case toEvent outcome of
+        Nothing → pure ()
+        Just ev → modifySTRef' eventsRef (ev :)
+{-# INLINE noteOutcome #-}
 
 -- | Derive the passive fluid map (surfaces) from an active-volume grid.
 deriveFluidMap ∷ VU.Vector Int → V.Vector (Maybe ActiveFluidCell)
@@ -151,35 +200,17 @@ seamFlow terrA mca terrB mcb =
                then negate (max 1 (min volB (surfDiff * volumePerLevel `div` 4))) else 0
        else 0
 
--- | Apply a signed seam flow (positive = mA[ia] → mB[ib]) live, bounded
---   by the source's CURRENT volume — so two seams meeting at a corner
---   cell can't over-drain it. Volume-conserving.
-moveSeam ∷ MV.MVector s (Maybe ActiveFluidCell) → Int
-         → MV.MVector s (Maybe ActiveFluidCell) → Int → Int → ST s ()
-moveSeam mA ia mB ib flow
-    | flow > 0  = transferCell mA ia mB ib flow
-    | flow < 0  = transferCell mB ib mA ia (negate flow)
-    | otherwise = pure ()
-
-transferCell ∷ MV.MVector s (Maybe ActiveFluidCell) → Int
-             → MV.MVector s (Maybe ActiveFluidCell) → Int → Int → ST s ()
-transferCell mSrc iSrc mDst iDst amt = do
-    msrc ← MV.read mSrc iSrc
-    case msrc of
-        Nothing → pure ()
-        Just s → do
-            let actual = min amt (fromIntegral (afcVolume s)) ∷ Int
-            when (actual > 0) $ do
-                MV.write mSrc iSrc (Just s
-                    { afcVolume = afcVolume s - fromIntegral actual })
-                mdst ← MV.read mDst iDst
-                case mdst of
-                    Nothing → MV.write mDst iDst (Just ActiveFluidCell
-                        { afcType = afcType s
-                        , afcVolume = fromIntegral actual
-                        , afcFlowDir = 0 })
-                    Just d → MV.write mDst iDst (Just d
-                        { afcVolume = afcVolume d + fromIntegral actual })
+-- | Apply a signed seam flow (positive = A → B) live through the shared
+--   applier, so an unlike pair across the seam reacts exactly like an
+--   unlike pair inside a chunk. Bounded by the source's CURRENT volume,
+--   so two seams meeting at a corner cell can't over-drain it.
+moveSeam ∷ MV.MVector s (Maybe ActiveFluidCell) → CellSite
+         → MV.MVector s (Maybe ActiveFluidCell) → CellSite → Int
+         → ST s TransferOutcome
+moveSeam mA siteA mB siteB flow
+    | flow > 0  = applyTransfer mA siteA mB siteB flow
+    | flow < 0  = applyTransfer mB siteB mA siteA (negate flow)
+    | otherwise = pure (TransferOutcome 0 0 Nothing)
 
 -- | (selfIdx, neighbourIdx) along the +X seam: this chunk's right column
 --   (lx = chunkSize-1) facing the East neighbour's left column (lx = 0).
@@ -206,16 +237,25 @@ southEdgePairs =
 --   still belongs to exactly one @(chunk, direction)@ probe and is still
 --   processed exactly once. Identity on a flat page and away from the
 --   seam.
+--
+--   Those stored keys are also what a seam solidification event is named
+--   by (#2481): the event belongs to the exhausted LAVA cell, whichever
+--   side of the seam it is on, under the key the sim already holds that
+--   chunk under.
 reconcileSeams ∷ SimTopology
                → HM.HashMap ChunkCoord (SimChunkState, Bool)
-               → HM.HashMap ChunkCoord (SimChunkState, Bool)
+               → ( HM.HashMap ChunkCoord (SimChunkState, Bool)
+                 , [SolidificationEvent] )
 reconcileSeams topo results
-    | HM.size results < 2 = results
+    | HM.size results < 2 = (results, [])
     | otherwise =
-        let (grids', touched) = runST $ do
+        let (grids', touched, events) = runST $ do
                 mgrids ← traverse (\(scs, _) → V.thaw (scsActiveFluid scs)) results
                 touchedRef ← newSTRef HS.empty
-                forM_ (HM.toList results) $ \(coord, (scsA, _)) →
+                eventsRef ← newSTRef ([] ∷ [SolidificationEvent])
+                -- Chunk-key order: the seam pass mutates live grids, so
+                -- its outcome must not depend on hash iteration order.
+                forM_ (sortOn fst (HM.toList results)) $ \(coord, (scsA, _)) →
                     forM_ [ (simSeamNeighbor topo 1 0 coord, eastEdgePairs)
                           , (simSeamNeighbor topo 0 1 coord, southEdgePairs) ] $ \(nbr, pairs) →
                         case HM.lookup nbr results of
@@ -232,29 +272,39 @@ reconcileSeams topo results
                                     let flow = seamFlow (terrA VU.! ia) ca
                                                         (terrB VU.! ib) cb
                                     when (flow ≢ 0) $ do
-                                        moveSeam mA ia mB ib flow
-                                        writeSTRef anyRef True
+                                        outcome ← moveSeam mA (siteIn coord terrA ia)
+                                                           mB (siteIn nbr terrB ib) flow
+                                        when (toMoved outcome > 0
+                                              ∨ toConsumed outcome > 0) $
+                                            writeSTRef anyRef True
+                                        case toEvent outcome of
+                                            Nothing → pure ()
+                                            Just ev → modifySTRef' eventsRef (ev :)
                                 didMove ← readSTRef anyRef
                                 when didMove $ modifySTRef' touchedRef
                                     (HS.insert coord . HS.insert nbr)
                 frozen ← traverse V.freeze mgrids
                 t ← readSTRef touchedRef
-                pure (frozen, t)
-        in HM.mapWithKey (\coord (scs, changed) →
-            if HS.member coord touched
-            then let active' = grids' HM.! coord
-                 in (scs { scsActiveFluid = active'
-                         , scsFluid = deriveFluidMap (scsTerrain scs) active' }, True)
-            else (scs, changed)
-            ) results
+                evs ← readSTRef eventsRef
+                pure (frozen, t, reverse evs)
+        in ( HM.mapWithKey (\coord (scs, changed) →
+                if HS.member coord touched
+                then let active' = grids' HM.! coord
+                     in (scs { scsActiveFluid = active'
+                             , scsFluid = deriveFluidMap (scsTerrain scs) active' }, True)
+                else (scs, changed)
+                ) results
+           , events )
 
 -- * Phase A: Gravity — downhill flow
 
-phaseGravity ∷ MV.MVector s (Maybe ActiveFluidCell)
+phaseGravity ∷ ChunkCoord
+             → MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
              → STRef s Bool
+             → STRef s [SolidificationEvent]
              → ST s ()
-phaseGravity mv terrainV changedRef = do
+phaseGravity coord mv terrainV changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -299,32 +349,26 @@ phaseGravity mv terrainV changedRef = do
                                      else amt
                             actual = min scaled (avail - soFar)
                         when (actual > 0) $ do
-                            writeSTRef totalRef (soFar + actual)
-                            srcCell ← MV.read mv idx
-                            case srcCell of
-                                Just src → MV.write mv idx
-                                    (Just src { afcVolume = afcVolume src - fromIntegral actual })
-                                Nothing → pure ()
-                            dst ← MV.read mv nIdx
-                            case dst of
-                                Nothing →
-                                    MV.write mv nIdx (Just ActiveFluidCell
-                                        { afcType = afcType afc
-                                        , afcVolume = fromIntegral actual
-                                        , afcFlowDir = 0
-                                        })
-                                Just d →
-                                    MV.write mv nIdx (Just d
-                                        { afcVolume = afcVolume d + fromIntegral actual })
-                            writeSTRef changedRef True
+                            -- Planned from the snapshot, paid from the LIVE
+                            -- cells: a reaction can consume more than this
+                            -- request, so the applier re-reads both sides
+                            -- and this loop advances only by what moved.
+                            outcome ← applyTransfer
+                                mv (siteIn coord terrainV idx)
+                                mv (siteIn coord terrainV nIdx)
+                                actual
+                            writeSTRef totalRef (soFar + toMoved outcome)
+                            noteOutcome changedRef eventsRef outcome
 
 -- * Phase B: Lateral pressure equalization
 
-phaseLateral ∷ MV.MVector s (Maybe ActiveFluidCell)
+phaseLateral ∷ ChunkCoord
+             → MV.MVector s (Maybe ActiveFluidCell)
              → VU.Vector Int
              → STRef s Bool
+             → STRef s [SolidificationEvent]
              → ST s ()
-phaseLateral mv terrainV changedRef = do
+phaseLateral coord mv terrainV changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -347,7 +391,10 @@ phaseLateral mv terrainV changedRef = do
                 -- and its 'Word16' volume wraps to ~65535, manufacturing
                 -- fluid (#2042). The rate ('diff div 4') and the
                 -- minimum-one-unit progress rule are untouched for every
-                -- transfer the source can actually afford.
+                -- transfer the source can actually afford. Since #2481 the
+                -- live cap is enforced inside 'applyTransfer' as well, which
+                -- is what makes it hold when an unlike-fluid reaction — not
+                -- this loop's own spending — is what emptied the source.
                 spentRef ← newSTRef (0 ∷ Int)
                 forM_ nbrs $ \(nx, ny) →
                     when (nx ≥ 0 ∧ nx < chunkSize ∧ ny ≥ 0 ∧ ny < chunkSize) $ do
@@ -365,57 +412,46 @@ phaseLateral mv terrainV changedRef = do
                                         let transfer = min (max 1 (diff `div` 4))
                                                            (srcVol - spent)
                                         when (transfer > 0) $ do
-                                            curSrc ← MV.read mv idx
-                                            curDst ← MV.read mv nIdx
-                                            case (curSrc, curDst) of
-                                                (Just s, Just d) → do
-                                                    writeSTRef spentRef (spent + transfer)
-                                                    MV.write mv idx (Just s
-                                                        { afcVolume = afcVolume s - fromIntegral transfer })
-                                                    MV.write mv nIdx (Just d
-                                                        { afcVolume = afcVolume d + fromIntegral transfer })
-                                                    writeSTRef changedRef True
-                                                _ → pure ()
+                                            outcome ← applyTransfer
+                                                mv (siteIn coord terrainV idx)
+                                                mv (siteIn coord terrainV nIdx)
+                                                transfer
+                                            writeSTRef spentRef
+                                                (spent + toMoved outcome)
+                                            noteOutcome changedRef eventsRef outcome
                                 Nothing | srcVol > volumePerLevel → do
                                     spent ← readSTRef spentRef
                                     let transfer = min (max 1 (srcVol `div` 4))
                                                        (srcVol - spent)
                                     when (transfer > 0) $ do
-                                        curSrc ← MV.read mv idx
-                                        case curSrc of
-                                            Just s → do
-                                                writeSTRef spentRef (spent + transfer)
-                                                MV.write mv idx (Just s
-                                                    { afcVolume = afcVolume s - fromIntegral transfer })
-                                                -- Read the LIVE destination: an
-                                                -- earlier source this same phase
-                                                -- may already have spilled into
-                                                -- this snapshot-empty cell, and
-                                                -- overwriting it would destroy
-                                                -- that fluid (#2042).
-                                                curDst ← MV.read mv nIdx
-                                                case curDst of
-                                                    Nothing →
-                                                        MV.write mv nIdx (Just ActiveFluidCell
-                                                            { afcType = afcType afc
-                                                            , afcVolume = fromIntegral transfer
-                                                            , afcFlowDir = 0
-                                                            })
-                                                    Just d →
-                                                        MV.write mv nIdx (Just d
-                                                            { afcVolume = afcVolume d + fromIntegral transfer })
-                                                writeSTRef changedRef True
-                                            Nothing → pure ()
+                                        -- The destination was empty in the
+                                        -- SNAPSHOT, but an earlier source this
+                                        -- same phase may already have spilled
+                                        -- into it — possibly with an unlike
+                                        -- fluid. 'applyTransfer' reads the LIVE
+                                        -- cell, so this branch reacts, adds, or
+                                        -- creates exactly as the live state
+                                        -- warrants instead of overwriting what
+                                        -- is there (#2042, #2481).
+                                        outcome ← applyTransfer
+                                            mv (siteIn coord terrainV idx)
+                                            mv (siteIn coord terrainV nIdx)
+                                            transfer
+                                        writeSTRef spentRef
+                                            (spent + toMoved outcome)
+                                        noteOutcome changedRef eventsRef outcome
                                 _ → pure ()
 
 -- * Phase C: Waterfall detection
 
-phaseWaterfall ∷ MV.MVector s (Maybe ActiveFluidCell)
+phaseWaterfall ∷ ChunkCoord
+               → MV.MVector s (Maybe ActiveFluidCell)
                → MVU.MVector s Word8
                → VU.Vector Int
                → STRef s Bool
+               → STRef s [SolidificationEvent]
                → ST s ()
-phaseWaterfall mv decoMv terrainV changedRef = do
+phaseWaterfall coord mv decoMv terrainV changedRef eventsRef = do
     snap ← V.freeze mv
     let sz = chunkSize * chunkSize
     forM_ [0 .. sz - 1] $ \idx → do
@@ -453,29 +489,22 @@ phaseWaterfall mv decoMv terrainV changedRef = do
                                      else amt
                             actual = min scaled (avail - soFar)
                         when (actual > 0) $ do
-                            writeSTRef totalRef (soFar + actual)
-                            srcCell ← MV.read mv idx
-                            case srcCell of
-                                Just src → MV.write mv idx
-                                    (Just src { afcVolume = afcVolume src - fromIntegral actual })
-                                Nothing → pure ()
-                            dst ← MV.read mv nIdx
-                            case dst of
-                                Nothing →
-                                    MV.write mv nIdx (Just ActiveFluidCell
-                                        { afcType = afcType afc
-                                        , afcVolume = fromIntegral actual
-                                        , afcFlowDir = 0
-                                        })
-                                Just d →
-                                    MV.write mv nIdx (Just d
-                                        { afcVolume = afcVolume d + fromIntegral actual })
-                            fd ← readSTRef flowDirRef
-                            writeSTRef flowDirRef (fd ⌄ ((1 ∷ Word8) `shiftL` dirBit))
-                            MVU.write decoMv idx
-                                (sideDecoBase DecoWaterfall
-                                    + fromIntegral (dirBit `mod` 4))
-                            writeSTRef changedRef True
+                            outcome ← applyTransfer
+                                mv (siteIn coord terrainV idx)
+                                mv (siteIn coord terrainV nIdx)
+                                actual
+                            writeSTRef totalRef (soFar + toMoved outcome)
+                            noteOutcome changedRef eventsRef outcome
+                            -- A reaction moves no fluid, so nothing fell
+                            -- here: the waterfall marker and flow direction
+                            -- describe transfers only.
+                            when (toMoved outcome > 0) $ do
+                                fd ← readSTRef flowDirRef
+                                writeSTRef flowDirRef
+                                    (fd ⌄ ((1 ∷ Word8) `shiftL` dirBit))
+                                MVU.write decoMv idx
+                                    (sideDecoBase DecoWaterfall
+                                        + fromIntegral (dirBit `mod` 4))
                 newFD ← readSTRef flowDirRef
                 when (newFD ≢ afcFlowDir afc) $ do
                     cur ← MV.read mv idx
@@ -502,4 +531,3 @@ cardinalNeighbors ∷ Int → Int → [(Int, Int)]
 cardinalNeighbors lx ly =
     [(lx, ly - 1), (lx + 1, ly), (lx, ly + 1), (lx - 1, ly)]
 {-# INLINE cardinalNeighbors #-}
-

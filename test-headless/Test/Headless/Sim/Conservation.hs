@@ -23,13 +23,13 @@ import UPrelude
 import Test.Hspec
 import Data.List (sort)
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import System.Random (StdGen, mkStdGen, randomR)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Types (FluidType(..))
-import Sim.State.Types (SimWorldState(..), SimChunkState(..))
+import Sim.State.Types (SimWorldState(..), SimChunkState(..)
+                       , emptySimWorldState)
 import Sim.Topology (SimTopology(..))
 import Sim.Fluid.Types (ActiveFluidCell(..))
 import Sim.Fluid.Active (simulateActiveTick)
@@ -64,9 +64,8 @@ mkChunk terrain active = SimChunkState
     }
 
 mkState ∷ SimChunkState → SimWorldState
-mkState scs = SimWorldState
+mkState scs = emptySimWorldState
     { swsChunks      = HM.singleton (ChunkCoord 0 0) scs
-    , swsDirtyChunks = HS.empty
     , swsActive      = True
     -- One chunk, no neighbour to reach: these fixtures drive the
     -- in-chunk phases, so the page's seam frame (#2044) is irrelevant
