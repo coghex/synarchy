@@ -72,7 +72,7 @@ import sys
 import time
 import uuid
 import probe_protocol
-from probelib import quit_engine, boot, send, wait_load_published
+from probelib import quit_engine, boot, send, send_json, wait_load_published
 
 LOG = "/tmp/orphan_prune_engine.log"
 LOG_NAME = "orphan_prune_engine.log"
@@ -346,27 +346,32 @@ def _run(args, rep: probe_protocol.Reporter) -> int:
         if not wait_save_written(SAVE_NAME):
             rep.abort(f"save file for '{SAVE_NAME}' never appeared on disk")
             return 2
-        # Unpause first so the load-time freeze is observable: loadSave must
-        # pause the engine synchronously (before queueing WorldLoadSave) so
-        # the Lua loop can't tick script update()s against the half-restored
-        # singletons during the load window.
-        send(args.port, "engine.setPaused(false); return 'ok'", expect_result=False)
-        load_cmd = f'return engine.loadSave("{SAVE_NAME}")'
-        rep.note(f"loadSave -> {send(args.port, load_cmd)}")
-        # Right after loadSave returns (world thread hasn't finished the load),
-        # the engine must already be paused — frozen for the load window.
-        load_paused = send(args.port, "return engine.isPaused()")
-        rep.note(f"engine.isPaused() immediately after loadSave -> {load_paused}")
-        paused_ok = load_paused.strip().lower() in ("true", "1", "1.0")
+        # Observe request-time pause in the SAME Lua command as acceptance.
+        # A separate query can be rejected during the session replacement.
+        load_observation = send_json(args.port,
+            "engine.setPaused(false); "
+            "local before=engine.isPaused(); "
+            f'local accepted=engine.loadSave("{SAVE_NAME}"); '
+            "return {accepted=accepted, before=before, "
+            "paused=engine.isPaused(), request_id=engine.getLoadStatus().id}")
+        if (not isinstance(load_observation, dict)
+                or load_observation.get("accepted") is not True
+                or type(load_observation.get("request_id")) is not int):
+            rep.abort("load request was not accepted with a valid request id",
+                      {"observation": load_observation})
+            return 2
+        paused_ok = (load_observation.get("before") is False
+                     and load_observation.get("paused") is True)
         ok &= rep.check("load_pauses_immediately", paused_ok,
                         ("loadSave paused the engine immediately"
                          if paused_ok else
                          "loadSave did not pause before the load transaction"),
-                        {"paused": load_paused})
+                        load_observation)
         # Issue #763: loadSave only ACCEPTS synchronously -- the saved page
         # ("arena", its own id verbatim -- no more main_world remap)
         # doesn't exist live until the transaction publishes.
-        published, status = wait_load_published(args.port, 180)
+        published, status = wait_load_published(
+            args.port, 180, request_id=load_observation["request_id"])
         rep.note(f"load transaction published -> {published} ({status})")
         if not published:
             rep.abort("load transaction did not publish", {"status": status})
