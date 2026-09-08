@@ -308,17 +308,24 @@ lootProfileItemErrors registered def =
 --   repository mentions. The warning list is the only place that
 --   collision is visible. It is reported for a duplicate at ANY depth,
 --   not only the document's own @id@: a repeated @chance@ inside an
---   entry is the same authoring mistake with the same silent outcome,
---   and the path names which one it was.
+--   entry is the same authoring mistake with the same silent outcome.
+--
+--   The diagnostic carries the same coordinates every other rule here
+--   carries, and for the same reason — but only the ones a duplicated
+--   key leaves TRUSTWORTHY, which is what 'duplicateContext' below
+--   decides. A duplicate inside an entry is named by profile, 1-based
+--   entry index and item, exactly as a bad @chance@ in that same entry
+--   would be.
 loadLootProfileYaml ∷ LoggerState → FilePath → IO (Maybe LootProfileYamlDef)
 loadLootProfileYaml logger path = do
     result ← Yaml.decodeFileWithWarnings path
     case result of
         Left err → reject (tshow err)
         Right (warnings, def) → case [ p | DuplicateKey p ← warnings ] of
-            dups@(_:_) → reject ("duplicate key(s) at YAML path(s) "
-                <> T.intercalate ", " (map renderPath dups)
-                <> " — a repeated key silently keeps only the last binding")
+            dups@(_:_) → reject
+                (T.intercalate "; "
+                     (map (duplicateAt (duplicateContext dups def) def) dups)
+                 <> " — a repeated key silently keeps only the last binding")
             [] → do
                 logDebug logger CatAsset $ "Loaded loot profile '"
                     <> lpydId def <> "' from " <> T.pack path
@@ -329,14 +336,62 @@ loadLootProfileYaml logger path = do
             <> T.pack path <> ": " <> why
         return Nothing
 
--- | A duplicate key's location, spelled the way the author would find
---   it. Written out rather than taken from Aeson's own path formatter
---   so the rendering is pinned by this module's own gate.
+-- | Which coordinates a document's duplicated keys leave TRUSTWORTHY.
+--
+--   A duplicate is resolved by keeping the LAST binding, so the decoded
+--   value of a duplicated key is precisely the value this whole
+--   rejection exists to distrust. Naming a profile out of a document
+--   that says @id@ twice would print whichever id happened to come
+--   second — the exact confusion the rule is here to prevent — and the
+--   same holds one level down: when the top-level @entries@ key is
+--   itself duplicated, libyaml reports the duplicate keys inside BOTH
+--   lists while only the last list decoded, so an @entries[0]@ index no
+--   longer picks out the entry that warning came from.
+--
+--   Everything a duplicate did NOT touch stays nameable, which is why
+--   this is two answers rather than one all-or-nothing flag.
+data DuplicateContext = DuplicateContext
+    { dcProfile ∷ Maybe Text  -- ^ the id, unless @id@ itself repeated
+    , dcEntries ∷ Bool        -- ^ do entry indices still pick out entries?
+    }
+
+duplicateContext ∷ [Aeson.JSONPath] → LootProfileYamlDef → DuplicateContext
+duplicateContext dups def = DuplicateContext
+    { dcProfile = if repeatedTopLevel "id" then Nothing else Just (lpydId def)
+    , dcEntries = not (repeatedTopLevel "entries")
+    }
+  where
+    repeatedTopLevel key = any (≡ [Aeson.Key (Key.fromText key)]) dups
+
+-- | One duplicated key's diagnostic, at the finest coordinates
+--   'DuplicateContext' allows.
+duplicateAt ∷ DuplicateContext → LootProfileYamlDef → Aeson.JSONPath → Text
+duplicateAt ctx def path = case dcProfile ctx of
+    -- The document's own name is one of the duplicated keys, so there
+    -- is nothing to call this profile. The raw path is all there is.
+    Nothing  → "duplicate key at YAML path " <> renderPath path
+    Just pid → case path of
+        [Aeson.Key k] → profileAt pid (dup k)
+        [Aeson.Key blk, Aeson.Key k]
+            | Key.toText blk ≡ "quantity_multiplier" →
+                profileAt pid (quoted (Key.toText blk) <> ": " <> dup k)
+        [Aeson.Key es, Aeson.Index i, Aeson.Key k]
+            | Key.toText es ≡ "entries", dcEntries ctx
+            , (e : _) ← drop i (lpydEntries def) →
+                entryFor pid (i + 1) (lpyeItem e) (dup k)
+        _ → profileAt pid ("duplicate key at YAML path " <> renderPath path)
+  where
+    dup k = "duplicate key " <> quoted (Key.toText k)
+
+-- | A duplicate key's raw location, for the cases 'duplicateAt' cannot
+--   give real coordinates to. Written out rather than taken from
+--   Aeson's own path formatter so the rendering is pinned by this
+--   module's own gate.
 --
 --   Array elements are 0-based here because that is what libyaml
---   reported — this is the raw YAML PATH, not the 1-based entry
---   coordinate the field rules print, and the message says so rather
---   than renumbering a path an author would then not find.
+--   reported: this is the raw YAML PATH, printed only when the 1-based
+--   entry coordinate would be a guess, and renumbering a path is not
+--   something an author could then find.
 renderPath ∷ Aeson.JSONPath → Text
 renderPath = T.concat ∘ map element
   where

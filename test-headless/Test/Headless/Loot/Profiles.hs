@@ -270,18 +270,62 @@ spec = describe "Loot profiles" $ do
         -- The libyaml resolver keeps the LAST binding of a repeated
         -- mapping key, so without this the document below would decode
         -- cleanly as `second` and register a profile whose name nobody
-        -- reading the file would predict.
-        it "rejects a REPEATED top-level id key, naming the path" $
-            rejectsNaming [".id", "duplicate"] $ T.unlines
-                [ "id: first", "id: second", okMult
-                , "entries:", entryOf "rations" "0.5" "2" ]
+        -- reading the file would predict. It is also the ONE case with
+        -- no profile to name: printing either id would print exactly
+        -- the value this rejection exists to distrust.
+        it "rejects a REPEATED top-level id key, naming the raw path and \
+           \neither of the two ids" $
+            rejectsNamingBut [".id", "duplicate"] ["first", "second"] $
+                T.unlines [ "id: first", "id: second", okMult
+                          , "entries:", entryOf "rations" "0.5" "2" ]
 
-        it "rejects a repeated key inside an entry the same way — the \
-           \same silent last-one-wins, one level down" $
-            rejectsNaming [".entries[0].chance", "duplicate"] $ T.unlines
+        -- Everything a duplicate did NOT touch stays nameable, so a
+        -- duplicate INSIDE an entry carries the same profile / 1-based
+        -- index / item coordinates a bad `chance` in that entry would.
+        it "rejects a repeated key inside an entry, by profile, 1-based \
+           \entry index and item — not by a raw 0-based path" $
+            rejectsNamingBut
+                ["probe_salvage", "2", "steel_bar", "chance", "duplicate"]
+                [".entries[1].chance"] $
+                T.unlines
                 [ "id: probe_salvage", okMult, "entries:"
+                , entryOf "rations" "0.5" "2"
+                , "  - item: steel_bar\n    chance: 0.5\n    chance: 0.9\
+                  \\n    quantity_factor: 3" ]
+
+        it "rejects a repeated key inside quantity_multiplier, naming \
+           \the profile and the block" $
+            rejectsNamingBut
+                ["probe_salvage", "quantity_multiplier", "min", "duplicate"]
+                ["entry"] $
+                docSource "probe_salvage"
+                    "quantity_multiplier:\n  min: 1\n  min: 2\n  max: 4"
+                    [entryOf "rations" "0.5" "2"]
+
+        it "rejects a repeated top-level key other than id, naming the \
+           \profile — that name is still trustworthy" $
+            rejectsNamingBut ["probe_salvage", "entries", "duplicate"]
+                             [".entries"] $
+                T.unlines
+                [ "id: probe_salvage", okMult
+                , "entries:", entryOf "rations" "0.5" "2"
+                , "entries:", entryOf "steel_bar" "0.5" "3" ]
+
+        -- A duplicated `entries` key makes the INDEX untrustworthy for
+        -- the same reason a duplicated `id` makes the name untrustworthy
+        -- — libyaml reports the inner duplicate against whichever list
+        -- it walked, while only the last list decoded. The profile is
+        -- still named; the entry is not guessed at.
+        it "keeps the profile but drops entry coordinates when entries \
+           \itself repeated" $
+            rejectsNamingBut ["probe_salvage", "duplicate", ".entries[0].chance"]
+                             ["rations", "steel_bar"] $
+                T.unlines
+                [ "id: probe_salvage", okMult
+                , "entries:"
                 , "  - item: rations\n    chance: 0.5\n    chance: 0.9\
-                  \\n    quantity_factor: 2" ]
+                  \\n    quantity_factor: 2"
+                , "entries:", entryOf "steel_bar" "0.5" "3" ]
 
         it "rejects entries: [] — a profile that can only ever realize \
            \nothing" $

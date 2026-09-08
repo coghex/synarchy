@@ -3351,9 +3351,18 @@ the previously registered profile of that id exactly as it was.
 Diagnostics name the FILE always, the profile once it is known, and a
 1-based entry index only for an ENTRY-level rule. A missing `id` and a
 bad `quantity_multiplier` have no entry to name and do not invent one.
-The duplicate-key rejection prints the raw YAML path instead, 0-based
-and labelled as such, because renumbering a path is not something an
-author could then find.
+
+The duplicate-key rejection follows the same discipline, over the
+coordinates a duplicated key leaves trustworthy. A repeated key inside
+an entry is named by profile, 1-based entry index and item, exactly as
+a bad `chance` in that entry would be. Two cases fall back to the raw
+0-based YAML path, and only as far as they must: a repeated top-level
+`id` has no name to print — either one would be the value the rule
+exists to distrust — and a repeated top-level `entries` makes the index
+untrustworthy, because libyaml reports the inner duplicate against
+whichever list it walked while only the last list decoded. That second
+case still names the profile; it just stops short of guessing the
+entry.
 
 **The loader's outcome contract is the #2203 one, unchanged.**
 `engine.loadLootProfileYaml(path)` answers ONE number; a truthy second
