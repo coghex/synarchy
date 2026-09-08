@@ -62,6 +62,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Tile-coordinate seam frame (#1175/#1230)](#tile-coordinate-seam-frame-11751230)
 - [Position hold (#1216)](#position-hold-1216)
 - [Player transfers: the three player-facing modes](#player-transfers-the-three-player-facing-modes)
+- [Nested ownership moves (#2487)](#nested-ownership-moves-2487)
 - [Commanded-order stall budget (#920/#1291)](#commanded-order-stall-budget-9201291)
 - [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
 - [Unit and combat animations headless](#unit-and-combat-animations-headless)
@@ -2343,6 +2344,86 @@ commandable, so neither is a session failure. Gate coverage: hspec
 two-sided hold and every failure trigger above.
 
 ---
+
+## Nested ownership moves (#2487)
+
+**One pure boundary owns every nested insert and remove.** Design
+authority: [`docs/portable_loot_containers.md`](portable_loot_containers.md)
+PLC-4, D-1, D-4, D-5, D-16. `src/Item/Ownership.hs` is the only place a
+production path may put an `ItemInstance` into, or take one out of,
+another instance's `iiContents`. It is pure and EngineEnv-free, the same
+shape `Unit.Transfer` has: the caller projects the live managers into an
+`OwnershipScene` (the edited tree, everything else the owner carries, the
+root's weight capacity, and `itemTotalWeight` partially applied to the
+live `ItemManager`) and applies the list the policy returns. PLC-8 and
+PLC-9 are its first production callers.
+
+**Five other writers exist, in four modules, and none is a move.**
+`Item.Materialize.materializeNode` MINTS a tree (#1418's one mint
+boundary), `World.Save.Component.PageActivity.fromItemInstanceDTO`
+REBUILDS one already materialized, `Item.Temperature.coolItem` RE-VALUES
+temperatures in place, and the two medical draws
+(`Engine.Scripting.Lua.API.Units.Medical.consumeBandages` /
+`consumeKitFill`) DESTROY contents rather than re-owning them. That
+allowlist is scoped per FUNCTION, not per module, so a later unrelated
+writer in the same file is still a finding. It holds nine entries: those
+five exceptions plus the four functions inside the boundary itself.
+
+**What a move must satisfy.** Exact instance identity survives —
+`iiInstanceId` and every descendant, in authored order. An insert needs
+the destination's own `isWeightCapacity` (recursive weight of its direct
+children) and `isBulkCapacity` (direct children's own external
+`iiBulk`, D-5) to hold, both bounds inclusive. Every weight-bearing
+ANCESTOR above the destination is revalidated for weight too — the
+immediate parent fitting proves nothing — while bulk is charged at the
+immediate parent ONLY, because a container's external bulk is fixed. The
+root owner is revalidated last, in the `Unit.Transfer.fits` sense where
+a limited capacity of 0 means no room rather than unlimited; the ground
+carries `RootUnlimited` and passes no weight limit at all.
+
+**Absence fails closed, and each absence is its own refusal.** A
+destination whose `iiStorage` is `Nothing` accepts no insert, and
+neither does anything below an ancestor that declares none — which today
+is every shipped kit and toolbox, since `data/items` authors no
+`storage:`. A candidate whose `iiBulk` is `Nothing` is never a
+candidate, and a destination already holding such a child refuses
+because its used bulk cannot be summed. Removal charges no capacity at
+all, so a legacy tree can always be emptied; that asymmetry is D-30's.
+
+**Cycles, duplicates, and the final arrangement.** A move into the
+instance itself or into one of its own descendants is refused as a
+CYCLE, and `moveInstance` decides that BEFORE its internal detach,
+against the tree that still holds both ends of the move — after the
+detach the destination has simply vanished from it. `insertInstance`
+independently rejects a target inside the candidate VALUE, which needs
+no tree and so also covers a candidate arriving from another owner;
+neither check subsumes the other.
+Duplicate detection compares every id in the moved SUBTREE, descendants
+included, against the whole destination tree. Because `moveInstance`
+removes before it inserts, requirements about the post-move arrangement
+fall out: a shared ancestor is never charged for the subtree twice, a
+relocation within one owner nets zero against the carrier, and the
+instance never reads as a duplicate of itself.
+
+**Refusal is atomic, and rollback is not an insert.** A refused move
+returns the reason and the caller's tree exactly as it was, including
+when the refusal lands after the internal detach — nothing is
+duplicated, dropped, or reordered. `OwnershipRemoval` records the source
+parent AND index, generalizing `Unit.Transfer`'s flat `tpIndex`, and
+`restoreRemoval` splices the instance back there checking NO capacity:
+a rollback must restore a bandage into a first-aid kit that would refuse
+an ordinary insert, or a failed transaction becomes a lost item. That
+guarantee is against the corresponding post-removal snapshot and
+promises nothing about arbitrary intervening mutations. Ordinary
+remove-then-reinsert goes through `insertInstance` instead, needs an
+eligible parent, and appends.
+
+Every refusal is enumerable (`allOwnershipRefusals`,
+`ownershipRefusalId`) so PLC-9's endpoints can surface it verbatim.
+Gate: hspec `--match "Item.Ownership"`, whose capacity cases are each
+mutation-tested by loosening the fixture bound one unit past the guard
+and asserting the verdict flips, and whose structural writer guard holds
+the allowlist above.
 
 ## Commanded-order stall budget (#920/#1291)
 

@@ -9,7 +9,11 @@ import UPrelude
 import Control.Parallel.Strategies (parListChunk, using, rdeepseq)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
-import World.Types
+import World.Chunk.Types (ChunkCoord(..), chunkSize)
+import World.Constants (seaLevel)
+import World.Generate.Types (WorldGenParams(..))
+import World.Geology.Timeline.Types (GeoTimeline(..))
+import World.ZoomMap.Types (ZoomChunkEntry(..))
 import World.Material (MaterialId(..), matGlacier, MaterialRegistry)
 import World.Plate (elevationAtGlobal, isBeyondGlacier, isGlacierZone, wrapGlobalU)
 import World.Fluid.Ocean (isOceanChunk, hasAnyOceanFluid)

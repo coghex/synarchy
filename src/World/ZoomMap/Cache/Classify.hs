@@ -10,7 +10,7 @@ module World.ZoomMap.Cache.Classify
 
 import UPrelude
 import qualified Data.Map.Strict as Map
-import World.Types
+import World.Chunk.Types (chunkSize)
 import World.Vegetation (isBarrenMaterial, isWetlandSoil)
 import World.Weather.Types (ClimateState(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))

@@ -10,7 +10,9 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as BB
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Vector as V
-import World.Types
+import World.Chunk.Types (chunkSize)
+import World.Fluid.Types (FluidCell(..), FluidType(..), IceMap)
+import World.ZoomMap.Types (zoomTileSize)
 import World.Fluid.Internal (FluidMap)
 import World.Vegetation (vegVariants)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
