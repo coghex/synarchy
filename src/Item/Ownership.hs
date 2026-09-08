@@ -231,8 +231,10 @@ treeIds ∷ [ItemInstance] → HS.HashSet Word64
 treeIds = foldl' (\acc i → HS.union acc (subtreeIds i)) HS.empty
 
 -- | Is @needle@ the root of, or anywhere inside, @holder@'s subtree?
---   Answered from the VALUE, so it holds for a candidate that is not
---   (or no longer) attached to any tree.
+--   Answered from the VALUE, so it serves both cycle checks: the
+--   pre-detach one in 'moveInstance', which resolves @holder@ from the
+--   original tree, and 'insertInstance''s, whose candidate may be
+--   attached to no tree at all.
 withinSubtree ∷ Word64 → ItemInstance → Bool
 withinSubtree needle holder = HS.member needle (subtreeIds holder)
 
@@ -464,17 +466,23 @@ data OwnershipMove = OwnershipMove
 --   duplicate of itself. Removing first makes all three fall out:
 --   every later check sees a tree that no longer holds the subtree.
 --
---   Detaching does NOT cost the cycle verdict (correction to
---   requirements 4-6), even though the destination stops existing in
---   the tree the moment the subtree comes out. 'insertInstance' decides
---   the cycle against the CANDIDATE VALUE, which carries its own
---   descendants with it, so a target living inside the detached subtree
---   still reports 'WouldCycle' rather than the 'NoSuchTarget' the tree
---   alone would now say. That is why this needs no cycle check of its
---   own before the detach.
+--   The cycle is decided BEFORE the detach, against the instance as it
+--   stands in the original tree (correction to requirements 4-6). A
+--   self or descendant target must report 'WouldCycle', and the tree it
+--   is resolved against has to be the one that still holds both ends of
+--   the move — after the detach the destination is simply gone from it.
+--
+--   'insertInstance' independently rejects a target inside the
+--   CANDIDATE VALUE, which is a genuinely different check: it needs no
+--   tree at all, so it also covers a candidate arriving from outside
+--   this owner. Neither subsumes the other, and the two agreeing on a
+--   verdict is the point rather than a redundancy.
 moveInstance ∷ OwnershipScene → Word64 → Word64
              → Either OwnershipRefusal OwnershipMove
 moveInstance scene movedId targetId = do
+    moved ← maybe (Left NoSuchInstance) Right
+                  (findInstance movedId (oscItems scene))
+    when (withinSubtree targetId moved) (Left WouldCycle)
     removal ← removeInstance scene movedId
     let after = scene { oscItems = orItems removal }
     items' ← insertInstance after targetId (orInstance removal)

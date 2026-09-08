@@ -2356,7 +2356,7 @@ root's weight capacity, and `itemTotalWeight` partially applied to the
 live `ItemManager`) and applies the list the policy returns. PLC-8 and
 PLC-9 are its first production callers.
 
-**Four other writers exist, and none of them is a move.**
+**Five other writers exist, in four modules, and none is a move.**
 `Item.Materialize.materializeNode` MINTS a tree (#1418's one mint
 boundary), `World.Save.Component.PageActivity.fromItemInstanceDTO`
 REBUILDS one already materialized, `Item.Temperature.coolItem` RE-VALUES
@@ -2364,7 +2364,8 @@ temperatures in place, and the two medical draws
 (`Engine.Scripting.Lua.API.Units.Medical.consumeBandages` /
 `consumeKitFill`) DESTROY contents rather than re-owning them. That
 allowlist is scoped per FUNCTION, not per module, so a later unrelated
-writer in the same file is still a finding.
+writer in the same file is still a finding. It holds nine entries: those
+five exceptions plus the four functions inside the boundary itself.
 
 **What a move must satisfy.** Exact instance identity survives —
 `iiInstanceId` and every descendant, in authored order. An insert needs
@@ -2389,8 +2390,12 @@ all, so a legacy tree can always be emptied; that asymmetry is D-30's.
 
 **Cycles, duplicates, and the final arrangement.** A move into the
 instance itself or into one of its own descendants is refused as a
-CYCLE, and that check runs BEFORE the internal detach — after it the
-destination would simply have vanished and reported "no such target".
+CYCLE, and `moveInstance` decides that BEFORE its internal detach,
+against the tree that still holds both ends of the move — after the
+detach the destination has simply vanished from it. `insertInstance`
+independently rejects a target inside the candidate VALUE, which needs
+no tree and so also covers a candidate arriving from another owner;
+neither check subsumes the other.
 Duplicate detection compares every id in the moved SUBTREE, descendants
 included, against the whole destination tree. Because `moveInstance`
 removes before it inserts, requirements about the post-move arrangement

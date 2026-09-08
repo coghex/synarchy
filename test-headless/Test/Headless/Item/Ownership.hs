@@ -388,9 +388,40 @@ spec = do
             insertInstance (carrier 8.0) pouchId boulder
                 `refusedWith` OverRootCapacity
         it "and a relocation WITHIN one owner nets to zero, so a carrier \
-           \already exactly at capacity can still rearrange" $ do
+           \already exactly at capacity can still rearrange — DOWNWARD \
+           \into a nested container" $ do
             accepted (moveInstance (carrier 8.0) spannerId pouchId)
             accepted (moveInstance (carrier 8.0) rockId pouchId)
+        it "and UPWARD into a container that is its own ancestor, which \
+           \is the direction a shared ancestor could have been charged \
+           \twice in" $
+            -- The bandage moves out of the kit and into the crate that
+            -- holds the kit. The crate is on BOTH sides of the move, so
+            -- a check that measured before the detach would count the
+            -- dressing against it twice.
+            case moveInstance (carrier 8.0) bandageId crateId of
+                Left r → expectationFailure (show r)
+                Right mv → do
+                    let ids = map iiInstanceId ∘ iiContents
+                    ids ⊚ findInstance crateId (omItems mv)
+                        `shouldBe` Just [kitId, pouchId, spannerId, bandageId]
+                    ids ⊚ findInstance kitId (omItems mv) `shouldBe` Just [6, 7]
+                    omInstance mv `shouldBe` item "bandage" bandageId 0.25 0.5
+                    sum (map weigh (omItems mv)) `shouldBe` 8.0
+                    sort (idList (omItems mv)) `shouldBe` sort (idList baseTree)
+        it "and refuses that same upward move when the carrier is one \
+           \notch short, so the exact-capacity acceptance is a real bound" $
+            moveInstance (carrier 7.9375) bandageId crateId
+                `refusedWith` OverRootCapacity
+        it "and an upward move into a SIBLING's container, where the \
+           \shared ancestor is the crate rather than either endpoint" $
+            case moveInstance (carrier 8.0) bandageId pouchId of
+                Left r → expectationFailure (show r)
+                Right mv → do
+                    (map iiInstanceId ∘ iiContents)
+                        ⊚ findInstance pouchId (omItems mv)
+                        `shouldBe` Just [bandageId]
+                    sum (map weigh (omItems mv)) `shouldBe` 8.0
 
     describe "absence fails closed (requirement 3)" $ do
         it "a target whose iiStorage is Nothing accepts no insert — \
@@ -632,6 +663,77 @@ spec = do
            \-out write and a haddock mention are not writes" $
             contentsWriteSites "src/Fake.hs" innocentSource `shouldBe` []
 
+    describe "the mandated cycle-check ordering (requirement 6)" $ do
+        -- The approved correction requires the self/descendant check to
+        -- run BEFORE the detach. No behavioural case can pin that:
+        -- insertInstance's own candidate-value check reaches the same
+        -- WouldCycle verdict either way, which is exactly why the
+        -- ordering needs a structural gate rather than prose.
+        it "moveInstance decides the cycle before it detaches" $ do
+            body ← definitionBody "moveInstance" <$> TIO.readFile ownershipModule
+            body `shouldNotBe` []
+            let cycleAt  = firstIndexOf "withinSubtree" body
+                detachAt = firstIndexOf "removeInstance scene" body
+            (cycleAt, detachAt) `shouldSatisfy` \(c, d) →
+                isJust c ∧ isJust d ∧ c < d
+        it "and that gate is not vacuous: it reads the real order, and \
+           \rejects both the reversed order and a missing check" $ do
+            firstIndexOf "withinSubtree" (definitionBody "moveInstance" orderedSource)
+                `shouldBe` Just 1
+            firstIndexOf "removeInstance scene"
+                (definitionBody "moveInstance" orderedSource) `shouldBe` Just 2
+            firstIndexOf "withinSubtree" (definitionBody "moveInstance" reversedSource)
+                `shouldBe` Just 2
+            firstIndexOf "removeInstance scene"
+                (definitionBody "moveInstance" reversedSource) `shouldBe` Just 1
+            firstIndexOf "withinSubtree" (definitionBody "moveInstance" detachOnlySource)
+                `shouldBe` Nothing
+        it "and it reads only moveInstance's OWN body, so a check in a \
+           \neighbouring definition cannot satisfy it" $ do
+            definitionBody "moveInstance" neighbourSource
+                `shouldSatisfy` (\ls → not (any (T.isInfixOf "withinSubtree") ls))
+            definitionBody "moveInstance" orderedSource `shouldSatisfy` ((≡ 3) ∘ length)
+
+-- * The ordering guard
+
+-- | The lines of one top-level definition's body, its own definition
+--   line included and its trailing signature excluded.
+definitionBody ∷ String → Text → [Text]
+definitionBody name body =
+    case dropWhile (not ∘ isDefinitionOf) (T.lines body) of
+        []       → []
+        (l : ls) → l : takeWhile (isNothing ∘ topLevelName) ls
+  where
+    isDefinitionOf l =
+        topLevelName l ≡ Just name ∧ T.isInfixOf "=" (T.takeWhile (≢ '-') l)
+
+-- | The index of the first line containing @needle@.
+firstIndexOf ∷ Text → [Text] → Maybe Int
+firstIndexOf needle ls =
+    listToMaybe [ i | (i, l) ← zip [0 ..] ls, T.isInfixOf needle l ]
+
+-- | The name a top-level definition or signature line declares: an
+--   identifier starting in column 0 that is not one of Haskell's own
+--   leading keywords.
+topLevelName ∷ Text → Maybe String
+topLevelName l = case T.uncons l of
+    Just (c, _) | isLower c →
+        let name = T.takeWhile isIdentChar l
+        in if T.null name ∨ name `elem` keywords then Nothing
+                                                 else Just (T.unpack name)
+    _ → Nothing
+  where
+    keywords = [ "module", "import", "where", "data", "type", "newtype"
+               , "class", "instance", "deriving", "infix", "infixl"
+               , "infixr", "foreign", "default" ]
+
+isIdentChar ∷ Char → Bool
+isIdentChar c = isAlphaNum c ∨ c ≡ '_' ∨ c ≡ '\''
+
+-- | The boundary's own source, read by the two structural guards.
+ownershipModule ∷ FilePath
+ownershipModule = "src" </> "Item" </> "Ownership.hs"
+
 -- * The writer guard
 
 -- | Every production module permitted to assign 'iiContents', with the
@@ -700,27 +802,11 @@ contentsWriteSites path body =
     scoped = go "?" (map stripComment (T.lines body))
       where
         go _  []       = []
-        go fn (l : ls) = case definitionName l of
+        go fn (l : ls) = case topLevelName l of
             Just fn' → (fn', l) : go fn' ls
             Nothing  → (fn,  l) : go fn  ls
 
     stripComment l = fst (T.breakOn "--" l)
-
-    -- A top-level definition or signature: an identifier starting in
-    -- column 0 that is not one of Haskell's own leading keywords.
-    definitionName l = case T.uncons l of
-        Just (c, _) | isLower c →
-            let name = T.takeWhile isIdent l
-            in if T.null name ∨ name `elem` keywords
-                   then Nothing
-                   else Just (T.unpack name)
-        _ → Nothing
-
-    keywords = [ "module", "import", "where", "data", "type", "newtype"
-               , "class", "instance", "deriving", "infix", "infixl"
-               , "infixr", "foreign", "default" ]
-
-    isIdent c = isAlphaNum c ∨ c ≡ '_' ∨ c ≡ '\''
 
     assignsContents l = any assigns (occurrences l)
       where
@@ -740,7 +826,8 @@ contentsWriteSites path body =
                     whole = maybe True (not ∘ identChar) (lastMaybe before)
                           ∧ maybe True (not ∘ identChar) (fstMaybe tail')
                 in [tail' | whole] ⧺ go tail'
-        identChar c = isAlphaNum c ∨ c ≡ '_' ∨ c ≡ '\'' ∨ c ≡ '.'
+        -- A qualifier dot counts, so `Item.iiContents` is one token.
+        identChar c = isIdentChar c ∨ c ≡ '.'
         lastMaybe t = if T.null t then Nothing else Just (T.last t)
         fstMaybe t  = if T.null t then Nothing else Just (T.head t)
 
@@ -781,4 +868,39 @@ innocentSource = T.unlines
     , ""
     , "disabled ∷ ItemInstance → ItemInstance"
     , "disabled i = i   -- i { iiContents = [] } is what this used to do"
+    ]
+
+-- | The mandated order, as a fixture the ordering gate must accept.
+orderedSource ∷ Text
+orderedSource = T.unlines
+    [ "moveInstance scene movedId targetId = do"
+    , "    when (withinSubtree targetId moved) (Left WouldCycle)"
+    , "    removal ← removeInstance scene movedId"
+    , "somethingElse = ()"
+    ]
+
+-- | The same two steps, the wrong way round.
+reversedSource ∷ Text
+reversedSource = T.unlines
+    [ "moveInstance scene movedId targetId = do"
+    , "    removal ← removeInstance scene movedId"
+    , "    when (withinSubtree targetId moved) (Left WouldCycle)"
+    , "somethingElse = ()"
+    ]
+
+-- | The check dropped altogether.
+detachOnlySource ∷ Text
+detachOnlySource = T.unlines
+    [ "moveInstance scene movedId targetId = do"
+    , "    removal ← removeInstance scene movedId"
+    , "somethingElse = ()"
+    ]
+
+-- | The check present, but in the definition NEXT DOOR.
+neighbourSource ∷ Text
+neighbourSource = T.unlines
+    [ "moveInstance scene movedId targetId = do"
+    , "    removal ← removeInstance scene movedId"
+    , "elsewhere targetId moved ="
+    , "    when (withinSubtree targetId moved) (Left WouldCycle)"
     ]

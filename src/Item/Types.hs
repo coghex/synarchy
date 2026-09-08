@@ -99,16 +99,12 @@ data ItemContentEntry = ItemContentEntry
 --   "Engine.Asset.YamlItems"'s @storage:@ parser, which rejects a
 --   missing / non-positive / non-finite capacity by definition name).
 --
---   NOTHING enforces either capacity yet (#1233 is data only; PLC-4,
---   the epic's former PLC-3B, owns capacity-safe ownership moves), so a
---   value here is authored, materialized and persisted, but never
---   consulted on insert, transfer, pickup or drop.
--- | The internal capacities a portable storage item offers its
---   contents (#1233). #2487 made these ENFORCED rather than merely
---   recorded: "Item.Ownership" is the one boundary that inserts into or
---   removes from a nested 'iiContents', and it measures every insert
---   against both fields below. Absence of the whole block fails closed
---   — see 'iiStorage'.
+--   Both capacities are ENFORCED since PLC-4 (#2487), which is what
+--   #1233 left to a later slice: "Item.Ownership" is the ONE boundary
+--   through which a production path inserts into or removes from a
+--   nested 'iiContents', and it measures every insert against both
+--   fields below. Absence of the whole block fails closed — an item
+--   declaring no capacity accepts no insert; see 'iiStorage'.
 data ItemStorage = ItemStorage
     { isWeightCapacity ∷ !Float  -- ^ kilograms of CONTENTS this item can
                                  --   structurally support. Independent of
