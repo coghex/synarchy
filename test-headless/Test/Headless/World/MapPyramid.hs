@@ -23,6 +23,7 @@ import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import qualified Data.Set as Set
 import qualified Data.Vector as V
+import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import Data.IORef (readIORef)
 import Numeric (showHex)
@@ -141,6 +142,76 @@ pageCellBlock bytes col row = BS.pack $ concat
               (mapPageGutter + col * zoomTileSize + px)
               (mapPageGutter + row * zoomTileSize + py)
     ]
+
+-- | The smallest normalized world size whose root is level 2, so the
+--   reduction tree is exercised carrying rows through one level and
+--   into the next rather than stopping after a single adjacent step.
+multiLevelWorldSize ∷ Int
+multiLevelWorldSize = 136
+
+-- | A page-payload-sized window of a whole level, read under the SAME
+--   two rules a page samples its level by: longitude wraps by the
+--   level's raster width, latitude outside the raster is transparent.
+--
+--   A plain 'mapRasterWindow' is not the right expectation for an edge
+--   page. worldSize 136's finest level is 2176 texels wide and its five
+--   page columns span 2560, so the last column legitimately shows the
+--   start of the world again — while a plain window would simply run
+--   out and report transparent. Wrapping here compares the overrun
+--   against what is actually supposed to be there instead of excusing
+--   it.
+wholeLevelWindow ∷ MapRaster → Int → Int → MapRaster
+wholeLevelWindow whole ox oy =
+    MapRaster mapPagePayload mapPagePayload $
+        VU.generate (mapPagePayload * mapPagePayload * 4) $ \i →
+            let component = i `mod` 4
+                pixel = i `div` 4
+                x = ox + pixel `mod` mapPagePayload
+                y = oy + pixel `div` mapPagePayload
+                (rr, gg, bb, aa)
+                  | y < 0 ∨ y ≥ mrHeight whole = (0, 0, 0, 0)
+                  | otherwise =
+                      mapRasterTexel whole (x `mod` mrWidth whole) y
+            in case component of
+                0 → rr
+                1 → gg
+                2 → bb
+                _ → aa
+
+-- | ONE 4x4 premultiplied box per output texel — the collapsed filter
+--   D-16 forbids, written here only so a test can show that the
+--   synthetic data tells it apart from two adjacent 2x2 steps. It is
+--   deliberately NOT exported by the pyramid.
+collapse4x4 ∷ MapRaster → MapRaster
+collapse4x4 r = MapRaster w' h' $ VU.generate (w' * h' * 4) $ \i →
+    let component = i `mod` 4
+        pixel = i `div` 4
+        x = pixel `mod` w'
+        y = pixel `div` w'
+        quad = [ mapRasterTexel r (4 * x + dx) (4 * y + dy)
+               | dy ← [0 .. 3], dx ← [0 .. 3] ]
+        alphaOf (_, _, _, a) = fromIntegral a ∷ Int
+        chan f = sum [ fromIntegral (f q) * alphaOf q | q ← quad ] ∷ Int
+        red (v, _, _, _) = v
+        green (_, v, _, _) = v
+        blue (_, _, v, _) = v
+        alphaSum = sum (map alphaOf quad)
+        narrow v = fromIntegral (max 0 (min 255 v)) ∷ Word8
+        (rr, gg, bb, aa)
+          | alphaSum ≡ 0 = (0, 0, 0, 0)
+          | otherwise =
+              ( narrow (divRoundHalfUp (chan red) alphaSum)
+              , narrow (divRoundHalfUp (chan green) alphaSum)
+              , narrow (divRoundHalfUp (chan blue) alphaSum)
+              , narrow (divRoundHalfUp alphaSum 16) )
+    in case component of
+        0 → rr
+        1 → gg
+        2 → bb
+        _ → aa
+  where
+    w' = mrWidth r `div` 4
+    h' = mrHeight r `div` 4
 
 cellsPerPageEdge ∷ Int
 cellsPerPageEdge = mapPagePayload `div` zoomTileSize
@@ -651,33 +722,37 @@ pageSpec = describe "page composition, gutters and seams" $ do
                 \(_, row) → all (≡ (0, 0, 0, 0)) row
 
     it "agrees between whole-level, pagewise and streamed execution" $ do
-        -- worldSize 128's root sits one level above the finest, so both
-        -- a finest and a reduced level are covered. The whole level is
-        -- materialised and reduced by 'reduceMapRaster'; each page is
-        -- produced by the independent streaming path. They are two
-        -- executions of the same adjacent-level sequence.
-        inv ← inventoryFor 128
-        geom ← geometryFor 128
-        forM_ [0, 1] $ \level → do
+        -- worldSize 136 is the SMALLEST normalized size whose root is
+        -- level 2, so the reduction tree has to carry rows through
+        -- level 1 and into level 2 rather than stopping after a single
+        -- adjacent step. The whole level is materialised and reduced by
+        -- 'reduceMapRaster'; each page is produced by the independent
+        -- streaming path. They are two executions of the same
+        -- adjacent-level sequence, and at level 2 they are two
+        -- executions of that sequence TWICE.
+        inv ← inventoryFor multiLevelWorldSize
+        geom ← geometryFor multiLevelWorldSize
+        mpiRootLevel inv `shouldBe` 2
+        forM_ [0, 1, 2] $ \level → do
             whole ← accept (mapLevelRaster inv syntheticSource level)
             let pagesU = mapLevelPagesU geom level
                 pagesV = mapLevelPagesV geom level
-                -- every page of the reduced level; the corners and an
-                -- interior page of the much larger finest level
-                keys | level ≡ 1 = [ MapPageKey level pu pv
+                -- every page of the coarsest level, whose pages are
+                -- the ones carried furthest through the tree; corners
+                -- and an interior page of the larger finer levels
+                keys | level ≡ 2 = [ MapPageKey level pu pv
                                    | pu ← [0 .. pagesU - 1]
                                    , pv ← [0 .. pagesV - 1] ]
                      | otherwise = [ MapPageKey level pu pv
                                    | (pu, pv) ← [ (0, 0), (pagesU - 1, 0)
                                                 , (0, pagesV - 1)
                                                 , (pagesU - 1, pagesV - 1)
-                                                , (2, 3) ] ]
+                                                , (1, 2) ] ]
             forM_ keys $ \key → do
                 bytes ← accept (mapPageImage inv syntheticSource key)
                 page ← pageRaster bytes
                 let (ox, oy) = mapPageTexelOrigin key
-                    fromWhole = mapRasterWindow whole ox oy
-                                    mapPagePayload mapPagePayload
+                    fromWhole = wholeLevelWindow whole ox oy
                     fromPage = mapRasterWindow page mapPageGutter mapPageGutter
                                     mapPagePayload mapPagePayload
                 (key, fromPage ≡ fromWhole) `shouldBe` (key, True)
@@ -685,14 +760,46 @@ pageSpec = describe "page composition, gutters and seams" $ do
     it "reduces through every intermediate level, not in one wide box" $ do
         -- D-16 specifies REPEATED ADJACENT reduction, and RGBA8
         -- rounding is not associative across levels, so the pyramid
-        -- must never collapse two levels into one wide box. Executing
-        -- the adjacent step by hand on the finest raster has to land on
-        -- exactly what asking for the next level gives.
-        inv ← inventoryFor 128
+        -- must never collapse two levels into one wide box.
+        --
+        -- One adjacent step cannot tell those apart: a 4x4 box and two
+        -- 2x2 boxes agree trivially at level 1. Level 2 is where they
+        -- diverge, which is why this runs at the smallest world size
+        -- that HAS a level 2.
+        inv ← inventoryFor multiLevelWorldSize
         finest ← accept (mapLevelRaster inv syntheticSource 0)
         once ← acceptReduce (reduceMapRaster finest)
-        viaLevels ← accept (mapLevelRaster inv syntheticSource 1)
-        once `shouldBe` viaLevels
+        twice ← acceptReduce (reduceMapRaster once)
+        viaLevel1 ← accept (mapLevelRaster inv syntheticSource 1)
+        viaLevel2 ← accept (mapLevelRaster inv syntheticSource 2)
+        once `shouldBe` viaLevel1
+        twice `shouldBe` viaLevel2
+
+        -- and the data really does distinguish the two: collapsing the
+        -- same finest raster in ONE 4x4 premultiplied box gives a
+        -- different answer, so the equality above is evidence rather
+        -- than a coincidence of uniform texels.
+        let collapsed = collapse4x4 finest
+        (mrWidth collapsed, mrHeight collapsed)
+            `shouldBe` (mrWidth twice, mrHeight twice)
+        collapsed `shouldNotBe` twice
+
+    it "carries a coarse page through the tree in any order" $ do
+        -- Evaluation-order independence where it can actually bite: a
+        -- level-2 page's rows pass through one pending row per level,
+        -- so a tree that leaked state between pages would show up here
+        -- and not at level 0.
+        inv ← inventoryFor multiLevelWorldSize
+        geom ← geometryFor multiLevelWorldSize
+        let keys = [ MapPageKey 2 pu pv
+                   | pu ← [0 .. mapLevelPagesU geom 2 - 1]
+                   , pv ← [0 .. mapLevelPagesV geom 2 - 1] ]
+        forwards ← mapM (accept ∘ mapPageImage inv syntheticSource) keys
+        backwards ← mapM (accept ∘ mapPageImage inv syntheticSource)
+                         (reverse keys)
+        again ← mapM (accept ∘ mapPageImage inv syntheticSource) keys
+        forwards `shouldBe` again
+        reverse backwards `shouldBe` forwards
 
     it "is deterministic across repeated and reordered generation" $ do
         inv ← inventoryFor 64
