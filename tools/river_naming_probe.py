@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import probe_protocol
 from probelib import (boot, quit_engine, send, send_json, capture_request_id,
                       wait_save_complete, wait_load_published)
 
@@ -139,48 +140,98 @@ def check_named(rs: list[dict], failures: list[str], where: str) -> None:
             f"#1102's whole point is that a head morpheme repeats")
 
 
+PROBE_CHECKS = [
+    ('rivers_present', 'generated world has rivers to inspect'),
+    ('named_identity', 'named river ids are present and unique'),
+    ('stable_geometry', 'repeated queries preserve river identity and geometry'),
+    ('river_names', 'river names and glosses have the expected structure and recurring heads'),
+    ('unnamed_identity', 'unnamed river ids are present and unique'),
+    ('unnamed_same_ids', 'language provenance does not change river ids'),
+    ('unnamed_absent_names', 'unnamed rivers omit name and gloss fields'),
+    ('save_request', 'saving reports a request id'),
+    ('save_completed', 'saving reaches its terminal completion'),
+    ('load_published', 'fresh-process load reaches reconciled publication'),
+    ('restored_rivers', 'fresh-process load restores identical rivers'),
+    ('regenerated_rivers', 'fresh-process regeneration reproduces identical rivers'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('river_naming', PROBE_CHECKS)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=16)
     ap.add_argument("--port", type=int, default=9192)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
 
+
+def _run(args, rep):
     failures: list[str] = []
     port = args.port
 
     # ---- Phase 1-3: identity, naming, and the no-language fallback ---
-    proc = boot(port, LOG)
+    proc = boot(port, rep.engine_log_path("river_generate.log", LOG),
+                args=rep.engine_args())
     try:
         gen_world(port, "named", args.seed, args.size, named=True)
         first = rivers(port)
-        if not first:
+        if not rep.check('rivers_present', bool(first), DESCRIPTOR.label('rivers_present')):
             return fail_out([
                 f"no rivers on seed {args.seed} size {args.size} -- this "
                 f"probe needs a world that grows several; pick another "
                 f"--seed/--size pair"])
-        print(f"phase 1: {len(first)} rivers on the named world")
+        rep.note(f'phase 1: {len(first)} rivers on the named world')
+        before_errors = len(failures)
         check_identity(first, failures, "phase 1")
+        rep.check('named_identity', len(failures) == before_errors, DESCRIPTOR.label('named_identity'),
+                  {"failures": failures[before_errors:]})
 
         second = rivers(port)
-        if second != first:
+        if not rep.check('stable_geometry', second == first, DESCRIPTOR.label('stable_geometry')):
             failures.append(
                 "phase 1: a second world.getRivers() returned a DIFFERENT "
                 "table -- ids must stay attached to the same geometry "
                 f"call over call\n  first:  {json.dumps(first)}\n"
                 f"  second: {json.dumps(second)}")
 
+        before_errors = len(failures)
         check_named(first, failures, "phase 2")
+        rep.check('river_names', len(failures) == before_errors, DESCRIPTOR.label('river_names'),
+                  {"failures": failures[before_errors:]})
 
         gen_world(port, "unnamed", args.seed, args.size, named=False)
         plain = rivers(port)
+        before_errors = len(failures)
         check_identity(plain, failures, "phase 3")
-        if [r["id"] for r in plain] != [r["id"] for r in first]:
+        rep.check('unnamed_identity', len(failures) == before_errors, DESCRIPTOR.label('unnamed_identity'),
+                  {"failures": failures[before_errors:]})
+        if not rep.check(
+            'unnamed_same_ids',
+            [r['id'] for r in plain] == [r['id'] for r in first],
+            DESCRIPTOR.label('unnamed_same_ids')
+        ):
             failures.append(
                 "phase 3: the same terrain seed produced different river "
                 "ids with and without a language -- naming must not touch "
                 "worldgen")
-        if any("name" in r or "gloss" in r for r in plain):
+        if not rep.check(
+            'unnamed_absent_names',
+            not (any(('name' in r or 'gloss' in r for r in plain))),
+            DESCRIPTOR.label('unnamed_absent_names')
+        ):
             failures.append(
                 "phase 3: a world with NO language provenance must leave "
                 "the name/gloss keys ABSENT, got "
@@ -191,12 +242,12 @@ def main() -> int:
              timeout=30.0)
         rid = capture_request_id(port, "return engine.getSaveStatus()",
                                  seconds=15.0)
-        if rid is None:
+        if not rep.check('save_request', rid is not None, DESCRIPTOR.label('save_request')):
             failures.append("phase 4: engine.saveWorld never reported a "
                             "request id")
         else:
             ok, status = wait_save_complete(port, rid, seconds=120.0)
-            if not ok:
+            if not rep.check('save_completed', bool(ok), DESCRIPTOR.label('save_completed')):
                 failures.append(f"phase 4: the save did not complete: {status}")
     finally:
         quit_engine(port, proc)
@@ -205,7 +256,8 @@ def main() -> int:
         return fail_out(failures)
 
     # ---- Phase 4: a FRESH process loads the save --------------------
-    proc = boot(port, LOG)
+    proc = boot(port, rep.engine_log_path("river_load.log", LOG),
+                args=rep.engine_args())
     try:
         send(port, f"engine.loadSave('{SLOT}'); return 'ok'", timeout=30.0)
         # Unpack: wait_load_published returns a (published, status)
@@ -217,42 +269,42 @@ def main() -> int:
         # (published, but a Lua onSaveLoaded callback raised, so the
         # river names read below would come off half-reconciled state).
         published, load_status = wait_load_published(port, seconds=240.0)
-        if not published:
+        if not rep.check('load_published', bool(published), DESCRIPTOR.label('load_published')):
             return fail_out(["phase 4: the load did not reach a fully "
                              f"reconciled LoadPublished ({load_status})"])
         active = send(port, "return world.getActiveWorldId()").strip().strip('"')
         send(port, f"world.show('{active}'); return 'ok'")
         loaded = rivers(port)
-        if loaded != first:
+        if not rep.check('restored_rivers', loaded == first, DESCRIPTOR.label('restored_rivers')):
             failures.append(
                 "phase 4: rivers changed across save -> fresh process -> "
                 f"load\n  before: {json.dumps(first)}\n"
                 f"  after:  {json.dumps(loaded)}")
         else:
-            print(f"phase 4: {len(loaded)} rivers reloaded identically "
-                  f"(ids, names, glosses, geometry)")
+            rep.note(f'phase 4: {len(loaded)} rivers reloaded identically (ids, names, glosses, geometry)')
     finally:
         quit_engine(port, proc)
 
     # ---- Phase 5: a FRESH process regenerates the same world ---------
-    proc = boot(port, LOG)
+    proc = boot(port, rep.engine_log_path("river_regenerate.log", LOG),
+                args=rep.engine_args())
     try:
         gen_world(port, "named", args.seed, args.size, named=True)
         regen = rivers(port)
-        if regen != first:
+        if not rep.check('regenerated_rivers', regen == first, DESCRIPTOR.label('regenerated_rivers')):
             failures.append(
                 "phase 5: regenerating the identical seed + language in a "
                 f"fresh process produced different rivers\n"
                 f"  original: {json.dumps(first)}\n"
                 f"  regen:    {json.dumps(regen)}")
         else:
-            print("phase 5: regeneration reproduced every id, name and gloss")
+            rep.note('phase 5: regeneration reproduced every id, name and gloss')
     finally:
         quit_engine(port, proc)
 
     if failures:
         return fail_out(failures)
-    print("river naming probe: PASS")
+    rep.note('river naming probe: PASS')
     return 0
 
 

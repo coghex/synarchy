@@ -149,6 +149,7 @@ enginePrelude sc =
     , "engine.logWarn  = function(m) warns[#warns + 1] = m end"
     , "engine.logError = function(m) errors[#errors + 1] = m end"
     , "engine.logDebug = function() end"
+    , "engine.realTime = function() return 0 end"
     , "engine.loadTexture = function() return 1 end"
     , "engine.loadTutorialDir = function() end"
     , "engine.listFiles = function(dir) return files[dir] end"
@@ -587,8 +588,109 @@ withFixtureDir label files action =
 
 -----------------------------------------------------------------------
 
+-- A deterministic wall clock makes each queue entry's cost observable.
+-- Assertions inside entries catch reordering, replay, and label drift.
+budgetPrelude ∷ Text
+budgetPrelude = loaderPrelude healthy <> T.unlines
+    [ "clock, executed = 0, {}"
+    , "engine.realTime = function() return clock end"
+    , "function queue(n, cost)"
+    , "  SL.reset(); SL.built = true; executed = {}"
+    , "  for i = 1, n do"
+    , "    SL.items[i] = { label = tostring(i), fn = function()"
+    , "      assert(i == #executed + 1 and SL.currentLabel == tostring(i))"
+    , "      executed[#executed + 1] = i"
+    , "      clock = clock + cost"
+    , "    end }"
+    , "  end"
+    , "end"
+    ]
+
 spec ∷ Spec
 spec = describe "Startup readiness" $ do
+
+    describe "budgeted normal startup" $ do
+        it "bounds a stopped clock and resumes every entry exactly once" $ do
+            r ← inVM budgetPrelude $ T.unlines
+                [ "queue(65, 0); SL.tick(0, true)"
+                , "assert(#executed == 32 and not SL.isDone())"
+                , "SL.tick(0, true)"
+                , "assert(#executed == 64 and not SL.isDone())"
+                , "SL.tick(0, true); SL.tick(0, true)"
+                , "return tostring(#executed) .. ':' .. tostring(SL.isDone())"
+                ]
+            r `shouldBe` "65:true"
+
+        it "yields before starting another item after the elapsed budget" $ do
+            r ← inVM budgetPrelude $ T.unlines
+                [ "queue(10, 0.002); SL.tick(0, true)"
+                , "assert(#executed == 2 and not SL.isDone())"
+                , "SL.tick(0, true)"
+                , "return tostring(#executed)"
+                ]
+            r `shouldBe` "4"
+
+        it "allows one slow native item to finish, then yields" $ do
+            r ← inVM budgetPrelude $ T.unlines
+                [ "queue(3, 1.5); SL.tick(0, true)"
+                , "return tostring(#executed) .. ':' .. tostring(SL.isDone())"
+                ]
+            r `shouldBe` "1:false"
+
+        it "yields safely on backwards or nonfinite wall-clock readings" $ do
+            r ← inVM budgetPrelude $ T.unlines
+                [ "for _, bad in ipairs({-1, math.huge, -math.huge, 0/0}) do"
+                , "  clock = 0; queue(3, 0)"
+                , "  local reads = 0"
+                , "  engine.realTime = function()"
+                , "    reads = reads + 1; return reads == 1 and 0 or bad"
+                , "  end"
+                , "  SL.tick(0, true); assert(#executed == 1)"
+                , "  if bad ~= -1 then"
+                , "    queue(3, 0); SL.tick(0, true); assert(#executed == 0)"
+                , "  end"
+                , "end"
+                , "return 'ok'"
+                ]
+            r `shouldBe` "ok"
+
+        it "completes on the last item at either budget boundary" $ do
+            r ← inVM budgetPrelude $ T.unlines
+                [ "for _, case in ipairs({{32, 0}, {1, 0.004}}) do"
+                , "  clock = 0; queue(case[1], case[2]); SL.tick(0, true)"
+                , "  assert(SL.isDone() and SL.currentLabel == 'Complete!')"
+                , "end"
+                , "return 'ok'"
+                ]
+            r `shouldBe` "ok"
+
+        it "preserves default four-item ticks and synchronous arena draining" $ do
+            r ← inVM budgetPrelude $ T.unlines
+                [ "queue(9, 0); engine.realTime = function() error('clock used') end"
+                , "SL.tick(0); assert(#executed == 4 and not SL.isDone())"
+                , "SL.runAll(); assert(#executed == 9 and SL.isDone())"
+                , "return 'ok'"
+                ]
+            r `shouldBe` "ok"
+
+        it "preserves real family aggregates, terminal failures and queue order" $ do
+            forM_ [healthy, Scenario ["data/recipes"] [] [],
+                   Scenario [] ["data/recipes/b.yaml"] [],
+                   Scenario [] [] [("data/flora/b.yaml", "saguaro")]] $ \sc → do
+                let run budget = inVM (loaderPrelude sc) $ T.unlines
+                        [ "SL.build('normal')"
+                        , "local guard = 0"
+                        , "while not SL.isDone() and not SL.isFailed() do"
+                        , "  SL.tick(0, " <> budget <> ")"
+                        , "  guard = guard + 1; assert(guard < 1000)"
+                        , "end"
+                        , "SL.tick(0, " <> budget <> ")"
+                        , "return report() .. table.concat(infos, '|') .. table.concat(calls, '|')"
+                        ]
+                before ← run "false"
+                after ← run "true"
+                before `shouldNotSatisfy` T.isPrefixOf "lua "
+                after `shouldBe` before
 
     ------------------------------------------------------------------
     describe "the loader's terminal failure (requirements 2-4)" $ do

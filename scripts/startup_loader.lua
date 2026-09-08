@@ -8,6 +8,11 @@
 -- doesn't stall on a 100-texture load.
 local startupLoader = {}
 
+-- Normal startup opts into a soft wall-time budget. Individual native
+-- loads cannot be preempted; the count limit also bounds a stopped clock.
+local startupTickSeconds = 0.004
+local startupTickItems = 32
+
 startupLoader.items         = {}
 startupLoader.processed     = 0
 startupLoader.currentLabel  = "Initializing..."
@@ -479,7 +484,7 @@ end
 -- Tick
 -----------------------------------------------------------
 
-function startupLoader.tick(dt)
+function startupLoader.tick(dt, budgeted)
     -- #2203: a failed startup is TERMINAL. Returning here is what keeps
     -- a repeated tick -- the loading screen calls one every frame --
     -- from advancing progress past the family that failed or logging
@@ -488,7 +493,14 @@ function startupLoader.tick(dt)
     if startupLoader.done then return end
     if not startupLoader.built then return end
 
-    for _ = 1, startupLoader.itemsPerTick do
+    local started, previous
+    if budgeted then
+        started = engine.realTime()
+        if started ~= started or math.abs(started) == math.huge then return end
+        previous = started
+    end
+    local limit = budgeted and startupTickItems or startupLoader.itemsPerTick
+    for _ = 1, limit do
         local idx = startupLoader.processed + 1
         if idx > #startupLoader.items then
             startupLoader.done = true
@@ -501,10 +513,25 @@ function startupLoader.tick(dt)
         startupLoader.processed = idx
         -- Checked per ITEM, not per tick: nothing queued after the
         -- failing family -- another family's files, the tutorial tree,
-        -- a texture preload -- may run, and itemsPerTick is 4.
+        -- a texture preload -- may run.
         if startupLoader.failure then
             startupLoader.currentLabel = startupLoader.failure.message
             return
+        end
+        if budgeted then
+            -- Complete on the final item even when it exhausts a budget.
+            if idx == #startupLoader.items then
+                startupLoader.done = true
+                startupLoader.currentLabel = "Complete!"
+                return
+            end
+            local now = engine.realTime()
+            -- realTime is a wall clock: yield safely on clock anomalies.
+            if now ~= now or math.abs(now) == math.huge
+                or now < previous or now - started >= startupTickSeconds then
+                return
+            end
+            previous = now
         end
     end
 end

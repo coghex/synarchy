@@ -78,6 +78,7 @@ import shutil
 import subprocess
 import sys
 import yaml
+import probe_protocol
 from probelib import quit_engine, boot, send
 
 LOG = "/tmp/config_migration_probe_engine.log"
@@ -171,10 +172,9 @@ def equivalent_video_fixture() -> str:
             "video: {" + body + "}\n")
 
 
-def check(name: str, ok: bool, detail: str = "") -> bool:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
-          + (f"  ({detail})" if detail else ""))
-    return ok
+def check(name: str, ok: bool, detail: str = "", *, rep) -> bool:
+    return rep.check(CHECK_ID_BY_LABEL[name], ok, name
+                     + (f"  ({detail})" if detail else ""))
 
 
 def git_status(paths: list[str]) -> str:
@@ -189,10 +189,10 @@ def clear_all() -> None:
             os.remove(p)
 
 
-def read_log() -> str:
+def read_log(path=LOG) -> str:
     """The most recent boot's engine output (probelib truncates per boot)."""
     try:
-        with open(LOG) as f:
+        with open(path) as f:
             return f.read()
     except OSError:
         return ""
@@ -269,11 +269,91 @@ def get_video_ui_scale(port: int) -> float:
     return float(scale), vsync == "true"
 
 
+PROBE_CHECKS = [
+    ('legacy_video_present', 'tracked config/video.yaml is present on disk'),
+    ('legacy_keybinds_present', 'tracked config/keybinds.yaml is present on disk'),
+    ('legacy_notifications_present', 'tracked config/notifications.yaml is present on disk'),
+    ('legacy_clean', 'tracked legacy files are unmodified (clean git status)'),
+    ('local_video_absent', 'config/video.local.yaml absent pre-boot'),
+    ('local_keybinds_absent', 'config/keybinds.local.yaml absent pre-boot'),
+    ('local_notifications_absent', 'config/notifications.local.yaml absent pre-boot'),
+    ('neutral_video_absent', 'config/video.legacy-neutral.local.yaml absent pre-boot'),
+    ('neutral_keybinds_absent', 'config/keybinds.legacy-neutral.local.yaml absent pre-boot'),
+    ('default_video_scale', 'real legacy video.yaml resolves to the versioned default ui_scale'),
+    ('default_video_vsync', 'real legacy video.yaml resolves to the versioned default vsync'),
+    ('default_keybinds', 'real legacy keybinds.yaml resolves to the versioned default moveUp'),
+    ('default_notifications', 'real legacy notifications.yaml resolves to the registry default'),
+    ('neutral_video_not_promoted', 'config/video.local.yaml NOT created from a neutral placeholder'),
+    ('neutral_keybinds_not_promoted', 'config/keybinds.local.yaml NOT created from a neutral placeholder'),
+    ('neutral_video_recorded', 'config/video.legacy-neutral.local.yaml records the neutral determination'),
+    ('neutral_keybinds_recorded', 'config/keybinds.legacy-neutral.local.yaml records the neutral determination'),
+    ('notifications_materialized', 'config/notifications.local.yaml still materializes (no tracked template to be neutral against)'),
+    ('video_suppression_log', 'boot log names video suppression distinguishably'),
+    ('video_no_migration_log', 'boot log does NOT claim a video migration'),
+    ('keybinds_suppression_log', 'boot log names keybinds suppression distinguishably'),
+    ('keybinds_no_migration_log', 'boot log does NOT claim a keybinds migration'),
+    ('revised_video_default', 'revised video_default.yaml ui_scale is effective'),
+    ('revised_keybinds_default', 'revised keybinds_default.yaml moveUp is effective'),
+    ('revised_video_not_promoted', 'config/video.local.yaml STILL absent after the template revision'),
+    ('revised_keybinds_not_promoted', 'config/keybinds.local.yaml STILL absent after the template revision'),
+    ('revised_video_no_migration', 'the untouched video placeholder is still not migrated'),
+    ('revised_keybinds_no_migration', 'the untouched keybinds placeholder is still not migrated'),
+    ('legacy_unchanged', 'the tracked legacy files were never rewritten'),
+    ('equivalent_bytes_differ', 'the fixture really is byte-different from the template'),
+    ('equivalent_scale', 'reformatted legacy resolves to the versioned default ui_scale'),
+    ('equivalent_not_promoted', 'no video.local.yaml from a reformatted placeholder'),
+    ('equivalent_suppression_log', 'reformatted placeholder logs the suppression line'),
+    ('equivalent_no_migration_log', 'reformatted placeholder logs no migration'),
+    ('migrated_video_scale', 'video: legacy ui_scale=1.75 is effective'),
+    ('migrated_video_vsync', 'video: legacy vsync=false is effective'),
+    ('migrated_keybinds', 'keybinds: legacy moveUp=[I,K] is effective'),
+    ('partial_notification_override', "notifications: the partial legacy file's explicit log=false is effective"),
+    ('partial_notification_inheritance', "notifications: the omitted popup/pause inherit the registry's true defaults rather than reading as false (#1938)"),
+    ('migrated_video_file', 'config/video.local.yaml created by migration'),
+    ('migrated_keybinds_file', 'config/keybinds.local.yaml created by migration'),
+    ('migrated_notifications_file', 'config/notifications.local.yaml created by migration'),
+    ('migrated_video_content', 'migrated video.local.yaml carries the legacy ui_scale'),
+    ('video_migration_log', 'video: the exact migration log line is unchanged'),
+    ('keybinds_migration_log', 'keybinds: the exact migration log line is unchanged'),
+    ('notifications_migration_log', 'notifications: the exact migration log line is unchanged'),
+    ('migrated_not_neutral', 'genuinely different content is never called neutral'),
+    ('migrated_video_no_record', 'no config/video.legacy-neutral.local.yaml is written for a real migration'),
+    ('migrated_keybinds_no_record', 'no config/keybinds.legacy-neutral.local.yaml is written for a real migration'),
+    ('idempotent_scale', 'second boot keeps the phase-1 migrated value (1.75), ignoring the now-edited legacy file'),
+    ('idempotent_content', 'video.local.yaml on disk is unchanged by the second boot'),
+    ('local_precedence', 'resolved config uses the local value (3.9), not the legacy one (1.75)'),
+    ('legacy_preserved', 'legacy config/video.yaml itself is left untouched'),
+    ('malformed_default', 'malformed legacy -> falls back to the versioned default ui_scale'),
+    ('malformed_not_promoted', 'no video.local.yaml is created from a malformed legacy file'),
+    ('malformed_no_record', 'no neutrality record is written for a malformed legacy file'),
+    ('malformed_local_precedence', 'valid local value (3.2) survives next to a malformed legacy file'),
+    ('malformed_local_preserved', 'video.local.yaml content itself is unchanged'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('config_migration', PROBE_CHECKS)
+
+CHECK_ID_BY_LABEL = {label: cid for cid, label in PROBE_CHECKS}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9166)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
 
+
+def _run(args, rep):
     passed = True
     proc = None
 
@@ -283,32 +363,33 @@ def main() -> int:
     # the direct-updater path itself, not just the mechanism exercised
     # against synthetic fixtures below.
     # ----------------------------------------------------------------
-    print("0. the real committed legacy files are recognized as neutral placeholders")
+    rep.note('0. the real committed legacy files are recognized as neutral placeholders')
     for p in LEGACY_FILES:
-        passed &= check(f"tracked {p} is present on disk", os.path.exists(p))
+        passed &= check(f"tracked {p} is present on disk", os.path.exists(p), rep=rep)
     status = git_status(LEGACY_FILES)
     passed &= check("tracked legacy files are unmodified (clean git status)",
-                     status == "", status.strip())
+                     status == "", status.strip(), rep=rep)
 
     local_backups = backup_local_only()
     default_backups: dict[str, str] = {}
     try:
         for p in LOCAL_FILES + RECORD_FILES:
-            passed &= check(f"{p} absent pre-boot", not os.path.exists(p))
+            passed &= check(f"{p} absent pre-boot", not os.path.exists(p), rep=rep)
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_committed.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
 
         want_default = load_yaml("config/video_default.yaml")["video"]
         scale, vsync = get_video_ui_scale(args.port)
         passed &= check("real legacy video.yaml resolves to the versioned default ui_scale",
-                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale))
+                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale), rep=rep)
         passed &= check("real legacy video.yaml resolves to the versioned default vsync",
-                         vsync == bool(want_default["vsync"]), str(vsync))
+                         vsync == bool(want_default["vsync"]), str(vsync), rep=rep)
 
         want_kb = load_yaml("config/keybinds_default.yaml")["keybinds"]
         r = send(args.port, "local b = engine.getKeybinds(); return table.concat(b.moveUp, ',')")
         passed &= check("real legacy keybinds.yaml resolves to the versioned default moveUp",
-                         r == ",".join(want_kb["moveUp"]), r)
+                         r == ",".join(want_kb["moveUp"]), r, rep=rep)
 
         r = notification_triple(args.port, "survival_critical")
         want_cat = next(c for c in load_yaml("data/notification_categories.yaml")
@@ -316,7 +397,7 @@ def main() -> int:
         want_triple = "|".join(str(bool(want_cat["default_settings"][k])).lower()
                                 for k in ("log", "popup", "pause"))
         passed &= check("real legacy notifications.yaml resolves to the registry default",
-                         r == want_triple, f"{r} want {want_triple}")
+                         r == want_triple, f"{r} want {want_triple}", rep=rep)
 
         quit_engine(args.port, proc)
         proc = None
@@ -325,21 +406,21 @@ def main() -> int:
         # This is the check that fails if promotion is reintroduced.
         for p in ("config/video.local.yaml", "config/keybinds.local.yaml"):
             passed &= check(f"{p} NOT created from a neutral placeholder",
-                             not os.path.exists(p))
+                             not os.path.exists(p), rep=rep)
         for p in RECORD_FILES:
             passed &= check(f"{p} records the neutral determination",
-                             os.path.exists(p))
+                             os.path.exists(p), rep=rep)
         passed &= check("config/notifications.local.yaml still materializes "
                         "(no tracked template to be neutral against)",
-                        os.path.exists("config/notifications.local.yaml"))
+                        os.path.exists("config/notifications.local.yaml"), rep=rep)
 
-        log = read_log()
+        log = read_log(log_path)
         for name in ("video", "keybinds"):
             passed &= check(f"boot log names {name} suppression distinguishably",
                              f"Legacy config config/{name}.yaml" in log
-                             and NEUTRAL_MARK in log)
+                             and NEUTRAL_MARK in log, rep=rep)
             passed &= check(f"boot log does NOT claim a {name} migration",
-                             migrated_line(name) not in log)
+                             migrated_line(name) not in log, rep=rep)
 
         # ------------------------------------------------------------
         # Phase 0b: requirement 5 — revising an ALREADY-SHIPPED value in
@@ -348,7 +429,7 @@ def main() -> int:
         # files are left exactly as committed, so a stateless equality
         # check would now read them as player state and promote them.
         # ------------------------------------------------------------
-        print("0b. a later revision of a tracked default still reaches a never-saved player")
+        rep.note('0b. a later revision of a tracked default still reaches a never-saved player')
         os.makedirs(BACKUP_DIR, exist_ok=True)
         for p in DEFAULT_FILES:
             bak = os.path.join(BACKUP_DIR, os.path.basename(p) + ".orig")
@@ -374,25 +455,26 @@ def main() -> int:
 
         legacy_before = {p: open(p).read() for p in LEGACY_FILES}
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_revised.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
         scale, _ = get_video_ui_scale(args.port)
         passed &= check("revised video_default.yaml ui_scale is effective",
-                         abs(scale - revised_scale) < 1e-6, str(scale))
+                         abs(scale - revised_scale) < 1e-6, str(scale), rep=rep)
         r = send(args.port, "local b = engine.getKeybinds(); return table.concat(b.moveUp, ',')")
         passed &= check("revised keybinds_default.yaml moveUp is effective",
-                         r == ",".join(revised_moveup), r)
+                         r == ",".join(revised_moveup), r, rep=rep)
         quit_engine(args.port, proc)
         proc = None
 
         for p in ("config/video.local.yaml", "config/keybinds.local.yaml"):
             passed &= check(f"{p} STILL absent after the template revision",
-                             not os.path.exists(p))
-        log = read_log()
+                             not os.path.exists(p), rep=rep)
+        log = read_log(log_path)
         for name in ("video", "keybinds"):
             passed &= check(f"the untouched {name} placeholder is still not migrated",
-                             migrated_line(name) not in log)
+                             migrated_line(name) not in log, rep=rep)
         passed &= check("the tracked legacy files were never rewritten",
-                         all(open(p).read() == legacy_before[p] for p in LEGACY_FILES))
+                         all(open(p).read() == legacy_before[p] for p in LEGACY_FILES), rep=rep)
     finally:
         if proc is not None:
             quit_engine(args.port, proc)
@@ -409,33 +491,34 @@ def main() -> int:
         # so only a deliberately reformatted fixture can tell a semantic
         # comparison apart from `cmp`.
         # ------------------------------------------------------------
-        print("0c. a reformatted but semantically identical legacy file is still neutral")
+        rep.note('0c. a reformatted but semantically identical legacy file is still neutral')
         clear_all()
         equivalent = equivalent_video_fixture()
         with open("config/video.yaml", "w") as f:
             f.write(equivalent)
         passed &= check("the fixture really is byte-different from the template",
-                         equivalent != open("config/video_default.yaml").read())
+                         equivalent != open("config/video_default.yaml").read(), rep=rep)
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_equivalent.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
         want_default = load_yaml("config/video_default.yaml")["video"]
         scale, _ = get_video_ui_scale(args.port)
         passed &= check("reformatted legacy resolves to the versioned default ui_scale",
-                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale))
+                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale), rep=rep)
         quit_engine(args.port, proc)
         proc = None
         passed &= check("no video.local.yaml from a reformatted placeholder",
-                         not os.path.exists("config/video.local.yaml"))
-        log = read_log()
+                         not os.path.exists("config/video.local.yaml"), rep=rep)
+        log = read_log(log_path)
         passed &= check("reformatted placeholder logs the suppression line",
-                         NEUTRAL_MARK in log)
+                         NEUTRAL_MARK in log, rep=rep)
         passed &= check("reformatted placeholder logs no migration",
-                         migrated_line("video") not in log)
+                         migrated_line("video") not in log, rep=rep)
 
         # ------------------------------------------------------------
         # Phase 1: upgrade — legacy present, local absent, all three
         # ------------------------------------------------------------
-        print("1. upgrade: legacy files with distinct non-default values, no local yet")
+        rep.note('1. upgrade: legacy files with distinct non-default values, no local yet')
         clear_all()
         with open("config/video.yaml", "w") as f:
             f.write(LEGACY_VIDEO)
@@ -444,68 +527,76 @@ def main() -> int:
         with open("config/notifications.yaml", "w") as f:
             f.write(LEGACY_NOTIFICATIONS)
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_migration.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
 
         scale, vsync = get_video_ui_scale(args.port)
         passed &= check("video: legacy ui_scale=1.75 is effective",
-                         abs(scale - 1.75) < 1e-6, str(scale))
-        passed &= check("video: legacy vsync=false is effective", vsync is False, str(vsync))
+                         abs(scale - 1.75) < 1e-6, str(scale), rep=rep)
+        passed &= check("video: legacy vsync=false is effective", vsync is False, str(vsync), rep=rep)
 
         r = send(args.port, "local b = engine.getKeybinds(); return table.concat(b.moveUp, ',')")
-        passed &= check("keybinds: legacy moveUp=[I,K] is effective", r == "I,K", r)
+        passed &= check("keybinds: legacy moveUp=[I,K] is effective", r == "I,K", r, rep=rep)
 
         r = notification_triple(args.port, "survival_critical")
         passed &= check("notifications: the partial legacy file's explicit "
-                         "log=false is effective", r.split("|")[0] == "false", r)
+                         "log=false is effective", r.split("|")[0] == "false", r, rep=rep)
         passed &= check("notifications: the omitted popup/pause inherit the "
                          "registry's true defaults rather than reading as false "
                          "(#1938)",
-                         r == "false|true|true", r)
+                         r == "false|true|true", r, rep=rep)
 
         for p in LOCAL_FILES:
-            passed &= check(f"{p} created by migration", os.path.exists(p))
+            passed &= check(f"{p} created by migration", os.path.exists(p), rep=rep)
         if os.path.exists("config/video.local.yaml"):
             migrated = load_yaml("config/video.local.yaml")["video"]
             passed &= check("migrated video.local.yaml carries the legacy ui_scale",
-                             abs(float(migrated["ui_scale"]) - 1.75) < 1e-6)
+                             abs(float(migrated["ui_scale"]) - 1.75) < 1e-6, rep=rep)
+
+        elif rep.protocol_mode:
+            # No content assertion is possible without its file. End the
+            # event prefix here instead of jumping over that declared check.
+            rep.abort("the migrated video file is absent; later checks were not run")
+            return 1
 
         quit_engine(args.port, proc)
         proc = None
-        log = read_log()
+        log = read_log(log_path)
         for name in ("video", "keybinds", "notifications"):
             passed &= check(f"{name}: the exact migration log line is unchanged",
-                             migrated_line(name) in log)
+                             migrated_line(name) in log, rep=rep)
         passed &= check("genuinely different content is never called neutral",
-                         NEUTRAL_MARK not in log)
+                         NEUTRAL_MARK not in log, rep=rep)
         for p in RECORD_FILES:
             passed &= check(f"no {p} is written for a real migration",
-                             not os.path.exists(p))
+                             not os.path.exists(p), rep=rep)
 
         # ------------------------------------------------------------
         # Phase 2: idempotent second boot — legacy edited afterward,
         # must not be re-migrated over the already-local value.
         # ------------------------------------------------------------
-        print("2. idempotent second boot: post-migration legacy edits are ignored")
+        rep.note('2. idempotent second boot: post-migration legacy edits are ignored')
         with open("config/video.yaml", "w") as f:
             f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 3.3"))
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_idempotent.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
         scale, _ = get_video_ui_scale(args.port)
         passed &= check("second boot keeps the phase-1 migrated value (1.75), "
                          "ignoring the now-edited legacy file",
-                         abs(scale - 1.75) < 1e-6, str(scale))
+                         abs(scale - 1.75) < 1e-6, str(scale), rep=rep)
         quit_engine(args.port, proc)
         proc = None
         migrated = load_yaml("config/video.local.yaml")["video"]
         passed &= check("video.local.yaml on disk is unchanged by the second boot",
-                         abs(float(migrated["ui_scale"]) - 1.75) < 1e-6)
+                         abs(float(migrated["ui_scale"]) - 1.75) < 1e-6, rep=rep)
 
         # ------------------------------------------------------------
         # Phase 3: a genuine newer local file wins over a legacy file
         # present from the very start (not just a stale post-migration
         # edit as in phase 2).
         # ------------------------------------------------------------
-        print("3. existing newer local state wins over legacy state")
+        rep.note('3. existing newer local state wins over legacy state')
         clear_all()
         with open("config/video.yaml", "w") as f:
             f.write(LEGACY_VIDEO)  # ui_scale 1.75
@@ -515,53 +606,55 @@ def main() -> int:
         with open("config/video.local.yaml", "w") as f:
             f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 3.9"))
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_local_precedence.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
         scale, _ = get_video_ui_scale(args.port)
         passed &= check("resolved config uses the local value (3.9), not the legacy one (1.75)",
-                         abs(scale - 3.9) < 1e-6, str(scale))
+                         abs(scale - 3.9) < 1e-6, str(scale), rep=rep)
         quit_engine(args.port, proc)
         proc = None
         untouched = load_yaml("config/video.yaml")["video"]
         passed &= check("legacy config/video.yaml itself is left untouched",
-                         abs(float(untouched["ui_scale"]) - 1.75) < 1e-6)
+                         abs(float(untouched["ui_scale"]) - 1.75) < 1e-6, rep=rep)
 
         # ------------------------------------------------------------
         # Phase 4: malformed legacy state fails safely.
         # ------------------------------------------------------------
-        print("4. malformed legacy state falls back safely")
+        rep.note('4. malformed legacy state falls back safely')
         clear_all()
         with open("config/video.yaml", "w") as f:
             f.write(MALFORMED_YAML)
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_malformed.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
         want_default = load_yaml("config/video_default.yaml")["video"]
         scale, _ = get_video_ui_scale(args.port)
         passed &= check("malformed legacy -> falls back to the versioned default ui_scale",
-                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale))
+                         abs(scale - float(want_default["ui_scale"])) < 1e-6, str(scale), rep=rep)
         passed &= check("no video.local.yaml is created from a malformed legacy file",
-                         not os.path.exists("config/video.local.yaml"))
+                         not os.path.exists("config/video.local.yaml"), rep=rep)
         quit_engine(args.port, proc)
         proc = None
         passed &= check("no neutrality record is written for a malformed legacy file",
-                         not os.path.exists("config/video.legacy-neutral.local.yaml"))
+                         not os.path.exists("config/video.legacy-neutral.local.yaml"), rep=rep)
 
-        print("4b. malformed legacy state does not destroy a valid newer local file")
+        rep.note('4b. malformed legacy state does not destroy a valid newer local file')
         with open("config/video.local.yaml", "w") as f:
             f.write(LEGACY_VIDEO.replace("ui_scale: 1.75", "ui_scale: 3.2"))
         # config/video.yaml is still the malformed fixture from 4a.
 
-        proc = boot(args.port, log=LOG)
+        log_path = rep.engine_log_path("config_malformed_local.log", LOG)
+        proc = boot(args.port, log=log_path, args=rep.engine_args())
         scale, _ = get_video_ui_scale(args.port)
         passed &= check("valid local value (3.2) survives next to a malformed legacy file",
-                         abs(scale - 3.2) < 1e-6, str(scale))
+                         abs(scale - 3.2) < 1e-6, str(scale), rep=rep)
         quit_engine(args.port, proc)
         proc = None
         kept = load_yaml("config/video.local.yaml")["video"]
         passed &= check("video.local.yaml content itself is unchanged",
-                         abs(float(kept["ui_scale"]) - 3.2) < 1e-6)
+                         abs(float(kept["ui_scale"]) - 3.2) < 1e-6, rep=rep)
 
-        print(f"\n  {'PASS' if passed else 'FAIL'}: config-migration upgrade path"
-              + ("" if passed else " — see failures above"))
+        rep.note(f"\n  {('PASS' if passed else 'FAIL')}: config-migration upgrade path" + ('' if passed else ' — see failures above'))
         return 0 if passed else 1
     finally:
         if proc is not None:

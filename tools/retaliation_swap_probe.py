@@ -140,6 +140,7 @@ import os
 import sys
 import time
 
+import probe_protocol
 from probelib import (boot, clear_find_water, init_arena, load_ai_stack,
                       poll_until, quit_engine, send, send_json, spawn_acolyte)
 
@@ -296,7 +297,8 @@ class Ledger:
     unreached one reportable.
     """
 
-    def __init__(self, declared: tuple[tuple[str, str], ...] = DECLARED_CHECKS):
+    def __init__(self, declared: tuple[tuple[str, str], ...] = DECLARED_CHECKS, rep=None):
+        self.rep = rep
         self._names = dict(declared)
         self._order = [key for key, _ in declared]
         self._results: dict[str, tuple[bool, str]] = {}
@@ -307,8 +309,12 @@ class Ledger:
         if key in self._results:
             raise KeyError(f"{key!r} was already recorded")
         self._results[key] = (bool(passed), detail)
-        print(f"  [{'PASS' if passed else 'FAIL'}] {self._names[key]}"
-              + (f" — {detail}" if detail else ""))
+        human = self._names[key] + (f" — {detail}" if detail else "")
+        if self.rep is None:
+            print(f"  [{'PASS' if passed else 'FAIL'}] {human}")
+        else:
+            self.rep.check(key.replace(":", "_").replace("-", "_"), passed, human)
+
 
     def order(self) -> list[str]:
         return list(self._order)
@@ -342,29 +348,32 @@ def finish(ledger: Ledger, failure: FixtureFailure | None = None) -> int:
     clean finish report the same ledger in the same shape — a check that
     never ran is named `NOT RUN`, never dropped.
     """
-    print("\n--- result ---")
+    emit = ledger.rep.note if ledger.rep is not None else print
+    if failure is not None and ledger.rep is not None:
+        ledger.rep.abort(str(failure))
+    emit("\n--- result ---")
     for key in ledger.order():
-        print("  " + outcome_line(ledger.outcome(key), ledger.name(key)))
+        emit("  " + outcome_line(ledger.outcome(key), ledger.name(key)))
     unrun, failed = ledger.unrun(), ledger.failed()
     total = len(ledger.order())
     if unrun:
-        print(f"\n{len(unrun)} of {total} declared checks never ran:")
+        emit(f"\n{len(unrun)} of {total} declared checks never ran:")
         for key in unrun:
-            print("  " + outcome_line("NOT RUN", ledger.name(key)))
+            emit("  " + outcome_line("NOT RUN", ledger.name(key)))
     if failure is not None:
-        print(f"\nFIXTURE FAILURE: {failure}")
+        emit(f"\nFIXTURE FAILURE: {failure}")
         return 2
     if unrun:
         # No fixture failure and a check still missing is a defect in the
         # probe itself, not a result — report it as a fixture failure
         # rather than letting the run read as a pass.
-        print("\nthe run ended without a fixture failure yet left declared "
+        emit("\nthe run ended without a fixture failure yet left declared "
               "checks unreached")
         return 2
     if failed:
-        print(f"\n{len(failed)} of {total} checks failed (#1483)")
+        emit(f"\n{len(failed)} of {total} checks failed (#1483)")
         return 1
-    print(f"\nall {total} checks passed (#1483)")
+    emit(f"\nall {total} checks passed (#1483)")
     return 0
 
 
@@ -1053,6 +1062,13 @@ def log_size() -> int:
         return 0
 
 
+PROBE_CHECKS = [(key.replace(":", "_").replace("-", "_"), label)
+                for key, label in DECLARED_CHECKS]
+DESCRIPTOR = probe_protocol.build_descriptor("retaliation_swap", PROBE_CHECKS)
+DEFAULT_LOG = LOG
+
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -1060,13 +1076,31 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=9483)
     ap.add_argument("--self-test", action="store_true",
                     help="check the declared-check accounting with no engine")
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
+    global LOG
+    LOG = rep.engine_log_path("retaliation_swap_engine.log", DEFAULT_LOG)
     if args.self_test:
         return self_test()
     port = args.port
 
-    proc = boot(port, log=LOG)
-    ledger = Ledger()
+    proc = boot(port, log=LOG, args=rep.engine_args())
+    ledger = Ledger(rep=rep)
 
     try:
         try:
