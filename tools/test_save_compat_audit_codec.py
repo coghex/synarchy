@@ -301,12 +301,17 @@ def _stub_cabal(tmp: Path, *, binary: Path, build_creates: bool) -> Path:
     bin_dir.mkdir(exist_ok=True)
     log = tmp / "cabal.log"
     script = bin_dir / "cabal"
+    # Built outside the f-strings below on purpose: a backslash inside an
+    # f-string EXPRESSION is a SyntaxError before Python 3.12 (PEP 701
+    # lifted it), and CI runs 3.10, so an interpolated `\"` here would
+    # fail to parse there while compiling fine on a newer local one.
+    build_action = 'touch "%s"' % binary if build_creates else ":"
     script.write_text(
         "#!/bin/sh\n"
         f'echo "$@" >> "{log}"\n'
         'case "$1" in\n'
         f'  list-bin) echo "{binary}" ;;\n'
-        f'  build) {"touch \"%s\"" % binary if build_creates else ":"} ;;\n'
+        f'  build) {build_action} ;;\n'
         'esac\n'
         "exit 0\n", encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
