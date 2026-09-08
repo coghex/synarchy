@@ -7,10 +7,14 @@
 --   This module is deliberately CONTENT-FREE — it knows the SHAPE of a
 --   component (id, version, required/optional, dependencies, an
 --   encoder, a version-dispatched decoder, a validator) but nothing
---   about any specific gameplay slice. The concrete components live in
---   "World.Save.Component.Session"/".Page"/".Entities"; the authoritative
---   registry + cross-component assembly is "World.Save.Component". Both
---   import THIS module, so this one must not import them (no cycle).
+--   about any specific gameplay slice. Concrete components are declared
+--   across several owner modules under "World.Save.Component.*" (e.g.
+--   "World.Save.Component.Session", ".Knowledge") — some of which sit
+--   behind a re-exporting façade rather than being imported directly;
+--   'World.Save.Component.saveComponentRegistry' is the authoritative
+--   list of every declared component, though not of which module owns
+--   each one. Every owner module and the registry import THIS module,
+--   so this one must not import them (no cycle).
 --
 --   Every component's on-disk bytes are the frozen wire contract
 --   (requirement 4): a 'ComponentCodec's DTO is encoded positionally by
