@@ -126,7 +126,7 @@ positiveWholeField key v = wholeNumberField key v ⌦ \n →
 --   that always does.
 --
 --   Both checks run AFTER narrowing to the stored 32-bit 'Float', for
---   the same reason 'Engine.Asset.YamlLootTables.requireLootWeight'
+--   the same reason @Engine.Asset.YamlLootTables.requireLootWeight@
 --   narrows first: the value PLC-13 will actually compare a roll
 --   against is the 'Float', and an ordinary @1.0e+100@ is a valid
 --   'Scientific' that becomes @Infinity@ there. A non-finite chance
