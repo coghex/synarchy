@@ -126,8 +126,13 @@ uiGetElementOnClickFn env = do
 
 -- | UI.findHoverTarget(x, y) -> elementHandle, callbackName  or  nil, nil
 --
---   Finds the element at the given point, then walks up the tree to
---   locate the nearest clickable ancestor and its callback name.
+--   Finds the element at the given point, then walks up the tree to the
+--   nearest ancestor carrying a left-click callback, and reports that
+--   callback's name. 'findClickableAncestor' tests 'ueOnClick' alone and
+--   never 'ueClickable', so a shown-but-disabled control is still
+--   reported: this is the left-click AFFORDANCE
+--   (@UI.getElementInfo@'s @leftClickAffordance@), not the active target
+--   a real click would activate (@leftClickTarget@).
 uiFindHoverTargetFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 uiFindHoverTargetFn env = do
     xArg ← Lua.tonumber 1
