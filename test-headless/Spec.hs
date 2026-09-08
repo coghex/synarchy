@@ -285,6 +285,7 @@ import qualified Test.Headless.Core.LogParity as LogParity
 import qualified Test.Headless.Core.LogThresholdEnv as LogThresholdEnv
 import qualified Test.Headless.Core.LoopStartup as LoopStartup
 import qualified Test.Headless.Core.MonotonicClock as MonotonicClock
+import qualified Test.Headless.Core.StepProtocol as StepProtocol
 import qualified Test.Headless.Core.ShutdownAtlasRelease as ShutdownAtlasRelease
 import qualified Test.Headless.Core.WorkerLifecycle as WorkerLifecycle
 import qualified Test.Headless.Core.DebugListener as DebugListener
@@ -1051,6 +1052,7 @@ main = hspec $ do
     LogThresholdEnv.spec
     LoopStartup.spec
     MonotonicClock.spec
+    StepProtocol.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
     DebugListener.spec
