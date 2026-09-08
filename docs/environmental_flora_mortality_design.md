@@ -19,14 +19,14 @@ concrete precondition
 - [x] EPIC. Make flora condition persistent and texture fallback expressive — [#2526]
 - [x] EFM-1. Publish the canonical flora visual-state and fallback contract — [#2530]
 - [x] EFM-2. Load and audit sparse flora visual and corpse-policy declarations — [#2539]
-- [ ] EFM-3. Resolve flora textures through the canonical fallback lattice
-- [ ] EFM-4. Give flora occurrences stable identity and explicit render context
-- [ ] EFM-5. Persist wild and row-flora condition records across regeneration and saves
-- [ ] EFM-6. Persist groundcover-crop condition records through the same model
-- [ ] EFM-7. Expose and render persistent flora conditions without hazard producers
-- [ ] EFM-10. Apply corpse retention and successor policy
-- [ ] EFM-8. Create an approved pilot mortality texture set
-- [ ] EFM-9. Demonstrate the complete condition and fallback path on one pilot species
+- [x] EFM-3. Resolve flora textures through the canonical fallback lattice — [#2544]
+- [x] EFM-4. Give flora occurrences stable identity and explicit render context — [#2547]
+- [x] EFM-5. Persist wild and row-flora condition records across regeneration and saves — [#2549]
+- [x] EFM-6. Persist groundcover-crop condition records through the same model — [#2552]
+- [x] EFM-7. Expose and render persistent flora conditions without hazard producers — [#2555]
+- [x] EFM-10. Apply corpse retention and successor policy — [#2557]
+- [x] EFM-8. Create an approved pilot mortality texture set — [#2559]
+- [x] EFM-9. Demonstrate the complete condition and fallback path on one pilot species — [#2562]
 
 ## Epic contract
 

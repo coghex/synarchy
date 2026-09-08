@@ -38,6 +38,15 @@ No GitHub duplicate search was performed; that belongs to `process-report`.
 - [x] BUG-4. Dump CLI silently substitutes defaults for malformed arguments — [#1191]
 - [x] BUG-5. Action-outcome audit fails strict Python warning compilation — [#1192]
 - [x] BUG-6. Adding a concept id can change an existing concept's generated root — [#1868]
+- [ ] BUG-7. Escape stops dismissing dropdowns after their IDs exceed 100
+- [ ] BUG-8. Replacing list items leaves scrollbar position and visibility stale
+- [ ] BUG-9. Resizing the save browser discards its scroll position
+- [ ] BUG-10. Crawling restores hydration without a water source
+- [ ] BUG-11. Organ-failure stamina drain uses the wrong body-size floor
+- [ ] BUG-12. Float rounding can prevent the starvation death threshold from firing
+- [ ] BUG-13. Autonomous drinking credits water that was not drained
+- [ ] BUG-14. Injury recovery interrupts source drinking and leaves its action locked
+- [ ] BUG-15. Small resource changes are discarded forever instead of accumulated
 
 ---
 
@@ -334,3 +343,456 @@ window was involved.
   it, or (3) accept and document additions as best-effort for etymology. The
   measured rate (2 of 60 probe additions on one of five seeds) is a sample from
   synthetic ids, not a prediction for a real catalogue expansion.
+
+## UI interaction and state: September 7, 2026 audit
+
+BUG-7 through BUG-9 were verified against local `master` commit
+`78e73df070070058585c8279652bca43386d2873`. Source paths and line numbers
+below refer to that revision, not the older `docs-wip` code. All cited source
+and fixture files remained unchanged when `master` advanced during the audit
+to `ca55a6fbcd1ac5517a5145582daa7ec1881b8e54`. Searches of the
+Markdown reports in both worktrees found no existing equivalent findings.
+No GitHub search, issue creation, implementation change, or publication was
+performed.
+
+Verification used `cabal repl test:synarchy-test-headless` and
+`Test.Headless.UI.ResponsiveMenus.Fixture`: each reproduction ran in a fresh
+`withMenusEngine` / `newBareLuaBackend` through `evalOk`. This fixture isolates
+configuration and saves before engine initialization. The real Lua modules
+and Haskell UI backend ran with synthetic texture/font handles; texture
+loading temporarily returned handle `1` while `dropdown.init()` or
+`list.init()` initialized the widget family. No graphical window was opened.
+The results establish input decisions and UI state, not rendered appearance.
+
+### BUG-7. Escape stops dismissing dropdowns after their IDs exceed 100
+
+**Verification:** Verified. The same Escape handler closes dropdown ID 1 but
+skips an otherwise identical open dropdown with ID 101 and invokes the
+settings menu's Back action instead.
+
+The unfocused-dropdown branch in `uiManager.onUIEscape` searches the literal
+range `1..100`. Dropdown IDs increase on every creation, and individual
+destruction does not reset that counter. Settings rebuilds destroy their own
+widgets individually and create replacements, so this limit counts historical
+creations rather than simultaneously open controls. Repeated resizing or
+menu reconstruction can therefore change Escape behavior during one session.
+
+**Evidence:**
+
+- `scripts/ui_manager_input.lua:123` — the dismissal loop is
+  `for id = 1, 100 do`; missing that loop reaches `showMenu("back")` at
+  line 141 when the current menu is settings or create-world.
+- `scripts/ui/dropdown.lua:183` — `new` allocates and increments `nextId`.
+  `destroy` at line 353 removes one entry without resetting the counter;
+  the separate `destroyAll` operation is what resets it.
+- `scripts/settings_menu.lua:260` — owned dropdowns are destroyed with
+  individual `dropdown.destroy(id)` calls. The resize path at line 1078
+  rebuilds the UI. `scripts/settings/graphics_tab.lua:224` is a live creation
+  site for the resolution dropdown, alongside three other graphics controls.
+- `scripts/ui/dropdown.lua:556` — opening the option list does not give its
+  display box text focus, so opening via the arrow can reach this bounded
+  search rather than the earlier focused-text-input branch.
+
+**Reproduction:** In a fresh widget registry, create a one-option dropdown,
+open it, and call the real `uiManager.onUIEscape`; confirm it closes. Destroy
+it, then create/destroy IDs 2 through 100. Create ID 101, open its list without
+text focus, and call the handler again. The test loaded the real
+`scripts.ui_manager_input` onto a manager with `currentMenu = "settings"`,
+replacing only `showMenu` with a counter and keybind capture with an inactive
+stub. Observed output:
+
+```json
+{"firstClosed":true,"lastId":101,"lastStillOpen":true,"menuBackCalls":1}
+```
+
+**Handoff context:** Enumerate live dropdowns through their owning module
+instead of guessing an ID range. Preserve focused-input Escape behavior and
+the menu fallback when no widget handles the key. A regression should create
+and destroy more than 100 controls before dismissing the surviving dropdown;
+testing only freshly initialized IDs cannot expose this defect. The probe
+intercepted navigation to observe it safely; it did not render a complete
+settings-menu transition.
+
+### BUG-8. Replacing list items leaves scrollbar position and visibility stale
+
+**Verification:** Verified. Replacing the data of a scrolled list resets its
+row offset to zero while its scrollbar retains offset 10; scrolling down
+once jumps the rows to offset 11. Filtering to one item and restoring the
+full list leaves all four queried scrollbar controls hidden.
+
+`list.setItems` updates the rows and scrollbar through different state paths.
+It resets `ls.scrollOffset`, but `scrollbar.setContentSize` only clamps the
+scrollbar's existing offset and updates its geometry. The latter neither
+resets its offset nor notifies the list. Separately, shrinking the list hides
+the scrollbar, but expanding it again never re-shows it.
+
+**Evidence:**
+
+- `scripts/ui/list.lua:798` — `setItems` sets the list offset to zero, calls
+  `scrollbar.setContentSize` when scrolling is needed, and calls
+  `scrollbar.setVisible(..., false)` otherwise. There is no corresponding
+  reset of the scrollbar offset or visibility restoration.
+- `scripts/ui/scrollbar.lua:403` — `setContentSize` preserves an offset
+  that remains in range and does not invoke `onScroll` or change visibility.
+  `scrollDown` at line 317 increments this independent stored offset.
+- `scripts/plant_panel.lua:246` — `refreshList` calls `list.setItems` for
+  search and category filters; the sort button at line 375 also calls it.
+  This is a live caller that can narrow and re-expand an existing list.
+
+**Reproduction:** Initialize the real list/scrollbar modules, create a visible
+list with 20 items and `maxVisible = 4`, and run these calls. `sbid` is the
+list's scrollbar ID (1 in the fresh fixture):
+
+```lua
+list.setScrollOffset(id, 10)
+list.setItems(id, items)
+-- list.getScrollOffset(id) == 0; scrollbar.getScrollOffset(sbid) == 10
+scrollbar.scrollDown(sbid)
+-- list.getScrollOffset(id) == 11
+list.setItems(id, {items[1]})
+list.setItems(id, items)
+-- UI.getElementInfo(h).visible is false for every handle returned by
+-- scrollbar.getElementHandles(sbid): up, down, thumb, middle track.
+```
+
+Observed output:
+
+```json
+{"before":{"list":10,"scrollbar":10},"replaced":{"list":0,"scrollbar":10},"afterWheel":11,"scrollbarVisibleAfterFilterClear":[false,false,false,false]}
+```
+
+**Handoff context:** Update the list's row offset, scrollbar offset, content
+size, and visibility consistently whenever items change. Cover a scrolled
+sort/replacement and a scrollable → short → scrollable filter cycle. Respect
+the containing widget's visibility when restoring scrollbar controls. The
+reproduction intentionally uses a larger synthetic catalogue; the shipped
+crop catalogue has only two entries, so the planting-panel manifestation
+requires a viewport small enough to scroll those entries or additional crop
+data. Loss of the scrollbar does not itself prove loss of wheel scrolling.
+
+### BUG-9. Resizing the save browser discards its scroll position
+
+**Verification:** Verified. With 30 saves at 1280×720 and the list scrolled to
+offset 10, resizing to 1200×720 resets the offset to zero. Both dimensions are
+inside the supported responsive envelope at UI scale 1.
+
+The browser snapshots its selected value and keyboard control focus before a
+resize, then destroys and recreates the list. It never snapshots or restores
+the list's scroll offset. Browsing farther down a long save list is therefore
+undone by an ordinary geometry change, contrary to the responsive lifecycle's
+explicit scroll-preservation rule.
+
+**Evidence:**
+
+- `scripts/save_browser.lua:434` — `onFramebufferResize` preserves selection
+  and focus around `createUI`, but makes no `getScrollOffset` or
+  `setScrollOffset` call.
+- `scripts/save_browser.lua:140` — `destroyOwned` destroys the previous
+  list; `createUI` calls it before constructing a fresh list.
+- `scripts/ui/list.lua:323` — new lists start at offset zero. The existing
+  `getScrollOffset` and `setScrollOffset` APIs at lines 898 and 908 support
+  restoration, including scrollbar clamping when geometry changes.
+- `docs/engine_contracts.md:1409` — geometry rebuilds must preserve scroll
+  offsets without re-firing selection callbacks.
+- `test-headless/Test/Headless/UI/ResponsiveMenus.hs:422` — existing coverage
+  preserves selection and counts callbacks using a three-save fixture; it
+  does not set or verify a nonzero scroll offset.
+
+**Reproduction:** Initialize the real list widget family, then run:
+
+```lua
+local m = require("scripts.save_browser")
+local list = require("scripts.ui.list")
+local saves = {}
+for i = 1, 30 do saves[i] = {name="save-"..i, timestamp="t"} end
+local callbacks = 0
+m.init(1, 2, 3, 1280, 720)
+m.show(saves, function() callbacks = callbacks + 1 end, function() end)
+list.setScrollOffset(m.listId, 10)
+local before = list.getScrollOffset(m.listId)
+m.onFramebufferResize(1200, 720)
+return {before=before, after=list.getScrollOffset(m.listId), callbacks=callbacks}
+```
+
+Observed output: `{"before":10,"after":0,"callbacks":0}`.
+
+**Handoff context:** Snapshot the offset before destroying the list and
+restore it through the existing setter after reconstruction, clamping only
+when the new viewport requires it. Preserve the existing selection and focus
+restoration and zero extra load callbacks. Add a long-list resize case with
+an explicitly nonzero offset; no save-file writing or actual load is needed.
+
+## Survival mechanics: extended September 7, 2026 audit
+
+These findings were verified at `ca55a6fbcd1ac5517a5145582daa7ec1881b8e54`.
+Each reproduction used the real Lua module and shipped configuration through
+the isolated `withMenusEngine` / `newBareLuaBackend` fixture. A minimal acolyte
+was installed with `Test.Headless.Unit.TransferApi.mkUnit` and `minimalDef`;
+stat reads and writes used the registered Haskell API and its real Float
+storage. No unit simulation worker ran in this fixture. Where command
+execution or an interleaving was simulated, that boundary is stated below.
+Existing local reports were checked for equivalent concerns. No issues were
+created, and no engine code or authored content was changed.
+
+### BUG-10. Crawling restores hydration without a water source
+
+**Verification:** Verified at the production resource-tick boundary.
+Starting with hydration 10, maximum hydration 40, and endurance 1, one
+0.1-second crawling tick raised hydration to `10.499047279358` while
+`world.getFluidAt(0, 0)` returned no water. No container was consumed.
+
+The hydration resource treats the Crawling pose itself as a water supply.
+That pose is also used by incapacitated units and the sleep transition chain,
+so the resource code credits drinking for unrelated behavior.
+
+**Evidence:**
+
+- `scripts/unit_resource_config.lua:64` — acolyte hydration declares
+  `regen_factor_crawling = 5.0`, with the assumption that crawling means
+  being at a water source.
+- `scripts/unit_resource_tick.lua:63` — pose selection applies that factor
+  to any crawling unit. No source, drinking action, fluid kind, location,
+  or inventory check occurs before the hydration write.
+- `scripts/unit_resource_injury.lua:129` — a conscious unit that cannot
+  walk remains crawling because of its injuries.
+- `scripts/unit_ai_sleep.lua:215` — falling asleep and waking pass through
+  Crawling for reasons unrelated to drinking.
+- `scripts/unit_resources.lua:130` — the per-resource loop passes the
+  unit's current pose into this same tick.
+
+**Reproduction:** Set the stats above on a fixture unit, then call
+`tick.tickResource(1, "acolyte", "hydration", config.acolyte.hydration,
+"idle", "crawling", 0.1)` using the real `unit_resource_tick` and
+`unit_resource_config` modules. The fixture has no generated water or held
+items. Read back hydration through `unit.getStat`.
+
+**Handoff context:** Make hydration gain depend on an actual eligible
+drinking operation, with Crawling serving only as its pose requirement if
+needed. Cover injured crawling and both sleep transitions on dry land, plus
+a positive source-drinking control. This probe establishes the unconditional
+gain, not how much an entire sleep animation would award in a live session.
+
+### BUG-11. Organ-failure stamina drain uses the wrong body-size floor
+
+**Verification:** Verified with real stat storage. The stamina path both
+starts organ failure above the intended fat floor for a smaller frame and
+fails to start it at that floor for a larger frame.
+
+Body initialization and starvation use `0.02 * frame_mass`, where frame mass
+includes the unit's rolled bulk. The stamina resource still tests the older
+`0.44 * height * height` formula, which only matches when bulk is exactly 1.
+Shipped acolytes roll bulk around 1 with range 1, so this is not restricted to
+custom species data.
+
+**Evidence:**
+
+- `src/Unit/Thread/Command/Body.hs:95` — initialization computes frame mass
+  as `22 * height * height * bulk`, seeds a frame-proportional minimum fat,
+  and retains `frame_mass` as the stable viability reference.
+- `scripts/unit_resource_energy.lua:168` — starvation uses
+  `0.02 * frame_mass`, falling back to the height-only formula only for
+  older units without that stat.
+- `scripts/unit_resource_tick.lua:51` — organ failure ignores `frame_mass`
+  and always compares fat against `0.44 * height * height` plus tolerance.
+- `data/units/acolyte.yaml:41` — authored bulk is variable.
+
+**Reproduction:** With height 2, endurance 1, stamina 5, caffeine 0, and
+the shipped acolyte stamina configuration, run a 0.1-second idle tick:
+
+| Frame mass | Fat mass | Correct floor | Observed stamina | Consequence |
+| --- | --- | --- | --- | --- |
+| 44 | 1.2 | 0.88 | 4.9499998 | Organ-failure drain starts despite remaining reserves |
+| 132 | 2.64 | 2.64 | 5.0500002 | Ordinary recovery continues at the exhausted-reserve floor |
+
+The height-only threshold is 1.76 in both cases. Positive calories were set
+to isolate this decision from catabolism.
+
+**Handoff context:** Share the current frame-based floor and legacy fallback
+between both death paths. Preserve the Float-rounding tolerance already
+provided for fat. Cover bulk below and above 1, exact exhaustion, and legacy
+units without `frame_mass`. This does not imply that a large-frame unit can
+never die; dehydration, injury, or lean-tissue loss remain other death paths.
+
+### BUG-12. Float rounding can prevent the starvation death threshold from firing
+
+**Verification:** Verified through real Float stat writes. At frame mass
+100.1, 100 consecutive starvation ticks of 10 seconds each left lean mass at
+its clamped floor without ever requesting death. An exactly representable
+floor control requested death immediately.
+
+Starvation clamps lean mass to a Lua-computed minimum, stores it as a Haskell
+Float, then compares the widened stored value against the unrounded Lua
+minimum on the next tick. If the store rounds upward, `lean <= minLean` is
+permanently false. Further catabolism repeatedly writes the same rounded
+floor, so time does not resolve the discrepancy.
+
+**Evidence:**
+
+- `scripts/unit_resource_energy.lua:170` — `minLean = 0.20 * frame_mass`.
+  The respiratory-failure guard at line 174 uses a strict numeric floor
+  comparison without tolerance.
+- `scripts/unit_resource_energy.lua:201` — catabolism clamps lean to that
+  minimum and writes it back through `unit.setStat`.
+- `src/Engine/Scripting/Lua/API/Units/Stats.hs:352` — stat assignment
+  converts Lua's number to the Float stored in `uiStats`.
+- `scripts/unit_resource_energy.lua:45` — the same module already explains
+  this exact Float32/Float64 hazard for the fat floor and supplies
+  `FAT_FLOOR_TOL`; the lean death guard has no corresponding protection.
+
+**Reproduction:** Set frame mass to 100.1, read it back, and set lean to
+`0.2 * unit.getStat(1, "frame_mass")`. Set calories to zero, metabolism rate
+to 1, fat to its frame-based minimum, height to 2, and body mass to 40.
+Replace only `unit.kill` with a request counter, then call the real
+`energy.tickStarvation(1, 10)` 100 times. Observed:
+
+```json
+{"floor":20.019999694824,"lean":20.020000457764,"killCalls":0}
+```
+
+Setting frame mass 70 and lean mass 14, then ticking once, increased the same
+kill counter to 1. This demonstrates the missing threshold decision; the
+fixture intentionally did not execute queued death commands.
+
+**Handoff context:** Make the lean death decision stable across storage
+rounding, using a justified tolerance or comparison in one numeric domain.
+Test upward- and downward-rounded floors with real stored values, an exact
+floor, and a clearly above-floor living control. Other resource death paths
+may mask this fault in a full simulation; they do not repair it.
+
+### BUG-13. Autonomous drinking credits water that was not drained
+
+**Verification:** Verified with the real autonomous action and real hydration
+storage, injecting the inventory/drain boundary. A nil, zero, or short drain
+all received the same full hydration credit as a successful 0.5-litre sip.
+
+The canteen action calculates its sip from an inventory snapshot, calls the
+exact-instance drain, and ignores that call's authoritative result. It then
+adds hydration for the requested amount and queues the drink animation. The
+player coffee mechanism was repaired for this class of error, but the
+independent autonomous water action retains it.
+
+**Evidence:**
+
+- `scripts/unit_ai_needs.lua:100` — `drinkExecute` selects a canteen from
+  `unit.getInventory` and computes the requested sip from that snapshot.
+- `scripts/unit_ai_needs.lua:138` — `unit.modifyItemFillById` is called
+  without retaining its result, followed by the full hydration write and
+  `unit.drink`.
+- `src/Engine/Scripting/Lua/API/Units/Equipment.hs:64` — the drain returns
+  the signed amount actually removed, or nil for a vanished endpoint.
+  `adjustFillById` at line 305 clamps against current fill atomically.
+- `scripts/consumable.lua:161` — the coffee mechanism already bases effects
+  on the actual drain and refuses nil/zero results.
+- `tools/canteen_instance_probe.py:105` — the existing water-drinking case
+  checks which of two instances was drained; it does not change the selected
+  instance between snapshot and mutation or inject a refused/short result.
+
+**Reproduction:** Use the shipped acolyte tunables, starting hydration 10 and
+maximum 40, and an inventory snapshot containing one full canteen. Intercept
+only inventory reading, the drain's returned value, and animation requests;
+run `needs.drinkExecute(1, {}, params)` once per case:
+
+| Drain result | Water supplied | Expected hydration | Observed hydration | Drink requests |
+| --- | --- | --- | --- | --- |
+| nil | none | 10 | 15.5 | 1 |
+| 0 | none | 10 | 15.5 | 1 |
+| -0.1 | 0.1 L | 11.1 | 15.5 | 1 |
+| -0.5 | 0.5 L | 15.5 | 15.5 | 1 |
+
+**Handoff context:** Credit the positive magnitude of the actual negative
+drain, refusing missing/zero drains before effects or animation. Preserve
+exact-instance targeting, sip limits, and deficit clamping. This is distinct
+from the already-recorded coffee finding in `project_review_1642-1631.md` and
+its fix: that code path is now correct. The injected cases establish response
+handling, not a measured frequency of live inventory races.
+
+### BUG-14. Injury recovery interrupts source drinking and leaves its action locked
+
+**Verification:** Verified by composing the real source-drinking and injury
+modules under a controlled command-execution schedule. A healthy unit reaches
+the `drinking` phase, injury recovery stands it up, and 50 further action
+executions leave it standing in `drinking` with infinite utility.
+
+The injury recovery code treats any healthy crawling unit as ready to stand.
+It makes an explicit exception for the sleep transition chain but omits the
+equally deliberate source-drinking chain. Once a drinker's pose becomes
+standing, its hydration regeneration stops; its `drinking` phase only checks
+for a nearly full hydration meter and never repairs the pose or abandons the
+phase. The action therefore remains locked while thirst increases.
+
+**Evidence:**
+
+- `scripts/unit_ai_water.lua:208` — observing Crawling in the descending
+  phase advances to `sourcePhase = "drinking"`.
+- `scripts/unit_resource_injury.lua:133` — healthy Crawling invokes
+  `unit.revive` unless `s.sleepPhase` exists; `s.sourcePhase` is ignored.
+- `src/Unit/Thread/Command/Pose.hs:159` — the revive handler really snaps
+  a crawling unit to Standing.
+- `scripts/unit_ai_water.lua:224` — the drinking branch waits for hydration
+  to reach 95%, without checking that the unit remains in its drinking pose.
+- `scripts/unit_ai_water.lua:187` — any non-nil `sourcePhase` earns
+  `math.huge` utility, preventing ordinary action pre-emption.
+
+**Reproduction:** Give a healthy fixture unit hydration 10/40 and AI state
+`{sourcePhase="descending", knownWaterSources={{x=1,y=0}}}`. Start its observed
+pose at Crawling. Execute `drinkFromSourceExecute`, then `tickInjuries`, then
+the drinking action 50 times. The fixture replaces `unit.revive` with the
+handler's immediate Standing result and counts requests; no real unit worker
+or water-finding traversal runs. Result:
+
+```json
+{"phaseBefore":"drinking","phaseAfter":"drinking","revives":1,"locked":true,"pose":"standing"}
+```
+
+As a control, giving that same healthy crawler a `sleepPhase` caused injury
+recovery to issue zero revive requests and leave it crawling.
+
+**Handoff context:** Reconcile deliberate pose ownership across injury
+recovery, drinking, and sleep. Also make a source-drinking action robust to
+losing its pose after admission. Cover the composed injury/resource/AI path,
+including losing water or being interrupted, rather than only testing each
+transition helper alone. The exact live symptom depends on scheduling:
+injury recovery may also interrupt the descent before the AI observes it.
+
+### BUG-15. Small resource changes are discarded forever instead of accumulated
+
+**Verification:** Verified with the real resource tick, shipped squirrel
+sleep-pressure configuration, and real Float storage. Equal simulated time
+produced almost total depletion with one-second steps and no depletion at all
+with the routine 0.1-second step.
+
+The resource tick skips any write whose absolute change is at most `1e-4`.
+It retains no fractional remainder, so that is a minimum per-tick rate, not
+a batching optimization. Small but valid drains can therefore disappear
+forever. Low-endurance sleep-pressure pools expose this at ordinary cadence.
+
+**Evidence:**
+
+- `scripts/unit_resource_tick.lua:157` — only writes when
+  `math.abs(next - current) > 1e-4`; skipped changes have no accumulator.
+- `scripts/init_loader.lua:107` — registers the resource script at a
+  0.1-second interval.
+- `scripts/unit_stats.lua:106` — maximum sleep pressure is endurance × 10.
+  `scripts/unit_resource_config.lua` gives the squirrel a drain fraction of
+  `1 / 3600` per second.
+- `data/units/red_squirrel.yaml:22` — squirrel endurance is a rolled stat
+  around 0.6; the reproduction's 0.3 is a valid low-endurance value, not an
+  invalid numeric input.
+- `tools/circadian_probe.py:151` — current drain coverage spawns one acolyte;
+  it does not pin a low maximum or compare equal-duration step schedules.
+
+**Reproduction:** Set endurance 0.3 and sleep pressure 3 on the fixture unit.
+Call `tickResource` with `config.red_squirrel.sleep_pressure`, idle activity,
+and standing pose 36,000 times at `dt = 0.1`. Reset pressure to 3 and call it
+3,600 times at `dt = 1`. Both schedules represent 3,600 seconds:
+
+```json
+{"fineSteps":3.0,"coarseSteps":0.000002843664105967,"gameSeconds":3600}
+```
+
+**Handoff context:** Preserve accumulated changes independently of update
+partitioning, or remove the lossy threshold with appropriate storage handling.
+Test small real resource pools and equal-duration schedules, including
+threshold/death decisions based on values actually committed. This is a
+separate defect from the recorded stamina read/modify/write race: it occurs
+with one writer and no interleaving at all.
