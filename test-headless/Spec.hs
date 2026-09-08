@@ -68,6 +68,7 @@ import qualified Test.Headless.Item.SteelHelmet as ItemSteelHelmet
 import qualified Test.Headless.Item.RepairFinite as ItemRepairFinite
 import qualified Test.Headless.Item.Materialize as ItemMaterialize
 import qualified Test.Headless.Item.BulkStorage as ItemBulkStorage
+import qualified Test.Headless.Item.Ownership as ItemOwnership
 import qualified Test.Headless.Item.FoodNutrition as ItemFoodNutrition
 import qualified Test.Headless.Item.Discovery as ItemDiscovery
 import qualified Test.Headless.Asset.TextureFallback as TextureFallback
@@ -816,6 +817,7 @@ main = hspec $ do
     describe "Item.QualityTier" ItemQualityTier.spec
     describe "Item.ContentsSignature" ItemContentsSig.spec
     describe "Item.BulkStorage" ItemBulkStorage.spec
+    describe "Item.Ownership" ItemOwnership.spec
     describe "Item.FoodNutrition" ItemFoodNutrition.spec
     describe "Item.Materialize" ItemMaterialize.spec
     describe "World.Save.Sanitize" SaveSanitize.spec

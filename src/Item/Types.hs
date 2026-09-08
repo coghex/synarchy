@@ -103,15 +103,38 @@ data ItemContentEntry = ItemContentEntry
 --   the epic's former PLC-3B, owns capacity-safe ownership moves), so a
 --   value here is authored, materialized and persisted, but never
 --   consulted on insert, transfer, pickup or drop.
+-- | The internal capacities a portable storage item offers its
+--   contents (#1233). #2487 made these ENFORCED rather than merely
+--   recorded: "Item.Ownership" is the one boundary that inserts into or
+--   removes from a nested 'iiContents', and it measures every insert
+--   against both fields below. Absence of the whole block fails closed
+--   — see 'iiStorage'.
 data ItemStorage = ItemStorage
     { isWeightCapacity ∷ !Float  -- ^ kilograms of CONTENTS this item can
                                  --   structurally support. Independent of
                                  --   the item's own empty weight.
+                                 --
+                                 --   Charged RECURSIVELY (D-5): each
+                                 --   direct child contributes its full
+                                 --   'itemTotalWeight', fill and nested
+                                 --   contents included. Every
+                                 --   weight-bearing ANCESTOR of an
+                                 --   insert is revalidated against its
+                                 --   own copy of this too, so a pouch
+                                 --   with room inside a crate without
+                                 --   any still refuses.
+                                 --   Bound is inclusive.
     , isBulkCapacity   ∷ !Float  -- ^ litres of usable INTERNAL packing
                                  --   space. Direct children consume their
                                  --   own external 'idBulk' against this;
                                  --   distinct from — and never derived
                                  --   from — the item's own external bulk.
+                                 --
+                                 --   Charged at the IMMEDIATE parent
+                                 --   only (D-5): a container's external
+                                 --   bulk is fixed, so filling it
+                                 --   consumes nothing further up the
+                                 --   chain. Bound is inclusive.
     } deriving (Show, Eq, Generic, Serialize)
 
 -- | A single stat-modifier conferred by wearing/holding this item.
@@ -443,10 +466,25 @@ data ItemInstance = ItemInstance
                                 --   REPRESENTED rather than papered over,
                                 --   so no reader can silently fall back to
                                 --   a definition that has since been
-                                --   edited; PLC-4 (the epic's former
-                                --   PLC-3B), the first slice that
-                                --   ENFORCES a capacity, decides what an
-                                --   absent bulk means to it. Field order is
+                                --   edited.
+                                --
+                                --   PLC-4 (#2487) answered what that
+                                --   absence MEANS to enforcement, and the
+                                --   answer is FAIL CLOSED. An instance
+                                --   with no bulk has nothing to charge
+                                --   against a container's
+                                --   'isBulkCapacity', so
+                                --   "Item.Ownership" never moves one INTO
+                                --   storage, and a container already
+                                --   holding one refuses further inserts
+                                --   because its used bulk cannot be
+                                --   summed. The two are distinct,
+                                --   reportable refusals rather than one
+                                --   "it didn't fit". Removing such an
+                                --   instance is still permitted —
+                                --   removal charges no capacity — so a
+                                --   legacy tree can always be emptied.
+                                --   Field order is
                                 --   load-bearing (positional Generic
                                 --   Serialize) — appended for #1233.
     , iiStorage     ∷ !(Maybe ItemStorage)
@@ -458,7 +496,21 @@ data ItemInstance = ItemInstance
                                 --   absence 'iiBulk' documents (a crate in
                                 --   an old save was never stamped, so its
                                 --   capacity is unrecoverable rather than
-                                --   zero). Field order is load-bearing
+                                --   zero).
+                                --
+                                --   That absence FAILS CLOSED since PLC-4
+                                --   (#2487): an item declaring no internal
+                                --   capacity accepts no insert, and
+                                --   neither does anything nested below an
+                                --   ancestor that declares none. Today
+                                --   that is every shipped kit and toolbox
+                                --   — @data/items@ authors no @storage:@
+                                --   at all — so a first-aid kit can be
+                                --   drawn FROM but not stocked, which is
+                                --   deliberate rather than an oversight
+                                --   (@docs/portable_loot_containers.md@
+                                --   D-30). "Item.Ownership" is where both
+                                --   rules live. Field order is load-bearing
                                 --   (positional Generic Serialize) —
                                 --   appended for #1233.
     } deriving (Show, Eq, Generic, Serialize)
