@@ -98,7 +98,7 @@ loadTutorialDirFn core regs = do
 --   Both relationship arrays are ALWAYS present (empty when unused), so
 --   a consumer never has to distinguish nil from empty. Their order is
 --   the validated display order — @order@ within a sibling group, ties
---   broken by id — and at most one of the two is ever non-empty.
+--   broken by id. A composite may populate both arrays.
 getTutorialTreeFn ∷ ContentRegistriesCapability
                   → Lua.LuaE Lua.Exception Lua.NumResults
 getTutorialTreeFn regs = do

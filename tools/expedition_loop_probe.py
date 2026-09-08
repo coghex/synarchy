@@ -19,8 +19,7 @@ Every component of that chain already had its own gate. What had never
 been run is the chain AS ONE SESSION, from an empty world to a reloaded
 save: `tools/location_embark_probe.py` stops at discovery,
 `tools/expedition_retrieval_probe.py` starts from a staged item and its
-own hand-built storage, `tools/tutorial_probe.py` covers preparation
-only, and `tools/gameplay_scenarios.py` is an observation log with no
+own hand-built storage, `tools/tutorial_probe.py` covers tutorial state without the whole trip, and `tools/gameplay_scenarios.py` is an observation log with no
 verdict at all.
 
 STAGES
@@ -34,7 +33,7 @@ own:
   prepare   water secured by a real acolyte's own FOV scan; the
             traveller provisioned off the technomule through the normal
             inventory-transfer surface; the shipped first_session
-            objective set at its expected value
+            objective set containing the required preparation latches
   travel    both travellers walk ONE identical move leg to the ruin (no
             teleport) and are measured together at the ruin, and the
             ruin is DISCOVERED by sight (#1230) — lifecycle, player event,

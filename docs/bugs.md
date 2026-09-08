@@ -47,6 +47,12 @@ No GitHub duplicate search was performed; that belongs to `process-report`.
 - [ ] BUG-13. Autonomous drinking credits water that was not drained
 - [ ] BUG-14. Injury recovery interrupts source drinking and leaves its action locked
 - [ ] BUG-15. Small resource changes are discarded forever instead of accumulated
+- [ ] BUG-16. Electrical networks disconnect at the cylindrical seam
+- [ ] BUG-17. Focus cleanup discards typed dropdown choices before submission
+- [ ] BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass
+- [ ] BUG-19. Treatment aliases separate wounds inflicted at the same game time
+- [ ] BUG-20. Healed blood-loss patients have no route through the revival blood gate
+- [ ] BUG-21. Ground-repair return retries never end after the item leaves its worker
 
 ---
 
@@ -547,10 +553,10 @@ so the resource code credits drinking for unrelated behavior.
 
 **Evidence:**
 
-- `scripts/unit_resource_config.lua:64` — acolyte hydration declares
+- `scripts/unit_resource_config.lua:71` — acolyte hydration declares
   `regen_factor_crawling = 5.0`, with the assumption that crawling means
   being at a water source.
-- `scripts/unit_resource_tick.lua:63` — pose selection applies that factor
+- `scripts/unit_resource_tick.lua:70` — pose selection applies that factor
   to any crawling unit. No source, drinking action, fluid kind, location,
   or inventory check occurs before the hydration write.
 - `scripts/unit_resource_injury.lua:129` — a conscious unit that cannot
@@ -592,7 +598,7 @@ custom species data.
 - `scripts/unit_resource_energy.lua:168` — starvation uses
   `0.02 * frame_mass`, falling back to the height-only formula only for
   older units without that stat.
-- `scripts/unit_resource_tick.lua:51` — organ failure ignores `frame_mass`
+- `scripts/unit_resource_tick.lua:58` — organ failure ignores `frame_mass`
   and always compares fat against `0.44 * height * height` plus tolerance.
 - `data/units/acolyte.yaml:41` — authored bulk is variable.
 
@@ -631,7 +637,7 @@ floor, so time does not resolve the discrepancy.
 - `scripts/unit_resource_energy.lua:170` — `minLean = 0.20 * frame_mass`.
   The respiratory-failure guard at line 174 uses a strict numeric floor
   comparison without tolerance.
-- `scripts/unit_resource_energy.lua:201` — catabolism clamps lean to that
+- `scripts/unit_resource_energy.lua:200` — catabolism clamps lean to that
   minimum and writes it back through `unit.setStat`.
 - `src/Engine/Scripting/Lua/API/Units/Stats.hs:352` — stat assignment
   converts Lua's number to the Float stored in `uiStats`.
@@ -673,9 +679,9 @@ independent autonomous water action retains it.
 
 **Evidence:**
 
-- `scripts/unit_ai_needs.lua:100` — `drinkExecute` selects a canteen from
+- `scripts/unit_ai_needs.lua:121` — `drinkExecute` selects a canteen from
   `unit.getInventory` and computes the requested sip from that snapshot.
-- `scripts/unit_ai_needs.lua:138` — `unit.modifyItemFillById` is called
+- `scripts/unit_ai_needs.lua:153` — `unit.modifyItemFillById` is called
   without retaining its result, followed by the full hydration write and
   `unit.drink`.
 - `src/Engine/Scripting/Lua/API/Units/Equipment.hs:64` — the drain returns
@@ -724,7 +730,7 @@ phase. The action therefore remains locked while thirst increases.
 
 - `scripts/unit_ai_water.lua:208` — observing Crawling in the descending
   phase advances to `sourcePhase = "drinking"`.
-- `scripts/unit_resource_injury.lua:133` — healthy Crawling invokes
+- `scripts/unit_resource_injury.lua:144` — healthy Crawling invokes
   `unit.revive` unless `s.sleepPhase` exists; `s.sourcePhase` is ignored.
 - `src/Unit/Thread/Command/Pose.hs:159` — the revive handler really snaps
   a crawling unit to Standing.
@@ -764,20 +770,22 @@ with the routine 0.1-second step.
 The resource tick skips any write whose absolute change is at most `1e-4`.
 It retains no fractional remainder, so that is a minimum per-tick rate, not
 a batching optimization. Small but valid drains can therefore disappear
-forever. Low-endurance sleep-pressure pools expose this at ordinary cadence.
+forever. A sufficiently small configured or overridden sleep-pressure pool
+exposes this at ordinary cadence.
 
 **Evidence:**
 
-- `scripts/unit_resource_tick.lua:157` — only writes when
+- `scripts/unit_resource_tick.lua:153` — only writes when
   `math.abs(next - current) > 1e-4`; skipped changes have no accumulator.
 - `scripts/init_loader.lua:107` — registers the resource script at a
   0.1-second interval.
 - `scripts/unit_stats.lua:106` — maximum sleep pressure is endurance × 10.
   `scripts/unit_resource_config.lua` gives the squirrel a drain fraction of
   `1 / 3600` per second.
-- `data/units/red_squirrel.yaml:22` — squirrel endurance is a rolled stat
-  around 0.6; the reproduction's 0.3 is a valid low-endurance value, not an
-  invalid numeric input.
+- `data/units/red_squirrel.yaml:21` and `src/Unit/Stats.hs:145` — ordinary
+  squirrel rolls clamp endurance to 0.45–0.75, so they do NOT reach this
+  reproduction's 0.3 on spawn. It is a valid positive stat override; current
+  default species rolls at the default tick rate were not shown to freeze.
 - `tools/circadian_probe.py:151` — current drain coverage spawns one acolyte;
   it does not pin a low maximum or compare equal-duration step schedules.
 
@@ -795,4 +803,373 @@ partitioning, or remove the lossy threshold with appropriate storage handling.
 Test small real resource pools and equal-duration schedules, including
 threshold/death decisions based on values actually committed. This is a
 separate defect from the recorded stamina read/modify/write race: it occurs
-with one writer and no interleaving at all.
+with one writer and no interleaving at all. Treat its present gameplay impact
+as conditional on a smaller configured/overridden pool or a faster resource
+tick, not as a demonstrated defect in default squirrel spawning.
+
+
+## Connectivity and input dispatch: extended September 7, 2026 audit
+
+These findings were checked against `ca55a6fbcd1ac5517a5145582daa7ec1881b8e54`
+and rechecked against `167e3e88f093eaa2b9919d482cf2339b2b60b9b7`; their
+implementation files did not change between those revisions. Reproductions
+use the existing headless test component's REPL and real production helpers.
+No implementation or test files were edited.
+
+### BUG-16. Electrical networks disconnect at the cylindrical seam
+
+**Verification:** A two-tile wire run crossing the cylindrical seam becomes
+two electrical networks, leaving its attached battery uncharged. A comparable
+run away from the seam charges the battery. All 46 existing
+`Test.Headless.Power.Network` examples passed in the same REPL.
+
+Wire placement/autotiling recognizes canonical neighbors across the seam,
+but power connectivity searches ordinary `(x ± 1, y)` / `(x, y ± 1)` keys.
+Across the seam, adjacent tiles have distant canonical coordinates. Both wire
+flood-fill and attachment of power nodes/consumers consequently miss these
+neighbors. The electrical topology disagrees with the placement topology.
+
+**Evidence:**
+
+- `src/Power/Network.hs:116` — `neighborsOf` uses plain cardinal offsets;
+  `wireComponents` has no world-size argument and performs no canonicalization.
+- `src/Power/Network.hs:145` — `touchedComponents` uses the same neighbor
+  helper for attaching nodes and consumers.
+- `src/Power/Network.hs:316` and `:337` — snapshots and charging feed the
+  wire set directly into that topology. Their world-size parameter is used
+  downstream for solar phasing, not seam-aware connectivity.
+- `src/World/Generate/Coordinates.hs:87` — canonical tile coordinates and
+  `localizeTileToAnchor` establish that the reproduction's two distant keys
+  really are cardinal neighbors.
+- `src/Engine/Scripting/Lua/API/StructureArt.hs:466` and
+  `scripts/wire.lua:61` — the placement-neighbor API is explicitly seam-aware.
+- `test-headless/Test/Headless/Power/Network.hs` — tests solar phasing for
+  seam aliases, but does not place adjacent wire tiles across the seam.
+
+**Reproduction:** In a world of size 64, define:
+
+```haskell
+wa = canonicalTile 64 511 0  -- (511,0)
+wb = canonicalTile 64 512 0  -- (0,512)
+```
+
+`localizeTileToAnchor 64 wa wb` returns `(512,0)`, one tile east of `wa`,
+but `length (wireComponents (HS.fromList [wa,wb]))` returns `2`. Attach a
+100 W source at `canonicalTile 64 510 0` and an empty 100 Wh battery at
+`canonicalTile 64 513 0`. Advance `tickPowerNodes` by 3,600 game seconds with
+global sun angle 0, no drains, and those two wires. Stored charge remains
+`0.0 Wh`. The control with wires `(0,0),(1,0)`, source `(-1,0)`, battery
+`(2,0)`, and global sun angle 0.5 stores approximately `100 Wh`.
+These are pure topology/charging calls; rendered wire pixels were not tested.
+
+**Handoff context:** Apply the shared cylindrical coordinate rules to both
+wire adjacency and node/consumer attachment. Cover each of those boundaries,
+including a single wire touching a node across the seam, independently of the
+already passing solar-phase and chunk-residency tests.
+
+### BUG-17. Focus cleanup discards typed dropdown choices before submission
+
+**Verification:** The real dropdown, button, and UI-manager Lua handlers
+produce different results for a direct outside-click callback and the actual
+focus-loss-first dispatch order. The latter silently restores the old value;
+an Apply-style button's callback likewise receives the old selection.
+
+Editable dropdowns implement commit-on-outside-click in `onClickOutside`.
+However, the input router queues focus loss before an outside mouse event,
+and UI-manager focus cleanup calls `dropdown.unfocusAll`. Unfocusing replaces
+the raw edit with the previously selected text. The later outside-click
+handler then sees no focused dropdown to submit. Clicking another UI control
+has the same problem through `handleNonTextBoxClick`.
+
+**Evidence:**
+
+- `scripts/ui/dropdown.lua:420` — `unfocus` resets the input text from
+  `selectedIndex`, discarding the in-progress edit.
+- `scripts/ui/dropdown.lua:512` and `:1082` — submission matches the raw
+  edit and selects its value; clicking outside is meant to invoke submission.
+- `src/Engine/Input/Thread/Mouse.hs:300` — a left-click miss queues
+  `LuaUIFocusLost` before `LuaMouseDownEvent`.
+- `scripts/ui_manager_input.lua:152` — the focus-lost handler unfocuses
+  dropdowns immediately.
+- `scripts/ui_manager_widgets.lua:27` and `:157` — other-control cleanup
+  runs before a button's callback and discards the dropdown edit.
+- `scripts/settings/graphics_tab.lua:224` — the editable resolution
+  dropdown updates pending width/height only through `onChange`; typing a
+  matching resolution and clicking Apply therefore does not commit it.
+
+**Reproduction:** Create a real dropdown with two options, `1280x720` and
+`1920x1080`, initially select the former, focus it, and set its raw edit to
+the latter. Count `onChange` calls. In separate reset runs:
+
+```json
+{
+  "directOutside": {"changed": 1, "value": "new"},
+  "routedOutside": {"changed": 0, "value": "old"},
+  "apply": {"changed": 0, "value": "old"}
+}
+```
+
+`directOutside` calls `dropdown.onClickOutside(500,500)`;
+`routedOutside` calls `manager.onUIFocusLost()` first, matching the queued
+order; `apply` calls `manager.onButtonClick` with a real button handle whose
+callback records the selected value. Each run uses the real UI text-input
+storage in the isolated headless fixture. Texture loading returns a synthetic
+handle; no rendered or GLFW pointer-event test was performed.
+
+**Handoff context:** Distinguish committing a valid edit on blur from
+cancelling it on Escape, and ensure commit happens before a dependent button
+callback reads pending values. Cover routed empty-space clicks, other widget
+clicks, Apply/Save, and explicit Escape cancellation. A test that calls
+`onClickOutside` directly cannot detect this event-ordering defect.
+
+
+## Body composition: extended September 7, 2026 audit
+
+### BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass
+
+**Verification:** With ordinary acolyte-sized body stats, the real regrowth
+helper at its routine 0.1-second cadence spends calories but produces no idle
+muscle growth and no total-weight gain. Walking regrowth adds muscle while
+its intended fat burn and total-mass update both disappear. A one-second
+step control produces different body composition over the same elapsed time.
+
+Each tick reads the Float32 body stats into Lua, adds tiny increments, and
+immediately stores each result back to Float32. At normal human body sizes,
+the intended idle lean increment and total-mass increment are below half a
+storage step. They round back to the old value on every tick; there is no
+retained remainder. Fat, lean, total mass, and the calorie bill round
+independently, so the stored changes also fail to conserve composition.
+
+**Evidence:**
+
+- `scripts/unit_resource_energy.lua:75` — `applyRegrowth` computes separate
+  fat/lean/body increments and writes all three every tick. The idle split
+  is 90% fat / 10% lean from 0.1 kcal per second; walking also burns fat.
+- `scripts/unit_resource_tick.lua:205` — a live calorie store above 75%
+  invokes regrowth with the resource tick's `dt`.
+- `scripts/init_loader.lua:107` — that routine interval is 0.1 seconds.
+- `src/Unit/Types/Instance.hs:67` and
+  `src/Engine/Scripting/Lua/API/Units/Stats.hs:343` — these stats are stored
+  as `Float`, and the public setter writes through that representation.
+- `src/Unit/Thread/Command/Body.hs:159` — recomputation derives strength,
+  pool maxima, and carrying capacity from the stored composition; it does
+  not reconcile total mass with independently rounded fat/lean deltas.
+- `tools/physiology_probe.py:395` — its calorie-drain measurement explicitly
+  moves below the surplus-regrowth band. It does not assert regrowth
+  accumulation at the production cadence.
+
+**Reproduction:** Seed height 1.8 m, body/frame mass 71.28 kg, lean mass
+28.512 kg, fat mass 14.256 kg, strength base 1, and calories 1,400. Call the
+real `applyRegrowth` 10,000 times at 0.1 seconds. Reset, then repeat 1,000
+times at one second. Repeat the fine-step case with walking activity:
+
+| 1,000 seconds of regrowth | Body mass (kg) | Lean mass (kg) | Fat mass (kg) | Calories |
+|---|---:|---:|---:|---:|
+| Initial stored values | 71.279999 | 28.511999 | 14.256000 | 1400.000000 |
+| Idle, 0.1 s steps | 71.279999 | 28.511999 | 14.265536 | 1299.902344 |
+| Idle, 1 s steps | 71.295258 | 28.517721 | 14.267444 | 1300.024414 |
+| Walking, 0.1 s steps | 71.279999 | 28.550146 | 14.256000 | 1299.902344 |
+
+Without storage loss, idle growth over that duration adds approximately
+0.011688 kg fat and 0.005556 kg lean, with their sum added to total mass.
+The isolated fixture uses real stat setters and real body recomputation;
+metabolism, digestion, and other physiology updates are not interleaved.
+The duration therefore measures the regrowth mechanism, not an unattended
+1,000-second whole-game trajectory.
+
+**Handoff context:** Preserve sub-Float increments and a coherent accounting
+of tissue/total mass and energy. Cover ordinary default-scale bodies at the
+actual tick cadence, with tolerances that cannot accept completely missing
+growth or exercise burn. This is distinct from BUG-15: these writes are
+unconditional, so removing `tickResource`'s explicit `1e-4` guard would not
+repair this defect.
+
+
+## Medical treatment and recovery: September 7, 2026 continuation
+
+Verified against `289d454b12c0ec2e0db1e72aa4073b0462743a59`, using the existing headless component's REPL. The live API
+fixtures reuse `Test.Headless.Unit.MedicalKitInstance` inside the isolated
+`withMenusEngine` harness. No unit/combat simulation worker or graphical
+window runs; treatment APIs, item consumption, wound storage, and Lua
+revival decisions are real. Wound progression is called explicitly through
+its production pure helper.
+
+### BUG-19. Treatment aliases separate wounds inflicted at the same game time
+
+**Verification:** One real antibiotic treatment changed two wounds after
+consuming one dose. Worse, the less-infected wound increased from 0.1 to 0.4
+because treatment assigned it the result computed for the more-infected
+wound. A control changing only the second wound's timestamp treated just the
+intended first wound.
+
+The treatment code selects one worst wound, but identifies it for mutation
+by `(part, kind, woundAt)`. Those fields do not uniquely identify a wound:
+combat stamps wounds with the current shared game time and appends them to
+the existing list. Separate attacks resolved between game-clock updates can
+inflict the same kind of wound on the same part with the same timestamp.
+The treatment mutators update EVERY matching entry, not just the selected
+wound. Both dressing/cleaning and infection treatment share this key.
+
+**Evidence:**
+
+- `src/Combat/Resolution.hs:420` — `mkWound` stamps `woundAt = gt`;
+  the following commit appends the new wounds without assigning a unique
+  treatment identity or merging existing same-key wounds.
+- `src/Combat/Resolution.hs:177` and `src/Combat/Thread.hs:156` — attacks
+  read the shared game clock while a queue-draining loop can resolve several
+  attacks before that clock changes. The timestamp is not a sequence number.
+- `src/Engine/Scripting/Lua/API/Units/Medical.hs:111` and `:533` — each
+  treatment selects one wound and constructs the three-field key.
+- The same file's `setWoundDressing` at line 340, `setWoundClean` at
+  line 399, and `setWoundInfection` at line 427 map over ALL matching wounds.
+- Infection treatment at line 549 computes a single absolute `newInf` from
+  the selected wound, then copies it to all matches after spending one dose.
+- `test-headless/Test/Headless/Unit/MedicalKitInstance.hs:185` — its clinical
+  fixture has one wound, so passing supply-instance tests do not cover
+  collisions in the patient's wound identity.
+
+**Reproduction:** Reuse the medical-kit fixture's medic, stocked second kit,
+and adjacent patient. Give the patient two torso slash wounds at timestamp
+0, with infection 0.9 and 0.1 and inflicted severity 0.5 and 0.2. Set the
+medic's intelligence to 0.5; it already knows infection control at 100.
+Call the real `unit.treatInfection(1,2)`:
+
+| Case | First infection after | Second infection after | Antibiotic doses spent |
+|---|---:|---:|---:|
+| Both wound timestamps 0 | 0.399999976 | 0.399999976 | 1 |
+| Second timestamp 0.01 | 0.399999976 | 0.100000001 | 1 |
+
+The same-key case marks both wounds clean. The distinct-time control leaves
+the second wound dirty. The stocked antibiotic item's fill fell from 5 to 4.
+These are real treatment commits against seeded wound lists; an actual
+multi-attacker fight was not simulated. Production collision reachability
+is established by the combat stamping and append path above.
+
+**Handoff context:** Give a selected wound unambiguous mutation identity,
+including across intervening healing/list changes. Do not fix this merely by
+adding severity to the key: severity and the other mutable clinical fields
+are neither identities nor guaranteed unique. Cover same-time same-part
+same-kind wounds for both treatment verbs, including different infection
+types and a less-infected non-target whose infection must never increase.
+If the chosen solution changes persisted wound records, follow the save
+schema/migration contract.
+
+### BUG-20. Healed blood-loss patients have no route through the revival blood gate
+
+**Verification:** After the real wound tick removed a patient's final healed
+wound, 10,000 ticks left blood at 1 L of a 5.25 L maximum. The real revival
+helper requested zero revives in 100 calls despite no wounds and no active
+bleeding. Changing only blood to 4.9 L made all 100 calls request revival.
+
+The revival gate requires at least 50% of maximum blood after a hemorrhagic
+collapse. Its comment says wound closure refills blood indirectly and that
+healing or first aid allows recovery. The actual implementation never
+replenishes blood: wound progression subtracts loss, wound-free progression
+returns without touching blood, and treatment alters dressings/infection
+without restoring volume. Thus successful medical stabilization cannot
+complete the promised recovery. This is a missing recovery mechanism, not a
+request to remove the anti-flapping blood gate.
+
+**Evidence:**
+
+- `scripts/unit_resource_tick.lua:258` — documents the bleeding-collapse
+  hysteresis and asserts wound closure will permit recovery; the gate at
+  line 271 refuses revival below 50% of maximum blood.
+- `src/Combat/Wounds/Tick.hs:174` — a wound-free unit only decays immunity;
+  it leaves `uiBlood` untouched.
+- `src/Combat/Wounds/Tick.hs:404` and `:474` — the wounded path computes
+  `newBlood = uiBlood inst - totalDrain` and stores its nonnegative clamp.
+  Healing/removing the last wound does not add blood.
+- `src/Engine/Scripting/Lua/API/Units/Medical.hs:167` and `:550` — bleeding
+  and infection treatment change supplies, wound state, knowledge and immune
+  response, with no volume-recovery effect.
+- `src/Unit/Types/Wound.hs:134` — maximum blood is body mass × 0.075.
+  Repository-wide `uiBlood` writer inspection found spawning and save
+  restoration, but no live healing, feeding, drinking, or transfusion writer
+  that replenishes the field.
+
+**Reproduction:** Seed a 70 kg collapsed patient with blood 1 L and one
+clean, fully clotted, dressed torso slash: severity 0.5, heal 0.999,
+infection 0. Call `Combat.Wounds.tickOneUnit` 10,000 times with `dt = 0.1`;
+the first call removes the healed wound. The final state has zero wounds
+and blood still 1 L. Install that result in the medical fixture and call
+`unit_resource_tick.checkRevive(2,{})` 100 times, counting `unit.revive`
+requests. The empty resource configuration intentionally isolates the blood
+gate from other resource thresholds:
+
+```json
+{"revives":0,"blood":{"max":5.25,"current":1.0,"bleedRate":0.0},"wounds":0}
+```
+
+Changing only blood to 4.9 L produces 100 revive requests. The fixture does
+not execute those requests, and it omits other physiology: a full simulation
+can deteriorate further through hypoxia or other survival conditions instead
+of leaving the patient indefinitely collapsed.
+
+**Handoff context:** Define and implement the intended post-stabilization
+blood-volume recovery, including its nutrition/rest/treatment prerequisites
+and time scale, while retaining collapse/revival hysteresis. Test the whole
+bleed → stabilize → wound closure → blood recovery → revival sequence, plus
+continued bleeding and a true exsanguination control. A healing test that
+asserts only wound removal misses the blocked recovery step.
+
+
+## Repair ownership: September 7, 2026 continuation
+
+### BUG-21. Ground-repair return retries never end after the item leaves its worker
+
+**Verification:** After a real pickup and a real transfer of the target to
+another unit, aborting its repair entered `returning`. One hundred further
+executions retained that phase, utility 6, and the original worker's claim,
+although the worker no longer held the item and the other unit did.
+
+Ground-sourced repair jobs must drop their borrowed target when they finish
+or abort. The new retry path correctly preserves a still-held item when its
+page temporarily cannot accept a drop. It treats EVERY failed drop as that
+same retryable condition, however. If the item was transferred, dropped by
+another action, or otherwise removed from this inventory, retrying cannot
+succeed. The job never checks ownership again, retains its repair utility,
+and refreshes its claim on every execution.
+
+**Evidence:**
+
+- `scripts/unit_ai_repair.lua:139` — abort of a fetched ground target calls
+  `returnGroundTarget`; any false result preserves the job in `returning`.
+- `scripts/unit_ai_repair_target.lua:231` — the return helper only checks
+  whether `unit.dropItemById` returned true; it cannot distinguish a missing
+  item from a temporarily unavailable destination.
+- `scripts/unit_ai_repair.lua:183` — an existing repair job receives the
+  configured lock utility before candidate eligibility is considered.
+- `scripts/unit_ai_repair.lua:301` — every execution refreshes the claim;
+  the `returning` branch at line 308 retries the drop and otherwise returns
+  without checking whether the worker still owns the item.
+- `src/Engine/Scripting/Lua/API/Units/Cargo.hs:181` — an exact-instance
+  unit transfer really removes the item from this worker's inventory.
+  The repair obligation is separate Lua state, not part of that commit.
+- `test-headless/Test/Headless/Lua/UnitAiRepairGround.hs:780` — current
+  failure coverage removes and restores the page while the worker continues
+  holding the target. It does not remove or transfer the target itself.
+
+**Reproduction:** Reuse that fixture with one worker holding lignite, a
+broken ground axe (instance 735) one tile away, and a second live same-page
+unit. Drive the real repair scoring/claim and pickup, reaching
+`fetch_consumable`. Transfer the axe through
+`unit.transferItemToUnit(1,2,"axe_steel",735)`; it returns true. Call
+`RP.abort(1,s,unit.getInfo(1))`, then `RP.execute(1,s,PARAMS)` 100 times:
+
+```json
+{"moved":true,"phase":"returning","utility":6.0,"claimant":1}
+```
+
+Real inventory reads show only lignite on the original worker and axe 735
+on the second unit. The reproduction reuses the existing fixture's station
+and pace stubs, but no pickup, transfer, inventory-read, or drop result is
+stubbed. No actual repair operation is needed; it exercises abort cleanup.
+
+**Handoff context:** Reconcile the return obligation against current item
+ownership. Keep retrying while the worker still holds the item and the drop
+is temporarily impossible; release stale work when the item has legitimately
+left. Preserve the exact-instance and own-page return policies. Cover player
+transfer/drop during repair, missing targets, and temporary page loss. The
+stale job is not an infinite-utility lock: higher-priority survival/combat can
+still preempt it, but ordinary work stays displaced whenever repair resumes.
