@@ -398,7 +398,8 @@ initializeEngineWith logBackend = do
   focusMgrRef ← newIORef createFocusManager
   textBuffersRef ← newIORef Map.empty
   fontCache ← newIORef defaultFontCache
-  -- Start at noon, published rather than overridden (#1869).
+  -- Start at 6am (sunAngle 0.25, per World.Time.Types), published rather
+  -- than overridden (#1869).
   sunAngleRef ← newIORef (publishedSolar 0.25)
   worldPreviewRef ← newIORef Nothing
   worldPreviewGenerationRef ← newIORef 0
