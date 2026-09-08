@@ -6,10 +6,10 @@
 --   real-second: @0@ pauses the page clock and a positive value advances
 --   it. The value the Lua boundary accepts is stored as a 'Float'
 --   (@WorldSetTimeScale@, @wsTimeScaleRef@, @wsResumeScaleRef@) and is
---   later multiplied by the elapsed seconds of a tick and floored into
---   an 'Int' day count by 'World.Time.Types.advanceWorldClock'. NaN, an
---   infinity, a negative value, or a finite value large enough to floor
---   outside 'Int' all corrupt or pin that clock.
+--   later multiplied by the elapsed seconds of a tick and split into an
+--   'Int' minute count by 'World.Time.Types.advanceWorldClock'. NaN, an
+--   infinity, a negative value, or a finite value large enough to make
+--   that split inexact all corrupt or pin that clock.
 --
 --   This module is the ONE definition of what is accepted, shared by the
 --   Lua boundary (which refuses at the door, before any world command is
@@ -28,14 +28,14 @@ module World.Time.Scale
     , acceptedTimeScale
     , describeTimeScaleRefusal
     , maxTimeScale
+    , worstCaseMinuteTotal
     , worstCaseDayCount
       -- * The clock's own constants
+    , clockMinutesPerDayInt
     , clockMinutesPerDay
     , clockMaxInDayMinute
     , clockMaxElapsedStep
     , clockMinutesPerDayD
-    , clockMaxInDayMinuteD
-    , clockMaxElapsedStepD
     , acceptedElapsed
       -- * Retained sub-minute progress (#2471)
     , ClockRemainder
@@ -44,11 +44,12 @@ module World.Time.Scale
     , maxClockRemainder
     , mkClockRemainder
     , repairClockRemainder
-    , clockMaxStartMinute
     , clockTickErrorBound
       -- * Representation guards
     , floorToInt
     , floorToIntD
+    , floorToIntExact
+    , doubleExactIntegerBound
     , addChecked
     , mulCheckedNonNeg
     , nextDownFloat
@@ -62,14 +63,23 @@ import Engine.Core.Clock (maxElapsedStep)
 
 -- * The clock's own constants
 
--- | Minutes in a clock day, exactly as
---   'World.Time.Types.advanceWorldClock' divides by it. Deliberately not
---   derived from 'World.Time.Types.CalendarConfig': the time-of-day
---   arithmetic is fixed at 24×60 regardless of the calendar's month and
---   year lengths, and a ceiling that disagreed with the arithmetic it
---   guards would not be a bound at all.
+-- | Minutes in a clock day, at the type
+--   'World.Time.Types.advanceWorldClock' actually divides by since #2471:
+--   the day/minute split is EXACT 'Int' arithmetic, so this is where the
+--   value is stated and the floating copies below are derived from it.
+--
+--   Deliberately not derived from 'World.Time.Types.CalendarConfig': the
+--   time-of-day arithmetic is fixed at 24×60 regardless of the
+--   calendar's month and year lengths, and a ceiling that disagreed with
+--   the arithmetic it guards would not be a bound at all.
+clockMinutesPerDayInt ∷ Int
+clockMinutesPerDayInt = 1440
+
+-- | 'clockMinutesPerDayInt' in the stored time scale's type. 1440 is
+--   exactly representable in 'Float', so the derivation is exact and the
+--   two cannot drift.
 clockMinutesPerDay ∷ Float
-clockMinutesPerDay = 1440
+clockMinutesPerDay = fromIntegral clockMinutesPerDayInt
 
 -- | The last minute a tick can START from — 23:59, i.e. one minute
 --   before the next midnight. This is the worst case for the ceiling
@@ -90,17 +100,6 @@ clockMaxElapsedStep = realToFrac maxElapsedStep
 --   widening is exact.
 clockMinutesPerDayD ∷ Double
 clockMinutesPerDayD = realToFrac clockMinutesPerDay
-
--- | 'clockMaxInDayMinute' in the accumulator's own type, widened the
---   same way and equally exactly.
-clockMaxInDayMinuteD ∷ Double
-clockMaxInDayMinuteD = realToFrac clockMaxInDayMinute
-
--- | 'Engine.Core.Clock.maxElapsedStep' in the accumulator's own type —
---   which is the type it is already defined at, so this is the value
---   itself and 'clockMaxElapsedStep' above is the narrowing of it.
-clockMaxElapsedStepD ∷ Double
-clockMaxElapsedStepD = maxElapsedStep
 
 -- * Retained sub-minute progress (#2471)
 
@@ -165,51 +164,70 @@ repairClockRemainder r = case mkClockRemainder r of
     Just ok → (ok, False)
     Nothing → (zeroClockRemainder, True)
 
--- | The largest precise in-day minute total a tick can START from:
---   'clockMaxInDayMinute' plus the largest retained remainder. This is
---   the worst case for the ceiling below, and it is ATTAINABLE — a page
---   really can sit at 23:59 carrying 'maxClockRemainder' — so the bound
---   derived from it is tight rather than merely safe.
-clockMaxStartMinute ∷ Double
-clockMaxStartMinute =
-    clockMaxInDayMinuteD + clockRemainderMinutes maxClockRemainder
-
 -- | The worst-case rounding error ONE tick's accumulation can introduce,
---   in game-minutes: half an ulp at the largest total the accumulator
---   ever holds before it is reduced back into the day.
+--   in game-minutes: half an ulp just below 2, which is the largest
+--   value the FRACTIONAL accumulator can ever hold.
 --
---   The per-tick product @scale × dt@ is exact ('ClockRemainder'), so
---   this is the whole error budget. The accumulator is reduced below
---   'clockMinutesPerDay' every tick, so the bound does NOT grow with
---   session length: reaching a whole minute of drift would take
---   @1 \/ clockTickErrorBound@ ticks — upwards of 8×10¹² of them, which
---   at 60 ticks a second is several thousand years of continuous play.
+--   That ceiling of 2 is the whole point of the split arithmetic in
+--   'World.Time.Types.advanceWorldClock', and it is what makes this
+--   bound independent of the time scale. The tick's exact product
+--   @scale × dt@ has its WHOLE-minute part taken off first and added to
+--   the clock as an 'Int'; only the leftover fraction, strictly below 1,
+--   is ever added to the retained remainder, itself strictly below 1. So
+--   the one rounding a tick can perform happens on a sum in @[0, 2)@
+--   however large the scale is — an accumulator that carried
+--   @scale × dt@ whole would round at that value's own ulp, which at the
+--   ceiling scale is millions of minutes.
+--
+--   The per-tick product is exact ('ClockRemainder' spells out why) and
+--   the day/minute split is exact 'Int' arithmetic, so this rounding is
+--   the entire error budget. It does not grow with session length:
+--   reaching a whole minute of drift would take @1 / clockTickErrorBound@
+--   ticks — over 9×10¹⁵ of them, which at 60 ticks a second is millions
+--   of years of continuous play.
 clockTickErrorBound ∷ Double
-clockTickErrorBound =
-    (clockMinutesPerDayD - nextDownDouble clockMinutesPerDayD) / 2
+clockTickErrorBound = (2 - nextDownDouble 2) / 2
 
 -- * The accepted domain
 
--- | The day count a worst-case NORMAL tick produces at @scale@: one
---   starting at 'clockMaxStartMinute' and running for a full
---   'clockMaxElapsedStep'. 'Nothing' when that count is not
---   representable as an 'Int'.
+-- | The whole-minute total a worst-case NORMAL tick reaches at @scale@:
+--   the last minute of a day, plus the minute its retained remainder can
+--   still carry, plus a full 'clockMaxElapsedStep' at @scale@. 'Nothing'
+--   when that total is not an EXACTLY split 'Int'.
 --
---   This is 'World.Time.Types.advanceWorldClock''s own first step, at
---   the inputs that maximise it, so a scale this answers 'Just' for
---   cannot overflow the day count on any normal tick — a shorter step,
---   an earlier start or a smaller retained remainder only makes the
---   total smaller.
+--   This is 'World.Time.Types.advanceWorldClock''s own arithmetic, at
+--   the inputs that maximise it, associated the same way: the tick's own
+--   whole-minute count is taken off the exact product first, and only
+--   then added to the clock. A shorter step, an earlier start or a
+--   smaller retained remainder only makes the total smaller, so a scale
+--   this answers 'Just' for cannot overflow on any normal tick.
 --
---   #2471 moved it onto the accumulator's own 'Double' arithmetic and
---   onto the largest start a page can now hold: before the remainder
---   existed the worst start was a whole 'clockMaxInDayMinute', and a
---   bound derived from that would be an ulp short of what the clock can
---   actually be handed.
+--   __Why exactness and not merely representability (#2471).__ The
+--   sub-minute remainder is only meaningful while the whole-minute split
+--   of @scale × dt@ is exact — above 'doubleExactIntegerBound' a 'Double'
+--   has no sub-unit precision left at all, and both the split and the
+--   fraction it leaves behind become fiction. Refusing there is what
+--   makes 'clockTickErrorBound' a true statement over the WHOLE accepted
+--   domain rather than over the scales someone happened to test. It
+--   costs nothing real: the bound still sits many orders of magnitude
+--   above every shipped caller (the largest is @50000@ in
+--   @tools\/farm_ai_probe.py@ and @tools\/crop_probe.py@), and a single
+--   tick at the ceiling still advances the calendar by millions of
+--   years.
+worstCaseMinuteTotal ∷ Float → Maybe Int
+worstCaseMinuteTotal scale = do
+    addedWhole ← floorToIntExact
+        (realToFrac scale * realToFrac clockMaxElapsedStep)
+    -- The largest start: the last minute of a day, plus the one minute a
+    -- remainder below 1 can carry into it.
+    addChecked clockMinutesPerDayInt addedWhole
+
+-- | The day count of 'worstCaseMinuteTotal' — the quantity the calendar
+--   carry actually receives, and the one 'maxTimeScale''s documentation
+--   is stated in.
 worstCaseDayCount ∷ Float → Maybe Int
-worstCaseDayCount scale = floorToIntD
-    ((clockMaxStartMinute + realToFrac scale * clockMaxElapsedStepD)
-        / clockMinutesPerDayD)
+worstCaseDayCount scale =
+    (`div` clockMinutesPerDayInt) <$> worstCaseMinuteTotal scale
 
 -- | The largest stored scale the boundary accepts: the largest 'Float'
 --   whose worst-case tick still floors to a representable 'Int' day
@@ -218,8 +236,7 @@ worstCaseDayCount scale = floorToIntD
 --   FOUND, not chosen, and not left to a closed form. The algebraic
 --   solution of
 --
---   > (clockMaxStartMinute + scale * clockMaxElapsedStep) / clockMinutesPerDay
---   >     ≡ intFloorUpperExclusive
+--   > scale * clockMaxElapsedStep ≡ doubleExactIntegerBound
 --
 --   is only a starting point: every step of it rounds, and a bound that
 --   rounded UP would admit a scale that overflows — exactly the trap in
@@ -230,21 +247,27 @@ worstCaseDayCount scale = floorToIntD
 --   therefore cannot drift from the arithmetic it guards, and it is the
 --   largest safe scale rather than a convenient round number below it.
 --
---   In practice the walk takes one step. The budget is a termination
---   guarantee, not an expectation: it bounds the search at far more
---   steps than any rounding can cost, and a search that somehow
---   exhausted it would refuse everything but a paused clock rather than
---   return an unproven bound.
+--   In practice the walk takes a step or two. The budget is a
+--   termination guarantee, not an expectation: it bounds the search at
+--   far more steps than any rounding can cost, and a downward search
+--   that somehow exhausted it would refuse everything but a paused clock
+--   rather than return an unproven bound.
 maxTimeScale ∷ Float
 maxTimeScale = search maxSearchSteps algebraicCeiling
   where
-    algebraicCeiling = realToFrac
-        ((intFloorUpperExclusive * clockMinutesPerDayD - clockMaxStartMinute)
-            / clockMaxElapsedStepD)
+    -- Both operands are exact powers of two (0.25 exactly, and 2^53), so
+    -- this quotient is exact in 'Double' AND lands on a 'Float' without
+    -- rounding: the starting
+    -- point is the algebraic solution ITSELF, never a value rounded
+    -- below it. Walking down from there therefore reaches the largest
+    -- accepted scale, and there is nothing above it to climb back to.
+    algebraicCeiling ∷ Float
+    algebraicCeiling =
+        realToFrac (doubleExactIntegerBound / realToFrac clockMaxElapsedStep)
     search ∷ Int → Float → Float
     search budget scale
       | budget ≤ 0 ∨ scale ≤ 0 = 0
-      | otherwise = case worstCaseDayCount scale of
+      | otherwise = case worstCaseMinuteTotal scale of
           Just _  → scale
           Nothing → search (budget - 1) (nextDownFloat scale)
 
@@ -254,19 +277,30 @@ maxSearchSteps ∷ Int
 maxSearchSteps = 64
 
 -- | The next representable value strictly below a positive finite @x@.
+--   Shared by both instantiations below so the 'Float' ceiling search
+--   and the 'Double' remainder bound can never disagree about what one
+--   step down means.
 --
---   'decodeFloat' normalises to the type's own significand width, so
---   decrementing it and re-encoding at the same exponent is exactly one
---   step down — including across a binade boundary, where the
---   decremented significand simply denormalises into the next binade's
---   spacing. Shared by both instantiations below so the 'Float' ceiling
---   search and the 'Double' remainder bound can never disagree about
---   what one step down means.
+--   'decodeFloat' NORMALISES: it returns a significand in
+--   @[2^(d-1), 2^d)@ for @d = floatDigits x@. Away from a binade
+--   boundary, decrementing it and re-encoding at the same exponent is
+--   exactly one step down. AT the bottom of a binade it is not — the
+--   spacing halves below @x@, so plain @mant - 1@ steps down by a whole
+--   ulp of the binade above and SKIPS the representable value in
+--   between. #2471 found that the hard way: a ceiling search starting
+--   at an exact power of two settled an ulp low and refused a scale the
+--   clock handles perfectly well. The binade case re-encodes one
+--   exponent lower instead, where the doubled significand is exact.
 nextDownAt ∷ ∀ α. RealFloat α ⇒ α → α
 nextDownAt x = case decodeFloat x of
     (mant, ex)
-      | mant ≤ 0  → x
-      | otherwise → encodeFloat (mant - 1) ex
+      | mant ≤ 0           → x
+      | mant ≡ binadeFloor → encodeFloat (2 * mant - 1) (ex - 1)
+      | otherwise          → encodeFloat (mant - 1) ex
+  where
+    -- The smallest NORMALISED significand of this type; a denormal's is
+    -- below it, and there the uniform spacing makes @mant - 1@ right.
+    binadeFloor = 2 ^ (floatDigits x - 1)
 
 -- | 'nextDownAt' at the stored time scale's type.
 nextDownFloat ∷ Float → Float
@@ -275,6 +309,7 @@ nextDownFloat = nextDownAt
 -- | 'nextDownAt' at the calendar accumulator's type (#2471).
 nextDownDouble ∷ Double → Double
 nextDownDouble = nextDownAt
+
 
 -- | Why a time scale was refused. Each maps to one diagnostic in
 --   'describeTimeScaleRefusal'.
@@ -362,11 +397,6 @@ intFloorLowerInclusiveAt = fromIntegral (minBound ∷ Int)
 intFloorUpperExclusiveAt ∷ ∀ α. RealFloat α ⇒ α
 intFloorUpperExclusiveAt = negate intFloorLowerInclusiveAt
 
--- | The 'Double' ceiling, named for 'maxTimeScale''s algebraic starting
---   point — which #2471 moved onto the accumulator's arithmetic.
-intFloorUpperExclusive ∷ Double
-intFloorUpperExclusive = intFloorUpperExclusiveAt
-
 -- | @floor@ into 'Int', but only where the result is representable.
 --   'Nothing' for NaN, either infinity, and any finite value whose floor
 --   would fall outside @[minBound, maxBound]@ — the partial
@@ -390,6 +420,29 @@ floorToInt = floorToIntAt
 -- | 'floorToIntAt' at the calendar accumulator's type (#2471).
 floorToIntD ∷ Double → Maybe Int
 floorToIntD = floorToIntAt
+
+-- | @2^53@: the first 'Double' whose successor is not an integer, and
+--   therefore the exclusive bound below which @floor@ and the fraction
+--   it leaves behind are both EXACT. A power of two, so it is itself
+--   exactly representable.
+doubleExactIntegerBound ∷ Double
+doubleExactIntegerBound = 2 ^^ (53 ∷ Int)
+
+-- | 'floorToIntD', but only where the split is also exact (#2471):
+--   @x@ must be below 'doubleExactIntegerBound' in magnitude, so that
+--   @fromIntegral (floor x)@ reproduces the integer part without
+--   rounding and @x - fromIntegral (floor x)@ is the true fraction
+--   rather than a cancellation artefact.
+--
+--   Stricter than 'floorToIntD' and deliberately so: this is the guard
+--   the retained sub-minute remainder needs, and 'maxTimeScale' is
+--   derived from it, so the exactness the remainder's contract claims
+--   holds at every accepted scale instead of only at small ones.
+floorToIntExact ∷ Double → Maybe Int
+floorToIntExact x
+  | isNaN x ∨ isInfinite x        = Nothing
+  | abs x ≥ doubleExactIntegerBound = Nothing
+  | otherwise                     = floorToIntD x
 
 -- | Addition that reports 'Int' overflow instead of wrapping into it.
 addChecked ∷ Int → Int → Maybe Int

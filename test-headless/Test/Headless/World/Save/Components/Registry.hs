@@ -153,6 +153,24 @@ spec = do
             ccValidate worldPagesCodec (basePageSnapshots (WorldPagesDTO []))
                 `shouldSatisfy` (not . null)
 
+        -- #2471: the validator used to stamp a literal 10 on every error
+        -- it built, which had already gone stale once — a malformed
+        -- current-format save was reported against a schema version it
+        -- was not written at, sending a reader to the wrong wire shape.
+        -- Both places now name 'worldPagesVersion', and this is what
+        -- keeps them saying the same thing.
+        it "world-pages stamps its errors with the version it WRITES, \
+           \not a literal that goes stale at the next bump" $ do
+            let dup = basePageSnapshots
+                        (WorldPagesDTO [pageCore page1, pageCore page1])
+            map ceVersion (ccValidate worldPagesCodec dup)
+                `shouldBe` [ccVersion worldPagesCodec]
+            map ceVersion
+                (ccValidate worldPagesCodec
+                    (basePageSnapshots (WorldPagesDTO [])))
+                `shouldBe` [ccVersion worldPagesCodec]
+            ccVersion worldPagesCodec `shouldBe` worldPagesVersion
+
         -- #760 round 8: per-page allocator validation for the three
         -- per-page (not global) id counters — craft bills, power nodes,
         -- ground items — mirroring world-pages' own component-local

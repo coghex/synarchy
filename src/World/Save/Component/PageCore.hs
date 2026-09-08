@@ -77,6 +77,7 @@ module World.Save.Component.PageCore
     , PageCoreDTOv10(..)
     , WorldPagesDTOv10(..)
       -- * The component
+    , worldPagesVersion
     , WorldPages(..)
     , worldPagesCodec
     , validatePages
@@ -550,9 +551,31 @@ data WorldPages = WorldPages
 --   used to be a hand-rolled 'ComponentCodec' because the shared helper
 --   had no real multi-version dispatch — 'componentCodec' now expresses
 --   it, with each accepted version declared exactly once.
+-- | The @world-pages@ schema version this build WRITES.
+--
+--   Named because 'validatePages' has to stamp it on every error it
+--   reports, and a second hand-maintained literal there is exactly what
+--   went stale: the validator still said 10 after #917 took the
+--   component to 10, so a malformed current-format save was reported
+--   against a schema version it was not written at, sending a reader to
+--   the wrong wire shape.
+--
+--   'csVersion' below spells the number out rather than naming this,
+--   because @tools\/save_compat_audit.py@ reads that field statically and
+--   deliberately refuses an expression there — it needs the real schema
+--   version, not something it would have to evaluate. The two are tied
+--   instead by the @save components@ example
+--   "world-pages stamps its errors with the version it WRITES", which
+--   asserts @ccVersion worldPagesCodec ≡ worldPagesVersion@.
+worldPagesVersion ∷ Word32
+worldPagesVersion = 11
+
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
+      -- A literal, not 'worldPagesVersion': the save-compat audit parses
+      -- this field statically. The example named on that constant is
+      -- what keeps the two from drifting.
     , csVersion       = 11
     , csRequired      = True
     , csDeps          = []
@@ -642,15 +665,19 @@ validatePages wp
                     ⧺ locationSignificantItemErrors lis
           ]
   where
-    err = ComponentError worldPagesComponentId 10 ValidatePhase
+    -- The version this build WRITES, not a literal that has to be
+    -- remembered at every bump: an error naming the wrong schema version
+    -- sends a reader looking at the wrong wire shape.
+    err = ComponentError worldPagesComponentId worldPagesVersion ValidatePhase
     -- Each repeated value once, in ascending order, so the report is
     -- deterministic rather than a hash-map traversal order.
     duplicates xs = [ y | (y : _ : _) ← L.group (L.sort xs) ]
 
--- | Turn the decoded current v10 page cores into the base 'PageSnapshot' map every
---   other page-scoped component then writes onto (assembly). All entity/
---   activity/edit fields start empty and are overwritten by their own
---   REQUIRED components; a valid save leaves none of these placeholders.
+-- | Turn the decoded current v11 page cores into the base 'PageSnapshot'
+--   map every other page-scoped component then writes onto (assembly).
+--   All entity/activity/edit fields start empty and are overwritten by
+--   their own REQUIRED components; a valid save leaves none of these
+--   placeholders.
 basePageSnapshots ∷ WorldPagesDTO → WorldPages
 basePageSnapshots (WorldPagesDTO ps) = WorldPages
     { wpPageIds = map pcPageId ps

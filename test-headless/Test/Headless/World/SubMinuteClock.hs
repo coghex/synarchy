@@ -51,10 +51,15 @@ import Structure.Palette (emptyTexPalette)
 import World.Load.Stage
     (stageSession, renderStageError, stagedTimeRemainderWarning)
 import World.Load.Types (StagedPage(..), StagedSession(..))
-import World.Save.Component.Page (blankPageSnapshot)
+import World.Save.Component.Page
+    ( blankPageSnapshot, worldPagesCodec, worldPagesVersion
+    , WorldPages(..) )
+import World.Save.Component.Types
+    (ComponentCodec(..), ComponentError, renderComponentError)
 import World.Save.Snapshot
     (LiveCameraSnapshot(..), PageSnapshot(..), SessionSnapshot(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
+import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import World.Thread (worldTickWith)
 import World.Thread.Command.Time (handleWorldSetDateCommand,
                                   handleWorldSetTimeCommand)
@@ -90,29 +95,29 @@ daysPerYear = ccDaysPerMonth defaultCalendarConfig
 
 -- * The pure spec
 
--- | The clock the pure examples advance, as one precise minute count —
---   the oracle's own representation, deliberately NOT the production
---   one. 'advanceWorldClock' splits the same quantity into whole minutes
---   plus a remainder plus a date, and the two must agree.
+-- | The clock the oracle advances, as one EXACT minute count — its own
+--   representation, deliberately not the production one.
+--   'advanceWorldClock' splits the same quantity into whole minutes plus
+--   a remainder plus a date, and the two must agree.
 data OracleClock = OracleClock
-    { ocMinutes ∷ !Double   -- ^ precise minutes since midnight, [0, 1440)
-    , ocDays    ∷ !Int      -- ^ whole days elapsed since the start
+    { ocMinutes ∷ !Rational  -- ^ exact minutes since midnight, [0, 1440)
+    , ocDays    ∷ !Int       -- ^ whole days elapsed since the start
     } deriving (Show, Eq)
 
--- | The independent oracle: accumulate the same exact per-tick products
---   and reduce into the day, with no reference to the production code.
+-- | The independent oracle, in EXACT arithmetic.
 --
---   The per-tick product is exact in 'Double' (two 'Float' significands
---   are 48 bits against 53), so the ONLY difference an implementation can
---   have from this is the order the running sum rounds in — which is what
---   'clockTickErrorBound' bounds and what the examples below compare
---   against.
+--   'Rational' rather than a second 'Double' accumulation on purpose: a
+--   reference that repeated the implementation's own rounding could not
+--   witness that rounding at all. 'toRational' on a 'Float' is exact, so
+--   every per-tick product here is the real number the implementation is
+--   trying to accumulate, and the difference the examples measure is the
+--   implementation's whole error.
 oracleStep ∷ OracleClock → (Float, Float) → OracleClock
 oracleStep (OracleClock minutes days) (scale, dt) =
-    let total = minutes + realToFrac scale * realToFrac dt
-        rolled = floor (total / clockMinutesPerDayD) ∷ Int
-    in OracleClock (total - clockMinutesPerDayD * fromIntegral rolled)
-                   (days + rolled)
+    let total  = minutes + toRational scale * toRational dt
+        perDay = toRational clockMinutesPerDayInt
+        rolled = floor (total / perDay) ∷ Int
+    in OracleClock (total - perDay * fromIntegral rolled) (days + rolled)
 
 -- | Drive the PRODUCTION pure advance over a schedule, accumulating the
 --   days it reports.
@@ -127,18 +132,23 @@ advanceSchedule time0 rem0 = go time0 rem0 (WorldDate 1 1 1) 0
                                   time remainder date
         in go time' remainder' date' (rolledTotal + rolled) rest
 
--- | The production advance's own precise in-day minute total.
-preciseMinutes ∷ WorldTime → ClockRemainder → Double
+-- | The production advance's own in-day minute total, EXACTLY — the
+--   stored whole minutes plus the retained remainder, with no rounding
+--   introduced by the comparison itself. Adding them in 'Double' would
+--   round at the ulp of 1439, which is larger than the error being
+--   measured.
+preciseMinutes ∷ WorldTime → ClockRemainder → Rational
 preciseMinutes (WorldTime h m) remainder =
-    fromIntegral h * 60 + fromIntegral m + clockRemainderMinutes remainder
+    fromIntegral (h * 60 + m) + toRational (clockRemainderMinutes remainder)
 
 -- | The tolerance a schedule of @n@ ticks is allowed, straight from the
 --   documented per-tick bound. Not a fudge factor chosen to make an
---   example pass: 'clockTickErrorBound' is half an ulp at
---   'clockMinutesPerDayD', and @n@ of them is the worst case where every
---   rounding goes the same way.
-scheduleTolerance ∷ Int → Double
-scheduleTolerance n = fromIntegral n * clockTickErrorBound
+--   example pass: 'clockTickErrorBound' is half an ulp just below 2 —
+--   the largest value the fractional accumulator can hold, whatever the
+--   time scale — and @n@ of them is the worst case where every rounding
+--   goes the same way.
+scheduleTolerance ∷ Int → Rational
+scheduleTolerance n = fromIntegral n * toRational clockTickErrorBound
 
 spec ∷ Spec
 spec = describe "Calendar retains sub-minute progress" $ do
@@ -201,7 +211,43 @@ spec = describe "Calendar retains sub-minute progress" $ do
                 oracle = foldl' oracleStep (OracleClock 600 0) schedule
             rolled `shouldBe` ocDays oracle
             abs (preciseMinutes t r - ocMinutes oracle)
-                `shouldSatisfy` (< scheduleTolerance (length schedule))
+                `shouldSatisfy` (≤ scheduleTolerance (length schedule))
+
+        it "holds that same bound at the TOP of the accepted scale \
+           \domain, where a recombined accumulator would round at \
+           \millions of minutes" $ do
+            -- The bound must be a property of the arithmetic, not of the
+            -- fixture: at these scales the ulp of a tick's own
+            -- @scale × dt@ is enormous, and an accumulator that carried
+            -- the whole product would lose far more than a minute per
+            -- tick. Splitting the whole minutes off into 'Int' before
+            -- the fraction is added is what keeps the error at half an
+            -- ulp below 2 regardless.
+            forM_ [50000, maxTimeScale / 2, maxTimeScale] $ \scale → do
+                let schedule = replicate 400 (scale, 0.25 ∷ Float)
+                    (t, r, rolled) = advanceSchedule (WorldTime 10 0)
+                        (remainderOf 0.5) schedule
+                    oracle = foldl' oracleStep
+                        (OracleClock (600 + 1 / 2) 0) schedule
+                (scale, rolled) `shouldBe` (scale, ocDays oracle)
+                (scale, abs (preciseMinutes t r - ocMinutes oracle))
+                    `shouldSatisfy`
+                        (\(_, d) → d ≤ scheduleTolerance (length schedule))
+
+        it "does not move a clock at all on a zero-scale, zero-elapsed \
+           \tick, even at the largest representable remainder" $ do
+            -- Regression for the recombination trap: 1439 + the largest
+            -- remainder is 1440 in 'Double', so an implementation that
+            -- added the remainder back onto the stored minutes before
+            -- flooring would cross midnight and roll the date here while
+            -- advancing the clock by nothing whatsoever.
+            forM_ [ (0, 0), (0, 0.25), (1, 0) ] $ \(scale, dt) → do
+                let (t, r, d, rolled) = advanceWorldClock
+                        defaultCalendarConfig scale dt (WorldTime 23 59)
+                        maxClockRemainder (WorldDate 5 4 3)
+                ((scale, dt), t, r, d, rolled) `shouldBe`
+                    ((scale, dt), WorldTime 23 59, maxClockRemainder,
+                     WorldDate 5 4 3, 0)
 
         it "never lets the same elapsed time diverge by a whole minute \
            \between two partitions of it" $ do
@@ -488,51 +534,94 @@ capturingLogger = do
             (\e → atomicModifyIORef' ref (\es → (e : es, ()))) }
     pure (logger, reverse ⊚ readIORef ref)
 
--- | A one-page save carrying @stored@ as its persisted sub-minute
---   progress, built the way a DECODED save is: 'blankPageSnapshot' is
---   the construction every @world-pages@ version's own decoder converges
---   on, and 'snapshotToSaveData' is the adapter staging consumes. Forging
---   the value HERE therefore reaches the staging write along the real
---   route rather than a test-only shortcut.
-saveWith ∷ Double → SaveData
-saveWith stored = snapshotToSaveData
-    (SaveRequestMeta "sub_minute_slot" "2026-09-07T00:00:00.000000Z" False)
-    SessionSnapshot
-        { snapGameTime       = 0
-        , snapTexPalette     = emptyTexPalette
-        , snapNextItemId     = 1
-        , snapNextBuildingId = 1
-        , snapNextUnitId     = 1
-        , snapActivePage     = stagedPageId
-        , snapVisiblePages   = [stagedPageId]
-        , snapLiveCamera     = LiveCameraSnapshot
-            { lcsOwnerPage = Just stagedPageId
-            , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceSouth }
-        , snapPages          = HM.singleton stagedPageId
-            (blankPageSnapshot stagedPageId arenaParams)
-                { pgsTimeHour     = 13
-                , pgsTimeMinute   = 42
-                , pgsDateYear     = 1
-                , pgsDateMonth    = 1
-                , pgsDateDay      = 1
-                , pgsTimeRemainder = stored
-                }
-        }
+-- | The session every staging example is built from, carrying @stored@
+--   as its page's sub-minute progress.
+sessionWith ∷ Double → SessionSnapshot
+sessionWith stored = SessionSnapshot
+    { snapGameTime       = 0
+    , snapTexPalette     = emptyTexPalette
+    , snapNextItemId     = 1
+    , snapNextBuildingId = 1
+    , snapNextUnitId     = 1
+    , snapActivePage     = stagedPageId
+    , snapVisiblePages   = [stagedPageId]
+    , snapLiveCamera     = LiveCameraSnapshot
+        { lcsOwnerPage = Just stagedPageId
+        , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceSouth }
+    , snapPages          = HM.singleton stagedPageId
+        (blankPageSnapshot stagedPageId arenaParams)
+            { pgsGeneratedId  =
+                Just (fixtureGeneratedWorldIdForPage stagedPageId)
+              -- Required of a payload at this version: @validatePages@
+              -- refuses a v11 page with no generated-world id, and the
+              -- examples below assert it returns NO errors, so the
+              -- fixture has to be a page a real save could hold.
+            , pgsTimeHour     = 13
+            , pgsTimeMinute   = 42
+            , pgsDateYear     = 1
+            , pgsDateMonth    = 1
+            , pgsDateDay      = 1
+            , pgsTimeRemainder = stored
+            }
+    }
+
+-- | @stored@ put through the REAL @world-pages@ codec and component
+--   validator, exactly as 'World.Save.Component.decodeComponentValue'
+--   does it: encode the session's page at the current version, decode it
+--   back, then validate the canonical value.
+--
+--   This is what makes the invalid-value examples below prove the
+--   contract they claim. Handing staging a forged snapshot could only
+--   ever show that STAGING repairs a bad value; it could not show that
+--   the value survives the v11 wire shape unchanged and that
+--   @validatePages@ deliberately lets it through, which is the half of
+--   the requirement that says the repair is reachable at all.
+decodedRemainder ∷ HasCallStack ⇒ Double → IO (Double, [ComponentError])
+decodedRemainder stored = do
+    let encoded = ccEncode worldPagesCodec (sessionWith stored)
+    case ccDecode worldPagesCodec worldPagesVersion encoded of
+        Left e → expectationFailure
+            ("world-pages did not decode: "
+             ⧺ T.unpack (renderComponentError e))
+            ≫ error "unreachable"
+        Right wp → case HM.lookup stagedPageId (wpBase wp) of
+            Nothing → expectationFailure "the decoded page is missing"
+                        ≫ error "unreachable"
+            Just page →
+                pure (pgsTimeRemainder page, ccValidate worldPagesCodec wp)
+
+-- | 'Eq' that also identifies two NaNs, so an example can pin a
+--   round-tripped non-number without @NaN ≢ NaN@ silently defeating it.
+sameDouble ∷ Double → Double → Bool
+sameDouble a b = (isNaN a ∧ isNaN b) ∨ a ≡ b
 
 -- | Gen params shaped as an ARENA page (seed 0 with the empty timeline)
 --   so load staging rebuilds flat chunks instead of generating a world.
 arenaParams ∷ WorldGenParams
 arenaParams = defaultWorldGenParams { wgpSeed = 0 }
 
--- | Stage one such save and hand back the staged page's OWN clock — read
---   from the refs the staged world state publishes from — beside
---   everything the logger emitted.
+-- | Stage the session carrying @stored@ and hand back the staged page's
+--   OWN clock — read from the refs the staged world state publishes
+--   from — beside everything the logger emitted.
+--
+--   The value staged is the one the CODEC handed back, not the one the
+--   fixture wrote: 'decodedRemainder' is called first and its result is
+--   what goes into the save, so the whole chain from the v11 wire shape
+--   through component validation to the staging repair is one path
+--   rather than three assertions about three separate values.
 stageWith ∷ HasCallStack ⇒ EngineEnv → Double
           → IO (WorldTime, ClockRemainder, [LogEntry])
 stageWith env stored = do
+    (throughWire, componentErrors) ← decodedRemainder stored
+    componentErrors `shouldBe` []
+    (throughWire, sameDouble throughWire stored) `shouldSatisfy` snd
     (logger, drain) ← capturingLogger
     matReg ← readIORef (materialRegistryRef env)
-    staged ← stageSession env logger (saveWith stored) matReg ⌦ either
+    let save = snapshotToSaveData
+            (SaveRequestMeta "sub_minute_slot"
+                             "2026-09-07T00:00:00.000000Z" False)
+            (sessionWith throughWire)
+    staged ← stageSession env logger save matReg ⌦ either
         (\e → expectationFailure (T.unpack (renderStageError e))
                 ≫ error "unreachable")
         pure
@@ -554,7 +643,9 @@ stagingSpec ∷ SpecWith EngineEnv
 stagingSpec = describe "Calendar retains sub-minute progress, through \
                        \load staging" $ do
 
-    it "restores a stored remainder exactly, and stays silent" $ \env →
+    it "carries every valid remainder through the v11 wire shape and \
+       \component validator unchanged, restores it exactly, and stays \
+       \silent" $ \env →
         forM_ [ 0, 0.25, 0.5
               , clockRemainderMinutes maxClockRemainder ] $ \stored → do
             let label = show stored
@@ -568,9 +659,13 @@ stagingSpec = describe "Calendar retains sub-minute progress, through \
     it "loads an out-of-domain stored remainder as none, keeps the whole \
        \minutes, and warns once naming the page and the value" $ \env →
         -- The lower and upper boundaries plus every non-finite value, all
-        -- through the SAME production path a real save takes. Note the
-        -- save is not refused: @validatePages@ deliberately leaves this
-        -- field unjudged so it reaches this one repair.
+        -- through the SAME production path a real save takes: 'stageWith'
+        -- encodes each one at the current @world-pages@ version, decodes
+        -- it back, and asserts the component validator returned NO
+        -- errors, before staging what the codec produced. That order is
+        -- the point — the save is deliberately not refused, so the value
+        -- reaches this one repair rather than costing the player
+        -- everything else in the file.
         forM_ [ 1, 1.5, -0.5, -1e-9, 0 / 0, 1 / 0, -1 / 0 ] $ \stored → do
             -- Labelled by 'show', not by the value itself: NaN is one of
             -- the cases and never equals itself, so a tuple carrying it

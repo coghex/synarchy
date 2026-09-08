@@ -230,8 +230,13 @@ nanScale = 0 / 0
 -- | The next 'Float' strictly above a positive finite @x@ — the
 --   just-over-the-line value the ceiling examples need, computed from
 --   'maxTimeScale' itself rather than from a copied literal.
-nextUpFloat ∷ Float → Float
-nextUpFloat x =
+--
+--   Deliberately its OWN definition rather than
+--   'World.Time.Scale.nextUpFloat', which the ceiling SEARCH now uses:
+--   a tightness proof written in terms of the searcher's own step
+--   function could not witness a bug in that step.
+oneUlpAbove ∷ Float → Float
+oneUlpAbove x =
     let (mant, ex) = decodeFloat x
     in encodeFloat (mant + 1) ex
 
@@ -295,7 +300,7 @@ spec = do
               , ("-Infinity", -1 / 0)
               , ("a negative finite scale", -1.0)
               , ("a scale one ulp above the derived ceiling",
-                 nextUpFloat maxTimeScale)
+                 oneUlpAbove maxTimeScale)
               ] $ \(label, scale) ->
             it ("refuses " ⧺ label ⧺ " and leaves the clock exactly alone") $ do
                 -- #2471: started from a NONZERO remainder, so "exactly
@@ -310,19 +315,25 @@ spec = do
                 d `shouldBe` WorldDate 3 7 11
                 rolled `shouldBe` 0
 
-        it "accepts the derived ceiling itself, and floors to exactly the \
-           \day count the shared domain predicts" $ do
+        it "accepts the derived ceiling itself, and rolls no more days \
+           \than the shared domain's own bound" $ do
             -- The worst case the ceiling is derived FROM: the last minute
             -- of a day plus one whole maxElapsedStep.
             -- #2471 moved that worst case: the start is the last minute
             -- of a day PLUS the largest remainder a page can carry, which
-            -- is what 'clockMaxStartMinute' names and what the ceiling is
-            -- now derived from. Driving the real clock from a smaller
-            -- start would no longer be the worst case at all.
+            -- is the start 'worstCaseMinuteTotal' is derived from.
+            -- Driving the real clock from a smaller start would no longer
+            -- be the worst case at all.
             let (t, r, _, rolled) = advanceWorldClock defaultCalendarConfig
                     maxTimeScale 0.25 (WorldTime 23 59) maxClockRemainder
                     (WorldDate 1 1 1)
-            Just rolled `shouldBe` worstCaseDayCount maxTimeScale
+            -- A BOUND, not a prediction: 'worstCaseMinuteTotal' adds the
+            -- whole minute a remainder below 1 can carry, and this start
+            -- does not always carry it. What must hold is that the real
+            -- advance never exceeds the bound the domain was derived
+            -- from, and that it really did advance.
+            Just rolled `shouldSatisfy` (≤ worstCaseDayCount maxTimeScale)
+            rolled `shouldSatisfy` (> 0)
             wtHour t `shouldSatisfy` (\h -> h >= 0 && h <= 23)
             wtMinute t `shouldSatisfy` (\m -> m >= 0 && m <= 59)
             clockRemainderMinutes r `shouldSatisfy`
@@ -335,8 +346,18 @@ spec = do
             -- the value itself must not. A ceiling that merely happened to
             -- be safe (half the range, say) would pass the example above
             -- while needlessly refusing scales the clock handles fine.
+            worstCaseMinuteTotal maxTimeScale `shouldSatisfy` isJust
+            worstCaseMinuteTotal (oneUlpAbove maxTimeScale) `shouldBe` Nothing
+            -- #2471: the step the search WALKS must reach every
+            -- representable value, or the ceiling settles low and the
+            -- example above passes on a bound that is merely safe. At
+            -- the bottom of a binade the spacing halves, which is
+            -- exactly where a normalised decrement skips one.
+            forM_ [1, 2, 1024, 2 ** 55, maxTimeScale] $ \x -> do
+                nextDownFloat x `shouldSatisfy` (< x)
+                (x, oneUlpAbove (nextDownFloat x)) `shouldBe` (x, x)
             worstCaseDayCount maxTimeScale `shouldSatisfy` isJust
-            worstCaseDayCount (nextUpFloat maxTimeScale) `shouldBe` Nothing
+            worstCaseDayCount (oneUlpAbove maxTimeScale) `shouldBe` Nothing
             forM_ [maxTimeScale / 2, maxTimeScale * 0.75, maxTimeScale] $
                 \scale -> case worstCaseDayCount scale of
                     Nothing -> expectationFailure

@@ -111,6 +111,7 @@ module World.Save.Component.Page
     , WorldEditsDTOv1(..)
     , PageEditsDTOv2(..)
     , WorldEditsDTOv2(..)
+    , worldPagesVersion
     , WorldPages(..)
     , migrateWorldEditsV1
     , migrateWorldEditsV2

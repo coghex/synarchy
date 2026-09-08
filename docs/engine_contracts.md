@@ -2919,19 +2919,39 @@ The rules that go with it:
   solar consumers (rendering, line of sight, power) read: nondecreasing
   within a day, equal to `worldTimeToSunAngle` at a zero remainder, and
   still wrapping at midnight.
-- **Numerics.** The per-tick product `scale × dt` is EXACT in the
-  accumulator's `Double` (two `Float` significands are 48 bits against 53
-  available), so the whole error budget is the running sum's own
-  rounding — bounded by `World.Time.Scale.clockTickErrorBound`, half an
-  ulp at `clockMinutesPerDay`. That bound does not grow with session
-  length, because the accumulator is reduced back into the day every
-  tick; reaching a whole minute of drift would take upwards of 8×10^12
-  ticks. `worstCaseDayCount`, and therefore `maxTimeScale`, are derived
-  from `clockMaxStartMinute` — 23:59 plus the largest representable
-  remainder, an ATTAINABLE start — on that same `Double` arithmetic.
-- **Totality is unchanged.** A refused scale, a refused elapsed value, an
-  unrepresentable floor or an overflowing calendar carry all return the
-  exact input time, remainder and date with zero rolled days.
+- **Numerics.** The per-tick product `scale × dt` is EXACT in `Double`
+  (two `Float` significands are 48 bits against 53 available). Its
+  WHOLE-minute part is then split off and carried in exact `Int`
+  arithmetic, and only the leftover fraction — below one minute — is ever
+  added to the retained remainder, itself below one minute. So the single
+  rounding a tick performs is on a sum in `[0, 2)` **whatever the scale**,
+  bounded by `World.Time.Scale.clockTickErrorBound` = half an ulp below
+  2 = 2⁻⁵³ game-minutes. Reaching a whole minute of drift would take over
+  9×10¹⁵ ticks.
+
+  That split is a correctness requirement, not an optimisation.
+  Recombining the stored minutes with the remainder before flooring would
+  round `1439 + nextDownDouble 1` to 1440, so a page at 23:59 holding
+  `maxClockRemainder` would cross midnight and roll its date on a PAUSED
+  tick that advanced it by nothing.
+
+  `maxTimeScale` is re-derived accordingly: `worstCaseMinuteTotal` refuses
+  a scale whose worst-case tick cannot be split EXACTLY
+  (`floorToIntExact`, i.e. below `doubleExactIntegerBound` = 2⁵³), because
+  above that a `Double` has no sub-unit precision and both the split and
+  the fraction it leaves are fiction. The bound still sits many orders of
+  magnitude above every shipped caller — the largest is `50000` — and one
+  tick at the ceiling still advances the calendar by millions of years.
+  `worstCaseDayCount` is that minute total divided by
+  `clockMinutesPerDayInt`, and is a BOUND rather than a prediction: it
+  includes the minute a remainder can carry, which a given start may not.
+- **Totality is unchanged.** A refused scale, a refused elapsed value, a
+  whole-minute count this tick cannot split exactly, a minute total that
+  will not fit an `Int`, or an overflowing calendar carry all return the
+  exact input time, remainder and date with zero rolled days. The
+  inexact-split refusal is unreachable at any accepted scale on a
+  sanitised tick; it is the honest answer for the over-cap elapsed steps
+  `acceptedElapsed` still admits.
 - **Persistence.** `world-pages` v11 carries it (`pcTimeRemainder`,
   `wpsTimeRemainder`); `migrateWorldPagesV10` loads every earlier payload
   with none, which is the value those saves actually recorded. The
