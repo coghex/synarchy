@@ -59,6 +59,7 @@ import subprocess
 import sys
 import time
 import uuid
+import probe_protocol
 from probelib import (quit_engine, boot, send, capture_request_id,
                       wait_load_published)
 
@@ -200,31 +201,67 @@ def wait_resumed(port: int, page: str, expected: float, timeout: float = 15.0):
     return False, paused, ts
 
 
+PROBE_CHECKS = [
+    ('fast_forward', 'world runs at the requested nondefault speed before saving'),
+    ('save_frozen', 'saving pauses the session and freezes its clock'),
+    ('save_race_frozen', 'a stray speed command cannot unfreeze the saved session'),
+    ('before_load_running', 'the session is running before loading'),
+    ('save_written', 'the save file is published before loading'),
+    ('load_published', 'the first load transaction publishes'),
+    ('loaded_page', 'the first load names a real active page'),
+    ('load_frozen', 'the loaded session is paused with a frozen clock'),
+    ('load_race_frozen', 'a stray speed command cannot unfreeze the loaded session'),
+    ('before_reload_running', 'resume makes the second load pause observable'),
+    ('reload_request', 'reload reports a request id distinct from the first load'),
+    ('reload_published', 'the second load transaction publishes'),
+    ('reloaded_page', 'the second load names a real active page'),
+    ('reload_frozen', 'the reloaded page is paused with a frozen clock'),
+    ('resume_default', 'resuming the reloaded page restores the default speed'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('save_pause', PROBE_CHECKS)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9142)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
 
+
+def _run(args, rep):
     # Never reuse or clobber an existing save directory (belt-and-suspenders
     # on top of the random SAVE_NAME).
     save_dir = os.path.join("saves", SAVE_NAME)
     if os.path.exists(save_dir):
         sys.exit(f"refusing to run: {save_dir} already exists")
 
-    proc = boot(args.port, log=LOG)
+    proc = boot(args.port, log=rep.engine_log_path("save_pause_engine.log", LOG),
+                args=rep.engine_args())
     failures: list[str] = []
     try:
         # 1. Generate a small world and activate it.
         send(args.port, f'world.init("pausetest", {args.seed}, 64, 3)',
              expect_result=False)
-        print(f"[init     ] waitForInit -> {wait_for_init(args.port)}")
+        rep.note(f'[init     ] waitForInit -> {wait_for_init(args.port)}')
         send(args.port, 'world.show("pausetest")', expect_result=False)
 
         # Sanity: a freshly generated, unpaused world runs at scale 1.
         pre_ts = as_float(send(args.port, 'return world.getTimeScale("pausetest")'))
         pre_paused = as_bool(send(args.port, "return engine.isPaused()"))
-        print(f"[pre-save ] isPaused={pre_paused} timeScale={pre_ts}")
+        rep.note(f'[pre-save ] isPaused={pre_paused} timeScale={pre_ts}')
 
         # Run the world at a NON-default speed before saving. Without this
         # the session begins and ends at 1.0, so the post-load resumed-speed
@@ -235,9 +272,8 @@ def main() -> int:
         send(args.port, f'world.setTimeScale("pausetest", {PRE_SAVE_SCALE})',
              expect_result=False)
         ff_ok, ff_ts = wait_time_scale(args.port, "pausetest", PRE_SAVE_SCALE)
-        print(f"[pre-save ] fast-forward to {PRE_SAVE_SCALE} -> timeScale={ff_ts} "
-              f"{'ok' if ff_ok else 'FAIL'}")
-        if not ff_ok:
+        rep.note(f"[pre-save ] fast-forward to {PRE_SAVE_SCALE} -> timeScale={ff_ts} {('ok' if ff_ok else 'FAIL')}")
+        if not rep.check('fast_forward', bool(ff_ok), DESCRIPTOR.label('fast_forward')):
             failures.append(
                 f"before save: could not run the world at a non-default speed "
                 f"(asked for {PRE_SAVE_SCALE}, page reports {ff_ts}); the "
@@ -245,17 +281,16 @@ def main() -> int:
 
         # 2. Save → world thread auto-pauses AND must freeze the clock.
         save_ok = send(args.port, f'return engine.saveWorld("pausetest", "{SAVE_NAME}")')
-        print(f"[save     ] engine.saveWorld -> {save_ok}")
+        rep.note(f'[save     ] engine.saveWorld -> {save_ok}')
         paused, ts = wait_paused_and_frozen(args.port, "pausetest")
-        print(f"[post-save] isPaused={paused} timeScale={ts}")
-        if not (paused and ts == 0.0):
+        rep.note(f'[post-save] isPaused={paused} timeScale={ts}')
+        if not rep.check('save_frozen', bool(paused and ts == 0.0), DESCRIPTOR.label('save_frozen')):
             failures.append(
                 f"after save: expected isPaused=True & timeScale=0, "
                 f"got isPaused={paused} timeScale={ts}")
         ok, rp, rt = stays_frozen_under_race(args.port, "pausetest")
-        print(f"[save-race] stray setTimeScale while paused -> "
-              f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
-        if not ok:
+        rep.note(f"[save-race] stray setTimeScale while paused -> isPaused={rp} timeScale={rt} {('ok' if ok else 'FAIL')}")
+        if not rep.check('save_race_frozen', bool(ok), DESCRIPTOR.label('save_race_frozen')):
             failures.append(
                 f"after save: a stray setTimeScale un-froze a paused world "
                 f"(isPaused={rp} timeScale={rt})")
@@ -280,9 +315,8 @@ def main() -> int:
         # post-load check cares about.
         send(args.port, f'{PAUSE}.set(false)', expect_result=False)
         unpaused_ok, pre_load_paused = wait_unpaused(args.port)
-        print(f"[pre-load ] resumed before loading -> isPaused={pre_load_paused} "
-              f"{'ok' if unpaused_ok else 'FAIL'}")
-        if not unpaused_ok:
+        rep.note(f"[pre-load ] resumed before loading -> isPaused={pre_load_paused} {('ok' if unpaused_ok else 'FAIL')}")
+        if not rep.check('before_load_running', bool(unpaused_ok), DESCRIPTOR.label('before_load_running')):
             failures.append(
                 f"before load: expected the session to be running so the load's "
                 f"own pause is observable, got isPaused={pre_load_paused}")
@@ -290,27 +324,35 @@ def main() -> int:
         # 3. Load → world thread must restore paused AND a frozen clock.
         #    Wait for the file to actually land first (saveWorld returns on
         #    enqueue, so the write can lag the frozen-clock signal above).
-        if not wait_save_written(SAVE_NAME):
+        if not rep.check(
+            'save_written',
+            bool(wait_save_written(SAVE_NAME)),
+            DESCRIPTOR.label('save_written')
+        ):
             failures.append(f"save file for '{SAVE_NAME}' never appeared on disk")
         load_ok = send(args.port, f'return engine.loadSave("{SAVE_NAME}")')
-        print(f"[load     ] engine.loadSave -> {load_ok}")
+        rep.note(f'[load     ] engine.loadSave -> {load_ok}')
         # Issue #763: engine.loadSave only ACCEPTS the request — the saved
         # page ("pausetest", its own id verbatim, never remapped to
         # "main_world") doesn't exist live until the transaction actually
         # publishes. Wait for that before touching anything it names.
         published, status = wait_load_published(args.port)
-        print(f"[load     ] load transaction published -> {published} ({status})")
+        rep.note(f'[load     ] load transaction published -> {published} ({status})')
         first_load_id = status.get("id") if isinstance(status, dict) else None
-        if not published:
+        if not rep.check('load_published', bool(published), DESCRIPTOR.label('load_published')):
             failures.append(f"load transaction never published: {status}")
         active_page = send(args.port, "return world.getActiveWorldId()").strip().strip('"')
-        print(f"[load     ] active page after publish -> {active_page!r}")
+        rep.note(f'[load     ] active page after publish -> {active_page!r}')
         # worldGetActiveWorldIdFn returns nil when no page is active, while
         # worldGetTimeScaleFn answers an unknown page with its documented
         # 1.0 default — so an unusable id here would silently turn every
         # page-targeted check below into a read of nothing. Fail instead,
         # and skip those checks rather than run them against a bogus name.
-        if not active_page or active_page.lower() in ("nil", "null"):
+        if not rep.check(
+            'loaded_page',
+            not (not active_page or active_page.lower() in ('nil', 'null')),
+            DESCRIPTOR.label('loaded_page')
+        ):
             failures.append(
                 f"after load: world.getActiveWorldId() named no page "
                 f"({active_page!r}); the post-load frozen, race and "
@@ -318,15 +360,14 @@ def main() -> int:
         else:
             send(args.port, f'world.show("{active_page}")', expect_result=False)
             paused, ts = wait_paused_and_frozen(args.port, active_page)
-            print(f"[post-load] isPaused={paused} timeScale={ts}")
-            if not (paused and ts == 0.0):
+            rep.note(f'[post-load] isPaused={paused} timeScale={ts}')
+            if not rep.check('load_frozen', bool(paused and ts == 0.0), DESCRIPTOR.label('load_frozen')):
                 failures.append(
                     f"after load: expected isPaused=True & timeScale=0, "
                     f"got isPaused={paused} timeScale={ts}")
             ok, rp, rt = stays_frozen_under_race(args.port, active_page)
-            print(f"[load-race] stray setTimeScale while paused -> "
-                  f"isPaused={rp} timeScale={rt} {'ok' if ok else 'FAIL'}")
-            if not ok:
+            rep.note(f"[load-race] stray setTimeScale while paused -> isPaused={rp} timeScale={rt} {('ok' if ok else 'FAIL')}")
+            if not rep.check('load_race_frozen', bool(ok), DESCRIPTOR.label('load_race_frozen')):
                 failures.append(
                     f"after load: a stray setTimeScale un-froze a paused world "
                     f"(isPaused={rp} timeScale={rt})")
@@ -351,9 +392,12 @@ def main() -> int:
             #    staged page came up at — the regression-sensitive step.
             send(args.port, f'{PAUSE}.set(false)', expect_result=False)
             pre2_ok, pre2_paused = wait_unpaused(args.port)
-            print(f"[reload   ] resumed before reloading -> "
-                  f"isPaused={pre2_paused} {'ok' if pre2_ok else 'FAIL'}")
-            if not pre2_ok:
+            rep.note(f"[reload   ] resumed before reloading -> isPaused={pre2_paused} {('ok' if pre2_ok else 'FAIL')}")
+            if not rep.check(
+                'before_reload_running',
+                bool(pre2_ok),
+                DESCRIPTOR.label('before_reload_running')
+            ):
                 failures.append(
                     f"before reload: expected the session to be running so "
                     f"the reload's own pause is observable, got "
@@ -370,8 +414,12 @@ def main() -> int:
             # load makes that a real window (probelib).
             reload_id = capture_request_id(args.port,
                                            "return engine.getLoadStatus()")
-            print(f"[reload   ] engine.loadSave -> {reload_ok} (id={reload_id})")
-            if reload_id is None or reload_id == first_load_id:
+            rep.note(f'[reload   ] engine.loadSave -> {reload_ok} (id={reload_id})')
+            if not rep.check(
+                'reload_request',
+                not (reload_id is None or reload_id == first_load_id),
+                DESCRIPTOR.label('reload_request')
+            ):
                 # Without a distinct id there is no way to tell the reload's
                 # publication from the first load's, so the fresh-epoch
                 # guarantee this block exists for is gone. Fail rather than
@@ -384,15 +432,18 @@ def main() -> int:
             else:
                 published2, status2 = wait_load_published(args.port,
                                                           request_id=reload_id)
-                print(f"[reload   ] load transaction published -> {published2} "
-                      f"({status2})")
-                if not published2:
+                rep.note(f'[reload   ] load transaction published -> {published2} ({status2})')
+                if not rep.check('reload_published', bool(published2), DESCRIPTOR.label('reload_published')):
                     failures.append(
                         f"reload transaction never published: {status2}")
                 page2 = send(args.port,
                              "return world.getActiveWorldId()").strip().strip('"')
-                print(f"[reload   ] active page after publish -> {page2!r}")
-                if not page2 or page2.lower() in ("nil", "null"):
+                rep.note(f'[reload   ] active page after publish -> {page2!r}')
+                if not rep.check(
+                    'reloaded_page',
+                    not (not page2 or page2.lower() in ('nil', 'null')),
+                    DESCRIPTOR.label('reloaded_page')
+                ):
                     failures.append(
                         f"after reload: world.getActiveWorldId() named no page "
                         f"({page2!r}); the resumed-speed check was skipped")
@@ -405,8 +456,8 @@ def main() -> int:
                 # reads a real page, which is the second half of what made
                 # the assertion this replaces vacuous.
                 p2, t2 = wait_paused_and_frozen(args.port, page2)
-                print(f"[reload   ] isPaused={p2} timeScale={t2}")
-                if not (p2 and t2 == 0.0):
+                rep.note(f'[reload   ] isPaused={p2} timeScale={t2}')
+                if not rep.check('reload_frozen', bool(p2 and t2 == 0.0), DESCRIPTOR.label('reload_frozen')):
                     failures.append(
                         f"after reload: expected isPaused=True & timeScale=0, "
                         f"got isPaused={p2} timeScale={t2}")
@@ -418,10 +469,8 @@ def main() -> int:
                 send(args.port, f'{PAUSE}.set(false)', expect_result=False)
                 r_ok, r_paused, r_ts = wait_resumed(args.port, page2,
                                                     RESUMED_SCALE)
-                print(f"[resume   ] loaded page {page2!r} -> "
-                      f"isPaused={r_paused} timeScale={r_ts} "
-                      f"{'ok' if r_ok else 'FAIL'}")
-                if not r_ok:
+                rep.note(f"[resume   ] loaded page {page2!r} -> isPaused={r_paused} timeScale={r_ts} {('ok' if r_ok else 'FAIL')}")
+                if not rep.check('resume_default', bool(r_ok), DESCRIPTOR.label('resume_default')):
                     failures.append(
                         f"after load/unpause: expected isPaused=False & "
                         f"timeScale={RESUMED_SCALE} on loaded page {page2!r}, "
@@ -440,12 +489,12 @@ def main() -> int:
             shutil.rmtree(save_dir, ignore_errors=True)
 
     if failures:
-        print("\nFAIL:")
+        rep.warn("save/load pause checks failed", {"failures": failures})
+        rep.note('\nFAIL:')
         for f in failures:
-            print("  - " + f)
+            rep.note('  - ' + f)
         return 1
-    print("\nPASS: engine.isPaused() and world time stay consistent across "
-          "save/load, and the loaded session resumes at the default speed.")
+    rep.note('\nPASS: engine.isPaused() and world time stay consistent across save/load, and the loaded session resumes at the default speed.')
     return 0
 
 

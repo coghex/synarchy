@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 
+import probe_protocol
 from probelib import quit_engine, boot, send
 from location_content_probe import (
     load_defs, gen_world, placed_ready, wait_floor, ruin_geometry,
@@ -68,31 +69,59 @@ def try_spawn(port: int, def_name: str, gx: int, gy: int) -> str | None:
     return None if r == "nil" else r
 
 
+PROBE_CHECKS = [
+    ('ruin_bounds', 'worldgen placed a ruin with resolvable bounds'),
+    ('ruin_stamped', 'the ruin stamps its floor geometry'),
+    ('portal_rejected', 'portal placement rejects overlap with the location bounds'),
+    ('spawn_rejected', 'direct portal spawn cannot bypass the location exclusion'),
+    ('ordinary_allowed', 'ordinary construction remains allowed inside the location'),
+    ('adjacent_allowed', 'an adjacent non-overlapping tile remains eligible'),
+    ('geometry_unchanged', 'placement attempts leave ruin geometry unchanged'),
+    ('content_unchanged', 'placement attempts leave ruin content unchanged'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('portal_location', PROBE_CHECKS)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--size", type=int, default=64)
     ap.add_argument("--port", type=int, default=9192)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
 
+
+def _run(args, rep):
     failures: list[str] = []
 
-    proc = boot(args.port, log=LOG)
+    proc = boot(args.port, log=rep.engine_log_path("portal_location_engine.log", LOG),
+                args=rep.engine_args())
     try:
         load_defs(args.port)
         gen_world(args.port, "pw", args.seed, args.size)
         located = placed_ready(args.port)
         ruins = [e for e in located if e.get("id") == "ruin_small" and "bounds" in e]
-        print(f"world (seed {args.seed}): {len(ruins)} ruin_small placed with known bounds")
-        if not ruins:
+        rep.note(f'world (seed {args.seed}): {len(ruins)} ruin_small placed with known bounds')
+        if not rep.check('ruin_bounds', bool(ruins), DESCRIPTOR.label('ruin_bounds')):
             failures.append(
                 "no ruin_small with resolvable bounds placed — cannot test exclusion")
         else:
             ruin = ruins[0]
             bounds = ruin["bounds"]
             gx, gy, cx, cy = ruin["gx"], ruin["gy"], ruin["cx"], ruin["cy"]
-            print(f"PASS: ruin_small known from the overlay at ({gx},{gy}), "
-                  f"bounds {bounds}")
+            rep.note(f'PASS: ruin_small known from the overlay at ({gx},{gy}), bounds {bounds}')
 
             # Load the ruin's own chunk (so it stamps + spawns content, for
             # the before/after snapshot below) plus a small halo of
@@ -102,7 +131,11 @@ def main() -> int:
                  f"return world.loadChunksInRegion({cx-1},{cy-1},{cx+1},{cy+1})")
             send(args.port, "return world.waitForChunks(60)", timeout=65)
 
-            if not wait_floor(args.port, gx, gy):
+            if not rep.check(
+                'ruin_stamped',
+                bool(wait_floor(args.port, gx, gy)),
+                DESCRIPTOR.label('ruin_stamped')
+            ):
                 failures.append(f"ruin at ({gx},{gy}) never stamped its geometry")
 
             geom_before = ruin_geometry(args.port, gx, gy)
@@ -111,9 +144,12 @@ def main() -> int:
             # ---- portal exclusion at the ruin's own anchor tile (deep
             #      inside bounds, on the room's stamped floor). ----
             valid, reason = can_place_at(args.port, PORTAL, gx, gy)
-            if not valid and reason == "inside a location's bounds":
-                print(f"PASS: building.canPlaceAt('{PORTAL}', {gx}, {gy}) "
-                      f"rejected — reason: {reason}")
+            if rep.check(
+                'portal_rejected',
+                bool(not valid and reason == "inside a location's bounds"),
+                DESCRIPTOR.label('portal_rejected')
+            ):
+                rep.note(f"PASS: building.canPlaceAt('{PORTAL}', {gx}, {gy}) rejected — reason: {reason}")
             else:
                 failures.append(
                     f"expected portal rejection at the ruin anchor, got "
@@ -123,9 +159,8 @@ def main() -> int:
             #      it shares the exact validator the preview call above
             #      just used. ----
             spawned = try_spawn(args.port, PORTAL, gx, gy)
-            if spawned is None:
-                print(f"PASS: building.spawn('{PORTAL}', {gx}, {gy}) also "
-                      f"refused (no bypass via the authoritative path)")
+            if rep.check('spawn_rejected', bool(spawned is None), DESCRIPTOR.label('spawn_rejected')):
+                rep.note(f"PASS: building.spawn('{PORTAL}', {gx}, {gy}) also refused (no bypass via the authoritative path)")
             else:
                 failures.append(
                     f"building.spawn bypassed the location rejection: id={spawned}")
@@ -133,10 +168,8 @@ def main() -> int:
             # ---- an ordinary non-starting building is NOT rejected at the
             #      same bounds-overlapping coordinate. ----
             ord_valid, ord_reason = can_place_at(args.port, ORDINARY, gx, gy)
-            if ord_valid:
-                print(f"PASS: non-starting '{ORDINARY}' is placeable inside "
-                      f"the same location bounds (locations remain "
-                      f"occupiable/repairable by ordinary construction)")
+            if rep.check('ordinary_allowed', bool(ord_valid), DESCRIPTOR.label('ordinary_allowed')):
+                rep.note(f"PASS: non-starting '{ORDINARY}' is placeable inside the same location bounds (locations remain occupiable/repairable by ordinary construction)")
             else:
                 failures.append(
                     f"non-starting '{ORDINARY}' unexpectedly rejected inside "
@@ -156,9 +189,8 @@ def main() -> int:
                 if v:
                     adjacent_ok = (agx, agy)
                     break
-            if adjacent_ok:
-                print(f"PASS: an adjacent non-overlapping tile "
-                      f"{adjacent_ok} remains eligible")
+            if rep.check('adjacent_allowed', bool(adjacent_ok), DESCRIPTOR.label('adjacent_allowed')):
+                rep.note(f'PASS: an adjacent non-overlapping tile {adjacent_ok} remains eligible')
             else:
                 failures.append(
                     f"no adjacent non-overlapping candidate out of "
@@ -168,13 +200,21 @@ def main() -> int:
             #      geometry. ----
             geom_after = ruin_geometry(args.port, gx, gy)
             counts_after = spawn_counts(args.port)
-            if geom_after == geom_before:
-                print(f"PASS: ruin geometry unchanged ({geom_after})")
+            if rep.check(
+                'geometry_unchanged',
+                bool(geom_after == geom_before),
+                DESCRIPTOR.label('geometry_unchanged')
+            ):
+                rep.note(f'PASS: ruin geometry unchanged ({geom_after})')
             else:
                 failures.append(
                     f"ruin geometry changed: before={geom_before} after={geom_after}")
-            if counts_after == counts_before:
-                print(f"PASS: ruin content unchanged ({counts_after})")
+            if rep.check(
+                'content_unchanged',
+                bool(counts_after == counts_before),
+                DESCRIPTOR.label('content_unchanged')
+            ):
+                rep.note(f'PASS: ruin content unchanged ({counts_after})')
             else:
                 failures.append(
                     f"ruin content changed: before={counts_before} "
@@ -182,17 +222,20 @@ def main() -> int:
     finally:
         quit_engine(args.port, proc)
 
-    print("-" * 56)
+    rep.note('-' * 56)
     if failures:
         # Durable records rather than the unflushed stderr print this was
         # (#1982): `run_probes.py` merges this probe's stderr into a
         # block-buffered stdout pipe and prints only its last 25 lines, so
         # a printed `FAIL:` overtook the buffered checks and landed above
         # the retained tail. These are read back from the COMPLETE capture.
-        FAILURE.report(failures)
-        FAILURE.context_log(LOG)
+        if rep.protocol_mode:
+            rep.warn("; ".join(failures))
+        else:
+            FAILURE.report(failures)
+            FAILURE.context_log(LOG)
         return 1
-    print("ALL CHECKS PASSED")
+    rep.note('ALL CHECKS PASSED')
     return 0
 
 

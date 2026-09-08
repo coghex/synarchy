@@ -1233,6 +1233,13 @@ redistribution rights. Selecting, authoring, licensing, and reviewing the full
 player-facing sound library is a later content effort and does not block the
 audio foundation.
 
+The owner-approved first menu pair is preserved in the
+[menu-cue reference](audio/menu_cues/README.md): a solid, fairly deep click
+for buttons that change menus, and a deeper wood-block-like click for Back.
+That reference contains the exact synth recipe, approved auditions, and
+signoff. It records later content direction under D-26; it does not add
+production sound integration to AUD-1 through AUD-12 or replace their fixtures.
+
 ### D-27. Use a Synarchy-owned low-level miniaudio core
 
 Vendor and pin miniaudio 0.11.25, compile its `.c` file, and use device,
