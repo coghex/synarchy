@@ -493,7 +493,9 @@ spec = aroundAll withHeadlessEngineNoWorld $
 
     -- §8 The shipped caller.
     describe "the shipped tickStance caller (§8)" $ do
-        it "recovers through the verb, with no stance read of its own" $
+        -- The plain path. §1 and §6 are what actually distinguish the
+        -- verb from the old read-modify-write; this one pins the rate.
+        it "recovers by rate × dt in a quiet scene" $
           \env → do
             resetScene env (statsWithStance 0.5)
             ls ← newBareLuaBackend env
