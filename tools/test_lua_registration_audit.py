@@ -830,12 +830,15 @@ def test_a_registration_outside_any_block_is_a_certification_failure() -> None:
 
 def test_a_registration_with_no_setglobal_is_a_certification_failure() -> None:
     """An unassociated registration must fail rather than yield a
-    quietly smaller map."""
+    quietly smaller map, naming the spelling that opened it."""
     root = build({}, {"scripts/a.lua": "engine.quit()\n"},
                  raw_registrars=raw('  Lua.newtable\n'
                                     '  registerLuaFunction "quit" (quitFn env)\n'))
-    expect_certification_failure(root, "no\n  Lua.setglobal".replace("\n  ", " "),
-                                 "a block that is never installed")
+    output = expect_certification_failure(
+        root, "no\n  Lua.setglobal".replace("\n  ", " "),
+        "a block that is never installed")
+    expect("registerLuaFunction 'quit'" in output,
+           f"the unpublished block must name its own construct, got: {output!r}")
 
 
 def test_an_empty_block_is_a_certification_failure() -> None:
@@ -895,6 +898,221 @@ def test_a_registrar_installing_no_namespace_is_a_certification_failure() -> Non
                  raw_registrars={"Helper": HEADER + "  pure ()\n"})
     expect_certification_failure(root, "installs no namespace",
                                  "a registrar module that installs nothing")
+
+
+# ===========================================================================
+# #2479's descriptor form: the same rules, a second spelling
+#
+# Every rule the raw `registerLuaFunction "<verb>"` shape is held to is
+# pinned again here for `registerLuaVerb (luaVerb "<verb>" ...)`, in both
+# directions. The positive fixtures reproduce the exact multi-line
+# formatting Register/UI.hs uses -- a descriptor spread over six lines
+# inside a `sequence [...]` list -- because a grammar that only accepted
+# a one-line spelling would certify nothing about the module that
+# actually ships.
+# ===========================================================================
+
+DESCRIPTOR_HEADER = (
+    "module Engine.Scripting.Lua.API.Register.X (registerXAPI) where\n"
+    "import Engine.Scripting.Lua.API.Internal (registerLuaVerb)\n"
+    "import Engine.Scripting.Lua.API.Descriptor\n"
+    "import qualified HsLua as Lua\n"
+    "\n"
+    "registerXAPI :: EngineEnv -> Lua.LuaE Lua.Exception ()\n"
+    "registerXAPI = void . installXAPI\n"
+    "\n"
+    "installXAPI :: EngineEnv -> Lua.LuaE Lua.Exception [LuaVerb]\n"
+    "installXAPI env = do\n")
+
+# The first body line of a DESCRIPTOR_HEADER fixture.
+DESCRIPTOR_BODY_LINE = DESCRIPTOR_HEADER.count("\n") + 1
+
+
+def descriptor_entry(verb: str, *, first: bool = False) -> str:
+    """One `registerLuaVerb` list element, formatted as Register/UI.hs
+    formats it: the descriptor's arguments, return shape and prose each
+    on their own line, and the action on the line after the descriptor's
+    closing paren."""
+    lead = "[" if first else ","
+    return (f'    {lead} registerLuaVerb (luaVerb "{verb}"\n'
+            f'        [ argReq "elementHandle" TInteger "A handle."\n'
+            f'        , argOpt "flag" TBoolean "Defaults to false."\n'
+            f'        ]\n'
+            f'        (retVals [resVal "ok" TBoolean "Whether it worked."])\n'
+            f'        "Do the {verb} thing.")\n'
+            f'        ({verb}Fn env)\n')
+
+
+def descriptor_registrar(namespace: str, verbs: list[str]) -> str:
+    """A whole registrar module in the descriptor form."""
+    body = "  Lua.newtable\n  descriptors <- sequence\n"
+    body += "".join(descriptor_entry(v, first=(i == 0))
+                    for i, v in enumerate(verbs))
+    body += ("    ]\n"
+             f'  Lua.setglobal (Lua.Name "{namespace}")\n'
+             "  pure descriptors\n")
+    return DESCRIPTOR_HEADER + body
+
+
+def test_a_descriptor_registration_is_read() -> None:
+    """The shipped Register/UI.hs formatting must certify, and its verbs
+    must reach the namespace map exactly as raw ones do."""
+    root = build({}, {"scripts/a.lua": "engine.quit()\nengine.show('x')\n"},
+                 raw_registrars={"Engine": descriptor_registrar(
+                     "engine", ["quit", "show"])})
+    output = expect_clean(root, "a registrar in the descriptor form")
+    expect("2 registrations across 1 namespaces" in output,
+           f"both descriptor registrations must be counted, got: {output!r}")
+
+
+def test_a_verb_named_only_by_a_descriptor_is_still_checked() -> None:
+    """The descriptor form must not become a hole in the gate: a call
+    site naming a verb no descriptor installs is the same finding."""
+    root = build({}, {"scripts/a.lua": "engine.quit()\nengine.ghost()\n"},
+                 raw_registrars={"Engine": descriptor_registrar(
+                     "engine", ["quit"])})
+    expect_finding(root, "engine.ghost",
+                   "a call site missing from the descriptor set")
+
+
+def test_renaming_a_descriptor_registered_verb_fails_every_call_site() -> None:
+    call_sites = ("engine.logInfo('a')\n"
+                  "engine.logInfo('b')\n"
+                  "local f = engine.logInfo\n")
+    clean = build({}, {"scripts/a.lua": call_sites},
+                  raw_registrars={"Engine": descriptor_registrar(
+                      "engine", ["logInfo"])})
+    expect_clean(clean, "call sites naming the descriptor-registered verb")
+
+    renamed = build({}, {"scripts/a.lua": call_sites},
+                    raw_registrars={"Engine": descriptor_registrar(
+                        "engine", ["logInformation"])})
+    output = expect_finding(renamed, "engine.logInfo",
+                            "call sites after the descriptor verb is renamed",
+                            count=3)
+    for line in (1, 2, 3):
+        expect_attributed(output, "scripts/a.lua", line, "each renamed call site")
+
+
+def test_a_block_mixing_both_registration_shapes_reports_the_union() -> None:
+    """Nothing requires a converted namespace to convert all at once,
+    so one block carrying both spellings must publish both verbs."""
+    mixed = (DESCRIPTOR_HEADER
+             + "  Lua.newtable\n"
+             + '  registerLuaFunction "quit" (quitFn env)\n'
+             + "  descriptors <- sequence\n"
+             + descriptor_entry("show", first=True)
+             + "    ]\n"
+             + '  Lua.setglobal (Lua.Name "engine")\n'
+             + "  pure descriptors\n")
+    root = build({}, {"scripts/a.lua": "engine.quit()\nengine.show('x')\n"},
+                 raw_registrars={"Engine": mixed})
+    output = expect_clean(root, "one block carrying both registration shapes")
+    expect("2 registrations across 1 namespaces" in output,
+           f"the union of both shapes must be counted, got: {output!r}")
+
+    stray = build({}, {"scripts/a.lua": "engine.quit()\nengine.ghost()\n"},
+                  raw_registrars={"Engine": mixed})
+    expect_finding(stray, "engine.ghost",
+                   "a call site absent from either shape in a mixed block")
+
+
+def test_a_descriptor_registration_outside_any_block_is_a_certification_failure() -> None:
+    body = (descriptor_entry("quit", first=True)
+            + "  Lua.newtable\n"
+            + '  Lua.setglobal (Lua.Name "engine")\n')
+    root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                 raw_registrars={"Engine": DESCRIPTOR_HEADER + body})
+    output = expect_certification_failure(
+        root, "attached to no open table block",
+        "a descriptor registration before any newtable")
+    expect("registerLuaVerb 'quit'" in output,
+           f"the failure must name the descriptor construct, got: {output!r}")
+    expect_attributed(output, "src/Engine/Scripting/Lua/API/Register/Engine.hs",
+                      DESCRIPTOR_BODY_LINE,
+                      "an unattached descriptor registration")
+
+
+def test_a_descriptor_registration_with_no_setglobal_is_a_certification_failure() -> None:
+    """A descriptor block that reaches end of file unpublished must fail
+    loudly, attributed to the registration and naming its construct."""
+    body = "  Lua.newtable\n  descriptors <- sequence\n" + descriptor_entry(
+        "quit", first=True)
+    root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                 raw_registrars={"Engine": DESCRIPTOR_HEADER + body})
+    output = expect_certification_failure(
+        root, "reaches end of file", "a descriptor block that is never installed")
+    expect("registerLuaVerb 'quit'" in output,
+           f"the failure must name the descriptor construct, got: {output!r}")
+    expect_attributed(output, "src/Engine/Scripting/Lua/API/Register/Engine.hs",
+                      DESCRIPTOR_BODY_LINE + 2,
+                      "an unpublished descriptor registration")
+
+
+def test_a_computed_descriptor_verb_name_is_a_certification_failure() -> None:
+    root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                 raw_registrars=raw(
+                     '  Lua.newtable\n'
+                     '  registerLuaVerb (luaVerb verbName [] retNone "d") (f env)\n'
+                     '  Lua.setglobal (Lua.Name "engine")\n', name="Engine"))
+    expect_certification_failure(root, '(luaVerb "<verb>" ...)',
+                                 "a descriptor named by a variable")
+
+
+def test_an_unusable_descriptor_verb_name_is_a_certification_failure() -> None:
+    root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                 raw_registrars=raw(
+                     '  Lua.newtable\n'
+                     '  registerLuaVerb (luaVerb "not a verb" [] retNone "d") (f env)\n'
+                     '  Lua.setglobal (Lua.Name "engine")\n', name="Engine"))
+    expect_certification_failure(root, "unusable verb",
+                                 "a descriptor whose name is not an identifier")
+
+
+def test_a_descriptor_built_by_another_constructor_is_a_certification_failure() -> None:
+    """Only `luaVerb` puts the name where this analyzer can read it. A
+    helper of the registrar's own could compute it."""
+    root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                 raw_registrars=raw(
+                     '  Lua.newtable\n'
+                     '  registerLuaVerb (myVerb "quit" [] retNone "d") (f env)\n'
+                     '  Lua.setglobal (Lua.Name "engine")\n', name="Engine"))
+    expect_certification_failure(root, '(luaVerb "<verb>" ...)',
+                                 "a descriptor built by another constructor")
+
+
+def test_a_bare_descriptor_value_is_a_certification_failure() -> None:
+    """A named descriptor hides its verb behind an identifier."""
+    root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                 raw_registrars=raw('  Lua.newtable\n'
+                                    '  registerLuaVerb quitVerb (quitFn env)\n'
+                                    '  Lua.setglobal (Lua.Name "engine")\n',
+                                    name="Engine"))
+    expect_certification_failure(root, '(luaVerb "<verb>" ...)',
+                                 "a descriptor passed as a named value")
+
+
+def test_a_truncated_descriptor_registration_is_a_certification_failure() -> None:
+    for tail, what in (('  registerLuaVerb\n', "registerLuaVerb alone at end of file"),
+                       ('  registerLuaVerb (luaVerb\n', "a descriptor cut off before its name")):
+        root = build({}, {"scripts/a.lua": "engine.quit()\n"},
+                     raw_registrars=raw('  Lua.newtable\n' + tail, name="Engine"))
+        expect_certification_failure(root, "registerLuaVerb is truncated", what)
+
+
+def test_descriptor_registrations_in_comments_and_strings_are_not_registrations() -> None:
+    root = build({}, {"scripts/a.lua": "engine.ghost()\n"},
+                 raw_registrars=raw(
+                     '  Lua.newtable\n'
+                     '  -- registerLuaVerb (luaVerb "ghost" [] retNone "d") (f env)\n'
+                     '  {- registerLuaVerb (luaVerb "alsoGhost" [] retNone "d") (f env) -}\n'
+                     '  let doc = "registerLuaVerb (luaVerb \\"stringGhost\\""\n'
+                     '  registerLuaVerb (luaVerb "quit" [] retNone "d") (quitFn env)\n'
+                     '  Lua.setglobal (Lua.Name "engine")\n', name="Engine"))
+    output = expect_finding(root, "engine.ghost",
+                            "a descriptor verb named only in a comment")
+    expect("1 registrations" in output,
+           f"only the executable descriptor must be counted, got: {output!r}")
 
 
 def test_an_unreadable_registrar_is_a_certification_failure() -> None:
@@ -1116,6 +1334,18 @@ TESTS = [
     test_a_computed_namespace_name_is_a_certification_failure,
     test_a_computed_verb_name_is_a_certification_failure,
     test_an_unsupported_install_construct_is_a_certification_failure,
+    test_a_descriptor_registration_is_read,
+    test_a_verb_named_only_by_a_descriptor_is_still_checked,
+    test_renaming_a_descriptor_registered_verb_fails_every_call_site,
+    test_a_block_mixing_both_registration_shapes_reports_the_union,
+    test_a_descriptor_registration_outside_any_block_is_a_certification_failure,
+    test_a_descriptor_registration_with_no_setglobal_is_a_certification_failure,
+    test_a_computed_descriptor_verb_name_is_a_certification_failure,
+    test_an_unusable_descriptor_verb_name_is_a_certification_failure,
+    test_a_descriptor_built_by_another_constructor_is_a_certification_failure,
+    test_a_bare_descriptor_value_is_a_certification_failure,
+    test_a_truncated_descriptor_registration_is_a_certification_failure,
+    test_descriptor_registrations_in_comments_and_strings_are_not_registrations,
     test_a_partially_unrecognized_registrar_fails_whole,
     test_a_registrar_installing_no_namespace_is_a_certification_failure,
     test_an_unreadable_registrar_is_a_certification_failure,

@@ -22,8 +22,16 @@ WHAT IT DOES NOT DO
 It does not flag registered-but-uncalled verbs (reverse coverage cannot
 be trusted without enumerating the hspec suites, the ~85 probes, and the
 debug console, all of which call verbs `scripts/` never names), and it
-checks neither argument counts nor return shapes. Those belong to a
-later slice with a descriptor contract behind it.
+checks neither argument counts nor return shapes.
+
+#2479 introduced the descriptor that records those, and this analyzer
+still does not enforce them. It reads a descriptor registration for its
+NAME and nothing else: arity and return shape live in the Haskell
+record, are metadata rather than runtime validation, and are checked --
+against what the verbs actually return -- by the hspec group
+`Test.Headless.Lua.UiDescriptors`, not here. What this gate owes the
+descriptor form is exactly what it owes the raw one: every registration
+either yields a verb name attributed to a namespace, or fails loudly.
 
 THE TWO OUTCOMES ARE DISTINCT
 -----------------------------
@@ -299,10 +307,10 @@ STOCK_MEMBERS: dict[str, frozenset[str]] = {
 }
 
 # Every HsLua construct that can attach a member to the table under
-# construction or install a global. `registerLuaFunction` and the two
-# `Lua.Name` globals are the accepted grammar; the rest are recognized
-# only so that introducing one fails loudly instead of yielding a
-# quietly smaller map.
+# construction or install a global. `registerLuaFunction`,
+# `registerLuaVerb` and the two `Lua.Name` globals are the accepted
+# grammar; the rest are recognized only so that introducing one fails
+# loudly instead of yielding a quietly smaller map.
 UNSUPPORTED_INSTALL = frozenset({
     "Lua.setfield", "Lua.rawset", "Lua.rawseti", "Lua.settable",
     "Lua.register", "Lua.pushcfunction", "Lua.pushHaskellFunction",
@@ -310,6 +318,15 @@ UNSUPPORTED_INSTALL = frozenset({
 })
 
 VERB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# The one smart constructor a descriptor registration may open with
+# (`Engine.Scripting.Lua.API.Descriptor.luaVerb`). Fixing the spelling
+# is what keeps the verb name a literal this analyzer can read: a
+# registrar that builds its descriptor any other way -- a named value, a
+# record literal, a helper of its own -- hides the name behind an
+# expression, and is a certification failure rather than a silent
+# omission.
+DESCRIPTOR_CONSTRUCTOR = "luaVerb"
 
 
 @dataclass
@@ -353,15 +370,56 @@ def _expect_lua_name(path: str, tokens: list[Token], i: int, construct: str) -> 
     return name, i + len(shape)
 
 
+def _expect_descriptor_name(path: str, tokens: list[Token], i: int) -> tuple[str, int]:
+    """Read the `(luaVerb "x"` opening of a descriptor registration.
+
+    Only the name is read. Everything after it -- argument list, return
+    shape, documentation -- is the descriptor's own business and is
+    skipped as ordinary tokens, exactly as the action expression after a
+    raw registration is.
+
+    The spelling is exact for the same reason `_expect_lua_name`'s is: a
+    descriptor assembled any other way puts the verb name behind an
+    expression this analyzer cannot evaluate, and a name it cannot read
+    is a name it must not certify.
+    """
+    line = tokens[i - 1].line
+    shape = [("op", "("), ("name", DESCRIPTOR_CONSTRUCTOR), ("string", None)]
+    if i + len(shape) > len(tokens):
+        raise CertificationError(path, line, "registerLuaVerb is truncated")
+    for offset, (kind, text) in enumerate(shape):
+        token = tokens[i + offset]
+        if token.kind != kind or (text is not None and token.text != text):
+            raise CertificationError(
+                path, token.line,
+                "registerLuaVerb does not spell its descriptor as "
+                f'({DESCRIPTOR_CONSTRUCTOR} "<verb>" ...); found {token.text!r}')
+    name = tokens[i + 2].text
+    if not VERB_NAME_RE.match(name):
+        raise CertificationError(
+            path, line, f"registerLuaVerb names an unusable verb {name!r}")
+    return name, i + len(shape)
+
+
 def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], set[str], int]:
     """Read one registrar module's namespace->verb map.
 
     The accepted grammar is a sequence of blocks. A block OPENS with
     either `Lua.newtable` (a fresh table) or
     `Lua.getglobal (Lua.Name "ns")` (augmenting a stdlib table already
-    installed by openlibs), attaches one or more
-    `registerLuaFunction "<verb>"` members, and CLOSES with
-    `Lua.setglobal (Lua.Name "ns")`, which is what names it.
+    installed by openlibs), attaches one or more members, and CLOSES
+    with `Lua.setglobal (Lua.Name "ns")`, which is what names it.
+
+    A member is attached in one of two spellings, and a block may mix
+    them freely -- the namespace's verb set is their union:
+
+        registerLuaFunction "<verb>" (action)              -- the raw form
+        registerLuaVerb (luaVerb "<verb>" ...) (action)    -- #2479's
+                                                           -- descriptor form
+
+    Both must name the verb with a string literal in that position. A
+    descriptor built any other way, or attached to no open block, is a
+    certification failure with a file and a line.
 
     Register/Debug.hs takes the augmenting form and guards both halves
     behind the same `isTbl` test, so the newtable and the setglobal sit
@@ -381,7 +439,9 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
     registrations = 0
 
     open_kind: str | None = None      # None | 'new' | 'global'
-    pending: list[tuple[str, int]] = []
+    # (verb, line, construct) -- the construct is carried so an
+    # unpublished block names the spelling that actually opened it.
+    pending: list[tuple[str, int, str]] = []
     # The namespace a `Lua.getglobal` opened since the last install, if any.
     # A later `Lua.newtable` does not clear it: Register/Debug.hs guards the
     # two on mutually exclusive branches of the same `isTbl` test, so the
@@ -424,9 +484,17 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
                 raise CertificationError(
                     path, token.line,
                     f"registerLuaFunction {verb!r} is attached to no open table block")
-            pending.append((verb, token.line))
+            pending.append((verb, token.line, "registerLuaFunction"))
             registrations += 1
             i += 2
+        elif token.text == "registerLuaVerb":
+            verb, i = _expect_descriptor_name(path, tokens, i + 1)
+            if open_kind is None:
+                raise CertificationError(
+                    path, token.line,
+                    f"registerLuaVerb {verb!r} is attached to no open table block")
+            pending.append((verb, token.line, "registerLuaVerb"))
+            registrations += 1
         elif token.text == "Lua.setglobal":
             name, i = _expect_lua_name(path, tokens, i + 1, "Lua.setglobal")
             if open_kind is None:
@@ -447,17 +515,17 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
                         f"namespace {name!r} augments an existing global whose stock "
                         "members this analyzer does not know")
                 augmenting.add(name)
-            namespaces.setdefault(name, set()).update(verb for verb, _ in pending)
+            namespaces.setdefault(name, set()).update(verb for verb, _, _ in pending)
             pending = []
             open_kind, augment_of = None, None
         else:
             i += 1
 
     if pending:
-        verb, line = pending[0]
+        verb, line, construct = pending[0]
         raise CertificationError(
             path, line,
-            f"registerLuaFunction {verb!r} reaches end of file with no "
+            f"{construct} {verb!r} reaches end of file with no "
             "Lua.setglobal naming its namespace")
     return namespaces, augmenting, registrations
 
