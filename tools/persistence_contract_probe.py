@@ -368,7 +368,9 @@ def assert_nondefault_map_mode(chk: Checks, tmpdir: str, save_path: str, page: s
     """world.setMapMode has no live query counterpart, so the non-default
     value is verified through the same dump_canonical_summary decode
     tools/save_compat_migration_probe.py already uses -- its per-page
-    dump already includes "mapMode" (GHCI_DUMP_SUMMARY_TEMPLATE)."""
+    dump already includes "mapMode" (app-save-codec/Main.hs's
+    `canonicalSummary`, which since #2273 is a compiled helper rather
+    than a GHCi program)."""
     import json
     out_path = os.path.join(tmpdir, "map_mode_check.json")
     ok, tail = dump_canonical_summary(Path(save_path), Path(out_path))
