@@ -81,9 +81,15 @@ allWorkers ∷ EngineWorkers → [WorkerSlot]
 allWorkers w = preRenderWorkers w ⧺ postRenderWorkers w
 
 -- | Stop one phase's workers in list order, announcing each by name
---   first. The only traversal of a 'WorkerSlot' list in the tree —
---   'shutdownEngine' splits its two phases through it, and
---   'shutdownEngineWorkers' runs the whole list through it.
+--   first, and calling 'shutdownThread' for every slot that started
+--   one. It is production's one caller of 'shutdownThread' outside
+--   'Engine.Core.Thread' itself:
+--   'Engine.Loop.Shutdown.shutdownEngineWith' calls it once per phase,
+--   'shutdownEngineWorkers' calls it once for @allWorkers@ with a
+--   no-op announce, and @App.Boot.luaThreadOrAbort@ calls it with the
+--   already-started slots filtered down to the ones a partial boot
+--   actually forked. 'announce' runs for every slot, 'Nothing'
+--   included; only the join beneath it is conditional.
 --
 --   'shutdownThread' is idempotent, so a mode whose error path fires
 --   after a partial clean shutdown re-stops nothing.
@@ -93,7 +99,17 @@ stopWorkers announce = mapM_ $ \(name, mThread) → do
     liftIO $ forM_ mThread shutdownThread
 
 -- | Stop every worker the mode started, in @allWorkers@ order, without
---   announcing them — the paths that use this either have no engine
---   log left to write to or are already reporting a fatal error.
+--   announcing them: this convenience exposes no announcer parameter
+--   and hands 'stopWorkers' a no-op one. The plain 'IO' type is not
+--   what silences it — 'stopWorkers' announces in any 'MonadIO', so
+--   the announcing path is simply the one whose caller has an
+--   announcer to pass, which @Engine.Loop.Shutdown.shutdownEngineWith@
+--   supplies from its own logging combinators.
+--
+--   Three call sites use it: the fatal-error tail
+--   (@App.Boot.handleBootResult@, #1021), and the two modes that run
+--   no render teardown, @--headless@ and @--dump@. The latter two
+--   reach it on their ordinary success path and call @shutdownLogger@
+--   on that still-live logger immediately afterwards.
 shutdownEngineWorkers ∷ EngineWorkers → IO ()
 shutdownEngineWorkers = stopWorkers (\_ → pure ()) ∘ allWorkers

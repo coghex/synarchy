@@ -47,8 +47,11 @@ import Location.Instance
 import Location.Bounds (RelBounds(..))
 import Test.Headless.Location.Fixture (expectGeometry)
 import qualified HsLua as Lua
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Engine.Scripting.Lua.API.Items.Ground (pickupGroundOnPage)
+import Engine.Scripting.Lua.API.Units.Inventory (unitGetInventoryFn)
+import Engine.Scripting.Lua.API.WorldQuery.Location (worldGetLocationInstanceFn)
 import Engine.Scripting.Lua.API.Items.Ground
     (worldSpawnLocationSignificantItemFn)
 import Item.Ground (GroundItems(..), spawnGroundItem)
@@ -1168,6 +1171,42 @@ boundIds ws = do
 significantSpec ∷ SpecWith EngineEnv
 significantSpec =
     describe "compound clearance with significant contents (#917)" $ do
+
+        it "Tutorial evaluation: ordinary successful pickup satisfies Recover and Secure synchronously" $ \env → do
+            let pageId = WorldPageId "sig_tutorial"
+            ws ← newSignificantPage env pageId LifecycleDiscovered (Just [])
+                     [ (owed 1 0) { lsiInstanceId = Nothing } ]
+            writeIORef (unitManagerRef env) $ emptyUnitManager
+                { umInstances = HM.singleton (UnitId 809)
+                    ((testUnit pageId FactionPlayer 8 8) { uiDefName = "acolyte" }) }
+            spawnSignificant env pageId 1 1 (8, 8) `shouldReturn` True
+            gid ← onlyGroundId ws
+            result ← Lua.run $ do
+                Lua.openlibs
+                Lua.pushHaskellFunction (unitGetInventoryFn env)
+                Lua.setglobal "realInventory"
+                Lua.pushHaskellFunction (worldGetLocationInstanceFn env)
+                Lua.setglobal "realLocation"
+                Lua.pushHaskellFunction $ do
+                    ok ← Lua.liftIO (pickupGroundOnPage env ws (UnitId 809) gid)
+                    Lua.pushboolean ok
+                    pure 1
+                Lua.setglobal "realPickup"
+                status ← Lua.dostring $ TE.encodeUtf8 $ T.unlines
+                    [ "unit={exists=function(uid) return uid==809 end,"
+                    , " getFaction=function() return 'player' end, getPose=function() return 'standing' end,"
+                    , " getInfo=function() return {defName='acolyte'} end, getInventory=realInventory}"
+                    , "world={getLocationInstance=realLocation}"
+                    , "local ev=require('scripts.tutorial_eval')"
+                    , "ev.aiState={[809]={knownLocations={{page='sig_tutorial',id=1}}}}"
+                    , "local before=ev.gatherFacts(); assert(before.confront and not before.recover and not before.secure)"
+                    , "assert(realPickup()); local after=ev.gatherFacts()"
+                    , "assert(after.recover and after.secure, 'successful pickup did not satisfy both predicates')"
+                    ]
+                case status of
+                    Lua.OK → pure Nothing
+                    _ → Lua.tostring (-1)
+            result `shouldBe` Nothing
 
         -- The binding is applied by the real Lua verb, ON THIS THREAD,
         -- before it returns — not queued to the world thread. Every

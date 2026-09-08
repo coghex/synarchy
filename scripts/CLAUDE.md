@@ -74,11 +74,14 @@ load. Gate: hspec `--match "Lua.ShellInput"`.
 truncation, and any other per-character walk — advance one code point
 at a time, or non-ASCII text renders as mojibake and gets measured once
 per byte. Lua PATTERNS are byte-oriented too, so `gmatch(".")` is a byte
-loop. Pixel-width wrapping goes through `scripts/ui/text_wrap.lua` —
-`byCharacter` (the debug console) and `byWord` (all three log panels) —
-rather than a fourth private copy. Unlike `utf8_safe`, it never raises
-on malformed UTF-8 and never drops a byte. Gate: hspec
-`--match "Lua.TextWrapping"`.
+loop. Pixel-width fitting does two jobs — wrapping text that may run
+onto more lines, and truncating text that must stay on one — and both
+go through the one shared implementation in `scripts/ui/text_wrap.lua`:
+`byCharacter` (character wrap), `byWord` (word wrap with a character
+hard-break), and `truncateToWidth` (single-line truncation). A display
+surface that needs either job calls one of the three rather than adding
+a private copy. Unlike `utf8_safe`, it never raises on malformed UTF-8
+and never drops a byte. Gate: hspec `--match "Lua.TextWrapping"`.
 
 **Pointer, scroll, and focus routing (#742–#749):** the six contracts
 are in `docs/engine_contracts.md` §UI input routing — read it before

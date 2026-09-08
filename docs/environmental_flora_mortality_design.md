@@ -19,14 +19,14 @@ concrete precondition
 - [x] EPIC. Make flora condition persistent and texture fallback expressive — [#2526]
 - [x] EFM-1. Publish the canonical flora visual-state and fallback contract — [#2530]
 - [x] EFM-2. Load and audit sparse flora visual and corpse-policy declarations — [#2539]
-- [ ] EFM-3. Resolve flora textures through the canonical fallback lattice
-- [ ] EFM-4. Give flora occurrences stable identity and explicit render context
-- [ ] EFM-5. Persist wild and row-flora condition records across regeneration and saves
-- [ ] EFM-6. Persist groundcover-crop condition records through the same model
-- [ ] EFM-7. Expose and render persistent flora conditions without hazard producers
-- [ ] EFM-10. Apply corpse retention and successor policy
-- [ ] EFM-8. Create an approved pilot mortality texture set
-- [ ] EFM-9. Demonstrate the complete condition and fallback path on one pilot species
+- [x] EFM-3. Resolve flora textures through the canonical fallback lattice — [#2544]
+- [x] EFM-4. Give flora occurrences stable identity and explicit render context — [#2547]
+- [x] EFM-5. Persist wild and row-flora condition records across regeneration and saves — [#2549]
+- [x] EFM-6. Persist groundcover-crop condition records through the same model — [#2552]
+- [x] EFM-7. Expose and render persistent flora conditions without hazard producers — [#2555]
+- [x] EFM-10. Apply corpse retention and successor policy — [#2557]
+- [x] EFM-8. Create an approved pilot mortality texture set — [#2559]
+- [x] EFM-9. Demonstrate the complete condition and fallback path on one pilot species — [#2562]
 
 ## Epic contract
 
@@ -274,7 +274,11 @@ handle and a record of which fallback candidate won.
 
 Existing `phases`, `annualCycle`, and `cycleOverrides` remain valid. At load
 time they can be normalized into the new selector table as `wild` + `alive`
-entries, preserving every shipped species without YAML churn.
+entries, preserving every shipped species without YAML churn. The one
+exception is a `phases` entry tagged `dead`: it is the species' generic-dead
+declaration, not a life phase, and normalizes to `condition: dead` with
+wildcard phase and cause, its `phase: dead` cycle overrides becoming
+stage-specific generic-dead entries (D-21).
 
 The additive schema is an explicit list of selectors rather than automatic
 filesystem discovery:
@@ -657,10 +661,37 @@ Rejected alternative: a new cactus `lifecycle:` value changing how cacti age
 and die, which would have reached the loader vocabulary, growth code, and
 schema tests for no behavior the design needs. Decided 2026-09-07.
 
+### D-21. A legacy `dead` phase is the species' generic-dead declaration
+
+Every mortal shipped species declares `dead` under `phases`, and the growth
+code's dead window pins the age to that entry. Under the selector model that
+entry is not a life phase: it normalizes to `condition: dead` with wildcard
+phase and cause (Tier 1 art), and its `cycleOverrides` for `phase: dead`
+become stage-specific generic-dead entries. Every other legacy phase, stage,
+and override normalizes to `wild` + `alive`. The natural-lifespan dead window
+requests `condition: dead`, `cause: natural`, and the frozen last living phase
+and stage, and resolves to the same `dead.png` it shows today. `PhaseDead`
+remains in `LifePhaseTag` for decoding only and is never a phase-at-death.
+Consequences: natural and hazard deaths share one fallback path; EFM-3
+documents the rule in the contract; the growth code exposes the frozen phase
+one slice before EFM-5. Rejected: keeping `dead` as a life phase requested as
+`alive`, which would give natural and hazard deaths different fallback paths
+and leave `phase: dead` unexplained beside `condition: dead`. Decided
+2026-09-07.
+
 ## Open questions
 
-All eleven design questions are resolved below; they remain listed to preserve
+All twelve design questions are resolved below; they remain listed to preserve
 the decision history and rejected alternatives.
+
+### Q-12. How does the legacy `dead` phase normalize into the selector table?
+
+Resolved by D-21. The sparse-declaration rule said legacy entries normalize as
+`wild` + `alive`, but `dead` is authored as a life phase by every mortal
+species and the dead window pins the age to it. Reading it literally would
+have kept `phase: dead` as a living request beside the new `condition: dead`
+axis; D-21 instead makes it the generic-dead declaration so one fallback path
+serves natural and hazard deaths alike.
 
 ### Q-11. What is the cactus class's lifecycle?
 
@@ -828,9 +859,11 @@ remains.
 - **Phase:** Foundation
 - **Depends on:** EFM-2
 - **Ordering:** `critical path`
-- **Relevant decisions:** D-2, D-3, D-4, D-7, D-9 through D-11, D-15
+- **Relevant decisions:** D-2, D-3, D-4, D-7, D-9 through D-11, D-15, D-21
 - **Acceptance signals:** Exhaustive table tests cover every fallback boundary
-  and prove the species base is total.
+  and prove the species base is total; every shipped species resolves to the
+  handle it resolves to today on every day of the year, alive and inside the
+  natural dead window.
 - **Out of scope:** Persistent deaths, hazard producers, or art.
 - **Open questions:** None
 
@@ -913,7 +946,7 @@ remains.
 - **Depends on:** EFM-7
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-5, D-6, D-9, D-10, D-12 through D-14, D-18
-  through D-20
+  through D-21
 - **Acceptance signals:** A 60-day transient corpse crosses its boundary once
   without accidental revival; a persistent corpse survives that boundary,
   eviction, and reload; expired state is compacted when its successor permits;
