@@ -184,6 +184,44 @@ spec = around withDescriptorEngine $ do
             checkShape ls ds "loadBoxTextures"
                 "UI.loadBoxTextures(1, 1, 1, 1, 1, 1, 1, 1, 1)"
 
+        it "documents Lua.toboolean's coercion the way it really behaves" $ \env → do
+            (ls, _) ← newFixture env
+            -- flagArg's wording covers eleven descriptors, so pin what
+            -- it claims: an explicit false is false (it is not "any
+            -- value but nil"), an omitted argument is false, and 0 —
+            -- truthy in Lua, unlike in C — is true.
+            coercion ← evalDebug ls (T.concat
+                [ "UI.setClipChildren(_G.__box, false) "
+                , "local explicitFalse = UI.isClipChildren(_G.__box) "
+                , "UI.setClipChildren(_G.__box, 0) "
+                , "local zero = UI.isClipChildren(_G.__box) "
+                , "UI.setClipChildren(_G.__box) "
+                , "local omitted = UI.isClipChildren(_G.__box) "
+                , "return (explicitFalse == false) and (zero == true) "
+                , "and (omitted == false)" ])
+            coercion `shouldBe` "true"
+
+        it "describes control focus as the unvalidated handle it really is" $ \env → do
+            (ls, ds) ← newFixture env
+            checkShape ls ds "getControlFocus" "UI.getControlFocus()"
+            checkShape ls ds "hasControlFocus" "UI.hasControlFocus(999999)"
+            -- UI.Manager.Focus.setControlFocus stores whatever integer
+            -- it is handed; nothing validates the element until keyboard
+            -- dispatch does. The descriptors say so, and this is why.
+            unvalidated ← evalDebug ls (T.concat
+                [ "UI.setControlFocus(999999) "
+                , "return (UI.getControlFocus() == 999999) "
+                , "and (UI.hasControlFocus(999999) == true)" ])
+            unvalidated `shouldBe` "true"
+            -- Text focus is the opposite — setElementFocus looks the
+            -- handle up and ignores an unknown one — which is what keeps
+            -- hasFocus's "false for an unknown handle" wording honest.
+            validated ← evalDebug ls (T.concat
+                [ "UI.setFocus(999999) "
+                , "return (UI.getFocus() == nil) "
+                , "and (UI.hasFocus(999999) == false)" ])
+            validated `shouldBe` "true"
+
         it "pushes nothing from the setters that describe no results" $ \env → do
             (ls, ds) ← newFixture env
             checkShape ls ds "setVisible" "UI.setVisible(_G.__box, true)"

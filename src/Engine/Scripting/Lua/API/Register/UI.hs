@@ -14,9 +14,11 @@
 --   The metadata is read off the implementations in
 --   "Engine.Scripting.Lua.API.UI" and describes what they really do,
 --   coercions and fallbacks included — @Lua.tointeger@ accepts a
---   numeric string (#1497), @Lua.toboolean@ never fails and treats an
---   omitted argument as @false@, and a verb whose required arguments
---   are missing is usually a silent no-op rather than an error.
+--   numeric string (#1497), @Lua.toboolean@ never fails and treats
+--   omitted, @nil@ and @false@ alike as @false@, a verb whose required
+--   arguments are missing is usually a silent no-op rather than an
+--   error, and a handle a verb stores without validating is described
+--   as such rather than as the element it was meant to name.
 --
 --   'installUIAPI' returns the descriptors the very expressions below
 --   installed, so a test can hold the metadata against the live table
@@ -48,21 +50,22 @@ elementArg ∷ LuaArg
 elementArg = argReq "elementHandle" TInteger elementHandleDoc
 
 elementHandleDoc ∷ Text
-elementHandleDoc = "Handle from UI.newElement/newBox/newText/newSprite. Read with Lua.tointeger, which also accepts a numeric string; a missing or non-numeric handle makes the call a no-op."
+elementHandleDoc = "Handle from UI.newElement/newBox/newText/newSprite. Read with Lua.tointeger, which also accepts a numeric string. A missing or non-numeric handle makes a mutating verb a silent no-op and makes a reading verb answer with the nil or false fallback its result documents."
 
 -- | The page handle the page-scoped verbs take.
 pageArg ∷ LuaArg
 pageArg = argReq "pageHandle" TInteger pageHandleDoc
 
 pageHandleDoc ∷ Text
-pageHandleDoc = "Handle from UI.newPage. Read with Lua.tointeger, which also accepts a numeric string; a missing or non-numeric handle makes the call a no-op."
+pageHandleDoc = "Handle from UI.newPage. Read with Lua.tointeger, which also accepts a numeric string. A missing or non-numeric handle makes a mutating verb a silent no-op and makes a reading verb answer with the nil or false fallback its result documents."
 
 -- | A boolean flag read with @Lua.toboolean@, which coerces instead of
---   validating: omitted or @nil@ is @false@, and any other value but
---   @false@ is @true@.
+--   validating: omitted, @nil@ and @false@ are all @false@, and every
+--   other value is @true@ — including @0@ and @""@, which are truthy in
+--   Lua.
 flagArg ∷ Text → Text → LuaArg
 flagArg name what = argOpt name TBoolean
-    (what <> " Read with Lua.toboolean, so an omitted or nil argument means false and any other value means true.")
+    (what <> " Read with Lua.toboolean, which coerces rather than validating: omitted, nil and false all mean false, and every other value means true — including 0 and the empty string, which are truthy in Lua.")
 
 -- | The @{x, y, w, h}@ sub-table 'UI.getEffectiveClip' and the
 --   @effectiveClip@/@interactiveBounds@ info fields all push.
@@ -377,7 +380,7 @@ installUIAPI env = do
     , registerLuaVerb (luaVerb "setControlFocus"
         [elementArg]
         retNone
-        "Give an element keyboard CONTROL focus, deciding what Enter/Space activates (#745). Reports the transition to Lua.")
+        "Give an element keyboard CONTROL focus, deciding what Enter/Space activates (#745). Reports the transition to Lua. UI.Manager.Focus.setControlFocus stores the handle WITHOUT checking that the element exists — keyboard dispatch validates lazily — so until then getControlFocus and hasControlFocus report an unknown handle back verbatim. Text focus is the opposite: UI.setFocus ignores a handle no element carries.")
         (uiSetControlFocusFn env)
     , registerLuaVerb (luaVerb "clearControlFocus"
         []
@@ -387,13 +390,13 @@ installUIAPI env = do
     , registerLuaVerb (luaVerb "getControlFocus"
         []
         (retVals [resVal "elementHandle" (TNullable TInteger)
-            "The control-focused element, or nil when nothing holds control focus."])
+            "The stored control focus, or nil when nothing holds it. Not validated on read: a handle UI.setControlFocus stored is reported even when no such element exists, until keyboard dispatch's lazy validation clears it."])
         "Read the keyboard control focus (#745).")
         (uiGetControlFocusFn env)
     , registerLuaVerb (luaVerb "hasControlFocus"
         [elementArg]
         (retVals [resVal "focused" TBoolean
-            "Whether this element holds control focus; false for a missing or unknown handle."])
+            "Whether this handle is the stored control focus. False when the argument is missing; an unknown handle reads TRUE if it is the one UI.setControlFocus stored, because neither call validates it."])
         "Whether an element holds keyboard control focus (#745).")
         (uiHasControlFocusFn env)
 
@@ -719,7 +722,7 @@ installUIAPI env = do
         , argReq "availableHeight" TNumber "Space available for rows, in framebuffer pixels."
         ]
         (retVals [resVal "count" TInteger
-            "How many rows actually fit; 0 when any argument is missing."])
+            "How many rows actually fit: 0 when any argument is missing or preferredCount is 0 or less; preferredCount unchanged when rowHeight is 0 or less; otherwise at least 1, even when the available height is smaller than a single row."])
         "How many rows of a given height fit in the available space.")
         (uiFitVisibleRowsFn env)
     ]
