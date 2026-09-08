@@ -176,8 +176,8 @@ quoted key = "'" <> key <> "'"
 --   domain checks.
 parseLootProfileYamlEntry
     ∷ Text → Int → Aeson.Value → Aeson.Parser LootProfileYamlEntry
-parseLootProfileYamlEntry pid entryIx =
-    withObject "LootProfileYamlEntry" $ \v → do
+parseLootProfileYamlEntry pid entryIx val = case val of
+    Aeson.Object v → do
         -- The item id is read FIRST so the two rules after it can name
         -- the entry by what it holds. When it is unusable there is no
         -- honest name to print, and the coordinates stop at the index.
@@ -186,6 +186,15 @@ parseLootProfileYamlEntry pid entryIx =
         LootProfileYamlEntry item
             ⊚ orFail at (chanceField "chance" v)
             ⊛ orFail at (positiveWholeField "quantity_factor" v)
+    -- The entry is not a block at all. Matched HERE rather than left to
+    -- @withObject@, which is the one shape that would have escaped this
+    -- module's diagnostic contract: its own failure names neither the
+    -- profile nor the entry, only aeson's @$@ path. Both coordinates are
+    -- known at this point — the id was read before any entry was — so
+    -- there is nothing to recover and every reason to print them.
+    _ → fail ∘ T.unpack ∘ entryAt pid entryIx $
+            "must be an {item, chance, quantity_factor} block, got "
+            <> tshow val
 
 -- | The profile-level @quantity_multiplier@ block: a required object
 --   with required whole-number @min@ and @max@, @1 ≤ min ≤ max@.

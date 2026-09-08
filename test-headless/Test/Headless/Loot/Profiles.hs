@@ -539,6 +539,26 @@ spec = describe "Loot profiles" $ do
             rejectsNaming ["probe_salvage", "2", "item", "name", "string"]
                 (probeProfile "0.5" "3" `withSecondItem` "5")
 
+        -- The one shape with no fields to name at all. It must still
+        -- carry the coordinates that ARE known — an entry that is not a
+        -- block is diagnosed by profile and 1-based index, never by
+        -- aeson's bare `$` path.
+        it "rejects a scalar where an entry block belongs, by profile \
+           \and 1-based index" $
+            rejectsNaming ["probe_salvage", "2", "block"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2", "  - 5" ]
+
+        it "rejects an authored null entry the same way" $
+            rejectsNaming ["probe_salvage", "2", "block"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2", "  - null" ]
+
+        it "rejects a LIST where an entry block belongs" $
+            rejectsNaming ["probe_salvage", "2", "block"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2", "  - [1, 2]" ]
+
     it "fails the WHOLE document, so the valid FIRST entry is not \
        \salvaged either" $
         withTempProfileYaml (probeProfile "1.5" "3") $ \path → do
