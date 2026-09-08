@@ -3369,9 +3369,21 @@ never costs the others:
   likewise just the last binding, so every duplicate in that entry is
   named by profile and 1-based index without it.
 
-The index is 0-based only in that raw-path fallback, where it is a YAML
-path rather than an entry coordinate: renumbering a path is not
-something an author could then find.
+A duplicate nested deeper inside an entry — in a sub-block of its own —
+keeps that entry's coordinate and names the sub-block after it, since it
+is still that entry's duplicate. The index is 0-based only in the
+raw-path fallback, where it is a YAML path rather than an entry
+coordinate: renumbering a path is not something an author could then
+find.
+
+**Duplicates are settled before the typed parse runs.** The file is
+decoded to a plain `Value` first, which cannot fail on schema, so the
+warning list is always in hand. Decoding straight to the definition type
+loses it on exactly the documents that need it most: a validation
+failure answers with the warnings discarded, so a file that repeated
+`id` *and* authored a bad `quantity_multiplier` would be rejected by a
+message quoting the last-wins id — the value the duplicate rule exists
+to distrust — with the duplicate never mentioned.
 
 **The loader's outcome contract is the #2203 one, unchanged.**
 `engine.loadLootProfileYaml(path)` answers ONE number; a truthy second

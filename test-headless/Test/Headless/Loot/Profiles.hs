@@ -353,6 +353,49 @@ spec = describe "Loot profiles" $ do
                   \\n    quantity_factor: 2"
                 , "entries:", entryOf "steel_bar" "0.5" "3" ]
 
+        -- Duplicates are settled BEFORE the typed parse, so a document
+        -- that is BOTH duplicated and invalid is reported as the
+        -- duplicate — never by a schema error quoting the last-wins
+        -- value the duplicate rule distrusts.
+        it "reports the duplicate, not the schema error, when a repeated \
+           \id sits beside an invalid quantity_multiplier" $
+            rejectsNamingBut [".id", "duplicate"] ["first", "second"] $
+                T.unlines [ "id: first", "id: second", multOf "0" "4"
+                          , "entries:", entryOf "rations" "0.5" "2" ]
+
+        it "reports the duplicate when a repeated item sits beside an \
+           \invalid chance, naming neither competing item" $
+            rejectsNamingBut ["probe_salvage", "2", "item", "duplicate"]
+                             ["steel_bar", "wiring"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2"
+                    , "  - item: steel_bar\n    item: wiring\
+                      \\n    chance: 5.0\n    quantity_factor: 3" ]
+
+        it "reports the duplicate when a repeated entries key sits \
+           \beside an invalid entry" $
+            rejectsNaming ["probe_salvage", "entries", "duplicate"] $
+                T.unlines
+                [ "id: probe_salvage", okMult
+                , "entries:", entryOf "rations" "0.5" "2"
+                , "entries:", entryOf "steel_bar" "5.0" "3" ]
+
+        -- A duplicate NESTED in an entry's own sub-block is still that
+        -- entry's, so it keeps the entry coordinate and says which
+        -- block it was in. Unknown entry fields are tolerated, which is
+        -- exactly why this path is reachable.
+        it "keeps the entry coordinate for a duplicate nested inside an \
+           \entry, and names the sub-block" $
+            rejectsNamingBut
+                ["probe_salvage", "2", "steel_bar", "note", "duplicate"
+                , ".metadata"]
+                [".entries[1]"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2"
+                    , "  - item: steel_bar\n    chance: 0.5\
+                      \\n    quantity_factor: 3\n    metadata:\
+                      \\n      note: a\n      note: b" ]
+
         it "rejects entries: [] — a profile that can only ever realize \
            \nothing" $
             rejectsNamingBut ["probe_salvage", "entries", "empty"] ["entry"] $

@@ -46,7 +46,7 @@ import Data.Aeson (FromJSON(..), withObject)
 import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KM
-import qualified Data.Aeson.Types as Aeson (Parser, JSONPathElement(..))
+import qualified Data.Aeson.Types as Aeson (Parser, JSONPathElement(..), parseEither)
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
 
 -- | One @{item, chance, quantity_factor}@ profile entry, as authored.
@@ -319,26 +319,40 @@ lootProfileItemErrors registered def =
 --   not only the document's own @id@: a repeated @chance@ inside an
 --   entry is the same authoring mistake with the same silent outcome.
 --
+--   __Duplicates are settled BEFORE the typed parse runs, and that
+--   ordering is load-bearing.__ The file is decoded to a plain
+--   'Aeson.Value' first, which cannot fail on schema, so the warning
+--   list is always in hand. Decoding straight to 'LootProfileYamlDef'
+--   instead loses it on exactly the documents that need it most: a
+--   validation failure answers 'Left' with the warnings discarded, so a
+--   file that repeated @id@ AND authored a bad @quantity_multiplier@
+--   would be rejected by a message quoting the last-wins id — the value
+--   the duplicate rule exists to distrust — with the duplicate never
+--   mentioned. Same for a repeated @item@ beside a bad @chance@.
+--
 --   The diagnostic carries the same coordinates every other rule here
 --   carries, and for the same reason — but only the ones a duplicated
 --   key leaves TRUSTWORTHY, which is what 'duplicateContext' below
 --   decides. A duplicate inside an entry is named by profile, 1-based
 --   entry index and item, exactly as a bad @chance@ in that same entry
---   would be.
+--   would be, at any depth inside that entry.
 loadLootProfileYaml ∷ LoggerState → FilePath → IO (Maybe LootProfileYamlDef)
 loadLootProfileYaml logger path = do
     result ← Yaml.decodeFileWithWarnings path
     case result of
         Left err → reject (tshow err)
-        Right (warnings, def) → case [ p | DuplicateKey p ← warnings ] of
-            dups@(_:_) → reject
-                (T.intercalate "; "
-                     (map (duplicateAt (duplicateContext dups def) def) dups)
-                 <> " — a repeated key silently keeps only the last binding")
-            [] → do
-                logDebug logger CatAsset $ "Loaded loot profile '"
-                    <> lpydId def <> "' from " <> T.pack path
-                return (Just def)
+        Right (warnings, val) → case [ p | DuplicateKey p ← warnings ] of
+            dups@(_:_) →
+                let ctx = duplicateContext dups val
+                in reject (T.intercalate "; " (map (duplicateAt ctx val) dups)
+                           <> " — a repeated key silently keeps only the \
+                              \last binding")
+            [] → case Aeson.parseEither parseJSON val of
+                Left err  → reject (T.pack err)
+                Right def → do
+                    logDebug logger CatAsset $ "Loaded loot profile '"
+                        <> lpydId def <> "' from " <> T.pack path
+                    return (Just def)
   where
     reject why = do
         logWarn logger CatAsset $ "Failed to parse loot profile YAML "
@@ -371,40 +385,85 @@ data DuplicateContext = DuplicateContext
     , dcAmbiguousItems ∷ [Int]       -- ^ 0-based entries whose @item@ repeated
     }
 
-duplicateContext ∷ [Aeson.JSONPath] → LootProfileYamlDef → DuplicateContext
-duplicateContext dups def = DuplicateContext
-    { dcProfile = if repeatedTopLevel "id" then Nothing else Just (lpydId def)
+duplicateContext ∷ [Aeson.JSONPath] → Aeson.Value → DuplicateContext
+duplicateContext dups val = DuplicateContext
+    { dcProfile = if repeatedTopLevel "id" then Nothing else rawProfileId val
     , dcEntries = not (repeatedTopLevel "entries")
+      -- A DIRECT @entries[i].item@ duplicate, and only that: a repeated
+      -- @item@ nested inside some sub-block of the entry is a different
+      -- key and leaves the entry's own item name alone.
     , dcAmbiguousItems =
-        [ i | [Aeson.Key es, Aeson.Index i, Aeson.Key k] ← dups
-            , Key.toText es ≡ "entries", Key.toText k ≡ "item" ]
+        [ i | Just (i, [Aeson.Key k]) ← map entryPath dups
+            , Key.toText k ≡ "item" ]
     }
   where
     repeatedTopLevel key = any (≡ [Aeson.Key (Key.fromText key)]) dups
 
+-- | Split a duplicate's path into the 0-based entry index it sits under
+--   and the path INSIDE that entry — at any depth, because a duplicate
+--   nested in an entry's own sub-block is still that entry's, and
+--   losing the entry coordinate for it would contradict the rule that
+--   duplicates are reported at any depth.
+entryPath ∷ Aeson.JSONPath → Maybe (Int, Aeson.JSONPath)
+entryPath (Aeson.Key es : Aeson.Index i : inside)
+    | Key.toText es ≡ "entries" = Just (i, inside)
+entryPath _ = Nothing
+
+-- | The document's authored @id@, straight off the RAW value, when it
+--   is a usable string. Read here rather than off a decoded definition
+--   because duplicates are settled before anything is decoded.
+rawProfileId ∷ Aeson.Value → Maybe Text
+rawProfileId (Aeson.Object o) = case KM.lookup (Key.fromText "id") o of
+    Just (Aeson.String t) | not (T.null t) → Just t
+    _                                     → Nothing
+rawProfileId _ = Nothing
+
+-- | The authored @item@ of the 0-based entry @i@, when it is a usable
+--   string. Same reason as 'rawProfileId'.
+rawEntryItem ∷ Aeson.Value → Int → Maybe Text
+rawEntryItem (Aeson.Object o) i = do
+    Aeson.Array es ← KM.lookup (Key.fromText "entries") o
+    Aeson.Object e ← es V.!? i
+    Aeson.String t ← KM.lookup (Key.fromText "item") e
+    guard (not (T.null t))
+    pure t
+rawEntryItem _ _ = Nothing
+
 -- | One duplicated key's diagnostic, at the finest coordinates
 --   'DuplicateContext' allows.
-duplicateAt ∷ DuplicateContext → LootProfileYamlDef → Aeson.JSONPath → Text
-duplicateAt ctx def path = case dcProfile ctx of
+duplicateAt ∷ DuplicateContext → Aeson.Value → Aeson.JSONPath → Text
+duplicateAt ctx val path = case dcProfile ctx of
     -- The document's own name is one of the duplicated keys, so there
     -- is nothing to call this profile. The raw path is all there is.
-    Nothing  → "duplicate key at YAML path " <> renderPath path
-    Just pid → case path of
-        [Aeson.Key k] → profileAt pid (dup k)
-        [Aeson.Key blk, Aeson.Key k]
-            | Key.toText blk ≡ "quantity_multiplier" →
-                profileAt pid (quoted (Key.toText blk) <> ": " <> dup k)
-        [Aeson.Key es, Aeson.Index i, Aeson.Key k]
-            | Key.toText es ≡ "entries", dcEntries ctx →
-                case drop i (lpydEntries def) of
-                    -- The item names the entry only when the item
-                    -- itself is not one of the ambiguous values.
-                    (e : _) | i `notElem` dcAmbiguousItems ctx →
-                        entryFor pid (i + 1) (lpyeItem e) (dup k)
-                    _ → entryAt pid (i + 1) (dup k)
-        _ → profileAt pid ("duplicate key at YAML path " <> renderPath path)
+    Nothing  → rawPath
+    Just pid → case entryPath path of
+        Just (i, inside) | dcEntries ctx → entryCoord pid i (inside `orRaw` i)
+        _ → case path of
+            [Aeson.Key k] → profileAt pid (dup k)
+            [Aeson.Key blk, Aeson.Key k]
+                | Key.toText blk ≡ "quantity_multiplier" →
+                    profileAt pid (quoted (Key.toText blk) <> ": " <> dup k)
+            _ → profileAt pid rawPath
   where
-    dup k = "duplicate key " <> quoted (Key.toText k)
+    dup k   = "duplicate key " <> quoted (Key.toText k)
+    rawPath = "duplicate key at YAML path " <> renderPath path
+
+    -- The item names the entry only when the item itself is not one of
+    -- the ambiguous values.
+    entryCoord pid i = case rawEntryItem val i of
+        Just item | i `notElem` dcAmbiguousItems ctx → entryFor pid (i + 1) item
+        _                                            → entryAt pid (i + 1)
+
+    -- Inside an entry the duplicated key is the LAST path element;
+    -- anything before it is the sub-block it sits in, kept so a NESTED
+    -- duplicate still says where without losing the entry coordinate.
+    orRaw inside i = case reverse inside of
+        [Aeson.Key k]            → dup k
+        (Aeson.Key k : outer)    → dup k <> " under "
+                                     <> renderPath (reverse outer)
+        _                        → "duplicate key at YAML path "
+                                     <> renderPath (Aeson.Key (Key.fromText "entries")
+                                                    : Aeson.Index i : inside)
 
 -- | A duplicate key's raw location, for the cases 'duplicateAt' cannot
 --   give real coordinates to. Written out rather than taken from
