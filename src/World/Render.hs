@@ -337,11 +337,14 @@ buildFrameSolar env worldManager = do
         case lookup pageId (wmWorlds worldManager) of
             Nothing → return Nothing
             Just worldState → do
-                wt ← readIORef (wsTimeRef worldState)
+                -- #2471: one read of the page's whole clock, so the
+                -- solar table moves every frame instead of once a
+                -- game-minute — and can never mix halves of two states.
+                clock ← readIORef (wsTimeRef worldState)
                 mParams ← readIORef (wsGenParamsRef worldState)
                 return $ Just
                     ( pageId
-                    , (worldTimeToSunAngle wt, wgpWorldSize ⊚ mParams) )
+                    , (preciseSunAngle clock, wgpWorldSize ⊚ mParams) )
     let slots = solarSlotAssignment visible
         table = buildSolarPageTable (sbAngle solarBase)
                                     (`HM.lookup` pageInputs) visible

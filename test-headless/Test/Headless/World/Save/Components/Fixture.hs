@@ -117,6 +117,7 @@ minimalPage pid = PageSnapshot
     , pgsCameraY      = 0
     , pgsTimeHour     = 12
     , pgsTimeMinute   = 0
+    , pgsTimeRemainder = 0
     , pgsDateYear     = 1
     , pgsDateMonth    = 1
     , pgsDateDay      = 1
@@ -409,6 +410,7 @@ pageCore ∷ WorldPageId → PageCoreDTO
 pageCore pid = PageCoreDTO
     { pcPageId = pid, pcGenParams = toWorldGenParamsDTO defaultGP
     , pcCameraX = 0, pcCameraY = 0, pcTimeHour = 0, pcTimeMinute = 0
+    , pcTimeRemainder = 0
     , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
     , pcIdentity = Nothing
     , pcGeneratedId = Just (fixtureGeneratedWorldIdForPage pid) }

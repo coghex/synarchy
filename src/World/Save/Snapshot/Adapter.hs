@@ -166,6 +166,7 @@ pageToWorldPageSave cam nextBid nextUid page = WorldPageSave
     , wpsCameraFacing = lcsFacing cam
     , wpsTimeHour     = pgsTimeHour page
     , wpsTimeMinute   = pgsTimeMinute page
+    , wpsTimeRemainder = pgsTimeRemainder page
     , wpsDateYear     = pgsDateYear page
     , wpsDateMonth    = pgsDateMonth page
     , wpsDateDay      = pgsDateDay page

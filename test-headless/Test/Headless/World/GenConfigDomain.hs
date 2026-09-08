@@ -606,7 +606,7 @@ stagedPageId = WorldPageId "gen_domain_staged"
 
 -- | A one-page save carrying @params@, built the way a DECODED save is:
 --   'blankPageSnapshot' is the single construction every @world-pages@
---   version's own decoder converges on — the current v10 and all seven
+--   version's own decoder converges on — the current v11 and all eight
 --   migrated historical ones alike — and 'snapshotToSaveData' is the
 --   adapter that turns such a snapshot into the 'SaveData' staging
 --   consumes. Forging the params HERE therefore reaches 'stagePage'

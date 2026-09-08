@@ -102,6 +102,7 @@ minimalPage gp = PageSnapshot
     , pgsCameraY      = 0
     , pgsTimeHour     = 12
     , pgsTimeMinute   = 0
+    , pgsTimeRemainder = 0
     , pgsDateYear     = 1
     , pgsDateMonth    = 1
     , pgsDateDay      = 1

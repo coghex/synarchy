@@ -63,7 +63,8 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
 import World.Thread (worldTickWith)
-import World.Time.Types (WorldDate(..), WorldTime(..))
+import World.Time.Types
+    (WorldDate(..), WorldTime(..), PreciseWorldTime(..), preciseWorldTime)
 
 -- * Fixtures
 
@@ -284,7 +285,7 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         withHeadlessEngineNoWorld $ \env → do
         let sim = toWorldSimCapability env
         ws ← emptyWorldState
-        writeIORef (wsTimeRef ws) (WorldTime 8 0)
+        writeIORef (wsTimeRef ws) (preciseWorldTime (WorldTime 8 0))
         writeIORef (wsDateRef ws) (WorldDate 1 1 1)
         writeIORef (wsTimeScaleRef ws) 60
         writeIORef (wsWorldManagerRef sim) emptyWorldManager
@@ -308,14 +309,14 @@ spec = describe "save snapshot barrier owner park (issue #2221)" $ do
         -- the 'drainInitQueues'/'tickWorldTime'/'updateChunkLoading'
         -- work the issue names as able to enqueue fresh unit/building
         -- work after every owner already drained its three passes.
-        readIORef (wsTimeRef ws) `shouldReturn` WorldTime 8 0
+        pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 8 0
 
         -- Deferred, not discarded: a SAVE keeps the live session, so its
         -- non-authorized commands still run afterwards, in order.
         failSave (saveBarrierRef env) n "an owner did not respond"
         ownerGated (saveBarrierRef env) SaveWorld `shouldReturn` False
         _ ← worldTickWith scripted env lastRef
-        readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 59
+        pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 59
 
     -- Rounds 1-4 of review, converged. The render owner's park and the
     -- publication's CUTOVER on 'luaToEngineQueue' are separate things,

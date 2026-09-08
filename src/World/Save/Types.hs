@@ -144,7 +144,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 100
+currentSaveVersion = 101
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -305,6 +305,21 @@ data WorldPageSave = WorldPageSave
     , wpsCameraFacing ∷ !CameraFacing
     , wpsTimeHour     ∷ !Int
     , wpsTimeMinute   ∷ !Int
+    , wpsTimeRemainder ∷ !Double
+      -- ^ #2471: the page's sub-minute calendar progress, in
+      --   game-minutes, as it was WRITTEN — not yet judged. The stored
+      --   clock holds whole minutes only, so without this the fraction
+      --   every tick contributes was lost, and at the default speed the
+      --   calendar never advanced at all.
+      --
+      --   Deliberately a raw 'Double' rather than a validated
+      --   'World.Time.Scale.ClockRemainder': this record mirrors what a
+      --   decoded save actually carries, and the repair of an
+      --   out-of-range value belongs to load staging
+      --   ('World.Load.Stage'), which is where the diagnostic can name
+      --   the page it repaired. A component validator that refused the
+      --   save instead would cost the player everything else in it over
+      --   less than a minute of clock.
     , wpsDateYear     ∷ !Int
     , wpsDateMonth    ∷ !Int
     , wpsDateDay      ∷ !Int

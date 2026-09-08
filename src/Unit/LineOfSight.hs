@@ -47,7 +47,7 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Unit.Direction (Direction(..))
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..),
                     WorldPageId)
-import World.Time.Types (worldTimeToSunAngle)
+import World.Time.Types (preciseSunAngle)
 import World.Chunk.Types (LoadedChunk(..), columnIndex, wrapChunkCoordU)
 import World.Tile.Types (lookupChunk, WorldTileData(..))
 import World.Generate.Coordinates (globalToChunk)
@@ -97,7 +97,11 @@ unitVisibleTiles env uid = do
 visibleTilesOnPage ∷ WorldState → UnitInstance → IO [(Int, Int)]
 visibleTilesOnPage ws inst = do
     wtd     ← readIORef (wsTilesRef ws)
-    wt      ← readIORef (wsTimeRef ws)
+    -- #2471: ONE read of the page's whole clock — the sub-minute
+    -- progress rides with the minutes, so daylight moves continuously
+    -- rather than once a game-minute, and this thread can never pair a
+    -- new minute with a stale remainder.
+    clock   ← readIORef (wsTimeRef ws)
     mParams ← readIORef (wsGenParamsRef ws)
     let worldSize = maybe fallbackWorldSizeChunks wgpWorldSize mParams
         ux = floor (uiGridX inst) ∷ Int
@@ -108,7 +112,8 @@ visibleTilesOnPage ws inst = do
         (fx, fy) = facingVector (uiFacing inst)
         perception = HM.lookupDefault 1.0 "perception" (uiStats inst)
         night = nightPerceptionFactor
-                    (localSunAngle worldSize ux uy (worldTimeToSunAngle wt))
+                    (localSunAngle worldSize ux uy
+                        (preciseSunAngle clock))
         radius = max 1 (floor (realToFrac perception * awareRangeTiles
                                * realToFrac night) ∷ Int)
 
@@ -177,8 +182,8 @@ unitAwareness env defender attacker
                     -- Same half-angle-60° cone test as the vision FOV (cos²60 = 0.25).
                     inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
                 blocked ← losBlockedBetween env defender attacker
-                wt ← readIORef (wsTimeRef ws)
-                let sunAngle = worldTimeToSunAngle wt
+                clock ← readIORef (wsTimeRef ws)
+                let sunAngle = preciseSunAngle clock
                 worldSize ← activeWorldSizeChunks env (uiPage defender)
                 let localAngle = localSunAngle worldSize (floor defX) (floor defY) sunAngle
                 pure $! nightPerceptionFactor localAngle *

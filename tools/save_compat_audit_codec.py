@@ -121,6 +121,12 @@ case decoded of
           , "powerNodeCount" .= HM.size (pnsNodes (pgsPowerNodes page))
           , "groundItemCount" .= HM.size (gisItems (pgsGroundItems page))
           , "timeHour" .= pgsTimeHour page, "timeMinute" .= pgsTimeMinute page
+          -- #2471: the sub-minute calendar progress beside the whole
+          -- minutes. Absent from every expected summary generated before
+          -- world-pages v11, which is exactly right for those fixtures --
+          -- the Baselines reader defaults a missing key to 0, the value a
+          -- migrated pre-v11 payload really carries.
+          , "timeRemainder" .= pgsTimeRemainder page
           , "dateYear" .= pgsDateYear page, "dateMonth" .= pgsDateMonth page
           , "dateDay" .= pgsDateDay page
           , "mapMode" .= T.pack (show (pgsMapMode page))

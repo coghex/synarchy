@@ -125,6 +125,12 @@ data PageSnapshot = PageSnapshot
     , pgsCameraY      ∷ !Float
     , pgsTimeHour     ∷ !Int
     , pgsTimeMinute   ∷ !Int
+    , pgsTimeRemainder ∷ !Double
+      -- ^ #2471: this page's sub-minute calendar progress in
+      --   game-minutes — the fraction of a minute 'pgsTimeMinute' cannot
+      --   hold. Captured as the raw stored value; 'World.Load.Stage'
+      --   owns the domain repair, for the reasons
+      --   'World.Save.Types.wpsTimeRemainder' spells out.
     , pgsDateYear     ∷ !Int
     , pgsDateMonth    ∷ !Int
     , pgsDateDay      ∷ !Int

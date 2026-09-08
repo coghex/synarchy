@@ -151,7 +151,16 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                         case mPageParams of
                             Nothing → pure $ Left ("page is not snapshotable: " <> unWorldPageId pid)
                             Just params → do
-                                WorldTime h m    ← readIORef (wsTimeRef ws)
+                                -- #2471: one read gives the whole
+                                -- clock — the minutes AND the
+                                -- sub-minute progress beside them, so a
+                                -- save written mid-minute restores
+                                -- mid-minute rather than silently
+                                -- rounding the calendar down, and the
+                                -- capture cannot pair halves of two
+                                -- published states.
+                                PreciseWorldTime (WorldTime h m)
+                                    timeRemainder ← readIORef (wsTimeRef ws)
                                 WorldDate y mo d ← readIORef (wsDateRef ws)
                                 -- No clock write here: 'imposePause' above
                                 -- owns the (flag, visible page's clock) pair
@@ -232,6 +241,9 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                         , pgsCameraY    = wcy
                                         , pgsTimeHour   = h
                                         , pgsTimeMinute = m
+                                        , pgsTimeRemainder =
+                                            clockRemainderMinutes
+                                                timeRemainder
                                         , pgsDateYear   = y
                                         , pgsDateMonth  = mo
                                         , pgsDateDay    = d

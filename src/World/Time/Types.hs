@@ -3,7 +3,11 @@ module World.Time.Types
     ( module World.Time.Scale
     , WorldTime(..)
     , defaultWorldTime
+    , PreciseWorldTime(..)
+    , preciseWorldTime
+    , defaultPreciseWorldTime
     , worldTimeToSunAngle
+    , preciseSunAngle
     , advanceWorldClock
     , WorldDate(..)
     , worldDateAddDaysChecked
@@ -47,12 +51,72 @@ defaultWorldTime = WorldTime
 
 -- | Convert world time to sun angle (0.0 .. 1.0)
 --   Mapping: midnight (0:00) = 0.0, 6am = 0.25, noon = 0.5, 6pm = 0.75
+--
+--   Whole minutes only. 'preciseSunAngle' is what every LIVE page
+--   uses (#2471); this remains the answer for a 'WorldTime' with no
+--   retained progress beside it, and the two agree exactly there.
 worldTimeToSunAngle ∷ WorldTime → Float
 worldTimeToSunAngle (WorldTime h m) =
     let totalMinutes = fromIntegral h * 60.0 + fromIntegral m ∷ Float
     in totalMinutes / 1440.0   -- 1440 = 24 * 60
 
--- | Advance the full world clock — time of day AND calendar date (#332).
+-- | A page's time of day as ONE value: the whole minutes every reader
+--   has always seen, plus the sub-minute progress beside them (#2471).
+--
+--   The two are a single record rather than two refs because they are
+--   published together and read together. A live page's clock is written
+--   by the world thread and read by others — 'Unit.LineOfSight' on the
+--   unit thread, "Engine.Scripting.Lua.API.Power" on the Lua thread —
+--   and while they were separate a reader landing between the two writes
+--   of a minute carry could pair the NEW minute with the OLD remainder.
+--   That is a clock no tick ever produced, and it would run the sun
+--   angle backwards. One 'IORef' holding both makes every published
+--   state a whole one, structurally: there is no way to write half a
+--   clock because there is no setter for half a clock.
+data PreciseWorldTime = PreciseWorldTime
+    { pwtTime      ∷ !WorldTime
+    , pwtRemainder ∷ !ClockRemainder
+      -- ^ Game-minutes already elapsed that 'pwtTime' cannot store,
+      --   always in @[0, 1)@ — see 'World.Time.Scale.ClockRemainder'.
+    } deriving (Show, Eq)
+
+-- | A clock at a whole minute, carrying no sub-minute progress: what a
+--   @world.setTime@, a fresh page and every pre-#2471 save all produce.
+preciseWorldTime ∷ WorldTime → PreciseWorldTime
+preciseWorldTime t = PreciseWorldTime t zeroClockRemainder
+
+defaultPreciseWorldTime ∷ PreciseWorldTime
+defaultPreciseWorldTime = preciseWorldTime defaultWorldTime
+
+-- | The sun angle of a live page's clock: whole minutes PLUS the
+--   sub-minute progress that clock is carrying (#2471).
+--
+--   The clock stores whole minutes, so before #2471 the angle could only
+--   step once a minute — and at the default scale it never stepped at
+--   all. Reading the retained remainder here makes the angle advance
+--   smoothly with the tick that produced it, which is what every solar
+--   consumer (rendering, line of sight, power generation) actually wants
+--   from a continuously moving sun.
+--
+--   Contract, in the terms the acceptance states: NONDECREASING within a
+--   day (the remainder only ever grows between whole-minute steps, and a
+--   whole-minute step carries exactly the minute the remainder gave up),
+--   and EQUAL to 'worldTimeToSunAngle' whenever the remainder is zero.
+--   Midnight still wraps to 0, exactly as the whole-minute angle does.
+--
+--   It takes the WHOLE clock, never a minute and a remainder separately:
+--   that is what stops a caller from pairing halves of two different
+--   published states and getting an angle no tick ever produced.
+preciseSunAngle ∷ PreciseWorldTime → Float
+preciseSunAngle (PreciseWorldTime (WorldTime h m) remainder) =
+    realToFrac (preciseMinutes / clockMinutesPerDayD)
+  where
+    preciseMinutes = fromIntegral h * 60 + fromIntegral m
+                   + clockRemainderMinutes remainder ∷ Double
+
+-- | Advance the full world clock — time of day AND calendar date (#332),
+--   retaining sub-minute progress between ticks (#2471).
+--
 --   The predecessor wrapped at midnight without carrying the day, which
 --   left the world date frozen forever (the flora annual cycle selected
 --   by day-of-year could never move). This is the same minute arithmetic
@@ -62,6 +126,34 @@ worldTimeToSunAngle (WorldTime h m) =
 --   actually changed. A single tick can cross several midnights at high
 --   time scales.
 --
+--   __Sub-minute progress is retained, not discarded (#2471).__ The
+--   stored clock is whole minutes, and every tick used to FLOOR
+--   @timeScale × dt@ straight back into it. At the shipped default scale
+--   — one game-minute per real second, against an elapsed step capped at
+--   'World.Time.Scale.clockMaxElapsedStep' — no admitted tick ever added
+--   a whole minute, so the calendar never moved at all; at higher scales
+--   the same elapsed time advanced the clock by different amounts
+--   depending on how the worker happened to partition it. The remainder
+--   threaded through here is that lost fraction, carried into the next
+--   tick.
+--
+--   Equal admitted elapsed time therefore advances the calendar by the
+--   same duration however it is partitioned, to within
+--   'World.Time.Scale.clockTickErrorBound' per tick — and that bound is
+--   independent of the time scale. The per-tick product is EXACT in
+--   'Double' ('World.Time.Scale.ClockRemainder' spells out why); its
+--   WHOLE-minute part is split off and carried in exact 'Int'
+--   arithmetic; and only the leftover fraction, below one minute, is
+--   ever added to the retained remainder, itself below one minute. So
+--   the single rounding a tick performs is on a sum in @[0, 2)@ whatever
+--   the scale, rather than at the ulp of a multi-day total.
+--
+--   That split is a correctness requirement, not an optimisation.
+--   Recombining the stored minutes with the remainder before flooring
+--   would round @1439 + nextDownDouble 1@ to 1440, so a page at 23:59
+--   holding 'World.Time.Scale.maxClockRemainder' would cross midnight
+--   and roll its date on a PAUSED tick that advanced it by nothing.
+--
 --   __Total over every input (#2280).__ @world.setTimeScale@ refuses a
 --   scale outside 'World.Time.Scale.classifyTimeScale''s domain at the
 --   Lua door, but this function enforces the same domain again so a
@@ -70,36 +162,107 @@ worldTimeToSunAngle (WorldTime h m) =
 --   follows, because a scale inside the domain can still be handed an
 --   elapsed step no normal tick would produce.
 --
---   For an unacceptable scale, an unacceptable elapsed step, a day count
---   or wrapped-minute total that will not fit an 'Int', or a calendar
---   carry that would overflow 'wdYear', the answer is the EXACT input
---   time and date with zero rolled days — never a partially applied
---   advance. Every accepted input keeps the behaviour it already had,
---   and the returned 'WorldTime' always satisfies @0 ≤ wtHour ≤ 23@ and
---   @0 ≤ wtMinute ≤ 59@.
-advanceWorldClock ∷ CalendarConfig → Float → Float → WorldTime → WorldDate
-                  → (WorldTime, WorldDate, Int)
-advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) date
+--   For an unacceptable scale, an unacceptable elapsed step, a whole
+--   minute count this tick cannot represent as an 'Int', a STORED clock
+--   whose own minute total will not fit one (nothing range-checks the
+--   hour and minute a save carries — see
+--   'World.Time.Scale.clockStartMinutes'), a minute total that will not
+--   fit, or a calendar carry that would overflow 'wdYear', the answer is
+--   the EXACT input
+--   time, remainder and date with zero rolled days — never a partially
+--   applied advance, and never a remainder the refused tick moved.
+--   Every accepted input keeps the behaviour it already had at whole
+--   minutes, and the returned clock's 'pwtTime' always satisfies
+--   @0 ≤ wtHour ≤ 23@ and @0 ≤ wtMinute ≤ 59@ while its 'pwtRemainder'
+--   always satisfies its own @[0, 1)@ range. The two come back as ONE
+--   'PreciseWorldTime' so a caller cannot publish half an advance.
+advanceWorldClock ∷ CalendarConfig → Float → Float
+                  → PreciseWorldTime → WorldDate
+                  → (PreciseWorldTime, WorldDate, Int)
+advanceWorldClock cc timeScale dtSeconds clock date
     | not (acceptedTimeScale timeScale) = unchanged
     | not (acceptedElapsed dtSeconds)   = unchanged
-    | otherwise = case floorToInt (newTotal / clockMinutesPerDay) of
+    | otherwise = case floorToIntD added of
         Nothing         → unchanged
-        Just daysRolled → carry daysRolled
+        Just addedWhole → withWholeMinutes addedWhole
   where
-    unchanged = (time, date, 0)
-    totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
-    newTotal = totalMinutes + timeScale * dtSeconds
-    carry daysRolled =
-        case floorToInt (newTotal - clockMinutesPerDay * fromIntegral daysRolled) of
+    PreciseWorldTime (WorldTime h m) remainder = clock
+    unchanged = (clock, date, 0)
+
+    -- Both factors are 'Float', so this product is EXACT in 'Double'
+    -- (24 + 24 significand bits, against 53 available). Widening BEFORE
+    -- multiplying is what makes that true: multiplying in 'Float' and
+    -- widening afterwards would round first and retain the rounded value
+    -- forever.
+    added = realToFrac timeScale * realToFrac dtSeconds ∷ Double
+
+    -- The whole-minute part of this tick leaves the floating world here
+    -- and never comes back: everything downstream of @addedWhole@ is
+    -- exact 'Int' arithmetic. Only the leftover FRACTION meets the
+    -- retained remainder, so the one rounding a tick can perform happens
+    -- on a sum in [0, 2) whatever the time scale — which is what
+    -- 'World.Time.Scale.clockTickErrorBound' bounds.
+    --
+    -- The split is EXACT at every value this guard admits, and needs no
+    -- cutoff of its own to be: @added@ is the exact product of two
+    -- 'Float's, so it carries at most 48 significant bits, and a 48-bit
+    -- value at or above 2^53 is necessarily an integer already. See
+    -- 'World.Time.Scale.worstCaseMinuteTotal', which 'maxTimeScale' is
+    -- derived from, for the whole argument.
+    --
+    -- Recombining them instead — adding the remainder back onto the
+    -- whole minute count and flooring the total — is exactly what this
+    -- must not do. @1439 + nextDownDouble 1@ is 1440 in 'Double', so a
+    -- page sitting at 23:59 with the largest representable remainder
+    -- would roll the date on a tick that advanced it by nothing at all.
+    -- The stored clock's own minute total is CHECKED, not computed
+    -- inline. @h@ and @m@ are whatever a save carried: nothing
+    -- range-checks 'World.Save.Types.wpsTimeHour' or @wpsTimeMinute@ on
+    -- the way in, so @h@ really can be 'maxBound', and a bare
+    -- @h * 60 + m@ would wrap to a small negative and hand this
+    -- function a clock it then "advances" — returning 23:00 and a
+    -- rolled-back day for a paused tick that must return the input
+    -- untouched.
+    withWholeMinutes addedWhole = case clockStartMinutes h m of
+        Nothing    → unchanged
+        Just start → case addChecked start addedWhole of
             Nothing → unchanged
-            Just wrappedMinutes →
-                let time' = WorldTime ((wrappedMinutes `div` 60) `mod` 24)
-                                      (wrappedMinutes `mod` 60)
-                in if daysRolled > 0
-                    then case worldDateAddDaysChecked cc daysRolled date of
-                        Nothing    → unchanged
-                        Just date' → (time', date', daysRolled)
-                    else (time', date, daysRolled)
+            Just minutesBeforeCarry →
+                case addChecked minutesBeforeCarry minuteCarry of
+                    Nothing           → unchanged
+                    Just totalMinutes → roll totalMinutes
+      where
+        -- Exact: for @n = floor x@ the real value @x - n@ lies in [0, 1)
+        -- and is a multiple of @ulp x@, so it is representable. Above
+        -- 2^53 an @added@ is already an integer and this is exactly 0,
+        -- which is the honest answer — such a value has no sub-minute
+        -- precision left to carry.
+        addedFraction = added - fromIntegral addedWhole
+        -- In [0, 2): a remainder below 1 plus a fraction below 1.
+        carried       = clockRemainderMinutes remainder + addedFraction
+        minuteCarry   = if carried ≥ 1 then 1 else 0 ∷ Int
+        -- Exact again, by the same argument, and in [0, 1). The
+        -- constructor is what ESTABLISHES that range rather than
+        -- assuming it: 'ClockRemainder' has no other way in, so the
+        -- invariant holds by construction at this ingress as it does at
+        -- the persisted one. With the split above the repair is
+        -- unreachable, and the spec pins the range over pathological
+        -- inputs rather than trusting the derivation.
+        remainder'    = fst (repairClockRemainder
+                            (carried - fromIntegral minuteCarry))
+
+        roll totalMinutes =
+            let (daysRolled, wrapped) =
+                    totalMinutes `divMod` clockMinutesPerDayInt
+                clock' = PreciseWorldTime
+                    (WorldTime (wrapped `div` clockMinutesPerHourInt)
+                               (wrapped `mod` clockMinutesPerHourInt))
+                    remainder'
+            in if daysRolled > 0
+                then case worldDateAddDaysChecked cc daysRolled date of
+                    Nothing    → unchanged
+                    Just date' → (clock', date', daysRolled)
+                else (clock', date, daysRolled)
 
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.
