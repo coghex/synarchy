@@ -72,6 +72,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Power (#358-#361, #590/#591, #1206)](#power-358-361-590591-1206)
 - [Flora species identity: the authored name is the key (#2241)](#flora-species-identity-the-authored-name-is-the-key-2241)
 - [Farming (#331-#336)](#farming-331-336)
+- [Fluid reaction: unlike-fluid contact in the active sim (#2481)](#fluid-reaction-unlike-fluid-contact-in-the-active-sim-2481)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
 
@@ -3253,6 +3254,84 @@ boundary and the shipped corpus), `--match "Chop tag policy"` (all
 four surfaces agreeing against a real engine), `--match "chop fell
 XP"` (the Lua grant). `tools/chop_probe.py` stays ADVISORY until #2058
 gives it a fixture.
+
+---
+
+## Fluid reaction: unlike-fluid contact in the active sim (#2481)
+
+Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
+(decisions D-1, D-3 and D-5). FR-1 of epic #2480; nothing consumes the
+events it produces until FR-2.
+
+**Occupied-contact identity invariant.** No occupied contact changes
+either cell's fluid type. Unlike contact is `Lava` versus any of `Ocean`,
+`Lake` or `River`; the three water types are ONE compatible class among
+themselves. Every live cell keeps its type until its volume reaches zero,
+at which point it becomes empty. Before #2481 every occupied-destination
+write kept the DESTINATION's type and added the incoming volume, so lava
+arriving in water silently became water and vice versa.
+
+**Live contact annihilation.** A contact is resolved from both cells'
+CURRENT LIVE type and volume, before either side is debited. The consumed
+amount is the smaller live volume; it is subtracted from BOTH sides and
+none of the requested transfer moves. A cell reaching zero becomes empty
+(`Nothing`). Exactly one side of an unlike contact is lava, so a contact
+yields at most one solidification event — emitted only when the LAVA side
+reached zero. A water cell reaching zero is not a solidification.
+
+**The five protected branches.** There are four transfer mechanisms but
+FIVE occupied-destination write branches in `src/Sim/Fluid/Active.hs`:
+seam exchange (`transferCell` via `reconcileSeams`), `phaseGravity`,
+`phaseLateral` with a snapshot-occupied destination, `phaseLateral` with a
+snapshot-empty destination that an earlier source filled live in the same
+phase, and `phaseWaterfall`. All five route through ONE applier,
+`Sim.Fluid.Reaction.applyTransfer` — do not re-derive the rule at a call
+site. A wrapped cylindrical-seam event names the exhausted lava cell's own
+CANONICAL stored chunk key (#2044), whichever side of the seam it is on.
+
+**Snapshot plans are paid from live cells.** The three in-chunk phases
+plan requests from a frozen snapshot and mutate a live grid, and a
+reaction can consume MORE than the planned transfer. Every request is
+therefore resolved against the live source and destination when it is
+applied; a later request cannot overdraw, recreate, or keep spending an
+exhausted source.
+
+**Bounded compatible transfers.** An ordinary transfer into an empty or
+compatible destination is bounded by the requested amount, the live source
+volume, AND the destination's remaining `maxBound :: Word16` capacity.
+Undelivered units stay at the source; no subtraction or addition wraps.
+An empty destination takes the source's type, a compatible occupied one
+keeps its own.
+
+**Refill policy.** A cell emptied by annihilation is an ordinary empty
+destination for later phases and requests in the same tick, and may be
+refilled with any fluid. Refill neither cancels nor duplicates the event
+that coordinate already emitted. At most one event is emitted per
+canonical coordinate PER TICK; a later tick may emit another there once
+new lava has arrived and been exhausted again.
+
+**Event accumulation.** Events land in `SimWorldState`'s `swsSolidEvents`
+(`src/Sim/State/Types.hs`), in emission order. The collection is transient
+simulation OUTPUT: `emptySimWorldState` starts it empty, and a
+nonreacting, inactive or deactivating tick carries it forward unchanged —
+a deactivating tick bakes its grid to passive fluid but keeps the events
+it already produced. **It is drained only by a consumer (FR-2 owns that)
+and cleared only when the page itself is dropped** (`SimDropWorld`;
+`SimDeactivateWorld` keeps the world entry, so events survive hide/show
+like the chunks do). Until FR-2 lands it is append-only, so a long-lived
+active world grows it without bound — that is accepted for this slice, and
+a later reader must not assume it is per-tick. Never serialized: see
+[`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
+§6.
+
+Gates: hspec `--match "unlike-fluid reaction"`
+(`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch
+per ordering, plus the live-source, capacity-edge, refill and
+event-accumulation cases. The neighbouring groups `Sim.Fluid.Seam`,
+`Sim.Fluid.Conservation` and `fluid writeback staleness` must stay green
+unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
+the reaction never fires in it and a change there is a regression in
+compatible transfers, not a fixture that needs relaxing.
 
 ---
 
