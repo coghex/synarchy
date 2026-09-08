@@ -38,6 +38,9 @@ module World.ZoomMap.Pyramid.Cells
       -- * The halo, as its own two steps
     , mapCellHaloTable
     , renderCellsFromHaloTable
+      -- * The pass-one seam
+    , worldGenCellSourceWith
+    , mapCellHaloTableWith
     ) where
 
 import UPrelude
@@ -67,15 +70,25 @@ import World.ZoomMap.Pyramid.Page (MapCellSource(..))
 mapCellHaloTable ∷ WorldGenParams → MaterialRegistry
                  → Maybe BorderedTerrainCache → [ChunkCoord]
                  → Map.Map ChunkCoord ZoomChunkPass
-mapCellHaloTable params registry mBorderedCache chunks =
+mapCellHaloTable params registry mBorderedCache =
+    mapCellHaloTableWith (wgpWorldSize params)
+        (zoomChunkPass params registry mBorderedCache)
+
+-- | 'mapCellHaloTable' with pass one INJECTED.
+--
+--   The halo union and the parallel evaluation are the real ones; only
+--   where a chunk's pass-one data comes from is substitutable. That is
+--   what lets a test hand this world's own generator halo-sensitive
+--   neighbours and still exercise the production assembly.
+mapCellHaloTableWith ∷ Int → (ChunkCoord → ZoomChunkPass) → [ChunkCoord]
+                     → Map.Map ChunkCoord ZoomChunkPass
+mapCellHaloTableWith worldSize passOne chunks =
     Map.fromList (zip needed passes)
   where
-    worldSize = wgpWorldSize params
     halo = concatMap (zoomChunkHaloNeighbours worldSize) chunks
     needed = Set.toList (Set.fromList (chunks ⧺ halo))
     batch = max 1 (length needed `div` 128)
-    passes = map (zoomChunkPass params registry mBorderedCache) needed
-                 `using` parListChunk batch rdeepseq
+    passes = map passOne needed `using` parListChunk batch rdeepseq
 
 -- | Render chunks out of such a table.
 --
@@ -116,13 +129,32 @@ worldGenCellSource geom params registry palette mBorderedCache
             "map geometry for worldSize " <> tshow (mgWorldSize geom)
             <> " was paired with generation parameters for worldSize "
             <> tshow (wgpWorldSize params)
-    | otherwise = Right $ MapCellSource generate
+    | otherwise = Right $ worldGenCellSourceWith geom palette
+        (zoomChunkPass params registry mBorderedCache)
+
+-- | 'worldGenCellSource' with pass one INJECTED — the same 'generate'
+--   the production source runs, including the halo union in
+--   'mapCellHaloTableWith' and the neighbour lookup in
+--   'renderCellsFromHaloTable'.
+--
+--   This exists because no generated world can exercise the halo end to
+--   end: 'World.Generate.Chunk.Fluid.chunkOrNeighborOceanic' already
+--   composes a chunk beside an oceanic one as oceanic, so the
+--   cross-chunk half of the ocean extension closes nothing in a real
+--   world. Injecting pass one lets a test give this world's own chunks
+--   an OCEAN neighbour and watch the composed source carry it through.
+--   Take the halo away anywhere along that path — the union here, the
+--   table's contents, or the lookup in the renderer — and the bytes
+--   this returns change.
+worldGenCellSourceWith ∷ MapGeometry → ZoomColorPalette
+                       → (ChunkCoord → ZoomChunkPass) → MapCellSource
+worldGenCellSourceWith geom palette passOne = MapCellSource generate
   where
-    worldSize = wgpWorldSize params
+    worldSize = mgWorldSize geom
 
     generate cells = do
         chunks ← traverse chunkOf cells
-        let table = mapCellHaloTable params registry mBorderedCache chunks
+        let table = mapCellHaloTableWith worldSize passOne chunks
         renderCellsFromHaloTable palette worldSize table chunks
 
     chunkOf ∷ MapCell → Either Text ChunkCoord

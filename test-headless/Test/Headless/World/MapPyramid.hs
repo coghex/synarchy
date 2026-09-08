@@ -42,7 +42,8 @@ import World.Map.ImagePlan
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.ZoomMap.Cache.ChunkPass
-    (ZoomChunkPass(..), zoomChunkHaloNeighbours, zoomChunkInWorld)
+    ( ZoomChunkPass(..), zoomChunkHaloNeighbours, zoomChunkInWorld
+    , zoomChunkPass )
 import World.ZoomMap.ColorPalette (ZoomColorPalette, buildColorPalette)
 import World.ZoomMap.Pyramid
 import World.ZoomMap.Types (zoomTileSize)
@@ -986,6 +987,8 @@ worldSpec = describe "map pyramid finest-page goldens (#2298)" $ do
         goldenPages env 128
     it "carries the halo-aware bytes, and the halo can change them" $ \env →
         haloDependence env 64
+    it "carries a neighbour's ocean through the composed cell source" $ \env →
+        haloIntegration env 64
     it "generates a page alone exactly as within a larger region" $ \env →
         regionIndependence env 64
 
@@ -1119,6 +1122,68 @@ haloDependence env size = do
     forM_ placed $ \(col, row, coord) →
         (size, coord, Right [pageCellBlock bytes col row])
             `shouldBe` (size, coord, renderVia honest coord)
+
+-- | The INTEGRATION the helper assertions cannot reach: that
+--   'worldGenCellSource' composes the halo table and the halo-aware
+--   renderer, rather than merely that each works when driven directly.
+--
+--   No generated world can show this. Every chunk of this one is
+--   halo-inert, so a source that built a requested-chunks-only table
+--   would return byte-identical output and every other assertion in
+--   this file would stay green. The seam
+--   'worldGenCellSourceWith' therefore drives the SAME 'generate' the
+--   production source runs — same halo union, same lookup — with pass
+--   one injected, so this world's own chunks can be given an ocean
+--   neighbour.
+--
+--   Take the halo away anywhere along that path and this fails: the
+--   union in 'mapCellHaloTableWith', a table filtered to the requested
+--   chunks in 'worldGenCellSource' itself, or the neighbour lookup in
+--   'renderCellsFromHaloTable'.
+haloIntegration ∷ EngineEnv → Int → IO ()
+haloIntegration env size = do
+    PyramidFixture { pfGeometry = geom, pfSource = honestSource
+                   , pfParams = params, pfRegistry = registry
+                   , pfPalette = palette } ← pyramidFor env size
+    covered ← acceptAddress (mapPageFinestCells geom (MapPageKey 0 0 0))
+
+    let realPass coord = zoomChunkPass params registry Nothing coord
+        allOcean = V.replicate (chunkSize * chunkSize)
+                       (Just (FluidCell Ocean seaLevel))
+        -- This world's own pass one, except that every chunk OTHER than
+        -- the one being rendered composed as open ocean. Nothing else
+        -- about the chunk changes, so the only thing that can move its
+        -- bytes is the cross-boundary extension reading a neighbour.
+        floodedExcept target coord
+          | coord ≡ target = realPass coord
+          | otherwise      = (realPass coord) { zcpRawFluid = allOcean }
+        flooded target =
+            worldGenCellSourceWith geom palette (floodedExcept target)
+        tileFor src cell = case mcsCellTiles src [cell] of
+            Right [tile] → Right tile
+            Right tiles  → Left ("expected one tile, got "
+                                 ⧺ show (length tiles))
+            Left reason  → Left (T.unpack reason)
+
+    -- Some chunk of this page must react to an ocean neighbour at all;
+    -- otherwise the comparison below could not distinguish anything.
+    let reacting =
+            [ (cell, coord)
+            | (_, _, cell) ← covered
+            , Right coord ← [chunkOfFinestCell geom cell]
+            , tileFor (flooded coord) cell ≢ tileFor honestSource cell ]
+    (size, null (take 1 reacting)) `shouldBe` (size, False)
+
+    -- and the composed source really is what carried it: the flooded
+    -- neighbours reach the rendered chunk THROUGH
+    -- 'worldGenCellSource''s own assembly.
+    forM_ (take 1 reacting) $ \(cell, coord) → do
+        withOcean ← either (\e → expectationFailure e ≫ error "x") pure
+                        (tileFor (flooded coord) cell)
+        honest ← either (\e → expectationFailure e ≫ error "x") pure
+                     (tileFor honestSource cell)
+        (size, coord, withOcean ≡ honest) `shouldBe` (size, coord, False)
+        BS.length withOcean `shouldBe` mapCellTileBytes
 
 -- | A page generated alone must equal the same page generated as part
 --   of a larger region. The halo is what could break this: it is
