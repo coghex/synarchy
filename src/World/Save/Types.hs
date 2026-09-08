@@ -1031,13 +1031,23 @@ missingDefReferences buildingDefs unitDefs pages = concatMap pageRefs pages
 -- | One 'ItemInstance' plus every item nested (recursively) in its
 --   'iiContents' — a first-aid kit's own kit-in-kit contents.
 --
---   THE recursive item walk of the save system (#1090). It used to be
---   written out three times, once per consumer; all three now go
---   through this one definition, together with 'pageItemContainers'
---   below: 'World.Save.Snapshot.allItemInstanceIds' (the id-allocator
---   and duplicate-id checks),
+--   THE recursive item walk of the save system (#1090). Before that
+--   consolidation it was written out once per consumer; every consumer
+--   now reaches it through this one definition, always paired with
+--   'pageItemContainers' below — the container set from that, the
+--   nesting from this. Its production consumers today are
+--   'World.Save.Snapshot.allItemInstanceIds' (the id-allocator and
+--   duplicate-id checks),
 --   'Engine.Scripting.Lua.API.Save.Integrity.knownEntitiesFromSaveData'
---   (the load-time known-entity set), and 'missingItemDefReferences'.
+--   (the load-time known-entity set), 'missingItemDefReferences'
+--   below, and 'World.Save.Integrity.pageEntitiesFrom' (a page's
+--   resolvable-entity set, which transfer-order integrity resolves
+--   references against at BOTH the pre-save boundary and the load
+--   boundary in "World.Load.Stage"); the headless item specs walk a
+--   page the same way. Read that as a map of today's callers, not as
+--   a bound: the invariant is that nothing walks a page's items
+--   privately, so a new consumer joins the list rather than
+--   falsifying it.
 flattenItemInstances ∷ ItemInstance → [ItemInstance]
 flattenItemInstances i = i : concatMap flattenItemInstances (iiContents i)
 

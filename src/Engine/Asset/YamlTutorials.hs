@@ -261,9 +261,6 @@ checkRelationships ∷ (Text → Maybe TutorialObjectiveKind)
                    → TutorialYamlObjective
                    → Either TutorialLoadError ()
 checkRelationships kindOf o = do
-  when (not (null kids) ∧ not (null subs)) $ bad
-    ("declares both children and subobjectives; the two relationships"
-     <> " are mutually exclusive")
   case kindOf oid of
     Just TutorialFull →
       unless (null subs) $ bad
@@ -271,8 +268,6 @@ checkRelationships kindOf o = do
     Just TutorialComposite → do
       when (null subs) $ bad
         "has kind 'composite' but declares no subobjectives"
-      unless (null kids) $ bad
-        "has kind 'composite' but declares children"
     Just TutorialSubobjective → do
       unless (null kids) $ bad
         "has kind 'subobjective' but declares children"

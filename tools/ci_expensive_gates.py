@@ -34,8 +34,9 @@ WORLDGEN_GLOBS = [
     "app/App/Dump.hs", "app/Main.hs",
     "src/Engine/Core/Init.hs", "src/Engine/Scripting/Lua/API/World/GenConfig*",
     # Generation-family subtrees use a `Name*` prefix (not `Name/*`) so each
-    # family's facade module (e.g. src/World/Generate.hs, src/World/Fluids.hs)
-    # matches alongside its directory. Deliberately NOT src/World/* wholesale:
+    # family's facade module (e.g. src/World/Generate.hs, src/World/Plate.hs,
+    # each sitting beside a directory of the same name) matches alongside its
+    # directory. Deliberately NOT src/World/* wholesale:
     # the gameplay subtrees there (saves, designations, cursors, power,
     # render-side Tile texturing, ...) cannot shift a bare --dump's
     # terrain/material/fluid/ice/ore layers, and must not trigger the gate.
@@ -506,17 +507,60 @@ def _local_changed_paths_cases(
     return failures
 
 
+#: The repository root of the checkout this script belongs to, used to
+#: confirm that designated self-test fixtures still name real files.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+#: The worldgen facade/prefix self-test fixtures, every one of which must
+#: name a file this checkout actually contains.
+#:
+#: `selected` is a pure fnmatch over the diff paths with no filesystem
+#: check anywhere, so a case naming a DELETED module keeps passing while
+#: guarding nothing. The fluid facade case sat here doing exactly that from
+#: #1110, which deleted that module, until #2324. Pinning the list in one
+#: place and checking it against the tree makes the next such deletion FAIL
+#: the self-test rather than silently hollow it out.
+#:
+#: Only paths designated here carry that requirement. The suite elsewhere
+#: pins a deliberately hypothetical path (src/Sim/Fluid/Future.hs, which
+#: exists to prove a module added to that tree LATER would select) and a
+#: path a checkout is allowed not to have (cabal.project.local); neither is
+#: a claim about the tree, so neither belongs in this list.
+WORLDGEN_REAL_PATH_FIXTURES = (
+    "src/World/Geology/Timeline.hs",
+    # Facade modules sitting NEXT to their directory must match too — the
+    # original `Name/*` globs silently missed these.
+    "src/World/Generate.hs",
+    "src/World/Plate.hs",
+    "src/World/Weather.hs",
+    "src/World/Magma/Pool.hs",
+    "src/World/Material/Id.hs",
+    # The fluid family's own coverage. #1110 deleted its facade module and
+    # a `src/World/Fluid.hs` never existed either, so the family has none
+    # to name; the `src/World/Fluid*` glob is pinned here by a real module
+    # from inside the directory instead (#2324).
+    "src/World/Fluid/Ocean.hs",
+)
+
+
+def _missing_fixture_failures() -> list[str]:
+    """Designated worldgen fixtures that no longer exist in the tree."""
+    return [
+        f"worldgen self-test fixture {path!r} names a file that is not in "
+        "the tree — its case still passes, because selection never touches "
+        "the filesystem, but it guards no diff any pull request can produce"
+        for path in WORLDGEN_REAL_PATH_FIXTURES
+        if not (REPO_ROOT / path).is_file()
+    ]
+
+
 def self_test() -> int:
     cases = [
-        ("worldgen", ["src/World/Geology/Timeline.hs"], True),
-        # Facade modules sitting NEXT to their directory must match too —
-        # the original `Name/*` globs silently missed these.
-        ("worldgen", ["src/World/Generate.hs"], True),
-        ("worldgen", ["src/World/Fluids.hs"], True),
-        ("worldgen", ["src/World/Plate.hs"], True),
-        ("worldgen", ["src/World/Magma/Pool.hs"], True),
-        ("worldgen", ["src/World/Material/Id.hs"], True),
-        ("worldgen", ["src/World/Weather.hs"], True),
+        # The facade/prefix block, generated from the one designated list
+        # so a case and its existence requirement can never drift apart.
+        *(("worldgen", [path], True)
+          for path in WORLDGEN_REAL_PATH_FIXTURES),
         # The stages a bare --dump reads THROUGH (#1318): the simulation
         # settle and the world-thread writeback that overwrite the terrain,
         # surface and fluid fields the dump prints. Both a top-level and a
@@ -841,6 +885,7 @@ def self_test() -> int:
             "an unknown gate name was answered True by the conservative "
             "sentinel instead of raising")
 
+    failures.extend(_missing_fixture_failures())
     failures.extend(_local_changed_paths_failures())
 
     if failures:

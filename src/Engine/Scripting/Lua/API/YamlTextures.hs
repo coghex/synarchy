@@ -144,7 +144,7 @@ loadVegetationYamlFn env backendState = do
             let filePath = T.unpack (TE.decodeUtf8Lenient pathBS)
             (parsed, count) ← Lua.liftIO $ do
                 logger ← readIORef (loggerRef env)
-                -- Parse the single vegetation YAML file
+                -- Parse the vegetation YAML file at this caller-supplied path
                 mDefs ← loadVegetationYamlOutcome logger filePath
                 let defs = fromMaybe [] mDefs
 
