@@ -165,20 +165,26 @@ UNIT_ASSET_GLOBS = [
 ]
 
 # The save-compat gate (#1360): the ONE member of
-# tools/test_save_compat_audit.py that spawns a `cabal repl` --
-# test_normalize_fixture_timestamp_makes_generation_reproducible, reached
-# by `--only-reproducibility`. Everything else in that module, and the
-# whole of tools/save_compat_audit.py, stays unconditional on every pull
-# request; only this member is selected here.
+# tools/test_save_compat_audit.py reached by `--only-reproducibility` --
+# test_normalize_fixture_timestamp_makes_generation_reproducible.
+# Everything else in that module, and the whole of
+# tools/save_compat_audit.py, stays unconditional on every pull request;
+# only this member is selected here.
 #
 # The test decodes a tracked fixture through the real envelope codec,
 # rewrites its `metadata` payload's smTimestamp, re-encodes, and proves
 # normalize_fixture_timestamp collapses the two variants to identical
 # bytes. So the inputs that can move its result are: the audit tooling
 # that owns normalize_fixture_timestamp, the fixture corpus and manifest
-# it reads, the Haskell modules its GHCi setup imports, and the build
-# definition that decides what `cabal repl test:synarchy-test-headless`
-# even loads.
+# it reads, the compiled codec helper that performs the re-encode and the
+# Haskell modules it imports, and the build definition that decides what
+# `cabal build all` produces.
+#
+# It cost a `cabal repl test:synarchy-test-headless` of its own until
+# issue #2273 replaced every GHCi program in this family with that
+# helper; the selection stays because these inputs are still the ones
+# that can move the result, and because tools/ci_parity_audit.py pins
+# both command spellings.
 #
 # NB these are fnmatch patterns, not globs: `*` crosses `/`.
 SAVE_COMPAT_GLOBS = [
@@ -192,9 +198,9 @@ SAVE_COMPAT_GLOBS = [
     # beside save_storage_probe.py's below.
     #
     # The self-test side is a PREFIX pattern instead, because issue
-    # #2073 split it into a façade plus seven sibling modules and a
-    # future owner must not be able to escape this gate by being left
-    # off a list. `tools/test_save_compat_audit*.py` matches the façade
+    # #2073 split it into a façade plus sibling modules (issue #2273
+    # added the codec-bridge owner) and a future owner must not be able
+    # to escape this gate by being left off a list. `tools/test_save_compat_audit*.py` matches the façade
     # (`*` matches empty) and every sibling, and nothing else under
     # tools/ carries that prefix -- the production modules are named
     # `save_compat_audit_*`, without the `test_`.
@@ -213,16 +219,21 @@ SAVE_COMPAT_GLOBS = [
     # one file that would silently stop being the current one.
     "docs/save_compat/*", "test-headless/data/save-compat/*",
     # The save format itself. Whole subtree plus any future
-    # src/World/Save.hs facade: the GHCi setup imports
+    # src/World/Save.hs facade: the codec helper imports
     # World.Save.Envelope.Codec/.Types, World.Save.Envelope,
     # World.Save.Component and World.Save.Types directly, and the
     # frozen compat mirrors under Compat/ decide which fixtures still
     # decode at all.
     "src/World/Save*",
-    # The build definition. `cabal repl test:synarchy-test-headless`
-    # resolves its module set, dependency bounds and options from the
-    # cabal file and EVERY cabal.project file cabal applies, so any of
-    # them can change whether the repl loads or what it loads.
+    # The codec helper itself (#2273): the compiled program that performs
+    # every real-codec operation this coverage exercises. Its own source
+    # is the most direct input of all, so an edit to it faces the member
+    # that proves its re-encode is reproducible.
+    "app-save-codec/*",
+    # The build definition. `cabal build all` resolves the helper's
+    # module set, dependency bounds and options from the cabal file and
+    # EVERY cabal.project file cabal applies, so any of them can change
+    # whether it builds or what it builds against.
     # `cabal.project*` covers the whole family on purpose, including
     # `.local`: that file is NOT gitignored, so a change can legitimately
     # track one, and cabal would then apply it in CI. What keeps
@@ -720,11 +731,12 @@ def self_test() -> int:
         ("save-compat", ["tools/test_save_compat_audit_register.py"], True),
         ("save-compat",
          ["tools/test_save_compat_audit_reproducibility.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_codec.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_discovery.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_coverage.py"], True),
         # Issue #2049's owner modules. Each is named individually, so a
-        # PR touching only one of them still pays for the repl coverage
-        # that exercises it -- the codec bridge in particular owns
+        # PR touching only one of them still pays for the coverage that
+        # exercises it -- the codec bridge in particular owns
         # normalize_fixture_timestamp, which is exactly what the
         # reproducibility member proves.
         ("save-compat", ["tools/save_compat_audit_common.py"], True),
@@ -734,6 +746,9 @@ def self_test() -> int:
         ("save-compat", ["tools/save_compat_audit_manifest.py"], True),
         ("save-compat", ["tools/save_compat_audit_register.py"], True),
         ("save-compat", ["tools/save_compat_audit_generate.py"], True),
+        # The compiled codec helper (#2273): the program every one of
+        # those owners now execs in place of a `cabal repl`.
+        ("save-compat", ["app-save-codec/Main.hs"], True),
         ("save-compat", ["docs/save_compat/manifest.json"], True),
         ("save-compat", ["docs/save_compat/enum_baseline.json"], True),
         ("save-compat",
@@ -824,6 +839,8 @@ def self_test() -> int:
         ("worldgen", ["tools/test_save_compat_audit.py"], False),
         ("worldgen", ["tools/test_save_compat_audit_coverage.py"], False),
         ("worldgen", ["tools/save_compat_audit_codec.py"], False),
+        ("worldgen", ["app-save-codec/Main.hs"], False),
+        ("unit-assets", ["app-save-codec/Main.hs"], False),
         ("unit-assets", ["tools/save_compat_audit_manifest.py"], False),
         ("unit-assets",
          ["tools/test_save_compat_audit_discovery.py"], False),

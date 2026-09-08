@@ -32,8 +32,12 @@ Owner modules (issue #2073)
       `--add-baseline` and `--generate-session` as transactions:
       atomic writes, refusals, `--force`, every rollback path.
   test_save_compat_audit_reproducibility.py     1 member
-      The one member that spawns a `cabal repl`, and the source of
+      The fixture-generation reproducibility member, and the source of
       REPRODUCIBILITY_TESTS below.
+  test_save_compat_audit_codec.py               9 members
+      The real-codec bridge (issue #2273): the compiled helper's output
+      parity against the tracked corpus, its failure diagnostics, and
+      its pre-resolved-binary handoff.
   test_save_compat_audit_discovery.py          16 members
       `componentCodec` discovery, `csOlderVersions` parsing, component
       source paths, Lua persistence-module discovery.
@@ -41,12 +45,13 @@ Owner modules (issue #2073)
       Component/version coverage, modern-baseline completeness, B1
       migration policy, orphans, and the real-manifest guards.
 
-Seventy-one members in total. The issue's own table says 69 across
+Eighty members in total. The issue's own table says 69 across
 15/12/11/1/14/16 owners; #2098 added
 `test_haskell_component_source_paths_is_the_whole_directory` and
 `test_dropping_one_owner_from_discovery_changes_the_fingerprint` to the
-discovery owner after that table was written, which is the whole of the
-difference and is why requirement 11's baseline is the tree as it stands
+discovery owner after that table was written, and #2273 added the
+codec-bridge owner's nine, which together are the whole of the
+difference and are why requirement 11's baseline is the tree as it stands
 after #1922 and #2049, not as it stood at filing.
 
 Dependencies run one way (requirement 16): support imports no owner, an
@@ -57,12 +62,17 @@ does nothing on purpose -- there is one command, and it is this one.
 Selecting what runs (issue #1360)
 --------------------------------
 Exactly one member of this module,
-`test_normalize_fixture_timestamp_makes_generation_reproducible`, spawns
-a `cabal repl test:synarchy-test-headless` to build its two envelope
-variants. That is ~26 s of a ~58 s module on a warm tree, and it
+`test_normalize_fixture_timestamp_makes_generation_reproducible`,
 exercises fixture GENERATION, which only the save format, the fixture
 set, or the audit tooling can move. So it -- and only it -- is selected
 by changed paths rather than run on every pull request:
+
+Until issue #2273 that member also cost ~26 s of a ~58 s module,
+because it built its two envelope variants through a
+`cabal repl test:synarchy-test-headless`. It now writes them through the
+compiled `exe:synarchy-save-codec`, so the split is about which inputs
+can move the result rather than about cost; the two command spellings
+are load-bearing regardless, since `tools/ci_parity_audit.py` pins them:
 
   python3 tools/test_save_compat_audit.py
       Everything, the reproducibility member included. The default, so a
@@ -76,6 +86,13 @@ by changed paths rather than run on every pull request:
       Cabal path -- `tools/ci_expensive_gates.py`'s `save-compat` gate,
       whose pattern table names every such path and whose --self-test
       pins both directions.
+
+No member of this module starts GHCi any more (issue #2273). Members
+that reach the real codec exec the compiled `exe:synarchy-save-codec`
+that `cabal build all` produces, so `cabal build all` remains this
+module's one build prerequisite -- as it already was for
+`tools/save_compat_audit.py` itself, whose real-manifest run decodes the
+tracked corpus through that same helper.
 
 The two selective forms partition the module: `REPRODUCIBILITY_TESTS`
 below is subtracted from the full list rather than duplicated, so a
@@ -98,7 +115,7 @@ Import and patch ownership (issue #2049)
 tools/save_compat_audit.py is now a thin façade over seven owner
 modules, so each case imports and patches the OWNER of the state or
 function it exercises -- `common.MANIFEST_PATH`,
-`register._run_real_codec_validation`, `codec.dump_canonical_summary`,
+`register._run_real_codec_validation`, `codec.ENV_CODEC_EXE`,
 `generate.generate_current_format_session`, and so on. Each test owner
 above imports exactly the production owners its own members touch.
 
@@ -112,6 +129,12 @@ real headless engine inside `--without-reproducibility` -- so each faked
 seam additionally asserts that the fake was REACHED, and the
 registration and generation cases assert the real manifest's bytes are
 unchanged afterwards.
+
+The codec owner (issue #2273) fakes its seam through the production
+resolution path instead of a rebinding: it exports
+`codec.ENV_CODEC_EXE` at a stand-in helper, which is the same
+pre-resolved-binary handoff a probe runner uses, so the double is
+reached through the code under test rather than around it.
 """
 from __future__ import annotations
 
@@ -124,6 +147,7 @@ from pathlib import Path
 # owner repeats it so it also imports standalone, but the façade cannot
 # rely on that ordering accident.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_save_compat_audit_codec as codec_tests  # noqa: E402
 import test_save_compat_audit_coverage as coverage_tests  # noqa: E402
 import test_save_compat_audit_discovery as discovery_tests  # noqa: E402
 import test_save_compat_audit_envelope as envelope_tests  # noqa: E402
@@ -135,8 +159,8 @@ import selftestlib  # noqa: E402
 from selftestlib import FAILURES  # noqa: E402
 
 
-#: The members that spawn a `cabal repl` and are therefore selected by
-#: changed paths rather than run on every pull request (issue #1360).
+#: The members selected by changed paths rather than run on every pull
+#: request (issue #1360).
 #: Subtracted from ALL_TESTS below rather than listed twice, so the two
 #: selective forms provably partition the module. Taken from the
 #: reproducibility owner's own registry rather than named again here:
@@ -147,15 +171,17 @@ REPRODUCIBILITY_TESTS = list(reproducibility_tests.TESTS)
 
 #: Every member, in run order. `--without-reproducibility` runs this
 #: minus REPRODUCIBILITY_TESTS; `--only-reproducibility` runs the
-#: intersection; a bare run runs all of it. Plain concatenation of six
+#: intersection; a bare run runs all of it. Plain concatenation of the
 #: ordered owner registries reproduces the pre-split order exactly
 #: (issue #2073 requirement 12), because each owner's members were
-#: already contiguous in it.
+#: already contiguous in it; issue #2273's codec owner is appended after
+#: the reproducibility member, next to the operations it covers.
 ALL_TESTS = [
     *manifest_tests.TESTS,
     *envelope_tests.TESTS,
     *register_tests.TESTS,
     *reproducibility_tests.TESTS,
+    *codec_tests.TESTS,
     *discovery_tests.TESTS,
     *coverage_tests.TESTS,
 ]
@@ -205,10 +231,10 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--only-reproducibility", action="store_true",
-        help="run ONLY the cabal-repl reproducibility member (#1360).")
+        help="run ONLY the fixture-reproducibility member (#1360).")
     group.add_argument(
         "--without-reproducibility", action="store_true",
-        help="run every member EXCEPT the cabal-repl reproducibility "
+        help="run every member EXCEPT the fixture-reproducibility "
              "member (#1360).")
     # This script already owns its command line, and CI drives it through
     # both selective forms, so the shared verbosity flag joins that parser
@@ -218,8 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     selftestlib.begin(args.verbose)
 
-    # A member listed twice across the six owner registries would run
-    # twice and be counted twice (issue #2073).
+    # A member listed twice across the owner registries would run twice
+    # and be counted twice (issue #2073).
     duplicates = duplicate_members(ALL_TESTS)
     if duplicates:
         print(f"members listed by more than one owner registry: "

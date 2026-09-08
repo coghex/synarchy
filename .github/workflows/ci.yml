@@ -601,17 +601,21 @@ jobs:
       # Both commands here stay blocking on every non-docs-only change,
       # and on every save-compat input change. --without-reproducibility
       # (#1360) removes exactly ONE
-      # member of the self-test module -- the one that spawns its own
-      # `cabal repl` to build two timestamp variants -- which the next
-      # step runs path-selectively instead. Every other member still
-      # runs, and so does the whole real audit.
+      # member of the self-test module -- the one that builds two
+      # timestamp variants to prove fixture generation is reproducible --
+      # which the next step runs path-selectively instead. Every other
+      # member still runs, and so does the whole real audit.
       #
-      # Note this step is NOT cabal-free even so, and was never meant to
-      # become so: save_compat_audit.py's real-manifest run decodes the
-      # tracked fixtures' envelope descriptors through a `cabal repl` of
-      # its own (verify_fixture_descriptors -> dump_fixture_descriptors),
-      # and test_real_manifest_passes_the_audit runs that same audit. The
-      # saving here is one ADDITIONAL repl, not all of them.
+      # Neither command starts GHCi any more (#2273). Both still need the
+      # REAL Haskell codec -- save_compat_audit.py's real-manifest run
+      # decodes the tracked fixtures' envelope descriptors
+      # (verify_fixture_descriptors -> dump_fixture_descriptors), and
+      # test_real_manifest_passes_the_audit runs that same audit -- but
+      # they reach it by exec'ing the compiled `exe:synarchy-save-codec`
+      # the `cabal build all` step above already produced, instead of
+      # loading the 348-module test suite into `cabal repl` once per
+      # operation. That is what took these two steps from 2.6-3.7 minutes
+      # a run to seconds.
       - name: Save compatibility audit
         if: >-
           steps.docs-fast-path.outputs.docs_only != 'true'
@@ -620,14 +624,20 @@ jobs:
           python3 tools/test_save_compat_audit.py --without-reproducibility
           python3 tools/save_compat_audit.py
 
-      # The one cabal-repl member of that module, split out and selected
-      # by changed paths (#1360). It proves --generate-session's output
-      # is independent of when the command ran, by encoding two envelopes
-      # differing only in smTimestamp and showing normalize_fixture_
-      # timestamp collapses them to identical bytes. That exercises
-      # fixture GENERATION, which only a save-format, fixture,
-      # save-tooling or Cabal change can move -- so an unrelated pull
-      # request no longer pays its ~26 s.
+      # The fixture-generation member of that module, split out and
+      # selected by changed paths (#1360). It proves --generate-session's
+      # output is independent of when the command ran, by encoding two
+      # envelopes differing only in smTimestamp and showing
+      # normalize_fixture_timestamp collapses them to identical bytes.
+      # That exercises fixture GENERATION, which only a save-format,
+      # fixture, save-tooling or Cabal change can move.
+      #
+      # It cost ~26 s when it built those variants through its own
+      # `cabal repl`; since #2273 it writes them through the compiled
+      # `exe:synarchy-save-codec` like every other real-codec operation,
+      # so the split now selects on which inputs can move the result
+      # rather than on cost. The step itself stays, because
+      # tools/ci_parity_audit.py pins both command spellings.
       #
       # Path-selective on PRs and docs-only master pushes. Every other
       # master push feeds the selector all tracked files, retaining the

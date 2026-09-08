@@ -380,7 +380,7 @@ def test_generate_session_rolls_back_fixture_and_summary_on_dump_failure() -> No
                    f"expected both patched seams to be the ones actually "
                    f"reached, in order (a seam that silently kept its real "
                    f"implementation would have booted a real engine or "
-                   f"spawned a real `cabal repl`), got {called}")
+                   f"execed the real codec helper), got {called}")
         finally:
             generate.generate_current_format_session = old_gen
             codec.dump_canonical_summary = old_dump

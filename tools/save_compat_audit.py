@@ -88,12 +88,15 @@ Usage:
   exist (generated through the real codec -- see the manifest's own
   "provenance" fields for worked examples, and tools/README.md /
   docs/save_compat -- for a Haskell "complete-session" fixture that
-  means a real headless-engine boot + engine.saveWorld, or a GHCi/cabal
-  repl session calling World.Save.Envelope.Codec.encodeEnvelope
-  directly; for a Lua "component-focused" fixture, a GHCi/cabal repl
-  session driving a real HsLua VM through scripts/lib/data_codec.lua's
-  M.encode -- see test-headless/data/save-compat/lua-unit-ai-v1.bin's
-  manifest provenance for a worked example); this command performs the
+  means a real headless-engine boot + engine.saveWorld, or a session
+  calling World.Save.Envelope.Codec.encodeEnvelope directly; for a Lua
+  "component-focused" fixture, a session driving a real HsLua VM through
+  scripts/lib/data_codec.lua's M.encode -- see
+  test-headless/data/save-compat/lua-unit-ai-v1.bin's manifest
+  provenance for a worked example. Those provenance strings record how a
+  fixture was ORIGINALLY captured, several of them through a GHCi
+  session, and stay as written; the audit's own decoding no longer uses
+  one, see below); this command performs the
   atomic bookkeeping (checksum, size, manifest/summary wiring) AND, for
   a "complete-session" fixture, immediately runs it through the SAME
   real codec test-headless's CI gate uses (cabal test
@@ -157,7 +160,9 @@ Every implementation body lives with its owner:
                                     the version-coverage policy
   save_compat_audit_fingerprint.py  source fingerprints and envelope/
                                     metadata version discovery
-  save_compat_audit_codec.py        the real-codec (GHCi) bridge
+  save_compat_audit_codec.py        the real-codec bridge: execs the
+                                    compiled exe:synarchy-save-codec
+                                    (#2273, formerly a `cabal repl`)
   save_compat_audit_manifest.py     the blocking manifest audit
   save_compat_audit_register.py     --add-baseline registration
   save_compat_audit_generate.py     --generate-session generation
@@ -167,6 +172,12 @@ fingerprint and codec are leaf services; the manifest audit consumes
 those; registration consumes the audit; generation consumes the codec
 bridge and delegates to registration; this façade imports each command
 owner for dispatch only.
+
+Since issue #2273 no path through this tool starts GHCi. Every
+real-codec operation the codec bridge owns execs
+`exe:synarchy-save-codec`, which `cabal build all` produces beside the
+engine, so `cabal build all` is this tool's one build prerequisite --
+CI and `tools/ci-local.sh` both already run it before invoking this.
 
 `REPO_ROOT` and `dump_canonical_summary` are deliberately RE-EXPORTED
 here. Four sibling tools import them from this module by name --
