@@ -114,8 +114,12 @@ treeHelpers = lns
     , "                       'prepare_water', 1)"
     , "    local food  = node('first_session_prepare_food',  'subobjective',"
     , "                       'prepare_food', 2)"
+    , "    local clear = node('first_session_clear', 'full', 'clear', 1)"
+    , "    local custody = node('first_session_secure', 'full', 'secure', 1, {clear})"
+    , "    local recover = node('first_session_recover', 'full', 'recover', 1, {custody})"
+    , "    local confront = node('first_session_confront', 'full', 'confront', 1, {recover})"
     , "    local prep  = node('first_session_prepare_expedition', 'composite',"
-    , "                       'prepare_expedition', 1, nil, { water, food })"
+    , "                       'prepare_expedition', 1, {confront}, { water, food })"
     , "    local secure = node('first_session_secure_water', 'full',"
     , "                        'secure_water_source', 1, { prep })"
     , "    return { id = 'first_session',"
@@ -128,6 +132,10 @@ treeHelpers = lns
     , "PREP   = 'first_session_prepare_expedition'"
     , "WATER  = 'first_session_prepare_water'"
     , "FOOD   = 'first_session_prepare_food'"
+    , "CONFRONT = 'first_session_confront'"
+    , "RECOVER = 'first_session_recover'"
+    , "CUSTODY = 'first_session_secure'"
+    , "CLEAR = 'first_session_clear'"
     ]
 
 -- | Item rows in the exact shape @unit.getInventory@ pushes: a container
@@ -178,8 +186,15 @@ worldHelpers = lns
     , "            error('evaluation must not enumerate the active page')"
     , "        end,"
     , "    }"
+    , "    world = { getLocationInstance = function(id, page)"
+    , "        assert(page ~= nil, 'location query omitted page')"
+    , "        return ((WORLD.locations or {})[page] or {})[id]"
+    , "    end, listPlacedLocations = function(page)"
+    , "        assert(page ~= nil, 'page-less location enumeration'); return {} end }"
+    , "    item = { listGround = function() error('ground enumeration forbidden') end }"
     , "    unit = {"
     , "        exists = function(uid) return WORLD.units[uid] ~= nil end,"
+    , "        getPose = function(uid) return WORLD.units[uid].pose or 'standing' end,"
     , "        getFaction = function(uid)"
     , "            local u = WORLD.units[uid]"
     , "            return u and u.faction or nil"
@@ -494,6 +509,102 @@ spec = describe "Tutorial evaluation" $ do
             , "assert(#WARNINGS == 0, WARNINGS[1] or '')"
             ]
 
+    describe "expedition outcomes (#2301)" $ do
+        it "requires a real encounter and the exact empty-or-activated clearance rule" $ runsOk $ withEV prelude
+            [ "local known = {knownLocations = {{page='remote', id=7}}}"
+            , "local loc = {significant={}, lifecycle='discovered'}"
+            , "setWorld({units={[1]=acolyte({}, known)}, locations={remote={[7]=loc}}})"
+            , "assert(not tick()[CONFRONT], 'missing encounter must not count as empty')"
+            , "for _, c in ipairs({{0,false,false,false},{0,false,true,true},{2,false,true,false},{2,true,false,false},{2,true,true,true}}) do"
+            , "  loc.encounter = {rolled_count=c[1], activated=c[2], cleared=c[3]}"
+            , "  assert(tick()[CONFRONT] == c[4], 'wrong confrontation rule')"
+            , "end"
+            , "assert(TP.isCompleted(CONFRONT), 'completion must remain latched')"
+            ]
+
+        it "reads only known locations through their explicit non-active page" $ runsOk $ withEV prelude
+            [ "local known = {knownLocations = {{page='remote', id=7}}}"
+            , "local loc = {significant={}, lifecycle='discovered'}"
+            , "setWorld({units={[1]=acolyte({}, known)}, locations={remote={[7]=loc}}})"
+            , "loc.encounter={rolled_count=0, cleared=true}"
+            , "assert(tick()[CONFRONT])"
+            , "known.knownLocations[1].page='other'"
+            , "assert(not tick()[CONFRONT], 'wrong page returned the remote instance')"
+            , "known.knownLocations={}"
+            , "assert(not tick()[CONFRONT], 'unknown ruins must not count')"
+            ]
+
+        it "requires taken and the exact physical inventory instance for Secure" $ runsOk $ withEV prelude
+            [ "local known = {knownLocations = {{page='remote', id=7}}}"
+            , "local loc = {significant={}, lifecycle='discovered'}"
+            , "setWorld({units={[1]=acolyte({}, known)}, locations={remote={[7]=loc}}})"
+            , "local sig={item_instance_id=42, taken=false}; loc.significant={sig}"
+            , "WORLD.units[1].inv={{instanceId=42}}"
+            , "local r=tick(); assert(not r[RECOVER] and not r[CUSTODY] and not r[CLEAR])"
+            , "sig.taken=true; sig.item_instance_id=nil"
+            , "r=tick(); assert(r[RECOVER] and not r[CUSTODY])"
+            , "sig.item_instance_id=42; WORLD.units[1].inv={{instanceId=43}}"
+            , "assert(not tick()[CUSTODY], 'same definition is not same instance')"
+            , "WORLD.units[1].inv={{instanceId=42}}"
+            , "assert(tick()[CUSTODY])"
+            , "loc.lifecycle='cleared'; assert(tick()[CLEAR])"
+            , "loc.lifecycle='discovered'; sig.taken=false; WORLD.units[1].inv={}"
+            , "r=tick(); assert(not r[RECOVER] and not r[CUSTODY] and not r[CLEAR])"
+            , "assert(TP.isCompleted(RECOVER) and TP.isCompleted(CUSTODY) and TP.isCompleted(CLEAR))"
+            ]
+
+        it "accepts cross-acolyte knowledge and custody in either visit order" $ runsOk $ withEV prelude
+            [ "for _, order in ipairs({{1,2},{2,1}}) do"
+            , "  local known={knownLocations={{page='remote',id=7}}}"
+            , "  setWorld({units={[1]=acolyte({},known),[2]=acolyte({{instanceId=42}})},"
+            , "    locations={remote={[7]={significant={{taken=true,item_instance_id=42}}}}}})"
+            , "  setmetatable(EV.aiState, {__pairs=function(t)"
+            , "    local i=0; return function() i=i+1; local uid=order[i]; if uid then return uid,t[uid] end end end})"
+            , "  assert(tick()[CUSTODY], 'custody depends on acolyte visit order')"
+            , "end"
+            ]
+
+        it "does not secure loot carried by a hostile, mule, dead, or removed unit" $ runsOk $ withEV prelude
+            [ "local known = {knownLocations = {{page='remote', id=7}}}"
+            , "local loc = {significant={}, lifecycle='discovered'}"
+            , "setWorld({units={[1]=acolyte({}, known)}, locations={remote={[7]=loc}}})"
+            , "loc.significant={{taken=true,item_instance_id=42}}"
+            , "for _, holder in ipairs({{faction='hostile',def='acolyte'}, {faction='player',def='technomule'}, {faction='player',def='acolyte',pose='dead'}}) do"
+            , "  holder.inv={{instanceId=42}}; WORLD.units[2]=holder; EV.aiState[2]={}"
+            , "  local r=tick(); assert(r[RECOVER] and not r[CUSTODY])"
+            , "end"
+            , "WORLD.units[2]=nil; assert(not tick()[CUSTODY])"
+            ]
+
+        it "keeps newly revealed same-pass completions presentable in authored order" $ runsOk $ withEV prelude
+            [ "local known = {knownLocations = {{page='remote', id=7}}}"
+            , "local loc = {significant={}, lifecycle='discovered'}"
+            , "setWorld({units={[1]=acolyte({}, known)}, locations={remote={[7]=loc}}})"
+            , "TP.completeObjectives({PORTAL, SECURE, PREP, CONFRONT})"
+            , "TP.acknowledgePresented({PORTAL,SECURE,PREP,CONFRONT})"
+            , "loc.significant={{taken=true,item_instance_id=42}}; loc.lifecycle='cleared'"
+            , "WORLD.units[1].inv={{instanceId=42}}"
+            , "local r=tick(); assert(r[RECOVER] and r[CUSTODY] and r[CLEAR])"
+            , "local m=TP.getViewModel(); local shown={}"
+            , "for _, row in ipairs(m.rows) do if row.active and (row.id==RECOVER or row.id==CUSTODY or row.id==CLEAR) then shown[#shown+1]=row.id end end"
+            , "assert(ids(shown)==RECOVER..','..CUSTODY..','..CLEAR, ids(shown))"
+            , "tick(); assert(rowById(TP.getViewModel(),CUSTODY).active, 'evaluation acknowledged presentation')"
+            , "TP.acknowledgePresented(shown)"
+            , "assert(not rowById(TP.getViewModel(),CUSTODY).active and not rowById(TP.getViewModel(),CLEAR).active)"
+            ]
+
+        it "loads a pre-extension v1 payload without losing old completed ids" $ runsOk $ withEV savePrelude
+            [ "local old=fixtureTree(); old.root.children[1].children[1].children={}"
+            , "TP.setTree(old); TP.completeObjectives({PORTAL,SECURE,PREP})"
+            , "local snap=saveModules.snapshotAll(); assert(snap.ok)"
+            , "TP.reset(); TP.setTree(fixtureTree())"
+            , "assert(saveModules.prepareLoad(snap.components).ok); saveModules.applyAll()"
+            , "assert(TP.isCompleted(PORTAL) and TP.isCompleted(SECURE) and TP.isCompleted(PREP))"
+            , "for _, id in ipairs({CONFRONT,RECOVER,CUSTODY,CLEAR}) do assert(not TP.isCompleted(id)) end"
+            , "local new=saveModules.snapshotAll(); assert(new.ok)"
+            , "for _, c in ipairs(new.components) do if c.id=='tutorial_progress' then assert(c.version==1) end end"
+            ]
+
     describe "unbound and malformed wiring" $ do
         it "warns and skips an evaluator key with no predicate, without \
            \failing the pass" $ runsOk $ withEV prelude
@@ -658,8 +769,11 @@ shippedTreeChunk = lns
     , worldHelpers
     , "setWorld({ portal = true, units = { [1] = {"
     , "    faction = 'player', def = 'acolyte',"
-    , "    inv = { canteen(2.0), rationPack() },"
-    , "    ai = { knownWaterSources = { { x = 3, y = 8 } } } } } })"
+    , "    inv = { canteen(2.0), rationPack(), {instanceId = 42} },"
+    , "    ai = { knownWaterSources = { { x = 3, y = 8 } },"
+    , "           knownLocations = {{page='remote', id=7}} } } },"
+    , "    locations = {remote = {[7] = {encounter = {cleared=true, rolled_count=0},"
+    , "        significant = {{taken=true, item_instance_id=42}}, lifecycle='cleared'}}} })"
     , "local results = EV.evaluate()"
     , "assert(results ~= nil, 'the shipped tree did not reach the evaluator')"
     -- Every authored key must have had a predicate: an unbound one is
@@ -670,7 +784,7 @@ shippedTreeChunk = lns
     -- binding fails here rather than shipping inert.
     , "local index = TP.index"
     , "assert(index ~= nil, 'no tree index')"
-    , "assert(#index.order == 5, tostring(#index.order))"
+    , "assert(#index.order == 9, tostring(#index.order))"
     , "for _, id in ipairs(index.order) do"
     , "    assert(results[id] == true, 'unsatisfied objective: ' .. id)"
     , "end"

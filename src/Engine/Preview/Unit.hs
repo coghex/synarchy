@@ -45,7 +45,6 @@ module Engine.Preview.Unit
   , directionDirName
   , parseDirectionDirName
   , previewDirectionOrder
-  , sortFrameFiles
   , defaultAnimationName
   , resolveAnimDirections
   , frameIndexAt
@@ -70,7 +69,7 @@ import Engine.Asset.YamlUnits (UnitYamlAnim(..))
 import Engine.Core.Types
     ( PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..)
     , PreviewFrame(..) )
-import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir, sortFrameFiles)
+import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir)
 import Unit.Atlas.Index (renderAtlasLoadError)
 import Unit.Atlas.Types
     ( AtlasAnimation(..), AtlasDirectionRow(..), atlasCellUV )
@@ -405,10 +404,19 @@ buildPreviewAnims atlases =
             , paDirs  = resolveAnimDirections flipOK frames
             }
 
--- | The whole pre-boot pipeline for @--preview units/\<name\>@:
---   validate the target, discover its animations, resolve its compiled
---   atlases through the PRODUCTION loader, augment the rest from the
---   unit's own YAML, and pick the default selection.
+-- | The whole pre-boot pipeline for @--preview units/\<name\>@: validate
+--   the target, read the unit's own YAML declarations
+--   ('loadUnitAnimMetaIn'), resolve the compiled atlases through the
+--   PRODUCTION loader ('resolveUnitAtlasesIn') against that YAML, then
+--   assemble the animation list and pick the default selection.
+--
+--   The YAML declares which animations exist; atlas resolution checks
+--   the compiled index against exactly that declared set (#1261); and
+--   'buildPreviewAnims' takes every playback field — directions, frame
+--   counts, cell geometry, @fps@\/@loop@\/@flip@ — from the returned
+--   index records. There is no filesystem discovery step and no
+--   post-resolution YAML augmentation; both were retired with #887's
+--   filesystem-first pipeline.
 --
 --   The atlas resolution runs before anything is assembled and its
 --   failure is the whole target's failure (D-9): a unit whose compiled

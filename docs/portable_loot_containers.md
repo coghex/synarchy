@@ -7,6 +7,18 @@ has landed since the design was written.
 
 Design state: `ready for issue processing`
 
+> **2026-09-07 — PLC-9 returned from processing as not one PR.** Measured
+> against the tree it is two independently reviewable outcomes: the
+> item-container endpoint in the transfer contract (persistence, live view
+> resolution, Lua addressing, Mode B orders), and the player surfaces on
+> portable levels (Store/Retrieve gestures, the Mode A escort pair, knowledge
+> refresh). The same day D-29 fixed reach at the crate's outermost physical
+> holder (Q-9), D-30 limited gestures to storage-declared levels (Q-10), and
+> D-31 accepted P-7's split into PLC-19 and PLC-20, inserted after PLC-9.
+> PLC-9 stays in the ledger for processing to disposition as
+> `[no-issue]: split`, which also rewrites epic #1231's checklist. Everything
+> before PLC-9 is processed and unaffected.
+
 > **2026-09-07 — PLC-8 returned from processing as not one PR.** Measured
 > against the tree it is three independently reviewable outcomes: the
 > pending-pickup exception with the D-8 assignment helper, portable container
@@ -61,11 +73,13 @@ concrete precondition
 - [x] PLC-14. Spawn pending container shells from location content entries — [#2505]
 - [x] PLC-15. Realize pending shells on physical pickup — [#2510]
 - [x] PLC-7. Persist player knowledge of portable containers — [#2512]
-- [ ] PLC-8. Add unit-mediated opening and capacity-aware ground pickup
-- [ ] PLC-16. Pick up pending containers under the shared assignment rule
-- [ ] PLC-17. Show portable containers in the container window
-- [ ] PLC-18. Add the `Open` order for ground containers
+- [x] PLC-8. Add unit-mediated opening and capacity-aware ground pickup — [no-issue]: split by D-27 into PLC-16, PLC-17 and PLC-18
+- [x] PLC-16. Pick up pending containers under the shared assignment rule — [#2522]
+- [x] PLC-17. Show portable containers in the container window — [#2527]
+- [x] PLC-18. Add the `Open` order for ground containers — [#2528]
 - [ ] PLC-9. Extend unified transfers to portable item-container endpoints
+- [ ] PLC-19. Add the item-container transfer endpoint
+- [ ] PLC-20. Add transfer gestures on portable levels
 - [ ] PLC-10. Author the first wooden-crate ruin content
 - [ ] PLC-11. Gate the complete portable-container lifecycle
 
@@ -576,6 +590,42 @@ assignment rule), PLC-17 (portable container window levels) and PLC-18 (the
 delivery plan. No processed key changes. PLC-9's and PLC-10's `PLC-8`
 dependency becomes `PLC-18`, which transitively carries the other two.
 
+### D-28. One assignment resolver, generalized rather than duplicated
+
+Signed off 2026-09-07. `transfer_session.resolveSource` is the arc's D-8
+rule: it gains the z term and an opt-in no-selection fallback (nearest
+eligible player-commandable unit on the target's page) that `Pick up` and
+`Open` use, while Transfer and Retrieve stay selection-only. The unified
+transfers document's D-8 is amended to the three-dimensional rule; no
+second resolver is written.
+
+### D-29. Reach is measured to a crate's outermost physical holder
+
+Signed off 2026-09-07 (resolves Q-9). An item-container endpoint's reach is
+the existing Chebyshev ≤ 1 rule measured to the crate's OUTERMOST physical
+holder: its ground tile, the carrying unit's tile, or the holding building's
+rectangle. A crate the acting unit itself carries, at any nesting depth, is
+always in reach. A crate carried by a non-commandable unit is ineligible on
+whichever side it sits. No new distance concept is introduced.
+
+### D-30. Transfer gestures appear only on storage-declared levels
+
+Signed off 2026-09-07 (resolves Q-10). Store and Retrieve appear only on a
+level whose container declares `storage:`; kits and toolboxes stay
+inspect-only until a later decision that also considers the medical AI's
+draw paths. This keeps the arc to portable storage and matches PLC-4's
+fail-closed insert rule.
+
+### D-31. Split PLC-9 into two one-PR slices
+
+Signed off 2026-09-07 (accepts P-7). PLC-9 is dispositioned
+`[no-issue]: split` and replaced by PLC-19 (the item-container transfer
+endpoint) and PLC-20 (transfer gestures on portable levels), inserted
+directly after PLC-9 in both the ledger and the delivery plan. No processed
+key changes. PLC-10's and PLC-11's `PLC-9` dependency becomes `PLC-20`, which
+transitively carries PLC-19. The integrated end-to-end proof stays with
+PLC-11.
+
 ## Accepted proposals and rejected alternatives
 
 ### P-1. Add a sibling `storage:` item component
@@ -808,6 +858,49 @@ in both the ledger and the delivery plan. PLC-9's and PLC-10's `PLC-8`
 dependency becomes the `Open` order slice, which transitively carries the
 other two.
 
+### P-7. Split PLC-9 into two one-PR slices
+
+Accepted by D-31 (2026-09-07); the slices are PLC-19 and PLC-20 in the
+delivery plan. Repository evidence for why PLC-9 was not one PR:
+
+- **The endpoint vocabulary is persisted and advertised.**
+  `Unit.Transfer.TransferEndpoint` is a two-constructor `Serialize` enum
+  (`EndpointUnit`, `EndpointBuilding`) carried inside every durable order in
+  the `transfer-orders` component (v1) and advertised to Lua through
+  `unit.transferContract().endpointKinds`, which `transfer_session` and
+  `transfer_gestures` resolve against by name. An item-container endpoint is
+  an enum append (baseline ratchet and save-compat fixture), a third
+  `TransferEndpointView` whose capacity is the crate's `iiStorage` under
+  PLC-4's rules, a reach rule for a crate that has no rectangle of its own,
+  live resolution through PLC-7's locator, and a commit that writes into a
+  nested tree through PLC-4's insert and remove. #1085, which generalized
+  the contract to bidirectional endpoints, was PR #1129 at +3450 across 29
+  files.
+- **Mode B orders need nothing else.** `unit_ai_transfer.lua` walks the
+  acting unit to `unit.transferEndpointInfo(order.approach)` and commits on
+  arrival; a crate carried by another unit is the moving-target case #1013
+  already pinned.
+- **The player surfaces are a separate reversal.** The transfers arc's D-5
+  makes every item-container level render-only. Store and Retrieve on a
+  portable level, the Mode A escort pair with a crate endpoint through
+  `transfer_session`'s kind registry and panels, and a PLC-7 knowledge
+  refresh after a player-controlled commit each amend that decision and
+  `docs/unified_item_transfers.md`. Mode A alone, #1250, was PR #1350 at
+  +3215 across 20 files.
+
+Proposed slices, both under the Transfer integration phase:
+
+| Proposed slice | Outcome | Depends on |
+| --- | --- | --- |
+| The item-container transfer endpoint | `EndpointItem` in the pure policy with capacity, ancestor and reach rules; live view resolution; Lua addressing and contract vocabulary; order persistence; Mode B orders to and from a crate; `docs/unified_item_transfers.md` D-5 amended | PLC-4, PLC-7, PLC-18 |
+| Transfer gestures on portable levels | Store/Retrieve on portable levels; the Mode A escort pair with a crate endpoint; knowledge refresh after player-controlled commits; feedback; D-15 partial batches surfaced in the window | the endpoint slice, PLC-17 |
+
+Stable-ID handling (proposed): PLC-9 is dispositioned `[no-issue]: split`
+and the two take the next free numeric keys, inserted directly after PLC-9
+in both the ledger and the delivery plan. PLC-10's and PLC-11's `PLC-9`
+dependency becomes the gestures slice, which transitively carries the
+endpoint slice. The integrated end-to-end proof stays with PLC-11.
+
 ## Open questions
 
 ### Q-1. Does physical item storage use a sibling component?
@@ -906,6 +999,29 @@ container's level records a contents observation on PLC-7's record (the
 unit holds it, so the player has seen inside), or a live level never writes
 knowledge and only `Open` orders and transfers do. Resolved by D-26: a
 player unit's carried level records the observation.
+
+### Q-9. Where must a unit stand to reach a portable container?
+
+Open (2026-09-07). The transfer contract's reach rule is Chebyshev ≤ 1
+between the two endpoints' occupied rectangles. A crate has no rectangle of
+its own: it is on a ground tile, carried by a unit (possibly the acting
+unit), inside a building's storage, or nested inside another crate at any
+of those. Proposed rule: reach is measured to the crate's OUTERMOST physical
+holder — its ground tile, the carrying unit's tile, or the holding
+building's rectangle — and a crate the acting unit itself carries, at any
+nesting depth, is always in reach. A crate carried by a non-commandable unit
+is `receiver_ineligible` / `source_ineligible`. Resolved by D-29: the
+proposed rule, verbatim.
+
+### Q-10. Which item-container levels gain transfer gestures?
+
+Open (2026-09-07). PLC-4 refuses every insert into an item whose
+`iiStorage` is absent, which is every shipped kit and toolbox, but removal
+has no capacity and would let Retrieve pull a bandage out of a first-aid kit
+through the window. Either gestures appear only on levels whose container
+declares `storage:` (kits and toolboxes stay inspect-only until a later
+decision), or Retrieve appears on every item-container level and Store only
+on storage-declared ones. Resolved by D-30: storage-declared levels only.
 
 ## Verification strategy
 
@@ -1211,6 +1327,9 @@ player unit's carried level records the observation.
 
 ### PLC-16. Pick up pending containers under the shared assignment rule
 
+> Tracked as #2522 (2026-09-07). The shared resolver is generalized per
+> D-28.
+
 - **Outcome:** `Pick up` on any ground item uses D-8's assignment rule, and a
   pending shell is realized and weighed at arrival before capacity is judged.
 - **Scope:** One shared assignment helper (selected set as the candidate set,
@@ -1225,7 +1344,7 @@ player unit's carried level records the observation.
 - **Phase:** World interaction
 - **Depends on:** `PLC-7`, `PLC-15`
 - **Ordering:** `critical path` — lands in parallel with PLC-17
-- **Relevant decisions:** D-3, D-7, D-8, D-27
+- **Relevant decisions:** D-3, D-7, D-8, D-27, D-28
 - **Acceptance signals:** No-selection and selected-set assignment are
   deterministic and three-dimensional; a pending shell is not pre-rejected on
   weight; arrival realizes once and records weight; an overweight crate stays
@@ -1235,6 +1354,9 @@ player unit's carried level records the observation.
 - **Open questions:** None
 
 ### PLC-17. Show portable containers in the container window
+
+> Tracked as #2527 (2026-09-07). Adds the `portableItem` level kind and the
+> D-26 observation on a player unit's carried level.
 
 - **Outcome:** The container window can show a ground crate and its nested
   containers from the player's remembered knowledge, and a carried crate from
@@ -1261,6 +1383,9 @@ player unit's carried level records the observation.
 
 ### PLC-18. Add the `Open` order for ground containers
 
+> Tracked as #2528 (2026-09-07). Success opens the window per D-25; the
+> result boundary carries only the ordinary success (D-9).
+
 - **Outcome:** A player can send a unit to open a ground container; on
   success its contents become known and its window level opens.
 - **Scope:** `Open` context action under the shared assignment rule; a
@@ -1284,24 +1409,74 @@ player unit's carried level records the observation.
 
 ### PLC-9. Extend unified transfers to portable item-container endpoints
 
-- **Outcome:** Players move exact items between units and ground, carried, or
-  nested portable containers through the shared transfer experience.
-- **Scope:** Tagged item-container endpoints, accessibility/proximity, strict
-  request validation, item-container capacity and ancestor checks, stale
-  observation revalidation, shared container window/list, feedback, and
-  knowledge refresh after player-controlled commits.
+> Split by D-31 (2026-09-07) into PLC-19 and PLC-20 below; the original
+> outcome — players move exact items between units and ground, carried, or
+> nested portable containers through the shared transfer experience — is
+> delivered by PLC-20 on top of PLC-19. Disposition `[no-issue]: split`.
+
+- **Outcome:** Superseded by PLC-19 and PLC-20.
+- **Scope:** Superseded.
 - **Phase:** Transfer integration
 - **Depends on:** `PLC-4`, `PLC-7`, `PLC-18`
-- **Ordering:** `critical path` — D-14's external transfer-surface
-  precondition is met (epic #1013 closed); only the three dependencies above
-  remain
-- **Relevant decisions:** D-1, D-5, D-7, D-11, D-14, D-15
-- **Acceptance signals:** Ground and carried containers use the same endpoint
-  request/outcome vocabulary and item-list widget as unit/building transfers;
-  stale missing items cannot mutate live state; capacity failures follow one
-  settled batch policy; nested traversal never flattens ownership.
-- **Out of scope:** Rebuilding the unit/building modes #1013 delivered, lax AI
-  verbs, numeric quantity pickers, and generalized ground piles.
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-5, D-7, D-11, D-14, D-15, D-31
+- **Acceptance signals:** Superseded.
+- **Out of scope:** Superseded.
+- **Open questions:** None
+
+### PLC-19. Add the item-container transfer endpoint
+
+- **Outcome:** A portable container is a first-class endpoint of the strict
+  player-transfer contract, addressable from Lua and durable in Mode B
+  orders, with no player surface yet.
+- **Scope:** An item-container constructor appended to
+  `Unit.Transfer.TransferEndpoint` and its kind vocabulary (enum baseline
+  ratchet, `transfer-orders` save-compat fixture); a third endpoint view
+  whose capacity is the crate's `iiStorage` under PLC-4's weight, bulk and
+  ancestor rules and whose reach follows D-29; live resolution through
+  PLC-7's locator; eligibility (storage-declared, realized, not held by a
+  non-commandable unit); commit through PLC-4's insert and remove so a
+  nested move never flattens ownership; `{kind, id}` addressing in
+  `unit.transferEndpointInfo`, create, check and commit; the D-15 per-item
+  batch unchanged; Mode B orders to and from a crate through the existing
+  executor and outcome vocabulary; the transfers document's D-5 amended.
+- **Phase:** Transfer integration
+- **Depends on:** `PLC-4`, `PLC-7`, `PLC-18`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-1, D-5, D-11, D-14, D-15, D-29, D-31
+- **Acceptance signals:** An exact instance moves both ways between a unit
+  and a ground, carried, building-stored and nested crate through the pure
+  policy and through a durable order; a refused lot leaves both trees
+  unchanged; a crate carried by the acting unit is always in reach and one
+  carried by a hostile unit is ineligible; a v1 order payload loads
+  unchanged; the lax AI verbs are untouched.
+- **Out of scope:** Window gestures, the Mode A pair, knowledge refresh
+  (PLC-20).
+- **Open questions:** None
+
+### PLC-20. Add transfer gestures on portable levels
+
+- **Outcome:** Players move exact contents into and out of portable
+  containers from the container window, in both modes, and their knowledge
+  refreshes when they do.
+- **Scope:** Store 1 / Store all and Retrieve 1 / Retrieve all on a
+  `portableItem` or `unitItem` level whose container declares `storage:`
+  (D-30), through the shared item-list widget and gesture builder; the Mode
+  A escort pair with a crate endpoint through `transfer_session`'s kind
+  registry and panels; a PLC-7 contents-and-weight observation after every
+  player-controlled commit into or out of a crate; D-15 partial-batch
+  outcomes surfaced in the event log; feedback for stale observed rows.
+- **Phase:** Transfer integration
+- **Depends on:** `PLC-17`, `PLC-19`
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-7, D-11, D-15, D-25, D-30, D-31
+- **Acceptance signals:** A ground and a carried crate use the same
+  request/outcome vocabulary and widget as unit/building transfers; a stale
+  observed instance cannot mutate live state; a partial batch reports
+  exactly which instances remained; a kit or toolbox level shows no gesture;
+  the record's `revealedAt` and `weighedAt` advance after a commit.
+- **Out of scope:** Rebuilding the unit/building modes #1013 delivered, lax
+  AI verbs, numeric quantity pickers, and generalized ground piles.
 - **Open questions:** None
 
 ### PLC-10. Author the first wooden-crate ruin content
@@ -1312,7 +1487,7 @@ player unit's carried level records the observation.
   retuning of the profile PLC-12 shipped (D-20), fixed location position,
   distribution simulator/fixture, and authored-data validation.
 - **Phase:** Content vertical slice
-- **Depends on:** `PLC-1`, `PLC-2`, `PLC-15`, `PLC-18`, `PLC-9`
+- **Depends on:** `PLC-1`, `PLC-2`, `PLC-15`, `PLC-18`, `PLC-20`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-2, D-4, D-6, D-10
 - **Acceptance signals:** The profile references canonical item IDs; the crate
@@ -1333,7 +1508,7 @@ player unit's carried level records the observation.
 - **Phase:** Integration gate
 - **Depends on:** `PLC-1`, `PLC-2`, `PLC-3`, `PLC-4`, `PLC-5`, `PLC-12`,
   `PLC-13`, `PLC-14`, `PLC-15`, `PLC-7`, `PLC-16`, `PLC-17`, `PLC-18`,
-  `PLC-9`, `PLC-10`
+  `PLC-19`, `PLC-20`, `PLC-10`
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8, D-9,
   D-10, D-11, D-12, D-13, D-14, D-15
