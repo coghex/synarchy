@@ -80,9 +80,10 @@ PROBES = [
      "building's own sprite, in the staked building's own box, while staying "
      "one designation job (#807/#1845)"),
     ("content_registry", "content_registry_probe.py",
-     "content-registries capability (#890): all seven registries written via "
-     "their public load*Yaml verb and read back via their public query, plus "
-     "post-boot reload (insert/replace) and the placed-location def join"),
+     "content-registries capability (#890): all eight publicly reachable "
+     "registries written via their public load*Yaml verb and read back via "
+     "their public query, plus post-boot reload (insert/replace) and the "
+     "placed-location def join"),
     ("consumable_effects", "consumable_effects_probe.py",
      "drink effects scaled by item quality/temperature: hydration/caffeine/mood/warmth (#347)"),
     ("cooking", "cooking_probe.py",
@@ -289,7 +290,7 @@ PROBES = [
      "Sleeping pose + go_to_sleep AI goal: lie-down/wake chain, sleep_pressure regen, wake conditions (#612)"),
     ("startup_asset_logging", "startup_asset_logging_probe.py",
      "startup YAML logging ownership: one Info aggregate per registry family "
-     "from scripts/startup_loader.lua (12 normal / 11 arena), per-file path + "
+     "from scripts/startup_loader.lua (13 normal / 12 arena), per-file path + "
      "authoritative count only at CatAsset Debug (#1930; offscreen, needs a GPU)"),
     ("state_of_mind", "state_of_mind_probe.py",
      "unified consciousness/mood model: pain/awareness drift, no-hunger-config fallback, locomotor-collapse regression guard (#350)"),

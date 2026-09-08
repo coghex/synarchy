@@ -357,17 +357,27 @@ loadLootProfileYaml logger path = do
 --   lists while only the last list decoded, so an @entries[0]@ index no
 --   longer picks out the entry that warning came from.
 --
+--   The same reasoning reaches one level further down. An entry whose
+--   own @item@ key repeated has a decoded item name that is likewise
+--   just the last binding, so naming the entry BY that item would put
+--   an ambiguous value where a coordinate belongs — and would do it for
+--   every duplicate in that entry, not only the @item@ one.
+--
 --   Everything a duplicate did NOT touch stays nameable, which is why
---   this is two answers rather than one all-or-nothing flag.
+--   this is three answers rather than one all-or-nothing flag.
 data DuplicateContext = DuplicateContext
-    { dcProfile ∷ Maybe Text  -- ^ the id, unless @id@ itself repeated
-    , dcEntries ∷ Bool        -- ^ do entry indices still pick out entries?
+    { dcProfile        ∷ Maybe Text  -- ^ the id, unless @id@ itself repeated
+    , dcEntries        ∷ Bool        -- ^ do entry indices still pick out entries?
+    , dcAmbiguousItems ∷ [Int]       -- ^ 0-based entries whose @item@ repeated
     }
 
 duplicateContext ∷ [Aeson.JSONPath] → LootProfileYamlDef → DuplicateContext
 duplicateContext dups def = DuplicateContext
     { dcProfile = if repeatedTopLevel "id" then Nothing else Just (lpydId def)
     , dcEntries = not (repeatedTopLevel "entries")
+    , dcAmbiguousItems =
+        [ i | [Aeson.Key es, Aeson.Index i, Aeson.Key k] ← dups
+            , Key.toText es ≡ "entries", Key.toText k ≡ "item" ]
     }
   where
     repeatedTopLevel key = any (≡ [Aeson.Key (Key.fromText key)]) dups
@@ -385,9 +395,13 @@ duplicateAt ctx def path = case dcProfile ctx of
             | Key.toText blk ≡ "quantity_multiplier" →
                 profileAt pid (quoted (Key.toText blk) <> ": " <> dup k)
         [Aeson.Key es, Aeson.Index i, Aeson.Key k]
-            | Key.toText es ≡ "entries", dcEntries ctx
-            , (e : _) ← drop i (lpydEntries def) →
-                entryFor pid (i + 1) (lpyeItem e) (dup k)
+            | Key.toText es ≡ "entries", dcEntries ctx →
+                case drop i (lpydEntries def) of
+                    -- The item names the entry only when the item
+                    -- itself is not one of the ambiguous values.
+                    (e : _) | i `notElem` dcAmbiguousItems ctx →
+                        entryFor pid (i + 1) (lpyeItem e) (dup k)
+                    _ → entryAt pid (i + 1) (dup k)
         _ → profileAt pid ("duplicate key at YAML path " <> renderPath path)
   where
     dup k = "duplicate key " <> quoted (Key.toText k)

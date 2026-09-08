@@ -293,6 +293,32 @@ spec = describe "Loot profiles" $ do
                 , "  - item: steel_bar\n    chance: 0.5\n    chance: 0.9\
                   \\n    quantity_factor: 3" ]
 
+        -- An entry whose own `item` repeated has a decoded item name
+        -- that is just the last binding — the very value the duplicate
+        -- rule distrusts. It must not be printed as a coordinate.
+        it "keeps the profile and 1-based index but names NEITHER \
+           \competing item when item itself repeated" $
+            rejectsNamingBut ["probe_salvage", "2", "item", "duplicate"]
+                             ["steel_bar", "wiring"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2"
+                    , "  - item: steel_bar\n    item: wiring\
+                      \\n    chance: 0.5\n    quantity_factor: 3" ]
+
+        -- And the ambiguity taints the whole entry, not just the `item`
+        -- duplicate: a second duplicated key in that same entry must
+        -- not borrow the untrustworthy name either.
+        it "drops the item from EVERY duplicate in an entry whose item \
+           \repeated" $
+            rejectsNamingBut
+                ["probe_salvage", "2", "item", "chance", "duplicate"]
+                ["steel_bar", "wiring"] $
+                docSource "probe_salvage" okMult
+                    [ entryOf "rations" "0.5" "2"
+                    , "  - item: steel_bar\n    item: wiring\
+                      \\n    chance: 0.5\n    chance: 0.9\
+                      \\n    quantity_factor: 3" ]
+
         it "rejects a repeated key inside quantity_multiplier, naming \
            \the profile and the block" $
             rejectsNamingBut
