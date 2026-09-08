@@ -37,8 +37,9 @@
 --
 --   'isPointerSurfaceBlocked' extends the boundary to middle-click
 --   (camera drag), which has no owned handler and no page concept of
---   its own in 'Engine.Input.Thread' — pre-#742 it swallowed on ANY
---   visible sized element; #743 narrowed that to
+--   its own in 'Engine.Input.Thread.Mouse', the dispatch site that
+--   calls this check — pre-#742 it swallowed on ANY visible sized
+--   element; #743 narrowed that to
 --   'UI.Manager.Query.elementBlocksPointer' (see below), and it
 --   additionally swallows whenever a modal boundary exists at all, so
 --   a gap in the modal's own layout can't leak a middle-click through
@@ -262,10 +263,11 @@ routePointer kind pos mgr =
 routeScroll ∷ (Float, Float) → UIPageManager → Maybe ElementHandle
 routeScroll pos mgr = topHitBy (scopedPageOk mgr) elementCapturesScroll pos mgr
 
--- | #742: the middle-click "UI surface blocks" check
---   ('Engine.Input.Thread' — middle-click has no owned handler of its
---   own and exists purely to pan the camera). Pre-#742 this swallowed
---   on ANY visible sized element; #743 narrows the surface check to
+-- | #742: the middle-click "UI surface blocks" check, called from
+--   'Engine.Input.Thread.Mouse' (middle-click has no owned handler of
+--   its own and exists purely to pan the camera). Pre-#742 this
+--   swallowed on ANY visible sized element; #743 narrows the surface
+--   check to
 --   'elementBlocksPointer' (unscoped — a modal boundary, if any, is
 --   already folded in via 'isGameplayBlocked' below, so a purely
 --   visual, pass-through element no longer blocks the camera drag on

@@ -45,7 +45,19 @@ unitSortNudge = 0.0003
 
 -- | Choose a frame for a unit. If the unit has an active animation and
 --   the requested frames exist, pick by elapsed time; otherwise fall back
---   to the T-pose. Used by the render path and the hit-tester.
+--   to the T-pose.
+--
+--   Four production call sites under `src/` — the complete blast radius
+--   of the frozen arithmetic below:
+--
+--   * 'unitToQuad' (below), the render path.
+--   * `Unit.HitTest.frameSampleOf`, feeding `unitHitRect`, the hit-tester.
+--   * `unit.getFrameTexture` and `unit.getFrameSample`
+--     (`Engine.Scripting.Lua.API.Units.List`), the Lua query verbs where
+--     this sample leaves Haskell. `getFrameTexture` exports only
+--     `fsTexture`; `getFrameSample` exports every field of the sample as
+--     a Lua table, and is therefore the only complete script-side view of
+--     a frame (#1261).
 --
 --   Returns a storage-neutral 'FrameSample': the stable bindless handle
 --   (#286), the frame's own UV endpoints within that handle's image,

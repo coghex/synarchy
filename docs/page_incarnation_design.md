@@ -18,9 +18,9 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Make a reused world-page name a new incarnation with nothing inherited
-- [ ] PIN-1. Tear down page-owned units and buildings on single-page destroy and same-id re-init
-- [ ] PIN-2. Fence in-flight fluid writebacks with the page's incarnation epoch
+- [x] EPIC. Make a reused world-page name a new incarnation with nothing inherited — [#2474]
+- [x] PIN-1. Tear down page-owned units and buildings on single-page destroy and same-id re-init — [#2476]
+- [x] PIN-2. Fence in-flight fluid writebacks with the page's incarnation epoch — [#2477]
 
 ## Epic contract
 
