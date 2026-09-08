@@ -21,14 +21,14 @@ concrete precondition
 - [x] FTS-3. Migrate runtime units, spawning, and save data to faction profiles — [#2515]
 - [x] FTS-4. Port ownership, commandability, and discovery consumers — [#2518]
 - [x] FTS-5. Port alliance, hostility, combat, and AI consumers — [#2521]
-- [ ] FTS-6. Expose mutable faction profiles and directed order hostility
-- [ ] FTS-6B. Persist directed relation causes and wire the live overlay
-- [ ] FTS-6C. Expose the narrow Lua profile, tag, and relation-cause API
-- [ ] FTS-6D. Spawn with controllers, extra tags, and minted roster team tags
-- [ ] FTS-6E. Add the Attack transaction, the Hold action, and the escalation lock
-- [ ] FTS-6F. Add diplomacy resolution and grandfathered combat authorization
-- [ ] FTS-6A. Propagate directed hostility through orders and team knowledge
-- [ ] FTS-7. Retire the legacy enum and close compatibility documentation
+- [x] FTS-6. Expose mutable faction profiles and directed order hostility — [no-issue]: split into FTS-6B–FTS-6F (D-36)
+- [x] FTS-6B. Persist directed relation causes and wire the live overlay — [#2548]
+- [x] FTS-6C. Expose the narrow Lua profile, tag, and relation-cause API — [#2551]
+- [x] FTS-6D. Spawn with controllers, extra tags, and minted roster team tags — [#2554]
+- [x] FTS-6E. Add the Attack transaction, the Hold action, and the escalation lock — [#2558]
+- [x] FTS-6F. Add diplomacy resolution and grandfathered combat authorization — [#2561]
+- [x] FTS-6A. Propagate directed hostility through orders and team knowledge — [#2563]
+- [x] FTS-7. Retire the legacy enum and close compatibility documentation — [#2564]
 
 ## Epic contract
 
@@ -1316,6 +1316,9 @@ removing it.
 - **Open questions:** None
 
 ### FTS-6. Expose mutable faction profiles and directed order hostility
+
+> [no-issue] 2026-09-07: split by D-36 into FTS-6B–FTS-6F; nothing is tracked
+> under this ID.
 
 - **Outcome:** Lua/content/order callers can query arbitrary tags, mutate
   runtime-owned membership, and initiate/cancel cause-scoped directed hostility
