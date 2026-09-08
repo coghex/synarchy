@@ -136,9 +136,16 @@ installClockPage env time date scale = do
     pure ws
 
 -- | 0.25 s × 2880 game-minutes per real second = 720 game-minutes, a
---   whole number the calendar stores exactly (it floors to the minute
---   with no remainder accumulator); from 23:30 that lands on 11:30 the
---   next day, exercising the time-of-day and the date carry at once.
+--   whole number of minutes; from 23:30 that lands on 11:30 the next
+--   day, exercising the time-of-day and the date carry at once.
+--
+--   Chosen whole so these examples state the elapsed-time contract and
+--   nothing else. Before #2471 it had to be: the calendar floored every
+--   tick with no remainder accumulator, so any other scale would have
+--   silently lost the fraction here. The accumulator now exists, and the
+--   retained-remainder rule has its own gate in
+--   "Test.Headless.World.SubMinuteClock" — a scale that leaves a
+--   fraction belongs there, not in the monotonic-input contract.
 fullDayScale ∷ Float
 fullDayScale = 2880
 

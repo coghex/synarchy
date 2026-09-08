@@ -2350,6 +2350,93 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/x1-flora-species-names.expected.json"
         }
       ]
+    },
+    {
+      "id": "y1-subminute-clock-remainder",
+      "description": "The #2471 shape (world-pages v11): each page carries the sub-minute calendar progress its whole-minute clock cannot hold. Before #2471 the world tick floored that fraction away every tick, so at the shipped default speed -- one game-minute per real second against Engine.Core.Clock's 0.25 s cap -- no admitted tick ever contributed a whole minute and the calendar never moved. This fixture is a REAL current-format session written by the live engine after its clock had run unpaused, so its page carries a genuinely nonzero remainder captured by the ordinary engine.saveWorld path: a codec, adapter or staging change that dropped the field would decode it back as 0 and fail this baseline's expected canonical summary. Every earlier payload stays tracked by the baselines above; their pages decode with NO retained progress at all through World.Save.Component.PageCore.migrateWorldPagesV10, which is exactly right -- the clock that wrote them really did floor every fraction away.",
+      "declaredAt": "2026-09-07",
+      "declaredByIssue": 2471,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "identity for world-pages v11 (this baseline IS that shape); World.Save.Component.PageCore.migrateWorldPagesV10 decodes every earlier payload with the sub-minute remainder at zero, the value those saves actually recorded",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 11,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 9,
+          "required": true
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "y1-subminute-clock-remainder",
+          "path": "test-headless/data/save-compat/y1-subminute-clock-remainder.bin",
+          "kind": "complete-session",
+          "sha256": "0e371eb812d8bc9b8a1e43424e01bd82dc95ecf9074a1a4444935ef90898fa7f",
+          "sizeBytes": 905235,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), settled 3.0s, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/y1-subminute-clock-remainder.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

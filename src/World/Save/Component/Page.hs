@@ -105,6 +105,8 @@ module World.Save.Component.Page
     , WorldPagesDTOv8(..)
     , PageCoreDTOv9(..)
     , WorldPagesDTOv9(..)
+    , PageCoreDTOv10(..)
+    , WorldPagesDTOv10(..)
     , PageEditsDTOv1(..)
     , WorldEditsDTOv1(..)
     , PageEditsDTOv2(..)
@@ -121,6 +123,7 @@ module World.Save.Component.Page
     , migrateWorldPagesV7
     , migrateWorldPagesV8
     , migrateWorldPagesV9
+    , migrateWorldPagesV10
     , PageEditsDTO(..)
     , WorldEditsDTO(..)
     , PageActivityDTO(..)

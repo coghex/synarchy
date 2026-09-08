@@ -92,15 +92,24 @@ idOne, idTwo ∷ GeneratedWorldId
 idOne = fixtureGeneratedWorldIdForPage pageOne
 idTwo = fixtureGeneratedWorldIdForPage pageTwo
 
--- | A page core at the CURRENT wire shape (v9 when #2021 wrote this;
---   v10 since #917, which appended significant-item obligations to the
---   location table without touching this field).
-coreV9 ∷ WorldPageId → Maybe GeneratedWorldId → PageCoreDTO
-coreV9 pid gid = PageCoreDTO
-    { pcPageId = pid, pcGenParams = toWorldGenParamsDTO defaultWorldGenParams
-    , pcCameraX = 0, pcCameraY = 0, pcTimeHour = 0, pcTimeMinute = 0
-    , pcDateYear = 1, pcDateMonth = 1, pcDateDay = 1, pcMapMode = ZMDefault
-    , pcIdentity = Nothing, pcGeneratedId = gid }
+-- | A page core at the frozen v9 wire shape — the version that ADDED
+--   the generated-world id, and the version every example below decodes
+--   at.
+--
+--   Built through 'PageCoreDTOv9' rather than the current type. It used
+--   to be the current one, which was byte-identical for these fields
+--   right through #917; #2471 appended a sub-minute clock remainder to
+--   the page core, so encoding the current shape while decoding at v9
+--   would now misparse — the coincidence that made the shortcut work is
+--   gone, and stating the version explicitly is what keeps these
+--   examples about v9.
+coreV9 ∷ WorldPageId → Maybe GeneratedWorldId → PageCoreDTOv9
+coreV9 pid gid = PageCoreDTOv9
+    { pc9PageId = pid
+    , pc9GenParams = toWorldGenParamsDTOv7 defaultWorldGenParams
+    , pc9CameraX = 0, pc9CameraY = 0, pc9TimeHour = 0, pc9TimeMinute = 0
+    , pc9DateYear = 1, pc9DateMonth = 1, pc9DateDay = 1, pc9MapMode = ZMDefault
+    , pc9Identity = Nothing, pc9GeneratedId = gid }
 
 -- | The same page at the frozen v8 shape — the newest version that has
 --   no generated-world id at all.
@@ -175,7 +184,7 @@ pureSpec = describe "generated world identity (#2021)" $ do
 
     describe "world-pages v9 (the version that added the field)" $ do
         it "round-trips a page's id byte-exactly through the real codec" $
-            case decodeWorldPages 9 (S.encode (WorldPagesDTO [coreV9 pageOne (Just idOne)])) of
+            case decodeWorldPages 9 (S.encode (WorldPagesDTOv9 [coreV9 pageOne (Just idOne)])) of
                 Left e   → expectationFailure (T.unpack (renderComponentError e))
                 Right wp → map pgsGeneratedId (HM.elems (wpBase wp))
                                `shouldBe` [Just idOne]
@@ -183,7 +192,7 @@ pureSpec = describe "generated world identity (#2021)" $ do
         it "REFUSES a v9 payload whose page carries no id — the writer \
            \had one and did not write it, which is corruption, not the \
            \legacy shape" $
-            case decodeThenValidate 9 (S.encode (WorldPagesDTO [coreV9 pageOne Nothing])) of
+            case decodeThenValidate 9 (S.encode (WorldPagesDTOv9 [coreV9 pageOne Nothing])) of
                 Left e   → expectationFailure (T.unpack (renderComponentError e))
                 Right [] → expectationFailure
                     "a v9 payload with no generated-world id was ACCEPTED"
@@ -196,7 +205,7 @@ pureSpec = describe "generated world identity (#2021)" $ do
         it "refuses two pages naming the SAME generated foundation — no \
            \engine path can produce it, and later slices key durable \
            \artifacts by the id" $
-            case decodeThenValidate 9 (S.encode (WorldPagesDTO
+            case decodeThenValidate 9 (S.encode (WorldPagesDTOv9
                     [coreV9 pageOne (Just idOne), coreV9 pageTwo (Just idOne)])) of
                 Left e   → expectationFailure (T.unpack (renderComponentError e))
                 Right [] → expectationFailure
@@ -218,9 +227,11 @@ pureSpec = describe "generated world identity (#2021)" $ do
                         Right wp → map pgsGeneratedId (HM.elems (wpBase wp))
                                        `shouldBe` [Nothing]
 
-        it "still accepts every historical version — v1 through v9 all \
-           \decode, so the bump added a reader rather than replacing one" $
-            worldPagesInputVersions `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        it "still accepts every historical version — v1 through the \
+           \current one all decode, so each bump added a reader rather \
+           \than replacing one" $
+            worldPagesInputVersions
+                `shouldBe` [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 
     describe "metadata v3" $ do
         it "still accepts every historical version — v1 and v2 both \

@@ -74,6 +74,8 @@ module World.Save.Component.PageCore
     , WorldPagesDTOv8(..)
     , PageCoreDTOv9(..)
     , WorldPagesDTOv9(..)
+    , PageCoreDTOv10(..)
+    , WorldPagesDTOv10(..)
       -- * The component
     , WorldPages(..)
     , worldPagesCodec
@@ -89,6 +91,7 @@ module World.Save.Component.PageCore
     , migrateWorldPagesV7
     , migrateWorldPagesV8
     , migrateWorldPagesV9
+    , migrateWorldPagesV10
     ) where
 
 import UPrelude
@@ -243,7 +246,8 @@ fromWorldIdentityDTOv1 d =
 
 -- | One page's identity / clock / camera core. All evolving records are
 --   frozen DTOs; 'ZoomMapMode' is a payload-free append-only leaf enum.
---   This is the CURRENT (v10) wire shape — see 'PageCoreDTOv9' for the
+--   This is the CURRENT (v11) wire shape — see 'PageCoreDTOv10' for the
+--   frozen pre-#2471 one, 'PageCoreDTOv9' for the
 --   frozen pre-#917 one, 'PageCoreDTOv8' for the
 --   frozen pre-#2021 one, 'PageCoreDTOv7' for the
 --   frozen pre-#916 one, 'PageCoreDTOv6' for the
@@ -258,6 +262,21 @@ data PageCoreDTO = PageCoreDTO
     , pcCameraY     ∷ !Float
     , pcTimeHour    ∷ !Int
     , pcTimeMinute  ∷ !Int
+    , pcTimeRemainder ∷ !Double
+      -- ^ #2471: this page's sub-minute calendar progress, in
+      --   game-minutes and in @[0, 1)@ for anything this build wrote.
+      --
+      --   APPENDED, which is what makes v10 a distinct wire shape rather
+      --   than a compatible one: a @Generic Serialize@ record's fields
+      --   are positional, so a v10 payload read as this type would take
+      --   the date's first bytes as a 'Double'. Hence 'PageCoreDTOv10'
+      --   below and 'migrateWorldPagesV10'.
+      --
+      --   The wire type is a bare 'Double' and the DECODER does not
+      --   judge it: @validatePages@ leaves it alone deliberately, so an
+      --   out-of-range value reaches 'World.Load.Stage''s one repair
+      --   (which logs the page it repaired) instead of failing the whole
+      --   save over less than a minute of clock.
     , pcDateYear    ∷ !Int
     , pcDateMonth   ∷ !Int
     , pcDateDay     ∷ !Int
@@ -518,8 +537,9 @@ data WorldPages = WorldPages
       --   without guessing which version it is looking at.
     } deriving (Show)
 
--- | Encoding always writes the current v10 shape; v9 payloads decode
---   through their own frozen DTO via 'migrateWorldPagesV9' (#917), v8
+-- | Encoding always writes the current v11 shape; v10 payloads decode
+--   through their own frozen DTO via 'migrateWorldPagesV10' (#2471), v9
+--   via 'migrateWorldPagesV9' (#917), v8
 --   via 'migrateWorldPagesV8' (#2021), v7
 --   via 'migrateWorldPagesV7' (#916), v6
 --   via 'migrateWorldPagesV6' (#1230), v5
@@ -533,13 +553,14 @@ data WorldPages = WorldPages
 worldPagesCodec ∷ ComponentCodec WorldPages
 worldPagesCodec = componentCodec ComponentSpec
     { csComponent     = worldPagesComponentId
-    , csVersion       = 10
+    , csVersion       = 11
     , csRequired      = True
     , csDeps          = []
     , csEncode        = \snap →
         WorldPagesDTO (map toPageCore (orderedPages snap))
     , csDecode        = basePageSnapshots
-    , csOlderVersions = [ atVersion 9 migrateWorldPagesV9
+    , csOlderVersions = [ atVersion 10 migrateWorldPagesV10
+                        , atVersion 9 migrateWorldPagesV9
                         , atVersion 8 migrateWorldPagesV8
                         , atVersion 7 migrateWorldPagesV7
                         , atVersion 6 migrateWorldPagesV6
@@ -558,6 +579,7 @@ worldPagesCodec = componentCodec ComponentSpec
         , pcCameraY    = pgsCameraY p
         , pcTimeHour   = pgsTimeHour p
         , pcTimeMinute = pgsTimeMinute p
+        , pcTimeRemainder = pgsTimeRemainder p
         , pcDateYear   = pgsDateYear p
         , pcDateMonth  = pgsDateMonth p
         , pcDateDay    = pgsDateDay p
@@ -642,6 +664,7 @@ basePageSnapshots (WorldPagesDTO ps) = WorldPages
         , pgsCameraY    = pcCameraY p
         , pgsTimeHour   = pcTimeHour p
         , pgsTimeMinute = pcTimeMinute p
+        , pgsTimeRemainder = pcTimeRemainder p
         , pgsDateYear   = pcDateYear p
         , pgsDateMonth  = pcDateMonth p
         , pgsDateDay    = pcDateDay p
@@ -756,6 +779,71 @@ migrateWorldPagesV9 (WorldPagesDTOv9 ps) = WorldPages
         , pgsMapMode    = pc9MapMode p
         , pgsIdentity   = fromWorldIdentityDTO <$> pc9Identity p
         , pgsGeneratedId = pc9GeneratedId p
+        }
+
+-- | The FROZEN v10 wire shape (#917 through #2471): the CURRENT page
+--   core in every respect except that it carries no sub-minute clock
+--   progress — the field #2471 appended. Preserved verbatim for
+--   decode-only backward compatibility; never edited, and a further
+--   schema change freezes the current shape as 'PageCoreDTOv11' rather
+--   than touching this one (frozen-DTO boundary rule).
+--
+--   Its gen params and identity are the CURRENT types on purpose: #2471
+--   changed neither, so repointing them would fabricate a difference
+--   between two shapes whose bytes for those fields are identical. That
+--   is the same repointing rule 'PageCoreDTOv8' documents, applied in
+--   the direction where nothing has to move yet.
+data PageCoreDTOv10 = PageCoreDTOv10
+    { pc10PageId      ∷ !WorldPageId
+    , pc10GenParams   ∷ !WorldGenParamsDTO
+    , pc10CameraX     ∷ !Float
+    , pc10CameraY     ∷ !Float
+    , pc10TimeHour    ∷ !Int
+    , pc10TimeMinute  ∷ !Int
+    , pc10DateYear    ∷ !Int
+    , pc10DateMonth   ∷ !Int
+    , pc10DateDay     ∷ !Int
+    , pc10MapMode     ∷ !ZoomMapMode
+    , pc10Identity    ∷ !(Maybe WorldIdentityDTO)
+    , pc10GeneratedId ∷ !(Maybe GeneratedWorldId)
+    } deriving (Show, Generic, Serialize)
+
+newtype WorldPagesDTOv10 = WorldPagesDTOv10 { wpd10Pages ∷ [PageCoreDTOv10] }
+    deriving stock (Generic)
+    deriving newtype (Show, Serialize)
+
+-- | The v10→v11 migration (#2471): every field a v10 page carries rides
+--   across untouched, and its sub-minute clock progress is ZERO.
+--
+--   Zero is the value such a save actually recorded, not a guess. The
+--   pre-#2471 clock floored the fraction away on every single tick, so
+--   no v10 payload ever held one — the page it describes really was at
+--   a whole minute, and the calendar it describes really had stopped
+--   there. Inventing a fraction would move a loaded world's clock by an
+--   amount nothing in the file supports.
+--
+--   'wpIdsFromPayload' stays TRUE: v10 carries generated-world ids, so
+--   an absent id in one is corruption exactly as it is in a v11 payload
+--   and @validatePages@ must keep saying so.
+migrateWorldPagesV10 ∷ WorldPagesDTOv10 → WorldPages
+migrateWorldPagesV10 (WorldPagesDTOv10 ps) = WorldPages
+    { wpPageIds = map pc10PageId ps
+    , wpBase    = HM.fromList [ (pc10PageId p, toBase p) | p ← ps ]
+    , wpIdsFromPayload = True
+    }
+  where
+    toBase p = (blankPageSnapshot (pc10PageId p)
+                    (fromWorldGenParamsDTO (pc10GenParams p)))
+        { pgsCameraX    = pc10CameraX p
+        , pgsCameraY    = pc10CameraY p
+        , pgsTimeHour   = pc10TimeHour p
+        , pgsTimeMinute = pc10TimeMinute p
+        , pgsDateYear   = pc10DateYear p
+        , pgsDateMonth  = pc10DateMonth p
+        , pgsDateDay    = pc10DateDay p
+        , pgsMapMode    = pc10MapMode p
+        , pgsIdentity   = fromWorldIdentityDTO <$> pc10Identity p
+        , pgsGeneratedId = pc10GeneratedId p
         }
 
 -- | The v7→v8 migration (#916): every historical placed location keeps
@@ -983,6 +1071,10 @@ blankPageSnapshot pid params =
         , pgsCameraY      = 0
         , pgsTimeHour     = 0
         , pgsTimeMinute   = 0
+        -- #2471: no retained sub-minute progress. For a MIGRATED
+        -- pre-v11 payload this is the value the save recorded rather
+        -- than a placeholder — see 'migrateWorldPagesV10'.
+        , pgsTimeRemainder = 0
         , pgsDateYear     = 0
         , pgsDateMonth    = 0
         , pgsDateDay      = 0

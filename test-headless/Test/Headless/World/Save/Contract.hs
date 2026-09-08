@@ -357,6 +357,12 @@ richPage = PageSnapshot
     , pgsCameraY      = 7.5
     , pgsTimeHour     = 14
     , pgsTimeMinute   = 30
+    -- #2471: deliberately NONZERO, and not a round fraction. The
+    -- representative session is compared field-by-field through the
+    -- real codec, so a sub-minute remainder that failed to encode,
+    -- decode or migrate would fail here rather than round silently to
+    -- the whole minute beside it.
+    , pgsTimeRemainder = 0.376953125
     , pgsDateYear     = 3
     , pgsDateMonth    = 5
     , pgsDateDay      = 17
@@ -538,6 +544,7 @@ minimalPage2 = PageSnapshot
     , pgsGenParams    = canon defaultWorldGenParams { wgpSeed = 99 }
     , pgsCameraX      = 0, pgsCameraY = 0
     , pgsTimeHour     = 0, pgsTimeMinute = 0
+    , pgsTimeRemainder = 0
     , pgsDateYear     = 1, pgsDateMonth = 1, pgsDateDay = 1
     , pgsMapMode      = ZMDefault
     , pgsEdits        = emptyWorldEdits

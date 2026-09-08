@@ -45,7 +45,7 @@ import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.ReadOnlyRef (readReadOnlyRef)
 import Engine.Core.State (EngineEnv, activeWorldPageFrom)
 import World.Page.Types (WorldPageId(..))
-import World.Time.Types (worldTimeToSunAngle)
+import World.Time.Types (worldTimeSunAngleWith)
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..))
 import World.Tile.Types (WorldTileData)
 import qualified Engine.Core.Queue as Q
@@ -396,12 +396,13 @@ activeNetworkSnapshots env = do
         Just (pageId, ws) → do
             nodes ← readIORef (wsPowerNodesRef ws)
             wt    ← readIORef (wsTimeRef ws)
+            wtRem ← readIORef (wsTimeRemainderRef ws)
             td    ← readIORef (wsTilesRef ws)
             edits ← readIORef (wsEditsRef ws)
             bm    ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
             now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
             worldSize ← pageWorldSize ws
-            let sunAngle   = worldTimeToSunAngle wt
+            let sunAngle   = worldTimeSunAngleWith wt wtRem
                 wireTiles  = pageWireTiles td edits
                 positions  = positionsOf pageId bm nodes
             consumers ← liveConsumersOn env Nothing pageId now bm ws
@@ -436,12 +437,13 @@ isBuildingPowered env bid = do
                         Just ws → do
                             nodes ← readIORef (wsPowerNodesRef ws)
                             wt    ← readIORef (wsTimeRef ws)
+                            wtRem ← readIORef (wsTimeRemainderRef ws)
                             td    ← readIORef (wsTilesRef ws)
                             edits ← readIORef (wsEditsRef ws)
                             now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                             consumers ← liveConsumersOn env Nothing (biPage inst) now bm ws
                             worldSize ← pageWorldSize ws
-                            let sunAngle   = worldTimeToSunAngle wt
+                            let sunAngle   = worldTimeSunAngleWith wt wtRem
                                 wireTiles  = pageWireTiles td edits
                                 positions  = positionsOf (biPage inst) bm nodes
                                 nets = computeSnapshots worldSize sunAngle HM.empty
@@ -488,12 +490,13 @@ isRecipePoweredAt env mBillId bid drawW
                     Just ws → do
                         nodes ← readIORef (wsPowerNodesRef ws)
                         wt    ← readIORef (wsTimeRef ws)
+                        wtRem ← readIORef (wsTimeRemainderRef ws)
                         td    ← readIORef (wsTilesRef ws)
                         edits ← readIORef (wsEditsRef ws)
                         now   ← readIORef (wsGameTimeRef (toWorldSimCapability env))
                         othersOnly ← liveConsumersOn env mBillId (biPage inst) now bm ws
                         worldSize ← pageWorldSize ws
-                        let sunAngle  = worldTimeToSunAngle wt
+                        let sunAngle  = worldTimeSunAngleWith wt wtRem
                             wireTiles = pageWireTiles td edits
                             positions = positionsOf (biPage inst) bm nodes
                             tile      = (biAnchorX inst, biAnchorY inst)

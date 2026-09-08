@@ -239,6 +239,7 @@ import qualified Test.Headless.UI.TransferGestures as UITransferGestures
 import qualified Test.Headless.UI.ConsumableGesture as UIConsumableGesture
 import qualified Test.Headless.UI.TransferSession as UITransferSession
 import qualified Test.Headless.World.Calendar as Calendar
+import qualified Test.Headless.World.SubMinuteClock as SubMinuteClock
 import qualified Test.Headless.World.FloraGrowth as FloraGrowth
 import qualified Test.Headless.River.CalderaHazard as RiverCalderaHazard
 import qualified Test.Headless.River.InlandSources as RiverInlandSources
@@ -676,6 +677,16 @@ main = hspec $ do
     describe "World.Calendar" $ do
         aroundAll withHeadlessEngineNoWorld Calendar.setterSpec
         aroundAll withHeadlessEngineNoWorld Calendar.stagingSpec
+    -- #2471: the retained sub-minute remainder, split the same way. Both
+    -- halves need their OWN world-thread-free engine: the tick half
+    -- installs its own page set and drives worldTickWith directly (a live
+    -- world worker would tick those pages on its own clock and race every
+    -- assertion), and the staging half drives World.Load.Stage.stageSession
+    -- against a forged one-page arena save, so neither may gain or
+    -- disturb the shared engine's pages.
+    describe "World.SubMinuteClock" $ do
+        aroundAll withHeadlessEngineNoWorld SubMinuteClock.tickSpec
+        aroundAll withHeadlessEngineNoWorld SubMinuteClock.stagingSpec
     -- #2307: the saved-equipment-slot reconciliation, split the same
     -- way. The pure half needs no engine; the staging half gets its OWN
     -- world-thread-free engine for the same reason the gen-domain one
@@ -973,6 +984,7 @@ main = hspec $ do
     UIBarFillColor.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
+    SubMinuteClock.spec
     describe "World.FloraGrowth" FloraGrowth.spec
     describe "World.FloraOrder" FloraOrder.spec
     describe "River.CalderaHazard" RiverCalderaHazard.spec

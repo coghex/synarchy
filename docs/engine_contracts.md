@@ -1657,7 +1657,8 @@ name.
 
 ### Persistence
 
-`world-pages` v10 (v9 frozen by #917 as
+`world-pages` v11 (v10 frozen by #2471 as `PageCoreDTOv10`; v9 frozen by
+#917 as
 `PageCoreDTOv9`/`WorldGenParamsDTOv7`/`LocationInstancesDTOv5`/
 `LocationInstanceDTOv5`/`LocationEncounterDTOv1`; v7 frozen by #916 as
 `PageCoreDTOv7`/`WorldGenParamsDTOv6`/`LocationInstancesDTOv4`/
@@ -1730,7 +1731,8 @@ the encounter-wide, once-per-episode notification state through
 `hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
 compatibility wrappers resolving to the chunk's first instance.
 
-Persistence: `world-pages` v10, with v9's pre-significant-contents
+Persistence: `world-pages` v11, with v10's pre-sub-minute-remainder page
+core frozen as `PageCoreDTOv10` and v9's pre-significant-contents
 location record frozen as `LocationInstanceDTOv5` (its encounter, still
 carrying the clearance-notice flag, as `LocationEncounterDTOv1`) and
 v7's pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
@@ -1915,7 +1917,7 @@ location's exactly-once content lifecycle on a location that could then
 never be cleared. A hand-stamped location has no `LocationInstanceId`,
 so it owes nothing and its incidental contents are unaffected.
 
-**Persistence.** `world-pages` v10. `migrateWorldPagesV9` preserves every
+**Persistence.** `world-pages` v11. `migrateWorldPagesV9` preserves every
 stored value, lifts the encounter's clearance-notice flag onto the
 instance, and adds NO obligations — reading them off today's YAML would
 owe a materialized world an item it never spawned, permanently blocking
@@ -2887,10 +2889,68 @@ script whose clock jumps across several intervals runs once, leaves a
 deadline strictly later than the jumped clock, and is not due again
 when the pass repeats at that same `now`.
 
+**The sub-minute part of that world-tick advance is RETAINED, not floored
+away (#2471).** The stored clock (`WorldTime`) holds whole hours and
+minutes, and every tick used to floor the advance straight back into it —
+so at the shipped default scale, one game-minute per real second against
+the 0.25 s cap, no admitted tick ever contributed a whole minute and the
+calendar never moved at all; at higher scales the same elapsed time
+advanced it by different amounts depending on how the worker happened to
+partition it. Each page now carries the leftover fraction in its own
+`wsTimeRemainderRef`, always in `[0, 1)` game-minutes, and
+`advanceWorldClock` threads it through, so equal admitted elapsed time
+advances the calendar by the same duration however it is partitioned.
+
+The rules that go with it:
+
+- **Ownership.** Per page, written only by the world thread — the tick,
+  the queued `WorldSetTime`, and load staging — exactly like `wsTimeRef`
+  and `wsDateRef` beside it. Only `wmVisible` pages are ticked, unchanged
+  by #2471: a hidden page keeps the remainder it was last left with and
+  never catches up.
+- **Boundaries.** `WorldSetTime` names a whole minute and therefore
+  CLEARS the remainder; `WorldSetDate` leaves it alone (it changes no
+  time of day). A fresh page starts at zero, a paused tick rewrites the
+  same value it read, and a time-scale change keeps the accumulated
+  remainder and applies the new scale to later elapsed time only.
+- **Presentation.** Every whole-minute consumer sees the floor, and a
+  rollover across minute, midnight, month or year carries the remainder
+  rather than dropping it. `worldTimeSunAngleWith` is what a live page's
+  solar consumers (rendering, line of sight, power) read: nondecreasing
+  within a day, equal to `worldTimeToSunAngle` at a zero remainder, and
+  still wrapping at midnight.
+- **Numerics.** The per-tick product `scale × dt` is EXACT in the
+  accumulator's `Double` (two `Float` significands are 48 bits against 53
+  available), so the whole error budget is the running sum's own
+  rounding — bounded by `World.Time.Scale.clockTickErrorBound`, half an
+  ulp at `clockMinutesPerDay`. That bound does not grow with session
+  length, because the accumulator is reduced back into the day every
+  tick; reaching a whole minute of drift would take upwards of 8×10^12
+  ticks. `worstCaseDayCount`, and therefore `maxTimeScale`, are derived
+  from `clockMaxStartMinute` — 23:59 plus the largest representable
+  remainder, an ATTAINABLE start — on that same `Double` arithmetic.
+- **Totality is unchanged.** A refused scale, a refused elapsed value, an
+  unrepresentable floor or an overflowing calendar carry all return the
+  exact input time, remainder and date with zero rolled days.
+- **Persistence.** `world-pages` v11 carries it (`pcTimeRemainder`,
+  `wpsTimeRemainder`); `migrateWorldPagesV10` loads every earlier payload
+  with none, which is the value those saves actually recorded. The
+  component validator deliberately does not judge it: an out-of-domain
+  stored value is repaired to zero by `World.Load.Stage`, with a warning
+  naming the page, rather than costing the player the rest of the save.
+
 Gate: hspec `--match "monotonic elapsed-time contract"`, which drives
 the real `updateFrameTimingWith`, `worldTickWith`, `unitTickWith`, and
 `runDueScripts` with an injected clock; production callers pass
-`monotonicSeconds`.
+`monotonicSeconds`. The retained-remainder rule has its own gate
+beside it — hspec `--match "Calendar retains sub-minute progress"`, which
+drives that same real `worldTickWith` across long irregular schedules
+against an independent oracle, and the persistence half through the real
+`World.Load.Stage`. Live save evidence is
+`tools/persistence_contract_probe.py`, whose three fresh-process
+save→load→save cycles are compared through the real codec while paused,
+so a remainder dropped anywhere on the capture/encode/decode/stage path
+breaks it.
 
 ---
 

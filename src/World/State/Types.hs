@@ -45,7 +45,8 @@ import World.Render.Zoom.Types (ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMo
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import Sim.Topology (SimTopology(..), simTopologyForParams)
-import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime, defaultWorldDate)
+import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime,
+                         defaultWorldDate, ClockRemainder, zeroClockRemainder)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (StructureStage, emptyStructureStage)
 import World.Mine.Types (MineDesignations)
@@ -81,6 +82,24 @@ data WorldState = WorldState
     , wsTexturesRef  ∷ IORef WorldTextures
     , wsGenParamsRef ∷ IORef (Maybe WorldGenParams)
     , wsTimeRef      ∷ IORef WorldTime
+    , wsTimeRemainderRef ∷ IORef ClockRemainder
+      -- ^ #2471: this page's sub-minute calendar progress — the
+      --   game-minutes already elapsed that 'wsTimeRef' cannot store
+      --   because it holds whole minutes.
+      --
+      --   Without it the world clock discarded that fraction on every
+      --   tick, so at the shipped default speed (one game-minute per
+      --   real second, against an elapsed step capped at 0.25 s) the
+      --   calendar never advanced at all. PER PAGE, because each page
+      --   runs its own clock at its own scale, and written ONLY by the
+      --   world thread — the tick ('World.Thread.Time'), the queued
+      --   @WorldSetTime@ (which clears it, since that command names a
+      --   whole minute), and load staging — exactly like 'wsTimeRef'
+      --   and 'wsDateRef' beside it, so the three-ref update cannot
+      --   race another writer.
+      --
+      --   Persisted (@world-pages@ v11), unlike 'wsTimeScaleRef' below:
+      --   it is real elapsed calendar progress, not a load policy.
     , wsDateRef      ∷ IORef WorldDate
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
     , wsResumeScaleRef ∷ IORef (Maybe Float)
@@ -486,6 +505,9 @@ emptyWorldState = do
     texturesRef  ← newIORef defaultWorldTextures
     genParamsRef ← newIORef Nothing
     timeRef      ← newIORef defaultWorldTime
+    -- #2471: a brand-new page starts with no retained progress, which is
+    -- also what a pre-v11 save migrates to.
+    timeRemainderRef ← newIORef zeroClockRemainder
     dateRef      ← newIORef defaultWorldDate
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
     resumeScaleRef ← newIORef Nothing
@@ -542,7 +564,8 @@ emptyWorldState = do
     freshGeneratedId ← newGeneratedWorldId
     wsGeneratedIdRef ← newIORef freshGeneratedId
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
-                        timeRef dateRef timeScaleRef resumeScaleRef
+                        timeRef timeRemainderRef dateRef timeScaleRef
+                        resumeScaleRef
                         zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef

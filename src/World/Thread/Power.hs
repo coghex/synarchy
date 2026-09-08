@@ -34,7 +34,7 @@ import Engine.Core.Capability.ContentRegistriesView
 import Power.Types (PowerNodes(..))
 import Power.Network (tickPowerNodes, pageWireTiles, positionsOf, consumersOn,
                       activeCraftConsumersOn, combineConsumers)
-import World.Time.Types (WorldTime, worldTimeToSunAngle)
+import World.Time.Types (WorldTime, worldTimeSunAngleWith)
 import World.Types (WorldPageId, WorldState(..), WorldGenParams(..))
 
 -- | Advance one page's power networks by @dtGame@ game-seconds. No-op
@@ -51,6 +51,9 @@ tickPowerNetworks env pageId ws dtGame = do
     nodes0 ← readIORef (wsPowerNodesRef ws)
     when (not (HM.null (pnsNodes nodes0))) $ do
         wt      ← readIORef (wsTimeRef ws)
+        -- #2471: solar generation follows the page's precise clock, so a
+        -- sub-minute tick moves the sun rather than freezing it.
+        wtRem   ← readIORef (wsTimeRemainderRef ws)
         td      ← readIORef (wsTilesRef ws)
         -- #1207: wire topology is read from the page, not the tile
         -- cache, so a network keeps ticking while its chunks are
@@ -65,7 +68,7 @@ tickPowerNetworks env pageId ws dtGame = do
             (crvRecipeManagerRef (toContentRegistriesViewCapability env))
         bills   ← readIORef (wsCraftBillsRef ws)
         mParams ← readIORef (wsGenParamsRef ws)
-        let sunAngle    = worldTimeToSunAngle (wt ∷ WorldTime)
+        let sunAngle    = worldTimeSunAngleWith (wt ∷ WorldTime) wtRem
             -- Same wsGenParamsRef world.getSunAngleAt itself reads
             -- (Engine.Scripting.Lua.API.WorldQuery.Lookup.getWorldGenParams),
             -- so this tick's per-source local phasing (#794) agrees with

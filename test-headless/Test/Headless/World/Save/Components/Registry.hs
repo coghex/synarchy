@@ -125,7 +125,7 @@ spec = do
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
             ccVersion coreSessionCodec `shouldBe` 1
-            ccVersion worldPagesCodec `shouldBe` 10
+            ccVersion worldPagesCodec `shouldBe` 11
 
         it "rejects a NEWER unsupported version, naming the phase" $
             case ccDecode worldPagesCodec 999 (ccEncode worldPagesCodec richSnapshot) of
@@ -297,8 +297,21 @@ spec = do
             degenerate = AbsBounds 6 6 6 6
 
             bytesAt ∷ Word32 → AbsBounds → BS.ByteString
-            bytesAt 10 b = S.encode (WorldPagesDTO
+            bytesAt 11 b = S.encode (WorldPagesDTO
                 [ (pageCore page1) { pcGenParams = toWorldGenParamsDTO (gpWith b) } ])
+            -- #2471: v10 is the same page core WITHOUT the appended
+            -- sub-minute remainder, so it must be encoded through its own
+            -- frozen DTO -- the current type's bytes would misparse.
+            bytesAt 10 b = S.encode (WorldPagesDTOv10
+                [ PageCoreDTOv10
+                    { pc10PageId = page1
+                    , pc10GenParams = toWorldGenParamsDTO (gpWith b)
+                    , pc10CameraX = 0, pc10CameraY = 0
+                    , pc10TimeHour = 0, pc10TimeMinute = 0
+                    , pc10DateYear = 1, pc10DateMonth = 1, pc10DateDay = 1
+                    , pc10MapMode = ZMDefault, pc10Identity = Nothing
+                    , pc10GeneratedId =
+                        Just (fixtureGeneratedWorldIdForPage page1) } ])
             bytesAt 9 b = S.encode (WorldPagesDTOv9
                 [ PageCoreDTOv9
                     { pc9PageId = page1
@@ -354,7 +367,8 @@ spec = do
                     Right wp → Right (ccValidate worldPagesCodec wp)
 
             carriers ∷ [(String, Word32)]
-            carriers = [ ("v10 / LocationInstanceDTO",  10)
+            carriers = [ ("v11 / LocationInstanceDTO",  11)
+                       , ("v10 / LocationInstanceDTO", 10)
                        , ("v9 / LocationInstanceDTOv5",  9)
                        , ("v8 / LocationInstanceDTOv5",  8)
                        , ("v7 / LocationInstanceDTOv4", 7)
@@ -545,14 +559,14 @@ spec = do
                     DecodePhase
                     "unsupported schema version (reader supports v1, v2, v3)")
 
-        it "reports an unsupported version identically for a TEN-version \
-           \reader" $
-            decodeErrorOf worldPagesCodec 11 BS.empty
-                `shouldBe` Just (ComponentError worldPagesComponentId 11
+        it "reports an unsupported version identically for an \
+           \ELEVEN-version reader" $
+            decodeErrorOf worldPagesCodec 12 BS.empty
+                `shouldBe` Just (ComponentError worldPagesComponentId 12
                     DecodePhase
                     "unsupported schema version \
                     \(reader supports v1, v2, v3, v4, v5, v6, v7, v8, v9, \
-                    \v10)")
+                    \v10, v11)")
 
         it "reports a malformed payload identically -- same component, \
            \supplied version, DecodePhase, and cereal-derived message -- at \
@@ -829,7 +843,14 @@ goldenRichPayloads =
       -- it can actually be observed, by
       -- "a page owing significant contents encodes MORE than the same
       -- page owing none" below.
-    , ("world-pages",         (1340, "70b209601aaa96d0"))
+      --
+      -- #2471 re-pinned: @world-pages@ v11 appends each page's
+      -- sub-minute clock remainder, a bare 8-byte Double per page (16
+      -- here, for two pages). Unlike #917's obligation fields this one
+      -- hangs off the PAGE CORE, so these fixtures do witness it and the
+      -- row genuinely had to move. Only this component's rows moved; no
+      -- other component carries the remainder.
+    , ("world-pages",         (1356, "a2ab9bfa1262eb70"))
       -- #1854 re-pinned: @world-edits@ v2 appends the page's
       -- planted-flora allocator cursor to every page slice (and a
       -- FloraInstanceId to every WePlaceFlora entry, of which this
@@ -856,8 +877,10 @@ goldenFullPayloads =
     , ("texture-palette",     (16,  "88201fb960ff6465"))
       -- #2021 re-pinned, same reason as goldenRichPayloads (one page
       -- here, so 17 bytes rather than 34). #917 left it unmoved for the
-      -- same reason too — this page's location table is empty.
-    , ("world-pages",         (700, "e99c20c10976e8b9"))
+      -- same reason too — this page's location table is empty. #2471
+      -- re-pinned it as goldenRichPayloads is, for 8 bytes rather than
+      -- 16: the remainder is per PAGE and this fixture has one.
+    , ("world-pages",         (708, "f8e458cdd6312bd9"))
       -- #1854 re-pinned, same two components as goldenRichPayloads.
     , ("world-edits",         (78,  "d70f14ce21048a09"))
       -- #1233 re-pinned: this fixture's page carries a ground item, and

@@ -573,6 +573,7 @@ restoreSpec = describe "a restored multi-page session" $
                     , pcCameraY    = 0
                     , pcTimeHour   = wtHour time
                     , pcTimeMinute = wtMinute time
+                    , pcTimeRemainder = 0
                     , pcDateYear   = 1
                     , pcDateMonth  = 1
                     , pcDateDay    = 1

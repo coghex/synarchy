@@ -41,16 +41,29 @@ tickWorldTime env dt = do
                 -- Advance time of day AND the calendar date (#332):
                 -- midnights crossed carry into wsDateRef, so day-of-year
                 -- driven state (flora annual cycle, derived flora age)
-                -- actually moves. Both refs are only written from this
-                -- thread (tick + queued set-time/date commands), so the
-                -- two-ref update can't race another writer.
+                -- actually moves. All three refs are only written from
+                -- this thread (tick + queued set-time/date commands), so
+                -- the update can't race another writer.
+                --
+                -- #2471: wsTimeRemainderRef carries the sub-minute
+                -- progress wsTimeRef cannot hold, so the fraction of a
+                -- minute this tick contributes survives into the next
+                -- one instead of being floored away. A PAUSED tick runs
+                -- this same arithmetic at effScale 0 and therefore
+                -- rewrites all three refs with exactly the values it
+                -- read. Only wmVisible pages are ticked, unchanged by
+                -- #2471: a hidden page keeps whatever remainder it was
+                -- last left with and never catches up.
                 wt ← readIORef (wsTimeRef worldState)
+                remainder ← readIORef (wsTimeRemainderRef worldState)
                 date ← readIORef (wsDateRef worldState)
                 paramsM ← readIORef (wsGenParamsRef worldState)
                 let calendar = maybe defaultCalendarConfig wgpCalender paramsM
-                    (wt', date', daysRolled) =
-                        advanceWorldClock calendar effScale dt wt date
+                    (wt', remainder', date', daysRolled) =
+                        advanceWorldClock calendar effScale dt wt
+                                          remainder date
                 writeIORef (wsTimeRef worldState) wt'
+                writeIORef (wsTimeRemainderRef worldState) remainder'
                 writeIORef (wsDateRef worldState) date'
                 -- Flora regrowth (#94) follows the same clock: timers
                 -- count GAME-seconds (timeScale = game-minutes per
@@ -133,7 +146,8 @@ tickWorldTime env dt = do
         (pageId:_) → case lookup pageId (wmWorlds manager) of
             Just worldState → do
                 wt ← readIORef (wsTimeRef worldState)
-                let sunAngle = worldTimeToSunAngle wt
+                remainder ← readIORef (wsTimeRemainderRef worldState)
+                let sunAngle = worldTimeSunAngleWith wt remainder
                 atomicModifyIORef' (wsSunAngleRef (toWorldSimCapability env)) $ \_ →
                     (publishedSolar sunAngle, ())
             Nothing → return ()

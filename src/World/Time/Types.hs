@@ -4,6 +4,7 @@ module World.Time.Types
     , WorldTime(..)
     , defaultWorldTime
     , worldTimeToSunAngle
+    , worldTimeSunAngleWith
     , advanceWorldClock
     , WorldDate(..)
     , worldDateAddDaysChecked
@@ -47,12 +48,40 @@ defaultWorldTime = WorldTime
 
 -- | Convert world time to sun angle (0.0 .. 1.0)
 --   Mapping: midnight (0:00) = 0.0, 6am = 0.25, noon = 0.5, 6pm = 0.75
+--
+--   Whole minutes only. 'worldTimeSunAngleWith' is what every LIVE page
+--   uses (#2471); this remains the answer for a 'WorldTime' with no
+--   retained progress beside it, and the two agree exactly there.
 worldTimeToSunAngle ∷ WorldTime → Float
 worldTimeToSunAngle (WorldTime h m) =
     let totalMinutes = fromIntegral h * 60.0 + fromIntegral m ∷ Float
     in totalMinutes / 1440.0   -- 1440 = 24 * 60
 
--- | Advance the full world clock — time of day AND calendar date (#332).
+-- | The sun angle of a live page's clock: whole minutes PLUS the
+--   sub-minute progress that clock is carrying (#2471).
+--
+--   The clock stores whole minutes, so before #2471 the angle could only
+--   step once a minute — and at the default scale it never stepped at
+--   all. Reading the retained remainder here makes the angle advance
+--   smoothly with the tick that produced it, which is what every solar
+--   consumer (rendering, line of sight, power generation) actually wants
+--   from a continuously moving sun.
+--
+--   Contract, in the terms the acceptance states: NONDECREASING within a
+--   day (the remainder only ever grows between whole-minute steps, and a
+--   whole-minute step carries exactly the minute the remainder gave up),
+--   and EQUAL to 'worldTimeToSunAngle' whenever the remainder is zero.
+--   Midnight still wraps to 0, exactly as the whole-minute angle does.
+worldTimeSunAngleWith ∷ WorldTime → ClockRemainder → Float
+worldTimeSunAngleWith (WorldTime h m) remainder =
+    realToFrac (preciseMinutes / clockMinutesPerDayD)
+  where
+    preciseMinutes = fromIntegral h * 60 + fromIntegral m
+                   + clockRemainderMinutes remainder ∷ Double
+
+-- | Advance the full world clock — time of day AND calendar date (#332),
+--   retaining sub-minute progress between ticks (#2471).
+--
 --   The predecessor wrapped at midnight without carrying the day, which
 --   left the world date frozen forever (the flora annual cycle selected
 --   by day-of-year could never move). This is the same minute arithmetic
@@ -61,6 +90,25 @@ worldTimeToSunAngle (WorldTime h m) =
 --   invalidate date-dependent caches (flora textures) only when the day
 --   actually changed. A single tick can cross several midnights at high
 --   time scales.
+--
+--   __Sub-minute progress is retained, not discarded (#2471).__ The
+--   stored clock is whole minutes, and every tick used to FLOOR
+--   @timeScale × dt@ straight back into it. At the shipped default scale
+--   — one game-minute per real second, against an elapsed step capped at
+--   'World.Time.Scale.clockMaxElapsedStep' — no admitted tick ever added
+--   a whole minute, so the calendar never moved at all; at higher scales
+--   the same elapsed time advanced the clock by different amounts
+--   depending on how the worker happened to partition it. The remainder
+--   threaded through here is that lost fraction, carried into the next
+--   tick.
+--
+--   Equal admitted elapsed time therefore advances the calendar by the
+--   same duration however it is partitioned, to within
+--   'World.Time.Scale.clockTickErrorBound' per tick: the per-tick
+--   product is EXACT in the accumulator's 'Double'
+--   ('World.Time.Scale.ClockRemainder' spells out why), so only the
+--   running sum rounds, and the sum is reduced back into the day every
+--   tick rather than growing.
 --
 --   __Total over every input (#2280).__ @world.setTimeScale@ refuses a
 --   scale outside 'World.Time.Scale.classifyTimeScale''s domain at the
@@ -73,33 +121,59 @@ worldTimeToSunAngle (WorldTime h m) =
 --   For an unacceptable scale, an unacceptable elapsed step, a day count
 --   or wrapped-minute total that will not fit an 'Int', or a calendar
 --   carry that would overflow 'wdYear', the answer is the EXACT input
---   time and date with zero rolled days — never a partially applied
---   advance. Every accepted input keeps the behaviour it already had,
---   and the returned 'WorldTime' always satisfies @0 ≤ wtHour ≤ 23@ and
---   @0 ≤ wtMinute ≤ 59@.
-advanceWorldClock ∷ CalendarConfig → Float → Float → WorldTime → WorldDate
-                  → (WorldTime, WorldDate, Int)
-advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) date
+--   time, remainder and date with zero rolled days — never a partially
+--   applied advance, and never a remainder the refused tick moved.
+--   Every accepted input keeps the behaviour it already had at whole
+--   minutes, and the returned 'WorldTime' always satisfies
+--   @0 ≤ wtHour ≤ 23@ and @0 ≤ wtMinute ≤ 59@ while the returned
+--   'World.Time.Scale.ClockRemainder' always satisfies its own
+--   @[0, 1)@ range.
+advanceWorldClock ∷ CalendarConfig → Float → Float
+                  → WorldTime → ClockRemainder → WorldDate
+                  → (WorldTime, ClockRemainder, WorldDate, Int)
+advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) remainder date
     | not (acceptedTimeScale timeScale) = unchanged
     | not (acceptedElapsed dtSeconds)   = unchanged
-    | otherwise = case floorToInt (newTotal / clockMinutesPerDay) of
+    | otherwise = case floorToIntD (newTotal / clockMinutesPerDayD) of
         Nothing         → unchanged
         Just daysRolled → carry daysRolled
   where
-    unchanged = (time, date, 0)
-    totalMinutes = fromIntegral h * 60 + fromIntegral m ∷ Float
-    newTotal = totalMinutes + timeScale * dtSeconds
+    unchanged = (time, remainder, date, 0)
+    totalMinutes = fromIntegral h * 60 + fromIntegral m
+                 + clockRemainderMinutes remainder ∷ Double
+    -- Both factors are 'Float', so this product is EXACT in 'Double'
+    -- (24 + 24 significand bits, against 53 available). Widening BEFORE
+    -- multiplying is what makes that true: multiplying in 'Float' and
+    -- widening afterwards would round first and retain the rounded
+    -- value forever.
+    newTotal = totalMinutes + realToFrac timeScale * realToFrac dtSeconds
     carry daysRolled =
-        case floorToInt (newTotal - clockMinutesPerDay * fromIntegral daysRolled) of
+        case floorToIntD inDayMinutes of
             Nothing → unchanged
             Just wrappedMinutes →
                 let time' = WorldTime ((wrappedMinutes `div` 60) `mod` 24)
                                       (wrappedMinutes `mod` 60)
+                    -- Exact whenever the arithmetic is meaningful: for
+                    -- @n = floor x@ the real value @x - n@ lies in
+                    -- [0, 1) and is a multiple of @ulp x@, so it is
+                    -- representable and the subtraction does not round.
+                    -- 'repairClockRemainder' is the honest answer for
+                    -- the case where it is NOT — an @inDayMinutes@ so
+                    -- large that it is already an integer, or that
+                    -- @fromIntegral@ cannot mirror, both of which need
+                    -- an elapsed step no sanitised tick produces. Losing
+                    -- a sub-minute fraction there is right; returning a
+                    -- remainder outside its own range never is.
+                    remainder' = fst (repairClockRemainder
+                        (inDayMinutes - fromIntegral wrappedMinutes))
                 in if daysRolled > 0
                     then case worldDateAddDaysChecked cc daysRolled date of
                         Nothing    → unchanged
-                        Just date' → (time', date', daysRolled)
-                    else (time', date, daysRolled)
+                        Just date' → (time', remainder', date', daysRolled)
+                    else (time', remainder', date, daysRolled)
+      where
+        inDayMinutes =
+            newTotal - clockMinutesPerDayD * fromIntegral daysRolled
 
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.

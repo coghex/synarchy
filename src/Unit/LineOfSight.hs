@@ -47,7 +47,7 @@ import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
 import Unit.Direction (Direction(..))
 import World.Types (WorldManager(..), WorldState(..), WorldGenParams(..),
                     WorldPageId)
-import World.Time.Types (worldTimeToSunAngle)
+import World.Time.Types (worldTimeSunAngleWith)
 import World.Chunk.Types (LoadedChunk(..), columnIndex, wrapChunkCoordU)
 import World.Tile.Types (lookupChunk, WorldTileData(..))
 import World.Generate.Coordinates (globalToChunk)
@@ -98,6 +98,9 @@ visibleTilesOnPage ∷ WorldState → UnitInstance → IO [(Int, Int)]
 visibleTilesOnPage ws inst = do
     wtd     ← readIORef (wsTilesRef ws)
     wt      ← readIORef (wsTimeRef ws)
+    -- #2471: the page's own sub-minute progress rides with its clock, so
+    -- daylight moves continuously rather than once a game-minute.
+    wtRem   ← readIORef (wsTimeRemainderRef ws)
     mParams ← readIORef (wsGenParamsRef ws)
     let worldSize = maybe fallbackWorldSizeChunks wgpWorldSize mParams
         ux = floor (uiGridX inst) ∷ Int
@@ -108,7 +111,8 @@ visibleTilesOnPage ws inst = do
         (fx, fy) = facingVector (uiFacing inst)
         perception = HM.lookupDefault 1.0 "perception" (uiStats inst)
         night = nightPerceptionFactor
-                    (localSunAngle worldSize ux uy (worldTimeToSunAngle wt))
+                    (localSunAngle worldSize ux uy
+                        (worldTimeSunAngleWith wt wtRem))
         radius = max 1 (floor (realToFrac perception * awareRangeTiles
                                * realToFrac night) ∷ Int)
 
@@ -178,7 +182,8 @@ unitAwareness env defender attacker
                     inFacingCone = dist < 1.0e-4 ∨ (dot ≥ 0 ∧ dot * dot ≥ 0.25 * lenSq)
                 blocked ← losBlockedBetween env defender attacker
                 wt ← readIORef (wsTimeRef ws)
-                let sunAngle = worldTimeToSunAngle wt
+                wtRem ← readIORef (wsTimeRemainderRef ws)
+                let sunAngle = worldTimeSunAngleWith wt wtRem
                 worldSize ← activeWorldSizeChunks env (uiPage defender)
                 let localAngle = localSunAngle worldSize (floor defX) (floor defY) sunAngle
                 pure $! nightPerceptionFactor localAngle *
