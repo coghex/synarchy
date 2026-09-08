@@ -29,7 +29,9 @@
 --     satisfy a predicate, so nothing here may enumerate through an
 --     active-page-scoped list (unit.getAllIds, building.getActiveIds).
 --     Units come from the page-agnostic AI-state table, the portal from
---     the page-agnostic building.existsWithDef.
+--     the page-agnostic building.existsWithDef. Locations come from
+--     persisted knownLocations pairs, read with an explicit page; neither
+--     page-less world.listPlacedLocations nor item.listGround is used.
 --
 -- Loaded via engine.loadScript so update() ticks; requires nothing at
 -- module scope, so the whole module is reachable from the standalone-
@@ -120,6 +122,7 @@ local function isPlayerAcolyte(uid)
     if type(unit) ~= "table" then return false end
     if not unit.exists(uid) then return false end
     if unit.getFaction(uid) ~= PLAYER_FACTION then return false end
+    if unit.getPose(uid) == "dead" then return false end
     local info = unit.getInfo(uid)
     return type(info) == "table" and info.defName == ACOLYTE_DEF
 end
@@ -128,7 +131,7 @@ end
 -- its own inventory. Water is measured as fill, not as item count: a
 -- canteen is provisioning only to the extent it is full, and an empty
 -- one weighs the same as a full one to a naive count.
-local function carriedSupplies(uid)
+local function carriedSupplies(uid, carriedIds)
     local litres, rations = 0, 0
     if type(unit) ~= "table" or type(unit.getInventory) ~= "function" then
         return litres, rations
@@ -137,6 +140,7 @@ local function carriedSupplies(uid)
     if type(inv) ~= "table" then return litres, rations end
     for _, item in ipairs(inv) do
         if type(item) == "table" then
+            if item.instanceId ~= nil then carriedIds[item.instanceId] = true end
             if item.holds == WATER_HOLDS then
                 litres = litres + (tonumber(item.currentFill) or 0)
             end
@@ -156,6 +160,41 @@ local function portalExists()
     return building.existsWithDef(PORTAL_DEF) == true
 end
 
+-- Location facts use the remembered page/id pair, never the active page.
+-- Duplicate knowledge from multiple acolytes reads each instance only once.
+local function gatherLocations(state, facts, takenIds, visited)
+    if type(state) ~= "table" or type(state.knownLocations) ~= "table"
+            or type(world) ~= "table"
+            or type(world.getLocationInstance) ~= "function" then return end
+    for _, known in ipairs(state.knownLocations) do
+        if type(known) == "table" and known.page ~= nil and known.id ~= nil then
+            local page = visited[known.page] or {}
+            visited[known.page] = page
+            if not page[known.id] then
+                page[known.id] = true
+                local location = world.getLocationInstance(known.id, known.page)
+                if type(location) == "table" then
+                    local encounter = location.encounter
+                    if type(encounter) == "table" and encounter.cleared == true
+                            and (encounter.rolled_count == 0
+                                or encounter.activated == true) then
+                        facts.confront = true
+                    end
+                    if location.lifecycle == "cleared" then facts.clear = true end
+                    for _, significant in ipairs(location.significant or {}) do
+                        if significant.taken == true then
+                            facts.recover = true
+                            if significant.item_instance_id ~= nil then
+                                takenIds[significant.item_instance_id] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Everything the shipped predicates need, gathered in ONE pass over the
 -- eligible acolytes.
 --
@@ -172,9 +211,14 @@ function tutorialEval.gatherFacts()
         knownWater = false,
         water      = false,
         food       = false,
+        confront   = false,
+        recover    = false,
+        secure     = false,
+        clear      = false,
     }
     local aiState = aiStateTable()
     if aiState == nil then return facts end
+    local carriedIds, takenIds, visited = {}, {}, {}
     for uid, s in pairs(aiState) do
         if isPlayerAcolyte(uid) then
             if type(s) == "table" and type(s.knownWaterSources) == "table"
@@ -186,13 +230,19 @@ function tutorialEval.gatherFacts()
                 -- entries between acolytes.
                 facts.knownWater = true
             end
-            local litres, rations = carriedSupplies(uid)
+            local litres, rations = carriedSupplies(uid, carriedIds)
+            gatherLocations(s, facts, takenIds, visited)
             local hasWater = litres >= EXPEDITION_WATER_L
             if hasWater then facts.water = true end
             if hasWater and rations >= EXPEDITION_RATIONS then
                 facts.food = true
             end
         end
+    end
+    -- Knowledge and custody may belong to different acolytes. Intersect
+    -- after the pass so pairs(aiState) visit order cannot change Secure.
+    for id in pairs(takenIds) do
+        if carriedIds[id] then facts.secure = true; break end
     end
     return facts
 end
@@ -216,6 +266,10 @@ local PREDICATES = {
     secure_water_source = function(facts) return facts.knownWater end,
     prepare_water       = function(facts) return facts.water end,
     prepare_food        = function(facts) return facts.food end,
+    confront            = function(facts) return facts.confront end,
+    recover             = function(facts) return facts.recover end,
+    secure              = function(facts) return facts.secure end,
+    clear               = function(facts) return facts.clear end,
 }
 
 -----------------------------------------------------------
@@ -253,6 +307,7 @@ function tutorialEval.evaluate()
 
     local facts   = tutorialEval.gatherFacts()
     local results = {}
+    local completed = {}
 
     for _, id in ipairs(index.order) do
         local node = index.byId[id].node
@@ -277,7 +332,7 @@ function tutorialEval.evaluate()
                 if node.kind == "subobjective" then
                     TP.setSubobjectiveChecked(id, ok)
                 elseif ok then
-                    TP.completeObjective(id)
+                    completed[#completed + 1] = id
                 end
             end
         end
@@ -296,10 +351,11 @@ function tutorialEval.evaluate()
                 if results[sub] ~= true then all = false end
             end
             results[id] = all
-            if all then TP.completeObjective(id) end
+            if all then completed[#completed + 1] = id end
         end
     end
 
+    TP.completeObjectives(completed)
     return results
 end
 

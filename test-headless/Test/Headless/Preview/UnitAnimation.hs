@@ -1,10 +1,10 @@
 -- | Focused tests for 'Engine.Preview.Unit' (#887, Phase 3 of the
 --   @--preview@ browser epic #427): the pure direction-mirroring table,
---   the default-selection rule, animation ordering/labeling, numeric
---   frame ordering, YAML metadata extraction, the unequal-frame-count
---   playback rule, and the documented end-of-clip policy — since #1833
---   a CONTINUOUS REPLAY, for every clip, whatever its authored @loop@
---   says — plus the filesystem containment rules that reject a bad
+--   the default-selection rule, animation ordering/labeling, YAML
+--   metadata extraction, the unequal-frame-count playback rule, and
+--   the documented end-of-clip policy — since #1833 a CONTINUOUS
+--   REPLAY, for every clip, whatever its authored @loop@ says — plus
+--   the filesystem containment rules that reject a bad
 --   @units\/\<name\>@ target before a window is ever created. No engine
 --   needed.
 --
@@ -282,17 +282,6 @@ spec = do
             defaultAnimationName ["attack", "walk"] `shouldBe` Just "attack"
         it "is Nothing for a unit with no animations" $
             defaultAnimationName [] `shouldBe` Nothing
-
-    describe "sortFrameFiles" $ do
-        it "orders numerically, not lexicographically" $
-            sortFrameFiles ["frame_10.png", "frame_2.png", "frame_1.png"]
-                `shouldBe` ["frame_1.png", "frame_2.png", "frame_10.png"]
-        it "keeps zero-padded names in the same order they already read in" $
-            sortFrameFiles ["frame_002.png", "frame_000.png", "frame_001.png"]
-                `shouldBe` ["frame_000.png", "frame_001.png", "frame_002.png"]
-        it "sorts an unnumbered name after the numbered ones instead of dropping it" $
-            sortFrameFiles ["pose.png", "frame_001.png"]
-                `shouldBe` ["frame_001.png", "pose.png"]
 
     describe "resolveAnimDirections" $ do
         it "mirrors W/SW/NW from their eastern counterparts when flipping \

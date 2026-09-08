@@ -14,6 +14,9 @@ import World.Weather.Types (climateRegionSize)
 
 -- | Smallest supported world side, in chunks. A world must contain at
 --   least one complete region for every region grid used by generation.
+--   @regionSize@ (8) is a multiple of @climateRegionSize@ (4), so taking
+--   the larger of the two here is enough to make both grids divide it;
+--   this is not guaranteed for an arbitrary pair of grid sizes.
 minimumWorldSize ∷ Int
 minimumWorldSize = max regionSize climateRegionSize
 

@@ -3,6 +3,11 @@
 --   category-relative labeling, deterministic ordering, non-texture
 --   exclusion, nested focused-path resolution, and containment
 --   rejection. No engine needed — every function here is filesystem-only.
+--
+--   'sortFrameFiles' is covered here too (#2195): it lives in this
+--   module, and the buildings viewer is its one consumer. The coverage
+--   used to sit in "Test.Headless.Preview.UnitAnimation", reaching it
+--   through a re-export the units viewer had stopped using.
 module Test.Headless.Preview.Discovery (spec) where
 
 import UPrelude
@@ -95,6 +100,17 @@ spec = do
                 entries = map mk ["z.png", "A.png", "a.png", "m/x.png"]
             map peLabel (sortEntries entries)
                 `shouldBe` ["A.png", "a.png", "m/x.png", "z.png"]
+
+    describe "sortFrameFiles" $ do
+        it "orders numerically, not lexicographically" $
+            sortFrameFiles ["frame_10.png", "frame_2.png", "frame_1.png"]
+                `shouldBe` ["frame_1.png", "frame_2.png", "frame_10.png"]
+        it "keeps zero-padded names in the same order they already read in" $
+            sortFrameFiles ["frame_002.png", "frame_000.png", "frame_001.png"]
+                `shouldBe` ["frame_000.png", "frame_001.png", "frame_002.png"]
+        it "sorts an unnumbered name after the numbered ones instead of dropping it" $
+            sortFrameFiles ["pose.png", "frame_001.png"]
+                `shouldBe` ["frame_001.png", "pose.png"]
 
     describe "discoverEntries" $ do
         it "is empty for a nonexistent root (never an error)" $ do
