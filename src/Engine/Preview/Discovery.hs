@@ -133,9 +133,16 @@ sortEntries = sortBy (comparing peLabel)
 --   agree today, but an unpadded @frame_10.png@ must not sort before
 --   @frame_2.png@. Files whose stem carries no trailing digits sort
 --   after the numbered ones, by name, so nothing is silently dropped.
---   Shared by the units viewer ('Engine.Preview.Unit', which re-exports
---   it) and the buildings viewer ('Engine.Preview.Building') so the two
---   can never disagree about frame order.
+--
+--   The buildings viewer ('Engine.Preview.Building') is the ONLY
+--   consumer: it is the one viewer that still enumerates a directory of
+--   source frames. The units viewer ('Engine.Preview.Unit') does not
+--   share this ordering and is not constrained by it — since #1261 it
+--   reads the compiled atlas index instead, and each direction's frames
+--   follow ascending atlas columns, with that direction's row and its
+--   REAL frame count supplied by the index and sampled through
+--   'Unit.Atlas.Types.atlasCellUV'. The index records no per-frame
+--   source paths, so there is no directory listing left to order.
 sortFrameFiles ∷ [FilePath] → [FilePath]
 sortFrameFiles = sortOn key
   where
