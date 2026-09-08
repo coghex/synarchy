@@ -33,12 +33,14 @@ import UPrelude
 import Test.Hspec
 import Control.Exception (SomeAsyncException(..), AsyncException(UserInterrupt)
                          , throwIO, try)
-import Data.IORef (newIORef)
+import Data.IORef (newIORef, writeIORef)
 import Data.List (sort)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Engine.Core.State (EngineEnv(..))
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.API.Descriptor
@@ -83,15 +85,35 @@ spec = around withDescriptorEngine $ do
 
         it "pushes placePopup's three bare values in descriptor order" $ \env → do
             (ls, ds) ← newFixture env
-            checkShape ls ds "placePopup" "UI.placePopup(10, 20, 30, 40, 50, 60, 'below')"
-            -- Order and count are the contract, not just the arity.
-            types ← evalDebug ls (T.concat
-                [ "local x, y, f = UI.placePopup(10, 20, 30, 40, 50, 60, 'below') "
-                , "return type(x) .. ' ' .. type(y) .. ' ' .. type(f)" ])
-            unquoted types `shouldBe` "number number boolean"
+            checkShape ls ds "placePopup" placePopupBelow
+            -- Order is the contract, and a type check cannot carry it:
+            -- x and y are both TNumber, so a swap of the descriptor's
+            -- first two results — or of the action's first two pushes —
+            -- would read as "number number boolean" either way. Pin the
+            -- VALUES instead, over a framebuffer this test fixes so the
+            -- arithmetic is exact and x is distinguishable from y.
+            --
+            -- Anchor (10, 20) sized 30x40, content 50x60, 800x600
+            -- framebuffer: 'below' is y = 20 + 40 = 60, which fits, so
+            -- UI.PopupPlacement leaves x at the anchor's 10 and neither
+            -- clamp binds. x = 10, y = 60, flipped = false.
+            setFramebuffer env (800, 600)
+            checkNamedResults ls ds "placePopup" placePopupBelow
+                [("x", "10"), ("y", "60"), ("flipped", "false")]
+            -- The same request against the bottom edge cannot open
+            -- below (560 + 40 + 60 > 600), so it flips above to
+            -- 560 - 60 = 500 and reports it. This is what pins the
+            -- third result as the flip flag rather than as "whatever
+            -- boolean happened to be pushed last".
+            checkNamedResults ls ds "placePopup" placePopupFlipped
+                [("x", "10"), ("y", "500"), ("flipped", "true")]
             -- The direction argument really is optional, and omitting it
-            -- changes neither the count nor the kinds.
+            -- changes neither the count nor the values' positions.
+            -- Anchored placement ignores the anchor's size and clamps
+            -- only, so the pair stays asymmetric: x = 10, y = 20.
             checkShape ls ds "placePopup" "UI.placePopup(10, 20, 30, 40, 50, 60)"
+            checkNamedResults ls ds "placePopup" "UI.placePopup(10, 20, 30, 40, 50, 60)"
+                [("x", "10"), ("y", "20"), ("flipped", "false")]
 
         it "pushes findHoverTarget's two nullable values, together" $ \env → do
             (ls, ds) ← newFixture env
@@ -275,6 +297,20 @@ newFixture env = do
     setup `shouldNotSatisfy` isLuaError
     pure (ls, ds)
 
+-- | The placement requests the order check pins. Named so the shape
+--   check and the value check cannot drift apart into two different
+--   calls.
+placePopupBelow, placePopupFlipped ∷ Text
+placePopupBelow   = "UI.placePopup(10, 20, 30, 40, 50, 60, 'below')"
+placePopupFlipped = "UI.placePopup(10, 560, 30, 40, 50, 60, 'below')"
+
+-- | Fix the framebuffer @UI.placePopup@ reads. Without this the
+--   placement depends on whatever size the headless engine happens to
+--   hold, and no concrete result could be asserted.
+setFramebuffer ∷ EngineEnv → (Int, Int) → IO ()
+setFramebuffer env size =
+    writeIORef (rvFramebufferSizeRef (toRenderViewCapability env)) size
+
 fixtureLua ∷ Text
 fixtureLua = T.concat
     [ "local page = UI.newPage('desc_page', 'hud') "
@@ -325,6 +361,54 @@ checkShape ls ds name call = case [ d | d ← ds, verbName d ≡ TE.encodeUtf8 n
     (d : _) → do
         answer ← evalDebug ls (returnShapeChunk d call)
         answer `shouldBe` "true"
+
+-- | Pin one call's actual RESULT VALUES to positions through the
+--   descriptor's own result names.
+--
+--   A type check cannot express order when two results share a kind, and
+--   a bare value assertion cannot either — it never consults the
+--   descriptor, so reordering the descriptor alone would leave it
+--   passing. Pairing expected values with names and letting the
+--   DESCRIPTOR decide which position each name occupies closes both
+--   sides: reorder the descriptor and position 1 starts expecting y's
+--   value against x's actual; reorder the action's pushes and position 1
+--   stops producing x's. Renaming a result fails too, since its name no
+--   longer appears in the expectations.
+checkNamedResults ∷ LuaBackendState → [LuaVerb] → Text → Text
+                  → [(Text, Text)] → Expectation
+checkNamedResults ls ds name call expected =
+    case [ d | d ← ds, verbName d ≡ TE.encodeUtf8 name ] of
+        []      → expectationFailure ("no UI descriptor named " <> T.unpack name)
+        (d : _) → case verbReturns d of
+            ReturnsNothing → expectationFailure
+                (T.unpack name <> " describes no results, so it has no order to pin")
+            ReturnsValues results
+                | length results ≢ length expected → expectationFailure
+                    (T.unpack name <> " describes " <> show (length results)
+                        <> " results but " <> show (length expected)
+                        <> " were expected")
+                | [ r | r ← results, isNothing (lookup (resultName r) expected) ] ≢ []
+                    → expectationFailure
+                        (T.unpack name <> " describes a result this check does not "
+                            <> "name: " <> show (map resultName results))
+                | otherwise → do
+                    let binds = [ "v" <> tshow i | i ← [1 .. length results] ]
+                        checks =
+                            [ "(" <> v <> " == " <> fromMaybe "" (lookup (resultName r) expected) <> ")"
+                            | (v, r) ← zip binds results ]
+                        chunk = T.intercalate "\n"
+                            [ "local " <> T.intercalate ", " binds <> " = " <> call
+                            , "return " <> T.intercalate " and " checks
+                            ]
+                    answer ← evalDebug ls chunk
+                    -- Report the actual triple on failure, not just False.
+                    if answer ≡ "true" then pure () else do
+                        actual ← evalDebug ls ("return " <> call)
+                        expectationFailure
+                            (T.unpack name <> " " <> T.unpack call <> ": expected "
+                                <> show [ (resultName r, lookup (resultName r) expected)
+                                        | r ← results ]
+                                <> " in that order, got " <> show actual)
 
 -- | A Lua chunk answering @true@ when one call matches @verb@'s return
 --   shape.
