@@ -715,6 +715,7 @@ library
                      Sim.Topology
                      Sim.Chunk
                      Sim.Fluid.Types
+                     Sim.Fluid.Reaction
                      Sim.Fluid.Active
                      World.Base
                      World.Constants
@@ -1401,6 +1402,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.DumpSettleWait
                    Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
+                   Test.Headless.Sim.Reaction
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings

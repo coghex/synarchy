@@ -22,13 +22,13 @@ module Test.Headless.Sim.Seam (spec) where
 import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize, wrapChunkCoordU)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
-import Sim.State.Types (SimWorldState(..), SimChunkState(..))
+import Sim.State.Types (SimWorldState(..), SimChunkState(..)
+                       , emptySimWorldState)
 import Sim.Chunk (applyChunkEdit, loadedChunkState)
 import Sim.Fluid.Types (ActiveFluidCell(..), volumePerLevel, volumeToSurface)
 import Sim.Fluid.Active (simulateActiveTick)
@@ -55,9 +55,8 @@ mkChunk active = SimChunkState
     }
 
 mkState ∷ SimTopology → [(ChunkCoord, SimChunkState)] → SimWorldState
-mkState topo chunks = SimWorldState
+mkState topo chunks = emptySimWorldState
     { swsChunks      = HM.fromList chunks
-    , swsDirtyChunks = HS.empty
     , swsActive      = True
     , swsTopology    = topo
     }
