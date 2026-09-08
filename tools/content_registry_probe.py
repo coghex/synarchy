@@ -3,21 +3,24 @@
 
 The focused functional gate for the `content-registries` capability
 (`docs/engineenv_capability_inventory.md` SS5/SS7.6): every one of the
-seven registries is exercised through BOTH its public Lua writer and a
-public Lua reader, in one headless boot, so the #890 narrowing
+eight registries a public Lua verb can reach is exercised through BOTH
+its public writer and a public reader, in one headless boot, so the #890
+narrowing
 (`Engine.Core.Capability.ContentRegistries`) can't silently break a
 registry that no other CI-eligible probe touches.
 
 `tools/craft_probe.py` only loads substance / item / equipment / recipe
 data, and the infection + location probes are manual-only — so before
 this probe, three of the seven writer/reader pairs (infection, location
-defs, loot tables) had no automated gate at all.
+defs, loot tables) had no automated gate at all. Loot profiles (#2499)
+joined as the eighth and have no other gate either.
 
 Phases:
 
-  1. Writers — all seven `load*Yaml` verbs over the shipped data files:
+  1. Writers — all eight `load*Yaml` verbs over the shipped data files:
      substance, item, equipment, infection, recipe, location, loot
-     table. Each file must report a positive count of its OWN (a
+     table, loot profile. Each file must report a positive count of its
+     OWN (a
      rejected file is invisible in a summed total, #1233), and the item
      registry additionally has to load exactly as many definitions as
      the `data/items/` TREE authors — recursively, at any depth, since
@@ -33,7 +36,9 @@ Phases:
      path) and loot.rollFor (#948: the seed-stable draw the placed-
      location content-spawn path uses — repeatable for one context,
      independent across contexts, nil for an unknown table or an
-     incomplete context).
+     incomplete context), plus the two read-only loot-PROFILE queries
+     (#2499): loot.profile over the shipped profile's whole shape and
+     loot.listProfiles' sorted id list.
   3. Reload — the loaders are PUBLIC verbs callable at any time, not a
      one-shot boot step (`Engine.Scripting.Lua.API.Register.Engine`), so
      a probe-authored substance file is loaded twice with a changed
@@ -163,7 +168,7 @@ def main():
     proc = boot(port)
     try:
         # --- Phase 1: every writer path -------------------------------
-        print("\n-- phase 1: registry writers (all seven load*Yaml verbs) --")
+        print("\n-- phase 1: registry writers (all eight load*Yaml verbs) --")
         writers = [
             ("substance", "engine.loadSubstanceYaml", "data/substances/*.yaml"),
             ("item", "engine.loadItemYaml", ITEM_YAML_GLOB),
@@ -172,6 +177,14 @@ def main():
             ("recipe", "engine.loadRecipeYaml", "data/recipes/*.yaml"),
             ("location", "engine.loadLocationYaml", "data/locations/*.yaml"),
             ("loot table", "engine.loadLootTableYaml", "data/loot_tables/*.yaml"),
+            # #2499: this is ALSO D-20's own end-to-end proof. A loot
+            # profile resolves every entry's item id against the live
+            # item registry at load and refuses the whole file on the
+            # first unresolved one, so `n > 0` here means the shipped
+            # profile's eight item ids all named real definitions in the
+            # real `data/items/` tree loaded three lines above.
+            ("loot profile", "engine.loadLootProfileYaml",
+             "data/loot_profiles/*.yaml"),
         ]
         item_total = None
         for label, fn, pattern in writers:
@@ -335,6 +348,53 @@ def main():
             got = send(port, lua).strip().strip('"')
             ok = got in ("null", "nil", "")
             passed = check(passed, ok, label, f"got={got!r}")
+
+        # Loot PROFILES (#2499) are the other half of the `loot`
+        # namespace and a DIFFERENT registry field: read-only queries
+        # over what engine.loadLootProfileYaml registered above.
+        prof = send_json(port, "return loot.profile('ruin_industrial_salvage')",
+                         timeout=QUERY_TIMEOUT)
+        mult = prof.get("quantity_multiplier") if isinstance(prof, dict) else None
+        entries = prof.get("entries") if isinstance(prof, dict) else None
+        ok = (isinstance(prof, dict)
+              and prof.get("id") == "ruin_industrial_salvage"
+              and isinstance(mult, dict)
+              and 1 <= mult.get("min", 0) <= mult.get("max", 0)
+              and isinstance(entries, list) and len(entries) > 0
+              and all(isinstance(e.get("item"), str)
+                      and 0.0 <= e.get("chance", -1.0) <= 1.0
+                      and isinstance(e.get("quantity_factor"), int)
+                      and e["quantity_factor"] >= 1
+                      for e in entries))
+        passed = check(passed, ok, "loot.profile returns the whole profile",
+                       f"profile={prof}")
+        # Every item the SHIPPED profile names must be a def the item
+        # registry actually holds -- the same claim the loader enforced,
+        # re-read from the live registries rather than from the file.
+        registered_items = ({d.get("name") for d in item_defs}
+                            if isinstance(item_defs, list) else set())
+        unresolved = ([e.get("item") for e in entries
+                       if e.get("item") not in registered_items]
+                      if isinstance(entries, list) else ["<no entries>"])
+        passed = check(passed, not unresolved,
+                       "every shipped loot-profile entry names a registered "
+                       "item (D-20)", f"unresolved={unresolved}")
+
+        prof_ids = send_json(port, "return loot.listProfiles()",
+                             timeout=QUERY_TIMEOUT)
+        ok = (isinstance(prof_ids, list)
+              and "ruin_industrial_salvage" in prof_ids
+              and prof_ids == sorted(prof_ids)
+              and len(prof_ids) == len(set(prof_ids)))
+        passed = check(passed, ok,
+                       "loot.listProfiles is sorted and free of repeats",
+                       f"ids={prof_ids}")
+
+        unknown_profile = send(
+            port, "return loot.profile('no_such_profile')").strip().strip('"')
+        ok = unknown_profile in ("null", "nil", "")
+        passed = check(passed, ok, "loot.profile on an unknown id is nil",
+                       f"got={unknown_profile!r}")
 
         # --- Phase 3: loaders stay callable (insert/replace, not frozen)
         print("\n-- phase 3: reload semantics --")

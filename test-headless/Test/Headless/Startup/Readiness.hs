@@ -12,7 +12,7 @@
 --   Three layers own three halves of the fix, and this module pins each
 --   against the real production code:
 --
---   * the twelve @engine.load*Yaml@ BINDINGS answer a decode failure
+--   * the thirteen @engine.load*Yaml@ BINDINGS answer a decode failure
 --     distinguishably — but only when asked, so the single numeric
 --     result every other caller reads is untouched;
 --   * @scripts\/startup_loader.lua@ turns a family that discovered no
@@ -69,7 +69,7 @@ data Fam = Fam
     , famVerb ∷ Text
     }
 
--- | @queueNormalProfile@'s twelve, in its own order.
+-- | @queueNormalProfile@'s thirteen, in its own order.
 normalFams ∷ [Fam]
 normalFams =
     [ Fam "data/materials"   "material"   "loadMaterialYaml"
@@ -83,10 +83,11 @@ normalFams =
     , Fam "data/buildings"   "building"   "loadBuildingYaml"
     , Fam "data/units"       "unit"       "loadUnitYaml"
     , Fam "data/loot_tables" "loot_table" "loadLootTableYaml"
+    , Fam "data/loot_profiles" "loot_profile" "loadLootProfileYaml"
     , Fam "data/locations"   "location"   "loadLocationYaml"
     ]
 
--- | @queueArenaProfile@'s eleven: the same inventory minus flora.
+-- | @queueArenaProfile@'s twelve: the same inventory minus flora.
 arenaFams ∷ [Fam]
 arenaFams = [ f | f ← normalFams, famId f ≢ "flora" ]
 
@@ -457,7 +458,7 @@ runBootThen after sc profile = do
               | otherwise                       = -1
 
 -----------------------------------------------------------------------
--- The engine half: the twelve real bindings
+-- The engine half: the thirteen real bindings
 -----------------------------------------------------------------------
 
 -- | A private headless engine plus a real Lua backend with the whole
@@ -544,6 +545,7 @@ shippedFile verb = case verb of
     "loadBuildingYaml"   → "data/buildings/furnace.yaml"
     "loadUnitYaml"       → "data/units/acolyte.yaml"
     "loadLootTableYaml"  → "data/loot_tables/ruin_common.yaml"
+    "loadLootProfileYaml" → "data/loot_profiles/ruin_industrial_salvage.yaml"
     "loadLocationYaml"   → "data/locations/ruin_small.yaml"
     _                    → ""
 
@@ -553,6 +555,16 @@ shippedFile verb = case verb of
 shippedPrereqs ∷ Text → [(Text, Text)]
 shippedPrereqs "loadLocationYaml" =
     [("loadItemYaml", "data/items/processing_unit.yaml")]
+-- A loot profile resolves EVERY entry's item id against the live item
+-- registry at load (#2499, D-20), and rejects the whole file on the
+-- first unresolved one. So the shipped profile needs all eight of its
+-- items registered first — production's own order (items before
+-- profiles in @queueNormalProfile@), not a test convenience.
+shippedPrereqs "loadLootProfileYaml" =
+    [ ("loadItemYaml", "data/items/" <> item <> ".yaml")
+    | item ← [ "steel_bar", "electric_motor", "steel_hardware"
+             , "high_voltage_battery", "steel_plate", "processing_unit"
+             , "wiring", "rations" ] ]
 shippedPrereqs _ = []
 
 -- | The top-level key each list family decodes, so an EMPTY one can be
@@ -575,8 +587,9 @@ emptyListFile verb = case verb of
     _                    → Nothing
 
 -- | Broken YAML SYNTAX, so the decode fails for every family the same
---   way — including loot tables, whose loader bypasses 'loadYamlList'
---   entirely and had the identical indistinguishable-zero problem.
+--   way — including loot tables and loot profiles, whose loaders bypass
+--   'loadYamlList' entirely and had the identical
+--   indistinguishable-zero problem.
 malformedFile ∷ String
 malformedFile = "entries:\n  - id: [unclosed\n"
 

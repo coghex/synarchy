@@ -69,6 +69,7 @@ import Infection.Types (InfectionManager)
 import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
+import LootProfile.Types (LootProfileRegistry)
 import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible
@@ -561,6 +562,16 @@ data EngineEnv = EngineEnv
     --   does NOT touch 'statRNGRef'. The plain `loot.roll` still draws
     --   from that shared entropy-seeded generator and remains for
     --   ad-hoc, non-reproducible callers.
+  , lootProfileRegistryRef ∷ IORef LootProfileRegistry
+    -- ^ Registry of loot PROFILES loaded from data/loot_profiles/*.yaml
+    --   at boot (#2499, epic #1231 PLC-12). Distinct from
+    --   'lootTableRegistryRef' in kind, not just in content: a loot
+    --   table is ONE weighted draw, while a profile rolls every entry
+    --   independently against its own absolute chance and sizes each
+    --   accepted lot from the profile's quantity multiplier. Populated
+    --   by `engine.loadLootProfileYaml`, read back read-only through
+    --   `loot.profile` / `loot.listProfiles`. Pure authored data — no
+    --   consumer rolls it yet; PLC-13 owns realization.
   , tutorialRegistryRef ∷ IORef TutorialRegistry
     -- ^ The one active tutorial definition tree, loaded from
     --   data/tutorials/*.yaml at boot (#957). Pure authored data —

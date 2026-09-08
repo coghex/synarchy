@@ -445,6 +445,8 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "recipeManagerRef": frozenset({"Engine.Scripting.Lua.API.Craft.Recipe"}),
     "locationDefsRef": frozenset({"Engine.Scripting.Lua.API.Locations"}),
     "lootTableRegistryRef": frozenset({"Engine.Scripting.Lua.API.LootTables"}),
+    "lootProfileRegistryRef":
+        frozenset({"Engine.Scripting.Lua.API.LootProfiles"}),
     "tutorialRegistryRef": frozenset({"Engine.Scripting.Lua.API.Tutorial"}),
     "eventStoreRef": frozenset(),
     "notificationCfgRef": frozenset({"Engine.Scripting.Lua.API.PlayerEvent"}),

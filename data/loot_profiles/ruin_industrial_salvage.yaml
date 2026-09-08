@@ -1,0 +1,55 @@
+# The first loot PROFILE (#2499, epic #1231 PLC-12 / design D-20).
+#
+# A profile is NOT a loot table. A loot table (data/loot_tables/) makes
+# ONE weighted draw and `weight` is relative to its siblings. Here every
+# entry is rolled INDEPENDENTLY against its own absolute `chance`, and
+# each entry that appears contributes a lot of
+#   quantity_factor * <one roll of quantity_multiplier>
+# items, admitted against the container's remaining capacity in a
+# seed-shuffled order (design D-6). So the three 0.30 entries below
+# appear 30% of the time each, independently — a run where all of them
+# appear and a run where none does are both ordinary outcomes.
+#
+# One file IS one profile — no wrapping list, like a loot table and
+# unlike locations/items/units.
+#
+# Industrial salvage: what is left in a ruined workshop or plant. Bulk
+# stock (bars, hardware, plate, wiring) is common and comes in useful
+# lots; a surviving motor, processing unit or HV battery is a rare,
+# single find worth the trip. Rations are the odd non-industrial entry
+# — someone worked here.
+#
+# NOTHING CONSUMES THIS YET. PLC-13 owns the roll and the admission,
+# PLC-14 the container content entry, and PLC-10 both the wooden crate
+# that carries it and any retuning of the numbers below. Every `item`
+# must name a definition in data/items/ or the whole file is rejected
+# at load (D-20) — items load before profiles.
+id: ruin_industrial_salvage
+quantity_multiplier:
+  min: 1
+  max: 4
+entries:
+  - item: steel_bar
+    chance: 0.30
+    quantity_factor: 5
+  - item: electric_motor
+    chance: 0.05
+    quantity_factor: 1
+  - item: steel_hardware
+    chance: 0.30
+    quantity_factor: 10
+  - item: high_voltage_battery
+    chance: 0.01
+    quantity_factor: 1
+  - item: steel_plate
+    chance: 0.30
+    quantity_factor: 5
+  - item: processing_unit
+    chance: 0.05
+    quantity_factor: 1
+  - item: wiring
+    chance: 0.30
+    quantity_factor: 5
+  - item: rations
+    chance: 0.10
+    quantity_factor: 5

@@ -61,6 +61,7 @@ local yamlFamilies = {
     ["data/buildings"]   = "building",
     ["data/units"]       = "unit",
     ["data/loot_tables"] = "loot_table",
+    ["data/loot_profiles"] = "loot_profile",
     ["data/locations"]   = "location",
 }
 
@@ -81,10 +82,11 @@ end
 --
 -- Deliberately says only "loaded N", never "N definitions": the value
 -- summed is whatever that family's binding returns to Lua, and that is
--- not one quantity across the twelve — materials and vegetation return
--- a TEXTURE total, flora a texture total too, loot tables 0 or 1 per
--- file, and the rest a definition count. `files` distinguishes a family
--- whose directory held nothing from one whose files all returned zero.
+-- not one quantity across the thirteen — materials and vegetation return
+-- a TEXTURE total, flora a texture total too, loot tables and loot
+-- profiles 0 or 1 per file, and the rest a definition count. `files`
+-- distinguishes a family whose directory held nothing from one whose
+-- files all returned zero.
 function startupLoader.aggregateMessage(family, total, files)
     return string.format("Startup assets: %s loaded %d from %d file(s)",
                          family, math.floor(total), math.floor(files))
@@ -114,8 +116,8 @@ local function addYamlFamily(dir, label, loaderFn, paths)
             -- collision (today: a duplicate flora name). `parsed` keeps
             -- its decode-only meaning -- such a file decoded perfectly
             -- well -- so the arity a healthy call answers with is
-            -- unchanged at two, and eleven of the twelve families never
-            -- push a third value at all.
+            -- unchanged at two, and twelve of the thirteen families
+            -- never push a third value at all.
             local n, parsed, refusal = loaderFn(path, true)
             total = total + asCount(n)
             seen  = seen + 1
@@ -412,6 +414,13 @@ local function queueNormalProfile()
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
+    -- Loot PROFILES (#2499) after loot tables and before locations. The
+    -- position is not free like the tutorial tree's: every entry's
+    -- `item` is resolved against the item registry AT LOAD, so this has
+    -- to come after data/items -- and before data/locations, which is
+    -- where a future container content entry will name a profile.
+    addYamlDir("data/loot_profiles", "Loading loot profiles...",
+               engine.loadLootProfileYaml)
     -- The one active tutorial tree (#957). A DIRECTORY verb, not
     -- addYamlDir: this slice supports exactly one tree, and neither
     -- "a tree is present" nor "there is only one" can be checked from
@@ -458,6 +467,8 @@ local function queueArenaProfile()
     addYamlDir("data/buildings",  "Loading buildings...",  engine.loadBuildingYaml)
     addYamlDir("data/units",      "Loading units...",      engine.loadUnitYaml)
     addYamlDir("data/loot_tables", "Loading loot tables...", engine.loadLootTableYaml)
+    addYamlDir("data/loot_profiles", "Loading loot profiles...",
+               engine.loadLootProfileYaml)
     addYamlDir("data/locations",  "Loading locations...",  engine.loadLocationYaml)
 end
 

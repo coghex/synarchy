@@ -71,6 +71,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Crafting and bills (#325/#326/#329/#343/#795)](#crafting-and-bills-325326329343795)
 - [Power (#358-#361, #590/#591, #1206)](#power-358-361-590591-1206)
 - [Flora species identity: the authored name is the key (#2241)](#flora-species-identity-the-authored-name-is-the-key-2241)
+- [Loot profiles (#2499)](#loot-profiles-2499)
 - [Farming (#331-#336)](#farming-331-336)
 - [Fluid reaction: unlike-fluid contact in the active sim (#2481)](#fluid-reaction-unlike-fluid-contact-in-the-active-sim-2481)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
@@ -3208,7 +3209,7 @@ may be derived from it.
    queueing a load, so a refusal leaves no partial registration from the
    definitions ahead of the collision. It answers `(0, true, <name>)` —
    the file DECODED, so `pushYamlResult`'s decode-only second value is
-   unchanged for the other eleven families; the third value exists only
+   unchanged for the other twelve families; the third value exists only
    on a refusal, so a healthy call's arity is still one bare and two
    when asked. `scripts/startup_loader.lua` turns that third value into
    a TERMINAL startup failure naming the file and the name. The runtime
@@ -3286,6 +3287,117 @@ tracked `x1-flora-species-names` fixture really carries all three, and a
 pre-#2243 baseline still decodes as ordinals).
 Flora stays outside `tools/world_check.py`'s baselines, so no terrain
 recapture is owed.
+
+---
+
+## Loot profiles (#2499)
+
+A loot PROFILE is not a loot table, and the two registries are separate
+on purpose. A loot table (`data/loot_tables/`) is ONE weighted draw:
+exactly one entry wins and `weight` is relative to its siblings. A
+profile (`data/loot_profiles/`) rolls every entry INDEPENDENTLY against
+its own absolute `chance`, and each entry that appears contributes a lot
+sized by the profile's `quantity_multiplier` and the entry's own
+`quantity_factor` (design D-2/D-6 in
+[`docs/portable_loot_containers.md`](portable_loot_containers.md)).
+Nothing of the entry shape or the roll carries over.
+
+**The schema.** One YAML document per file — the file IS the profile,
+with no wrapping list, exactly like a loot table and unlike
+locations/items/units:
+
+```yaml
+id: ruin_industrial_salvage
+quantity_multiplier: { min: 1, max: 4 }
+entries:
+  - { item: steel_bar, chance: 0.30, quantity_factor: 5 }
+```
+
+`entries` keeps its AUTHORED order. That order is not cosmetic: PLC-13's
+admission pass shuffles a seeded copy of it, so it is the stable input
+that shuffle is a function of, and reordering a file is a content
+change.
+
+**Every rule rejects the WHOLE file.** A partially admitted profile is a
+distribution nobody authored, and whole-file rejection is what makes the
+registry's insert/replace policy safe — a rejected replacement leaves
+the previously registered profile of that id exactly as it was.
+`Engine.Asset.YamlLootProfiles` refuses:
+
+- a missing, empty, or non-string `id`;
+- a REPEATED key at any depth. libyaml resolves a duplicated mapping key
+  by keeping the LAST binding, so a document saying `id` twice would
+  otherwise decode cleanly as whichever id came second. This is the one
+  family decoded through `Yaml.decodeFileWithWarnings` rather than
+  `decodeFileEither`, because that warning list is the only place the
+  collision is visible;
+- an absent, null, non-list or EMPTY `entries` — unlike an empty loot
+  table, which is a defined outcome (its single draw answers `Nothing`);
+- a `chance` outside the INCLUSIVE `[0, 1]`, or non-finite. Both checks
+  run after narrowing to the stored 32-bit `Float`, so an ordinary
+  `1.0e+100` is refused as the `Infinity` the runtime would actually
+  compare against;
+- a `quantity_factor` that is not a positive whole number. Zero is not a
+  disable toggle (#1721's settled rule for the sibling multiplicities):
+  an entry that should not appear is deleted;
+- a `quantity_multiplier` that is absent, null, not a `{min, max}`
+  block, whose bounds are not whole numbers, or whose `min < 1` or
+  `max < min`;
+- after a successful decode, an `item` that is not in the live item
+  registry (D-20). Items load before profiles, so the registry is
+  complete — the same ordering #917 relies on for a location's
+  guaranteed significant contents.
+
+Diagnostics name the FILE always, the profile once it is known, and a
+1-based entry index only for an ENTRY-level rule. A missing `id` and a
+bad `quantity_multiplier` have no entry to name and do not invent one.
+The duplicate-key rejection prints the raw YAML path instead, 0-based
+and labelled as such, because renumbering a path is not something an
+author could then find.
+
+**The loader's outcome contract is the #2203 one, unchanged.**
+`engine.loadLootProfileYaml(path)` answers ONE number; a truthy second
+argument opts in to `(count, parsed)`, where `parsed` is about the
+DECODE alone. A decode failure answers `(0, false)`; a successful
+registration `(1, true)`; and an unknown item id `(0, true)` while
+registering nothing — that file parsed, so reporting it as a parse
+failure would make an ordinary content mistake indistinguishable from a
+corrupt `data/` tree. It warns once per unresolved entry rather than
+answering a silent zero. There is no third value: `pushYamlRefusal`
+exists for #2241's duplicate-NAME collision inside a list-shaped family,
+and nothing here is that. Registration is insert/replace by profile id,
+and a replacement says so in a warning naming the file and the profile.
+
+**Capabilities.** `lootProfileRegistryRef` is a `content-registries`
+field, written only by `Engine.Scripting.Lua.API.LootProfiles` through
+`ContentRegistriesCapability`. That module is the one in the group
+holding BOTH records: it reads `itemManagerRef` for the load-time item
+check through `ContentRegistriesViewCapability`, as a `ReadOnlyRef`, so
+it never gains write authority over items.
+
+**Reads are read-only and copy-free of the registry.**
+`loot.profile(id)` answers
+`{id, quantity_multiplier = {min, max}, entries = {{item, chance,
+quantity_factor}, …}}` with dense 1-based `entries` in authored order,
+or nil; `loot.listProfiles()` answers the sorted, repeat-free id list.
+Both build a fresh table per call, so a script that edits what it got
+back has edited its own copy. They live under the existing `loot`
+namespace by D-20; the namespace list stays closed.
+
+**No consumer rolls a profile yet.** PLC-13 owns realization, PLC-14 the
+container content entries, and PLC-10 both the wooden crate and any
+retuning of the shipped `ruin_industrial_salvage` calibration. The
+shipped file exists because #2203 makes a queued registry family that
+discovers no YAML a terminal boot failure, so registering the family
+required shipping its first file (D-20).
+
+Gates: hspec `--match "Loot profiles"` (the shipped file's pinned
+entries, every rejection rule at the tightest value its guard admits and
+refuses, the loader's three outcomes, insert/replace, and the two
+queries), `tools/content_registry_probe.py` (the family end to end
+against the real item tree), `tools/startup_asset_logging_probe.py` and
+hspec `--match "Startup"` (the thirteenth normal family and twelfth
+arena one).
 
 ---
 

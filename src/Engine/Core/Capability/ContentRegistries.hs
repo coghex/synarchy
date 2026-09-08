@@ -1,6 +1,6 @@
 -- | The @content-registries@ capability record of the @EngineEnv@
 --   capability split (epic #537, issue #890 — E2, the first real
---   consumer migration after #889's E1 convention): the eight
+--   consumer migration after #889's E1 convention): the nine
 --   YAML-backed content registries
 --   'docs/engineenv_capability_inventory.md' SS5's @content-registries@
 --   table groups.
@@ -20,7 +20,7 @@
 --   at boot" is the normal startup pattern, not an enforced one-shot
 --   invariant, so nothing here freezes a registry.
 --
---   For FOUR of the eight registries — items, equipment classes,
+--   For FOUR of the nine registries — items, equipment classes,
 --   substances and recipes — that write authority is now narrowed to
 --   the module that legitimately holds it, and every other
 --   capability-narrowed consumer takes
@@ -28,9 +28,10 @@
 --   four arrive as 'Engine.Core.ReadOnlyRef.ReadOnlyRef's (issue #1896,
 --   CMA-2 of epic #1890). So the earlier blanket claim that every
 --   reader AND writer in this group reaches these fields through THIS
---   record no longer holds: it is true of the other four registries
---   (infection, locations, loot tables, tutorials — outside the pilot),
---   and of the four selected registries' writers alone.
+--   record no longer holds: it is true of the other five registries
+--   (infection, locations, loot tables, loot profiles, tutorials —
+--   outside the pilot), and of the four selected registries' writers
+--   alone.
 --
 --   __The SS6.1 permanent cohort is outside this boundary (D-4), and
 --   still reaches the raw handles directly.__ 'Engine.Core.Init'
@@ -61,7 +62,7 @@
 --
 --   Like "Engine.Core.Capability.Core", this module imports only the
 --   narrow slice of @Engine.Core.State@ it needs (the bare 'EngineEnv'
---   type plus the seven field accessors) rather than @EngineEnv(..)@ or
+--   type plus the nine field accessors) rather than @EngineEnv(..)@ or
 --   a bare module import, so it is not itself a full-@EngineEnv@-access
 --   consumer under @tools/engine_env_capability_audit.py@'s ratchet.
 module Engine.Core.Capability.ContentRegistries
@@ -81,17 +82,19 @@ import Infection.Types (InfectionManager)
 import Craft.Types (RecipeManager)
 import Location.Types (LocationRegistry)
 import LootTable.Types (LootTableRegistry)
+import LootProfile.Types (LootProfileRegistry)
 import Tutorial.Types (TutorialRegistry)
 import Engine.Core.State
   ( EngineEnv
   , itemManagerRef, equipmentClassManagerRef, substanceManagerRef
   , infectionManagerRef, recipeManagerRef, locationDefsRef
-  , lootTableRegistryRef, tutorialRegistryRef
+  , lootTableRegistryRef, lootProfileRegistryRef, tutorialRegistryRef
   )
 
 -- | The @content-registries@ capability: item defs, equipment classes,
 --   worked-material substances, infection defs, crafting recipes,
---   location defs, loot tables, and the tutorial definition tree. See
+--   location defs, loot tables, loot profiles, and the tutorial
+--   definition tree. See
 --   'docs/engineenv_capability_inventory.md' SS5 @content-registries@
 --   and SS7.6.
 data ContentRegistriesCapability = ContentRegistriesCapability
@@ -102,6 +105,7 @@ data ContentRegistriesCapability = ContentRegistriesCapability
   , crRecipeManagerRef         ∷ IORef RecipeManager
   , crLocationDefsRef          ∷ IORef LocationRegistry
   , crLootTableRegistryRef     ∷ IORef LootTableRegistry
+  , crLootProfileRegistryRef   ∷ IORef LootProfileRegistry
   , crTutorialRegistryRef      ∷ IORef TutorialRegistry
   }
 
@@ -116,5 +120,6 @@ toContentRegistriesCapability env = ContentRegistriesCapability
   , crRecipeManagerRef         = recipeManagerRef env
   , crLocationDefsRef          = locationDefsRef env
   , crLootTableRegistryRef     = lootTableRegistryRef env
+  , crLootProfileRegistryRef   = lootProfileRegistryRef env
   , crTutorialRegistryRef      = tutorialRegistryRef env
   }

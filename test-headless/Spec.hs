@@ -338,6 +338,7 @@ import qualified Test.Headless.Location.SignificantContents as LocationSignifica
 import qualified Test.Headless.Location.Naming as LocationNaming
 import qualified Test.Headless.River.Naming as RiverNaming
 import qualified Test.Headless.Location.LootDeterminism as LocationLootDeterminism
+import qualified Test.Headless.Loot.Profiles as LootProfiles
 import qualified Test.Headless.Location.MapIcons as LocationMapIcons
 import qualified Test.Headless.Location.Stamping as LocationStamping
 import qualified Test.Headless.Location.StampCommit as LocationStampCommit
@@ -482,6 +483,12 @@ main = hspec $ do
         -- projected through the real capability, so it rides the
         -- shared engine and borrows/restores that one ref.
         LocationLootDeterminism.luaSpec
+        -- Same technique (#2499): the loot-profile load-and-register
+        -- boundary and its two read-only queries are entirely the live
+        -- env's content-registry refs projected through the real
+        -- capabilities, so this rides the shared engine and
+        -- borrows/restores the two refs it seeds.
+        LootProfiles.luaSpec
     -- Own engine (not the shared-worlds one above): the #707 save/load
     -- story snapshots and reloads EVERY live page, so an empty world
     -- manager keeps it scoped to its own cheap private w8 pages instead
@@ -1102,6 +1109,7 @@ main = hspec $ do
     LocationNaming.spec
     RiverNaming.spec
     LocationLootDeterminism.spec
+    LootProfiles.spec
     LocationMapIcons.spec
     LocationStamping.spec
     LocationStampCommit.spec
