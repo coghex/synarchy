@@ -201,6 +201,39 @@ spec = around withDescriptorEngine $ do
                 , "and (omitted == false)" ])
             coercion `shouldBe` "true"
 
+        it "describes scroll capture as the raw opt-in it really is" $ \env → do
+            (ls, _) ← newFixture env
+            -- The box carries an onClick. Pointer blocking is derived —
+            -- a clickable element with a callback blocks whether or not
+            -- it opted in — but scroll capture is not: #743 keeps the
+            -- two policies independent, so the callback buys nothing
+            -- here. Describing scrollCapturing as "effective, not just
+            -- the raw opt-in" fails this.
+            independent ← evalDebug ls (T.concat
+                [ "local blocking = UI.isPointerBlocking(_G.__box) "
+                , "local capturing = UI.isScrollCapturing(_G.__box) "
+                , "UI.setScrollCapture(_G.__box, true) "
+                , "local optedIn = UI.isScrollCapturing(_G.__box) "
+                , "return (blocking == true) and (capturing == false) "
+                , "and (optedIn == true)" ])
+            independent `shouldBe` "true"
+
+        it "describes page scope as requiring visibility" $ \env → do
+            (ls, ds) ← newFixture env
+            checkShape ls ds "isPageInScope" "UI.isPageInScope(_G.__page)"
+            -- pagesInScope is drawn from getVisiblePages, so a hidden
+            -- page is out of scope even with no modal boundary anywhere.
+            -- "in scope whenever there is no boundary" fails this.
+            scoped ← evalDebug ls (T.concat
+                [ "local blocked = UI.isInputBlocked() "
+                , "local shown = UI.isPageInScope(_G.__page) "
+                , "UI.hidePage(_G.__page) "
+                , "local hidden = UI.isPageInScope(_G.__page) "
+                , "UI.showPage(_G.__page) "
+                , "return (blocked == false) and (shown == true) "
+                , "and (hidden == false)" ])
+            scoped `shouldBe` "true"
+
         it "describes control focus as the unvalidated handle it really is" $ \env → do
             (ls, ds) ← newFixture env
             checkShape ls ds "getControlFocus" "UI.getControlFocus()"

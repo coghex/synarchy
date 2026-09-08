@@ -104,11 +104,11 @@ elementInfoRecord = TRecord
     , recField "inScope" TBoolean "isPageInScope for this element's own page: the modal-scope decision routePointer applies first (#1750)."
     , recField "leftClickTarget" TBoolean "Active left-click target: clickable AND an onClick callback is registered."
     , recField "leftClickAffordance" TBoolean "An onClick callback is registered at all, independent of clickable; true with leftClickTarget false is a shown-but-disabled control."
-    , recField "scrollCapturing" TBoolean "Effective elementCapturesScroll, not just the raw opt-in (#743)."
+    , recField "scrollCapturing" TBoolean "The raw ueCapturesScroll opt-in. Unlike pointerBlocking, a registered click callback implies nothing here: #743 keeps the two policies independent."
     , recField "clipsChildren" TBoolean "The raw ueClipChildren opt-in: whether this element clips its own descendants."
     , recField "interactiveOverflow" TBoolean "The raw ueInteractiveOverflow opt-in (#749)."
     , recField "effectiveClip" (TNullable (rectRecord "The clip this element is subject to:"))
-        "Intersection of every clipping ancestor's bounds (#747). Nil when no ancestor clips, or when the ancestor walk hits its 64-level depth limit. Unlike interactiveBounds this is NOT area-checked, so a fully disjoint intersection is still reported as a rect."
+        "Intersection of every clipping ancestor's bounds (#747). Nil when no ancestor clips. The walk stops after 64 ancestors, which TRUNCATES farther ancestry rather than discarding the result — a clipping ancestor found before the limit still yields a rect. Unlike interactiveBounds this is NOT area-checked, so a fully disjoint intersection is still reported as a rect."
     , recField "interactiveBounds" (TNullable (rectRecord "The interactive rect a hit resolves against:"))
         "Clip-intersected interactive rect (#749). Nil in either of two cases, since UI.InteractiveBounds.effectiveInteractiveBounds area-checks twice: the element's own interactive rect has non-positive width or height (a zero-size or overflow-collapsed element), or a clipping ancestor leaves no overlapping area at all."
     ]
@@ -165,7 +165,7 @@ installUIAPI env = do
     , registerLuaVerb (luaVerb "isPageInScope"
         [pageArg]
         (retVals [resVal "inScope" TBoolean
-            "True when the page is at or above the modal boundary, or there is no boundary; an unknown page is never in scope."])
+            "True when the page is VISIBLE and at or above the modal boundary. UI.InputOwnership.pagesInScope is drawn from getVisiblePages, so a hidden page is out of scope even when no boundary exists at all; an unknown page is never in scope."])
         "Whether a page is inside the current modal scope (#742).")
         (uiIsPageInScopeFn env)
 
@@ -464,7 +464,7 @@ installUIAPI env = do
         (uiIsPointerBlockingFn env)
     , registerLuaVerb (luaVerb "setScrollCapture"
         [ elementArg
-        , flagArg "captures" "Whether this element consumes wheel input with no click callback of its own."
+        , flagArg "captures" "Whether this element captures wheel input. Independent of any click callback (#743)."
         ]
         retNone
         "Set an element's explicit scroll-capture opt-in (#743).")
@@ -472,8 +472,8 @@ installUIAPI env = do
     , registerLuaVerb (luaVerb "isScrollCapturing"
         [elementArg]
         (retVals [resVal "capturing" TBoolean
-            "The effective predicate, not just the raw opt-in. False for an unknown handle."])
-        "Whether an element actually consumes a wheel event right now (#743).")
+            "The raw ueCapturesScroll opt-in, which is the whole predicate: a click callback never implies scroll capture. False for an unknown handle."])
+        "Whether an element captures wheel input (#743).")
         (uiIsScrollCapturingFn env)
     , registerLuaVerb (luaVerb "setDragActivation"
         [ elementArg
@@ -525,7 +525,7 @@ installUIAPI env = do
     , registerLuaVerb (luaVerb "getEffectiveClip"
         [elementArg]
         (retVals [resVal "clip" (TNullable (rectRecord "The clip this element is subject to:"))
-            "Intersection of every clipping ancestor's bounds. Nil when the handle is missing or unknown, when no ancestor clips, or when the ancestor walk hits its 64-level depth limit. Not area-checked: a fully disjoint intersection is still reported as a rect."])
+            "Intersection of every clipping ancestor's bounds. Nil when the handle is missing or unknown, or when no ancestor clips. The ancestor walk stops after 64 levels, truncating farther ancestry rather than nilling the result. Not area-checked: a fully disjoint intersection is still reported as a rect."])
         "Read the clip an element is actually subject to (#747), the same value rendering and hit-testing consult.")
         (uiGetEffectiveClipFn env)
     , registerLuaVerb (luaVerb "setZIndex"
