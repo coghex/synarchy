@@ -74,7 +74,7 @@ rectRecord what = TRecord
     , recField "h" TNumber (what <> " height, in framebuffer pixels.")
     ]
 
--- | The record 'Engine.Scripting.Lua.API.UI.Property.pushElementInfoTable'
+-- | The record @Engine.Scripting.Lua.API.UI.Property.pushElementInfoTable@
 --   builds, shared verbatim by @UI.getElementInfo@ (one element) and
 --   @UI.getVisibleElements@ (every element on every visible page).
 elementInfoRecord ∷ LuaType
