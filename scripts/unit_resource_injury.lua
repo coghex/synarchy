@@ -14,18 +14,42 @@ local M = {}
 -- 1.0 — quickly, and faster for agile/dextrous units (the time it
 -- takes to set your feet and ready your guard). Absent ⇒ treated as
 -- 1.0 everywhere, so no explicit spawn init is needed.
+--
+-- The RATE is computed here (from effective dexterity/agility, so a
+-- buff speeds recovery up); the WRITE is not. Recovery goes through
+-- unit.recoverStance (#2468), which adds the amount to the STORED
+-- stance inside one atomic unit-manager commit. Reading the stance
+-- here and writing back an absolute sum -- which is what this did --
+-- erased any strike the combat worker committed in between: the two
+-- run on separate threads, so `cur` was stale by the time setStat
+-- republished it. Passing the DELTA instead makes the debit visible
+-- to the addition by construction, so no read-modify-write window
+-- exists to lose it in.
+--
+-- No stance read, and no `cur >= 1.0` early return: the engine verb
+-- clamps at 1 and reports an absent entry as a full 1.0 without
+-- materialising it, so a full or absent stance needs no eligibility
+-- check on this side. (The dexterity/agility getters therefore now
+-- run on every tick, including at full stance -- they may lazy-roll
+-- an uncached attribute exactly as they did before, which is
+-- unchanged behaviour on a different schedule.)
 -----------------------------------------------------------
 local STANCE_RECOVER_BASE     = 0.35   -- per second, floor
 local STANCE_RECOVER_PER_STAT = 0.12   -- per second per (dex+agi) point
 function M.tickStance(uid, dt)
-    local cur = unit.getStat(uid, "stance")
-    if cur == nil or cur >= 1.0 then return end
     local dex  = unit.getStat(uid, "dexterity") or 1.0
     local agi  = unit.getStat(uid, "agility") or 1.0
     local rate = STANCE_RECOVER_BASE + STANCE_RECOVER_PER_STAT * (dex + agi)
-    local newv = cur + rate * dt
-    if newv > 1.0 then newv = 1.0 end
-    unit.setStat(uid, "stance", newv)
+    local newv, reason = unit.recoverStance(uid, rate * dt)
+    -- A refusal is a bug in this caller or a unit that vanished under
+    -- it, and `nil, reason` on its own is invisible: the engine's
+    -- callback isolation reports RAISED errors and discards ordinary
+    -- returns. Raise so the reason reaches the Lua log with its
+    -- file:line rather than silently skipping recovery forever.
+    if newv == nil then
+        error("recoverStance refused for unit " .. tostring(uid)
+              .. ": " .. tostring(reason))
+    end
 end
 
 -----------------------------------------------------------
