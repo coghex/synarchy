@@ -133,8 +133,11 @@ def run_parallel(chosen, results, *, jobs, parallel_base, parallel_ports,
     measurement cannot overlap it either. Since #1570 the build directory is
     one of the scheduled resources rather than an unguarded one: every probe
     here execs the executable the preflight already resolved, and the three
-    GHCi consumers that still run Cabal themselves hold `cabal-build`
-    EXCLUSIVELY. Anything not named by either resource table is still
+    probes that still run Cabal themselves hold `cabal-build` EXCLUSIVELY
+    -- two through `persistence_snapshot`'s `cabal repl`, and
+    `save_compat_migration` through the codec helper's own freshness
+    build (#2273); `tools/probe_runner_resources.py` names which is
+    which. Anything not named by either resource table is still
     unguarded. Retries run SOLO afterward, since parallel contention is
     exactly what a retry needs to escape.
     """

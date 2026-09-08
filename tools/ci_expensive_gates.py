@@ -165,36 +165,41 @@ UNIT_ASSET_GLOBS = [
 ]
 
 # The save-compat gate (#1360): the ONE member of
-# tools/test_save_compat_audit.py that spawns a `cabal repl` --
-# test_normalize_fixture_timestamp_makes_generation_reproducible, reached
-# by `--only-reproducibility`. Everything else in that module, and the
-# whole of tools/save_compat_audit.py, stays unconditional on every pull
-# request; only this member is selected here.
+# tools/test_save_compat_audit.py reached by `--only-reproducibility` --
+# test_normalize_fixture_timestamp_makes_generation_reproducible.
+# Everything else in that module, and the whole of
+# tools/save_compat_audit.py, stays unconditional on every pull request;
+# only this member is selected here.
 #
 # The test decodes a tracked fixture through the real envelope codec,
 # rewrites its `metadata` payload's smTimestamp, re-encodes, and proves
 # normalize_fixture_timestamp collapses the two variants to identical
 # bytes. So the inputs that can move its result are: the audit tooling
 # that owns normalize_fixture_timestamp, the fixture corpus and manifest
-# it reads, the Haskell modules its GHCi setup imports, and the build
-# definition that decides what `cabal repl test:synarchy-test-headless`
-# even loads.
+# it reads, the compiled codec helper that performs the re-encode and the
+# Haskell modules it imports, and the build definition that decides what
+# `cabal build all` produces.
+#
+# It cost a `cabal repl test:synarchy-test-headless` of its own until
+# issue #2273 replaced every GHCi program in this family with that
+# helper; the selection stays because these inputs are still the ones
+# that can move the result, and because tools/ci_parity_audit.py pins
+# both command spellings.
 #
 # NB these are fnmatch patterns, not globs: `*` crosses `/`.
 SAVE_COMPAT_GLOBS = [
-    # The audit and its self-test. The reproducibility member and its
-    # GHCi setup script live in the self-test; normalize_fixture_timestamp
-    # -- the very thing that member covers -- lives in the codec bridge
-    # since issue #2049 split the tool into owner modules, so EVERY owner
-    # is named here. Explicit per-module patterns, not a blanket
+    # The audit and its self-test. The reproducibility member lives in
+    # the self-test; normalize_fixture_timestamp -- the very thing that
+    # member covers -- lives in the codec bridge since issue #2049 split
+    # the tool into owner modules, so EVERY owner is named here. Explicit per-module patterns, not a blanket
     # `tools/save_compat*`: that would newly capture the unrelated
     # tools/save_compat_migration_probe.py, whose negative case sits
     # beside save_storage_probe.py's below.
     #
     # The self-test side is a PREFIX pattern instead, because issue
-    # #2073 split it into a façade plus seven sibling modules and a
-    # future owner must not be able to escape this gate by being left
-    # off a list. `tools/test_save_compat_audit*.py` matches the façade
+    # #2073 split it into a façade plus sibling modules (issue #2273
+    # added the codec-bridge owner) and a future owner must not be able
+    # to escape this gate by being left off a list. `tools/test_save_compat_audit*.py` matches the façade
     # (`*` matches empty) and every sibling, and nothing else under
     # tools/ carries that prefix -- the production modules are named
     # `save_compat_audit_*`, without the `test_`.
@@ -213,16 +218,21 @@ SAVE_COMPAT_GLOBS = [
     # one file that would silently stop being the current one.
     "docs/save_compat/*", "test-headless/data/save-compat/*",
     # The save format itself. Whole subtree plus any future
-    # src/World/Save.hs facade: the GHCi setup imports
+    # src/World/Save.hs facade: the codec helper imports
     # World.Save.Envelope.Codec/.Types, World.Save.Envelope,
     # World.Save.Component and World.Save.Types directly, and the
     # frozen compat mirrors under Compat/ decide which fixtures still
     # decode at all.
     "src/World/Save*",
-    # The build definition. `cabal repl test:synarchy-test-headless`
-    # resolves its module set, dependency bounds and options from the
-    # cabal file and EVERY cabal.project file cabal applies, so any of
-    # them can change whether the repl loads or what it loads.
+    # The codec helper itself (#2273): the compiled program that performs
+    # every real-codec operation this coverage exercises. Its own source
+    # is the most direct input of all, so an edit to it faces the member
+    # that proves its re-encode is reproducible.
+    "app-save-codec/*",
+    # The build definition. `cabal build all` resolves the helper's
+    # module set, dependency bounds and options from the cabal file and
+    # EVERY cabal.project file cabal applies, so any of them can change
+    # whether it builds or what it builds against.
     # `cabal.project*` covers the whole family on purpose, including
     # `.local`: that file is NOT gitignored, so a change can legitimately
     # track one, and cabal would then apply it in CI. What keeps
@@ -233,12 +243,12 @@ SAVE_COMPAT_GLOBS = [
     # only.
     "synarchy.cabal", "cabal.project*",
     # The CI toolchain image: the GHC/cabal versions and the pinned
-    # index snapshot the repl actually runs against. BOTH files that
-    # define it -- the image tag is a hash of the reusable workflow's
-    # own bytes concatenated with the Dockerfile's, so an edit to the
-    # build recipe alone (context, options, validation) mints a new
-    # image just as a Dockerfile edit does, and can move what the repl
-    # runs under.
+    # index snapshot the codec helper is actually compiled against. BOTH
+    # files that define it -- the image tag is a hash of the reusable
+    # workflow's own bytes concatenated with the Dockerfile's, so an edit
+    # to the build recipe alone (context, options, validation) mints a
+    # new image just as a Dockerfile edit does, and can move what the
+    # helper runs under.
     ".github/ci/Dockerfile", ".github/workflows/ci-image.yml",
     # The wiring that selects and runs this gate on both sides, and the
     # audit that keeps those two sides honest. An edit to any of them
@@ -462,7 +472,8 @@ def _local_changed_paths_cases(
         if selected("save-compat", paths):
             failures.append(
                 "an unrelated local change selected the save-compat gate, "
-                f"so `make ci` would still pay for the repl: {paths}")
+                f"so `make ci` would still run the reproducibility member: "
+                f"{paths}")
 
     with tempfile.TemporaryDirectory() as tmp:
         # cabal.project.local is not gitignored, so a change CAN track
@@ -720,11 +731,12 @@ def self_test() -> int:
         ("save-compat", ["tools/test_save_compat_audit_register.py"], True),
         ("save-compat",
          ["tools/test_save_compat_audit_reproducibility.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_codec.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_discovery.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_coverage.py"], True),
         # Issue #2049's owner modules. Each is named individually, so a
-        # PR touching only one of them still pays for the repl coverage
-        # that exercises it -- the codec bridge in particular owns
+        # PR touching only one of them still pays for the coverage that
+        # exercises it -- the codec bridge in particular owns
         # normalize_fixture_timestamp, which is exactly what the
         # reproducibility member proves.
         ("save-compat", ["tools/save_compat_audit_common.py"], True),
@@ -734,6 +746,9 @@ def self_test() -> int:
         ("save-compat", ["tools/save_compat_audit_manifest.py"], True),
         ("save-compat", ["tools/save_compat_audit_register.py"], True),
         ("save-compat", ["tools/save_compat_audit_generate.py"], True),
+        # The compiled codec helper (#2273): the program every one of
+        # those owners now execs in place of a `cabal repl`.
+        ("save-compat", ["app-save-codec/Main.hs"], True),
         ("save-compat", ["docs/save_compat/manifest.json"], True),
         ("save-compat", ["docs/save_compat/enum_baseline.json"], True),
         ("save-compat",
@@ -742,8 +757,8 @@ def self_test() -> int:
         ("save-compat",
          ["test-headless/data/save-compat/k1-new-fixture.expected.json"],
          True),
-        # The Haskell the GHCi setup imports: the envelope codec and its
-        # types, the component registry, the metadata DTO, and the
+        # The Haskell the codec helper imports: the envelope codec and
+        # its types, the component registry, the metadata DTO, and the
         # frozen compat mirrors. A facade module added beside the
         # directory later must match too, which is why the pattern is
         # `src/World/Save*` rather than `src/World/Save/*`.
@@ -755,7 +770,7 @@ def self_test() -> int:
         ("save-compat", ["src/World/Save/Types.hs"], True),
         ("save-compat", ["src/World/Save/Compat/SessionV90.hs"], True),
         ("save-compat", ["src/World/Save.hs"], True),
-        # The build definition the repl target resolves from.
+        # The build definition the codec helper is built from.
         ("save-compat", ["synarchy.cabal"], True),
         ("save-compat", ["cabal.project"], True),
         ("save-compat", ["cabal.project.freeze"], True),
@@ -768,7 +783,7 @@ def self_test() -> int:
         ("save-compat", [".github/ci/Dockerfile"], True),
         # The reusable image workflow is the OTHER half of the image
         # identity hash, so a PR editing only it still changes the
-        # toolchain the repl runs under.
+        # toolchain the codec helper is compiled with.
         ("save-compat", [".github/workflows/ci-image.yml"], True),
         # The wiring on both sides, and the parity audit over it.
         ("save-compat", ["tools/ci_expensive_gates.py"], True),
@@ -787,7 +802,7 @@ def self_test() -> int:
         ("save-compat", [".github/workflows/ci.yml"], True),
         # ...and the negatives, so the gate cannot be trivially
         # always-true. An unrelated PR -- gameplay Lua, worldgen, unit
-        # art, a doc -- must not pay for the repl.
+        # art, a doc -- must not run the reproducibility member.
         ("save-compat", ["scripts/unit_ai.lua"], False),
         ("save-compat", ["src/World/Geology/Timeline.hs"], False),
         ("save-compat", ["src/World/Thread/Command/Init.hs"], False),
@@ -824,6 +839,8 @@ def self_test() -> int:
         ("worldgen", ["tools/test_save_compat_audit.py"], False),
         ("worldgen", ["tools/test_save_compat_audit_coverage.py"], False),
         ("worldgen", ["tools/save_compat_audit_codec.py"], False),
+        ("worldgen", ["app-save-codec/Main.hs"], False),
+        ("unit-assets", ["app-save-codec/Main.hs"], False),
         ("unit-assets", ["tools/save_compat_audit_manifest.py"], False),
         ("unit-assets",
          ["tools/test_save_compat_audit_discovery.py"], False),

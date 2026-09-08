@@ -21,8 +21,7 @@ the verbose flag. Plus the tree-wide search requirement 1 states -- the
 narrating body survives in the shared module and nowhere else.
 
 The static half is deliberately not "run all thirty and diff": CI
-already runs most of them, several take minutes, and one drives
-``cabal repl``. What CI cannot notice is a script that quietly stopped
+already runs most of them, several take minutes, and one drives Cabal. What CI cannot notice is a script that quietly stopped
 importing the shared helper, which is what these checks are for.
 
 Usage:

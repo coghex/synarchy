@@ -228,8 +228,10 @@ python3 tools/engine_env_capability_audit.py
 # this Cabal-backed step after its docs-only selector proves the range is
 # unrelated documentation.
 # --without-reproducibility (#1360) drops exactly ONE member of the
-# self-test module -- the one that spawns its own `cabal repl` to build
-# two timestamp variants -- and the block below runs that member when
+# self-test module -- the one that builds two timestamp variants to prove
+# fixture generation is reproducible (its own `cabal repl` until #2273,
+# the compiled exe:synarchy-save-codec since) -- and the block below runs
+# that member when
 # this working tree's own changes touch a path that can move its result.
 # Every other member and the whole real audit still run on every local
 # invocation.

@@ -7,8 +7,9 @@
 #                     image every worker below runs in (#784).
 #   - test-and-audits everything that needs a Cabal build product: the
 #                     library + executable + test suites, the headless hspec
-#                     suite, both save-compatibility steps (each spawns its
-#                     own `cabal repl`) and world_check --quick. It is also
+#                     suite, both save-compatibility steps (each execs the
+#                     compiled `exe:synarchy-save-codec` this job built,
+#                     #2273) and world_check --quick. It is also
 #                     the workflow's sole build-cache writer, so the
 #                     cache-outcome report lives here too.
 #   - static-audits   every engine-free `python3 tools/*.py` gate — the
@@ -601,17 +602,21 @@ jobs:
       # Both commands here stay blocking on every non-docs-only change,
       # and on every save-compat input change. --without-reproducibility
       # (#1360) removes exactly ONE
-      # member of the self-test module -- the one that spawns its own
-      # `cabal repl` to build two timestamp variants -- which the next
-      # step runs path-selectively instead. Every other member still
-      # runs, and so does the whole real audit.
+      # member of the self-test module -- the one that builds two
+      # timestamp variants to prove fixture generation is reproducible --
+      # which the next step runs path-selectively instead. Every other
+      # member still runs, and so does the whole real audit.
       #
-      # Note this step is NOT cabal-free even so, and was never meant to
-      # become so: save_compat_audit.py's real-manifest run decodes the
-      # tracked fixtures' envelope descriptors through a `cabal repl` of
-      # its own (verify_fixture_descriptors -> dump_fixture_descriptors),
-      # and test_real_manifest_passes_the_audit runs that same audit. The
-      # saving here is one ADDITIONAL repl, not all of them.
+      # Neither command starts GHCi any more (#2273). Both still need the
+      # REAL Haskell codec -- save_compat_audit.py's real-manifest run
+      # decodes the tracked fixtures' envelope descriptors
+      # (verify_fixture_descriptors -> dump_fixture_descriptors), and
+      # test_real_manifest_passes_the_audit runs that same audit -- but
+      # they reach it by exec'ing the compiled `exe:synarchy-save-codec`
+      # the `cabal build all` step above already produced, instead of
+      # loading the 348-module test suite into `cabal repl` once per
+      # operation. That is what took these two steps from 2.6-3.7 minutes
+      # a run to seconds.
       - name: Save compatibility audit
         if: >-
           steps.docs-fast-path.outputs.docs_only != 'true'
@@ -620,14 +625,20 @@ jobs:
           python3 tools/test_save_compat_audit.py --without-reproducibility
           python3 tools/save_compat_audit.py
 
-      # The one cabal-repl member of that module, split out and selected
-      # by changed paths (#1360). It proves --generate-session's output
-      # is independent of when the command ran, by encoding two envelopes
-      # differing only in smTimestamp and showing normalize_fixture_
-      # timestamp collapses them to identical bytes. That exercises
-      # fixture GENERATION, which only a save-format, fixture,
-      # save-tooling or Cabal change can move -- so an unrelated pull
-      # request no longer pays its ~26 s.
+      # The fixture-generation member of that module, split out and
+      # selected by changed paths (#1360). It proves --generate-session's
+      # output is independent of when the command ran, by encoding two
+      # envelopes differing only in smTimestamp and showing
+      # normalize_fixture_timestamp collapses them to identical bytes.
+      # That exercises fixture GENERATION, which only a save-format,
+      # fixture, save-tooling or Cabal change can move.
+      #
+      # It cost ~26 s when it built those variants through its own
+      # `cabal repl`; since #2273 it writes them through the compiled
+      # `exe:synarchy-save-codec` like every other real-codec operation,
+      # so the split now selects on which inputs can move the result
+      # rather than on cost. The step itself stays, because
+      # tools/ci_parity_audit.py pins both command spellings.
       #
       # Path-selective on PRs and docs-only master pushes. Every other
       # master push feeds the selector all tracked files, retaining the
@@ -715,8 +726,12 @@ jobs:
   # sole cache writer.
   #
   # What deliberately did NOT move: the headless hspec suite, both
-  # save-compatibility steps (each spawns its own `cabal repl`) and
-  # world_check --quick (it drives the built executable).
+  # save-compatibility steps (each execs the compiled
+  # `exe:synarchy-save-codec`, #2273) and world_check --quick (it drives
+  # the built executable). All three read a build product, which is the
+  # criterion — a step that decodes fixtures through a compiled helper
+  # belongs with the job that builds it, not with the engine-free
+  # audits.
   #
   # tools/ci_parity_audit.py audits the UNION of this job's gate set and
   # test-and-audits', rejecting any command run by both BEFORE taking that
@@ -1585,13 +1600,18 @@ jobs:
 
       # This runner has its own restored build tree. Besides the executable
       # every probe launches, persistence_contract shells out to
-      # `cabal repl test:synarchy-test-headless`; compile that target here so
-      # it cannot consume the probe's timeout rebuilding a stale cached suite.
-      # This job never saves either cache; test-and-audits remains the sole
-      # cache writer for the workflow.
+      # `cabal repl test:synarchy-test-headless`, and reaches the real save
+      # codec through `save_compat_audit.dump_canonical_summary`, which since
+      # #2273 execs the compiled `exe:synarchy-save-codec`. Compile both
+      # targets here so neither can consume the probe's own timeout
+      # rebuilding a stale cached suite or helper: the probe runner's
+      # preflight resolves `exe:synarchy` and nothing else (#1570), and the
+      # codec bridge's own resolution would otherwise do that build inside
+      # the probe. This job never saves either cache; test-and-audits remains
+      # the sole cache writer for the workflow.
       - name: Build behavior probe prerequisites
         if: steps.probe-selection.outputs.selected == 'true'
-        run: cabal build exe:synarchy synarchy-test-headless
+        run: cabal build exe:synarchy exe:synarchy-save-codec synarchy-test-headless
 
       # --jobs 2 pairs probes on the 4-vCPU runner. --retries 1 reruns a
       # failed probe solo, absorbing the contention flakes this concurrency

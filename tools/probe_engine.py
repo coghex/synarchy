@@ -391,7 +391,7 @@ def _build_state_hold(namespace, *, deadline, announce, lock_root):
     interest the aggregate runner's preflight takes and for the same
     reason: requirement 5 of #1913 is that the fix must not reintroduce
     #1570's defect one level down, with a hand-run probe's build landing
-    inside a sweep's preflight or a `cabal repl` probe.
+    inside a sweep's preflight or another Cabal-driving probe.
 
     The wait is BOUNDED by the preparation allowance rather than
     unbounded like `probe_runner_resources.preflight_hold`, because this
