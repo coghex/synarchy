@@ -68,6 +68,25 @@ Resolving the binary (requirement 6)
      `cabal build all` remains the caller's responsibility exactly as it
      was before -- CI and `tools/ci-local.sh` both run it before any
      save-compatibility command.
+  3. Only if that path does not EXIST, one `cabal build` of the target,
+     then the query again. This is a compatibility bridge, not a
+     freshness guarantee: it makes an ABSENT binary buildable, and says
+     nothing about a stale one, which is why `cabal build all` is still
+     the caller's job.
+
+     It exists for the three probes that reach this module without a
+     preceding `cabal build all` -- `persistence_contract`,
+     `persistence_contract_sweep` and `save_compat_migration`, whose
+     runner preflight builds `exe:synarchy` and nothing else (#1570).
+     Before #2273 the `cabal repl` those calls went through built
+     whatever it needed; a compiled helper has to be able to say the
+     same. All three already hold the `cabal-build` resource
+     EXCLUSIVELY (`tools/probe_runner_resources.py`), because they drive
+     Cabal themselves, so a build here is inside a hold that already
+     exists rather than a new concurrent mutation of `dist-newstyle`.
+     Converting those probes off Cabal entirely is the declared
+     follow-up; this keeps them working until then, and never fires in
+     CI, where `cabal build all` has already run.
 
 The public façade is tools/save_compat_audit.py.
 """
@@ -96,6 +115,11 @@ ENV_CODEC_EXE = "SYNARCHY_SAVE_CODEC_EXE"
 #: a CI job. The GHCi path needed 1800 s because it compiled first.
 CODEC_TIMEOUT_SECONDS = 300
 
+#: Ceiling on a `cabal` call. Longer than CODEC_TIMEOUT_SECONDS because
+#: step 3 of the resolution below can actually compile the helper on a
+#: cold tree, which the helper's own invocations never do.
+CABAL_TIMEOUT_SECONDS = 1800
+
 #: Cached answer of the `cabal list-bin` branch of `resolve_codec_exe`,
 #: so a batch of operations pays that query at most once. `None` means
 #: "not resolved yet"; the environment branch is never cached, so a test
@@ -120,31 +144,56 @@ def resolve_codec_exe() -> tuple[str | None, str]:
         return exported, ""
     if _CACHED_CODEC_EXE is not None:
         return _CACHED_CODEC_EXE, ""
-    try:
-        proc = subprocess.run(
-            ["cabal", "list-bin", CODEC_TARGET],
-            cwd=common.REPO_ROOT, capture_output=True, text=True,
-            timeout=CODEC_TIMEOUT_SECONDS)
-    except FileNotFoundError:
-        return None, "'cabal' was not found on PATH"
-    except subprocess.TimeoutExpired:
-        return None, f"'cabal list-bin {CODEC_TARGET}' timed out"
-    # `cabal list-bin` can precede its answer with warnings, so the path
-    # is the LAST non-empty line, not the whole of stdout.
-    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-    if proc.returncode != 0 or not lines:
-        tail = "\n".join(
-            ((proc.stdout or "") + (proc.stderr or "")).splitlines()[-60:])
-        return None, (
-            f"could not locate {CODEC_TARGET} via `cabal list-bin` (run "
-            f"`cabal build all` first): {tail}")
-    path = lines[-1]
+    path, why = _list_bin()
+    if path is None:
+        return None, why
     if not Path(path).is_file():
-        return None, (
-            f"`cabal list-bin {CODEC_TARGET}` answered {path!r}, which does "
-            f"not exist -- run `cabal build all` first")
+        # Step 3: absent, not stale. Build once, then ask again -- and if
+        # the answer is still absent, report that rather than looping.
+        built, why = _cabal(["build", CODEC_TARGET])
+        if not built:
+            return None, why
+        path, why = _list_bin()
+        if path is None:
+            return None, why
+        if not Path(path).is_file():
+            return None, (
+                f"`cabal build {CODEC_TARGET}` reported success but "
+                f"{path!r} still does not exist")
     _CACHED_CODEC_EXE = path
     return path, ""
+
+
+def _cabal(args: list[str]) -> tuple[bool, str]:
+    """Run one `cabal` command in the repository root."""
+    try:
+        proc = subprocess.run(
+            ["cabal", *args], cwd=common.REPO_ROOT, capture_output=True,
+            text=True, timeout=CABAL_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        return False, "'cabal' was not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, f"`cabal {' '.join(args)}` timed out"
+    if proc.returncode != 0:
+        tail = "\n".join(
+            ((proc.stdout or "") + (proc.stderr or "")).splitlines()[-60:])
+        return False, f"`cabal {' '.join(args)}` failed: {tail}"
+    return True, (proc.stdout or "")
+
+
+def _list_bin() -> tuple[str | None, str]:
+    """The path `cabal list-bin` names for the codec target, unverified."""
+    ok, output = _cabal(["list-bin", CODEC_TARGET])
+    if not ok:
+        return None, output
+    # `cabal list-bin` can precede its answer with warnings, so the path
+    # is the LAST non-empty line, not the whole of stdout.
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    if not lines:
+        return None, (
+            f"`cabal list-bin {CODEC_TARGET}` named no path at all (run "
+            f"`cabal build all` first)")
+    return lines[-1], ""
 
 
 def _run_codec(args: list[str], marker: str) -> tuple[bool, str]:

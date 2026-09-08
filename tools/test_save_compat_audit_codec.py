@@ -112,6 +112,50 @@ def _with_helper(path: Path):
     return _Scope()
 
 
+def _stub_cabal(tmp: Path, *, binary: Path, build_creates: bool) -> Path:
+    """A `cabal` on PATH that records its argv and answers `list-bin`.
+
+    `build_creates` decides whether `cabal build` actually produces
+    `binary`, which is what separates the two directions of the
+    resolution's step 3: a helper that was merely absent, and one the
+    build did not manage to produce.
+    """
+    bin_dir = tmp / "stub-bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp / "cabal.log"
+    script = bin_dir / "cabal"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$@" >> "{log}"\n'
+        'case "$1" in\n'
+        f'  list-bin) echo "{binary}" ;;\n'
+        f'  build) {"touch \"%s\"" % binary if build_creates else ":"} ;;\n'
+        'esac\n'
+        "exit 0\n", encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return bin_dir
+
+
+def _with_path(bin_dir: Path):
+    """Prepend `bin_dir` to PATH, and clear the resolution cache, for one
+    block. The cache is cleared on the way OUT as well, so a stubbed
+    answer can never leak into a later member's real resolution."""
+    class _Scope:
+        def __enter__(self) -> None:
+            self.previous_path = os.environ.get("PATH", "")
+            self.previous_env = os.environ.pop(codec.ENV_CODEC_EXE, None)
+            self.previous_cache = codec._CACHED_CODEC_EXE
+            os.environ["PATH"] = f"{bin_dir}{os.pathsep}{self.previous_path}"
+            codec._CACHED_CODEC_EXE = None
+
+        def __exit__(self, *_exc) -> None:
+            os.environ["PATH"] = self.previous_path
+            if self.previous_env is not None:
+                os.environ[codec.ENV_CODEC_EXE] = self.previous_env
+            codec._CACHED_CODEC_EXE = self.previous_cache
+    return _Scope()
+
+
 def test_helper_summary_matches_every_generated_expectation() -> None:
     print("issue #2273: the COMPILED helper's canonical summary is "
           "byte-identical to every tracked *.expected.json the tool itself "
@@ -311,6 +355,58 @@ def test_pre_resolved_handoff_is_used_and_a_bad_one_is_refused() -> None:
                f"it pointed at, got {why!r}")
 
 
+def test_an_absent_helper_is_built_once_and_a_present_one_is_not() -> None:
+    print("issue #2273 requirement 6: the three probes that reach this "
+          "bridge without a `cabal build all` -- persistence_contract, "
+          "persistence_contract_sweep, save_compat_migration, whose runner "
+          "preflight builds exe:synarchy and nothing else (#1570) -- must "
+          "still find the helper, so an ABSENT binary is built once; a "
+          "present one is never rebuilt, because this resolution is a "
+          "compatibility bridge, not a freshness guarantee")
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        tmp = Path(d)
+        binary = tmp / "built-helper"
+        log = tmp / "cabal.log"
+
+        with _with_path(_stub_cabal(tmp, binary=binary, build_creates=True)):
+            resolved, why = codec.resolve_codec_exe()
+        expect(resolved == str(binary),
+               f"expected the built helper to resolve, got {resolved!r} ({why})")
+        calls = log.read_text(encoding="utf-8").split()
+        expect(calls.count("build") == 1,
+               f"expected exactly one build for an absent helper, got "
+               f"{log.read_text(encoding='utf-8')!r}")
+
+        log.unlink()
+        with _with_path(_stub_cabal(tmp, binary=binary, build_creates=True)):
+            resolved, why = codec.resolve_codec_exe()
+        expect(resolved == str(binary),
+               f"expected the present helper to resolve, got {resolved!r} ({why})")
+        expect("build" not in log.read_text(encoding="utf-8").split(),
+               f"expected a helper that already exists NOT to be rebuilt, "
+               f"got {log.read_text(encoding='utf-8')!r}")
+
+
+def test_a_build_that_produces_no_helper_is_refused_not_retried() -> None:
+    print("issue #2273: when the build reports success and the helper still "
+          "is not there, resolution says exactly that rather than looping or "
+          "handing a caller a path it is about to fail to exec")
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        tmp = Path(d)
+        binary = tmp / "never-built-helper"
+        log = tmp / "cabal.log"
+        with _with_path(_stub_cabal(tmp, binary=binary, build_creates=False)):
+            resolved, why = codec.resolve_codec_exe()
+        expect(resolved is None,
+               f"expected resolution to fail, got {resolved!r}")
+        expect("still does not exist" in why and str(binary) in why,
+               f"expected the refusal to name the path the build did not "
+               f"produce, got {why!r}")
+        expect(log.read_text(encoding="utf-8").split().count("build") == 1,
+               f"expected exactly ONE build attempt, not a retry loop, got "
+               f"{log.read_text(encoding='utf-8')!r}")
+
+
 #: This owner's members, in the run order the façade concatenates
 #: (issue #2073 requirement 12).
 TESTS = [
@@ -323,4 +419,6 @@ TESTS = [
     test_summary_success_without_written_output_is_reported_as_failure,
     test_descriptor_success_without_written_output_is_reported_as_failure,
     test_pre_resolved_handoff_is_used_and_a_bad_one_is_refused,
+    test_an_absent_helper_is_built_once_and_a_present_one_is_not,
+    test_a_build_that_produces_no_helper_is_refused_not_retried,
 ]
