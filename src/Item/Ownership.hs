@@ -230,8 +230,9 @@ subtreeIds i = HS.insert (iiInstanceId i) (treeIds (iiContents i))
 treeIds ∷ [ItemInstance] → HS.HashSet Word64
 treeIds = foldl' (\acc i → HS.union acc (subtreeIds i)) HS.empty
 
--- | Is @needle@ the root of, or anywhere inside, the subtree of the
---   instance identified by @holder@?
+-- | Is @needle@ the root of, or anywhere inside, @holder@'s subtree?
+--   Answered from the VALUE, so it holds for a candidate that is not
+--   (or no longer) attached to any tree.
 withinSubtree ∷ Word64 → ItemInstance → Bool
 withinSubtree needle holder = HS.member needle (subtreeIds holder)
 
@@ -463,17 +464,17 @@ data OwnershipMove = OwnershipMove
 --   duplicate of itself. Removing first makes all three fall out:
 --   every later check sees a tree that no longer holds the subtree.
 --
---   The one check that cannot wait for the detach is the cycle
---   (correction to requirements 4-6): a destination inside the moved
---   subtree stops existing the moment the subtree is detached, and
---   would then report 'NoSuchTarget'. It is decided against the
---   ORIGINAL tree, so it reports 'WouldCycle'.
+--   Detaching does NOT cost the cycle verdict (correction to
+--   requirements 4-6), even though the destination stops existing in
+--   the tree the moment the subtree comes out. 'insertInstance' decides
+--   the cycle against the CANDIDATE VALUE, which carries its own
+--   descendants with it, so a target living inside the detached subtree
+--   still reports 'WouldCycle' rather than the 'NoSuchTarget' the tree
+--   alone would now say. That is why this needs no cycle check of its
+--   own before the detach.
 moveInstance ∷ OwnershipScene → Word64 → Word64
              → Either OwnershipRefusal OwnershipMove
 moveInstance scene movedId targetId = do
-    moved ← maybe (Left NoSuchInstance) Right
-                  (findInstance movedId (oscItems scene))
-    when (withinSubtree targetId moved) (Left WouldCycle)
     removal ← removeInstance scene movedId
     let after = scene { oscItems = orItems removal }
     items' ← insertInstance after targetId (orInstance removal)

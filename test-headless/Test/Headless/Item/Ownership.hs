@@ -359,10 +359,25 @@ spec = do
                 `refusedWith` OverRootCapacity
             accepted (insertInstance (worn 13.5) pouchId wrench)
         it "reads a ZERO limited capacity as no room at all, never as \
-           \unlimited (the Unit.Transfer.fits sense)" $ do
+           \unlimited (the @Unit.Transfer.fits@ sense)" $ do
             insertInstance (carrier 0) pouchId feather
                 `refusedWith` OverRootCapacity
             accepted (insertInstance (carrier 8.125) pouchId feather)
+        it "and refuses at zero even when the resulting load would ALSO \
+           \be zero — a plain 'load > capacity' test would accept that" $ do
+            let weightless = OwnershipScene
+                    { oscItems    = [container "pouch" pouchId 0 0.5 (20, 20) []]
+                    , oscOther    = []
+                    , oscCapacity = RootLimited 0
+                    , oscWeigh    = weigh
+                    }
+                nothing = item "feather" 26 0 0.25
+            sum (map weigh (oscItems weightless)) `shouldBe` 0
+            insertInstance weightless pouchId nothing
+                `refusedWith` OverRootCapacity
+            accepted (insertInstance
+                        weightless { oscCapacity = RootLimited 0.5 }
+                        pouchId nothing)
         it "while a root with NO capacity concept — the ground — passes \
            \no limit at all" $ do
             -- 15 kg clears every limit inside the tree (pouch 20, crate
@@ -414,11 +429,23 @@ spec = do
         it "refuses a move into the instance itself" $
             moveInstance scene crateId crateId `refusedWith` WouldCycle
         it "refuses a move into one of the instance's own descendants, \
-           \and says CYCLE rather than 'no such target' — the check runs \
-           \before the detach that would make the target vanish" $ do
+           \and says CYCLE rather than 'no such target'" $ do
             moveInstance scene packId pouchId  `refusedWith` WouldCycle
             moveInstance scene crateId pouchId `refusedWith` WouldCycle
             moveInstance scene kitId bandageId `refusedWith` WouldCycle
+        it "and still says CYCLE for a target the tree can no longer \
+           \resolve — the check reads the CANDIDATE's own subtree, which \
+           \is what lets moveInstance detach before it measures" $
+            case removeInstance scene packId of
+                Left r → expectationFailure (show r)
+                Right rm → do
+                    -- The pouch left the tree WITH the pack. Resolving
+                    -- the target against the tree would now report
+                    -- NoSuchTarget, which is the wrong reason.
+                    findInstance pouchId (orItems rm) `shouldBe` Nothing
+                    insertInstance (onTree (orItems rm)) pouchId
+                                   (orInstance rm)
+                        `refusedWith` WouldCycle
         it "refuses a candidate whose own id is already in the tree" $
             insertInstance scene pouchId (item "bandage" bandageId 0.25 0.5)
                 `refusedWith` DuplicateInstanceId
