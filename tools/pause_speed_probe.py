@@ -53,6 +53,7 @@ import subprocess
 import sys
 import uuid
 
+import probe_protocol
 from probelib import (boot, capture_request_id, poll_until, quit_engine,
                       send, wait_load_published, wait_save_complete)
 
@@ -68,12 +69,13 @@ SAVE_NAME_PAUSED = "probe_pausespeed_prepaused_" + RUN_ID
 
 
 class Checks:
-    def __init__(self) -> None:
+    def __init__(self, rep) -> None:
+        self.rep = rep
         self.failed = 0
 
     def ok(self, cond: bool, label: str, detail: str = "") -> bool:
-        print(f"  [{'PASS' if cond else 'FAIL'}] {label}"
-              + (f"  ({detail})" if detail else ""), flush=True)
+        self.rep.check(CHECK_ID_BY_LABEL[label], cond, label
+                       + (f"  ({detail})" if detail else ""))
         if not cond:
             self.failed += 1
         return bool(cond)
@@ -144,33 +146,79 @@ def save_and_settle(port: int, name: str, chk: Checks, label: str) -> None:
     request_id = capture_request_id(port, "return engine.getSaveStatus()")
     if not chk.ok(request_id is not None,
                   f"{label}: the save transaction reported a request id"):
+        if chk.rep.protocol_mode:
+            # A later phase cannot jump over the unobserved completion.
+            raise RuntimeError(f"{label}: no request id; later checks were not run")
         return
     succeeded, status = wait_save_complete(port, request_id)
     chk.ok(succeeded, f"{label}: the save transaction reached a terminal "
                       f"SaveSucceeded before the resume", str(status))
 
 
+PROBE_CHECKS = [
+    ('notification_speed', 'precondition: the world is running at 10.0x'),
+    ('notification_frozen', 'the notification paused the session and froze its clock'),
+    ('notification_resumed', 'pause.toggle resumed at the chosen 10x, not the default 1x'),
+    ('manual_speed', 'precondition: the world is running at 8.0x'),
+    ('manual_save_accepted', 'manual save: engine.saveWorld returned true'),
+    ('manual_save_request', 'manual save: the save transaction reported a request id'),
+    ('manual_save_completed', 'manual save: the save transaction reached a terminal SaveSucceeded before the resume'),
+    ('manual_frozen', 'the completed save left the session paused and frozen'),
+    ('manual_resumed', 'resuming after the save returned the chosen 8x, not 1x'),
+    ('prepaused_speed', 'precondition: the world is running at 7.0x'),
+    ('prepaused_epoch', 'the notification opened the pause epoch at 7x'),
+    ('prepaused_save_accepted', 'pre-paused save: engine.saveWorld returned true'),
+    ('prepaused_save_request', 'pre-paused save: the save transaction reported a request id'),
+    ('prepaused_save_completed', 'pre-paused save: the save transaction reached a terminal SaveSucceeded before the resume'),
+    ('prepaused_frozen', 'it is still paused and frozen after both'),
+    ('prepaused_resumed', "the epoch's original 7x survived a second notification and a save"),
+    ('before_load_speed', 'precondition: the world is running at 6.0x'),
+    ('load_accepted', 'engine.loadSave was accepted'),
+    ('load_published', 'the load transaction published'),
+    ('load_frozen', 'the loaded session came up paused and frozen'),
+    ('load_default_speed', 'the loaded session resumed at the default 1.0, never the pre-save 8x or the pre-load 6x'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('pause_speed', PROBE_CHECKS)
+
+CHECK_ID_BY_LABEL = {label: cid for cid, label in PROBE_CHECKS}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9147)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
 
+
+def _run(args, rep):
     for name in (SAVE_NAME, SAVE_NAME_PAUSED):
         if os.path.exists(os.path.join("saves", name)):
             sys.exit(f"refusing to run: saves/{name} already exists")
 
-    proc = boot(args.port, log=LOG)
-    chk = Checks()
+    proc = boot(args.port, log=rep.engine_log_path("pause_speed_engine.log", LOG),
+                args=rep.engine_args())
+    chk = Checks(rep)
     try:
         send(args.port, f'world.init("{PAGE}", {args.seed}, 64, 3)',
              expect_result=False)
-        print(f"[init] waitForInit -> "
-              f"{send(args.port, 'return world.waitForInit(300)', timeout=305)}")
+        rep.note(f"[init] waitForInit -> {send(args.port, 'return world.waitForInit(300)', timeout=305)}")
         send(args.port, f'world.show("{PAGE}")', expect_result=False)
         send(args.port, "require('scripts.pause')", expect_result=False)
 
-        print("\nA. a pause: true notification, resumed the way Space does")
+        rep.note('\nA. a pause: true notification, resumed the way Space does')
         send(args.port, "engine.setPaused(false)", expect_result=False)
         set_scale(args.port, 10.0, chk)
         notify_pause(args.port)
@@ -182,7 +230,7 @@ def main() -> int:
             args.port, chk, 10.0,
             "pause.toggle resumed at the chosen 10x, not the default 1x")
 
-        print("\nB. a manual engine.saveWorld, all the way to a terminal outcome")
+        rep.note('\nB. a manual engine.saveWorld, all the way to a terminal outcome')
         set_scale(args.port, 8.0, chk)
         save_and_settle(args.port, SAVE_NAME, chk, "manual save")
         expect_paused_and_frozen(
@@ -193,7 +241,7 @@ def main() -> int:
             args.port, chk, 8.0,
             "resuming after the save returned the chosen 8x, not 1x")
 
-        print("\nC. a save taken from an ALREADY paused session")
+        rep.note('\nC. a save taken from an ALREADY paused session')
         set_scale(args.port, 7.0, chk)
         notify_pause(args.port)
         expect_paused_and_frozen(
@@ -210,7 +258,7 @@ def main() -> int:
             args.port, chk, 7.0,
             "the epoch's original 7x survived a second notification and a save")
 
-        print("\nD. load policy: a published load resumes at the default speed")
+        rep.note('\nD. load policy: a published load resumes at the default speed')
         set_scale(args.port, 6.0, chk)
         loaded = send(args.port, f'return engine.loadSave("{SAVE_NAME}")')
         chk.ok(loaded.strip() == "true", "engine.loadSave was accepted",
@@ -235,11 +283,11 @@ def main() -> int:
         for name in (SAVE_NAME, SAVE_NAME_PAUSED):
             shutil.rmtree(os.path.join("saves", name), ignore_errors=True)
 
-    print()
+    rep.note("")
     if chk.failed:
-        print(f"FAIL: {chk.failed} check(s) failed")
+        rep.note(f'FAIL: {chk.failed} check(s) failed')
         return 1
-    print("PASS: the chosen world speed survives every pause source (#1599)")
+    rep.note('PASS: the chosen world speed survives every pause source (#1599)')
     return 0
 
 
