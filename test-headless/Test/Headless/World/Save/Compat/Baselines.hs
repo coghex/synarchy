@@ -12,9 +12,11 @@
 --   ("Test.Headless.World.Save.Compat") can sequence it among the other
 --   families' groups in the order the suite has always run in; this
 --   module registers nothing itself. The manifest model, the expected
---   canonical-summary schema (@tools/save_compat_audit_codec.py@'s
---   @GHCI_DUMP_SUMMARY_TEMPLATE@ mirrors it by hand) and the
---   staging helpers live here because only this family reads them.
+--   canonical-summary schema (@app-save-codec/Main.hs@'s
+--   @canonicalSummary@ mirrors it by hand -- it was
+--   @tools/save_compat_audit_codec.py@'s @GHCI_DUMP_SUMMARY_TEMPLATE@
+--   until #2273 compiled that program) and the staging helpers live here
+--   because only this family reads them.
 module Test.Headless.World.Save.Compat.Baselines
     ( manifestFixturesSpec
     , containerKnowledgeSpec
@@ -201,6 +203,7 @@ data ExpectedPage = ExpectedPage
     , epUnitSimStateCount ∷ !Int, epCraftBillCount ∷ !Int
     , epPowerNodeCount ∷ !Int, epGroundItemCount ∷ !Int
     , epTimeHour ∷ !Int, epTimeMinute ∷ !Int
+    , epTimeRemainder ∷ !Double
     , epDateYear ∷ !Int, epDateMonth ∷ !Int, epDateDay ∷ !Int
     , epMapMode ∷ !Text
     , epBuildings ∷ ![ExpectedBuilding]
@@ -216,6 +219,13 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .: "unitSimStateCount" <*> o .: "craftBillCount"
         <*> o .: "powerNodeCount" <*> o .: "groundItemCount"
         <*> o .: "timeHour" <*> o .: "timeMinute"
+        -- #2471: OPTIONAL, defaulting to no retained progress. Every
+        -- summary generated before world-pages v11 predates the key, and
+        -- 0 is precisely what 'migrateWorldPagesV10' gives those payloads
+        -- back -- so the default is the pre-v11 contract rather than a
+        -- convenience. A v11 fixture declares its own value and this
+        -- reader then pins it exactly.
+        <*> o .:? "timeRemainder" .!= 0
         <*> o .: "dateYear" <*> o .: "dateMonth" <*> o .: "dateDay"
         <*> o .: "mapMode"
         <*> o .:? "buildings" .!= []
@@ -365,6 +375,13 @@ manifestFixturesSpec =
                                         `shouldBe` epGroundItemCount ep
                                     pgsTimeHour page `shouldBe` epTimeHour ep
                                     pgsTimeMinute page `shouldBe` epTimeMinute ep
+                                    -- #2471: pinned exactly, so a v11
+                                    -- fixture proves its recorded
+                                    -- sub-minute progress survives decode
+                                    -- and every pre-v11 fixture proves
+                                    -- its migration yields none.
+                                    pgsTimeRemainder page
+                                        `shouldBe` epTimeRemainder ep
                                     pgsDateYear page `shouldBe` epDateYear ep
                                     pgsDateMonth page `shouldBe` epDateMonth ep
                                     pgsDateDay page `shouldBe` epDateDay ep

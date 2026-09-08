@@ -50,6 +50,7 @@ import World.Save.Component.Page
     , PageCoreDTOv6(..), WorldPagesDTOv6(..)
     , PageCoreDTOv7(..), WorldPagesDTOv7(..)
     , PageCoreDTOv8(..), WorldPagesDTOv8(..)
+    , PageCoreDTOv10(..), WorldPagesDTOv10(..)
     , WorldGenParamsDTOv5(..), toWorldGenParamsDTOv5
     , toWorldGenParamsDTOv6
     , WorldGenParamsDTOv7(..), toWorldGenParamsDTOv7
@@ -58,7 +59,7 @@ import World.Save.Component.Page
     , LanguageProvenanceDTO(..), toEtymologySourceDTO, basePageSnapshots
     , migrateWorldPagesV1, migrateWorldPagesV2, migrateWorldPagesV3
     , migrateWorldPagesV4, migrateWorldPagesV5, migrateWorldPagesV6
-    , migrateWorldPagesV7, migrateWorldPagesV8 )
+    , migrateWorldPagesV7, migrateWorldPagesV8, migrateWorldPagesV10 )
 import World.Save.Component.WorldGen
     ( LocationInstanceDTOv3(..), LocationInstancesDTOv3(..)
     , LocationInstanceDTOv5(..), LocationInstancesDTOv5(..)
@@ -520,6 +521,49 @@ languageProvenanceSpec =
                     `shouldBe` map liEncounter
                         (HM.elems (lisById encounterInstances))
 
+        it "a frozen pre-#2471 v10 page keeps its whole-minute clock, \
+           \date, identity and generated-world id, and gains NO \
+           \sub-minute progress" $ do
+            -- Zero is the value a v10 save actually recorded: the
+            -- pre-#2471 clock floored the fraction away on every tick, so
+            -- no such payload ever held one. The example beside this one
+            -- round-trips a NONZERO remainder through the current shape,
+            -- which is what makes this absence a real decode outcome
+            -- rather than a field nothing ever writes.
+            let dto = WorldPagesDTOv10 [legacyPageCoreV10]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTOv10 of
+                Left err → expectationFailure err
+                Right dto' → do
+                    let pages = migrateWorldPagesV10 dto'
+                        page = HM.lookup (WorldPageId "legacy_page")
+                                         (wpBase pages)
+                    (pgsTimeRemainder <$> page) `shouldBe` Just 0
+                    (pgsTimeHour <$> page) `shouldBe` Just 12
+                    (pgsTimeMinute <$> page) `shouldBe` Just 30
+                    (pgsDateYear <$> page) `shouldBe` Just 1
+                    (pgsDateMonth <$> page) `shouldBe` Just 2
+                    (pgsDateDay <$> page) `shouldBe` Just 3
+                    (wiName <$> (pgsIdentity =≪ page))
+                        `shouldBe` Just "Legacy World"
+                    (pgsGeneratedId <$> page) `shouldBe`
+                        Just (Just (fixtureGeneratedWorldIdForPage
+                                        (WorldPageId "legacy_page")))
+                    -- v10 DOES carry generated-world ids, so an absent
+                    -- one in such a payload stays corruption rather than
+                    -- becoming the format's honest answer.
+                    wpIdsFromPayload pages `shouldBe` True
+
+        it "the CURRENT page core round-trips a NONZERO sub-minute \
+           \remainder, so the v10 migration's zero above is a real \
+           \decode outcome" $ do
+            let dto = WorldPagesDTO [currentPageCore]
+            case S.decode (S.encode dto) ∷ Either String WorldPagesDTO of
+                Left err  → expectationFailure err
+                Right dto' → do
+                    let page = HM.lookup (WorldPageId "legacy_page")
+                                   (wpBase (basePageSnapshots dto'))
+                    (pgsTimeRemainder <$> page) `shouldBe` Just 0.25
+
         it "the CURRENT v8 page core round-trips a present provenance -- \
            \so the two absences above are a real decode outcome, not a \
            \field that is always Nothing" $ do
@@ -936,12 +980,32 @@ keepSource = EtymologySource
                                       (GeneratorVersion 1)
     }
 
+-- | The frozen pre-#2471 (v10) shape of 'currentPageCore': every field
+--   it has except the appended sub-minute remainder, which v10 has no
+--   place for at all.
+legacyPageCoreV10 ∷ PageCoreDTOv10
+legacyPageCoreV10 = PageCoreDTOv10
+    { pc10PageId     = pcPageId currentPageCore
+    , pc10GenParams  = pcGenParams currentPageCore
+    , pc10CameraX    = pcCameraX currentPageCore
+    , pc10CameraY    = pcCameraY currentPageCore
+    , pc10TimeHour   = pcTimeHour currentPageCore
+    , pc10TimeMinute = pcTimeMinute currentPageCore
+    , pc10DateYear   = pcDateYear currentPageCore
+    , pc10DateMonth  = pcDateMonth currentPageCore
+    , pc10DateDay    = pcDateDay currentPageCore
+    , pc10MapMode    = pcMapMode currentPageCore
+    , pc10Identity   = pcIdentity currentPageCore
+    , pc10GeneratedId = pcGeneratedId currentPageCore
+    }
+
 currentPageCore ∷ PageCoreDTO
 currentPageCore = PageCoreDTO
     { pcPageId     = WorldPageId "legacy_page"
     , pcGenParams  = toWorldGenParamsDTO defaultWorldGenParams
     , pcCameraX    = 1, pcCameraY = 2
     , pcTimeHour   = 12, pcTimeMinute = 30
+    , pcTimeRemainder = 0.25
     , pcDateYear   = 1, pcDateMonth = 2, pcDateDay = 3
     , pcMapMode    = ZMDefault
     , pcIdentity   = Just (WorldIdentityDTO "Legacy World" (Just "an old gloss")

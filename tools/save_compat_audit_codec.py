@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """The real-codec bridge for the save-compatibility tool (issue #2049,
-requirement 7).
+requirement 7; converted from GHCi to a compiled helper by issue #2273).
 
-A LEAF service (requirement 15): the ONE owner of every GHCi-backed
-operation this tool performs, and of the `cabal repl` subprocess
-protocol behind them. It imports only the shared definitions owner.
+A LEAF service (requirement 15): the ONE owner of every real-codec
+operation this tool performs, and of the subprocess protocol behind
+them. It imports only the shared definitions owner.
 
-It owns all three GHCi templates and the three operations that run
-them:
+It owns the three operations, and the one binary that serves them:
 
-  - fixed-timestamp normalization (`normalize_fixture_timestamp`);
+  - fixed-timestamp rewriting (`set_fixture_timestamp`, and its
+    in-place `normalize_fixture_timestamp` form);
   - decoded fixture-descriptor dumping (`dump_fixture_descriptors`);
   - canonical-summary dumping (`dump_canonical_summary`).
 
@@ -21,354 +21,342 @@ takes a manifest dict and emits violation strings, so it belongs with
 the audit that aggregates them, and it reaches the real bytes only
 through `dump_fixture_descriptors` here.
 
-Requirement 8: every operation here keeps its existing production path
--- `cabal repl test:synarchy-test-headless`, the 1800-second timeout,
-its own success marker (`NORMALIZE_OK` / `DESCRIPTOR_DUMP_OK` /
-`DUMP_OK`), a 60-line diagnostic tail on failure, and guaranteed
-temporary-file cleanup. These are NOT interchangeable with
-save_compat_audit_register's `_run_real_codec_validation`, which is a
-different invocation entirely (`cabal test synarchy-test-headless
---test-options=--match "save migrations"`, judged by its return code,
-40-line tail) and stays with the registration owner it validates for.
+Issue #2273: no operation here starts GHCi
+--------------------------------------------
+Until #2273 each operation was a GHCi program fed to
+`cabal repl test:synarchy-test-headless` on stdin, so every call loaded
+the 348-module test suite into the interpreter to reach a handful of
+LIBRARY functions -- 91-133 s for the save-compatibility audit and
+64-88 s for the fixture-reproducibility member on the CI critical path,
+for work that is a few decodes.
+
+Those three programs are now `app-save-codec/Main.hs`, a compiled
+`exe:synarchy-save-codec` that `cabal build all` produces beside the
+engine, and every operation below execs that binary. It decodes and
+re-encodes through the SAME library functions the GHCi programs
+imported -- `World.Save.Envelope.decodeSessionEnvelope`,
+`World.Save.Envelope.Codec.decodeEnvelope` and `.encodeEnvelope` --
+so this is a change of how the real codec is REACHED, never a second
+decoder.
+
+Requirement 8's operational shape is preserved across that conversion:
+each operation keeps its own success marker (`NORMALIZE_OK` /
+`DESCRIPTOR_DUMP_OK` / `DUMP_OK`), a 60-line diagnostic tail on failure,
+and guaranteed temporary-file cleanup. These are still NOT
+interchangeable with save_compat_audit_register's
+`_run_real_codec_validation`, which is a different invocation entirely
+(`cabal test synarchy-test-headless --test-options=--match "save
+migrations"`, judged by its return code, 40-line tail) and stays with
+the registration owner it validates for.
+
+Resolving the binary (requirement 6)
+------------------------------------
+`resolve_codec_exe` answers an ABSOLUTE path, in one order:
+
+  1. `SYNARCHY_SAVE_CODEC_EXE`, if set to a non-empty value. This is the
+     pre-resolved handoff -- the same contract shape
+     `probe_engine.ENV_ENGINE_EXE` gives a probe its already-built
+     `exe:synarchy` (#1570) -- so a caller that has already resolved the
+     binary invokes this bridge with NO Cabal contact in the child
+     process at all. An explicitly exported path that does not exist is
+     an error, never a silent fall-through to resolution: the export is
+     a statement about which build to use.
+  2. Otherwise ONE `cabal build exe:synarchy-save-codec` followed by ONE
+     read-only `cabal list-bin`, cached together for the life of the
+     process.
+
+     The build is unconditional on purpose, and this is the whole reason
+     the branch is shaped this way rather than "build only when the file
+     is missing". `cabal list-bin` answers a path whether or not that
+     file is current, so accepting a helper because it EXISTS would hand
+     a caller a binary built before the last edit to `app-save-codec/` or
+     to an imported `World.Save.*` module -- and decode it against
+     yesterday's codec while reporting today's verdict. The `cabal repl`
+     this replaced compiled from current sources every time; a compiled
+     helper has to make the same promise. `probe_engine.resolve_executable`
+     resolves `exe:synarchy` with exactly this shape, and for exactly
+     this reason (#1570).
+
+     It is what lets the three probes that reach this module WITHOUT a
+     preceding `cabal build all` keep working -- `persistence_contract`,
+     `persistence_contract_sweep` and `save_compat_migration`, whose
+     runner preflight builds `exe:synarchy` and nothing else. All three
+     already hold the `cabal-build` resource EXCLUSIVELY
+     (`tools/probe_runner_resources.py`), because they drive Cabal
+     themselves, so this build sits inside a hold that already exists
+     rather than being a new concurrent mutation of `dist-newstyle`.
+
+     On a tree where `cabal build all` has already run -- CI, `make ci`,
+     and any ordinary local invocation -- the build is a plan check that
+     compiles nothing and costs no measurable time.
 
 The public façade is tools/save_compat_audit.py.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 import save_compat_audit_common as common
 
-# A small, permanent GHCi program (run via `cabal repl` subprocess) that
-# derives a fixture's canonical-summary JSON DIRECTLY from its real,
-# decoded SessionSnapshot/SaveMetadata -- not from live engine queries,
-# several of which (hour/minute of day, in particular) have no debug-
-# console verb to read at all. Mirrors EXACTLY the schema
-# test-headless/Test/Headless/World/Save/Compat/Baselines.hs's ExpectedSummary/
-# ExpectedPage/Expected* Aeson types parse -- the two must be kept in
-# sync by hand if that schema ever grows a field.
-GHCI_DUMP_SUMMARY_TEMPLATE = r"""
-:set -XOverloadedStrings -XTypeApplications
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BSL
-import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
-import qualified Data.Aeson as Aeson
-import Data.Aeson ((.=))
-import qualified Data.Text as T
-import Data.List (sortOn)
-import World.Save.Envelope (decodeSessionEnvelope)
-import World.Save.Snapshot
-import World.Save.Types
-import World.Page.Types (WorldPageId(..))
-import Building.Types (BuildingId(..))
-import Unit.Types (UnitId(..))
-import Unit.Sim.Types (UnitSimState(..))
-import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
-import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
-import Item.Ground (GroundItems(..))
-import Item.Types (ItemInstance(..))
+#: The Cabal target that produces the compiled codec helper (#2273).
+CODEC_TARGET = "exe:synarchy-save-codec"
 
-bytes <- BS.readFile "{fixture_path}"
+#: The pre-resolved-binary handoff (requirement 6). Its value is an
+#: ABSOLUTE path to an already-built `exe:synarchy-save-codec`; its
+#: presence is what lets a caller skip Cabal entirely. Deliberately
+#: distinct from `probe_engine.ENV_ENGINE_EXE`: that one names the
+#: ENGINE, and a caller may legitimately hold both.
+ENV_CODEC_EXE = "SYNARCHY_SAVE_CODEC_EXE"
 
-:{{
-let luaNames = HS.fromList ["unit_ai", "building_spawn"]
-    decoded = decodeSessionEnvelope luaNames luaNames bytes
-:}}
+#: Generous ceiling on one helper invocation. A decode is milliseconds;
+#: this exists so a wedged subprocess fails the audit instead of hanging
+#: a CI job. The GHCi path needed 1800 s because it compiled first.
+CODEC_TIMEOUT_SECONDS = 300
 
-:{{
-case decoded of
-  Left err -> putStrLn ("DUMP_FAILED: decode: " ++ T.unpack err)
-  Right (meta, snap, luaComponents, isMig) -> do
-    let dumpItem i = Aeson.object
-          [ "defName" .= iiDefName i, "instanceId" .= iiInstanceId i
-          , "currentFill" .= iiCurrentFill i, "quality" .= iiQuality i
-          , "condition" .= iiCondition i, "weight" .= iiWeight i
-          , "contents" .= map dumpItem (iiContents i) ]
-        dumpBuilding (bid, b) = Aeson.object
-          [ "id" .= unBuildingId bid, "defName" .= bisDefName b
-          , "anchorX" .= bisAnchorX b, "anchorY" .= bisAnchorY b
-          , "gridZ" .= bisGridZ b, "buildProgress" .= bisBuildProgress b ]
-        dumpUnit (uid, u) = Aeson.object
-          [ "id" .= unUnitId uid, "defName" .= uisDefName u
-          , "gridX" .= uisGridX u, "gridY" .= uisGridY u
-          , "gridZ" .= uisGridZ u, "facing" .= T.pack (show (uisFacing u))
-          , "activity" .= uisActivity u, "pose" .= uisPose u
-          , "inventory" .= map dumpItem (uisInventory u) ]
-        dumpSim (uid, s) = Aeson.object
-          [ "unitId" .= unUnitId uid, "realX" .= usRealX s, "realY" .= usRealY s
-          , "gridZ" .= usGridZ s, "pose" .= T.pack (show (usPose s))
-          , "state" .= T.pack (show (usState s))
-          , "facing" .= T.pack (show (usFacing s)) ]
-        dumpBill b = Aeson.object
-          [ "id" .= unBillId (cbId b), "station" .= unBuildingId (cbStation b)
-          , "recipe" .= cbRecipe b, "remaining" .= cbRemaining b
-          , "claimant" .= fmap unUnitId (cbClaimant b)
-          , "mode" .= T.pack (show (cbMode b)) ]
-        dumpNode n = Aeson.object
-          [ "id" .= unPowerNodeId (pnId n), "building" .= unBuildingId (pnBuilding n)
-          , "role" .= T.pack (show (pnRole n)), "peakWatts" .= pnPeakWatts n
-          , "capacityWh" .= pnCapacityWh n, "storedWh" .= pnStoredWh n ]
-        dumpPage (WorldPageId pid, page) = Aeson.object
-          [ "pageId" .= pid
-          , "buildingCount" .= HM.size (bsnInstances (pgsBuildings page))
-          , "unitCount" .= HM.size (usnInstances (pgsUnits page))
-          , "unitSimStateCount" .= HM.size (pgsUnitSimStates page)
-          , "craftBillCount" .= HM.size (cbsBills (pgsCraftBills page))
-          , "powerNodeCount" .= HM.size (pnsNodes (pgsPowerNodes page))
-          , "groundItemCount" .= HM.size (gisItems (pgsGroundItems page))
-          , "timeHour" .= pgsTimeHour page, "timeMinute" .= pgsTimeMinute page
-          , "dateYear" .= pgsDateYear page, "dateMonth" .= pgsDateMonth page
-          , "dateDay" .= pgsDateDay page
-          , "mapMode" .= T.pack (show (pgsMapMode page))
-          , "buildings" .= map dumpBuilding
-              (sortOn (unBuildingId . fst)
-                 (HM.toList (bsnInstances (pgsBuildings page))))
-          , "units" .= map dumpUnit
-              (sortOn (unUnitId . fst) (HM.toList (usnInstances (pgsUnits page))))
-          , "unitSimStates" .= map dumpSim
-              (sortOn (unUnitId . fst) (HM.toList (pgsUnitSimStates page)))
-          , "craftBills" .= map dumpBill
-              (sortOn cbId (HM.elems (cbsBills (pgsCraftBills page))))
-          , "powerNodes" .= map dumpNode
-              (sortOn pnId (HM.elems (pnsNodes (pgsPowerNodes page))))
-          ]
-        cam = snapLiveCamera snap
-        WorldPageId activePageText = snapActivePage snap
-        summary = Aeson.object
-          [ "metadata" .= Aeson.object
-              [ "seed" .= smSeed meta, "worldSize" .= smWorldSize meta
-              , "plateCount" .= smPlateCount meta, "worldName" .= smWorldName meta
-              , "worldGloss" .= smWorldGloss meta ]
-          , "gameTime" .= snapGameTime snap
-          , "nextItemId" .= snapNextItemId snap
-          , "nextBuildingId" .= snapNextBuildingId snap
-          , "nextUnitId" .= snapNextUnitId snap
-          , "camera" .= Aeson.object
-              [ "ownerPage" .= fmap (\(WorldPageId p) -> p) (lcsOwnerPage cam)
-              , "x" .= lcsX cam, "y" .= lcsY cam, "zoom" .= lcsZoom cam
-              , "facing" .= T.pack (show (lcsFacing cam)) ]
-          , "activePage" .= activePageText
-          , "visiblePages" .= map (\(WorldPageId p) -> p) (snapVisiblePages snap)
-          , "pages" .= map dumpPage
-              (sortOn (\(WorldPageId p, _) -> p) (HM.toList (snapPages snap)))
-          , "luaComponentCount" .= length luaComponents
-          , "isMigratedLegacyBaseline" .= isMig
-          ]
-    BSL.writeFile "{output_path}" (Aeson.encode summary)
-    putStrLn "DUMP_OK"
-:}}
-"""
+#: Ceiling on a `cabal` call. Longer than CODEC_TIMEOUT_SECONDS because
+#: step 3 of the resolution below can actually compile the helper on a
+#: cold tree, which the helper's own invocations never do.
+CABAL_TIMEOUT_SECONDS = 1800
 
-# A small, permanent GHCi program (run via `cabal repl`, mirroring
-# GHCI_DUMP_SUMMARY_TEMPLATE's own subprocess pattern) that overwrites
-# ONLY a freshly-generated fixture's "metadata" component's smTimestamp
-# field with common.FIXED_GENERATED_TIMESTAMP, leaving every other
-# component's version/required/payload bytes completely untouched.
-#
-# Round-11 review: engine.saveWorld (the real production save path
-# --generate-session deliberately reuses, per requirement 21's "a real
-# generation mode") always stamps the CURRENT WALL-CLOCK time into
-# smTimestamp (Engine.Scripting.Lua.API.Save's getCurrentTime call,
-# by design -- an ordinary player save needs each save to carry a
-# distinct real timestamp). That means two --generate-session runs
-# over IDENTICAL seed/world-size/plate-count/spawn arguments produce
-# DIFFERENT envelope bytes and sha256s purely from wall-clock drift,
-# defeating the reproducibility requirement 21 itself demands (a
-# fixture's checksum must depend only on its declared generation
-# inputs, not on when the command happened to run). This step
-# normalizes that ONE field post-generation, via the real envelope
-# codec (decode the raw manifest/payloads, rebuild every component's
-# spec verbatim except metadata's, re-encode) rather than a hand-rolled
-# binary patch -- so the fix stays correct through any future envelope
-# framing change, exactly like every other fixture-generation step in
-# this file.
-GHCI_NORMALIZE_TIMESTAMP_TEMPLATE = r"""
-:set -XOverloadedStrings
-import qualified Data.ByteString as BS
-import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
-import qualified Data.Serialize as S
-import World.Save.Envelope.Codec
-import World.Save.Envelope.Types
-import World.Save.Envelope (currentEnvelopeVersion, metadataComponentId)
-import World.Save.Component (componentKnownIds)
-import World.Save.Types (SaveMetadata(..))
-
-bytes <- BS.readFile "{fixture_path}"
-
-:{{
-let knownAll = HS.insert metadataComponentId
-                 (HS.insert (ComponentId "lua.unit_ai")
-                    (HS.insert (ComponentId "lua.building_spawn") componentKnownIds))
--- Structural re-encode only: knownAll widens what may APPEAR, while
--- the reader-required set stays EMPTY. Reusing knownAll for both would
--- demand that whatever fixture is being normalized carry every
--- component the current build knows about -- including any OPTIONAL one
--- added after the fixture was captured (#1087's container-knowledge),
--- which by definition it need not.
-in case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion knownAll HS.empty bytes of
-     Left e -> putStrLn ("NORMALIZE_FAILED: decode: " ++ show e)
-     Right decoded ->
-       case S.decode
-              (HM.lookupDefault BS.empty metadataComponentId (dePayloads decoded))
-              :: Either String SaveMetadata of
-         Left e -> putStrLn ("NORMALIZE_FAILED: metadata decode: " ++ e)
-         Right meta -> do
-           let fixedMeta = meta {{ smTimestamp = "{fixed_timestamp}" }}
-               newSpecs =
-                 [ ( cdId d, cdVersion d, cdRequired d
-                   , if cdId d == metadataComponentId
-                        then S.encode fixedMeta
-                        else HM.lookupDefault BS.empty (cdId d) (dePayloads decoded) )
-                 | d <- emComponents (deManifest decoded) ]
-           case encodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion newSpecs of
-             Left e -> putStrLn ("NORMALIZE_FAILED: encode: " ++ show e)
-             Right outBytes -> do
-               BS.writeFile "{fixture_path}" outBytes
-               putStrLn "NORMALIZE_OK"
-:}}
-"""
+#: Cached answer of the `cabal list-bin` branch of `resolve_codec_exe`,
+#: so a batch of operations pays that query at most once. `None` means
+#: "not resolved yet"; the environment branch is never cached, so a test
+#: repointing `SYNARCHY_SAVE_CODEC_EXE` is always honoured.
+_CACHED_CODEC_EXE: str | None = None
 
 
-def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:
-    """Run GHCI_NORMALIZE_TIMESTAMP_TEMPLATE via a `cabal repl` subprocess
-    to overwrite fixture_path's metadata smTimestamp with
-    common.FIXED_GENERATED_TIMESTAMP, in place. Returns (ok, diagnostic-tail-on-
-    failure)."""
-    script = GHCI_NORMALIZE_TIMESTAMP_TEMPLATE.format(
-        fixture_path=str(fixture_path),
-        fixed_timestamp=common.FIXED_GENERATED_TIMESTAMP)
+def resolve_codec_exe() -> tuple[str | None, str]:
+    """The absolute path of the compiled codec helper, or (None, why).
+
+    See the module docstring for the resolution order and why an
+    explicitly exported path is never silently ignored.
+    """
+    global _CACHED_CODEC_EXE
+    exported = os.environ.get(ENV_CODEC_EXE, "").strip()
+    if exported:
+        if not Path(exported).is_file():
+            return None, (
+                f"{ENV_CODEC_EXE} names {exported!r}, which is not a file -- "
+                f"export the absolute path of an already-built "
+                f"{CODEC_TARGET}, or unset it to resolve through cabal")
+        return exported, ""
+    if _CACHED_CODEC_EXE is not None:
+        return _CACHED_CODEC_EXE, ""
+    # Build FIRST, then locate. Not "locate, and build if absent": a
+    # present-but-stale helper is the failure this ordering exists to
+    # prevent, and `cabal list-bin` cannot tell the two apart.
+    built, why = _cabal(["build", CODEC_TARGET])
+    if not built:
+        return None, why
+    path, why = _list_bin()
+    if path is None:
+        return None, why
+    if not Path(path).is_file():
+        return None, (
+            f"`cabal build {CODEC_TARGET}` reported success but {path!r} "
+            f"does not exist")
+    _CACHED_CODEC_EXE = path
+    return path, ""
+
+
+def _cabal(args: list[str]) -> tuple[bool, str]:
+    """Run one `cabal` command in the repository root."""
     try:
         proc = subprocess.run(
-            ["cabal", "repl", "test:synarchy-test-headless"],
-            input=script, cwd=common.REPO_ROOT, capture_output=True, text=True,
-            timeout=1800)
+            ["cabal", *args], cwd=common.REPO_ROOT, capture_output=True,
+            text=True, timeout=CABAL_TIMEOUT_SECONDS)
     except FileNotFoundError:
         return False, "'cabal' was not found on PATH"
+    except subprocess.TimeoutExpired:
+        return False, f"`cabal {' '.join(args)}` timed out"
+    if proc.returncode != 0:
+        tail = "\n".join(
+            ((proc.stdout or "") + (proc.stderr or "")).splitlines()[-60:])
+        return False, f"`cabal {' '.join(args)}` failed: {tail}"
+    return True, (proc.stdout or "")
+
+
+def _list_bin() -> tuple[str | None, str]:
+    """The path `cabal list-bin` names for the codec target, unverified."""
+    ok, output = _cabal(["list-bin", CODEC_TARGET])
+    if not ok:
+        return None, output
+    # `cabal list-bin` can precede its answer with warnings, so the path
+    # is the LAST non-empty line, not the whole of stdout.
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    if not lines:
+        return None, (
+            f"`cabal list-bin {CODEC_TARGET}` named no path at all (run "
+            f"`cabal build all` first)")
+    return lines[-1], ""
+
+
+def _run_codec(args: list[str], marker: str) -> tuple[bool, str]:
+    """Run one codec-helper operation, judging it by BOTH its exit status
+    and its own success marker.
+
+    Returns (ok, diagnostic-tail-on-failure). The diagnostic is the last
+    60 lines of the helper's combined output, which for every failure
+    path in `app-save-codec/Main.hs` names the offending fixture and the
+    production codec's own error text (issue #2273 requirement 5).
+    """
+    exe, why = resolve_codec_exe()
+    if exe is None:
+        return False, why
+    try:
+        proc = subprocess.run(
+            [exe, *args], cwd=common.REPO_ROOT, capture_output=True,
+            text=True, timeout=CODEC_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        return False, f"{exe} was not found -- run `cabal build all` first"
+    except subprocess.TimeoutExpired:
+        return False, (f"{Path(exe).name} {args[0]} exceeded "
+                       f"{CODEC_TIMEOUT_SECONDS}s")
     output = (proc.stdout or "") + (proc.stderr or "")
-    if "NORMALIZE_OK" not in output:
+    if proc.returncode != 0 or marker not in output:
         return False, "\n".join(output.splitlines()[-60:])
     return True, ""
 
 
-# A small, permanent GHCi program (run via `cabal repl`, mirroring the
-# other GHCI_*_TEMPLATE constants' subprocess pattern) that decodes a
-# batch of REAL tracked fixture files' RAW envelope manifests -- their
-# actual on-disk (id, version, required) descriptors, exactly as the
-# real codec sees them -- and writes them all out as one JSON object
-# keyed by fixture path. A single, UNIVERSAL known-id set (every
-# Haskell/live-Lua modern id, plus BOTH retired legacy ids "session"
-# and "lua-state") is used for every fixture regardless of which shape
-# it actually is, since this only needs the envelope's STRUCTURAL
-# manifest -- no application-level decode/migration -- to succeed for
-# any of B1/B2/B3/C3's tracked shapes (round-12 review).
-#
-# Round-12 review: tools/save_compat_audit.py's version-coverage checks
-# (audit_component_versions) previously trusted a baseline's declared
-# components[] versions as-is, entirely from the manifest JSON -- never
-# cross-checked against what a fixture's OWN bytes actually contain.
-# Bumping only the manifest's declared version (with no fixture change
-# at all) satisfied every coverage check while validating nothing.
-# verify_fixture_descriptors (below) uses this dump to grind that
-# claim against real, decoded descriptors before trusting it.
-GHCI_DUMP_DESCRIPTORS_TEMPLATE = r"""
-:set -XOverloadedStrings
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as BSL
-import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HS
-import qualified Data.Aeson as Aeson
-import Data.Aeson ((.=))
-import qualified Data.Aeson.Key as AK
-import World.Save.Envelope.Codec
-import World.Save.Envelope.Types
-import World.Save.Envelope (currentEnvelopeVersion, metadataComponentId)
-import World.Save.Component (componentKnownIds)
-import World.Save.Compat.SessionV90 (sessionComponentId)
+def set_fixture_timestamp(fixture_path: Path, timestamp: str,
+                          output_path: Path | None = None) -> tuple[bool, str]:
+    """Rewrite ONLY `fixture_path`'s metadata component's smTimestamp to
+    `timestamp`, writing the result to `output_path` (default: in place).
 
-:{
-let universalKnown = HS.insert metadataComponentId
-        (HS.insert sessionComponentId
-            (HS.insert (ComponentId "lua-state")
-                (HS.insert (ComponentId "lua.unit_ai")
-                    (HS.insert (ComponentId "lua.building_spawn")
-                        componentKnownIds))))
-    cidText (ComponentId t) = t
-    dumpOne path = do
-      bytes <- BS.readFile path
-      pure $ case decodeEnvelope defaultEnvelopeLimits currentEnvelopeVersion
-                     universalKnown HS.empty bytes of
-        Left e -> (path, Left (show e))
-        Right decoded -> (path, Right
-          [ Aeson.object
-              [ "id" .= cidText (cdId d), "version" .= cdVersion d
-              , "required" .= cdRequired d ]
-          | d <- emComponents (deManifest decoded) ])
-in do
-  results <- mapM dumpOne ("__FIXTURE_PATHS__" :: [FilePath])
-  let failed = [ (p, e) | (p, Left e) <- results ]
-  if not (null failed)
-    then putStrLn ("DESCRIPTOR_DUMP_FAILED: " ++ show failed)
-    else do
-      let obj = Aeson.object
-            [ AK.fromString p .= descs | (p, Right descs) <- results ]
-      BSL.writeFile "__OUTPUT_PATH__" (Aeson.encode obj)
-      putStrLn "DESCRIPTOR_DUMP_OK"
-:}
-"""
+    Every other component's version/required/payload bytes are re-encoded
+    verbatim through the real envelope codec -- see
+    `app-save-codec/Main.hs`'s `set-timestamp` for why that is a decode/
+    re-encode rather than a binary patch. Returns
+    (ok, diagnostic-tail-on-failure).
+    """
+    args = ["set-timestamp", "--fixture", str(fixture_path),
+            "--timestamp", timestamp]
+    if output_path is not None:
+        args += ["--output", str(output_path)]
+    return _run_codec(args, "NORMALIZE_OK")
+
+
+def normalize_fixture_timestamp(fixture_path: Path) -> tuple[bool, str]:
+    """Overwrite fixture_path's metadata smTimestamp with
+    common.FIXED_GENERATED_TIMESTAMP, in place.
+
+    The reproducibility guarantee `--generate-session` depends on:
+    `engine.saveWorld` stamps the current wall-clock time into
+    smTimestamp, so without this two generation runs over identical
+    inputs differ in bytes and sha256 purely from when they ran.
+    Returns (ok, diagnostic-tail-on-failure).
+    """
+    return set_fixture_timestamp(fixture_path, common.FIXED_GENERATED_TIMESTAMP)
 
 
 def dump_fixture_descriptors(
         fixture_paths: list[Path]) -> tuple[dict[str, list[dict]] | None, str]:
-    """Run GHCI_DUMP_DESCRIPTORS_TEMPLATE via a single `cabal repl`
-    subprocess to decode every path in fixture_paths' RAW envelope
-    manifest. Returns (path-string -> [{"id","version","required"}, ...]
-    for every fixture, "") on success, or (None, diagnostic) on any
-    decode/subprocess failure."""
+    """Decode every path in fixture_paths' RAW envelope manifest.
+
+    Returns (path-string -> [{"id","version","required"}, ...] for every
+    fixture, "") on success, or (None, diagnostic) on any decode or
+    subprocess failure. The helper fails the whole batch on one
+    undecodable fixture, so a `dict` answered here always covers every
+    path asked for.
+
+    The audit's version-coverage checks previously trusted a baseline's
+    declared components[] versions entirely from the manifest JSON, never
+    cross-checked against what a fixture's OWN bytes contain;
+    save_compat_audit_manifest.verify_fixture_descriptors uses this dump
+    to grind that claim against real, decoded descriptors.
+    """
     if not fixture_paths:
         return {}, ""
-    haskell_list = "[" + ",".join(
-        json.dumps(str(p)) for p in fixture_paths) + "]"
     with tempfile.NamedTemporaryFile(
             suffix=".json", dir=common.REPO_ROOT, delete=False) as tf:
         output_path = Path(tf.name)
     try:
-        script = (GHCI_DUMP_DESCRIPTORS_TEMPLATE
-            .replace('"__FIXTURE_PATHS__"', haskell_list)
-            .replace("__OUTPUT_PATH__", str(output_path)))
+        ok, tail = _run_codec(
+            ["descriptors", "--output", str(output_path)]
+            + [str(p) for p in fixture_paths],
+            "DESCRIPTOR_DUMP_OK")
+        if not ok:
+            return None, tail
+        # A helper that reported success without leaving usable output
+        # behind is its own failure mode, distinct from a decode failure
+        # (issue #2273 requirement 4): report it as one rather than
+        # raising an unhandled JSONDecodeError from the read below.
+        #
+        # ABSENCE is not the test. `NamedTemporaryFile(delete=False)`
+        # above has already created the path, so a helper that wrote
+        # nothing leaves an EMPTY file, not a missing one -- the
+        # condition to judge is whether the file parses as the JSON
+        # object the helper promised.
         try:
-            proc = subprocess.run(
-                ["cabal", "repl", "test:synarchy-test-headless"],
-                input=script, cwd=common.REPO_ROOT, capture_output=True, text=True,
-                timeout=1800)
-        except FileNotFoundError:
-            return None, "'cabal' was not found on PATH"
-        output = (proc.stdout or "") + (proc.stderr or "")
-        if "DESCRIPTOR_DUMP_OK" not in output or not output_path.exists():
-            return None, "\n".join(output.splitlines()[-60:])
-        return json.loads(output_path.read_text(encoding="utf-8")), ""
+            document = json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            return None, (
+                f"the codec helper reported DESCRIPTOR_DUMP_OK but wrote no "
+                f"readable descriptor output at {output_path}: {error}")
+        if not isinstance(document, dict):
+            return None, (
+                f"the codec helper reported DESCRIPTOR_DUMP_OK but wrote "
+                f"{type(document).__name__}, not the path-keyed object the "
+                f"descriptor dump promises, at {output_path}")
+        return document, ""
     finally:
         output_path.unlink(missing_ok=True)
 
 
 def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool, str]:
-    """Run GHCI_DUMP_SUMMARY_TEMPLATE via a `cabal repl` subprocess to
-    derive fixture_path's canonical summary and write it to output_path.
-    Returns (ok, diagnostic-tail-on-failure)."""
-    script = GHCI_DUMP_SUMMARY_TEMPLATE.format(
-        fixture_path=str(fixture_path), output_path=str(output_path))
+    """Derive fixture_path's canonical summary from its real decoded
+    SessionSnapshot/SaveMetadata and write it to output_path.
+
+    Returns (ok, diagnostic-tail-on-failure). A helper that reported
+    success without actually producing a summary is reported as a failure
+    in its own words, which is a different diagnosis from a decode
+    failure (issue #2273 requirement 4).
+    """
+    # The helper writes to a path THIS call created, which is then moved
+    # into place. Neither the file's existence nor its size at
+    # `output_path` is evidence the helper produced anything: callers
+    # legitimately hand this an output path that already holds a summary
+    # (`--generate-session --force` regenerating over a registered
+    # fixture's own `*.expected.json`), and a helper that exited 0 having
+    # written nothing would leave that older content sitting there,
+    # non-empty, to be read back as this run's answer.
+    #
+    # Staging also means a failure leaves `output_path` byte-untouched,
+    # which is what the generation transaction's rollback wants anyway.
+    # Every I/O step below is inside the (ok, diagnostic) contract, not
+    # outside it. Staging can fail before the helper ever runs -- a
+    # `--summary` naming a parent directory that does not exist is the
+    # ordinary case -- and `cmd_generate` rolls the fixture and summary
+    # back on a RETURNED failure, not on an exception, so an OSError
+    # escaping here would leave a newly generated, unregistered fixture
+    # on disk. The pre-#2273 path could not do that: the helper itself
+    # failed on an unwritable output and exited non-zero.
+    output_path = Path(output_path)
+    staged: Path | None = None
     try:
-        proc = subprocess.run(
-            ["cabal", "repl", "test:synarchy-test-headless"],
-            input=script, cwd=common.REPO_ROOT, capture_output=True, text=True,
-            timeout=1800)
-    except FileNotFoundError:
-        return False, "'cabal' was not found on PATH"
-    output = (proc.stdout or "") + (proc.stderr or "")
-    if "DUMP_OK" not in output or not output_path.exists():
-        return False, "\n".join(output.splitlines()[-60:])
-    return True, ""
+        with tempfile.NamedTemporaryFile(
+                suffix=".json", dir=output_path.parent, delete=False) as tf:
+            staged = Path(tf.name)
+        ok, tail = _run_codec(
+            ["summary", "--fixture", str(fixture_path),
+             "--output", str(staged)],
+            "DUMP_OK")
+        if not ok:
+            return False, tail
+        if staged.stat().st_size == 0:
+            return False, (
+                f"the codec helper reported DUMP_OK but wrote no canonical "
+                f"summary for {fixture_path}")
+        os.replace(staged, output_path)
+        return True, ""
+    except OSError as error:
+        return False, (
+            f"could not write the canonical summary for {fixture_path} to "
+            f"{output_path}: {error}")
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)

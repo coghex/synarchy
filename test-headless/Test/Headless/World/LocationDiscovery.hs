@@ -65,7 +65,7 @@ import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
 import Structure.Types (emptyChunkStructures)
-import World.Time.Types (WorldTime(..))
+import World.Time.Types (WorldTime(..), preciseWorldTime)
 import World.Generate.Types (WorldGenParams(..), defaultWorldGenParams)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
@@ -198,7 +198,7 @@ newSightPage env pageId chunk time = do
     ws ← emptyWorldState
     writeIORef (wsGenParamsRef ws) $ Just pageParams
     writeIORef (wsTilesRef ws) (wtdWith chunk)
-    writeIORef (wsTimeRef ws) time
+    writeIORef (wsTimeRef ws) (preciseWorldTime time)
     writeIORef (worldManagerRef env) $ emptyWorldManager
         { wmWorlds = [(pageId, ws)]
         , wmVisible = [pageId] }
@@ -720,7 +720,7 @@ spec = beforeAll initEnv $ do
             writeIORef (wsGenParamsRef ws) $ Just seamPageParams
             writeIORef (wsTilesRef ws)
                 (wtdAt seamChunkKey (wallChunk 5 40 11))   -- x=27 → local 11
-            writeIORef (wsTimeRef ws) (WorldTime 12 0)
+            writeIORef (wsTimeRef ws) (preciseWorldTime (WorldTime 12 0))
             writeIORef (worldManagerRef env) $
                 emptyWorldManager
                     { wmWorlds = [(pageId, ws)]
@@ -745,7 +745,7 @@ spec = beforeAll initEnv $ do
             ws ← emptyWorldState
             writeIORef (wsGenParamsRef ws) $ Just seamPageParams
             writeIORef (wsTilesRef ws) (wtdAt seamChunkKey (flatChunk 5))
-            writeIORef (wsTimeRef ws) (WorldTime 12 0)
+            writeIORef (wsTimeRef ws) (preciseWorldTime (WorldTime 12 0))
             writeIORef (worldManagerRef env) $
                 emptyWorldManager
                     { wmWorlds = [(pageId, ws)]

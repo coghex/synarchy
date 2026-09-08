@@ -62,7 +62,7 @@ import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Save.Types (SaveData(..), WorldPageSave(..))
 import World.State.Types (WorldState(..))
-import World.Time.Types (WorldTime(..))
+import World.Time.Types (WorldTime(..), PreciseWorldTime(..))
 
 -----------------------------------------------------------------------
 -- * The values a save (or a script) can carry
@@ -394,7 +394,7 @@ stagingSpec = describe "Camera.Finite (#2337)" $
                 cam ← readIORef (wsCameraRef (spWorldState page))
                 cam `shouldBe` WorldCamera dx dy
                 -- ...an unrelated restored value, untouched...
-                wtHour ⊚ readIORef (wsTimeRef (spWorldState page))
+                wtHour ∘ pwtTime ⊚ readIORef (wsTimeRef (spWorldState page))
                     `shouldReturn` sentinelHour
                 -- ...and exactly one warning about it.
                 case cameraWarnings entries of

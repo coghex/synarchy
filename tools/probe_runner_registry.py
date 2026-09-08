@@ -460,7 +460,9 @@ DEFAULT_TIMEOUT = 900.0
 # exceeds DEFAULT_TIMEOUT. An explicit CLI --timeout remains authoritative for
 # every selected key. save_compat_migration runs every manifest-declared
 # complete-session fixture through two real engine processes and two real-codec
-# GHCi dumps; its 20-fixture clean reference run took 2311 s, so 3600 s gives
+# dumps (a `cabal repl` each until #2273, the compiled
+# `exe:synarchy-save-codec` since); its 20-fixture clean reference run took
+# 2311 s under the repl, so 3600 s gives
 # useful loaded-machine and manifest-growth margin without weakening the normal
 # 900 s hang bound for the rest of the registry.
 PROBE_TIMEOUT_OVERRIDES: dict[str, float] = {

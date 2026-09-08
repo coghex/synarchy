@@ -481,12 +481,12 @@ rollOneMidnight env = do
     case lookup setterPage (wmWorlds mgr) of
         Nothing → expectationFailure "the setter page is missing"
         Just ws → do
-            writeIORef (wsTimeRef ws) (WorldTime 23 59)
+            writeIORef (wsTimeRef ws) (preciseWorldTime (WorldTime 23 59))
             writeIORef (wsTimeScaleRef ws) 60
             writeIORef (enginePausedRef env) False
             tickWorldTime env 1
             writeIORef (enginePausedRef env) True
-            readIORef (wsTimeRef ws) `shouldReturn` WorldTime 0 59
+            pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 0 59
 
 -- * The staging spec
 
