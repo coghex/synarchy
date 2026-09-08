@@ -617,6 +617,7 @@ library
                      Item.Roll
                      Item.Materialize
                      Item.Temperature
+                     Item.Ownership
                      Engine.Asset.YamlItems
                      Engine.Scripting.Lua.API.Items
                      Engine.Scripting.Lua.API.Items.Contents
@@ -1348,6 +1349,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.SteelHelmet
                    Test.Headless.Item.RepairFinite
                    Test.Headless.Item.BulkStorage
+                   Test.Headless.Item.Ownership
                    Test.Headless.Item.FoodNutrition
                    Test.Headless.Item.Discovery
                    Test.Headless.Asset.TextureFallback
