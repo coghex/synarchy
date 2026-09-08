@@ -32,6 +32,8 @@ module World.Time.Scale
     , worstCaseDayCount
       -- * The clock's own constants
     , clockMinutesPerDayInt
+    , clockMinutesPerHourInt
+    , clockStartMinutes
     , clockMinutesPerDay
     , clockMaxInDayMinute
     , clockMaxElapsedStep
@@ -48,10 +50,9 @@ module World.Time.Scale
       -- * Representation guards
     , floorToInt
     , floorToIntD
-    , floorToIntExact
-    , doubleExactIntegerBound
     , addChecked
     , mulCheckedNonNeg
+    , mulCheckedSigned
     , nextDownFloat
     , nextDownDouble
     ) where
@@ -74,6 +75,25 @@ import Engine.Core.Clock (maxElapsedStep)
 --   the arithmetic it guards would not be a bound at all.
 clockMinutesPerDayInt ∷ Int
 clockMinutesPerDayInt = 1440
+
+-- | Minutes in a clock hour, at the type the day/minute split uses.
+clockMinutesPerHourInt ∷ Int
+clockMinutesPerHourInt = 60
+
+-- | The whole-minute total of a stored @(hour, minute)@ clock, refusing
+--   one that will not fit an 'Int' (#2471).
+--
+--   Checked because those two components are NOT range-checked anywhere
+--   on the way in: 'World.Save.Types.wpsTimeHour' and @wpsTimeMinute@
+--   are decoded as bare 'Int's, @validatePages@ deliberately does not
+--   judge them, and 'World.Load.Stage' stores them as they came. So a
+--   corrupt save really can present @hour = maxBound@, and @hour * 60@
+--   would then wrap to a small negative — silently moving a clock the
+--   totality contract promises to leave exactly alone.
+clockStartMinutes ∷ Int → Int → Maybe Int
+clockStartMinutes hour minute =
+    mulCheckedSigned hour clockMinutesPerHourInt ⌦ \hourMinutes →
+        addChecked hourMinutes minute
 
 -- | 'clockMinutesPerDayInt' in the stored time scale's type. 1440 is
 --   exactly representable in 'Float', so the derivation is exact and the
@@ -204,21 +224,25 @@ clockTickErrorBound = (2 - nextDownDouble 2) / 2
 --   smaller retained remainder only makes the total smaller, so a scale
 --   this answers 'Just' for cannot overflow on any normal tick.
 --
---   __Why exactness and not merely representability (#2471).__ The
---   sub-minute remainder is only meaningful while the whole-minute split
---   of @scale × dt@ is exact — above 'doubleExactIntegerBound' a 'Double'
---   has no sub-unit precision left at all, and both the split and the
---   fraction it leaves behind become fiction. Refusing there is what
---   makes 'clockTickErrorBound' a true statement over the WHOLE accepted
---   domain rather than over the scales someone happened to test. It
---   costs nothing real: the bound still sits many orders of magnitude
---   above every shipped caller (the largest is @50000@ in
---   @tools\/farm_ai_probe.py@ and @tools\/crop_probe.py@), and a single
---   tick at the ceiling still advances the calendar by millions of
---   years.
+--   __Representability is the whole requirement (#2471).__ The
+--   sub-minute split needs @added - fromIntegral (floor added)@ to be
+--   the true fraction, and it always is, for a reason that costs the
+--   domain nothing: @added@ is the EXACT product of two 'Float's, so it
+--   carries at most 48 significant bits. Below @2^53@ the floor and the
+--   round-trip are exact because every integer there is; at or above it
+--   a 48-bit value is necessarily an integer already (its lowest set bit
+--   sits at @2^5@ or higher), so the floor is the value itself and the
+--   fraction is exactly zero — the honest answer for a tick with no
+--   sub-minute precision left to carry. So this guards 'Int'
+--   representability and nothing more.
+--
+--   An earlier revision of #2471 also refused at @2^53@. That rejected
+--   demonstrably safe scales — @scale = 2^55@ against a full step is
+--   exactly the representable integer @2^53@ — and shrank the accepted
+--   domain for no gain.
 worstCaseMinuteTotal ∷ Float → Maybe Int
 worstCaseMinuteTotal scale = do
-    addedWhole ← floorToIntExact
+    addedWhole ← floorToIntD
         (realToFrac scale * realToFrac clockMaxElapsedStep)
     -- The largest start: the last minute of a day, plus the one minute a
     -- remainder below 1 can carry into it.
@@ -238,7 +262,7 @@ worstCaseDayCount scale =
 --   FOUND, not chosen, and not left to a closed form. The algebraic
 --   solution of
 --
---   > scale * clockMaxElapsedStep ≡ doubleExactIntegerBound
+--   > scale * clockMaxElapsedStep ≡ intFloorUpperExclusive
 --
 --   is only a starting point: every step of it rounds, and a bound that
 --   rounded UP would admit a scale that overflows — exactly the trap in
@@ -257,15 +281,15 @@ worstCaseDayCount scale =
 maxTimeScale ∷ Float
 maxTimeScale = search maxSearchSteps algebraicCeiling
   where
-    -- Both operands are exact powers of two (0.25 exactly, and 2^53), so
-    -- this quotient is exact in 'Double' AND lands on a 'Float' without
-    -- rounding: the starting
-    -- point is the algebraic solution ITSELF, never a value rounded
-    -- below it. Walking down from there therefore reaches the largest
-    -- accepted scale, and there is nothing above it to climb back to.
+    -- Both operands are exact powers of two (0.25 exactly, and the 2^63
+    -- 'Int' ceiling), so this quotient is exact in 'Double' AND lands on
+    -- a 'Float' without rounding: the starting point is the algebraic
+    -- solution ITSELF, never a value rounded below it. Walking down from
+    -- there therefore reaches the largest accepted scale, and there is
+    -- nothing above it to climb back to.
     algebraicCeiling ∷ Float
     algebraicCeiling =
-        realToFrac (doubleExactIntegerBound / realToFrac clockMaxElapsedStep)
+        realToFrac (intFloorUpperExclusive / realToFrac clockMaxElapsedStep)
     search ∷ Int → Float → Float
     search budget scale
       | budget ≤ 0 ∨ scale ≤ 0 = 0
@@ -423,28 +447,10 @@ floorToInt = floorToIntAt
 floorToIntD ∷ Double → Maybe Int
 floorToIntD = floorToIntAt
 
--- | @2^53@: the first 'Double' whose successor is not an integer, and
---   therefore the exclusive bound below which @floor@ and the fraction
---   it leaves behind are both EXACT. A power of two, so it is itself
---   exactly representable.
-doubleExactIntegerBound ∷ Double
-doubleExactIntegerBound = 2 ^^ (53 ∷ Int)
-
--- | 'floorToIntD', but only where the split is also exact (#2471):
---   @x@ must be below 'doubleExactIntegerBound' in magnitude, so that
---   @fromIntegral (floor x)@ reproduces the integer part without
---   rounding and @x - fromIntegral (floor x)@ is the true fraction
---   rather than a cancellation artefact.
---
---   Stricter than 'floorToIntD' and deliberately so: this is the guard
---   the retained sub-minute remainder needs, and 'maxTimeScale' is
---   derived from it, so the exactness the remainder's contract claims
---   holds at every accepted scale instead of only at small ones.
-floorToIntExact ∷ Double → Maybe Int
-floorToIntExact x
-  | isNaN x ∨ isInfinite x        = Nothing
-  | abs x ≥ doubleExactIntegerBound = Nothing
-  | otherwise                     = floorToIntD x
+-- | The 'Double' image of the exclusive 'Int' ceiling, named for
+--   'maxTimeScale''s algebraic starting point.
+intFloorUpperExclusive ∷ Double
+intFloorUpperExclusive = intFloorUpperExclusiveAt
 
 -- | Addition that reports 'Int' overflow instead of wrapping into it.
 addChecked ∷ Int → Int → Maybe Int
@@ -469,3 +475,21 @@ mulCheckedNonNeg a b
   | b ≡ 0                = Just 0
   | a > maxBound `div` b = Nothing
   | otherwise            = Just (a * b)
+
+-- | Multiplication by a POSITIVE @b@ that reports 'Int' overflow instead
+--   of wrapping into it, for EITHER sign of @a@ (#2471).
+--
+--   'mulCheckedNonNeg' above refuses a negative operand outright, which
+--   is right for the calendar extents it guards — those are floored at 1
+--   or 0 first — and wrong for a stored clock component, which comes off
+--   a save nothing range-checks and may legitimately be any 'Int' at all.
+--
+--   'quot' rather than 'div' for both bounds: it truncates toward zero,
+--   so @minBound `quot` b@ is the LEAST multiplicand whose product still
+--   fits, where flooring would name one whose product does not.
+mulCheckedSigned ∷ Int → Int → Maybe Int
+mulCheckedSigned a b
+  | b ≤ 0                 = Nothing
+  | a > maxBound `quot` b = Nothing
+  | a < minBound `quot` b = Nothing
+  | otherwise             = Just (a * b)

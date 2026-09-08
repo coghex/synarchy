@@ -246,6 +246,20 @@ oneUlpAbove x =
 halfMinute ∷ ClockRemainder
 halfMinute = fromMaybe zeroClockRemainder (mkClockRemainder 0.5)
 
+-- | The worst-case whole-minute total a tick reaches at @scale@, in
+--   EXACT unbounded arithmetic: the same composition
+--   'worstCaseMinuteTotal' performs — a full 'clockMaxElapsedStep' at
+--   @scale@, floored, plus the largest start a page can hold — but with
+--   no 'Int', no 'Double' and no 'Maybe' anywhere in it.
+--
+--   This is what lets the ceiling examples demonstrate that the next
+--   scale up really does overflow, rather than only that the predicate
+--   under test says so.
+exactWorstCaseMinutes ∷ Float → Integer
+exactWorstCaseMinutes scale =
+    fromIntegral clockMinutesPerDayInt
+      + floor (toRational scale * toRational clockMaxElapsedStep)
+
 fruitingDay, dormantDay ∷ Int
 fruitingDay = 200   -- inside berry's fruiting window (180–269)
 dormantDay  = 30    -- deep in the dormant stage
@@ -345,6 +359,17 @@ spec = do
             -- the value itself must not. A ceiling that merely happened to
             -- be safe (half the range, say) would pass the example above
             -- while needlessly refusing scales the clock handles fine.
+            -- INDEPENDENTLY, in unbounded arithmetic: the same
+            -- composition the real advance performs, computed with
+            -- 'Integer' and 'Rational' rather than by consulting the
+            -- very predicate under test. The ceiling is only meaningful
+            -- if the next scale up is GENUINELY unsafe, and a check
+            -- written in terms of 'worstCaseMinuteTotal' could not tell
+            -- a tight bound from a stale one.
+            exactWorstCaseMinutes maxTimeScale
+                `shouldSatisfy` (<= toInteger (maxBound ∷ Int))
+            exactWorstCaseMinutes (oneUlpAbove maxTimeScale)
+                `shouldSatisfy` (> toInteger (maxBound ∷ Int))
             worstCaseMinuteTotal maxTimeScale `shouldSatisfy` isJust
             worstCaseMinuteTotal (oneUlpAbove maxTimeScale) `shouldBe` Nothing
             -- #2471: the step the search WALKS must reach every

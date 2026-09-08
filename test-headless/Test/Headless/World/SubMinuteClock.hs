@@ -300,6 +300,41 @@ spec = describe "Calendar retains sub-minute progress" $ do
             d `shouldBe` WorldDate 4 6 10
             rolled `shouldBe` 1
 
+        it "refuses a STORED clock whose own minute total cannot be \
+           \represented, leaving it exactly as it was" $ do
+            -- Reachable from a save, not a hypothetical: nothing
+            -- range-checks `wpsTimeHour`/`wpsTimeMinute`, so a corrupt
+            -- payload really can present hour = maxBound. Computing
+            -- @hour * 60@ unchecked wraps to -60, and the tick then
+            -- "advances" a paused clock to 23:00 with a rolled-back day
+            -- — the totality contract's exact opposite.
+            -- Each of these overflows on the HOUR multiply. A clock
+            -- like @WorldTime 0 maxBound@ deliberately is not here: its
+            -- minute total is exactly 'maxBound', which fits, so it
+            -- advances like any other representable clock.
+            forM_ [ WorldTime maxBound 0, WorldTime minBound 0
+                  , WorldTime (maxBound `div` 30) 0
+                  , WorldTime (minBound `div` 30) 0 ] $ \stored → do
+                let start = PreciseWorldTime stored (remainderOf 0.5)
+                    (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                        0 0 start (WorldDate 6 5 4)
+                (stored, c, d, rolled)
+                    `shouldBe` (stored, start, WorldDate 6 5 4, 0)
+
+        it "still advances a stored clock whose minute total DOES fit, \
+           \so the refusal above is not simply refusing everything" $ do
+            -- The largest hour whose whole-minute total is still
+            -- representable. Without this the example above would pass
+            -- against an implementation that refused every clock.
+            let hour  = maxBound `div` 60 - 1
+                start = preciseWorldTime (WorldTime hour 0)
+                (c, _, rolled) = advanceWorldClock defaultCalendarConfig
+                    1 60 start (WorldDate 1 1 1)
+            clockStartMinutes hour 0 `shouldSatisfy` isJust
+            rolled `shouldSatisfy` (> 0)
+            wtHour (pwtTime c) `shouldSatisfy` (\h → h ≥ 0 ∧ h ≤ 23)
+            wtMinute (pwtTime c) `shouldSatisfy` (\m → m ≥ 0 ∧ m ≤ 59)
+
         it "advances a whole year of days from one enormous elapsed step \
            \and still returns a remainder in range" $ do
             -- Far past anything a sanitised tick produces, which is the

@@ -163,12 +163,12 @@ preciseSunAngle (PreciseWorldTime (WorldTime h m) remainder) =
 --   elapsed step no normal tick would produce.
 --
 --   For an unacceptable scale, an unacceptable elapsed step, a whole
---   minute count this tick cannot split EXACTLY
---   ('World.Time.Scale.floorToIntExact' — unreachable at any accepted
---   scale on a sanitised tick, and the honest refusal for the over-cap
---   steps the contract still admits), a minute total that will not fit
---   an 'Int', or a calendar carry that would overflow 'wdYear', the
---   answer is the EXACT input
+--   minute count this tick cannot represent as an 'Int', a STORED clock
+--   whose own minute total will not fit one (nothing range-checks the
+--   hour and minute a save carries — see
+--   'World.Time.Scale.clockStartMinutes'), a minute total that will not
+--   fit, or a calendar carry that would overflow 'wdYear', the answer is
+--   the EXACT input
 --   time, remainder and date with zero rolled days — never a partially
 --   applied advance, and never a remainder the refused tick moved.
 --   Every accepted input keeps the behaviour it already had at whole
@@ -182,7 +182,7 @@ advanceWorldClock ∷ CalendarConfig → Float → Float
 advanceWorldClock cc timeScale dtSeconds clock date
     | not (acceptedTimeScale timeScale) = unchanged
     | not (acceptedElapsed dtSeconds)   = unchanged
-    | otherwise = case floorToIntExact added of
+    | otherwise = case floorToIntD added of
         Nothing         → unchanged
         Just addedWhole → withWholeMinutes addedWhole
   where
@@ -203,21 +203,29 @@ advanceWorldClock cc timeScale dtSeconds clock date
     -- on a sum in [0, 2) whatever the time scale — which is what
     -- 'World.Time.Scale.clockTickErrorBound' bounds.
     --
-    -- 'floorToIntExact' rather than 'floorToIntD': above
-    -- 'World.Time.Scale.doubleExactIntegerBound' a 'Double' carries no
-    -- sub-unit precision, so both this split and the fraction it leaves
-    -- would be fiction. 'World.Time.Scale.maxTimeScale' is derived from
-    -- that same predicate, so no ACCEPTED scale can reach it on a
-    -- sanitised tick; an over-cap elapsed step still can, and is refused
-    -- here rather than advanced with an invented remainder.
+    -- The split is EXACT at every value this guard admits, and needs no
+    -- cutoff of its own to be: @added@ is the exact product of two
+    -- 'Float's, so it carries at most 48 significant bits, and a 48-bit
+    -- value at or above 2^53 is necessarily an integer already. See
+    -- 'World.Time.Scale.worstCaseMinuteTotal', which 'maxTimeScale' is
+    -- derived from, for the whole argument.
     --
     -- Recombining them instead — adding the remainder back onto the
     -- whole minute count and flooring the total — is exactly what this
     -- must not do. @1439 + nextDownDouble 1@ is 1440 in 'Double', so a
     -- page sitting at 23:59 with the largest representable remainder
     -- would roll the date on a tick that advanced it by nothing at all.
-    withWholeMinutes addedWhole =
-        case addChecked (h * 60 + m) addedWhole of
+    -- The stored clock's own minute total is CHECKED, not computed
+    -- inline. @h@ and @m@ are whatever a save carried: nothing
+    -- range-checks 'World.Save.Types.wpsTimeHour' or @wpsTimeMinute@ on
+    -- the way in, so @h@ really can be 'maxBound', and a bare
+    -- @h * 60 + m@ would wrap to a small negative and hand this
+    -- function a clock it then "advances" — returning 23:00 and a
+    -- rolled-back day for a paused tick that must return the input
+    -- untouched.
+    withWholeMinutes addedWhole = case clockStartMinutes h m of
+        Nothing    → unchanged
+        Just start → case addChecked start addedWhole of
             Nothing → unchanged
             Just minutesBeforeCarry →
                 case addChecked minutesBeforeCarry minuteCarry of
@@ -247,7 +255,8 @@ advanceWorldClock cc timeScale dtSeconds clock date
             let (daysRolled, wrapped) =
                     totalMinutes `divMod` clockMinutesPerDayInt
                 clock' = PreciseWorldTime
-                    (WorldTime (wrapped `div` 60) (wrapped `mod` 60))
+                    (WorldTime (wrapped `div` clockMinutesPerHourInt)
+                               (wrapped `mod` clockMinutesPerHourInt))
                     remainder'
             in if daysRolled > 0
                 then case worldDateAddDaysChecked cc daysRolled date of
