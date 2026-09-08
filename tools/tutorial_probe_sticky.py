@@ -25,10 +25,10 @@ What this owner proves, in order (#996, #1941, #2056):
   * a REAL gameplay HUD over a COLLAPSED panel presents nothing, and an
     OPEN panel on a GPU-less engine still presents nothing -- the
     negative half of #2056, which is this probe's own to own;
-  * an explicit `acknowledgePresented` retires the branch;
-  * removing the supplies brings the RETIRED branch back under the
-    ordinary live-check rule, and resupplying hides it again with no
-    second presentation;
+  * an explicit `acknowledgePresented` retires its hide suppression;
+  * the ordinary rule retains preparation beside its incomplete Confront
+    child (#2301); removing and restoring supplies still updates the live
+    checks without a second presentation grant;
   * a fresh-process reload of that finished, retired session does not
     return any already-retired ancestor to the active checklist.
 
@@ -51,6 +51,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import poll_until, send
 from tutorial_probe_contracts import (OBJ_EXPEDITION, OBJ_PORTAL, OBJ_WATER,
+                                      PREP_CONTINUATION,
                                       STICKY_SLOT, SUB_FOOD, SUB_WATER, Checks,
                                       ProbeError, hud_open, progress, settle)
 from tutorial_probe_harness import (face_toward, find_fixture_site,
@@ -256,7 +257,7 @@ def phase_pre_latched_reveal(port: int, checks: Checks, uid: int,
     # only until it has been presented, which the next phase does.
     checks.check("the already-latched prepare branch is observable in authored "
                  "preorder, not an empty checklist (#996)",
-                 p.active_row_ids == [OBJ_EXPEDITION, SUB_WATER, SUB_FOOD],
+                 p.active_row_ids == PREP_CONTINUATION,
                  str(p.active_row_ids))
     checks.check("place_portal and secure_water are retained as completed "
                  "history, not re-shown in the active view",
@@ -356,35 +357,30 @@ def phase_pre_latched_presentation(port: int, checks: Checks, uid: int) -> None:
                  OBJ_EXPEDITION in acked and SUB_WATER in acked
                  and SUB_FOOD in acked, acked)
 
-    p = settle(port, lambda s: OBJ_EXPEDITION not in s.active_row_ids,
-               seconds=20.0)
-    checks.check("having been reported presented, the branch retires from the "
-                 "active checklist", OBJ_EXPEDITION not in p.active_row_ids,
-                 str(p.active_row_ids))
-    checks.check("its subobjective rows retire with it",
-                 SUB_WATER not in p.active_row_ids
-                 and SUB_FOOD not in p.active_row_ids, str(p.active_row_ids))
-    checks.check("the checklist reaches its EMPTY completed state -- the "
-                 "shipped session's terminal branch no longer pins it open",
-                 p.active_row_ids == [], str(p.active_row_ids))
-    checks.check("the durable completions are untouched by the retirement",
+    retired = send(port,
+                   "return tostring(require('scripts.tutorial_progress')"
+                   ".stickyActive.first_session_prepare_expedition)", timeout=15.0)
+    checks.check("presentation retires the preparation hide suppression",
+                 retired.strip().strip('"') == "false", retired)
+    p = progress(port)
+    # The composite's child is still incomplete, so the ordinary rule
+    # keeps preparation and its supply rows alongside Confront after its
+    # exceptional suppression retires. Do not confuse that with resurrection.
+    checks.check("the ordinary continuation remains after acknowledgement",
+                 p.active_row_ids == PREP_CONTINUATION, str(p.active_row_ids))
+    checks.check("the durable completions are untouched by presentation",
                  p.is_completed(OBJ_EXPEDITION) and p.is_completed(OBJ_PORTAL)
                  and p.is_completed(OBJ_WATER), str(p))
-    checks.check("retirement is a display transition, not a supply change -- "
-                 "the acolyte is still provisioned",
+    checks.check("the supplies remain checked",
                  p.is_checked(SUB_WATER) and p.is_checked(SUB_FOOD), str(p))
-
-    # poll_until answers on TRUTHINESS, and "empty" is the state being
-    # waited for, so the sentinel is a marker rather than the list.
-    settled = poll_until(10.0,
-                         lambda: "empty" if checklist_rows(port) == [] else None)
-    checks.check("the open panel itself ends up empty, not merely the model",
-                 settled == "empty", str(checklist_rows(port)))
+    settled = poll_until(10.0, lambda: checklist_rows(port) == PREP_CONTINUATION)
+    checks.check("the open panel shows the same continuation as the model",
+                 bool(settled), str(checklist_rows(port)))
 
 
 def phase_pre_latched_reversal(port: int, checks: Checks, uid: int) -> None:
     """Removing the supplies afterwards must still uncheck the live
-    subobjectives, bring the branch back, and never touch the durable
+    subobjectives, keep the continuation visible, and never touch the durable
     completion.
 
     Since #1941 this is the ORDINARY rule doing the work, not a
@@ -399,7 +395,7 @@ def phase_pre_latched_reversal(port: int, checks: Checks, uid: int) -> None:
                  p.is_checked(SUB_WATER) is False, str(p))
     checks.check("removing the ration unchecks the live food subobjective",
                  p.is_checked(SUB_FOOD) is False, str(p))
-    checks.check("the RETIRED branch returns to the active checklist under the "
+    checks.check("the continuation keeps preparation and its unchecked rows under the "
                  "ordinary hide rule, showing the unchecked rows",
                  OBJ_EXPEDITION in p.active_row_ids
                  and SUB_WATER in p.active_row_ids
@@ -409,21 +405,19 @@ def phase_pre_latched_reversal(port: int, checks: Checks, uid: int) -> None:
 
 
 def phase_pre_latched_resupply(port: int, checks: Checks, uid: int) -> list[str]:
-    """Put the supplies back so the branch is FINISHED again, then save.
+    """Save with the supply checks restored and hide suppression retired.
 
-    The state that goes to disk matters: a save taken with the
-    subobjectives unchecked would come back with the composite
-    legitimately active under the ordinary rule, and could not tell
-    #1941's load reconstruction from #996's old permanent one. Saving a
-    finished, retired branch is what makes the reload leg conclusive.
+    Confront keeps the ordinary preparation row active; the reload leg
+    checks suppression itself as well as the authored continuation.
     """
     refill_canteen(port, uid)
     give_ration(port, uid, f"acolyte {uid} never got its ration back")
 
-    p = settle(port, lambda s: s.active_row_ids == [], seconds=20.0)
-    checks.check("re-satisfying the retired branch empties the checklist again, "
+    p = settle(port, lambda s: s.active_row_ids == PREP_CONTINUATION
+               and s.is_checked(SUB_WATER) and s.is_checked(SUB_FOOD), seconds=20.0)
+    checks.check("re-satisfying supplies preserves the preparation-to-encounter continuation, "
                  "with no second presentation needed",
-                 p.active_row_ids == [], str(p.active_row_ids))
+                 p.active_row_ids == PREP_CONTINUATION, str(p.active_row_ids))
 
     before = p.completed
     save_through_barrier(port, checks, STICKY_SLOT,
@@ -434,8 +428,8 @@ def phase_pre_latched_resupply(port: int, checks: Checks, uid: int) -> list[str]
 
 def phase_pre_latched_reload(port: int, checks: Checks,
                              expected: list[str]) -> None:
-    """#1941 requirement 4, in a FRESH PROCESS: a save whose tutorial was
-    already finished must not put the ancestors the player watched
+    """#1941 requirement 4, in a FRESH PROCESS: a save whose preparation suppression was
+    already retired must not put the ancestors the player watched
     retire back on the checklist.
 
     Presentation is deliberately never persisted, so the load has no
@@ -461,16 +455,22 @@ def phase_pre_latched_reload(port: int, checks: Checks,
     open_state = hud_open(port)
     checks.check("the HUD comes back collapsed after a load", open_state == "false",
                  open_state)
-    checks.check("the checklist stays EMPTY -- no already-retired ancestor is "
+    checks.check("the continuation is restored -- no retired portal/water ancestor is "
                  "returned to the active view (#1941)",
-                 p.active_row_ids == [], str(p.active_row_ids))
+                 p.active_row_ids == PREP_CONTINUATION, str(p.active_row_ids))
+
+    suppression = send(port,
+                       "return tostring(require('scripts.tutorial_progress')"
+                       ".stickyActive.first_session_prepare_expedition)", timeout=15.0)
+    checks.check("load reconstructs preparation as already presented, not sticky",
+                 suppression.strip().strip('"') == "false", suppression)
 
     # Not a single-frame answer: hold it across further evaluation ticks,
     # since the defect this replaces was a tick recomputing the rows back.
     time.sleep(2.0)
     p = progress(port)
-    checks.check("and it stays empty across further evaluation ticks",
-                 p.active_row_ids == [], str(p.active_row_ids))
+    checks.check("and the continuation stays stable across further evaluation ticks",
+                 p.active_row_ids == PREP_CONTINUATION, str(p.active_row_ids))
     checks.check("with every durable latch still intact underneath",
                  sorted(p.completed) == sorted(expected),
                  f"{sorted(p.completed)} != {sorted(expected)}")
@@ -507,7 +507,7 @@ def run_session(port: int, checks: Checks, seed: int, size: int) -> list[str]:
           "under the ordinary hide rule ==")
     phase_pre_latched_reversal(port, checks, uid)
 
-    print("== 14. re-supply, then save the finished, retired session ==")
+    print("== 14. re-supply, then save the completed preparation ==")
     return phase_pre_latched_resupply(port, checks, uid)
 
 
@@ -515,5 +515,5 @@ def run_reload(port: int, checks: Checks, expected: list[str]) -> None:
     """Stage 15 on the fourth engine: the retired branch does not come
     back."""
     prepare_reload_session(port)
-    print("== 15. an already-retired branch does not come back ==")
+    print("== 15. retired ancestors do not come back ==")
     phase_pre_latched_reload(port, checks, expected)

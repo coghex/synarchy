@@ -19,11 +19,11 @@ concrete precondition
 
 - [x] EPIC. Make fluid quantity visible as eight deterministic levels — [#2514]
 - [x] DFL-1. Replace freshwater slope interpolation with whole-z flat steps — [#2517]
-- [ ] DFL-2. Make eighth-z fluid state exact, conserved, and durable
-- [ ] DFL-3. Create and approve the eight fluid-level face maps
-- [ ] DFL-4. Render eighth-level fluid tops and partial step faces
-- [ ] DFL-5. Give generated rivers deterministic eighth-level surface progression
-- [ ] DFL-6. Add exact-level diagnostics and end-to-end compatibility gates
+- [x] DFL-2. Make eighth-z fluid state exact, conserved, and durable — [#2520]
+- [x] DFL-3. Create and approve the eight fluid-level face maps — [#2525]
+- [x] DFL-4. Render eighth-level fluid tops and partial step faces — [#2529]
+- [x] DFL-5. Give generated rivers deterministic eighth-level surface progression — [#2533]
+- [x] DFL-6. Add exact-level diagnostics and end-to-end compatibility gates — [#2535]
 
 ## Epic contract
 

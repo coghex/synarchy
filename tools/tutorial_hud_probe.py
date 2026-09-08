@@ -33,7 +33,7 @@ in-game HUD, then:
      check — before it is ever revealed still renders, in authored
      order with its normal completed marker, instead of an empty
      checklist. Same `setTree` injection point as check 4, shaped like
-     the real first_session tree so a composite branch exists to latch
+     the original preparation-only first_session tree so a composite branch exists to latch
      early. Since #2056 this check also carries the arc's only PIXEL
      proof of presentation: the sticky composite's own ink is
      attributed in a real frame — its text element is hidden and
@@ -52,22 +52,23 @@ in-game HUD, then:
   8. (#1581) The same rendered-glyph measurement applied to the
      OBJECTIVE ROWS, over the shipped `data/tutorials/first_session.yaml`
      tree restored from the live engine registry — so the strings
-     measured are the authored ones ("Place portal", "Secure water
-     source", "Prepare an expedition", "Prepare water", "Prepare food")
-     rather than a synthetic stand-in. Every one of the five shipped
-     rows is measured, covering all four depths the tree uses, and each
+     measured are the authored ones, including #2301’s four expedition
+     outcomes, rather than a synthetic stand-in. All nine shipped rows
+     are measured, covering seven depths, and each
      row's ink must fall inside both the checklist panel and the
      framebuffer. This oracle found the shipped tree overrunning the
      panel on every row below the root, which is why
      scripts/tutorial_hud.lua now fits a row's string to the budget its
      indent leaves; the assertions stay because that fit is the ONLY
      thing bounding a row (rows are still never clipped by the renderer,
-     and `fitToggle` covers the caption alone). Since #1941 the five
-     rows are reached in TWO stable captures rather than one transient
-     sticky one — see `restore_shipped_tree`.
-  9. (#1941) A finished checklist stays finished across a REAL save and
-     load in this same GPU session: the emptied panel comes back
-     collapsed, and reopening it does not repopulate with the ancestors
+     and `fitToggle` covers the caption alone). The nine rows are reached
+     in stable captures rather than one transient sticky state — see
+     `restore_shipped_tree`.
+  8b. (#2301) Recover, Secure and Clear completed in one batch reach
+      a rendered open-panel frame together before retiring.
+  9. (#1941/#2301) A REAL save and load restores the preparation-to-
+     encounter continuation. The panel comes back collapsed, and
+     reopening it does not repopulate with the portal/water ancestors
      the player already watched retire, across the evaluation tick that
      re-checks both subobjectives against the loaded world.
 
@@ -116,6 +117,10 @@ SHIPPED_ROWS = [
     ("first_session_place_portal",       ("Place portal",         0)),
     ("first_session_secure_water",       ("Secure water source",  1)),
     ("first_session_prepare_expedition", ("Prepare an expedition", 2)),
+    ("first_session_confront", ("Confront", 3)),
+    ("first_session_recover", ("Recover", 4)),
+    ("first_session_secure", ("Secure", 5)),
+    ("first_session_clear", ("Clear", 6)),
     ("first_session_prepare_water",      ("Prepare water",        3)),
     ("first_session_prepare_food",       ("Prepare food",         3)),
 ]
@@ -878,7 +883,7 @@ def restore_shipped_tree(port: int, completed: list[str]) -> str:
     matters since #1941: the old fixture re-adopted the tree to latch
     all five rows sticky at once, and a suppression is now spent by the
     very act of showing it, so a measurement lasting several seconds and
-    several screenshots can no longer be built on one. Two stable
+    several screenshots can no longer be built on one. Several stable
     captures replace one transient one; between them they still measure
     every shipped row at every authored depth."""
     ids = ", ".join(f"'{cid}'" for cid in completed)
@@ -936,21 +941,72 @@ def shipped_rows_phase(port: int, w: int, h: int, shots: str) -> None:
     """#1581: bound the RENDERED GLYPHS of the shipped tree's rows.
 
     Every shipped row and every authored depth is still measured; they
-    are reached in two stable stages rather than one (see
-    restore_shipped_tree). Stage `ancestors` latches only the root, so
-    the root stays active (its child is not complete) beside the child
-    it reveals; stage `branch` latches the whole chain with no
-    subobjective checked, so the terminal composite is not hideable and
-    displays both of its subobjectives.
+    are reached in stable stages (see restore_shipped_tree). Each stage
+    advances one link with no subobjective checked, keeping the composite
+    and its live supply rows visible while reaching every continuation row.
     """
     covered = measure_shipped_stage(port, w, h, shots, "ancestors",
                                     [SHIPPED_ROWS[0][0]], [0, 1])
-    covered += measure_shipped_stage(port, w, h, shots, "branch",
-                                     [SHIPPED_ROWS[0][0], SHIPPED_ROWS[1][0],
-                                      SHIPPED_ROWS[2][0]], [2, 3, 4])
-    check("the two stages between them measure every depth the shipped "
-          "tree authors", sorted(set(covered)) == [0, 1, 2, 3],
-          str(sorted(set(covered))))
+    for last, want in [(2, [2, 3, 7, 8]), (3, [2, 3, 4, 7, 8]),
+                       (4, [2, 4, 5, 7, 8]), (5, [2, 5, 6, 7, 8])]:
+        covered += measure_shipped_stage(
+            port, w, h, shots, f"continuation_{last}",
+            [rid for rid, _ in SHIPPED_ROWS[:last + 1]], want)
+    check("the stages measure every authored depth in the extended tree",
+          sorted(set(covered)) == list(range(7)), str(sorted(set(covered))))
+
+
+def same_pass_completion_phase(port: int, shots: str) -> None:
+    """Render the real shipped rows completed by one progress batch.
+
+    The Lua evaluation and real-pickup Hspec cases cover the producer;
+    this GPU fixture isolates its presentation boundary without replaying
+    combat. No callback can acknowledge a row inside the capture chunk.
+    """
+    restore_shipped_tree(port, [rid for rid, _ in SHIPPED_ROWS[:4]])
+    rows = [rid for rid, _ in SHIPPED_ROWS[4:7]]
+    send(port,
+         "local tp=require('scripts.tutorial_progress'); "
+         "require('scripts.tutorial_hud').setOpen(false); "
+         "tp.setSubobjectiveChecked('first_session_prepare_water',true); "
+         "tp.setSubobjectiveChecked('first_session_prepare_food',true); "
+         "tp.completeObjectives({'first_session_recover','first_session_secure','first_session_clear'}); "
+         "return 'ok'", timeout=15.0)
+    # Force the evaluator interleaving that can uncheck supplies and return
+    # preparation rows. The three outcome rows must survive it in order.
+    send(port, "require('scripts.tutorial_eval').evaluate(); return 'ok'",
+         timeout=15.0)
+    pending = dump(port)
+    check("a closed panel preserves all three same-batch completions",
+          [rid for rid in pending.get("activeIds", []) if rid in rows] == rows
+          and not pending.get("rows"), str(pending))
+    paths = [os.path.join(shots, name) for name in
+             ("expedition_completed.png", "expedition_recover_hidden.png",
+              "expedition_completed_again.png", "expedition_warm.png")]
+    captured = open_and_capture_build(port, *paths)
+    shown = [row for row in (captured.get("rows") or [])
+             if row.get("id") in rows]
+    check("the rendered open panel contains every same-batch completion in order",
+          [r.get("id") for r in shown] == rows
+          and [r.get("marker") for r in shown] == ["[x]"] * 3,
+          str(captured))
+    check("the renderer witnessed these rows before capture and retirement",
+          captured.get("shownPresented") is True and captured.get("shots") is True,
+          str(captured))
+    # The evaluator may uncheck supplies after this fixture releases the
+    # Lua owner, returning the preparation rows under their ordinary rule.
+    # Retirement concerns the three completed outcomes, not an empty HUD.
+    retired = poll_dump(port, lambda d: d.get("open") is True
+                        and not set(rows).intersection(d.get("rowIds") or [])
+                        and not set(rows).intersection(d.get("activeIds") or []))
+    check("all three retire together after rendered presentation", bool(retired), str(dump(port)))
+    completed = send(port,
+                     "local tp=require('scripts.tutorial_progress'); "
+                     "return tostring(tp.isCompleted('first_session_recover') and "
+                     "tp.isCompleted('first_session_secure') and tp.isCompleted('first_session_clear'))",
+                     timeout=15.0)
+    check("retirement preserves all three durable completions",
+          completed.strip().strip('"') == "true", completed)
 
 
 def spawn_provisioned_acolyte(port: int) -> int:
@@ -960,9 +1016,8 @@ def spawn_provisioned_acolyte(port: int) -> int:
     scripts/tutorial_eval.lua only counts `player` acolytes, and the kit
     (a full canteen and two rations, data/units/acolyte.yaml) is exactly
     what checks both prepare subobjectives -- which is what lets the
-    reload check below observe an EMPTY checklist rather than a
-    composite that is legitimately active because its live checks are
-    off."""
+    reload check below observe the same preparation-to-encounter
+    continuation with both live checks satisfied."""
     raw = send(port,
                "local gx, gy = camera.getPosition(); "
                "return tostring(unit.spawn('acolyte', math.floor(gx), "
@@ -975,7 +1030,7 @@ def spawn_provisioned_acolyte(port: int) -> int:
 
 def retired_reload_phase(port: int, shots: str) -> None:
     """#1941 requirement 4, through a REAL save and load in this GPU
-    session: a checklist the player finished stays finished.
+    session: the extended continuation returns without retired ancestors.
 
     Presentation is deliberately never persisted, so the load has no
     history to restore -- it RECONSTRUCTS one, treating every id the
@@ -994,10 +1049,11 @@ def retired_reload_phase(port: int, shots: str) -> None:
     if not check("the shipped tree is back in front of the HUD for the "
                  "round trip", tree_id == "first_session", tree_id):
         return
+    continuation = [SHIPPED_ROWS[i][0] for i in (2, 3, 7, 8)]
     empty = poll_dump(port,
-                      lambda x: (x.get("activeIds") or []) == [], seconds=30.0)
+                      lambda x: (x.get("activeIds") or []) == continuation, seconds=30.0)
     if not check("with the acolyte provisioned, the checklist reaches its "
-                 "EMPTY completed state before the save",
+                 "preparation-to-encounter continuation before the save",
                  bool(empty), str(dump(port))):
         return
 
@@ -1030,17 +1086,22 @@ def retired_reload_phase(port: int, shots: str) -> None:
     send(port, "require('scripts.tutorial_hud').setOpen(true); return 'ok'",
          timeout=15.0)
     still_empty = poll_dump(port,
-                            lambda x: (x.get("activeIds") or []) == []
-                            and (x.get("rows") or []) == [], seconds=30.0)
-    check("the reopened checklist does NOT repopulate -- no already-retired "
+                            lambda x: (x.get("activeIds") or []) == continuation
+                            and x.get("rowIds") == continuation, seconds=30.0)
+    check("the reopened checklist restores the continuation -- no retired portal/water "
           "ancestor returns to the active view (#1941)",
           bool(still_empty), str(dump(port)))
+    suppression = send(port,
+                       "return tostring(require('scripts.tutorial_progress')"
+                       ".stickyActive.first_session_prepare_expedition)", timeout=15.0)
+    check("the loaded preparation row is ordinary, not a resurrected suppression",
+          suppression.strip().strip('"') == "false", suppression)
     time.sleep(2.0)
     after = dump(port)
-    check("and it stays empty across further evaluation ticks",
-          (after.get("activeIds") or []) == [], str(after.get("activeIds")))
-    shot = os.path.join(shots, "reloaded_empty.png")
-    check("the reloaded, empty checklist screenshot answers",
+    check("and the continuation stays stable across further evaluation ticks",
+          (after.get("activeIds") or []) == continuation, str(after.get("activeIds")))
+    shot = os.path.join(shots, "reloaded_continuation.png")
+    check("the reloaded continuation screenshot answers",
           screenshot(port, shot))
 
 
@@ -1118,7 +1179,10 @@ def main() -> int:
         print("== 8. the SHIPPED rows' rendered glyph bounds (#1581) ==")
         shipped_rows_phase(args.port, w, h, shots)
 
-        print("== 9. a finished checklist stays finished across a real "
+        print("== 8b. same-pass expedition completions reach a rendered frame ==")
+        same_pass_completion_phase(args.port, shots)
+
+        print("== 9. the continuation survives without retired ancestors across "
               "save/load (#1941) ==")
         retired_reload_phase(args.port, shots)
     finally:
