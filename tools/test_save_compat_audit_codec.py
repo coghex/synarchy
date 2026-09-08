@@ -112,6 +112,183 @@ def _with_helper(path: Path):
     return _Scope()
 
 
+#: Every tracked complete-session fixture's EXACT decoded envelope
+#: manifest, in the codec's own canonical order, as
+#: ``"<id>:<version>:<R|o>"`` tokens (``R`` = required).
+#:
+#: This is per FIXTURE, and that is the whole point of it. The manifest
+#: declares components[] per BASELINE, and
+#: `save_compat_audit_manifest.verify_fixture_descriptors` correspondingly
+#: asks only that each declaration occur in SOME fixture of that
+#: baseline -- so a wrong version or required flag in one of
+#: `c3-raw-reference-v1`'s three fixtures is masked by a sibling that
+#: happens to carry the declared value. Nothing in the tracked manifest
+#: can express what ONE fixture's bytes decode to, which is why the
+#: expectation is frozen here.
+#:
+#: It is an oracle for the HELPER, not for the corpus: the fixtures'
+#: own bytes are already pinned by their manifest sha256, so a row that
+#: stops matching means the decode changed, not the file. Adding a
+#: tracked complete-session fixture means adding its row; the member
+#: below fails loudly on a fixture with no row rather than skipping it.
+_EXPECTED_DESCRIPTORS: dict[str, str] = {
+    "b1-initial-session.bin":
+        'metadata:1:R session:90:R',
+    "b2-split-haskell-lua-state.bin":
+        'buildings:1:R core-session:1:R craft-bills:1:R lua-state:1:R '
+        'metadata:1:R power-nodes:1:R texture-palette:1:R unit-sim:1:R '
+        'units:1:R world-activity:1:R world-edits:1:R world-pages:1:R',
+    "b3-lua-versioned-session-v1.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:1:R lua.unit_ai:1:R metadata:1:R '
+        'power-nodes:2:R texture-palette:1:R unit-sim:2:R units:1:R '
+        'world-activity:1:R world-edits:1:R world-pages:1:R',
+    "c3-typed-reference-v1-multipage.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:3:R lua.unit_ai:3:R metadata:1:R '
+        'power-nodes:2:R texture-palette:1:R unit-sim:2:R units:1:R '
+        'world-activity:1:R world-edits:1:R world-pages:1:R',
+    "c3-typed-reference-v1-with-items.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:3:R lua.unit_ai:3:R metadata:1:R '
+        'power-nodes:2:R texture-palette:1:R unit-sim:2:R units:1:R '
+        'world-activity:1:R world-edits:1:R world-pages:1:R',
+    "c3-typed-reference-v1.bin":
+        'buildings:1:R core-session:1:R craft-bills:1:R '
+        'lua.building_spawn:3:R lua.unit_ai:3:R metadata:1:R '
+        'power-nodes:1:R texture-palette:1:R unit-sim:1:R units:1:R '
+        'world-activity:1:R world-edits:1:R world-pages:1:R',
+    "d1-location-instance-identity.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:3:R lua.unit_ai:3:R metadata:1:R '
+        'power-nodes:2:R texture-palette:1:R unit-sim:2:R units:1:R '
+        'world-activity:1:R world-edits:1:R world-pages:2:R',
+    "e1-unit-location-knowledge.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:3:R lua.unit_ai:4:R metadata:1:R '
+        'power-nodes:2:R texture-palette:1:R unit-sim:2:R units:1:R '
+        'world-activity:1:R world-edits:1:R world-pages:2:R',
+    "f1-autosave-classification.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:3:R lua.tutorial_progress:1:o lua.unit_ai:4:R '
+        'metadata:2:R power-nodes:2:R texture-palette:1:R unit-sim:2:R '
+        'units:1:R world-activity:1:R world-edits:1:R world-pages:2:R',
+    "g1-language-provenance.bin":
+        'buildings:1:R core-session:1:R craft-bills:2:R '
+        'lua.building_spawn:3:R lua.tutorial_progress:1:o lua.unit_ai:4:R '
+        'metadata:2:R power-nodes:2:R texture-palette:1:R unit-sim:2:R '
+        'units:1:R world-activity:1:R world-edits:1:R world-pages:3:R',
+    "h1-container-knowledge.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:4:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'unit-sim:2:R units:1:R world-activity:1:R world-edits:1:R '
+        'world-pages:3:R',
+    "i1-location-language-names.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:4:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'unit-sim:2:R units:1:R world-activity:1:R world-edits:1:R '
+        'world-pages:4:R',
+    "j1-river-language-names.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:4:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'unit-sim:2:R units:1:R world-activity:1:R world-edits:1:R '
+        'world-pages:5:R',
+    "k1-canonical-designation-frame.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:4:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'unit-sim:2:R units:1:R world-activity:2:R world-edits:1:R '
+        'world-pages:5:R',
+    "k1-name-etymology.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:4:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'unit-sim:2:R units:1:R world-activity:1:R world-edits:1:R '
+        'world-pages:6:R',
+    "l1-order-stall-budget.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:5:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'unit-sim:2:R units:1:R world-activity:2:R world-edits:1:R '
+        'world-pages:6:R',
+    "m1-item-bulk-storage.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:5:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:2:R units:2:R world-activity:3:R '
+        'world-edits:1:R world-pages:6:R',
+    "n1-location-sight-reveal.bin":
+        'buildings:1:R container-knowledge:1:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:5:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:2:R units:1:R world-activity:2:R '
+        'world-edits:1:R world-pages:7:R',
+    "o1-wander-hazard-policy.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:5:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:3:R '
+        'world-edits:1:R world-pages:7:R',
+    "p1-position-hold.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:6:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:3:R '
+        'world-edits:1:R world-pages:7:R',
+    "q1-repair-ground-target.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:7:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:3:R '
+        'world-edits:1:R world-pages:7:R',
+    "r1-ruin-nomad-encounter.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:7:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:3:R '
+        'world-edits:1:R world-pages:8:R',
+    "s1-flora-instance-identity.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:7:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:4:R '
+        'world-edits:2:R world-pages:8:R',
+    "t1-construct-attempt-receipt.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:8:R metadata:2:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:5:R '
+        'world-edits:2:R world-pages:8:R',
+    "u1-generated-world-identity.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:8:R metadata:3:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:5:R '
+        'world-edits:2:R world-pages:9:R',
+    "v1-location-significant-contents.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:8:R metadata:3:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:5:R '
+        'world-edits:2:R world-pages:10:R',
+    "w1-construct-stake-reference.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:9:R metadata:3:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:5:R '
+        'world-edits:2:R world-pages:10:R',
+    "x1-flora-species-names.bin":
+        'buildings:2:R container-knowledge:2:o core-session:1:R '
+        'craft-bills:2:R lua.building_spawn:3:R lua.tutorial_progress:1:o '
+        'lua.unit_ai:9:R metadata:3:R power-nodes:2:R texture-palette:1:R '
+        'transfer-orders:1:o unit-sim:3:R units:2:R world-activity:6:R '
+        'world-edits:3:R world-pages:10:R',
+}
+
+
 def _stub_cabal(tmp: Path, *, binary: Path, build_creates: bool) -> Path:
     """A `cabal` on PATH that records its argv and answers `list-bin`.
 
@@ -205,11 +382,8 @@ def test_normalizing_a_tracked_fixture_reproduces_its_tracked_bytes() -> None:
            "quiet failure the copy exists to prevent)")
 
 
-def test_descriptor_dump_covers_every_requested_fixture_in_codec_order() -> None:
-    print("issue #2273: the compiled helper decodes every tracked "
-          "complete-session fixture, keys the dump by the exact path asked "
-          "for, and lists each manifest's descriptors in the codec's own "
-          "canonical component-id order")
+def _requested_complete_session_fixtures() -> list[Path]:
+    """Exactly the corpus `verify_fixture_descriptors` feeds the helper."""
     manifest = manifest_audit.load_manifest()
     requested = []
     for baseline in manifest.get("baselines", []):
@@ -219,6 +393,23 @@ def test_descriptor_dump_covers_every_requested_fixture_in_codec_order() -> None
             path = common.REPO_ROOT / fixture["path"]
             if path.exists():
                 requested.append(path)
+    return requested
+
+
+def _encode_descriptors(descriptors: list[dict]) -> str:
+    """One fixture's decoded manifest in `_EXPECTED_DESCRIPTORS`' spelling."""
+    return " ".join(
+        f"{d['id']}:{d['version']}:{'R' if d['required'] else 'o'}"
+        for d in descriptors)
+
+
+def test_descriptor_dump_matches_every_fixtures_exact_ordered_manifest() -> None:
+    print("issue #2273: the compiled helper's descriptor dump is compared "
+          "EXACTLY at its observable boundary -- per requested path, the "
+          "full ordered (id, version, required) list -- because the "
+          "manifest's own per-baseline check lets a sibling fixture mask a "
+          "wrong version or required flag in one of them")
+    requested = _requested_complete_session_fixtures()
     expect(len(requested) >= 20,
            f"expected the manifest to still name a substantial tracked "
            f"complete-session corpus, found {len(requested)}")
@@ -226,20 +417,26 @@ def test_descriptor_dump_covers_every_requested_fixture_in_codec_order() -> None
     if dumped is None:
         expect(False, f"expected the descriptor dump to succeed, got: {tail}")
         return
-    missing = [p.name for p in requested if str(p) not in dumped]
-    expect(not missing,
-           f"expected every requested fixture to appear in the dump, missing "
-           f"{missing}")
+    expect(sorted(dumped) == sorted(str(p) for p in requested),
+           f"expected the dump to be keyed by exactly the paths asked for, "
+           f"got {sorted(Path(k).name for k in dumped)}")
+    unlisted = [p.name for p in requested if p.name not in _EXPECTED_DESCRIPTORS]
+    expect(not unlisted,
+           f"expected every tracked complete-session fixture to carry a row "
+           f"in _EXPECTED_DESCRIPTORS; add one for {unlisted} rather than "
+           f"leaving it unchecked")
     for path in requested:
-        descriptors = dumped.get(str(path), [])
-        ids = [d["id"] for d in descriptors]
-        expect(ids == sorted(ids),
-               f"expected {path.name}'s descriptors in ascending component-id "
-               f"order (encodeEnvelope's canonical layout), got {ids}")
-        expect(all(isinstance(d["version"], int)
-                   and isinstance(d["required"], bool) for d in descriptors),
-               f"expected {path.name}'s descriptors to carry an integer "
-               f"version and a boolean required flag, got {descriptors}")
+        if path.name not in _EXPECTED_DESCRIPTORS:
+            continue
+        actual = _encode_descriptors(dumped.get(str(path), []))
+        expect(actual == _EXPECTED_DESCRIPTORS[path.name],
+               f"expected {path.name}'s decoded manifest to be exactly\n"
+               f"  {_EXPECTED_DESCRIPTORS[path.name]}\n"
+               f"got\n  {actual}")
+    stale = sorted(set(_EXPECTED_DESCRIPTORS) - {p.name for p in requested})
+    expect(not stale,
+           f"expected no _EXPECTED_DESCRIPTORS row for a fixture the "
+           f"manifest no longer tracks, found {stale}")
 
 
 def test_real_descriptors_back_the_manifests_declared_versions() -> None:
@@ -312,6 +509,45 @@ def test_summary_success_without_written_output_is_reported_as_failure() -> None
         expect("wrote no canonical summary" in tail,
                f"expected the missing-output diagnosis to say so in its own "
                f"words rather than borrowing a decode failure's, got {tail!r}")
+        expect(not out.exists(),
+               "expected nothing to be left at the caller's output path")
+
+
+def test_a_pre_existing_summary_is_never_mistaken_for_this_runs_output() -> None:
+    print("issue #2273: success is tied to bytes THIS invocation produced. "
+          "`--generate-session --force` regenerates over a registered "
+          "fixture's own *.expected.json, so the output path routinely "
+          "already holds a valid summary; a helper that exited 0 having "
+          "written nothing must not have that older content read back as "
+          "this run's answer, and must not damage it either")
+    with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
+        tmp = Path(d)
+        out = tmp / "summary.json"
+        stale = '{"metadata": {"seed": 1}, "pages": []}'
+        out.write_text(stale, encoding="utf-8")
+        with _with_helper(_fake_helper(tmp, "DUMP_OK")):
+            ok, tail = codec.dump_canonical_summary(
+                common.FIXTURE_DATA_DIR / "u1-generated-world-identity.bin", out)
+        expect(not ok,
+               "expected a helper that wrote nothing to fail even though the "
+               "output path already held a non-empty, perfectly valid summary")
+        expect("wrote no canonical summary" in tail,
+               f"expected the missing-output diagnosis, got {tail!r}")
+        expect(out.read_text(encoding="utf-8") == stale,
+               "expected the pre-existing summary to be byte-untouched by a "
+               "failed run, which is what the generation transaction's "
+               "rollback relies on")
+
+        # ... and the successful direction really does replace it, so the
+        # staging above is not quietly swallowing the write.
+        ok, tail = codec.dump_canonical_summary(
+            common.FIXTURE_DATA_DIR / "u1-generated-world-identity.bin", out)
+        expect(ok, f"expected the real helper to succeed, got: {tail}")
+        expect(out.read_bytes() == (
+                   common.FIXTURE_DATA_DIR
+                   / "u1-generated-world-identity.expected.json").read_bytes(),
+               "expected a successful run to replace the pre-existing content "
+               "with this fixture's real canonical summary")
 
 
 def test_descriptor_success_without_written_output_is_reported_as_failure() -> None:
@@ -355,36 +591,42 @@ def test_pre_resolved_handoff_is_used_and_a_bad_one_is_refused() -> None:
                f"it pointed at, got {why!r}")
 
 
-def test_an_absent_helper_is_built_once_and_a_present_one_is_not() -> None:
-    print("issue #2273 requirement 6: the three probes that reach this "
-          "bridge without a `cabal build all` -- persistence_contract, "
-          "persistence_contract_sweep, save_compat_migration, whose runner "
-          "preflight builds exe:synarchy and nothing else (#1570) -- must "
-          "still find the helper, so an ABSENT binary is built once; a "
-          "present one is never rebuilt, because this resolution is a "
-          "compatibility bridge, not a freshness guarantee")
+def test_resolution_builds_before_locating_even_when_the_helper_exists() -> None:
+    print("issue #2273: an EXISTING helper is not evidence of a CURRENT one "
+          "-- `cabal list-bin` answers a path either way -- so resolution "
+          "builds first and locates second, every time. The `cabal repl` "
+          "this replaced compiled from current sources on every call; "
+          "accepting a stale binary would decode against yesterday's codec "
+          "while reporting today's verdict, and the probe runner's own "
+          "preflight (#1570) builds exe:synarchy, never this target")
     with tempfile.TemporaryDirectory(dir=common.REPO_ROOT) as d:
         tmp = Path(d)
-        binary = tmp / "built-helper"
+        binary = tmp / "already-present-helper"
+        binary.write_text("stale", encoding="utf-8")
         log = tmp / "cabal.log"
 
         with _with_path(_stub_cabal(tmp, binary=binary, build_creates=True)):
             resolved, why = codec.resolve_codec_exe()
         expect(resolved == str(binary),
-               f"expected the built helper to resolve, got {resolved!r} ({why})")
-        calls = log.read_text(encoding="utf-8").split()
-        expect(calls.count("build") == 1,
-               f"expected exactly one build for an absent helper, got "
-               f"{log.read_text(encoding='utf-8')!r}")
+               f"expected the helper to resolve, got {resolved!r} ({why})")
+        calls = [line.split()[0] for line in
+                 log.read_text(encoding="utf-8").splitlines() if line.split()]
+        expect(calls == ["build", "list-bin"],
+               f"expected one build THEN one locate, even for a helper that "
+               f"was already on disk, got {calls}")
 
+        # Once per process, not once per operation: the whole point of
+        # caching the answer is that a batch of decodes pays this once.
         log.unlink()
         with _with_path(_stub_cabal(tmp, binary=binary, build_creates=True)):
-            resolved, why = codec.resolve_codec_exe()
-        expect(resolved == str(binary),
-               f"expected the present helper to resolve, got {resolved!r} ({why})")
-        expect("build" not in log.read_text(encoding="utf-8").split(),
-               f"expected a helper that already exists NOT to be rebuilt, "
-               f"got {log.read_text(encoding='utf-8')!r}")
+            codec.resolve_codec_exe()
+            codec.resolve_codec_exe()
+            codec.resolve_codec_exe()
+        calls = [line.split()[0] for line in
+                 log.read_text(encoding="utf-8").splitlines() if line.split()]
+        expect(calls == ["build", "list-bin"],
+               f"expected the resolved answer to be cached for the process, "
+               f"got {calls}")
 
 
 def test_a_build_that_produces_no_helper_is_refused_not_retried() -> None:
@@ -399,7 +641,7 @@ def test_a_build_that_produces_no_helper_is_refused_not_retried() -> None:
             resolved, why = codec.resolve_codec_exe()
         expect(resolved is None,
                f"expected resolution to fail, got {resolved!r}")
-        expect("still does not exist" in why and str(binary) in why,
+        expect("does not exist" in why and str(binary) in why,
                f"expected the refusal to name the path the build did not "
                f"produce, got {why!r}")
         expect(log.read_text(encoding="utf-8").split().count("build") == 1,
@@ -412,13 +654,14 @@ def test_a_build_that_produces_no_helper_is_refused_not_retried() -> None:
 TESTS = [
     test_helper_summary_matches_every_generated_expectation,
     test_normalizing_a_tracked_fixture_reproduces_its_tracked_bytes,
-    test_descriptor_dump_covers_every_requested_fixture_in_codec_order,
+    test_descriptor_dump_matches_every_fixtures_exact_ordered_manifest,
     test_real_descriptors_back_the_manifests_declared_versions,
     test_summary_failure_names_the_fixture_and_the_codec_error,
     test_descriptor_dump_failure_names_the_fixture_and_the_codec_error,
     test_summary_success_without_written_output_is_reported_as_failure,
     test_descriptor_success_without_written_output_is_reported_as_failure,
+    test_a_pre_existing_summary_is_never_mistaken_for_this_runs_output,
     test_pre_resolved_handoff_is_used_and_a_bad_one_is_refused,
-    test_an_absent_helper_is_built_once_and_a_present_one_is_not,
+    test_resolution_builds_before_locating_even_when_the_helper_exists,
     test_a_build_that_produces_no_helper_is_refused_not_retried,
 ]

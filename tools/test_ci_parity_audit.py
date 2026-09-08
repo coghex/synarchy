@@ -962,7 +962,7 @@ def _save_compat_wiring_self_test() -> list[str]:
     #      is ever executed, so a second one invoking the member
     #      unconditionally would otherwise sail through: the gate sets
     #      still match (same command), the executed block still selects
-    #      correctly, and `make ci` would run the `cabal repl` on every
+    #      correctly, and `make ci` would run the member on every
     #      unrelated change with this audit reporting no problem at all.
     duplicated = _WIRING_LOCAL_GOOD + (
         "# " + LOCAL_BLOCK_BEGIN + "\n"

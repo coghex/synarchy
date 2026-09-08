@@ -188,11 +188,10 @@ UNIT_ASSET_GLOBS = [
 #
 # NB these are fnmatch patterns, not globs: `*` crosses `/`.
 SAVE_COMPAT_GLOBS = [
-    # The audit and its self-test. The reproducibility member and its
-    # GHCi setup script live in the self-test; normalize_fixture_timestamp
-    # -- the very thing that member covers -- lives in the codec bridge
-    # since issue #2049 split the tool into owner modules, so EVERY owner
-    # is named here. Explicit per-module patterns, not a blanket
+    # The audit and its self-test. The reproducibility member lives in
+    # the self-test; normalize_fixture_timestamp -- the very thing that
+    # member covers -- lives in the codec bridge since issue #2049 split
+    # the tool into owner modules, so EVERY owner is named here. Explicit per-module patterns, not a blanket
     # `tools/save_compat*`: that would newly capture the unrelated
     # tools/save_compat_migration_probe.py, whose negative case sits
     # beside save_storage_probe.py's below.
@@ -757,8 +756,8 @@ def self_test() -> int:
         ("save-compat",
          ["test-headless/data/save-compat/k1-new-fixture.expected.json"],
          True),
-        # The Haskell the GHCi setup imports: the envelope codec and its
-        # types, the component registry, the metadata DTO, and the
+        # The Haskell the codec helper imports: the envelope codec and
+        # its types, the component registry, the metadata DTO, and the
         # frozen compat mirrors. A facade module added beside the
         # directory later must match too, which is why the pattern is
         # `src/World/Save*` rather than `src/World/Save/*`.

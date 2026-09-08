@@ -61,32 +61,34 @@ Resolving the binary (requirement 6)
      process at all. An explicitly exported path that does not exist is
      an error, never a silent fall-through to resolution: the export is
      a statement about which build to use.
-  2. Otherwise one read-only `cabal list-bin exe:synarchy-save-codec`,
-     cached for the life of the process. That is a plan query, not a
-     build and not an interpreter: it neither compiles nor loads a
-     module. It answers a path whether or not that file is current, so
-     `cabal build all` remains the caller's responsibility exactly as it
-     was before -- CI and `tools/ci-local.sh` both run it before any
-     save-compatibility command.
-  3. Only if that path does not EXIST, one `cabal build` of the target,
-     then the query again. This is a compatibility bridge, not a
-     freshness guarantee: it makes an ABSENT binary buildable, and says
-     nothing about a stale one, which is why `cabal build all` is still
-     the caller's job.
+  2. Otherwise ONE `cabal build exe:synarchy-save-codec` followed by ONE
+     read-only `cabal list-bin`, cached together for the life of the
+     process.
 
-     It exists for the three probes that reach this module without a
-     preceding `cabal build all` -- `persistence_contract`,
+     The build is unconditional on purpose, and this is the whole reason
+     the branch is shaped this way rather than "build only when the file
+     is missing". `cabal list-bin` answers a path whether or not that
+     file is current, so accepting a helper because it EXISTS would hand
+     a caller a binary built before the last edit to `app-save-codec/` or
+     to an imported `World.Save.*` module -- and decode it against
+     yesterday's codec while reporting today's verdict. The `cabal repl`
+     this replaced compiled from current sources every time; a compiled
+     helper has to make the same promise. `probe_engine.resolve_executable`
+     resolves `exe:synarchy` with exactly this shape, and for exactly
+     this reason (#1570).
+
+     It is what lets the three probes that reach this module WITHOUT a
+     preceding `cabal build all` keep working -- `persistence_contract`,
      `persistence_contract_sweep` and `save_compat_migration`, whose
-     runner preflight builds `exe:synarchy` and nothing else (#1570).
-     Before #2273 the `cabal repl` those calls went through built
-     whatever it needed; a compiled helper has to be able to say the
-     same. All three already hold the `cabal-build` resource
-     EXCLUSIVELY (`tools/probe_runner_resources.py`), because they drive
-     Cabal themselves, so a build here is inside a hold that already
-     exists rather than a new concurrent mutation of `dist-newstyle`.
-     Converting those probes off Cabal entirely is the declared
-     follow-up; this keeps them working until then, and never fires in
-     CI, where `cabal build all` has already run.
+     runner preflight builds `exe:synarchy` and nothing else. All three
+     already hold the `cabal-build` resource EXCLUSIVELY
+     (`tools/probe_runner_resources.py`), because they drive Cabal
+     themselves, so this build sits inside a hold that already exists
+     rather than being a new concurrent mutation of `dist-newstyle`.
+
+     On a tree where `cabal build all` has already run -- CI, `make ci`,
+     and any ordinary local invocation -- the build is a plan check that
+     compiles nothing and costs no measurable time.
 
 The public façade is tools/save_compat_audit.py.
 """
@@ -144,22 +146,19 @@ def resolve_codec_exe() -> tuple[str | None, str]:
         return exported, ""
     if _CACHED_CODEC_EXE is not None:
         return _CACHED_CODEC_EXE, ""
+    # Build FIRST, then locate. Not "locate, and build if absent": a
+    # present-but-stale helper is the failure this ordering exists to
+    # prevent, and `cabal list-bin` cannot tell the two apart.
+    built, why = _cabal(["build", CODEC_TARGET])
+    if not built:
+        return None, why
     path, why = _list_bin()
     if path is None:
         return None, why
     if not Path(path).is_file():
-        # Step 3: absent, not stale. Build once, then ask again -- and if
-        # the answer is still absent, report that rather than looping.
-        built, why = _cabal(["build", CODEC_TARGET])
-        if not built:
-            return None, why
-        path, why = _list_bin()
-        if path is None:
-            return None, why
-        if not Path(path).is_file():
-            return None, (
-                f"`cabal build {CODEC_TARGET}` reported success but "
-                f"{path!r} still does not exist")
+        return None, (
+            f"`cabal build {CODEC_TARGET}` reported success but {path!r} "
+            f"does not exist")
     _CACHED_CODEC_EXE = path
     return path, ""
 
@@ -313,22 +312,37 @@ def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool,
     SessionSnapshot/SaveMetadata and write it to output_path.
 
     Returns (ok, diagnostic-tail-on-failure). A helper that reported
-    success without leaving output_path behind is reported as a failure
+    success without actually producing a summary is reported as a failure
     in its own words, which is a different diagnosis from a decode
     failure (issue #2273 requirement 4).
     """
-    ok, tail = _run_codec(
-        ["summary", "--fixture", str(fixture_path),
-         "--output", str(output_path)],
-        "DUMP_OK")
-    if not ok:
-        return False, tail
-    # Emptiness, not absence: a caller may hand this an output path that
-    # already exists (a rollback test's pre-existing summary, say), so
-    # "the file is there" is not evidence the helper wrote it. Every real
-    # canonical summary is a non-empty JSON object.
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        return False, (
-            f"the codec helper reported DUMP_OK but wrote no canonical "
-            f"summary at {output_path}")
-    return True, ""
+    # The helper writes to a path THIS call created, which is then moved
+    # into place. Neither the file's existence nor its size at
+    # `output_path` is evidence the helper produced anything: callers
+    # legitimately hand this an output path that already holds a summary
+    # (`--generate-session --force` regenerating over a registered
+    # fixture's own `*.expected.json`), and a helper that exited 0 having
+    # written nothing would leave that older content sitting there,
+    # non-empty, to be read back as this run's answer.
+    #
+    # Staging also means a failure leaves `output_path` byte-untouched,
+    # which is what the generation transaction's rollback wants anyway.
+    output_path = Path(output_path)
+    with tempfile.NamedTemporaryFile(
+            suffix=".json", dir=output_path.parent, delete=False) as tf:
+        staged = Path(tf.name)
+    try:
+        ok, tail = _run_codec(
+            ["summary", "--fixture", str(fixture_path),
+             "--output", str(staged)],
+            "DUMP_OK")
+        if not ok:
+            return False, tail
+        if staged.stat().st_size == 0:
+            return False, (
+                f"the codec helper reported DUMP_OK but wrote no canonical "
+                f"summary for {fixture_path}")
+        os.replace(staged, output_path)
+        return True, ""
+    finally:
+        staged.unlink(missing_ok=True)

@@ -34,11 +34,11 @@ Owner modules (issue #2073)
   test_save_compat_audit_reproducibility.py     1 member
       The fixture-generation reproducibility member, and the source of
       REPRODUCIBILITY_TESTS below.
-  test_save_compat_audit_codec.py              11 members
+  test_save_compat_audit_codec.py              12 members
       The real-codec bridge (issue #2273): the compiled helper's output
       parity against the tracked corpus, its failure diagnostics, and
-      how it resolves the binary -- the pre-resolved handoff and the
-      build-if-absent fallback behind it.
+      how it resolves the binary -- the pre-resolved handoff, and the
+      build-then-locate freshness order behind it.
   test_save_compat_audit_discovery.py          16 members
       `componentCodec` discovery, `csOlderVersions` parsing, component
       source paths, Lua persistence-module discovery.
@@ -46,12 +46,12 @@ Owner modules (issue #2073)
       Component/version coverage, modern-baseline completeness, B1
       migration policy, orphans, and the real-manifest guards.
 
-Eighty-two members in total. The issue's own table says 69 across
+Eighty-three members in total. The issue's own table says 69 across
 15/12/11/1/14/16 owners; #2098 added
 `test_haskell_component_source_paths_is_the_whole_directory` and
 `test_dropping_one_owner_from_discovery_changes_the_fingerprint` to the
 discovery owner after that table was written, and #2273 added the
-codec-bridge owner's eleven, which together are the whole of the
+codec-bridge owner's twelve, which together are the whole of the
 difference and are why requirement 11's baseline is the tree as it stands
 after #1922 and #2049, not as it stood at filing.
 

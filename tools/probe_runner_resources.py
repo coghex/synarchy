@@ -88,21 +88,28 @@ import probe_resource_lock
 # preflight below resolves the executable once and every probe execs that
 # binary, an ordinary probe only READS it, which is the shared interest.
 # Three registered probes still drive Cabal themselves, and they are the
-# reason the resource exists: `persistence_contract`,
-# `persistence_contract_sweep` and `save_compat_migration` all run
-# `cabal repl test:synarchy-test-headless` through
-# `persistence_snapshot.compare_session_files`. A `cabal repl` recompiles
-# into the same inplace package database whose concurrent mutation is the
-# defect, so each of them takes `cabal-build` EXCLUSIVELY: two of them
-# cannot overlap each other, and neither overlaps a probe reading the
-# binary they may be relinking.
+# reason the resource exists — but for two different reasons since #2273,
+# and conflating them is how this comment goes stale again:
 #
-# `save_compat_audit.dump_canonical_summary` is no longer one of those
-# reasons (#2273): it execs the compiled `exe:synarchy-save-codec` and
-# recompiles nothing. Converting `persistence_snapshot`'s own repl, and
-# with it these exclusive holds and the `behavior-probes` job's test-suite
-# build, is the declared follow-up; until it lands the hold stays, because
-# that repl is still reached from each of these three probes.
+#   * `persistence_contract` and `persistence_contract_sweep` run
+#     `cabal repl test:synarchy-test-headless` through
+#     `persistence_snapshot.compare_session_files`. A `cabal repl`
+#     recompiles into the same inplace package database whose concurrent
+#     mutation is the defect. Converting that repl, and with it the
+#     `behavior-probes` job's test-suite build, is the declared follow-up
+#     to #2273.
+#   * `save_compat_migration` reaches no repl at all. It calls
+#     `save_compat_audit.dump_canonical_summary`, which since #2273 execs
+#     the compiled `exe:synarchy-save-codec` — but resolving that helper
+#     freshness-builds it (`save_compat_audit_codec.resolve_codec_exe`),
+#     because the runner preflight builds `exe:synarchy` and nothing else
+#     (#1570). A `cabal build` writes the same package database a `cabal
+#     repl` does, so the interest is identical even though the command is
+#     not.
+#
+# Each therefore takes `cabal-build` EXCLUSIVELY: two of them cannot
+# overlap each other, and neither overlaps a probe reading the binary they
+# may be relinking.
 #: The shared Cabal build state, named once so the preflight below, the
 #: two declaration tables, and the direct path's own preparation (#1913)
 #: cannot drift apart. The name is `probe_engine`'s, because that module
@@ -357,7 +364,8 @@ def preflight_hold(namespace, *, announce=None, environ=None):
     the executable outside the exclusion would leave exactly the race
     this issue is about, one level up: two aggregate runs preflighting at
     once, or one runner's build landing inside another runner's
-    `persistence_contract` / `save_compat_migration` `cabal repl`. Nothing
+    `persistence_contract` repl or `save_compat_migration` helper build.
+    Nothing
     inside a single run can see that; only the cross-process lock can.
 
     Held for the build alone and released before any probe is dispatched,
@@ -390,8 +398,8 @@ def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
     that is how `persistence_contract_sweep`'s nested runner reaches its
     own probes without a second build, and it takes no lock because it
     builds nothing. Otherwise it runs one freshness build plus one `cabal
-    list-bin`, INSIDE `preflight_hold` so no other runner or GHCi consumer
-    is in the build directory at the same time. Raises
+    list-bin`, INSIDE `preflight_hold` so no other runner and no
+    Cabal-driving probe is in the build directory at the same time. Raises
     `EngineExecutableError`, which `tools/run_probes.py` reports as a
     nonzero exit before
     a probe is spawned, a retry allocated, or any probe assertion

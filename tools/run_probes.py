@@ -44,11 +44,11 @@ through the environment, so no probe process invokes Cabal while another
 is running. That preflight is itself
 a Cabal writer, so it runs inside an EXCLUSIVE `cabal-build` hold: two
 aggregate runs cannot build at once, and neither can a build and another
-runner's `cabal repl` probe. The few probes that
-legitimately still drive Cabal (GHCi consumers: `cabal repl` behind
-`persistence_snapshot`/`save_compat_audit`) declare `cabal-build`
-EXCLUSIVELY instead, which is the same scheduling mechanism keeping them
-off everyone else's toes. Since #1436 the SAME two tables are also
+runner's Cabal-driving probe. The few probes that legitimately still
+drive Cabal (a `cabal repl` behind `persistence_snapshot`, and the codec
+helper's own freshness build behind `save_compat_audit` since #2273)
+declare `cabal-build` EXCLUSIVELY instead, which is the same scheduling
+mechanism keeping them off everyone else's toes. Since #1436 the SAME two tables are also
 enforced ACROSS processes, through `tools/probe_resource_lock.py`, so a
 `/deflake` measurement or a second runner cannot overlap what this one is
 holding either. A full sequential run is low tens of
@@ -251,7 +251,7 @@ def main() -> int:
     # concurrent-`cabal run` race cannot happen at all. The build itself
     # runs inside an EXCLUSIVE `cabal-build` hold, because a preflight is
     # a Cabal writer like any other and a second runner's preflight (or
-    # another runner's `cabal repl` probe) must not be in the build
+    # another runner's Cabal-driving probe) must not be in the build
     # directory beside it. A failure is this runner's own nonzero exit,
     # never a retry and never a probe's assertion failure. The resolved
     # path is stored on its OWNER, which is the cell
