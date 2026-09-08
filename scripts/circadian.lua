@@ -61,9 +61,12 @@ end
 
 M.shapeFor = shapeFor
 
--- unit.getCircadianUrge(uid) — 0..1, or nil if the unit doesn't exist or
--- has no resolvable position (issue #611 requirement: skip gracefully,
--- never error). Named to match the issue's own example call shape.
+-- circadian.getCircadianUrge(uid) — 0..1, or nil if the unit doesn't exist
+-- or its sun angle cannot be resolved (issue #611 requirement: skip
+-- gracefully, never error). Called through a module import, as
+-- scripts/unit_ai_sleep.lua:194 does via its local `circadian` alias;
+-- `circadian` is not an engine-registered namespace, so a pasteable
+-- console example is require("scripts.circadian").getCircadianUrge(uid).
 function M.getCircadianUrge(uid)
     local info = unit.getInfo(uid)
     if not info then return nil end
