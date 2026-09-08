@@ -16,6 +16,11 @@ import Engine.Scripting.Lua.API.Units.TransferOrder
 -- list is frozen at the pre-split surface.
 import Engine.Scripting.Lua.API.Units.Medical
     (unitCanTreatFn, unitTreatmentRangeFn)
+-- #2468's atomic relative stance credit, imported directly for the same
+-- reason: the Units facade's export list is frozen at the pre-split
+-- surface. Its own module because it is the one verb that must commit
+-- against the SAME reference combat debits, not another stat accessor.
+import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -58,6 +63,7 @@ registerUnitAPI env = do
   registerLuaFunction "getStatBase" (unitGetStatBaseFn env)
   registerLuaFunction "setStat"     (unitSetStatFn env)
   registerLuaFunction "getAllStats" (unitGetAllStatsFn env)
+  registerLuaFunction "recoverStance" (unitRecoverStanceFn env)
   registerLuaFunction "getInventory" (unitGetInventoryFn env)
   registerLuaFunction "getItemContents" (unitGetItemContentsFn env)
   registerLuaFunction "treatBleeding" (unitTreatBleedingFn env)

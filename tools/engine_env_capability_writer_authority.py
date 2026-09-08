@@ -359,6 +359,11 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Units.Medical",
         "Engine.Scripting.Lua.API.Units.Selection",
         "Engine.Scripting.Lua.API.Units.Spawn",
+        # #2468: stance recovery is a RELATIVE credit committed inside
+        # one `atomicModifyIORef'` against the same reference
+        # Combat.Resolution.Admission debits, which is the whole point
+        # of it having its own owner rather than staying in Stats.
+        "Engine.Scripting.Lua.API.Units.Stance",
         "Engine.Scripting.Lua.API.Units.Stats",
         "Engine.Scripting.Lua.API.Units.Survival",
         "Engine.Scripting.Lua.API.Units.Transfer",

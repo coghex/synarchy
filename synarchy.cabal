@@ -401,6 +401,7 @@ library
                      Engine.Scripting.Lua.API.Units.Transfer
                       Engine.Scripting.Lua.API.Units.TransferOrder
                      Engine.Scripting.Lua.API.Units.Stats
+                     Engine.Scripting.Lua.API.Units.Stance
                      Engine.Scripting.Lua.API.Units.Selection
                      Engine.Scripting.Lua.API.Units.Medical
                      Engine.Scripting.Lua.API.World
@@ -1314,6 +1315,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.Fall
                    Test.Headless.Unit.StopTransition
                    Test.Headless.Unit.Stats
+                   Test.Headless.Unit.StanceRecovery
                    Test.Headless.Unit.AddXpApi
                    Test.Headless.Unit.AccessoryUnequip
                    Test.Headless.Unit.SpawnShed
