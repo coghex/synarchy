@@ -42,16 +42,16 @@ import time
 from pathlib import Path
 
 import probe_engine
+import probe_protocol
 from probelib import GUI_PORT, send, quit_engine
 
 REPO = Path(__file__).resolve().parent.parent
 LOG = "/tmp/resource_root_probe_engine.log"
 
 
-def check(name: str, ok: bool, detail: str = "") -> bool:
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
-          + (f"  ({detail})" if detail else ""))
-    return ok
+def check(name: str, ok: bool, detail: str = "", *, rep) -> bool:
+    return rep.check(CHECK_ID_BY_LABEL[name], ok, name
+                     + (f"  ({detail})" if detail else ""))
 
 
 def locate_binary() -> str:
@@ -97,21 +97,71 @@ def base_env() -> dict[str, str]:
     return env
 
 
+PROBE_CHECKS = [
+    ('missing_root', 'no root from non-repo cwd -> exit 1 naming root + missing paths'),
+    ('nonexistent_root', 'nonexistent --resource-root -> exit 1 naming it'),
+    ('missing_operand', 'bare --resource-root -> exit 1, no cwd fallback'),
+    ('empty_operand', 'empty --resource-root from the repo -> exit 1 naming the flag and the empty operand, no stdout'),
+    ('empty_overrides_env', 'empty --resource-root with a valid SYNARCHY_ROOT -> exit 1, boots from neither root'),
+    ('dump_from_root', '--dump via --resource-root -> nonempty JSON tile array'),
+    ('env_ready', 'headless via SYNARCHY_ROOT -> READY'),
+    ('console_answers', 'debug console answers'),
+    ('clean_shutdown', 'clean shutdown (engine.quit -> exit 0)'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('resource_root', PROBE_CHECKS)
+
+CHECK_ID_BY_LABEL = {label: cid for cid, label in PROBE_CHECKS}
+
+
+def run_captured(rep, log_name, command, **kwargs):
+    """Keep direct-binary output even when subprocess.run times out."""
+    path = Path(rep.engine_log_path(log_name, f"/tmp/{log_name}"))
+
+    def retain(stdout, stderr):
+        def decoded(value):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+        path.write_text(decoded(stdout) + "\n" + decoded(stderr))
+
+    try:
+        result = subprocess.run(command, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        retain(exc.stdout, exc.stderr)
+        raise
+    retain(result.stdout, result.stderr)
+    return result
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9636)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     args = ap.parse_args()
+    if args.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(args, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
+
+
+def _run(args, rep):
     if args.port == GUI_PORT:
         sys.exit(f"refusing port {GUI_PORT} (the GUI port); pass a 9xxx port")
 
     binary = locate_binary()
-    print(f"  exe: {binary}")
+    rep.note(f'  exe: {binary}')
     failures = 0
     tmp = tempfile.mkdtemp(prefix="synarchy_resource_root_")
-    print(f"  temp cwd (outside repo): {tmp}")
+    rep.note(f'  temp cwd (outside repo): {tmp}')
 
     # --- 2. no root given from a non-repo cwd: actionable error -----------
-    r = subprocess.run([binary, "--dump", "--worldSize", "64"],
+    r = run_captured(rep, "resource_root_case_1.log", [binary, "--dump", "--worldSize", "64"],
                        cwd=tmp, env=base_env(),
                        capture_output=True, text=True, timeout=60)
     ok = (r.returncode == 1
@@ -120,11 +170,11 @@ def main() -> int:
           and os.path.join(tmp, "scripts") in r.stderr
           and "--resource-root" in r.stderr)
     failures += not check("no root from non-repo cwd -> exit 1 naming root + missing paths",
-                          ok, f"rc={r.returncode}")
+                          ok, f"rc={r.returncode}", rep=rep)
 
     # --- 3. nonexistent explicit root: actionable error -------------------
     bogus = os.path.join(tmp, "nonexistent")
-    r = subprocess.run([binary, "--dump", "--resource-root", bogus],
+    r = run_captured(rep, "resource_root_case_2.log", [binary, "--dump", "--resource-root", bogus],
                        cwd=tmp, env=base_env(),
                        capture_output=True, text=True, timeout=60)
     ok = (r.returncode == 1
@@ -132,16 +182,16 @@ def main() -> int:
           and bogus in r.stderr
           and "--resource-root" in r.stderr)
     failures += not check("nonexistent --resource-root -> exit 1 naming it",
-                          ok, f"rc={r.returncode}")
+                          ok, f"rc={r.returncode}", rep=rep)
 
     # --- 3b. bare --resource-root (no path): error, not cwd fallback ------
-    r = subprocess.run([binary, "--dump", "--resource-root"],
+    r = run_captured(rep, "resource_root_case_3.log", [binary, "--dump", "--resource-root"],
                        cwd=tmp, env=base_env(),
                        capture_output=True, text=True, timeout=60)
     ok = (r.returncode == 1
           and "--resource-root requires a path" in r.stderr)
     failures += not check("bare --resource-root -> exit 1, no cwd fallback",
-                          ok, f"rc={r.returncode}")
+                          ok, f"rc={r.returncode}", rep=rep)
 
     # --- 3c. empty --resource-root operand: error, not cwd/env fallback ---
     # Deliberately run from REPO, not the temp dir. The pre-#1949 code
@@ -154,7 +204,7 @@ def main() -> int:
     # reaches stdout.
     empty_dump = ["--dump", "--seed", "7", "--worldSize", "32",
                   "--region", "0,0,0,0", "--resource-root", ""]
-    r = subprocess.run([binary] + empty_dump,
+    r = run_captured(rep, "resource_root_case_4.log", [binary] + empty_dump,
                        cwd=str(REPO), env=base_env(),
                        capture_output=True, text=True, timeout=60)
     ok = (r.returncode == 1
@@ -163,14 +213,14 @@ def main() -> int:
           and r.stdout == "")
     failures += not check("empty --resource-root from the repo -> exit 1 naming "
                           "the flag and the empty operand, no stdout",
-                          ok, f"rc={r.returncode}, stdout={len(r.stdout)}B")
+                          ok, f"rc={r.returncode}, stdout={len(r.stdout)}B", rep=rep)
 
     # Same operand with a VALID SYNARCHY_ROOT: the empty flag value must
     # not defer to the environment root either. Both roots on offer here
     # are usable, so booting at all is the regression.
     env = base_env()
     env["SYNARCHY_ROOT"] = str(REPO)
-    r = subprocess.run([binary] + empty_dump,
+    r = run_captured(rep, "resource_root_case_5.log", [binary] + empty_dump,
                        cwd=str(REPO), env=env,
                        capture_output=True, text=True, timeout=60)
     ok = (r.returncode == 1
@@ -179,12 +229,12 @@ def main() -> int:
           and r.stdout == "")
     failures += not check("empty --resource-root with a valid SYNARCHY_ROOT -> "
                           "exit 1, boots from neither root",
-                          ok, f"rc={r.returncode}, stdout={len(r.stdout)}B")
+                          ok, f"rc={r.returncode}, stdout={len(r.stdout)}B", rep=rep)
 
     # --- 4. --dump from the temp dir with --resource-root <repo> ----------
-    r = subprocess.run([binary, "--dump", "--seed", "42",
+    r = run_captured(rep, "resource_root_case_6.log", [binary, "--dump", "--seed", "42",
                         "--worldSize", "64", "--region", "0,0,0,0",
-                        "--resource-root", str(REPO)],
+                        "--resource-root", str(REPO)] + rep.engine_args(),
                        cwd=tmp, env=base_env(),
                        capture_output=True, text=True, timeout=600)
     tiles = None
@@ -196,34 +246,35 @@ def main() -> int:
     ok = (isinstance(tiles, list) and len(tiles) > 0
           and all(k in tiles[0] for k in ("x", "y", "terrainZ")))
     failures += not check("--dump via --resource-root -> nonempty JSON tile array",
-                          ok, f"rc={r.returncode}, tiles={len(tiles) if isinstance(tiles, list) else 'n/a'}")
+                          ok, f"rc={r.returncode}, tiles={len(tiles) if isinstance(tiles, list) else 'n/a'}", rep=rep)
 
     # --- 5. --headless from the temp dir with SYNARCHY_ROOT=<repo> --------
     env = base_env()
     env["SYNARCHY_ROOT"] = str(REPO)
-    logf = open(LOG, "w")
-    proc = subprocess.Popen([binary, "--headless", "--port", str(args.port)],
+    log_path = rep.engine_log_path("resource_root_engine.log", LOG)
+    logf = open(log_path, "w")
+    proc = subprocess.Popen([binary, "--headless", "--port", str(args.port)] + rep.engine_args(),
                             cwd=tmp, env=env,
                             stdout=logf, stderr=subprocess.STDOUT)
     try:
         ready = False
         deadline = time.time() + 180
         while time.time() < deadline:
-            if "READY" in open(LOG).read():
+            if "READY" in Path(log_path).read_text():
                 ready = True
                 break
             if proc.poll() is not None:
                 break
             time.sleep(0.4)
         failures += not check("headless via SYNARCHY_ROOT -> READY", ready,
-                              f"see {LOG}")
+                              f"see {log_path}", rep=rep)
         if ready:
             failures += not check("debug console answers",
-                                  send(args.port, "return 1+1") == "2")
+                                  send(args.port, "return 1+1") == "2", rep=rep)
             quit_engine(args.port, proc)
             failures += not check("clean shutdown (engine.quit -> exit 0)",
                                   proc.returncode == 0,
-                                  f"rc={proc.returncode}")
+                                  f"rc={proc.returncode}", rep=rep)
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -231,8 +282,7 @@ def main() -> int:
         logf.close()
 
     passed = failures == 0
-    print(f"\n  {'PASS' if passed else 'FAIL'}: resource-root launch contract"
-          + ("" if passed else " — see failures above"))
+    rep.note(f"\n  {('PASS' if passed else 'FAIL')}: resource-root launch contract" + ('' if passed else ' — see failures above'))
     return 0 if passed else 1
 
 

@@ -3,7 +3,7 @@
 
 `tools/test_probe_flake.py` stays the aggregate command; this module
 holds what more than one of its owners needs, so the harness owners and
-the twenty-one per-probe migration owners single-source it instead of
+the per-probe migration owners single-source it instead of
 carrying a copy each.
 
 Three things live here:
@@ -475,3 +475,105 @@ def synthetic_descriptor():
 def event_line(**payload) -> str:
     """One `probe-result/v1` event, serialized the way a probe writes it."""
     return json.dumps(payload) + "\n"
+
+
+def isolated_launch_contract(key, *, fields, logs, default_log, patch=None):
+    """Exercise a migrated probe's real entry point up to its first boot.
+
+    Unlike batch_contract, these probes may pass a private resource root to
+    the engine and may boot repeatedly. Inspect every launch as well as
+    intercepting the first one; no test creates an engine or borrows a port.
+    """
+    import ast
+    import contextlib
+    import importlib
+    import io
+    from unittest.mock import patch as mock_patch
+
+    module = importlib.import_module(f"{key}_probe")
+    descriptor = migration_descriptor(f"{key}_probe.py", key, module.DESCRIPTOR.ids)
+    if descriptor is None:
+        return
+    source = Path(module.__file__).read_text()
+    tree = ast.parse(source)
+    launches = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Name) and n.func.id == "boot"]
+    expect(all("rep.engine_args()" in ast.unparse(n) for n in launches),
+           f"{key}: every engine boot receives harness RTS arguments")
+    names = [n.args[0].value for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "engine_log_path"]
+    expect(sorted(names) == sorted(logs) and len(set(names)) == len(names),
+           f"{key}: every boot has its own declared log name")
+
+    with tempfile.TemporaryDirectory(prefix=f"{key}-launch-") as tmp:
+        root = Path(tmp)
+        # A descriptor must ignore even an invalid engine handoff and must
+        # not create the requested event stream or touch the runtime fixture.
+        env = dict(os.environ, SYNARCHY_PROBE_ENGINE_EXE=str(root / "absent"),
+                   SYNARCHY_PROBE_EVENTS=str(root / "describe-events"))
+        described = subprocess.run(
+            [sys.executable, str(Path(module.__file__)), "--describe"],
+            cwd=tmp, env=env, capture_output=True, text=True, timeout=30)
+        expect(described.returncode == 0 and not (root / "describe-events").exists(),
+               f"{key}: describe is pure from a cwd with no resources or executable")
+        seen = []
+
+        def stop(port, *args, **kwargs):
+            seen.append((port, kwargs.get("log", args[0] if args else None),
+                         list(kwargs.get("args") or [])))
+            raise StopBeforeEngine()
+
+        restore = patch(module) if patch is not None else lambda: None
+        saved_log = getattr(module, "LOG", None)
+        try:
+            with mock_patch.object(module, "boot", stop), contextlib.redirect_stdout(io.StringIO()):
+                for harnessed in (False, True):
+                    rep = probe_protocol.Reporter(
+                        descriptor, engine_log_dir=tmp if harnessed else None,
+                        rts_caps=3 if harnessed else None, stream=io.StringIO())
+                    try:
+                        module._run(argparse.Namespace(port=8911, **fields), rep)
+                    except StopBeforeEngine:
+                        pass
+                    finally:
+                        rep.close()
+        finally:
+            restore()
+            if saved_log is not None:
+                module.LOG = saved_log
+        expect(len(seen) == 2, f"{key}: both entry paths reach the engine")
+        if len(seen) == 2:
+            expect(all(port == 8911 for port, _, _ in seen),
+                   f"{key}: both launches use the leased port")
+            expect(seen[0][1] == default_log and seen[1][1] == str(root / logs[0]),
+                   f"{key}: historical standalone log and harness log are respected")
+            expect("+RTS" not in seen[0][2] and seen[1][2][-3:] == ["+RTS", "-N3", "-RTS"],
+                   f"{key}: standalone RTS defaults and requested harness caps are respected")
+            expect(("--resource-root" in seen[0][2]) == ("--resource-root" in seen[1][2]),
+                   f"{key}: harness mode preserves private-root launch behavior")
+
+
+def captured_outcomes(module, exercise):
+    """Run a probe-owned assertion seam with the real reporter in both modes."""
+    import contextlib
+    import io
+    with tempfile.TemporaryDirectory(prefix="migration-outcomes-") as tmp:
+        for harnessed in (False, True):
+            stream = io.StringIO()
+            path = Path(tmp) / "events"
+            rep = probe_protocol.Reporter(
+                module.DESCRIPTOR, events_path=str(path) if harnessed else None,
+                stream=stream)
+            try:
+                with contextlib.redirect_stdout(stream):
+                    exercise(rep)
+            finally:
+                rep.close()
+            if harnessed:
+                _, outcomes = probe_protocol.parse_event_stream(path.read_text(), module.DESCRIPTOR)
+                expect(not probe_protocol.forbidden_marker_lines(stream.getvalue()),
+                       f"{module.DESCRIPTOR.probe}: protocol outcomes have no stdout result channel")
+                return {key: value for key, value in outcomes.items()
+                        if value != probe_protocol.MISSING}
+            expect("[FAIL]" in stream.getvalue(),
+                   f"{module.DESCRIPTOR.probe}: real failed assertion stays readable standalone")
