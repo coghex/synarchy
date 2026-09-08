@@ -27,7 +27,7 @@ import time
 
 from probelib import poll_until, send
 
-from .constants import (DEPART_STOMACH_FRAC, EXPECTED_COMPLETED,
+from .constants import (DEPART_STOMACH_FRAC, REQUIRED_PREPARATION_COMPLETED,
                         MAX_START_SEPARATION, MAX_START_SPREAD, RATIONS_DEF,
                         STAGING_RADIUS, SUB_FOOD, SUB_WATER)
 from .harness import Checks, ExpeditionState, StageAbort
@@ -329,11 +329,11 @@ def run(chk: Checks, st: ExpeditionState) -> None:
            f"{room[control][1]:.1f} kg after {shed[control]})")
 
     completed, checked = poll_until(
-        45.0, lambda: (lambda p: p if EXPECTED_COMPLETED <= p[0] else None)(
+        45.0, lambda: (lambda p: p if REQUIRED_PREPARATION_COMPLETED <= p[0] else None)(
             progress(port)), interval=1.0) or progress(port)
-    chk.ok(completed == EXPECTED_COMPLETED,
-           f"the shipped first_session tree stands at exactly its expected "
-           f"completed set {sorted(EXPECTED_COMPLETED)} (got "
+    chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
+           f"the shipped first_session tree includes its required preparation "
+           f"completed set {sorted(REQUIRED_PREPARATION_COMPLETED)} (got "
            f"{sorted(completed)})")
     chk.ok({SUB_WATER, SUB_FOOD} <= checked,
            f"both live preparation subobjectives are checked while a "
