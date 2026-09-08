@@ -98,7 +98,8 @@ Additionally (round-6 review), at BOTH load boundaries this probe visits
 SECOND resave taken from engine B's freshly-reloaded state), the real
 saved bytes on disk are run through the same Haskell decode-and-dump
 logic tools/save_compat_audit.py's --generate-session command uses
-(dump_canonical_summary, a real `cabal repl` subprocess), and the result
+(dump_canonical_summary, which since #2273 execs the compiled
+`exe:synarchy-save-codec` rather than a `cabal repl`), and the result
 is structurally compared -- metadata, allocators, camera, EVERY page's
 clock/map-mode, and every declared building/unit/unit-sim-state/craft-
 bill/power-node -- against the fixture's own expectedCanonicalSummary.
@@ -678,8 +679,9 @@ def dump_and_compare(chk: Checks, tmp_dir: str, file_path: str,
                       expected_summary: dict, when: str) -> None:
     """Derive `file_path`'s REAL canonical summary via the SAME Haskell
     decode-and-dump logic tools/save_compat_audit.py's --generate-session
-    uses (World.Save.Envelope.decodeSessionEnvelope, run through a real
-    `cabal repl` subprocess), then structurally compare EVERY field the
+    uses (World.Save.Envelope.decodeSessionEnvelope, reached since #2273
+    through the compiled `exe:synarchy-save-codec` rather than a `cabal
+    repl`), then structurally compare EVERY field the
     fixture declares -- metadata, allocators, camera, and every page's
     clock/map-mode/entity slices -- against it (round-6 review: the
     aggregate page/pause/time-scale checks above, and fixture-declared

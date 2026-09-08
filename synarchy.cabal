@@ -716,6 +716,7 @@ library
                      Sim.Topology
                      Sim.Chunk
                      Sim.Fluid.Types
+                     Sim.Fluid.Reaction
                      Sim.Fluid.Active
                      World.Base
                      World.Constants
@@ -1169,6 +1170,37 @@ executable synarchy
     ghc-options: -rtsopts
                  "-with-rtsopts=-N -A128M"
 
+-- The save-compatibility tooling's compiled codec helper (#2273). Its
+-- three operations -- canonical-summary dump, fixed-timestamp re-encode,
+-- and raw fixture-descriptor dump -- were GHCi programs fed to
+-- `cabal repl test:synarchy-test-headless` until #2273, so every
+-- invocation loaded the 348-module test suite into the interpreter to
+-- reach a handful of library functions.
+--
+-- Deliberately its OWN executable rather than a mode of `exe:synarchy`.
+-- It must not boot, must not resolve or chdir into a runtime resource
+-- root, and must not link the renderer: keeping it out of app/Main.hs's
+-- boot-mode precedence is what makes "decode these bytes" a pure,
+-- millisecond operation. Its dependency set is therefore exactly the
+-- save codec's own -- no GLFW, no vulkan, no hslua -- and
+-- `cabal build all` produces it beside the engine, which is how
+-- tools/save_compat_audit_codec.py finds it without a `cabal repl`.
+executable synarchy-save-codec
+    import: warnings, lang, build-policy
+    main-is: Main.hs
+    -- Directories containing source files.
+    hs-source-dirs: app-save-codec
+    build-depends: base >=4.20 && <5
+                 , base-unicode-symbols
+                 , aeson
+                 , bytestring
+                 , cereal
+                 , synarchy
+                 , text
+                 , unordered-containers
+    ghc-options: -rtsopts
+                 "-with-rtsopts=-N"
+
 -- BUILD-ONLY IN AUTOMATED GATES, AND REQUIRES A REAL DISPLAY (#1153).
 -- `.github/workflows/ci.yml` and `make ci` (`tools/ci-local.sh`) both
 -- `cabal build` this suite and neither ever `cabal test`s it, so it is a
@@ -1411,6 +1443,7 @@ test-suite synarchy-test-headless
                    Test.Headless.App.DumpSettleWait
                    Test.Headless.Sim.Admission
                    Test.Headless.Sim.Conservation
+                   Test.Headless.Sim.Reaction
                    Test.Headless.Sim.Seam
                    Test.Headless.Input.KeyNames
                    Test.Headless.Input.Bindings

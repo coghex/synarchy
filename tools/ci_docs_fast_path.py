@@ -37,8 +37,10 @@ of a wrong "not eligible" is one slow-but-correct run:
   * `docs/save_compat/*` is EXCLUDED however it is touched. The manifest
     is read by the Haskell save-compat suite, and the directory's other
     machine-readable contracts select a Python audit that decodes real
-    fixtures through `cabal repl`. Calling these files documentation does
-    not make them Cabal-free. (The fixture blobs live under
+    fixtures through the compiled `exe:synarchy-save-codec` (#2273).
+    Calling these files documentation does not make them Cabal-free: that
+    audit still needs the real Haskell codec, and resolving the helper
+    builds it. (The fixture blobs live under
     `test-headless/data/`, which is outside `docs/` and already forces the
     full job.)
   * An empty or unreadable range is NOT eligible.

@@ -567,9 +567,10 @@ SKIP_GLOBS = [
 # One real coupling survives. The CI-eligible `persistence_contract` probe calls
 # `persistence_snapshot.compare_session_files`, which launches
 # `cabal repl test:synarchy-test-headless`, so it does need `test-headless/`
-# to COMPILE. The separate `behavior-probes` job therefore builds both
-# `exe:synarchy` and `synarchy-test-headless` before launching any selected
-# probe. A test-only change still selects no probes and is compiled + tested by
+# to COMPILE. The separate `behavior-probes` job therefore builds
+# `exe:synarchy`, `synarchy-test-headless` and (since #2273, for the
+# compiled save codec that same probe's `dump_canonical_summary` execs)
+# `exe:synarchy-save-codec` before launching any selected probe. A test-only change still selects no probes and is compiled + tested by
 # `test-and-audits`; a mixed core/test change selects probes and the
 # prerequisite build fails cleanly before their timeout begins. `test/` has no such
 # coupling: it belongs to

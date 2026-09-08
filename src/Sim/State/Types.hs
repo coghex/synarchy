@@ -10,12 +10,14 @@ module Sim.State.Types
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.Sequence as Seq
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Internal (FluidMap)
 import Sim.Fluid.Types (ActiveFluidCell(..))
+import Sim.Fluid.Reaction (SolidificationEvent(..))
 import Sim.Topology (SimTopology(..))
 
 -- | Simulation state, scoped per world. Each visible/active world owns
@@ -45,6 +47,17 @@ data SimWorldState = SimWorldState
         --   instead of missing on a raw key. Carried by every command
         --   that seeds a chunk into this world or activates it, so a page
         --   with anything to simulate always has it.
+    , swsSolidEvents ∷ !(Seq.Seq SolidificationEvent)
+        -- ^ Solidification events this page's ticks have produced, in
+        --   emission order (#2481). Transient simulation OUTPUT, not
+        --   simulation input: a lava cell exhausted by unlike-fluid
+        --   contact appends one here, and nothing in this slice drains
+        --   it — FR-2 of epic #2480 owns the consumer. It is therefore
+        --   append-only within a page's life and is cleared only when
+        --   the page itself is dropped ('SimDropWorld'); a normal,
+        --   nonreacting, inactive or deactivating tick carries it
+        --   forward unchanged. Never serialized: see
+        --   'docs/persistence_state_inventory.md' §6.
     }
 
 data SimChunkState = SimChunkState
@@ -84,4 +97,7 @@ emptySimWorldState = SimWorldState
     -- same answer 'World.State.Types.pageWrapWorldSize' gives a page with
     -- no gen params.
     , swsTopology    = SimFlatTopology
+    -- Nothing has reacted yet, so a fresh world's event history is
+    -- empty — the same value boot and load reconstruction start from.
+    , swsSolidEvents = Seq.empty
     }

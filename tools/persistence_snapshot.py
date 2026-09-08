@@ -27,13 +27,19 @@ e.g. an original save and a resave taken after a fresh-process load
 published it) through the real `World.Save.Envelope.decodeSessionEnvelope`
 and asserts every one is pairwise equal on both halves. This needs no
 engine, no GPU, and no window -- it runs as a `cabal repl` subprocess
-against raw files on disk, mirroring `save_compat_audit.py`'s
-`dump_canonical_summary` subprocess pattern exactly. On a mismatch, it
-additionally calls `save_compat_audit.dump_canonical_summary` (already
-covers metadata/allocators/camera/every page's entities) on each file to
-give a human-readable diagnostic of WHERE the two diverge -- the strict
-Eq/byte check is the pass/fail gate; the summary dump is only for
-debugging a failure.
+against raw files on disk. That repl is this module's own, and it is the
+last one in this family: issue #2273 converted `save_compat_audit.py`'s
+three codec operations to the compiled `exe:synarchy-save-codec`, and
+converting this structural comparison is its declared follow-up. So the
+two paths no longer share a subprocess pattern, and the pass/fail gate
+and the diagnostic below reach the codec by different means.
+
+On a mismatch it additionally calls
+`save_compat_audit.dump_canonical_summary` (already covers
+metadata/allocators/camera/every page's entities) on each file to give a
+human-readable diagnostic of WHERE the two diverge -- that call execs the
+compiled helper. The strict Eq/byte check here is the pass/fail gate; the
+summary dump is only for debugging a failure.
 
 Usage (as a library):
     from persistence_snapshot import compare_session_files
@@ -48,9 +54,8 @@ from save_compat_audit import (  # noqa: E402 -- sibling module, tools/ on sys.p
     REPO_ROOT, dump_canonical_summary,
 )
 
-# A permanent GHCi program (run via `cabal repl`, mirroring
-# save_compat_audit.GHCI_DUMP_SUMMARY_TEMPLATE's exact subprocess
-# pattern) that decodes every listed file and asserts every decoded
+# A permanent GHCi program (run via `cabal repl`) that decodes every
+# listed file and asserts every decoded
 # `SessionSnapshot` -- and every `lua.<module>` component's raw payload
 # bytes -- is pairwise structurally equal. `{paths_literal}` is a
 # Haskell list-of-Strings literal built by `compare_session_files`.

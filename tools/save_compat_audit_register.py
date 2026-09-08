@@ -11,13 +11,15 @@ consumes it but `--generate-session`, which DELEGATES here rather than
 repeating any of it (requirement 14).
 
 `_run_real_codec_validation` is registration's own subprocess and lives
-here, NOT with save_compat_audit_codec's GHCi bridge (requirement 8
-correction): it is a different invocation -- `cabal test
+here, NOT with save_compat_audit_codec's real-codec bridge (requirement
+8 correction): it is a different invocation -- `cabal test
 synarchy-test-headless --test-options=--match "save migrations"`,
 judged by the process return code, reported with a 40-line tail and its
-own `--skip-validation` hint. The three GHCi operations keep their own
-markers and 60-line tails over in that module. Do not unify the four
-behind one wrapper.
+own `--skip-validation` hint. The bridge's three operations keep their
+own markers and 60-line tails over in that module, and since issue #2273
+they exec a compiled helper rather than driving `cabal repl`; this one
+still runs the real test suite, which is the point of it. Do not unify
+the four behind one wrapper.
 
 The public façade is tools/save_compat_audit.py.
 """
