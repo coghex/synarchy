@@ -26,7 +26,9 @@
 -- A third, smaller lifetime sits between those two, and it is also
 -- never persisted: whether a full/composite id's #996 hide suppression
 -- is still owed it. It is granted at a first reveal that finds the id
--- already latched, retired by acknowledgePresented once a consumer has
+-- already latched (including completion in the same evaluation batch),
+-- plus the newly completed leading rows of a same-batch cascade. It is
+-- retired by acknowledgePresented once a consumer has
 -- actually shown the row, and RECONSTRUCTED -- never restored -- at
 -- every setTree/reset/load, under one rule (#1941 requirement 4):
 --
@@ -158,15 +160,19 @@ end
 -- applies to that id unchanged.
 --
 -- This has to be judged at the exact moment identified above, not
--- whenever a reader happens to call getViewModel: completeObjective is
+-- whenever a reader happens to call getViewModel: completeObjectives is
 -- itself what can make a DIFFERENT id newly reveal-eligible (its own
 -- completion is what a "child" relation reveals), so the judgement is
--- driven from there, incrementally, walking the whole index every time
+-- driven from there, once per batch, walking the whole index every time
 -- since a single completion can cascade through several links of the
 -- chain at once. A node whose ancestor completes while the node itself
--- is still incomplete is judged NOT sticky right then -- the ordinary,
+-- is still incomplete at the end of that batch is judged NOT sticky -- the ordinary,
 -- already-tested hide-on-its-own-later-completion case -- even though
--- the node may go on to complete later.
+-- the node may go on to complete in a later evaluation. All latches from
+-- one evaluation are published together so a newly revealed and completed
+-- child in that batch receives presentation even when visited after its parent.
+-- completeObjectives also protects newly completed ancestors within that
+-- cascade, so its leading row is shown checked alongside the new children.
 --
 -- The one case with no incremental order to replay is a fresh
 -- setTree()/reset()/load, and it passes `reconstructing` here. Both
@@ -299,37 +305,64 @@ end
 -- Write surface (#958 requirements 2/3)
 -----------------------------------------------------------
 
--- Latch a full objective completed, by YAML id. Returns true only when
--- this call is what completed it.
+-- Latch a batch of full objectives by YAML id, returning the newly latched
+-- ids in input order. tutorial_eval publishes one evaluation as one batch.
 --
 -- Idempotent (re-latching is a silent no-op) and total: an unknown id,
 -- or a subobjective id whose state is live rather than durable, is a
--- diagnostic no-op returning false, never an error -- this is driven by
+-- diagnostic no-op, never an error -- this is driven by
 -- data-authored evaluator wiring, and a stale id there must not take
 -- down a save.
-function tutorialProgress.completeObjective(id)
+function tutorialProgress.completeObjectives(ids)
     tutorialProgress.ensureTree()
-    local entry = entryOf(id)
-    if entry == nil then
-        warn("tutorial_progress: completeObjective ignored unknown objective id '"
-            .. tostring(id) .. "'")
+    local newlyCompleted = {}
+    for _, id in ipairs(ids) do
+        local entry = entryOf(id)
+        if entry == nil then
+            warn("tutorial_progress: completeObjective ignored unknown objective id '"
+                .. tostring(id) .. "'")
+        elseif not isFullKind(entry.node.kind) then
+            warn("tutorial_progress: completeObjective ignored '" .. tostring(id)
+                .. "' -- a subobjective's check state is live, not durable "
+                .. "(use setSubobjectiveChecked)")
+        elseif not tutorialProgress.completed[id] then
+            tutorialProgress.completed[id] = true
+            newlyCompleted[#newlyCompleted + 1] = id
+        end
+    end
+    -- Publish one evaluation's latches before judging first reveals. A
+    -- newly revealed child already completed in this batch therefore earns
+    -- presentation, independent of traversal order. Previously revealed
+    -- rows keep the ordinary hide-on-later-completion rule.
+    if #newlyCompleted > 0 then
+        recomputeHistory(false)
+        local newSet = {}
+        for _, id in ipairs(newlyCompleted) do newSet[id] = true end
+        -- If an evaluation completes an entire newly revealed chain,
+        -- retain its leading row too: the player must see Recover checked
+        -- alongside Secure and Clear, not just the two newly revealed rows.
+        local order = tutorialProgress.index.order
+        for i = #order, 1, -1 do
+            local id = order[i]
+            if newSet[id] then
+                for _, child in ipairs(entryOf(id).children) do
+                    if newSet[child] and tutorialProgress.stickyActive[child] then
+                        tutorialProgress.stickyActive[id] = true
+                    end
+                end
+            end
+        end
+    end
+    return newlyCompleted
+end
+
+-- Single completions retain the same validation and boolean result.
+function tutorialProgress.completeObjective(id)
+    if id == nil then
+        warn("tutorial_progress: completeObjective ignored unknown objective id 'nil'")
         return false
     end
-    if not isFullKind(entry.node.kind) then
-        warn("tutorial_progress: completeObjective ignored '" .. tostring(id)
-            .. "' -- a subobjective's check state is live, not durable "
-            .. "(use setSubobjectiveChecked)")
-        return false
-    end
-    if tutorialProgress.completed[id] then return false end
-    tutorialProgress.completed[id] = true
-    -- This completion may be exactly what makes a DIFFERENT id (a
-    -- child this one gates) newly reveal-eligible for the first time --
-    -- see recomputeHistory's header for why the judgement has to happen
-    -- here, not lazily whenever a view is next read. INCREMENTAL: this
-    -- is a live reveal with a real order, not a reconstruction.
-    recomputeHistory(false)
-    return true
+    return #tutorialProgress.completeObjectives({ id }) > 0
 end
 
 -- Durable latch state. Answers from the set itself, so it stays correct
@@ -455,10 +488,11 @@ end
 -- demands.
 --
 -- One override on top of all of that (#996): a node that was ALREADY
--- latched the first time it ever became reveal-eligible never gets a
+-- latched at its first reveal (including in the same evaluation batch) gets no
 -- chance to be seen "in progress" at all, so hiding it on the same tick
 -- it first appears would mean the player never sees it. stickyActive
--- (recomputeHistory, above) marks exactly those ids, and the hide rule
+-- (recomputeHistory and completeObjectives, above) marks those ids and
+-- newly completed leading rows in the same cascade, and the hide rule
 -- below is suppressed for them -- which, for a composite, is also what
 -- lets its subobjectives (gated on the composite staying un-hidden)
 -- become observable at all.

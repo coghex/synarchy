@@ -470,6 +470,7 @@ library
                      Engine.Core.Resource
                      Engine.Core.Queue
                      Engine.Core.Clock
+                     Engine.Core.StepProtocol
                      Engine.Core.SessionEpoch
                      Engine.Core.Yaml.Scalar
                      Engine.Scene.Base
@@ -1557,6 +1558,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Core.LogThresholdEnv
                    Test.Headless.Core.LoopStartup
                    Test.Headless.Core.MonotonicClock
+                   Test.Headless.Core.StepProtocol
                    Test.Headless.Core.ShutdownAtlasRelease
                    Test.Headless.Core.WorkerLifecycle
                    Test.Headless.Camera.Finite
