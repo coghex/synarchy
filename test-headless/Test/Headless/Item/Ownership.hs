@@ -662,6 +662,29 @@ spec = do
         it "and it does not cry wolf: a read, a comparison, a commented \
            \-out write and a haddock mention are not writes" $
             contentsWriteSites "src/Fake.hs" innocentSource `shouldBe` []
+        it "sees a write through a module QUALIFIER — Item.iiContents \
+           \assigns the same field" $
+            contentsWriteSites "src/Fake.hs" qualifiedSource
+                `shouldBe` [("src/Fake.hs", "stashQualified")]
+        it "and one whose = sits on a LATER line, which a record update \
+           \may legally be broken across" $
+            contentsWriteSites "src/Fake.hs" splitAssignmentSource
+                `shouldBe` [("src/Fake.hs", "stashSplit")]
+        it "without mistaking a read that merely ends a line for one" $
+            contentsWriteSites "src/Fake.hs" splitReadSource `shouldBe` []
+        it "and it sees through a BLOCK comment rather than into it: a \
+           \write inside {- … -} is disabled code, one after it is not" $ do
+            contentsWriteSites "src/Fake.hs" blockCommentedSource `shouldBe` []
+            contentsWriteSites "src/Fake.hs" afterBlockCommentSource
+                `shouldBe` [("src/Fake.hs", "stashAfterComment")]
+        it "and stripComments keeps line structure, so the enclosing \
+           \function of a later write is still resolved correctly" $ do
+            length (stripComments (T.lines afterBlockCommentSource))
+                `shouldBe` length (T.lines afterBlockCommentSource)
+            -- A pragma balances within its own line and leaves no depth
+            -- behind, so the definition after it is still in column 0.
+            map topLevelName (stripComments ["{-# LANGUAGE Strict #-}", "foo = ()"])
+                `shouldBe` [Nothing, Just "foo"]
 
     describe "the mandated cycle-check ordering (requirement 6)" $ do
         -- The approved correction requires the self/descendant check to
@@ -779,13 +802,21 @@ allContentsWriters = do
 -- | Every assignment to 'iiContents' in one source, as
 --   @(path, enclosing top-level function)@.
 --
---   Three rules keep it honest, each earned:
+--   Four rules keep it honest, each earned:
 --
---   * @iiContents@ must be a whole identifier followed by a single
---     @=@, so a READ (@iiContents it@), a comparison (@≡@ is a
---     different character entirely) and @itemContentsSig@ all pass by;
---   * everything from the first @--@ is dropped, so a commented-out
---     write and a haddock naming the field are not findings;
+--   * @iiContents@ must be a whole identifier, where a module QUALIFIER
+--     is not part of it — @Item.iiContents = cs@ assigns the same
+--     field and is reported, while @iiContentsSomething@ is a different
+--     name and is not;
+--   * the next non-blank thing after it must be a single @=@, so a READ
+--     (@iiContents it@), a comparison (@≡@ is a different character
+--     entirely, and @==@ is excluded outright) and a type signature all
+--     pass by — and the @=@ is allowed to sit on a LATER line, because
+--     a record update may legally be broken across lines;
+--   * comments are removed first — line comments from @--@, and
+--     @{- … -}@ blocks including nested and multi-line ones — so a
+--     commented-out write and a haddock naming the field are not
+--     findings;
 --   * the enclosing function is the nearest preceding definition
 --     starting in column 0, so a write inside a @where@ clause is
 --     attributed to the top-level binding that owns it — which is the
@@ -795,26 +826,41 @@ allContentsWriters = do
 --   reported. That is deliberate over-reporting: none exists in the
 --   tree today, and production code that destructures nested contents
 --   positionally is worth a look rather than a silent pass.
+--
+--   The one form it cannot see is a write hidden inside a STRING
+--   literal that also opens a comment — @"--"@ truncates its line.
+--   That direction only ever loses findings on a line holding such a
+--   literal, no module writing @iiContents@ has one, and the
+--   alternative is a Haskell parser this suite does not have.
 contentsWriteSites ∷ FilePath → Text → [(FilePath, String)]
 contentsWriteSites path body =
-    [ (path, fn) | (fn, line) ← scoped, assignsContents line ]
+    [ (path, fn) | (fn, line, later) ← scoped, assignsContents line later ]
   where
-    scoped = go "?" (map stripComment (T.lines body))
+    scoped = go "?" (stripComments (T.lines body))
       where
         go _  []       = []
         go fn (l : ls) = case topLevelName l of
-            Just fn' → (fn', l) : go fn' ls
-            Nothing  → (fn,  l) : go fn  ls
+            Just fn' → (fn', l, ls) : go fn' ls
+            Nothing  → (fn,  l, ls) : go fn  ls
 
-    stripComment l = fst (T.breakOn "--" l)
+    assignsContents l later = any (assigns later) (occurrences l)
 
-    assignsContents l = any assigns (occurrences l)
+    -- An `=` that is not the head of `==`.
+    opensAssignment t = case T.uncons t of
+        Just ('=', after) → case T.uncons after of
+            Just ('=', _) → False
+            _             → True
+        _ → False
+
+    assigns later rest
+        | not (T.null stripped) = opensAssignment stripped
+        -- Nothing left on this line: a legal record update may open the
+        -- assignment on the next non-blank one.
+        | otherwise = case dropWhile T.null (map T.strip later) of
+            (l : _) → opensAssignment l
+            []      → False
       where
-        assigns rest = case T.uncons (T.stripStart rest) of
-            Just ('=', after) → case T.uncons after of
-                Just ('=', _) → False   -- `==`, a comparison
-                _             → True
-            _ → False
+        stripped = T.stripStart rest
 
     -- The remainder after each whole-identifier `iiContents`.
     occurrences = go
@@ -823,13 +869,36 @@ contentsWriteSites path body =
             (_, after) | T.null after → []
             (before, after) →
                 let tail' = T.drop (T.length "iiContents") after
-                    whole = maybe True (not ∘ identChar) (lastMaybe before)
-                          ∧ maybe True (not ∘ identChar) (fstMaybe tail')
+                    whole = maybe True (not ∘ isIdentChar) (lastMaybe before)
+                          ∧ maybe True (not ∘ isIdentChar) (fstMaybe tail')
                 in [tail' | whole] ⧺ go tail'
-        -- A qualifier dot counts, so `Item.iiContents` is one token.
-        identChar c = isIdentChar c ∨ c ≡ '.'
         lastMaybe t = if T.null t then Nothing else Just (T.last t)
         fstMaybe t  = if T.null t then Nothing else Just (T.head t)
+
+-- | Blank out every comment while preserving line structure, so line
+--   numbers and column-0 definitions survive: a line comment from its
+--   @--@ to the end of the line, and a @{- … -}@ block wherever it
+--   runs, nesting and spanning lines included. A @{-# … #-}@ pragma
+--   balances on its own line and so simply vanishes.
+stripComments ∷ [Text] → [Text]
+stripComments = go 0
+  where
+    go _ [] = []
+    go depth (l : ls) =
+        let (kept, depth') = walk T.empty depth l
+        in kept : go depth' ls
+
+    walk acc depth t
+        | T.null t                    = (acc, depth)
+        | depth > 0, opens            = walk acc (depth + 1) (T.drop 2 t)
+        | depth > 0, closes           = walk acc (depth - 1) (T.drop 2 t)
+        | depth > 0                   = walk acc depth (T.drop 1 t)
+        | opens                       = walk acc 1 (T.drop 2 t)
+        | "--" `T.isPrefixOf` t       = (acc, depth)
+        | otherwise = walk (T.snoc acc (T.head t)) depth (T.drop 1 t)
+      where
+        opens  = "{-" `T.isPrefixOf` t
+        closes = "-}" `T.isPrefixOf` t
 
 -- | A module that writes 'iiContents' without permission.
 unauthorizedSource ∷ Text
@@ -903,4 +972,67 @@ neighbourSource = T.unlines
     , "    removal ← removeInstance scene movedId"
     , "elsewhere targetId moved ="
     , "    when (withinSubtree targetId moved) (Left WouldCycle)"
+    ]
+
+-- | A write reached through a module qualifier.
+qualifiedSource ∷ Text
+qualifiedSource = T.unlines
+    [ "module Fake where"
+    , ""
+    , "import qualified Item.Types as Item"
+    , ""
+    , "stashQualified ∷ Item.ItemInstance → Item.ItemInstance"
+    , "stashQualified parent = parent { Item.iiContents = [] }"
+    ]
+
+-- | A write whose @=@ is on the following line.
+splitAssignmentSource ∷ Text
+splitAssignmentSource = T.unlines
+    [ "module Fake where"
+    , ""
+    , "stashSplit ∷ ItemInstance → ItemInstance"
+    , "stashSplit parent = parent"
+    , "    { iiContents"
+    , "        = [] }"
+    ]
+
+-- | A READ that happens to end its line. The continuation opens with a
+--   closing paren, not an @=@.
+splitReadSource ∷ Text
+splitReadSource = T.unlines
+    [ "module Fake where"
+    , ""
+    , "countSplit ∷ ItemInstance → Int"
+    , "countSplit i = length (iiContents"
+    , "    i)"
+    , ""
+    , "compareSplit ∷ ItemInstance → ItemInstance → Bool"
+    , "compareSplit a b = iiContents a"
+    , "    == iiContents b"
+    ]
+
+-- | A write disabled inside a nested block comment.
+blockCommentedSource ∷ Text
+blockCommentedSource = T.unlines
+    [ "module Fake where"
+    , ""
+    , "{- disabled for now {- and nested -}"
+    , "stashOld parent = parent { iiContents = [] }"
+    , "-}"
+    , ""
+    , "live ∷ Int"
+    , "live = 1"
+    ]
+
+-- | The same block comment, with a REAL write after it closes.
+afterBlockCommentSource ∷ Text
+afterBlockCommentSource = T.unlines
+    [ "module Fake where"
+    , ""
+    , "{- disabled {- nested -}"
+    , "stashOld parent = parent { iiContents = [] }"
+    , "-}"
+    , ""
+    , "stashAfterComment ∷ ItemInstance → ItemInstance"
+    , "stashAfterComment parent = parent { iiContents = [] }"
     ]
