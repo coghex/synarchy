@@ -1506,14 +1506,28 @@ Only probes that implement the shared `probe-result/v1` protocol
 is rejected BY NAME before execution, without running the probe at all —
 heuristically parsing free-form stdout is the guesswork a reliability harness
 must not do, and invoking a legacy probe to find out would boot a real engine.
-`blood_decal`, `blood_impact`, `circadian`, `circadian_species`,
-`collapse_crawl`, `concussion_revive`, `config_state`, `disarm`, `injury_log`,
-`lua_orphan_prune`, `machine_shop`, `meal_waste`,
-`mental_efficiency`, `position_hold`, `remote_warning_page_guard`, `role`,
-`state_of_mind`, `text_encoding`, `thermo_altitude`, `thought`, and `wire` are
-the migrated probes today. Later changes normally migrate one at a time; this
-ten-probe batch was an explicit operator request so the related mechanical
-work could land in one pull request.
+The 31 migrated probes are `blood_decal`, `blood_impact`, `circadian`,
+`circadian_species`, `collapse_crawl`, `concussion_revive`, `config_migration`,
+`config_state`, `crop`, `disarm`, `injury_log`, `item_temp`, `lua_orphan_prune`,
+`machine_shop`, `meal_waste`, `mental_efficiency`, `pause_speed`,
+`portal_location`, `position_hold`, `remote_warning_page_guard`,
+`resource_root`, `retaliation_swap`, `river_naming`, `role`, `save_barrier`,
+`save_pause`, `state_of_mind`, `text_encoding`, `thermo_altitude`, `thought`,
+and `wire`. Migrations normally land one at a time; the operator explicitly
+requested this batch of ten additional probes in one pull request.
+
+The new batch preserves its CLI options, scenarios, thresholds and manual-only
+classification. Each engine boot gets the requested RTS capabilities and its
+own log under the harness artifact directory, including reloads and the
+resource-root probe's direct binary launches. An aborted prerequisite leaves
+an unreached suffix of `MISSING` checks; protocol mode stops before dependent
+checks if continuing would jump over an unobserved check. Teardown failures
+are diagnostics plus a nonzero exit, never an out-of-order check. Focused
+migration tests cover these paths without an engine.
+
+After merge, `$flake` seeds the census and selects from these probes normally.
+Pre-merge harness validation does not seed, record, or change the live census;
+the harness self-test reconciles a copy in memory when checking compatibility.
 
 A migrated probe prints its ordered, stable check declaration with
 `--describe` (no engine) and, when the harness supplies an event path, writes

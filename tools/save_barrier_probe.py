@@ -13,6 +13,7 @@ world thread or wedging the barrier open forever."""
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, tempfile, time, uuid
 from pathlib import Path
+import probe_protocol
 from probelib import boot, quit_engine, send, wait_load_published
 
 SAVE = "probe_barrier_" + uuid.uuid4().hex[:12]
@@ -59,18 +60,60 @@ def other_kind(natural_type):
     "river"->River, "ocean"->Ocean, anything else (incl. "water")->Lake."""
     return "river" if natural_type == "lake" else "water"
 
+PROBE_CHECKS = [
+    ('save_accepted', 'first save is accepted'),
+    ('owners_acknowledged', 'capture acknowledges every save owner'),
+    ('later_save_accepted', 'later save is accepted after the mutation'),
+    ('write_failure_accepted', 'disk-failure save reaches disk IO'),
+    ('write_failure_outcome', 'disk write failure reports SaveAborted'),
+    ('followup_accepted', 'save is accepted after the disk write failure'),
+    ('load_accepted', 'first snapshot load is accepted'),
+    ('load_published', 'first snapshot load publishes'),
+    ('load_paused', 'loaded session is paused'),
+    ('spread_restored', 'pre-boundary simulation spread survives the save'),
+    ('paused_spread_frozen', 'loaded fluid state remains frozen while paused'),
+    ('post_capture_mutation_absent', 'post-capture mutation is absent from the first snapshot'),
+    ('resave_accepted', 'unchanged snapshot can be saved again'),
+    ('snapshot_size_stable', 'unchanged fluid snapshot grows by at most 1024 bytes'),
+    ('later_load_accepted', 'later snapshot load is accepted'),
+    ('later_load_published', 'later snapshot load publishes'),
+    ('later_mutation_restored', 'later snapshot includes the mutation before its boundary'),
+]
+DESCRIPTOR = probe_protocol.build_descriptor('save_barrier', PROBE_CHECKS)
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--port", type=int, default=9143); ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--describe", action="store_true",
+                    help="print the probe-result/v1 descriptor without booting")
     a = ap.parse_args()
+    if a.describe:
+        print(DESCRIPTOR.to_json())
+        return 0
+    rep = probe_protocol.reporter_from_env(DESCRIPTOR)
+    try:
+        return _run(a, rep)
+    except Exception as exc:
+        rep.abort(str(exc))
+        raise
+    finally:
+        rep.close()
+
+
+def _run(a, rep):
     tmpdir = tempfile.mkdtemp(prefix="save_barrier_probe_")
     try:
         root = make_isolated_root(tmpdir)
-        _run(a, root)
+        return _exercise(a, root, rep)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-def _run(a, root):
-    path = os.path.join(root, "saves", SAVE); resave_path = os.path.join(root, "saves", RESAVE); path2 = os.path.join(root, "saves", SAVE2); p = boot(a.port, log="/tmp/save_barrier_probe.log", args=["--resource-root", root])
+def _exercise(a, root, rep):
+    path = os.path.join(root, "saves", SAVE); resave_path = os.path.join(root, "saves", RESAVE); path2 = os.path.join(root, "saves", SAVE2); p = boot(
+        a.port,
+        log=rep.engine_log_path("save_barrier_probe.log", "/tmp/save_barrier_probe.log"),
+        args=["--resource-root", root] + rep.engine_args()
+    )
     try:
         send(a.port, f'world.init("barrier",{a.seed},64,3)', expect_result=False); send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False)
         # The post-release-mutation check below touches tiles well
@@ -105,11 +148,21 @@ def _run(a, root):
             )
 
         spread_coord, spread_before = wait(spread, "simulation fluid spread writeback")
-        if send(a.port, f'return engine.saveWorld("barrier","{SAVE}")').strip() != "true": raise RuntimeError("save rejected")
+        if not rep.check(
+            'save_accepted',
+            send(a.port, f'return engine.saveWorld("barrier","{SAVE}")').strip() == 'true',
+            DESCRIPTOR.label('save_accepted')
+        ):
+            raise RuntimeError("save rejected")
         def state():
             raw = send(a.port, "return engine.getSaveStatus()"); return json.loads(raw) if raw != "nil" else None
         s = wait(state, "save status", 10)
-        if s["ownerCount"] != s["acknowledgedOwners"]: raise RuntimeError("save reached capture without all owners")
+        if not rep.check(
+            'owners_acknowledged',
+            s['ownerCount'] == s['acknowledgedOwners'],
+            DESCRIPTOR.label('owners_acknowledged')
+        ):
+            raise RuntimeError("save reached capture without all owners")
         wait(lambda: os.path.isfile(os.path.join(path, "world.synworld")), "save file")
 
         # #758: the barrier releases as soon as the snapshot is captured
@@ -131,7 +184,12 @@ def _run(a, root):
         # A LATER save, after the mutation, must capture it as ITS OWN
         # distinct boundary -- neither save shares captured state with
         # the other.
-        if send(a.port, f'return engine.saveWorld("barrier","{SAVE2}")').strip() != "true": raise RuntimeError("second save rejected")
+        if not rep.check(
+            'later_save_accepted',
+            send(a.port, f'return engine.saveWorld("barrier","{SAVE2}")').strip() == 'true',
+            DESCRIPTOR.label('later_save_accepted')
+        ):
+            raise RuntimeError("second save rejected")
         wait(lambda: os.path.isfile(os.path.join(path2, "world.synworld")), "second save file")
 
         # #758 review round 2 follow-up: a genuine disk-level write failure
@@ -149,14 +207,22 @@ def _run(a, root):
         elif os.path.exists(wfail_path): os.remove(wfail_path)
         with open(wfail_path, "w") as f: f.write("occupying this path with a plain file")
         try:
-            if send(a.port, f'return engine.saveWorld("barrier","{WFAIL}")').strip() != "true":
+            if not rep.check(
+                'write_failure_accepted',
+                send(a.port, f'return engine.saveWorld("barrier","{WFAIL}")').strip() == 'true',
+                DESCRIPTOR.label('write_failure_accepted')
+            ):
                 raise RuntimeError("write-failure save rejected before it ever reached disk I/O")
             def failed_status():
                 raw = send(a.port, "return engine.getSaveStatus()")
                 st = json.loads(raw) if raw != "nil" else None
                 return st if st and st.get("phase") == "SaveFailed" else None
             fs = wait(failed_status, "disk write failure to surface as SaveFailed", 15)
-            if "SaveAborted" not in fs.get("outcome", ""):
+            if not rep.check(
+                'write_failure_outcome',
+                'SaveAborted' in fs.get('outcome', ''),
+                DESCRIPTOR.label('write_failure_outcome')
+            ):
                 raise RuntimeError(f"expected a SaveAborted outcome, got {fs!r}")
         finally:
             os.remove(wfail_path)
@@ -165,7 +231,11 @@ def _run(a, root):
         # issued right after must still be accepted and actually complete.
         WFAIL_FOLLOWUP = SAVE + "_writefail_followup"
         followup_path = os.path.join(root, "saves", WFAIL_FOLLOWUP)
-        if send(a.port, f'return engine.saveWorld("barrier","{WFAIL_FOLLOWUP}")').strip() != "true":
+        if not rep.check(
+            'followup_accepted',
+            send(a.port, f'return engine.saveWorld("barrier","{WFAIL_FOLLOWUP}")').strip() == 'true',
+            DESCRIPTOR.label('followup_accepted')
+        ):
             raise RuntimeError("save rejected right after a prior write failure -- barrier stuck open?")
         wait(lambda: os.path.isfile(os.path.join(followup_path, "world.synworld")), "follow-up save file")
         shutil.rmtree(followup_path, ignore_errors=True)
@@ -173,57 +243,115 @@ def _run(a, root):
         quit_engine(a.port, p)
         try: p.wait(timeout=15)
         except subprocess.TimeoutExpired: p.kill()
-    p = boot(a.port, log="/tmp/save_barrier_probe_reload.log", args=["--resource-root", root])
+    p = boot(
+        a.port,
+        log=rep.engine_log_path("save_barrier_probe_reload.log", "/tmp/save_barrier_probe_reload.log"),
+        args=["--resource-root", root] + rep.engine_args()
+    )
     try:
-        if send(a.port, f'return engine.loadSave("{SAVE}")').strip() != "true": raise RuntimeError("load rejected")
+        if not rep.check(
+            'load_accepted',
+            send(a.port, f'return engine.loadSave("{SAVE}")').strip() == 'true',
+            DESCRIPTOR.label('load_accepted')
+        ):
+            raise RuntimeError("load rejected")
         # Issue #763: a load only ACCEPTS synchronously -- wait for the
         # whole-session transaction to publish before the saved page
         # ("barrier", its own id verbatim -- no more main_world remap)
         # exists live at all.
-        if not wait_load_published(a.port, 300)[0]: raise RuntimeError("load transaction did not publish")
+        if not rep.check(
+            'load_published',
+            bool(wait_load_published(a.port, 300)[0]),
+            DESCRIPTOR.label('load_published')
+        ):
+            raise RuntimeError("load transaction did not publish")
         send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False); time.sleep(1)
-        if send(a.port, "return engine.isPaused()").strip() != "true": raise RuntimeError("load was not paused")
+        if not rep.check(
+            'load_paused',
+            send(a.port, 'return engine.isPaused()').strip() == 'true',
+            DESCRIPTOR.label('load_paused')
+        ):
+            raise RuntimeError("load was not paused")
         reloaded_spread = area_fluid().get(spread_coord)
-        if reloaded_spread != spread_before:
+        if not rep.check(
+            'spread_restored',
+            reloaded_spread == spread_before,
+            DESCRIPTOR.label('spread_restored')
+        ):
             raise RuntimeError(
                 "pre-boundary World->Sim->World spread was not saved: "
                 f"{spread_coord}: expected {spread_before!r}, got {reloaded_spread!r}"
             )
         paused_fluid = reloaded_spread
         time.sleep(2)
-        if area_fluid().get(spread_coord) != paused_fluid:
+        if not rep.check(
+            'paused_spread_frozen',
+            area_fluid().get(spread_coord) == paused_fluid,
+            DESCRIPTOR.label('paused_spread_frozen')
+        ):
             raise RuntimeError("loaded world spread mutated while paused")
         # The mutation issued right after the FIRST save's barrier
         # released must be ABSENT from that already-captured save --
         # the tile's type must still match its PRE-mutation (natural)
         # state, not the mutated one.
         loaded_far = fluid_at(a.port, mx, my).get("type")
-        if loaded_far != natural:
+        if not rep.check(
+            'post_capture_mutation_absent',
+            loaded_far == natural,
+            DESCRIPTOR.label('post_capture_mutation_absent')
+        ):
             raise RuntimeError(
                 "a mutation made after barrier release altered an "
                 f"already-captured save: expected natural type {natural!r} "
                 f"at ({mx},{my}), got {loaded_far!r}"
             )
         first_size = os.path.getsize(os.path.join(path, "world.synworld"))
-        if send(a.port, f'return engine.saveWorld("barrier","{RESAVE}")').strip() != "true": raise RuntimeError("resave rejected")
+        if not rep.check(
+            'resave_accepted',
+            send(a.port, f'return engine.saveWorld("barrier","{RESAVE}")').strip() == 'true',
+            DESCRIPTOR.label('resave_accepted')
+        ):
+            raise RuntimeError("resave rejected")
         wait(lambda: os.path.isfile(os.path.join(resave_path, "world.synworld")), "resave file")
         second_size = os.path.getsize(os.path.join(resave_path, "world.synworld"))
-        if second_size > first_size + 1024:
+        if not rep.check(
+            'snapshot_size_stable',
+            not (second_size > first_size + 1024),
+            DESCRIPTOR.label('snapshot_size_stable')
+        ):
             raise RuntimeError(
                 "fluid snapshot grew across an unchanged save/load/save cycle: "
                 f"first={first_size}, second={second_size}"
             )
     finally:
         quit_engine(a.port, p); shutil.rmtree(path, ignore_errors=True); shutil.rmtree(resave_path, ignore_errors=True)
-    p = boot(a.port, log="/tmp/save_barrier_probe_reload2.log", args=["--resource-root", root])
+    p = boot(
+        a.port,
+        log=rep.engine_log_path("save_barrier_probe_reload2.log", "/tmp/save_barrier_probe_reload2.log"),
+        args=["--resource-root", root] + rep.engine_args()
+    )
     try:
         # The SECOND save -- taken AFTER the post-release mutation --
         # must capture it as its own distinct boundary.
-        if send(a.port, f'return engine.loadSave("{SAVE2}")').strip() != "true": raise RuntimeError("second-save load rejected")
-        if not wait_load_published(a.port, 300)[0]: raise RuntimeError("second-save load transaction did not publish")
+        if not rep.check(
+            'later_load_accepted',
+            send(a.port, f'return engine.loadSave("{SAVE2}")').strip() == 'true',
+            DESCRIPTOR.label('later_load_accepted')
+        ):
+            raise RuntimeError("second-save load rejected")
+        if not rep.check(
+            'later_load_published',
+            bool(wait_load_published(a.port, 300)[0]),
+            DESCRIPTOR.label('later_load_published')
+        ):
+            raise RuntimeError("second-save load transaction did not publish")
         send(a.port, "return world.waitForInit(300)", timeout=305); send(a.port, 'world.show("barrier")', expect_result=False); time.sleep(1)
         loaded_far2 = fluid_at(a.port, mx, my).get("type")
-        if loaded_far2 != mutated_type:
+        if not rep.check(
+            'later_mutation_restored',
+            loaded_far2 == mutated_type,
+            DESCRIPTOR.label('later_mutation_restored')
+        ):
             raise RuntimeError(
                 "a later save did not capture a mutation made before its "
                 f"own boundary: expected {mutated_type!r} at ({mx},{my}), "
@@ -231,9 +359,6 @@ def _run(a, root):
             )
     finally:
         quit_engine(a.port, p); shutil.rmtree(path2, ignore_errors=True)
-    print("PASS: save owners acknowledged, post-release mutation isolated, "
-          "later save captured its own boundary, a disk write failure "
-          "surfaced as SaveFailed without wedging the barrier, and loaded "
-          "session stayed paused")
+    rep.note('PASS: save owners acknowledged, post-release mutation isolated, later save captured its own boundary, a disk write failure surfaced as SaveFailed without wedging the barrier, and loaded session stayed paused')
 
-if __name__ == "__main__": main()
+if __name__ == "__main__": sys.exit(main())
