@@ -936,8 +936,8 @@ def _save_compat_wiring_self_test() -> list[str]:
             f"a block that never runs the member should fail, "
             f"got {problems(local=never)}")
 
-    # (e) Reintroducing the BARE invocation on either side puts the repl
-    #     back on every run.
+    # (e) Reintroducing the BARE invocation on either side runs the
+    #     reproducibility member on every run, selector or no selector.
     bare_local = _WIRING_LOCAL_GOOD.replace(
         "python3 tools/test_save_compat_audit.py --without-reproducibility",
         "python3 tools/test_save_compat_audit.py")
@@ -962,8 +962,9 @@ def _save_compat_wiring_self_test() -> list[str]:
     #      is ever executed, so a second one invoking the member
     #      unconditionally would otherwise sail through: the gate sets
     #      still match (same command), the executed block still selects
-    #      correctly, and `make ci` would run the member on every
-    #      unrelated change with this audit reporting no problem at all.
+    #      correctly, and `make ci` would run the reproducibility member
+    #      on every unrelated change with this audit reporting no problem
+    #      at all.
     duplicated = _WIRING_LOCAL_GOOD + (
         "# " + LOCAL_BLOCK_BEGIN + "\n"
         "python3 tools/test_save_compat_audit.py --only-reproducibility\n"

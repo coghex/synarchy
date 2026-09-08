@@ -327,11 +327,20 @@ def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool,
     #
     # Staging also means a failure leaves `output_path` byte-untouched,
     # which is what the generation transaction's rollback wants anyway.
+    # Every I/O step below is inside the (ok, diagnostic) contract, not
+    # outside it. Staging can fail before the helper ever runs -- a
+    # `--summary` naming a parent directory that does not exist is the
+    # ordinary case -- and `cmd_generate` rolls the fixture and summary
+    # back on a RETURNED failure, not on an exception, so an OSError
+    # escaping here would leave a newly generated, unregistered fixture
+    # on disk. The pre-#2273 path could not do that: the helper itself
+    # failed on an unwritable output and exited non-zero.
     output_path = Path(output_path)
-    with tempfile.NamedTemporaryFile(
-            suffix=".json", dir=output_path.parent, delete=False) as tf:
-        staged = Path(tf.name)
+    staged: Path | None = None
     try:
+        with tempfile.NamedTemporaryFile(
+                suffix=".json", dir=output_path.parent, delete=False) as tf:
+            staged = Path(tf.name)
         ok, tail = _run_codec(
             ["summary", "--fixture", str(fixture_path),
              "--output", str(staged)],
@@ -344,5 +353,10 @@ def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool,
                 f"summary for {fixture_path}")
         os.replace(staged, output_path)
         return True, ""
+    except OSError as error:
+        return False, (
+            f"could not write the canonical summary for {fixture_path} to "
+            f"{output_path}: {error}")
     finally:
-        staged.unlink(missing_ok=True)
+        if staged is not None:
+            staged.unlink(missing_ok=True)

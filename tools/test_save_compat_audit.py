@@ -28,9 +28,12 @@ Owner modules (issue #2073)
   test_save_compat_audit_envelope.py           12 members
       Envelope framing, Cabal-inherited extensions, header
       normalization, fingerprint mismatch.
-  test_save_compat_audit_register.py           11 members
+  test_save_compat_audit_register.py           13 members
       `--add-baseline` and `--generate-session` as transactions:
-      atomic writes, refusals, `--force`, every rollback path.
+      atomic writes, refusals, `--force`, every rollback path --
+      including (issue #2273) an unusable summary destination, which
+      must reach `cmd_generate` as a returned failure rather than an
+      exception that would bypass its rollback.
   test_save_compat_audit_reproducibility.py     1 member
       The fixture-generation reproducibility member, and the source of
       REPRODUCIBILITY_TESTS below.
@@ -46,12 +49,13 @@ Owner modules (issue #2073)
       Component/version coverage, modern-baseline completeness, B1
       migration policy, orphans, and the real-manifest guards.
 
-Eighty-three members in total. The issue's own table says 69 across
+Eighty-five members in total. The issue's own table says 69 across
 15/12/11/1/14/16 owners; #2098 added
 `test_haskell_component_source_paths_is_the_whole_directory` and
 `test_dropping_one_owner_from_discovery_changes_the_fingerprint` to the
 discovery owner after that table was written, and #2273 added the
-codec-bridge owner's twelve, which together are the whole of the
+codec-bridge owner's twelve plus two rollback cases in the registration
+owner, which together are the whole of the
 difference and are why requirement 11's baseline is the tree as it stands
 after #1922 and #2049, not as it stood at filing.
 

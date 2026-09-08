@@ -243,12 +243,12 @@ SAVE_COMPAT_GLOBS = [
     # only.
     "synarchy.cabal", "cabal.project*",
     # The CI toolchain image: the GHC/cabal versions and the pinned
-    # index snapshot the repl actually runs against. BOTH files that
-    # define it -- the image tag is a hash of the reusable workflow's
-    # own bytes concatenated with the Dockerfile's, so an edit to the
-    # build recipe alone (context, options, validation) mints a new
-    # image just as a Dockerfile edit does, and can move what the repl
-    # runs under.
+    # index snapshot the codec helper is actually compiled against. BOTH
+    # files that define it -- the image tag is a hash of the reusable
+    # workflow's own bytes concatenated with the Dockerfile's, so an edit
+    # to the build recipe alone (context, options, validation) mints a
+    # new image just as a Dockerfile edit does, and can move what the
+    # helper runs under.
     ".github/ci/Dockerfile", ".github/workflows/ci-image.yml",
     # The wiring that selects and runs this gate on both sides, and the
     # audit that keeps those two sides honest. An edit to any of them
@@ -472,7 +472,8 @@ def _local_changed_paths_cases(
         if selected("save-compat", paths):
             failures.append(
                 "an unrelated local change selected the save-compat gate, "
-                f"so `make ci` would still pay for the repl: {paths}")
+                f"so `make ci` would still run the reproducibility member: "
+                f"{paths}")
 
     with tempfile.TemporaryDirectory() as tmp:
         # cabal.project.local is not gitignored, so a change CAN track
@@ -769,7 +770,7 @@ def self_test() -> int:
         ("save-compat", ["src/World/Save/Types.hs"], True),
         ("save-compat", ["src/World/Save/Compat/SessionV90.hs"], True),
         ("save-compat", ["src/World/Save.hs"], True),
-        # The build definition the repl target resolves from.
+        # The build definition the codec helper is built from.
         ("save-compat", ["synarchy.cabal"], True),
         ("save-compat", ["cabal.project"], True),
         ("save-compat", ["cabal.project.freeze"], True),
@@ -782,7 +783,7 @@ def self_test() -> int:
         ("save-compat", [".github/ci/Dockerfile"], True),
         # The reusable image workflow is the OTHER half of the image
         # identity hash, so a PR editing only it still changes the
-        # toolchain the repl runs under.
+        # toolchain the codec helper is compiled with.
         ("save-compat", [".github/workflows/ci-image.yml"], True),
         # The wiring on both sides, and the parity audit over it.
         ("save-compat", ["tools/ci_expensive_gates.py"], True),
@@ -801,7 +802,7 @@ def self_test() -> int:
         ("save-compat", [".github/workflows/ci.yml"], True),
         # ...and the negatives, so the gate cannot be trivially
         # always-true. An unrelated PR -- gameplay Lua, worldgen, unit
-        # art, a doc -- must not pay for the repl.
+        # art, a doc -- must not run the reproducibility member.
         ("save-compat", ["scripts/unit_ai.lua"], False),
         ("save-compat", ["src/World/Geology/Timeline.hs"], False),
         ("save-compat", ["src/World/Thread/Command/Init.hs"], False),
