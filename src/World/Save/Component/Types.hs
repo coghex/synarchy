@@ -9,10 +9,12 @@
 --   encoder, a version-dispatched decoder, a validator) but nothing
 --   about any specific gameplay slice. Concrete components are declared
 --   across several owner modules under "World.Save.Component.*" (e.g.
---   "World.Save.Component.Session", ".Page"); 'World.Save.Component.saveComponentRegistry'
---   is the authoritative list of every declared component and its owner.
---   Every owner module and the registry import THIS module, so this one
---   must not import them (no cycle).
+--   "World.Save.Component.Session", ".Knowledge") — some of which sit
+--   behind a re-exporting façade rather than being imported directly;
+--   'World.Save.Component.saveComponentRegistry' is the authoritative
+--   list of every declared component, though not of which module owns
+--   each one. Every owner module and the registry import THIS module,
+--   so this one must not import them (no cycle).
 --
 --   Every component's on-disk bytes are the frozen wire contract
 --   (requirement 4): a 'ComponentCodec's DTO is encoded positionally by
