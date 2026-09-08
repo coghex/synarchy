@@ -274,11 +274,11 @@ installUIAPI env = do
         ]
         (retVals
             [ resVal "elementHandle" (TNullable TInteger)
-                "Nearest clickable ancestor of the element at the point, or nil."
+                "Nearest ancestor of the element at the point carrying a left-click callback, or nil. UI.Manager.Query.findClickableAncestor tests ueOnClick alone, so an ancestor whose clickable is false is still reported."
             , resVal "callbackName" (TNullable TString)
-                "That ancestor's click callback name, or nil."
+                "That ancestor's registered left-click callback name, or nil."
             ])
-        "Find the clickable target a hover at this point would activate. Always pushes two values; both are nil together.")
+        "Find the left-click AFFORDANCE a hover at this point sits over. This is getElementInfo's leftClickAffordance, not its leftClickTarget: a shown-but-disabled control is reported here even though a real click over it would not activate. Always pushes two values; both are nil together.")
         (uiFindHoverTargetFn env)
 
     -- Per-element text buffers

@@ -103,6 +103,20 @@ spec = around withDescriptorEngine $ do
                 [ "local h, cb = UI.findHoverTarget(60, 40) "
                 , "return type(h) .. ' ' .. type(cb)" ])
             unquoted hit `shouldBe` "number string"
+            -- The descriptor calls this the left-click AFFORDANCE, not
+            -- the active target: findClickableAncestor tests ueOnClick
+            -- alone, so revoking `clickable` leaves the hover target
+            -- reported while getElementInfo's leftClickTarget goes
+            -- false. Restating it as "the target a click would activate"
+            -- fails here.
+            disabled ← evalDebug ls (T.concat
+                [ "UI.setClickable(_G.__box, false) "
+                , "local h, cb = UI.findHoverTarget(60, 40) "
+                , "local info = UI.getElementInfo(_G.__box) "
+                , "return (h == _G.__box) and (type(cb) == 'string') "
+                , "and (info.leftClickAffordance == true) "
+                , "and (info.leftClickTarget == false)" ])
+            disabled `shouldBe` "true"
 
         it "pushes getElementInfo's nullable record with every documented field" $ \env → do
             (ls, ds) ← newFixture env
