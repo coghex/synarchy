@@ -31,7 +31,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from probelib import poll_until, send
-from tutorial_probe_contracts import (EXPEDITION_WATER_L, OBJ_EXPEDITION,
+from tutorial_probe_contracts import (EXPEDITION_WATER_L, OBJ_EXPEDITION, OBJ_CONFRONT,
+                                      PREP_CONTINUATION,
                                       OBJ_PORTAL, OBJ_WATER, SLOT, SUB_FOOD,
                                       SUB_WATER, Checks, hud_open, progress,
                                       settle)
@@ -211,15 +212,11 @@ def phase_supplies(port: int, checks: Checks, finder: int) -> None:
                  "subobjective", p.is_checked(SUB_FOOD), str(p))
     checks.check("both subobjectives satisfied completes 'Prepare an expedition'",
                  p.is_completed(OBJ_EXPEDITION), str(p))
-    # A fully-satisfied composite leaves the default active view (#958's
-    # hide rule), taking its subobjective rows with it. Pinned here
-    # because it is the ONE place the panel's rows and the durable state
-    # legitimately disagree: the completion is permanent, the rows are not.
-    checks.check("the satisfied composite drops out of the active view",
-                 (p.row(OBJ_EXPEDITION) or {}).get("active") is False, str(p))
-    checks.check("its subobjective rows go with it",
-                 SUB_WATER not in p.row_ids and SUB_FOOD not in p.row_ids,
-                 str(p.row_ids))
+    # #2301: the completed composite now also waits for its Confront child.
+    checks.check("preparation reveals Confront before its live supply rows",
+                 p.active_row_ids == PREP_CONTINUATION, str(p.active_row_ids))
+    checks.check("the newly revealed encounter objective remains incomplete",
+                 not p.is_completed(OBJ_CONFRONT), str(p))
 
 
 def phase_latch(port: int, checks: Checks, finder: int) -> None:

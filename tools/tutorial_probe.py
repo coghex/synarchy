@@ -14,10 +14,15 @@ branch driven from end to end by real gameplay state in a real engine —
     Place portal
       -> Secure water source
         -> Prepare an expedition
+             -> Resolve a ruin encounter
+                  -> Recover significant loot
+                       -> Secure the recovered item
+                            -> Clear a location
              - Prepare water
              - Prepare food
 
-— and then carried through a real save/load round trip in a SECOND
+The preparation-to-encounter frontier is then carried through a real save/load
+round trip in a SECOND
 process. Nothing here injects a tree, stubs a predicate, or writes the
 progress tables directly; every transition below is produced by placing
 a real building, teleporting a real acolyte next to real generated
@@ -69,14 +74,14 @@ What it proves (issue #922 requirements 2 and 3):
      drawn, because acknowledgement is gated on a completed renderer
      snapshot and `--headless` has no renderer. The transition is then
      made explicitly, through #958's own acknowledgePresented, and the
-     ordinary hide rule empties the checklist while the supplies are
-     still carried and every latch is intact. Removing the supplies
-     brings the RETIRED branch back (requirement 3, now under the
-     ordinary rule rather than a suppression). The positive proof --
+     suppression retires while the ordinary rule keeps preparation, its
+     Confront child and the supply rows visible (#2301). Removing and
+     restoring supplies still changes the live checks without touching
+     any durable completion. The positive proof --
      that the rows really do reach a rendered frame -- belongs to
      tools/tutorial_hud_probe.py, which runs `--offscreen`.
- 10. (#1941, a FOURTH boot) A save taken with that branch finished and
-     retired reloads in a fresh process without returning any
+ 10. (#1941, a FOURTH boot) A save taken with that suppression spent and
+     preparation completed reloads in a fresh process without returning any
      already-retired ancestor to the active checklist -- across the
      evaluation tick that re-checks both subobjectives against the same
      loaded world, which is the exact tick that used to resurrect all
