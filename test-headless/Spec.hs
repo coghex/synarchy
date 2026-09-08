@@ -103,6 +103,7 @@ import qualified Test.Headless.World.Identity as WorldIdentity
 import qualified Test.Headless.World.GeneratedIdentity as GeneratedIdentity
 import qualified Test.Headless.World.GeneratedLibrary as GeneratedLibrary
 import qualified Test.Headless.World.MapImagePlan as MapImagePlan
+import qualified Test.Headless.World.MapPyramid as MapPyramid
 import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
@@ -148,6 +149,7 @@ import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Equipment.Reconcile as EquipmentReconcile
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
+import qualified Test.Headless.Lua.UiDescriptors as LuaUiDescriptors
 import qualified Test.Headless.Lua.SchedulerFairness as LuaSchedulerFairness
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
 import qualified Test.Headless.Input.LayerA as InputLayerA
@@ -399,6 +401,7 @@ main = hspec $ do
         describe "Column Exposure" Exposure.spec
         describe "Zoom/Detail Parity" ZoomParity.spec
         ZoomArtifact.worldSpec
+        MapPyramid.worldSpec
         describe "Border Probe" BorderProbe.spec
         Climate.spec
         describe "Asset.TextureFallback" TextureFallback.spec
@@ -500,6 +503,9 @@ main = hspec $ do
     -- and saves it, which the shared-worlds engine above must not gain,
     -- for the same reason "World identity" is isolated.
     MapImagePlan.spec
+    -- #2298 (WML-5). Pure and engine-free; the goldens that need a
+    -- generated world are MapPyramid.worldSpec, above.
+    MapPyramid.spec
     aroundAll withHeadlessEngine MapImageAdmission.spec
     -- #2278. Own engine: it registers an out-of-tree material into the
     -- ONE process-global material registry and creates two private w8
@@ -988,6 +994,7 @@ main = hspec $ do
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec
     UIBarFillColor.spec
+    LuaUiDescriptors.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec
     SubMinuteClock.spec
