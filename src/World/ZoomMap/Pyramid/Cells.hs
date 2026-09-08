@@ -35,12 +35,16 @@
 --   rather than silently addressed against the wrong lattice.
 module World.ZoomMap.Pyramid.Cells
     ( worldGenCellSource
+      -- * The halo, as its own two steps
+    , mapCellHaloTable
+    , renderCellsFromHaloTable
     ) where
 
 import UPrelude
 import Control.Parallel.Strategies (parListChunk, rdeepseq, using)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import qualified Data.ByteString as BS
 import World.Chunk.Types (ChunkCoord(..))
 import World.Generate.InitTerrain (BorderedTerrainCache)
 import World.Generate.Types (WorldGenParams(..))
@@ -52,6 +56,48 @@ import World.ZoomMap.ColorPalette (ZoomColorPalette)
 import World.ZoomMap.Pyramid.Address
 import World.ZoomMap.Pyramid.Inventory (MapPyramidRefusal(..))
 import World.ZoomMap.Pyramid.Page (MapCellSource(..))
+
+-- | Pass one over a batch of chunks AND the halo their pass two reads:
+--   every requested chunk plus each one's
+--   'zoomChunkHaloNeighbours'.
+--
+--   The halo is derived from each chunk, never from the batch, which is
+--   what makes a chunk's bytes independent of what else was asked for
+--   alongside it.
+mapCellHaloTable ∷ WorldGenParams → MaterialRegistry
+                 → Maybe BorderedTerrainCache → [ChunkCoord]
+                 → Map.Map ChunkCoord ZoomChunkPass
+mapCellHaloTable params registry mBorderedCache chunks =
+    Map.fromList (zip needed passes)
+  where
+    worldSize = wgpWorldSize params
+    halo = concatMap (zoomChunkHaloNeighbours worldSize) chunks
+    needed = Set.toList (Set.fromList (chunks ⧺ halo))
+    batch = max 1 (length needed `div` 128)
+    passes = map (zoomChunkPass params registry mBorderedCache) needed
+                 `using` parListChunk batch rdeepseq
+
+-- | Render chunks out of such a table.
+--
+--   The TABLE is the halo: a chunk's pass two reads its neighbours'
+--   pass-one fluid maps out of it, and a neighbour the table does not
+--   hold answers dry — exactly how the whole-world builder's missing
+--   map key behaves at the latitude edge. Dropping that lookup, or
+--   handing this a table without the neighbours, changes the bytes of
+--   every chunk whose shoreline gap the extension would have closed.
+renderCellsFromHaloTable ∷ ZoomColorPalette → Int
+                         → Map.Map ChunkCoord ZoomChunkPass
+                         → [ChunkCoord] → Either Text [BS.ByteString]
+renderCellsFromHaloTable palette worldSize table = traverse renderOne
+  where
+    haloFluid coord = zcpRawFluid ⊚ Map.lookup coord table
+    renderOne coord = case Map.lookup coord table of
+        Just pass →
+            Right $ zoomChunkPixels palette worldSize haloFluid coord pass
+        -- Reachable only from a hand-built table: 'mapCellHaloTable'
+        -- always holds every chunk it was asked about. Answering rather
+        -- than pattern-matching partially is what keeps this total.
+        Nothing → Left $ "has no generated chunk for " <> tshow coord
 
 -- | A cell source that generates finest cells from world-generation
 --   parameters.
@@ -76,22 +122,8 @@ worldGenCellSource geom params registry palette mBorderedCache
 
     generate cells = do
         chunks ← traverse chunkOf cells
-        let halo = concatMap (zoomChunkHaloNeighbours worldSize) chunks
-            needed = Set.toList (Set.fromList (chunks ⧺ halo))
-            batch = max 1 (length needed `div` 128)
-            passes = map (zoomChunkPass params registry mBorderedCache) needed
-                         `using` parListChunk batch rdeepseq
-            byCoord = Map.fromList (zip needed passes)
-            haloFluid coord = zcpRawFluid ⊚ Map.lookup coord byCoord
-        traverse (renderOne byCoord haloFluid) chunks
-
-    renderOne byCoord haloFluid coord = case Map.lookup coord byCoord of
-        Just pass →
-            Right $ zoomChunkPixels palette worldSize haloFluid coord pass
-        -- Unreachable: every requested chunk is in `needed` by
-        -- construction. Answering rather than pattern-matching
-        -- partially is what keeps this source total.
-        Nothing → Left $ "has no generated chunk for " <> tshow coord
+        let table = mapCellHaloTable params registry mBorderedCache chunks
+        renderCellsFromHaloTable palette worldSize table chunks
 
     chunkOf ∷ MapCell → Either Text ChunkCoord
     chunkOf cell = case chunkOfFinestCell geom cell of

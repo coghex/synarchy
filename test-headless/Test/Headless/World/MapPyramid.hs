@@ -41,8 +41,7 @@ import World.Map.ImagePlan
 import World.Constants (seaLevel)
 import World.Fluid.Types (FluidCell(..), FluidType(..))
 import World.ZoomMap.Cache.ChunkPass
-    ( ZoomChunkPass(..), zoomChunkHaloNeighbours, zoomChunkPass
-    , zoomChunkPixels )
+    (ZoomChunkPass(..), zoomChunkHaloNeighbours, zoomChunkInWorld)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, buildColorPalette)
 import World.ZoomMap.Pyramid
 import World.ZoomMap.Types (zoomTileSize)
@@ -323,6 +322,27 @@ addressingSpec = describe "parity-compressed cylindrical addressing" $ do
               | pu ← [0 .. mapLevelPagesU geom 0 - 1]
               , pv ← [0 .. mapLevelPagesV geom 0 - 1] ] $ \key →
             climb geom key `shouldBe` root
+
+    it "names a chunk's four cardinal halo neighbours, wrapped and bounded" $ do
+        -- The halo a page's pass two reads. Its SHAPE is pinned here
+        -- because a halo that quietly became empty would leave every
+        -- other assertion in this file green on a world where the
+        -- cross-chunk extension happens to be inert.
+        L.sort (zoomChunkHaloNeighbours 64 (ChunkCoord 0 0)) `shouldBe`
+            L.sort [ ChunkCoord 1 0, ChunkCoord (-1) 0
+                   , ChunkCoord 0 1, ChunkCoord 0 (-1) ]
+        -- At the latitude edge (v = ccx + ccy = 31 is the last row) the
+        -- two neighbours that would leave the world are dropped, and
+        -- the one that leaves the canonical longitude range comes back
+        -- wrapped rather than missing.
+        L.sort (zoomChunkHaloNeighbours 64 (ChunkCoord 31 0)) `shouldBe`
+            L.sort [ ChunkCoord 30 0, ChunkCoord (-1) 31 ]
+        -- Latitude does not wrap, so the far edge loses neighbours too.
+        L.sort (zoomChunkHaloNeighbours 64 (ChunkCoord (-32) 0)) `shouldBe`
+            L.sort [ ChunkCoord (-31) 0, ChunkCoord 0 (-31) ]
+        zoomChunkInWorld 64 (ChunkCoord 31 0) `shouldBe` True
+        zoomChunkInWorld 64 (ChunkCoord 31 1) `shouldBe` False
+        zoomChunkInWorld 64 (ChunkCoord (-32) (-1)) `shouldBe` False
 
     it "places every finest cell in the page that covers it" $ do
         geom ← geometryFor 128
@@ -923,26 +943,31 @@ goldenPages env size = do
 -- | The page's bytes must be the halo-AWARE function of this world,
 --   not a chunk-local one.
 --
---   Two statements, because the obvious test does not hold: at seed 42
---   NO chunk of the worldSize 64 or 128 world changes when the halo is
---   withheld. The cross-chunk half of
---   'World.ZoomMap.Cache.OceanFill.extendOceanBoundary' is inert in
---   these worlds, so "the page differs from a halo-less page" would be
---   a vacuous assertion here rather than evidence.
+--   The obvious test does not hold: at seed 42 no chunk of the
+--   worldSize 64 or 128 world changes when the halo is withheld,
+--   because 'World.Generate.Chunk.Fluid.chunkOrNeighborOceanic' already
+--   composes a chunk beside an oceanic one as oceanic, leaving the
+--   cross-chunk half of
+--   'World.ZoomMap.Cache.OceanFill.extendOceanBoundary' with nothing to
+--   do. "The page differs from a halo-less page" would therefore be
+--   vacuous on this world rather than evidence.
 --
---     1. The halo genuinely changes what 'zoomChunkPixels' produces for
---        real chunks of this world — shown against a synthetic
---        all-ocean neighbour, so the sensitivity is demonstrated
---        whatever this seed happened to place.
---     2. Every chunk a golden page covers carries exactly what
---        'zoomChunkPixels' produces under the HONEST halo, rebuilt here
---        from 'zoomChunkHaloNeighbours' rather than borrowed from the
---        generator under test.
+--   So the halo is pinned where it is assembled and consumed instead,
+--   through the very functions the cell source uses:
 --
---   Together: the page's bytes are that halo-aware function applied to
---   this world, and that function is not the chunk-local one.
---   'Test.Headless.WorldGen.ZoomOceanFill' owns the constructed
---   cross-chunk promotion cases themselves (#2316).
+--     1. 'renderCellsFromHaloTable' really does read a neighbour's
+--        pass-one fluid map out of its table — flooding the
+--        neighbours changes a real chunk's bytes, and the difference
+--        is produced by the production renderer, so dropping its halo
+--        lookup fails HERE whatever the world contains; and
+--     2. every chunk a golden page covers carries exactly what that
+--        renderer produces from the HONEST table, rebuilt here rather
+--        than borrowed from the generator under test.
+--
+--   With 'mapCellHaloTable' holding the neighbours (checked below) and
+--   'zoomChunkHaloNeighbours' naming the right ones (pinned in the pure
+--   spec), the three mutations that could silently drop the halo each
+--   fail one of these.
 haloDependence ∷ EngineEnv → Int → IO ()
 haloDependence env size = do
     PyramidFixture { pfInventory = inv, pfGeometry = geom, pfSource = src
@@ -955,31 +980,38 @@ haloDependence env size = do
         coord ← acceptAddress (chunkOfFinestCell geom cell)
         pure (col, row, coord)
 
-    let coords = [ coord | (_, _, coord) ← placed ]
-        needed = Set.toList $ Set.fromList
-            (coords ⧺ concatMap (zoomChunkHaloNeighbours size) coords)
-        passes = M.fromList
-            [ (coord, zoomChunkPass params registry Nothing coord)
-            | coord ← needed ]
-        -- The halo the whole-world builder would supply: a neighbour
-        -- outside the world is absent, which is what makes the latitude
-        -- edge answer dry.
-        honest coord = zcpRawFluid ⊚ M.lookup coord passes
-        allOcean = Just $ V.replicate (chunkSize * chunkSize)
-                              (Just (FluidCell Ocean seaLevel))
-        render halo coord = case M.lookup coord passes of
-            Just pass → Just (zoomChunkPixels palette size halo coord pass)
-            Nothing   → Nothing
+    let honest = mapCellHaloTable params registry Nothing
+                     [ coord | (_, _, coord) ← placed ]
+        allOcean = V.replicate (chunkSize * chunkSize)
+                       (Just (FluidCell Ocean seaLevel))
+        -- One chunk's table, with and without its neighbours; and the
+        -- neighbours it does have flooded, so a chunk with a shoreline
+        -- gap on any edge shows the difference.
+        loneTable coord = M.filterWithKey (\k _ → k ≡ coord) (tableFor coord)
+        floodedTable coord = foldr
+            (\n → M.adjust (\pass → pass { zcpRawFluid = allOcean }) n)
+            (tableFor coord) (zoomChunkHaloNeighbours size coord)
+        tableFor coord = mapCellHaloTable params registry Nothing [coord]
+        renderVia table coord =
+            renderCellsFromHaloTable palette size table [coord]
 
-    -- (1) the halo is load-bearing for this world's chunks
-    let sensitive = [ coord | coord ← coords
-                    , render (const allOcean) coord ≢ render (const Nothing) coord ]
+    -- The table really is the chunk plus its cardinal neighbours.
+    case placed of
+        [] → expectationFailure "the page covers no cells"
+        ((_, _, coord) : _) →
+            L.sort (M.keys (tableFor coord)) `shouldBe`
+                L.sort (coord : zoomChunkHaloNeighbours size coord)
+
+    -- (1) the production renderer consults it
+    let sensitive = [ coord | (_, _, coord) ← placed
+                    , renderVia (floodedTable coord) coord
+                      ≢ renderVia (loneTable coord) coord ]
     (size, null (take 1 sensitive)) `shouldBe` (size, False)
 
-    -- (2) and the page took the honest side of it, for every chunk
+    -- (2) and the page carries the honest-table bytes for every chunk
     forM_ placed $ \(col, row, coord) →
-        (size, coord, Just (pageCellBlock bytes col row))
-            `shouldBe` (size, coord, render honest coord)
+        (size, coord, Right [pageCellBlock bytes col row])
+            `shouldBe` (size, coord, renderVia honest coord)
 
 -- | A page generated alone must equal the same page generated as part
 --   of a larger region. The halo is what could break this: it is
