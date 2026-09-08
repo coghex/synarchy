@@ -339,7 +339,10 @@ wetland-soil gate. The result is stored as `lcWaterTableMap` on
 
 ## 14. Related documents
 
-- `docs/code_health_findings.md` CH-80 (this document's origin), CH-81 (the
-  `World.Fluids` / `World.Fluid.*` naming collision).
+- `docs/code_health_findings.md` CH-80 (this document's origin), CH-81 (a
+  one-letter naming collision between the old fluid facade module and the
+  `World.Fluid.*` modules beneath it). CH-81 is history, not a live hazard:
+  #1110 resolved it by deleting the facade, so the fluid family now has no
+  facade module and `World.Fluid.*` is the only spelling.
 - `docs/history/river_rework.md` — an archived, superseded river redesign.
   Historical only.

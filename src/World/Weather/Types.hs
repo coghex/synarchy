@@ -43,8 +43,8 @@ import qualified Data.HashMap.Strict as HM
 -- * Climate Region Coordinate
 
 -- | Climate regions are 4×4 chunks = 64×64 tiles.
---   This is coarser than your geological RegionCoord (8×8 chunks)
---   but you could unify them if you prefer.
+--   This is finer than the geological RegionCoord (8×8 chunks, 128×128
+--   tiles); the two grids are not unified.
 climateRegionSize ∷ Int
 climateRegionSize = 4  -- in chunks (so 64 tiles per side)
 
