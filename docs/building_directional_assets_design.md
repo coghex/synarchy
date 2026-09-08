@@ -30,17 +30,17 @@ concrete precondition
 - [x] BDA-14. Add immediate structure teardown with transient destruction playback — [#2491]
 - [x] BDA-4. Make the building preview inspect every direction and lifecycle role — [#2492]
 - [x] BDA-17. Make structure preview inspect construction and destruction sets — [#2495]
-- [ ] BDA-5. Author the directional Workbench asset set
-- [ ] BDA-6. Author the directional Cargo Hold asset set
-- [ ] BDA-7. Author the directional Acolyte Portal asset set
-- [ ] BDA-8. Author the directional Furnace asset set
-- [ ] BDA-9. Author the directional Machine Shop asset set
-- [ ] BDA-10. Redesign and author the directional Kitchen asset set
-- [ ] BDA-11. Author the directional Solar Panel asset set
-- [ ] BDA-12. Author the directional High-Voltage Battery asset set
-- [ ] BDA-15. Author Dungeon structure lifecycle sets
-- [ ] BDA-16. Author Wire structure lifecycle sets
-- [ ] BDA-13. Enforce the complete constructible asset contract before play
+- [x] BDA-5. Author the directional Workbench asset set — [#2497]
+- [x] BDA-6. Author the directional Cargo Hold asset set — [#2498]
+- [x] BDA-7. Author the directional Acolyte Portal asset set — [#2501]
+- [x] BDA-8. Author the directional Furnace asset set — [#2503]
+- [x] BDA-9. Author the directional Machine Shop asset set — [#2504]
+- [x] BDA-10. Redesign and author the directional Kitchen asset set — [#2507]
+- [x] BDA-11. Author the directional Solar Panel asset set — [#2509]
+- [x] BDA-12. Author the directional High-Voltage Battery asset set — [#2511]
+- [x] BDA-15. Author Dungeon structure lifecycle sets — [#2513]
+- [x] BDA-16. Author Wire structure lifecycle sets — [#2516]
+- [x] BDA-13. Enforce the complete constructible asset contract before play — [#2519]
 
 ## Epic contract
 

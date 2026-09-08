@@ -15,15 +15,20 @@ concrete precondition
 
 ## Processing status
 
-- [ ] EPIC. Replace single factions with composable unit identity and relations
-- [ ] FTS-1. Add the pure faction identity and relation policy model
-- [ ] FTS-2. Add validated faction-tag definitions and legacy mappings
-- [ ] FTS-3. Migrate runtime units, spawning, and save data to faction profiles
-- [ ] FTS-4. Port ownership, commandability, and discovery consumers
-- [ ] FTS-5. Port alliance, hostility, combat, and AI consumers
-- [ ] FTS-6. Expose mutable faction profiles and directed order hostility
-- [ ] FTS-6A. Propagate directed hostility through orders and team knowledge
-- [ ] FTS-7. Retire the legacy enum and close compatibility documentation
+- [x] EPIC. Replace single factions with composable unit identity and relations — [#2496]
+- [x] FTS-1. Add the pure faction identity and relation policy model — [#2500]
+- [x] FTS-2. Add validated faction-tag definitions and legacy mappings — [#2506]
+- [x] FTS-3. Migrate runtime units, spawning, and save data to faction profiles — [#2515]
+- [x] FTS-4. Port ownership, commandability, and discovery consumers — [#2518]
+- [x] FTS-5. Port alliance, hostility, combat, and AI consumers — [#2521]
+- [x] FTS-6. Expose mutable faction profiles and directed order hostility — [no-issue]: split into FTS-6B–FTS-6F (D-36)
+- [x] FTS-6B. Persist directed relation causes and wire the live overlay — [#2548]
+- [x] FTS-6C. Expose the narrow Lua profile, tag, and relation-cause API — [#2551]
+- [x] FTS-6D. Spawn with controllers, extra tags, and minted roster team tags — [#2554]
+- [x] FTS-6E. Add the Attack transaction, the Hold action, and the escalation lock — [#2558]
+- [x] FTS-6F. Add diplomacy resolution and grandfathered combat authorization — [#2561]
+- [x] FTS-6A. Propagate directed hostility through orders and team knowledge — [#2563]
+- [x] FTS-7. Retire the legacy enum and close compatibility documentation — [#2564]
 
 ## Epic contract
 
@@ -88,11 +93,13 @@ concrete precondition
   group combat effectiveness, location spawning, save/load, and unit spawn.
   A tag conversion cannot safely update combat alone.
 - Saves carry the lowercase faction string, not the enum constructor. The
-  current `units` component is schema version 1; its frozen
-  `UnitInstanceDTO.uidFactionId` and live `UnitInstanceSnapshot.uisFactionId`
-  are both `Text`. A profile containing multiple tags and an owner identity is
-  a real wire-shape change requiring a v2 DTO, a frozen v1 decoder, and an
-  explicit v1-to-v2 migration.
+  `units` component is at schema version 2 with a frozen v1 decoder (#1233
+  moved it together with `buildings`); the current `UnitInstanceDTO.uidFactionId`,
+  the frozen `UnitInstanceDTOv1`, and the live
+  `UnitInstanceSnapshot.uisFactionId` all carry the faction as `Text`. A
+  profile containing multiple tags and an owner identity is a real wire-shape
+  change requiring a v3 DTO, a frozen v2 decoder beside the frozen v1, and
+  explicit v1-to-v3 and v2-to-v3 migrations (D-32; verified 2026-09-07).
 - Unrecognized current faction strings warn and degrade to inert `neutral`.
   This fail-safe property prevents corrupt or hand-edited data from creating
   new hostility and is worth preserving in the new model.
@@ -105,7 +112,8 @@ concrete precondition
   named policy queries instead of comparing raw identity values at call sites.
 - A readiness tracker search on 2026-08-15 found no existing composable-faction
   epic. Closed #912 is the typed scalar-policy foundation this arc replaces;
-  open #916 and expedition epic #1229 concern hostile location encounters and
+  #916 (closed completed 2026-08-31) and expedition epic #1229 concern
+  hostile location encounters and
   consume faction behavior rather than owning this profile/diplomacy migration.
 - The nomad primitive encounter design depends on this arc. It needs ordinary
   nomads, player acolytes, and future player nomads to share unit definitions
@@ -121,6 +129,19 @@ concrete precondition
   the context-menu Attack action is disabled unless `faction.canAttack` says
   the target is already attackable. There is no attack-order transaction that
   first establishes hostility, nor a combat hold/cancel path that removes it.
+- Verified 2026-09-07 while sizing FTS-6: `unitAi.commandAttack`
+  (`scripts/unit_ai_core.lua:468`) sets the attack goal and, for a committed
+  player order, clears the position hold; nothing else. No player Hold or
+  Cancel order exists in the context menu or elsewhere; the only path that
+  ends a player-ordered attack is a later move order
+  (`scripts/unit_ai_combat_move.lua:124`), which clears the goal and scopes
+  the retaliation cutoff to the hold it creates. Location content spawns
+  default to the legacy `"hostile"` value (`scripts/locations.lua:448`).
+  Under D-29 a player unit's profile is the local controller plus `[acolyte]`
+  and no team tag: the `player_team` and `fight_team_*` tags in the examples
+  below are minted by nothing yet, so an Attack order has no disjoint tag pair
+  to name (Q-23). A live pair whose target tag the attacker's own roster also
+  carries divides that roster, because tier 2 outranks controller equality.
 - The existing radio behavior in `scripts/unit_ai_notify.lua` communicates
   water-source knowledge only. It broadcasts to every radio-bearing acolyte,
   selected by unit definition rather than relationship tags; it does not carry
@@ -493,8 +514,9 @@ the broader reusable intelligence system remain separate consumers.
 
 ### Persistence and migration
 
-The `units` component must advance from v1 to v2. Its frozen v1 DTO retains one
-`uidFactionId :: Text`; v2 stores the approved profile shape. Migration must be
+The `units` component must advance from v2 to v3 (D-32). Its frozen v1 and v2
+DTOs each retain one faction `Text`; v3 stores the approved profile shape, and
+both frozen shapes migrate. Migration must be
 total for all five old tags and must not rely on current mutable relation data
 to decide what an old save meant.
 
@@ -831,6 +853,119 @@ commandability and unrestricted-combat capabilities. Unknown v1 values still
 warn and degrade inertly. Migration does not infer a new culture from a unit
 name or current diplomacy.
 
+### D-27. The legacy `debug` profile is diplomatically inert
+
+Signed off 2026-09-07 while drafting FTS-1 (#2500). The legacy `debug`
+profile has no controller and no tags, only the local-commandability and
+unrestricted-combat capabilities. Its relation to every profile, including
+another debug profile, is neutral; attack permission holds in every direction
+through the capability. The player/debug medic alliance and the wildlife and
+legacy-hostile hostility toward debug end. Because an identity-less profile
+shares nothing, neutral/neutral is likewise neutral rather than self-allied.
+
+### D-28. The compatibility base table preserves today's hostility
+
+Signed off 2026-09-07 (FTS-1, #2500). The shipped table declares symmetric
+`hostile` for acolyte/nomad (D-4), acolyte/wildlife, legacy_hostile/acolyte,
+and legacy_hostile/wildlife, and nothing else; nomad/wildlife and
+nomad/legacy_hostile stay undeclared and therefore neutral (D-8). Every
+legacy pair not involving neutral or debug keeps today's answer.
+
+### D-29. Shipped unit defaults
+
+Signed off 2026-09-07 (FTS-2, #2506). `acolyte` and `technomule` declare
+`faction_tags: [acolyte]`; `nomad_primitive` declares `[nomad]`;
+`bear_brown`, `red_squirrel`, and `white_tailed_deer` declare `[wildlife]`;
+`tiller` and `unknown_unit` omit the field. The technomule takes the colony
+culture tag so nomads and wildlife stay hostile to it exactly as today.
+
+### D-30. Authored data names catalogue-declared tags only
+
+Signed off 2026-09-07 (FTS-2, #2506). A base-relation endpoint or a unit
+`faction_tags` entry naming a tag the catalogue does not declare refuses that
+file and stops boot like any other data-family failure, so the catalogue
+loads before unit definitions. Runtime minting of undeclared valid tags stays
+open per D-12.
+
+### D-31. A tag-less spawn takes the definition's defaults
+
+Signed off 2026-09-07 (FTS-3, #2515). D-26's `wildlife` row is applied
+literally to a tag-less `unit.spawn`: a definition with authored defaults
+yields those defaults (an acolyte spawned without a tag is an uncontrolled
+acolyte), and only a definition without a declaration falls back to
+`wildlife`. Fixtures that relied on the old wildlife default pass `"hostile"`
+explicitly. During the compatibility window unported consumers read a
+profile→legacy adapter that is exact on the five legacy profiles and answers
+`neutral` for anything else.
+
+### D-32. The `units` component advances v2→v3
+
+Signed off 2026-09-07 (FTS-3, #2515). Master already carried `units` at v2
+with a frozen v1 (#1233), so the profile change freezes v2 and migrates both
+frozen shapes to v3 by D-26. This corrects the earlier v1→v2 wording; no
+migration meaning changed.
+
+### D-33. Consumer slices port their own Lua callers, and FTS-5 lands hooks only
+
+Signed off 2026-09-07 (FTS-4 #2518, FTS-5 #2521). Each consumer slice adds
+unit-id-based Lua queries and ports its callers; the string-taking `faction.*`
+verbs stay for the compatibility window and gain no new callers. Alliance for
+an acting unit is the actor's own directed regard toward the beneficiary
+(medic toward patient, rallying unit toward subject). FTS-5's relation
+authority takes the live overlay as an input that is empty at runtime, and
+the current-goal authorization is a fixture input, until the live-state
+slices that replace FTS-6 land them.
+
+### D-34. Attack orders name a per-order target tag against a roster team tag
+
+Signed off 2026-09-07. Spawn ingress mints one roster team tag for each
+controller's units under the ingress's own ownership, and a saved
+local-controller unit that lacks it gains it at load. An Attack order mints a
+temporary target-scoped tag on its target under the order's ownership and
+installs `<attacker roster team> -> <that target tag>: hostile` before the
+attack goal exists. The pair is disjoint from every attacker membership by
+construction, so it can never divide the attacker's roster, and the order's
+own end removes both the cause and the target tag whenever D-17 permits.
+Rejected: naming the target's culture tag (`acolyte`, `nomad`) or a shared
+`player_team -> acolyte` pair, either of which turns a mixed roster on itself
+because a live cause outranks controller equality; and dropping D-14 so
+player attacks install no cause, which loses pre-escalation Hold semantics.
+
+### D-35. Hold is a new player action
+
+Signed off 2026-09-07. A Hold action on the selected units ends their attack
+goals, removes the order-owned causes and target tags when D-17 permits,
+and creates a position hold at each unit's current tile. It composes with
+engine contracts §Position hold as one more arrival-equivalent and adds no
+second utility constant. A later move order keeps its current effect of
+ending the attack goal; it does not replace Hold.
+
+### D-36. FTS-6 is delivered as five ordered slices
+
+Signed off 2026-09-07. FTS-6 is superseded by FTS-6B (persisted relation
+causes and the live overlay), FTS-6C (narrow Lua profile, tag, and cause
+API), FTS-6D (spawn and content ingress with controllers, extra tags, and
+roster team tags), FTS-6E (Attack transaction, Hold, and the escalation
+lock), and FTS-6F (diplomacy resolution and grandfathered combat
+authorization), in that order. FTS-6A depends on FTS-6E; FTS-7 depends on
+FTS-6A and FTS-6F. The FTS-6 ledger entry is dispositioned `[no-issue]` in
+favor of them when processing reaches it. Whether the cause store is a
+required component with an empty migration or a third optional component
+under persistence contract §5 is decided inside FTS-6B.
+
+### D-37. Report scope is always a minted group tag
+
+Signed off 2026-09-07. A report never names a culture tag as its source
+scope. Controlled units report under their roster team tag (D-34), and
+uncontrolled groups report under a per-location occupant group tag that
+FTS-6D mints at content spawn under the location's ownership. A completed
+report installs `<informed group tag> -> <attacker roster team>: hostile`,
+disjoint from the attacker's roster by construction, so a player-controlled
+nomad is never turned on its own roster. Rejected: allowing culture tags with
+a precedence exception that lets a shared team outrank a live cause whose
+source tag the subject shares with the target, which would change the FTS-1
+precedence already filed as #2500.
+
 ## Open questions
 
 ### Q-1. Is controller identity a separate field or a namespaced tag?
@@ -985,6 +1120,34 @@ executing attack goal against its assigned target and ends when that target
 dies or escapes, the attacker retreats, or the goal otherwise completes. It
 does not permit target switching, restarting, or recruiting another combatant.
 
+### Q-23. Which tag pair does a player Attack order name?
+
+Resolved by D-34. Under D-29 a player unit carries only the local controller
+and `[acolyte]`, and any live pair whose target tag the attacker's roster
+also carries divides that roster because a live cause outranks controller
+equality. The order therefore mints a per-order target tag and names it
+against a roster team tag minted at spawn; team-to-team naming and dropping
+D-14 were rejected.
+
+### Q-24. What is the Hold/Cancel order?
+
+Resolved by D-35. No player Hold or Cancel order existed; a later move order
+was the only thing that ended a player-ordered attack. A new Hold action is
+added; a "Cancel attack" entry alone, and both together, were the rejected
+alternatives.
+
+### Q-25. How is FTS-6 split?
+
+Resolved by D-36. FTS-6 bundled at least five independently gated
+deliverables and is replaced by FTS-6B through FTS-6F in dependency order.
+
+### Q-26. Which tag names the reverse team relation a report installs?
+
+Resolved by D-37. A report naming a culture tag such as `nomad` as its
+source scope would turn a player-controlled nomad on its own roster, the
+mirror of Q-23; the informed scope is therefore always a minted group tag,
+and a precedence exception for shared teams was rejected.
+
 ## Verification strategy
 
 - Add pure exhaustive policy coverage over controller equality/difference,
@@ -994,9 +1157,10 @@ does not permit target switching, restarting, or recruiting another combatant.
   capability, malformed versus unknown-valid tags, and empty profiles.
   Directionality is asserted explicitly: A-to-B and B-to-A are independent
   unless YAML symmetric shorthand creates both.
-- Freeze a v1 `units` DTO fixture and prove its v2 migration for every legacy
-  faction value against D-26's exact map, multiple unit definitions, unknown
-  legacy tags, and warning deduplication. Re-encoding must emit only v2.
+- Prove the frozen v1 and v2 `units` DTO fixtures both migrate to v3 for every
+  legacy faction value against D-26's exact map, multiple unit definitions,
+  unknown legacy tags, and warning deduplication. Re-encoding must emit only
+  v3.
 - Run fresh-process save/load coverage with player acolyte, wildlife, neutral,
   debug, legacy-hostile, NPC nomad, and player-controlled nomad profiles.
 - Port the focused Haskell `Unit.Faction` and Lua faction-model suites rather
@@ -1099,8 +1263,8 @@ removing it.
   controller/tag profile; existing saves and spawn sources preserve behavior
   through migration.
 - **Scope:** `UnitInstance`, unit commands, spawn defaults/arguments, snapshot,
-  frozen v1/current v2 DTOs, component bump/migration, load warnings, fresh-
-  process compatibility tests.
+  frozen v1/v2 DTOs and the new v3, component bump/migration, load warnings,
+  fresh-process compatibility tests.
 - **Phase:** Runtime and wire
 - **Depends on:** FTS-2
 - **Ordering:** `critical path`
@@ -1153,6 +1317,9 @@ removing it.
 
 ### FTS-6. Expose mutable faction profiles and directed order hostility
 
+> [no-issue] 2026-09-07: split by D-36 into FTS-6B–FTS-6F; nothing is tracked
+> under this ID.
+
 - **Outcome:** Lua/content/order callers can query arbitrary tags, mutate
   runtime-owned membership, and initiate/cancel cause-scoped directed hostility
   through narrow authoritative operations without replacing profiles or
@@ -1178,6 +1345,117 @@ removing it.
   invalid inputs are inert and reported once.
 - **Out of scope:** General diplomacy UI and incident communication, which is
   FTS-6A.
+- **Open questions:** None. Superseded by D-36: returned from
+  `/process-design-doc` on 2026-09-07 as not one-PR sized and under-specified
+  on the tag pair an Attack order names (Q-23), it is delivered as FTS-6B
+  through FTS-6F below, and this ID is dispositioned `[no-issue]` in their
+  favor when processing reaches it.
+
+### FTS-6B. Persist directed relation causes and wire the live overlay
+
+- **Outcome:** One authoritative persisted store of directed tag-to-tag
+  relation causes feeds FTS-5's relation authority at runtime; an empty store
+  reproduces today's answers exactly.
+- **Scope:** Cause store type and owner, its save component (required with
+  an empty migration, or a third optional component under persistence
+  contract §5, decided here), persistence-inventory rows, save-compat
+  fixture, capability access, owner-scoped add/remove operations in Haskell,
+  overlay wiring into the FTS-5 authority, load/save tests.
+- **Phase:** Live state
+- **Depends on:** FTS-5
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-6, D-11, D-13, D-15, D-16, D-20, D-23, D-36
+- **Acceptance signals:** Causes round-trip exactly with their owners; a
+  stored hostile cause changes the live relation answer after a fresh-process
+  load; removing one owner's cause leaves every other cause; no Lua verb yet.
+- **Out of scope:** Lua API, spawn ingress, orders, reports.
+- **Open questions:** None
+
+### FTS-6C. Expose the narrow Lua profile, tag, and relation-cause API
+
+- **Outcome:** Scripts can read a unit's controller, tags, and a read-only
+  profile snapshot; add and remove owner-scoped runtime tags; reclassify
+  authored tags through the explicit conversion operation; and add and remove
+  explicitly scoped relation causes, with no whole-profile replacement and no
+  script-side precedence.
+- **Scope:** Verbs and their registration, invalid inputs inert and reported
+  once, authored and foreign-owned membership protection, the compatibility
+  window statement for `unit.getFaction` and the string-taking `faction.*`
+  verbs, authoring documentation, Lua API contract entries.
+- **Phase:** Integration API
+- **Depends on:** FTS-6B
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-11, D-12, D-16, D-22, D-25, D-33
+- **Acceptance signals:** Real scripts mint arbitrary valid tags and remove
+  only their own; cannot remove an authored default or another owner's
+  membership; cause mutations name exact tags; malformed input is inert.
+- **Out of scope:** Spawn ingress, orders, diplomacy resolution.
+- **Open questions:** None
+
+### FTS-6D. Spawn with controllers, extra tags, and minted roster team tags
+
+- **Outcome:** Spawn sources pass an optional controller and extra tags; the
+  portal roster carries the local controller's minted roster team tag, and
+  saved local-controller units gain it at load; location content spawns use
+  definition defaults (`nomad_primitive` arrives as `nomad`) instead of the
+  legacy `"hostile"`; legacy string arguments keep working.
+- **Scope:** `unit.spawn` ingress form, `building_spawn.lua`, `locations.lua`
+  content entries and the YAML `faction` field's meaning, roster team tag
+  minting under the ingress owner, load-time backfill, per-location occupant
+  group tags minted at content spawn under the location's ownership (D-37),
+  compatibility probes.
+- **Phase:** Ingress
+- **Depends on:** FTS-6C
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-5, D-10, D-22, D-26, D-29, D-34, D-37
+- **Acceptance signals:** The same definition spawns as NPC and as
+  local-player-controlled with identical identity and different ownership;
+  nomad content is hostile to acolytes through the base table and neutral to
+  wildlife; every player unit carries the roster team tag after a fresh spawn
+  and after loading a pre-existing save; expedition probes pass.
+- **Out of scope:** Orders, reports.
+- **Open questions:** None
+
+### FTS-6E. Add the Attack transaction, the Hold action, and the escalation lock
+
+- **Outcome:** An Attack order installs the order-owned
+  `<roster team> -> <per-order target tag>` hostile cause before its goal
+  exists; Hold ends attack goals, removes order-owned causes and target tags
+  unless reverse hostility exists, and creates a position hold; after
+  escalation Hold removes neither direction.
+- **Scope:** Context-menu Attack and Hold, the `unitAi` order transaction,
+  order-owned cleanup when a goal ends by target death, escape, or
+  completion, the reverse-hostility predicate, composition with the
+  position-hold and stall-budget contracts, persistence of order ownership
+  through FTS-6B and FTS-6C, tests and a probe.
+- **Phase:** Orders
+- **Depends on:** FTS-6D
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-14, D-16, D-17, D-18, D-24, D-34, D-35
+- **Acceptance signals:** Attack installs its cause before combat; Hold
+  before escalation removes exactly that order's cause and tag; a fixture
+  reverse cause locks both directions against Hold; a second simultaneous
+  cause prevents premature peace; debug staging installs nothing.
+- **Out of scope:** Reports, communication, diplomacy resolution.
+- **Open questions:** None
+
+### FTS-6F. Add diplomacy resolution and grandfathered combat authorization
+
+- **Outcome:** A diplomacy script call clears an escalated named pair in both
+  directions; each unit already executing an attack goal keeps a persisted
+  authorization to finish only that goal against its assigned target.
+- **Scope:** Resolution verb and its ownership, authorization state and its
+  persisted owner, wiring into FTS-5's engagement seam, save/load coverage
+  for a clear during active combat, fixtures.
+- **Phase:** Resolution
+- **Depends on:** FTS-6E
+- **Ordering:** `critical path`
+- **Relevant decisions:** D-19, D-20, D-21, D-33
+- **Acceptance signals:** Only the scripted resolution clears an escalated
+  pair; clearing blocks new engagements and recruitment; the authorized goal
+  finishes and ends on target death, escape, retreat, or completion, and
+  survives a fresh-process load with the same next decision.
+- **Out of scope:** Reports, communication, any diplomacy UI.
 - **Open questions:** None
 
 ### FTS-6A. Propagate directed hostility through orders and team knowledge
@@ -1190,10 +1468,10 @@ removing it.
   walk-notify integration, idempotent reverse-relation cause, persistence as
   approved.
 - **Phase:** Knowledge propagation
-- **Depends on:** FTS-6
+- **Depends on:** FTS-6E
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-6, D-9, D-11, D-12, D-13, D-14, D-15, D-16,
-  D-17, D-18, D-19, D-20, D-21, D-23, D-24
+  D-17, D-18, D-19, D-20, D-21, D-23, D-24, D-34, D-37
 - **Acceptance signals:** Team A can attack team B while B remains unaware; a
   damaged survivor may retaliate locally; an unwitnessed kill does not alert B;
   a witness or survivor can communicate; only completed communication makes
@@ -1211,7 +1489,7 @@ removing it.
   persistence inventory, `CLAUDE.md`, API/authoring docs, probe registry notes;
   link the nomad encounter design to this prerequisite.
 - **Phase:** Closure
-- **Depends on:** FTS-6A
+- **Depends on:** FTS-6A, FTS-6F
 - **Ordering:** `critical path`
 - **Relevant decisions:** D-1, D-2, D-3, D-4, D-5, D-6, D-7, D-8,
   D-9, D-10, D-11, D-12, D-13, D-14, D-15, D-16, D-17, D-18,
