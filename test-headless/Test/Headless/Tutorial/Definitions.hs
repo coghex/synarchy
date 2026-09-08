@@ -132,7 +132,7 @@ spec = describe "Tutorial definitions" $ do
                                    (tnChildren water)
             toLabel (tnObjective expedition) `shouldBe` "Prepare an expedition"
             toKind (tnObjective expedition) `shouldBe` TutorialComposite
-            childIds expedition `shouldBe` []
+            childIds expedition `shouldBe` ["first_session_confront"]
             -- Ordered live subobjectives — water (order 1) then food
             -- (order 2), the authored order.
             subIds expedition `shouldBe`
@@ -146,12 +146,31 @@ spec = describe "Tutorial definitions" $ do
         it "gives every objective a label, tooltip, and evaluator key" $ do
             tree ← loadShippedTree
             let objectives = map tnObjective (tutorialNodeList (ttRoot tree))
-            length objectives `shouldBe` 5
+            length objectives `shouldBe` 9
             map toEvaluator objectives `shouldBe`
                 [ "place_portal", "secure_water_source", "prepare_expedition"
+                , "confront", "recover", "secure", "clear"
                 , "prepare_water", "prepare_food" ]
             filter (T.null ∘ toLabel) objectives `shouldBe` []
             filter (T.null ∘ toTooltip) objectives `shouldBe` []
+
+    describe "composite continuation" $
+        it "accepts both relationships without weakening the per-kind rules" $ do
+            tree ← expectTree ∘ validateText $ docWith "first_session"
+                (  obj "root" "composite" 1
+                     [refs "children" ["kid"], refs "subobjectives" ["sub"]]
+                ⧺ obj "kid" "full" 1 []
+                ⧺ obj "sub" "subobjective" 1 [] )
+            childIds (ttRoot tree) `shouldBe` ["kid"]
+            subIds (ttRoot tree) `shouldBe` ["sub"]
+            forM_ ["children", "subobjectives"] $ \relationship → do
+                let result = validateText (docWith "first_session"
+                        (  obj "root" "composite" 1 [refs "subobjectives" ["sub"]]
+                        ⧺ obj "sub" "subobjective" 1 [refs relationship ["kid"]]
+                        ⧺ obj "kid" "full" 1 [] ))
+                case result of
+                    Left (TutorialInvalidRelationship oid _) → oid `shouldBe` "sub"
+                    other → expectationFailure ("expected subobjective rejection: " <> show other)
 
     describe "display order" $
         it "sorts a sibling group by order, breaking ties by id" $ do
@@ -233,20 +252,6 @@ spec = describe "Tutorial definitions" $ do
             validateText (docWith "first_session"
                 (obj "root" "full" 1 [refs "children" ["ghost"]]))
                 `shouldBe` Left (TutorialUnknownReference "root" "ghost")
-
-        it "one objective declaring both children and subobjectives" $ do
-            let result = validateText (docWith "first_session"
-                    (  obj "root" "composite" 1
-                         [ refs "children" ["kid"]
-                         , refs "subobjectives" ["sub"] ]
-                    ⧺ obj "kid" "full" 1 []
-                    ⧺ obj "sub" "subobjective" 1 [] ))
-            case result of
-                Left (TutorialInvalidRelationship oid why) → do
-                    oid `shouldBe` "root"
-                    why `shouldSatisfy` T.isInfixOf "mutually exclusive"
-                other → expectationFailure ("expected a relationship error, got "
-                                              <> show other)
 
         it "a full objective declaring subobjectives" $ do
             let result = validateText (docWith "first_session"
@@ -374,6 +379,11 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
             _ ← Lua.rawgeti (-1) 1
             expId ← field "id"
             expKind ← field "kind"
+            _ ← Lua.getfield (-1) "children"
+            expChildren ← Lua.rawlen (-1)
+            _ ← Lua.rawgeti (-1) 1
+            confrontId ← field "id"
+            Lua.pop 2
             -- the composite's ordered subobjectives
             _ ← Lua.getfield (-1) "subobjectives"
             subCount ← Lua.rawlen (-1)
@@ -384,10 +394,10 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
             sub2 ← field "label"
             return ( loaded, treeIsTable, tid, rootId, rootKind, rootLabel
                    , childCount, waterId, expId, expKind, subCount
-                   , sub1, sub2 )
+                   , sub1, sub2, expChildren, confrontId )
         let ( loaded, treeIsTable, tid, rootId, rootKind, rootLabel
               , childCount, waterId, expId, expKind, subCount
-              , sub1, sub2 ) = result
+              , sub1, sub2, expChildren, confrontId ) = result
         loaded `shouldBe` Just 1
         treeIsTable `shouldBe` True
         tid `shouldBe` Just "first_session"
@@ -398,6 +408,8 @@ luaSpec = describe "Tutorial definitions (Lua exposure)" $ do
         waterId `shouldBe` Just "first_session_secure_water"
         expId `shouldBe` Just "first_session_prepare_expedition"
         expKind `shouldBe` Just "composite"
+        expChildren `shouldBe` 1
+        confrontId `shouldBe` Just "first_session_confront"
         subCount `shouldBe` 2
         sub1 `shouldBe` Just "Prepare water"
         sub2 `shouldBe` Just "Prepare food"

@@ -48,13 +48,20 @@ import Vulkan.Zero
 import Vulkan.CStruct.Extends
 import Vulkan.Extensions.VK_KHR_swapchain hiding (acquireNextImageKHRSafe)
 
+-- | Ambient light level from the sun angle published by the world clock.
+--   The curve's phase is deliberately offset from the clock mapping
+--   documented in @World.Time.Types@ — its 0.7 peak and 0.15 trough land
+--   at 'sunAngle' 0.25 and 0.75, a quarter-day from the noon\/midnight they
+--   might suggest — because this curve is tuned for the lighting shader,
+--   not gameplay; see 'Unit.LineOfSight.nightPerceptionFactor' for a
+--   clock-correct curve.
 computeAmbientLight ∷ Float → Float
 computeAmbientLight sunAngle =
     let angle = sunAngle * 2.0 * π
         sunHeight = sin angle
     in if sunHeight ≥ 0
-       then 0.5 + 0.2 * sunHeight   -- day: 0.5 at horizon, 0.7 at noon
-       else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at midnight, 0.5 at horizon
+       then 0.5 + 0.2 * sunHeight   -- day: 0.5 at sunHeight 0, 0.7 at sunHeight's peak (1)
+       else 0.15 + 0.35 * (1.0 + sunHeight)  -- night: 0.15 at sunHeight's trough (-1), 0.5 at sunHeight 0
 
 -- | The active world's u-axis (gx-gy) circumference in tiles, for the
 --   world vertex shader's per-vertex longitude-local day/night phase
