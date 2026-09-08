@@ -12,8 +12,8 @@
 --   'Engine.Asset.YamlTutorials.validateTutorialDoc', so consumers may
 --   rely on the invariants that validator enforces: exactly one root,
 --   every objective reachable from it exactly once, no cycles, and the
---   'tnChildren' \/ 'tnSubobjectives' relationships mutually exclusive
---   per node.
+--   kind-appropriate relationships: composites may declare both
+--   'tnChildren' and 'tnSubobjectives'; subobjectives remain leaves.
 module Tutorial.Types
   ( TutorialObjectiveKind(..)
   , objectiveKindText
@@ -41,7 +41,7 @@ import GHC.Generics (Generic)
 --     objectives through @children@; never has subobjectives.
 --   * 'TutorialComposite' — a full objective whose completion is
 --     composed of live component requirements. Must have
---     @subobjectives@; never has children.
+--     @subobjectives@ and may gate further full objectives through @children@.
 --   * 'TutorialSubobjective' — a live component requirement of a
 --     composite. A leaf, and only ever named from a @subobjectives@
 --     list.
@@ -86,9 +86,8 @@ data TutorialObjective = TutorialObjective
     --   by id, so the exposed order is deterministic regardless.
   } deriving (Show, Eq, Generic)
 
--- | An objective plus its place in the tree. At most one of the two
---   relationship lists is non-empty (the validator rejects a node
---   declaring both); both are kept in display order.
+-- | An objective plus its place in the tree. A composite may populate
+--   both relationship lists; each is kept in display order.
 data TutorialNode = TutorialNode
   { tnObjective     ∷ !TutorialObjective
   , tnChildren      ∷ ![TutorialNode]

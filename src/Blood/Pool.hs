@@ -12,7 +12,10 @@
 --   same 'Blood.Types.spawnDecal' entry point everything else uses, up
 --   to a documented per-cluster bound. Decal records are NEVER mutated
 --   — there is no "grow this decal" field and there deliberately will
---   not be one, which locks the persisted record shape ahead of #884.
+--   not be one. Each layer is its own independent record with stable
+--   identity for as long as it lives, until the shared decal lifecycle
+--   (FIFO eviction, 'Blood.Types.clearBlood') removes it — not a
+--   preparation for persistence, which closed issue #884 ruled out.
 --
 --   Three parts, mirroring "Blood.Trail"'s split:
 --
