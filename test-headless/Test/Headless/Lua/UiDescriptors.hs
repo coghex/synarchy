@@ -488,8 +488,17 @@ returnShapeChunk verb call = T.intercalate "\n" $
 typePredicate ∷ LuaType → Text → Text
 typePredicate ty expr = case ty of
     TString     → "type(" <> expr <> ") == 'string'"
-    TNumber     → "type(" <> expr <> ") == 'number'"
-    TInteger    → "type(" <> expr <> ") == 'number'"
+    -- Lua 5.4 keeps integer and float as distinct subtypes of `number`,
+    -- and math.type reports which — so the two numeric kinds the
+    -- descriptor distinguishes are checkable, and checkable BOTH ways.
+    -- `type(v) == 'number'` alone would not be: it accepts a fractional
+    -- value where TInteger is promised, and it also lets a descriptor
+    -- weaken TInteger to TNumber unnoticed, since an integer satisfies
+    -- the looser claim. Pushing an integer is Lua.pushinteger and
+    -- pushing a float is Lua.pushnumber, which is exactly the
+    -- distinction Descriptor's TInteger/TNumber document.
+    TNumber     → "math.type(" <> expr <> ") == 'float'"
+    TInteger    → "math.type(" <> expr <> ") == 'integer'"
     TBoolean    → "type(" <> expr <> ") == 'boolean'"
     TNullable t → "((" <> expr <> ") == nil or (" <> typePredicate t expr <> "))"
     TRecord fs  → T.intercalate " and "

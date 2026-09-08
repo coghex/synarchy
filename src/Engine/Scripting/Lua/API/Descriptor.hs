@@ -65,9 +65,16 @@ import qualified Data.Text as T
 data LuaType
   = TString                 -- ^ read with @Lua.tostring@, which also
                             --   accepts a number
-  | TNumber                 -- ^ read with @Lua.tonumber@
-  | TInteger                -- ^ read with @Lua.tointeger@, which also
-                            --   accepts a numeric string (#1497)
+  | TNumber                 -- ^ an argument read with @Lua.tonumber@;
+                            --   a result pushed with @Lua.pushnumber@,
+                            --   so it carries Lua 5.4's FLOAT subtype
+                            --   (@math.type@ reports @\"float\"@)
+  | TInteger                -- ^ an argument read with @Lua.tointeger@,
+                            --   which also accepts a numeric string
+                            --   (#1497); a result pushed with
+                            --   @Lua.pushinteger@, so it carries Lua
+                            --   5.4's INTEGER subtype (@math.type@
+                            --   reports @\"integer\"@)
   | TBoolean                -- ^ read with @Lua.toboolean@, which
                             --   coerces rather than validating: any
                             --   value but @nil@/@false@ is true

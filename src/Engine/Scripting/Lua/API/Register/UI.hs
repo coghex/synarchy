@@ -108,9 +108,9 @@ elementInfoRecord = TRecord
     , recField "clipsChildren" TBoolean "The raw ueClipChildren opt-in: whether this element clips its own descendants."
     , recField "interactiveOverflow" TBoolean "The raw ueInteractiveOverflow opt-in (#749)."
     , recField "effectiveClip" (TNullable (rectRecord "The clip this element is subject to:"))
-        "Intersection of every clipping ancestor's bounds, or nil when unclipped (#747)."
+        "Intersection of every clipping ancestor's bounds (#747). Nil when no ancestor clips, or when the ancestor walk hits its 64-level depth limit. Unlike interactiveBounds this is NOT area-checked, so a fully disjoint intersection is still reported as a rect."
     , recField "interactiveBounds" (TNullable (rectRecord "The interactive rect a hit resolves against:"))
-        "Clip-intersected interactive rect (#749), or nil when the element is entirely clipped away."
+        "Clip-intersected interactive rect (#749). Nil in either of two cases, since UI.InteractiveBounds.effectiveInteractiveBounds area-checks twice: the element's own interactive rect has non-positive width or height (a zero-size or overflow-collapsed element), or a clipping ancestor leaves no overlapping area at all."
     ]
 
 -- | Install the @UI@ global table, yielding every descriptor it
@@ -525,7 +525,7 @@ installUIAPI env = do
     , registerLuaVerb (luaVerb "getEffectiveClip"
         [elementArg]
         (retVals [resVal "clip" (TNullable (rectRecord "The clip this element is subject to:"))
-            "Intersection of every clipping ancestor's bounds, or nil when unclipped or the handle is missing."])
+            "Intersection of every clipping ancestor's bounds. Nil when the handle is missing or unknown, when no ancestor clips, or when the ancestor walk hits its 64-level depth limit. Not area-checked: a fully disjoint intersection is still reported as a rect."])
         "Read the clip an element is actually subject to (#747), the same value rendering and hit-testing consult.")
         (uiGetEffectiveClipFn env)
     , registerLuaVerb (luaVerb "setZIndex"
