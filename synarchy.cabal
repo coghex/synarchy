@@ -1048,6 +1048,7 @@ library
                      World.ZoomMap.Cache
                      World.ZoomMap.Cache.Build
                      World.ZoomMap.Cache.BuildPixels
+                     World.ZoomMap.Cache.ChunkPass
                      World.ZoomMap.Cache.Classify
                      World.ZoomMap.Cache.Noise
                      World.ZoomMap.Cache.OceanFill
@@ -1055,6 +1056,12 @@ library
                      World.ZoomMap.Artifact
                      World.ZoomMap.ChunkTexture
                      World.ZoomMap.ColorPalette
+                     World.ZoomMap.Pyramid
+                     World.ZoomMap.Pyramid.Address
+                     World.ZoomMap.Pyramid.Cells
+                     World.ZoomMap.Pyramid.Inventory
+                     World.ZoomMap.Pyramid.Page
+                     World.ZoomMap.Pyramid.Reduce
                      World.ZoomMap.Types
     default-extensions: FlexibleInstances
     other-extensions: Strict
@@ -1400,6 +1407,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.GeneratedIdentity
                    Test.Headless.World.Identity
                    Test.Headless.World.MapImagePlan
+                   Test.Headless.World.MapPyramid
                    Test.Headless.World.MapImageAdmission
                    Test.Headless.World.MaterialRegistryMerge
                    Test.Headless.World.CursorInfo

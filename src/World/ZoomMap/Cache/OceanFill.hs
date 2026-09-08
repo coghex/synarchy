@@ -25,7 +25,9 @@ import UPrelude
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import World.Fluid.Internal (FluidMap)
-import World.Types
+import World.Chunk.Types (chunkSize)
+import World.Constants (seaLevel)
+import World.Fluid.Types (FluidCell(..), FluidType(..))
 
 -- | One cardinal dilation of a chunk's composed ocean mask.
 --
