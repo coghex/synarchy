@@ -178,15 +178,16 @@ def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     for key in sorted(config_probes):
         expect("repo-config" in probe_runner_resources.exclusive_resources(key),
                f"{key} still takes repo-config exclusively")
-    # The three probes that still drive Cabal themselves -- a `cabal repl`
-    # through persistence_snapshot / save_compat_audit, which is NOT an
-    # engine boot and has no prebuilt equivalent (#1570).
-    ghci = {"persistence_contract", "persistence_contract_sweep",
-            "save_compat_migration"}
-    expect(ghci <= declared,
-           f"every GHCi consumer is an exclusive holder too "
-           f"(missing: {sorted(ghci - declared)})")
-    for key in sorted(ghci):
+    # The three probes that still drive Cabal themselves, which is NOT an
+    # engine boot (#1570): a `cabal repl` through persistence_snapshot for
+    # the first two, and the codec helper's freshness build through
+    # save_compat_audit for the third (#2273).
+    cabal_drivers = {"persistence_contract", "persistence_contract_sweep",
+                     "save_compat_migration"}
+    expect(cabal_drivers <= declared,
+           f"every Cabal-driving probe is an exclusive holder too "
+           f"(missing: {sorted(cabal_drivers - declared)})")
+    for key in sorted(cabal_drivers):
         expect("cabal-build" in probe_runner_resources.exclusive_resources(key),
                f"{key} takes the shared Cabal build state exclusively")
     for key in sorted(declared):
@@ -202,7 +203,7 @@ def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     # shipped data rather than of the synthetic probes the scheduling
     # tests above drive. An interest in EITHER direction counts -- two
     # exclusive holders of one resource exclude each other too, which is
-    # how the three GHCi consumers stay off each other's `cabal repl`.
+    # how the three Cabal-driving probes stay off each other's writes.
     for key in sorted(declared):
         taken = probe_runner_resources.exclusive_resources(key)
         unguarded = sorted(

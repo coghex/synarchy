@@ -167,6 +167,32 @@ that anything occupying the solidifying cell — units, items — must be
 handled, leaning toward instant destruction; that is Q-6 and its own slice
 (FR-3).
 
+**Amended 2026-09-07 (refill policy, implemented by FR-1 in #2481).** The
+identity invariant is an *occupied-contact* rule, not a rule about every
+later state of a coordinate within a tick. A cell whose volume reaches zero
+by annihilation is empty, and is an ordinary empty destination for later
+phases and requests in the SAME tick: a later transfer may refill it with
+any fluid under the normal empty-cell rule, and that refill neither cancels
+nor duplicates the solidification event the coordinate already emitted. At
+most one event is emitted per canonical coordinate per tick; a later tick
+may emit another there once new lava has arrived and been exhausted again.
+Rejected: a tick-wide tombstone forbidding refill (needs a per-coordinate
+prohibition set threaded through all five branches, and would strand fluid
+that has nowhere else to go).
+
+**The five protected branches.** There are four transfer *mechanisms* but
+FIVE occupied-destination *write* branches, and the reaction and the
+bounded-transfer rules apply to all of them: seam exchange
+(`transferCell`), `phaseGravity`, `phaseLateral` with a snapshot-occupied
+destination, `phaseLateral` with a snapshot-empty destination that an
+earlier source filled live in the same phase, and `phaseWaterfall`. FR-1
+routes all five through one applier (`Sim.Fluid.Reaction.applyTransfer`),
+so each is independently protected by its own regression fixture. Because a
+reaction can consume more than the planned transfer, every request planned
+from a frozen snapshot is resolved against the LIVE cells at the moment it
+is applied, and ordinary transfers are additionally bounded by the
+destination's remaining `Word16` capacity.
+
 ### D-4. No interim stopgap ships first
 
 Owner decision 2026-08-31 (resolves Q-3). FR-1 ships the reaction directly;
@@ -272,17 +298,22 @@ Resolved by D-7.
 - **Outcome:** No transfer path can change a fluid's type; unlike-fluid
   contact consumes volume per the chosen rule and yields solidification
   events (consumed in FR-2; inert but observable in tests until then).
-- **Scope:** All four transfer sites (gravity, lateral, waterfall,
-  `transferCell`/seam), both orderings, volume accounting, pure hspec
-  coverage.
+- **Scope:** All FIVE occupied-destination write branches (gravity,
+  `phaseLateral` snapshot-occupied, `phaseLateral` snapshot-empty /
+  live-occupied, waterfall, `transferCell`/seam), both orderings, live
+  resolution of snapshot-planned requests, `Word16`-bounded ordinary
+  transfers, volume accounting, event accumulation, pure hspec coverage.
 - **Phase:** 1
 - **Depends on:** `none` (externally: #2042 and #2044 should land first —
   same code)
 - **Ordering:** critical path
-- **Relevant decisions:** D-1, D-3, D-4
-- **Acceptance signals:** reaction fixtures per path pass; a
-  lava-above-water gravity tick produces no retype and exact consumption;
-  existing seam/conservation specs still pass.
+- **Relevant decisions:** D-1, D-3 (including its 2026-09-07 refill
+  amendment), D-4, D-5
+- **Acceptance signals:** reaction fixtures per branch pass independently
+  in both orderings; a lava-above-water gravity tick produces no retype and
+  exact consumption; a coordinate emptied by annihilation can be refilled
+  in the same tick without losing or duplicating its event; existing
+  seam/conservation specs still pass.
 - **Out of scope:** terrain mutation, persistence, entity handling,
   presentation.
 - **Open questions:** None.

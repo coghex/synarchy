@@ -67,8 +67,9 @@ SAVE_COMPAT_WITHOUT_COMMAND = (
 #: ... the one that must run only when the gate selects ...
 SAVE_COMPAT_ONLY_COMMAND = (
     "python3 tools/test_save_compat_audit.py --only-reproducibility")
-#: ... and the bare form neither side may run, because it would put the
-#: reproducibility member's `cabal repl` back on every pull request.
+#: ... and the bare form neither side may run, because it would run the
+#: reproducibility member on every pull request rather than when the
+#: gate selects it.
 SAVE_COMPAT_BARE_COMMAND = "python3 tools/test_save_compat_audit.py"
 
 #: The selector invocation both files reach their decision through.
@@ -123,8 +124,8 @@ def extract_local_block(shell_text: str,
     leave every later block unexecuted and unaudited, so a second one
     running the reproducibility member unconditionally would evade this
     check entirely: the gate SET still matches (it is the same command),
-    the first block still selects correctly, and `make ci` would pay for
-    the `cabal repl` on every unrelated change. Refusing a duplicate is
+    the first block still selects correctly, and `make ci` would run the
+    member on every unrelated change. Refusing a duplicate is
     what keeps "the block this audit executes" and "the block that runs"
     the same block.
     """
@@ -145,8 +146,8 @@ def extract_local_block(shell_text: str,
             "each. This audit executes ONE block to prove `make ci` selects "
             "the same way CI does, so any further block would run "
             "unexecuted and unaudited -- one of them invoking the "
-            "reproducibility member unconditionally would put its `cabal "
-            "repl` back on every run with this audit still green.")
+            "reproducibility member unconditionally would run it on every "
+            "run with this audit still green.")
     begin = shell_text.find(LOCAL_BLOCK_BEGIN)
     end = shell_text.find(LOCAL_BLOCK_END)
     if end < begin:
@@ -319,8 +320,8 @@ def audit_save_compat_reproducibility_wiring(
         if SAVE_COMPAT_BARE_COMMAND in commands:
             problems.append(
                 f"{label}: runs the bare `{SAVE_COMPAT_BARE_COMMAND}`, "
-                "which puts the reproducibility member's `cabal repl` "
-                "back on every run regardless of the selector.")
+                "which runs the reproducibility member on every run "
+                "regardless of the selector.")
         if SAVE_COMPAT_SELECTOR_COMMAND not in commands:
             problems.append(
                 f"{label}: does not run `{SAVE_COMPAT_SELECTOR_COMMAND}`, "

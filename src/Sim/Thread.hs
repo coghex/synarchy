@@ -2,6 +2,15 @@
 module Sim.Thread
     ( startSimThread
     , completeFastSettleWith
+      -- * The synchronous settle loop, exported for tests
+      --
+      -- Both are pure and the dump path's whole settle behavior, so a
+      -- fixture that wants to prove something about fast settling
+      -- (#2481: that accumulated solidification events survive it) has
+      -- to call THESE rather than re-implement the loop and prove
+      -- nothing about the real one.
+    , fastSettleWorld
+    , settleNewChunks
     ) where
 
 import UPrelude

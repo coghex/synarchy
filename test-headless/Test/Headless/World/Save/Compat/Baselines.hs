@@ -12,9 +12,11 @@
 --   ("Test.Headless.World.Save.Compat") can sequence it among the other
 --   families' groups in the order the suite has always run in; this
 --   module registers nothing itself. The manifest model, the expected
---   canonical-summary schema (@tools/save_compat_audit_codec.py@'s
---   @GHCI_DUMP_SUMMARY_TEMPLATE@ mirrors it by hand) and the
---   staging helpers live here because only this family reads them.
+--   canonical-summary schema (@app-save-codec/Main.hs@'s
+--   @canonicalSummary@ mirrors it by hand -- it was
+--   @tools/save_compat_audit_codec.py@'s @GHCI_DUMP_SUMMARY_TEMPLATE@
+--   until #2273 compiled that program) and the staging helpers live here
+--   because only this family reads them.
 module Test.Headless.World.Save.Compat.Baselines
     ( manifestFixturesSpec
     , containerKnowledgeSpec
