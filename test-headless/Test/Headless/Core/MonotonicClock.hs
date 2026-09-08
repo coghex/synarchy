@@ -58,7 +58,8 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
 import World.Thread (worldTickWith)
-import World.Time.Types (WorldDate(..), WorldTime(..))
+import World.Time.Types
+    (WorldDate(..), WorldTime(..), PreciseWorldTime(..), preciseWorldTime)
 
 -- * Seams
 
@@ -126,7 +127,7 @@ clockPage = WorldPageId "monotonic_clock_page"
 installClockPage ∷ EngineEnv → WorldTime → WorldDate → Float → IO WorldState
 installClockPage env time date scale = do
     ws ← emptyWorldState
-    writeIORef (wsTimeRef ws) time
+    writeIORef (wsTimeRef ws) (preciseWorldTime time)
     writeIORef (wsDateRef ws) date
     writeIORef (wsTimeScaleRef ws) scale
     let sim = toWorldSimCapability env
@@ -355,7 +356,7 @@ spec = describe "monotonic elapsed-time contract" $ do
             lastRef ← newIORef 100
             clock ← scriptedClock [3700]
             _ ← worldTickWith clock env lastRef
-            readIORef (wsTimeRef ws) `shouldReturn` WorldTime 11 30
+            pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 11 30
             readIORef (wsDateRef ws) `shouldReturn` WorldDate 1 1 2
             readIORef lastRef `shouldReturn` 3700
 
@@ -367,7 +368,7 @@ spec = describe "monotonic elapsed-time contract" $ do
             -- 0.125 s × 2880 = 360 game-minutes: six hours.
             clock ← scriptedClock [100.125]
             _ ← worldTickWith clock env lastRef
-            readIORef (wsTimeRef ws) `shouldReturn` WorldTime 5 30
+            pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 5 30
             readIORef (wsDateRef ws) `shouldReturn` WorldDate 1 1 2
 
         it "passes a backward clock step as zero and measures the next \
@@ -383,11 +384,11 @@ spec = describe "monotonic elapsed-time contract" $ do
             -- -143136 game-minutes, which wraps to 13:54.
             clock ← scriptedClock [50.3, 50.425]
             _ ← worldTickWith clock env lastRef
-            readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 30
+            pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 30
             readIORef (wsDateRef ws) `shouldReturn` WorldDate 1 1 1
             readIORef lastRef `shouldReturn` 50.3
             _ ← worldTickWith clock env lastRef
-            readIORef (wsTimeRef ws) `shouldReturn` WorldTime 5 30
+            pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 5 30
             readIORef (wsDateRef ws) `shouldReturn` WorldDate 1 1 2
 
         it "leaves a paused calendar alone whatever the sample" $
@@ -398,7 +399,7 @@ spec = describe "monotonic elapsed-time contract" $ do
             lastRef ← newIORef 100
             clock ← scriptedClock [3700]
             _ ← worldTickWith clock env lastRef
-            readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 30
+            pwtTime ⊚ readIORef (wsTimeRef ws) `shouldReturn` WorldTime 23 30
             readIORef (wsDateRef ws) `shouldReturn` WorldDate 1 1 1
 
     ------------------------------------------------------------------

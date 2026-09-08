@@ -2896,18 +2896,26 @@ so at the shipped default scale, one game-minute per real second against
 the 0.25 s cap, no admitted tick ever contributed a whole minute and the
 calendar never moved at all; at higher scales the same elapsed time
 advanced it by different amounts depending on how the worker happened to
-partition it. Each page now carries the leftover fraction in its own
-`wsTimeRemainderRef`, always in `[0, 1)` game-minutes, and
+partition it. Each page's `wsTimeRef` now holds a `PreciseWorldTime` — the whole
+minutes plus the leftover fraction, always in `[0, 1)` game-minutes — and
 `advanceWorldClock` threads it through, so equal admitted elapsed time
 advances the calendar by the same duration however it is partitioned.
+
+Both halves live in ONE ref deliberately. The world thread writes the
+clock while other threads read it (`Unit.LineOfSight` on the unit thread,
+`Engine.Scripting.Lua.API.Power` on the Lua thread), so with two refs a
+reader landing between the writes of a minute carry would pair the new
+minute with the previous remainder — a clock no tick ever produced, which
+would run the sun angle backwards. One ref makes every observable state a
+whole one, structurally: there is no setter for half a clock.
 
 The rules that go with it:
 
 - **Ownership.** Per page, written only by the world thread — the tick,
-  the queued `WorldSetTime`, and load staging — exactly like `wsTimeRef`
-  and `wsDateRef` beside it. Only `wmVisible` pages are ticked, unchanged
-  by #2471: a hidden page keeps the remainder it was last left with and
-  never catches up.
+  the queued `WorldSetTime`, and load staging — exactly like `wsDateRef`
+  beside it, and always as one whole-clock write. Only `wmVisible` pages
+  are ticked, unchanged by #2471: a hidden page keeps the remainder it
+  was last left with and never catches up.
 - **Boundaries.** `WorldSetTime` names a whole minute and therefore
   CLEARS the remainder; `WorldSetDate` leaves it alone (it changes no
   time of day). A fresh page starts at zero, a paused tick rewrites the
@@ -2915,10 +2923,11 @@ The rules that go with it:
   remainder and applies the new scale to later elapsed time only.
 - **Presentation.** Every whole-minute consumer sees the floor, and a
   rollover across minute, midnight, month or year carries the remainder
-  rather than dropping it. `worldTimeSunAngleWith` is what a live page's
-  solar consumers (rendering, line of sight, power) read: nondecreasing
-  within a day, equal to `worldTimeToSunAngle` at a zero remainder, and
-  still wrapping at midnight.
+  rather than dropping it. `preciseSunAngle` is what a live page's solar
+  consumers (rendering, line of sight, power) read, and it takes the
+  WHOLE clock rather than a minute and a remainder separately:
+  nondecreasing within a day, equal to `worldTimeToSunAngle` at a zero
+  remainder, and still wrapping at midnight.
 - **Numerics.** The per-tick product `scale × dt` is EXACT in `Double`
   (two `Float` significands are 48 bits against 53 available). Its
   WHOLE-minute part is then split off and carried in exact `Int`
@@ -2965,7 +2974,9 @@ the real `updateFrameTimingWith`, `worldTickWith`, `unitTickWith`, and
 `monotonicSeconds`. The retained-remainder rule has its own gate
 beside it — hspec `--match "Calendar retains sub-minute progress"`, which
 drives that same real `worldTickWith` across long irregular schedules
-against an independent oracle, and the persistence half through the real
+against an independent exact-arithmetic oracle, samples the published
+clock from a concurrent reader across 600 minute carries, and takes the
+persistence half through the real component codec, `validatePages` and
 `World.Load.Stage`. Live save evidence is
 `tools/persistence_contract_probe.py`, whose three fresh-process
 save→load→save cycles are compared through the real codec while paused,

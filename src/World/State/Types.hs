@@ -45,8 +45,8 @@ import World.Render.Zoom.Types (ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMo
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import Sim.Topology (SimTopology(..), simTopologyForParams)
-import World.Time.Types (WorldTime(..), WorldDate(..), defaultWorldTime,
-                         defaultWorldDate, ClockRemainder, zeroClockRemainder)
+import World.Time.Types (WorldDate(..), PreciseWorldTime(..),
+                         defaultPreciseWorldTime, defaultWorldDate)
 import World.Edit.Types (WorldEdit, WorldEdits, emptyWorldEdits)
 import Structure.Types (StructureStage, emptyStructureStage)
 import World.Mine.Types (MineDesignations)
@@ -81,25 +81,33 @@ data WorldState = WorldState
     , wsCameraRef    ∷ IORef WorldCamera
     , wsTexturesRef  ∷ IORef WorldTextures
     , wsGenParamsRef ∷ IORef (Maybe WorldGenParams)
-    , wsTimeRef      ∷ IORef WorldTime
-    , wsTimeRemainderRef ∷ IORef ClockRemainder
-      -- ^ #2471: this page's sub-minute calendar progress — the
-      --   game-minutes already elapsed that 'wsTimeRef' cannot store
-      --   because it holds whole minutes.
+    , wsTimeRef      ∷ IORef PreciseWorldTime
+      -- ^ This page's time of day: whole minutes, plus #2471's
+      --   sub-minute calendar progress beside them.
       --
-      --   Without it the world clock discarded that fraction on every
-      --   tick, so at the shipped default speed (one game-minute per
-      --   real second, against an elapsed step capped at 0.25 s) the
-      --   calendar never advanced at all. PER PAGE, because each page
-      --   runs its own clock at its own scale, and written ONLY by the
-      --   world thread — the tick ('World.Thread.Time'), the queued
-      --   @WorldSetTime@ (which clears it, since that command names a
-      --   whole minute), and load staging — exactly like 'wsTimeRef'
-      --   and 'wsDateRef' beside it, so the three-ref update cannot
-      --   race another writer.
+      --   Both halves in ONE ref, deliberately. Without the remainder
+      --   the world clock floored that fraction away on every tick, so
+      --   at the shipped default speed (one game-minute per real second,
+      --   against an elapsed step capped at 0.25 s) the calendar never
+      --   advanced at all. But the two must also be PUBLISHED together:
+      --   the world thread writes this clock and other threads read it
+      --   ('Unit.LineOfSight' on the unit thread,
+      --   "Engine.Scripting.Lua.API.Power" on the Lua thread), and a
+      --   reader that could land between two separate writes of a minute
+      --   carry would pair the new minute with the old remainder — a
+      --   clock no tick ever produced, which would run the sun angle
+      --   backwards. One ref makes every state a reader can observe a
+      --   whole one.
       --
-      --   Persisted (@world-pages@ v11), unlike 'wsTimeScaleRef' below:
-      --   it is real elapsed calendar progress, not a load policy.
+      --   PER PAGE, because each page runs its own clock at its own
+      --   scale, and written ONLY by the world thread — the tick
+      --   ('World.Thread.Time'), the queued @WorldSetTime@ (which
+      --   restores it to a whole minute) and @WorldSetDate@ (which
+      --   leaves it alone), and load staging.
+      --
+      --   The remainder is persisted (@world-pages@ v11), unlike
+      --   'wsTimeScaleRef' below: it is real elapsed calendar progress,
+      --   not a load policy.
     , wsDateRef      ∷ IORef WorldDate
     , wsTimeScaleRef ∷ IORef Float    -- ^ Game-minutes per real-second
     , wsResumeScaleRef ∷ IORef (Maybe Float)
@@ -504,10 +512,9 @@ emptyWorldState = do
     cameraRef    ← newIORef (WorldCamera 0 0)
     texturesRef  ← newIORef defaultWorldTextures
     genParamsRef ← newIORef Nothing
-    timeRef      ← newIORef defaultWorldTime
-    -- #2471: a brand-new page starts with no retained progress, which is
-    -- also what a pre-v11 save migrates to.
-    timeRemainderRef ← newIORef zeroClockRemainder
+    -- #2471: a brand-new page starts with no retained sub-minute
+    -- progress, which is also what a pre-v11 save migrates to.
+    timeRef      ← newIORef defaultPreciseWorldTime
     dateRef      ← newIORef defaultWorldDate
     timeScaleRef ← newIORef 1.0   -- 1 game-minute per real-second
     resumeScaleRef ← newIORef Nothing
@@ -564,8 +571,7 @@ emptyWorldState = do
     freshGeneratedId ← newGeneratedWorldId
     wsGeneratedIdRef ← newIORef freshGeneratedId
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
-                        timeRef timeRemainderRef dateRef timeScaleRef
-                        resumeScaleRef
+                        timeRef dateRef timeScaleRef resumeScaleRef
                         zoomCacheRef
                         quadCacheRef quadCacheGenRef zoomQCRef bgQCRef
                         bakedZoomRef bakedBgRef wsInitQueueRef

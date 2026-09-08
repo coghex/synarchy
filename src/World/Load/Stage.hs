@@ -628,12 +628,12 @@ stagePage logger registry palette catalog buildingDefs unitDefs
     forM_ (wpsGeneratedId wps) $ writeIORef (wsGeneratedIdRef worldState)
     writeIORef (wsCameraRef worldState)
         (WorldCamera (wpsCameraX wps) (wpsCameraY wps))
-    writeIORef (wsTimeRef worldState)
-        (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps))
-    -- #2471: restored beside the whole minutes it belongs to, so a
-    -- session resumed mid-minute keeps the progress it had. A pre-v11
-    -- save migrates to no progress, which is exactly what it recorded.
-    writeIORef (wsTimeRemainderRef worldState) stagedRemainder
+    -- #2471: the sub-minute progress is restored WITH the whole minutes
+    -- it belongs to, in one write, so a session resumed mid-minute keeps
+    -- the progress it had. A pre-v11 save migrates to no progress, which
+    -- is exactly what it recorded.
+    writeIORef (wsTimeRef worldState) (PreciseWorldTime
+        (WorldTime (wpsTimeHour wps) (wpsTimeMinute wps)) stagedRemainder)
     writeIORef (wsDateRef worldState) stagedDate
     -- Never restore a player's previous simulation speed from a save.
     writeIORef (wsTimeScaleRef worldState) 1

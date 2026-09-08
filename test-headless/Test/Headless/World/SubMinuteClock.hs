@@ -9,7 +9,7 @@
 --   higher scales the same elapsed time advanced it by different amounts
 --   depending on how the world worker happened to partition it. Each
 --   page now carries the leftover fraction of a minute in its own
---   @wsTimeRemainderRef@.
+--   @wsTimeRef@.
 --
 --   The contract: @docs/engine_contracts.md@ §Monotonic elapsed time.
 --
@@ -38,7 +38,9 @@ import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.IORef (newIORef, readIORef, writeIORef, atomicModifyIORef')
+import Control.Concurrent.Async (async, wait)
+import Data.IORef
+    (newIORef, readIORef, writeIORef, modifyIORef', atomicModifyIORef')
 import Data.List (find, sort)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
@@ -121,24 +123,23 @@ oracleStep (OracleClock minutes days) (scale, dt) =
 
 -- | Drive the PRODUCTION pure advance over a schedule, accumulating the
 --   days it reports.
-advanceSchedule ∷ WorldTime → ClockRemainder → [(Float, Float)]
-                → (WorldTime, ClockRemainder, Int)
-advanceSchedule time0 rem0 = go time0 rem0 (WorldDate 1 1 1) 0
+advanceSchedule ∷ PreciseWorldTime → [(Float, Float)]
+                → (PreciseWorldTime, Int)
+advanceSchedule clock0 = go clock0 (WorldDate 1 1 1) 0
   where
-    go time remainder _ rolledTotal [] = (time, remainder, rolledTotal)
-    go time remainder date rolledTotal ((scale, dt):rest) =
-        let (time', remainder', date', rolled) =
-                advanceWorldClock defaultCalendarConfig scale dt
-                                  time remainder date
-        in go time' remainder' date' (rolledTotal + rolled) rest
+    go clock _ rolledTotal [] = (clock, rolledTotal)
+    go clock date rolledTotal ((scale, dt):rest) =
+        let (clock', date', rolled) =
+                advanceWorldClock defaultCalendarConfig scale dt clock date
+        in go clock' date' (rolledTotal + rolled) rest
 
 -- | The production advance's own in-day minute total, EXACTLY — the
 --   stored whole minutes plus the retained remainder, with no rounding
 --   introduced by the comparison itself. Adding them in 'Double' would
 --   round at the ulp of 1439, which is larger than the error being
 --   measured.
-preciseMinutes ∷ WorldTime → ClockRemainder → Rational
-preciseMinutes (WorldTime h m) remainder =
+preciseMinutes ∷ PreciseWorldTime → Rational
+preciseMinutes (PreciseWorldTime (WorldTime h m) remainder) =
     fromIntegral (h * 60 + m) + toRational (clockRemainderMinutes remainder)
 
 -- | The tolerance a schedule of @n@ ticks is allowed, straight from the
@@ -159,27 +160,27 @@ spec = describe "Calendar retains sub-minute progress" $ do
            \contributes" $ do
             -- 0.25 s at 1 game-minute per real second. The pre-#2471
             -- clock floored this to nothing, which is the whole defect.
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    1 0.25 (WorldTime 10 0) zeroClockRemainder
+            let (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1 0.25 (preciseWorldTime (WorldTime 10 0))
                     (WorldDate 1 1 1)
-            t `shouldBe` WorldTime 10 0
-            clockRemainderMinutes r `shouldBe` 0.25
+            pwtTime c `shouldBe` WorldTime 10 0
+            clockRemainderMinutes (pwtRemainder c) `shouldBe` 0.25
             d `shouldBe` WorldDate 1 1 1
             rolled `shouldBe` 0
 
         it "turns four such ticks into one whole minute and no leftover" $ do
-            let (t, r, _) = advanceSchedule (WorldTime 10 0)
-                    zeroClockRemainder (replicate 4 (1, 0.25))
-            t `shouldBe` WorldTime 10 1
-            r `shouldBe` zeroClockRemainder
+            let (c, _) = advanceSchedule
+                    (preciseWorldTime (WorldTime 10 0))
+                    (replicate 4 (1, 0.25))
+            c `shouldBe` preciseWorldTime (WorldTime 10 1)
 
         it "reaches day 1 11:00 from 240 quarter-second ticks at scale 1" $ do
             -- The acceptance case, on the pure advance: 240 × 0.25 s × 1
             -- = exactly 60 game-minutes.
-            let (t, r, rolled) = advanceSchedule (WorldTime 10 0)
-                    zeroClockRemainder (replicate 240 (1, 0.25))
-            t `shouldBe` WorldTime 11 0
-            r `shouldBe` zeroClockRemainder
+            let (c, rolled) = advanceSchedule
+                    (preciseWorldTime (WorldTime 10 0))
+                    (replicate 240 (1, 0.25))
+            c `shouldBe` preciseWorldTime (WorldTime 11 0)
             rolled `shouldBe` 0
 
         it "reaches the same day-3 22:00 however the same 60 s is \
@@ -191,9 +192,9 @@ spec = describe "Calendar retains sub-minute progress" $ do
                     , ("480 x 0.125 s", replicate 480 (60, 0.125))
                     , ("one 60 s call", [(60, 60)]) ]
             forM_ schedules $ \(label, schedule) → do
-                let (t, _, rolled) = advanceSchedule (WorldTime 10 0)
-                        zeroClockRemainder schedule
-                (label, t) `shouldBe` (label, WorldTime 22 0)
+                let (c, rolled) = advanceSchedule
+                        (preciseWorldTime (WorldTime 10 0)) schedule
+                (label, pwtTime c) `shouldBe` (label, WorldTime 22 0)
                 (label, rolled) `shouldBe` (label, 2)
 
         it "tracks an independent oracle across a long irregular schedule \
@@ -206,11 +207,11 @@ spec = describe "Calendar retains sub-minute progress" $ do
                 scales = [1, 7.5, 60, 0.25, 1000]
                 schedule = take 5000
                     [ (s, dt) | (s, dt) ← zip (cycle scales) (cycle dts) ]
-                (t, r, rolled) = advanceSchedule (WorldTime 10 0)
-                    zeroClockRemainder schedule
+                (c, rolled) = advanceSchedule
+                    (preciseWorldTime (WorldTime 10 0)) schedule
                 oracle = foldl' oracleStep (OracleClock 600 0) schedule
             rolled `shouldBe` ocDays oracle
-            abs (preciseMinutes t r - ocMinutes oracle)
+            abs (preciseMinutes c - ocMinutes oracle)
                 `shouldSatisfy` (≤ scheduleTolerance (length schedule))
 
         it "holds that same bound at the TOP of the accepted scale \
@@ -225,12 +226,13 @@ spec = describe "Calendar retains sub-minute progress" $ do
             -- ulp below 2 regardless.
             forM_ [50000, maxTimeScale / 2, maxTimeScale] $ \scale → do
                 let schedule = replicate 400 (scale, 0.25 ∷ Float)
-                    (t, r, rolled) = advanceSchedule (WorldTime 10 0)
-                        (remainderOf 0.5) schedule
+                    (c, rolled) = advanceSchedule
+                        (PreciseWorldTime (WorldTime 10 0) (remainderOf 0.5))
+                        schedule
                     oracle = foldl' oracleStep
                         (OracleClock (600 + 1 / 2) 0) schedule
                 (scale, rolled) `shouldBe` (scale, ocDays oracle)
-                (scale, abs (preciseMinutes t r - ocMinutes oracle))
+                (scale, abs (preciseMinutes c - ocMinutes oracle))
                     `shouldSatisfy`
                         (\(_, d) → d ≤ scheduleTolerance (length schedule))
 
@@ -242,12 +244,12 @@ spec = describe "Calendar retains sub-minute progress" $ do
             -- flooring would cross midnight and roll the date here while
             -- advancing the clock by nothing whatsoever.
             forM_ [ (0, 0), (0, 0.25), (1, 0) ] $ \(scale, dt) → do
-                let (t, r, d, rolled) = advanceWorldClock
-                        defaultCalendarConfig scale dt (WorldTime 23 59)
-                        maxClockRemainder (WorldDate 5 4 3)
-                ((scale, dt), t, r, d, rolled) `shouldBe`
-                    ((scale, dt), WorldTime 23 59, maxClockRemainder,
-                     WorldDate 5 4 3, 0)
+                let start = PreciseWorldTime (WorldTime 23 59)
+                                             maxClockRemainder
+                    (c, d, rolled) = advanceWorldClock
+                        defaultCalendarConfig scale dt start (WorldDate 5 4 3)
+                ((scale, dt), c, d, rolled) `shouldBe`
+                    ((scale, dt), start, WorldDate 5 4 3, 0)
 
         it "never lets the same elapsed time diverge by a whole minute \
            \between two partitions of it" $ do
@@ -256,11 +258,10 @@ spec = describe "Calendar retains sub-minute progress" $ do
             -- no player-visible reading can disagree.
             let coarse = replicate 2000 (37.5, 0.2)
                 fine   = replicate 8000 (37.5, 0.05)
-                (tc, _, rc) = advanceSchedule (WorldTime 6 17)
-                    (remainderOf 0.5) coarse
-                (tf, _, rf) = advanceSchedule (WorldTime 6 17)
-                    (remainderOf 0.5) fine
-            tc `shouldBe` tf
+                start  = PreciseWorldTime (WorldTime 6 17) (remainderOf 0.5)
+                (cc, rc) = advanceSchedule start coarse
+                (cf, rf) = advanceSchedule start fine
+            pwtTime cc `shouldBe` pwtTime cf
             rc `shouldBe` rf
 
         it "carries a remainder across a minute, a midnight, a month end \
@@ -269,28 +270,33 @@ spec = describe "Calendar retains sub-minute progress" $ do
             -- minute, so every boundary is crossed BY the retained
             -- fraction rather than by the tick alone.
             let step time date = advanceWorldClock defaultCalendarConfig
-                    1 15 time (remainderOf 0.75) date
-                (t1, r1, d1, n1) = step (WorldTime 10 0) (WorldDate 1 1 1)
-                (t2, _, d2, n2) = step (WorldTime 23 59) (WorldDate 1 1 1)
-                (t3, _, d3, n3) = step (WorldTime 23 59) (WorldDate 1 1 30)
-                (t4, _, d4, n4) = step (WorldTime 23 59) (WorldDate 1 12 30)
+                    1 15 (PreciseWorldTime time (remainderOf 0.75)) date
+                (c1, d1, n1) = step (WorldTime 10 0) (WorldDate 1 1 1)
+                (c2, d2, n2) = step (WorldTime 23 59) (WorldDate 1 1 1)
+                (c3, d3, n3) = step (WorldTime 23 59) (WorldDate 1 1 30)
+                (c4, d4, n4) = step (WorldTime 23 59) (WorldDate 1 12 30)
             -- 0.75 + 15 = 15.75 minutes.
-            (t1, d1, n1) `shouldBe` (WorldTime 10 15, WorldDate 1 1 1, 0)
-            clockRemainderMinutes r1 `shouldBe` 0.75
-            (t2, d2, n2) `shouldBe` (WorldTime 0 14, WorldDate 1 1 2, 1)
-            (t3, d3, n3) `shouldBe` (WorldTime 0 14, WorldDate 1 2 1, 1)
-            (t4, d4, n4) `shouldBe` (WorldTime 0 14, WorldDate 2 1 1, 1)
+            (pwtTime c1, d1, n1)
+                `shouldBe` (WorldTime 10 15, WorldDate 1 1 1, 0)
+            clockRemainderMinutes (pwtRemainder c1) `shouldBe` 0.75
+            (pwtTime c2, d2, n2)
+                `shouldBe` (WorldTime 0 14, WorldDate 1 1 2, 1)
+            (pwtTime c3, d3, n3)
+                `shouldBe` (WorldTime 0 14, WorldDate 1 2 1, 1)
+            (pwtTime c4, d4, n4)
+                `shouldBe` (WorldTime 0 14, WorldDate 2 1 1, 1)
 
         it "spends exactly the retained fraction when it completes a \
            \minute at a boundary" $ do
             -- 0.75 already held plus 0.25 more is the whole minute that
             -- crosses midnight. Dropping the remainder here would leave
             -- the clock a minute behind for the rest of the session.
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    1 15 (WorldTime 23 59) (remainderOf 0.75)
+            let (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1 15
+                    (PreciseWorldTime (WorldTime 23 59) (remainderOf 0.75))
                     (WorldDate 4 6 9)
-            t `shouldBe` WorldTime 0 14
-            clockRemainderMinutes r `shouldBe` 0.75
+            pwtTime c `shouldBe` WorldTime 0 14
+            clockRemainderMinutes (pwtRemainder c) `shouldBe` 0.75
             d `shouldBe` WorldDate 4 6 10
             rolled `shouldBe` 1
 
@@ -299,13 +305,15 @@ spec = describe "Calendar retains sub-minute progress" $ do
             -- Far past anything a sanitised tick produces, which is the
             -- point: the guards, not the caller, are what keep the
             -- returned remainder inside [0, 1).
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    1440 (fromIntegral daysPerYear) (WorldTime 0 0)
-                    (remainderOf 0.5) (WorldDate 1 1 1)
+            let (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1440 (fromIntegral daysPerYear)
+                    (PreciseWorldTime (WorldTime 0 0) (remainderOf 0.5))
+                    (WorldDate 1 1 1)
             rolled `shouldBe` daysPerYear
             d `shouldBe` WorldDate 2 1 1
-            wtHour t `shouldSatisfy` (\h → h ≥ 0 ∧ h ≤ 23)
-            clockRemainderMinutes r `shouldSatisfy` (\v → v ≥ 0 ∧ v < 1)
+            wtHour (pwtTime c) `shouldSatisfy` (\h → h ≥ 0 ∧ h ≤ 23)
+            clockRemainderMinutes (pwtRemainder c)
+                `shouldSatisfy` (\v → v ≥ 0 ∧ v < 1)
 
     describe "the remainder's own domain" $ do
 
@@ -339,7 +347,7 @@ spec = describe "Calendar retains sub-minute progress" $ do
         it "equals the whole-minute angle when no progress is retained" $
             forM_ [ WorldTime 0 0, WorldTime 6 0, WorldTime 12 0
                   , WorldTime 18 30, WorldTime 23 59 ] $ \t →
-                worldTimeSunAngleWith t zeroClockRemainder
+                preciseSunAngle (preciseWorldTime t)
                     `shouldBe` worldTimeToSunAngle t
 
         it "is nondecreasing across a day of sub-minute ticks, and wraps \
@@ -347,12 +355,12 @@ spec = describe "Calendar retains sub-minute progress" $ do
             -- Sampled by driving the real advance, so the claim is about
             -- the angles a session actually produces.
             let ticks = 4000
-                sample (angles, time, remainder, date) _ =
-                    let (t', r', d', _) = advanceWorldClock
-                            defaultCalendarConfig 1 0.25 time remainder date
-                    in ( worldTimeSunAngleWith t' r' : angles, t', r', d')
-                (collected, _, _, _) = foldl' sample
-                    ([], WorldTime 0 0, zeroClockRemainder, WorldDate 1 1 1)
+                sample (angles, clock, date) _ =
+                    let (c', d', _) = advanceWorldClock
+                            defaultCalendarConfig 1 0.25 clock date
+                    in (preciseSunAngle c' : angles, c', d')
+                (collected, _, _) = foldl' sample
+                    ( [], preciseWorldTime (WorldTime 0 0), WorldDate 1 1 1)
                     [1 .. ticks ∷ Int]
                 angles = reverse collected
             -- 4000 quarter-second ticks at scale 1 is 1000 game-minutes:
@@ -361,7 +369,8 @@ spec = describe "Calendar retains sub-minute progress" $ do
             length (filter (\(a, b) → b > a) (zip angles (drop 1 angles)))
                 `shouldSatisfy` (> 0)
             -- Midnight itself is 0 whatever fraction is retained.
-            worldTimeSunAngleWith (WorldTime 0 0) (remainderOf 0.5)
+            preciseSunAngle
+                (PreciseWorldTime (WorldTime 0 0) (remainderOf 0.5))
                 `shouldSatisfy` (\a → a > 0 ∧ a < 1e-3)
 
 -- * The tick spec
@@ -379,7 +388,7 @@ installTickPages ∷ EngineEnv → [(WorldPageId, WorldTime, Float)]
 installTickPages env pages = do
     installed ← forM pages $ \(pid, time, scale) → do
         ws ← emptyWorldState
-        writeIORef (wsTimeRef ws) time
+        writeIORef (wsTimeRef ws) (preciseWorldTime time)
         writeIORef (wsDateRef ws) (WorldDate 1 1 1)
         writeIORef (wsTimeScaleRef ws) scale
         pure (pid, ws)
@@ -397,11 +406,14 @@ runTicks env n dt = do
     lastRef ← newIORef 0
     forM_ [1 .. n] $ \(_ ∷ Int) → void (worldTickWith clock env lastRef)
 
-readClock ∷ WorldState → IO (WorldTime, ClockRemainder, WorldDate)
-readClock ws = (,,)
+readClock ∷ WorldState → IO (PreciseWorldTime, WorldDate)
+readClock ws = (,)
     <$> readIORef (wsTimeRef ws)
-    <*> readIORef (wsTimeRemainderRef ws)
     <*> readIORef (wsDateRef ws)
+
+-- | Just this page's retained sub-minute progress.
+readRemainder ∷ WorldState → IO ClockRemainder
+readRemainder ws = pwtRemainder ⊚ readIORef (wsTimeRef ws)
 
 tickSpec ∷ SpecWith EngineEnv
 tickSpec = describe "Calendar retains sub-minute progress, through the \
@@ -414,7 +426,7 @@ tickSpec = describe "Calendar retains sub-minute progress, through the \
         [(_, ws)] ← installTickPages env [(tickPageA, WorldTime 10 0, 1)]
         runTicks env 240 0.25
         readClock ws `shouldReturn`
-            (WorldTime 11 0, zeroClockRemainder, WorldDate 1 1 1)
+            (preciseWorldTime (WorldTime 11 0), WorldDate 1 1 1)
 
     it "reaches the same day-3 22:00 from either partition of 60 real \
        \seconds at scale 60" $ \env → do
@@ -426,8 +438,8 @@ tickSpec = describe "Calendar retains sub-minute progress, through the \
             [(_, ws)] ← installTickPages env
                 [(tickPageA, WorldTime 10 0, 60)]
             runTicks env n dt
-            (time, _, date) ← readClock ws
-            ((n, dt), time, date) `shouldBe`
+            (clock, date) ← readClock ws
+            ((n, dt), pwtTime clock, date) `shouldBe`
                 ((n, dt), WorldTime 22 0, WorldDate 1 1 3)
 
     it "admits only the capped 0.25 s of an over-cap sample, remainder \
@@ -437,7 +449,8 @@ tickSpec = describe "Calendar retains sub-minute progress, through the \
         lastRef ← newIORef 100
         _ ← worldTickWith clock env lastRef
         readClock ws `shouldReturn`
-            (WorldTime 10 0, remainderOf 0.25, WorldDate 1 1 1)
+            ( PreciseWorldTime (WorldTime 10 0) (remainderOf 0.25)
+            , WorldDate 1 1 1 )
 
     it "leaves a paused page's remainder bit-identical however many \
        \ticks land" $ \env → do
@@ -452,13 +465,12 @@ tickSpec = describe "Calendar retains sub-minute progress, through the \
        \applies the new scale only to later elapsed time" $ \env → do
         [(pid, ws)] ← installTickPages env [(tickPageA, WorldTime 10 0, 1)]
         runTicks env 2 0.25          -- 0.5 minutes retained
-        readIORef (wsTimeRemainderRef ws)
-            `shouldReturn` remainderOf 0.5
+        readRemainder ws `shouldReturn` remainderOf 0.5
         writeIORef (wsTimeScaleRef ws) 2
         pid `shouldBe` tickPageA
         runTicks env 1 0.25          -- + 0.5 minutes: exactly one minute
         readClock ws `shouldReturn`
-            (WorldTime 10 1, zeroClockRemainder, WorldDate 1 1 1)
+            (preciseWorldTime (WorldTime 10 1), WorldDate 1 1 1)
 
     it "runs each page's remainder independently and never leaks one \
        \into another" $ \env → do
@@ -466,8 +478,8 @@ tickSpec = describe "Calendar retains sub-minute progress, through the \
             [ (tickPageA, WorldTime 10 0, 1)
             , (tickPageB, WorldTime 10 0, 2) ]
         runTicks env 1 0.25
-        readIORef (wsTimeRemainderRef wsA) `shouldReturn` remainderOf 0.25
-        readIORef (wsTimeRemainderRef wsB) `shouldReturn` remainderOf 0.5
+        readRemainder wsA `shouldReturn` remainderOf 0.25
+        readRemainder wsB `shouldReturn` remainderOf 0.5
 
     it "leaves a hidden page's remainder untouched, with no catch-up \
        \when it becomes visible again" $ \env → do
@@ -480,43 +492,93 @@ tickSpec = describe "Calendar retains sub-minute progress, through the \
         atomicModifyIORef' (wsWorldManagerRef sim) $ \mgr →
             (mgr { wmVisible = [tickPageA] }, ())
         runTicks env 40 0.25
-        readIORef (wsTimeRemainderRef wsB) `shouldReturn` remainderOf 0.25
+        readRemainder wsB `shouldReturn` remainderOf 0.25
         atomicModifyIORef' (wsWorldManagerRef sim) $ \mgr →
             (mgr { wmVisible = [tickPageA, tickPageB] }, ())
         runTicks env 1 0.25
-        readIORef (wsTimeRemainderRef wsB) `shouldReturn` remainderOf 0.5
-        readIORef (wsTimeRemainderRef wsA) `shouldReturn` remainderOf 0.5
+        readRemainder wsB `shouldReturn` remainderOf 0.5
+        readRemainder wsA `shouldReturn` remainderOf 0.5
+
+    it "publishes the clock as ONE value, so a concurrent reader never \
+       \sees a new minute beside a stale remainder" $ \env → do
+        -- The consistency the solar consumers depend on. 'Unit.LineOfSight'
+        -- reads this ref on the unit thread and
+        -- "Engine.Scripting.Lua.API.Power" on the Lua thread while the
+        -- world thread writes it; with the minutes and the remainder in
+        -- SEPARATE refs a reader landing between the two writes of a
+        -- minute carry would pair the new minute with the previous
+        -- remainder, and the sun angle would step forward and then back.
+        --
+        -- Scale 5 against quarter-second ticks adds 1.25 minutes each
+        -- time, so every single tick both carries a whole minute and
+        -- leaves a fraction behind — the exact interleaving at issue,
+        -- 600 times over. Starting at midnight and stopping at 12:30
+        -- keeps the run inside one day, where the angle's contract is
+        -- nondecreasing; a midnight wrap would legitimately reset it.
+        [(_, ws)] ← installTickPages env [(tickPageA, WorldTime 0 0, 5)]
+        stop       ← newIORef False
+        backwards  ← newIORef (0 ∷ Int)
+        distinct   ← newIORef (0 ∷ Int)
+        lastSeen   ← newIORef (-1 ∷ Float)
+        -- Counters rather than a sample list: the reader spins for the
+        -- whole run and a retained sample per iteration is millions of
+        -- them.
+        reader ← async $
+            let loop = do
+                    done ← readIORef stop
+                    unless done $ do
+                        clock ← readIORef (wsTimeRef ws)
+                        let angle = preciseSunAngle clock
+                        previous ← readIORef lastSeen
+                        when (angle < previous) $ modifyIORef' backwards (+ 1)
+                        when (angle ≢ previous) $ modifyIORef' distinct (+ 1)
+                        writeIORef lastSeen angle
+                        loop
+            in loop
+        runTicks env 600 0.25
+        writeIORef stop True
+        wait reader
+        readClock ws `shouldReturn`
+            (preciseWorldTime (WorldTime 12 30), WorldDate 1 1 1)
+        -- Every angle a reader can observe belongs to a state the tick
+        -- actually published, so the sequence only ever goes forward.
+        readIORef backwards `shouldReturn` 0
+        -- …and the reader really did watch the clock move, so a sampler
+        -- that saw one frozen value cannot pass the check above
+        -- vacuously.
+        seen ← readIORef distinct
+        seen `shouldSatisfy` (> 1)
 
     it "starts a freshly created page at no retained progress" $ \env → do
         ws ← emptyWorldState
-        readIORef (wsTimeRemainderRef ws) `shouldReturn` zeroClockRemainder
+        readRemainder ws `shouldReturn` zeroClockRemainder
         [(_, replaced)] ← installTickPages env
             [(tickPageA, WorldTime 10 0, 1)]
         runTicks env 1 0.25
-        readIORef (wsTimeRemainderRef replaced)
+        readRemainder replaced
             `shouldReturn` remainderOf 0.25
         -- Replacing the page with a new WorldState under the SAME id
         -- leaves nothing of the old page's progress behind.
         [(_, fresh)] ← installTickPages env
             [(tickPageA, WorldTime 10 0, 1)]
-        readIORef (wsTimeRemainderRef fresh) `shouldReturn` zeroClockRemainder
+        readRemainder fresh `shouldReturn` zeroClockRemainder
 
     it "clears the remainder on world.setTime and keeps it on \
        \world.setDate" $ \env → do
         [(_, ws)] ← installTickPages env [(tickPageA, WorldTime 10 0, 1)]
         (logger, _) ← capturingLogger
         runTicks env 1 0.25
-        readIORef (wsTimeRemainderRef ws) `shouldReturn` remainderOf 0.25
+        readRemainder ws `shouldReturn` remainderOf 0.25
         -- A date poke changes no time of day, so the progress stands.
         handleWorldSetDateCommand (toWorldSimCapability env) logger
                                   tickPageA 3 4 5
-        readIORef (wsTimeRemainderRef ws) `shouldReturn` remainderOf 0.25
+        readRemainder ws `shouldReturn` remainderOf 0.25
         readIORef (wsDateRef ws) `shouldReturn` WorldDate 3 4 5
         -- Setting the clock names a whole minute, so it does not.
         handleWorldSetTimeCommand (toWorldSimCapability env) logger
                                   tickPageA 7 8
         readClock ws `shouldReturn`
-            (WorldTime 7 8, zeroClockRemainder, WorldDate 3 4 5)
+            (preciseWorldTime (WorldTime 7 8), WorldDate 3 4 5)
 
 -- * The staging spec
 
@@ -630,9 +692,10 @@ stageWith env stored = do
         Nothing → expectationFailure "the staged page is missing"
                     ≫ error "unreachable"
         Just sp → do
-            time ← readIORef (wsTimeRef (spWorldState sp))
-            remainder ← readIORef (wsTimeRemainderRef (spWorldState sp))
-            pure (time, remainder, entries)
+            -- One read of the whole clock, the way every production
+            -- consumer reads it.
+            clock ← readIORef (wsTimeRef (spWorldState sp))
+            pure (pwtTime clock, pwtRemainder clock, entries)
 
 repairWarnings ∷ [LogEntry] → [LogEntry]
 repairWarnings = filter $ \e →

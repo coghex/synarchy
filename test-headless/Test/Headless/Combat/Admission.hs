@@ -55,7 +55,7 @@ import World.Page.Types (WorldPageId(..))
 import World.State.Types
     (WorldState(..), emptyWorldState, WorldManager(..), emptyWorldManager)
 import World.Tile.Types (WorldTileData(..))
-import World.Time.Types (WorldTime(..))
+import World.Time.Types (WorldTime(..), preciseWorldTime)
 import Structure.Types (emptyChunkStructures)
 
 -- ---- Fixture ------------------------------------------------------
@@ -108,13 +108,13 @@ setupPages = do
     wsA ← emptyWorldState
     writeIORef (wsTilesRef wsA)
         (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1)
-    writeIORef (wsTimeRef wsA) (WorldTime 12 0)
+    writeIORef (wsTimeRef wsA) (preciseWorldTime (WorldTime 12 0))
     writeIORef (wsGenParamsRef wsA)
         (Just defaultWorldGenParams { wgpWorldSize = 4 })
     wsB ← emptyWorldState
     writeIORef (wsTilesRef wsB)
         (WorldTileData (HM.singleton (ChunkCoord 0 0) flatChunk) 1)
-    writeIORef (wsTimeRef wsB) (WorldTime 12 0)
+    writeIORef (wsTimeRef wsB) (preciseWorldTime (WorldTime 12 0))
     writeIORef (wsGenParamsRef wsB)
         (Just defaultWorldGenParams { wgpWorldSize = 4 })
     pure (emptyWorldManager

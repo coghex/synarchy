@@ -254,24 +254,23 @@ spec ∷ Spec
 spec = do
     describe "advanceWorldClock" $ do
         it "leaves the date alone before midnight" $ do
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    1.0 60.0 (WorldTime 10 0) zeroClockRemainder
+            let (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1.0 60.0 (preciseWorldTime (WorldTime 10 0))
                     (WorldDate 1 1 1)
-            t `shouldBe` WorldTime 11 0
-            r `shouldBe` zeroClockRemainder
+            c `shouldBe` preciseWorldTime (WorldTime 11 0)
             d `shouldBe` WorldDate 1 1 1
             rolled `shouldBe` 0
         it "carries midnight into the next day" $ do
-            let (t, _, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    1.0 120.0 (WorldTime 23 0) zeroClockRemainder
+            let (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1.0 120.0 (preciseWorldTime (WorldTime 23 0))
                     (WorldDate 1 1 1)
-            t `shouldBe` WorldTime 1 0
+            pwtTime c `shouldBe` WorldTime 1 0
             d `shouldBe` WorldDate 1 1 2
             rolled `shouldBe` 1
         it "carries several midnights crossed by one high-time-scale tick" $ do
             -- 3000 game-min/real-sec for 3 real-sec = 9000 min = 6.25 days
-            let (_, _, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    3000.0 3.0 (WorldTime 0 0) zeroClockRemainder
+            let (_, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    3000.0 3.0 (preciseWorldTime (WorldTime 0 0))
                     (WorldDate 1 1 1)
             rolled `shouldBe` 6
             d `shouldBe` WorldDate 1 1 7
@@ -282,11 +281,10 @@ spec = do
             -- merely close -- a paused world that crept forward a
             -- fraction of a minute per tick would be exactly the defect
             -- the retained remainder introduced.
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    0.0 3600.0 (WorldTime 23 59) halfMinute
-                    (WorldDate 1 12 30)
-            t `shouldBe` WorldTime 23 59
-            r `shouldBe` halfMinute
+            let start = PreciseWorldTime (WorldTime 23 59) halfMinute
+                (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    0.0 3600.0 start (WorldDate 1 12 30)
+            c `shouldBe` start
             d `shouldBe` WorldDate 1 12 30
             rolled `shouldBe` 0
 
@@ -307,11 +305,10 @@ spec = do
                 -- alone" covers the sub-minute progress too. A refusal
                 -- that zeroed it, or that spent it, would silently move
                 -- the clock of a world the guard just protected.
-                let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                        scale 0.25 (WorldTime 23 59) halfMinute
-                        (WorldDate 3 7 11)
-                t `shouldBe` WorldTime 23 59
-                r `shouldBe` halfMinute
+                let start = PreciseWorldTime (WorldTime 23 59) halfMinute
+                    (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                        scale 0.25 start (WorldDate 3 7 11)
+                c `shouldBe` start
                 d `shouldBe` WorldDate 3 7 11
                 rolled `shouldBe` 0
 
@@ -324,9 +321,11 @@ spec = do
             -- is the start 'worstCaseMinuteTotal' is derived from.
             -- Driving the real clock from a smaller start would no longer
             -- be the worst case at all.
-            let (t, r, _, rolled) = advanceWorldClock defaultCalendarConfig
-                    maxTimeScale 0.25 (WorldTime 23 59) maxClockRemainder
+            let (c, _, rolled) = advanceWorldClock defaultCalendarConfig
+                    maxTimeScale 0.25
+                    (PreciseWorldTime (WorldTime 23 59) maxClockRemainder)
                     (WorldDate 1 1 1)
+                (t, r) = (pwtTime c, pwtRemainder c)
             -- A BOUND, not a prediction: 'worstCaseMinuteTotal' adds the
             -- whole minute a remainder below 1 can carry, and this start
             -- does not always carry it. What must hold is that the real
@@ -367,9 +366,10 @@ spec = do
         it "accepts the 50000 probe scale and carries its whole-day count" $ do
             -- tools/farm_ai_probe.py and tools/crop_probe.py both drive
             -- the world at this scale; requirement 5 keeps it accepted.
-            let (t, _, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    50000.0 1.0 (WorldTime 0 0) zeroClockRemainder
+            let (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    50000.0 1.0 (preciseWorldTime (WorldTime 0 0))
                     (WorldDate 1 1 1)
+                t = pwtTime c
             rolled `shouldBe` 34
             t `shouldBe` WorldTime 17 20
             d `shouldBe` WorldDate 1 2 5
@@ -378,11 +378,10 @@ spec = do
             -- An accepted scale, an ordinary elapsed step, a representable
             -- day count -- and a year that cannot absorb the carry. The
             -- pre-#2280 clock wrapped straight into a negative year.
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    3000.0 180.0 (WorldTime 6 0) halfMinute
-                    (WorldDate maxBound 1 1)
-            t `shouldBe` WorldTime 6 0
-            r `shouldBe` halfMinute
+            let start = PreciseWorldTime (WorldTime 6 0) halfMinute
+                (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    3000.0 180.0 start (WorldDate maxBound 1 1)
+            c `shouldBe` start
             d `shouldBe` WorldDate maxBound 1 1
             rolled `shouldBe` 0
 
@@ -393,10 +392,10 @@ spec = do
             -- divide by zero. Totality means the unchanged clock, not a
             -- crash.
             calendarDaysPerYearChecked wrappingCalendar `shouldBe` Nothing
-            let (t, r, d, rolled) = advanceWorldClock wrappingCalendar
-                    1.0 3600.0 (WorldTime 23 0) halfMinute (WorldDate 1 1 1)
-            t `shouldBe` WorldTime 23 0
-            r `shouldBe` halfMinute
+            let start = PreciseWorldTime (WorldTime 23 0) halfMinute
+                (c, d, rolled) = advanceWorldClock wrappingCalendar
+                    1.0 3600.0 start (WorldDate 1 1 1)
+            c `shouldBe` start
             d `shouldBe` WorldDate 1 1 1
             rolled `shouldBe` 0
 
@@ -404,10 +403,10 @@ spec = do
             -- The guard is over the values each floor actually receives,
             -- so a producer handing the clock a NaN dt is refused even at
             -- an accepted scale.
-            let (t, r, d, rolled) = advanceWorldClock defaultCalendarConfig
-                    1.0 nanScale (WorldTime 10 0) halfMinute (WorldDate 1 1 1)
-            t `shouldBe` WorldTime 10 0
-            r `shouldBe` halfMinute
+            let start = PreciseWorldTime (WorldTime 10 0) halfMinute
+                (c, d, rolled) = advanceWorldClock defaultCalendarConfig
+                    1.0 nanScale start (WorldDate 1 1 1)
+            c `shouldBe` start
             d `shouldBe` WorldDate 1 1 1
             rolled `shouldBe` 0
 

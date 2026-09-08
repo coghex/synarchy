@@ -116,10 +116,12 @@ clockMinutesPerDayD = realToFrac clockMinutesPerDay
 --   __Why 'Double' and not 'Float'.__ The two inputs are 'Float's, and
 --   their product is EXACT in 'Double': a 'Float' significand is 24 bits,
 --   so a product needs at most 48, comfortably inside 'Double''s 53. The
---   only error the accumulator can carry is therefore the rounding of
---   the running sum itself, bounded by 'clockTickErrorBound' per tick —
---   and the sum is reduced back below 'clockMinutesPerDay' every tick,
---   so that bound never grows with the length of the session.
+--   only error a tick can introduce is therefore the rounding of the one
+--   sum this value takes part in — itself plus the tick's leftover
+--   FRACTION, both below one minute — which 'clockTickErrorBound'
+--   bounds. The tick's whole minutes never enter that sum: they are
+--   split off into exact 'Int' arithmetic first, which is what keeps the
+--   bound independent of the time scale and of session length alike.
 --
 --   Constructed only by 'mkClockRemainder' / 'repairClockRemainder' and
 --   by 'World.Time.Types.advanceWorldClock', which is what holds the

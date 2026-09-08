@@ -3,8 +3,11 @@ module World.Time.Types
     ( module World.Time.Scale
     , WorldTime(..)
     , defaultWorldTime
+    , PreciseWorldTime(..)
+    , preciseWorldTime
+    , defaultPreciseWorldTime
     , worldTimeToSunAngle
-    , worldTimeSunAngleWith
+    , preciseSunAngle
     , advanceWorldClock
     , WorldDate(..)
     , worldDateAddDaysChecked
@@ -49,13 +52,41 @@ defaultWorldTime = WorldTime
 -- | Convert world time to sun angle (0.0 .. 1.0)
 --   Mapping: midnight (0:00) = 0.0, 6am = 0.25, noon = 0.5, 6pm = 0.75
 --
---   Whole minutes only. 'worldTimeSunAngleWith' is what every LIVE page
+--   Whole minutes only. 'preciseSunAngle' is what every LIVE page
 --   uses (#2471); this remains the answer for a 'WorldTime' with no
 --   retained progress beside it, and the two agree exactly there.
 worldTimeToSunAngle ∷ WorldTime → Float
 worldTimeToSunAngle (WorldTime h m) =
     let totalMinutes = fromIntegral h * 60.0 + fromIntegral m ∷ Float
     in totalMinutes / 1440.0   -- 1440 = 24 * 60
+
+-- | A page's time of day as ONE value: the whole minutes every reader
+--   has always seen, plus the sub-minute progress beside them (#2471).
+--
+--   The two are a single record rather than two refs because they are
+--   published together and read together. A live page's clock is written
+--   by the world thread and read by others — 'Unit.LineOfSight' on the
+--   unit thread, "Engine.Scripting.Lua.API.Power" on the Lua thread —
+--   and while they were separate a reader landing between the two writes
+--   of a minute carry could pair the NEW minute with the OLD remainder.
+--   That is a clock no tick ever produced, and it would run the sun
+--   angle backwards. One 'IORef' holding both makes every published
+--   state a whole one, structurally: there is no way to write half a
+--   clock because there is no setter for half a clock.
+data PreciseWorldTime = PreciseWorldTime
+    { pwtTime      ∷ !WorldTime
+    , pwtRemainder ∷ !ClockRemainder
+      -- ^ Game-minutes already elapsed that 'pwtTime' cannot store,
+      --   always in @[0, 1)@ — see 'World.Time.Scale.ClockRemainder'.
+    } deriving (Show, Eq)
+
+-- | A clock at a whole minute, carrying no sub-minute progress: what a
+--   @world.setTime@, a fresh page and every pre-#2471 save all produce.
+preciseWorldTime ∷ WorldTime → PreciseWorldTime
+preciseWorldTime t = PreciseWorldTime t zeroClockRemainder
+
+defaultPreciseWorldTime ∷ PreciseWorldTime
+defaultPreciseWorldTime = preciseWorldTime defaultWorldTime
 
 -- | The sun angle of a live page's clock: whole minutes PLUS the
 --   sub-minute progress that clock is carrying (#2471).
@@ -72,8 +103,12 @@ worldTimeToSunAngle (WorldTime h m) =
 --   whole-minute step carries exactly the minute the remainder gave up),
 --   and EQUAL to 'worldTimeToSunAngle' whenever the remainder is zero.
 --   Midnight still wraps to 0, exactly as the whole-minute angle does.
-worldTimeSunAngleWith ∷ WorldTime → ClockRemainder → Float
-worldTimeSunAngleWith (WorldTime h m) remainder =
+--
+--   It takes the WHOLE clock, never a minute and a remainder separately:
+--   that is what stops a caller from pairing halves of two different
+--   published states and getting an angle no tick ever produced.
+preciseSunAngle ∷ PreciseWorldTime → Float
+preciseSunAngle (PreciseWorldTime (WorldTime h m) remainder) =
     realToFrac (preciseMinutes / clockMinutesPerDayD)
   where
     preciseMinutes = fromIntegral h * 60 + fromIntegral m
@@ -137,21 +172,22 @@ worldTimeSunAngleWith (WorldTime h m) remainder =
 --   time, remainder and date with zero rolled days — never a partially
 --   applied advance, and never a remainder the refused tick moved.
 --   Every accepted input keeps the behaviour it already had at whole
---   minutes, and the returned 'WorldTime' always satisfies
---   @0 ≤ wtHour ≤ 23@ and @0 ≤ wtMinute ≤ 59@ while the returned
---   'World.Time.Scale.ClockRemainder' always satisfies its own
---   @[0, 1)@ range.
+--   minutes, and the returned clock's 'pwtTime' always satisfies
+--   @0 ≤ wtHour ≤ 23@ and @0 ≤ wtMinute ≤ 59@ while its 'pwtRemainder'
+--   always satisfies its own @[0, 1)@ range. The two come back as ONE
+--   'PreciseWorldTime' so a caller cannot publish half an advance.
 advanceWorldClock ∷ CalendarConfig → Float → Float
-                  → WorldTime → ClockRemainder → WorldDate
-                  → (WorldTime, ClockRemainder, WorldDate, Int)
-advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) remainder date
+                  → PreciseWorldTime → WorldDate
+                  → (PreciseWorldTime, WorldDate, Int)
+advanceWorldClock cc timeScale dtSeconds clock date
     | not (acceptedTimeScale timeScale) = unchanged
     | not (acceptedElapsed dtSeconds)   = unchanged
     | otherwise = case floorToIntExact added of
         Nothing         → unchanged
         Just addedWhole → withWholeMinutes addedWhole
   where
-    unchanged = (time, remainder, date, 0)
+    PreciseWorldTime (WorldTime h m) remainder = clock
+    unchanged = (clock, date, 0)
 
     -- Both factors are 'Float', so this product is EXACT in 'Double'
     -- (24 + 24 significand bits, against 53 available). Widening BEFORE
@@ -210,12 +246,14 @@ advanceWorldClock cc timeScale dtSeconds time@(WorldTime h m) remainder date
         roll totalMinutes =
             let (daysRolled, wrapped) =
                     totalMinutes `divMod` clockMinutesPerDayInt
-                time' = WorldTime (wrapped `div` 60) (wrapped `mod` 60)
+                clock' = PreciseWorldTime
+                    (WorldTime (wrapped `div` 60) (wrapped `mod` 60))
+                    remainder'
             in if daysRolled > 0
                 then case worldDateAddDaysChecked cc daysRolled date of
                     Nothing    → unchanged
-                    Just date' → (time', remainder', date', daysRolled)
-                else (time', remainder', date, daysRolled)
+                    Just date' → (clock', date', daysRolled)
+                else (clock', date, daysRolled)
 
 -- | World date (placeholder for seasons).
 --   Currently unused for sun angle calculation.
