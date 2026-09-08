@@ -42,25 +42,59 @@ import Combat.Types (AttackMode(..))
 
 -- ===================================================================
 -- Tier 3 physical damage model (real-units kinematics). The wielder
--- does muscular WORK on the swing; that work becomes kinetic energy of
--- an effective striking mass at an impact velocity (capped by how fast
--- the limb can move). From the swing we read off ENERGY (what shears /
--- penetrates tissue) and MOMENTUM (what crushes):
+-- does muscular WORK on the swing; the implement rides the lever of an
+-- inferred limb, so that work spins the whole lever about the shoulder
+-- (capped by how fast the limb can move). From the swing we read off
+-- ENERGY (what shears / penetrates tissue) and MOMENTUM (what crushes):
 --
 --   work  = eHuman · strength · modeWork · skillEff · stamina · (1−pain)   [J]
---   m_eff = weaponMass + modeCoupling · bodyMass                          [kg]
---   v_max = vHuman · modeSpeed · (0.6 + 0.4·dexterity)                    [m/s]
---   v     = min(v_max, sqrt(2·work / m_eff))     -- work-limited OR capped
---   E     = ½·m_eff·v²        p = m_eff·v
 --
--- Each kind converts its driver into a wound via a mechanism-specific
--- lethality efficiency η_kind (concentration + material gates):
---   stab / slash  — ENERGY-driven (cut/pierce = work to shear tissue)
---   blunt         — MOMENTUM-driven (crush/fracture peak force ∝ impulse)
+--   -- Lever geometry, radii from the shoulder, in metres:
+--   R     = max(0.05, armLen + wepLen)             -- contact (tip) radius
+--   r_CoM = armLen + clamp(0,1,wepCoM) · wepLen    -- implement CoM radius
+--   I     = max(1e-4, ⅓·armMass·armLen² + wepMass·r_CoM²)        [kg·m²]
+--             -- limb as a rod about one end + implement as a point mass
 --
---   delivered = driver · η_kind · (1 − natRes[kind]) · (1 − toughCut)
---   severity  = delivered · kindSeverityFactor[kind] / (partMaxHp · perHp)
---   perHp = energyPerHp (stab/slash) | momentumPerHp (blunt)
+--   v_max = vHuman · modeSpeed · (0.6 + 0.4·dexterity)                  [m/s]
+--   ω     = min(v_max / R, sqrt(2·work / I))     -- tip-capped OR work-limited
+--   v     = ω·R                          m_eff = I / R²
+--   E     = ½·I·ω² = ½·m_eff·v²          p     = m_eff·v
+--
+-- m_eff is DERIVED from the lever, never stated: body mass reaches the
+-- blow only through armMass = armMassFrac·bodyMass — the limb's own
+-- inertia, ~5% of the body — and never as a mass added to the weapon's.
+-- So implement LENGTH and limb REACH move the answer through R and I
+-- together: a longer implement raises r_CoM and hence I (less ω for the
+-- same work), while raising R lowers both m_eff = I/R² and the angular
+-- cap v_max/R — the cap is on TIP speed, so v never exceeds v_max
+-- however the lever is built. That trade is what armMassFrac,
+-- armLengthFrac, and a weapon's mass / length / centre-of-mass tune.
+--
+-- Stab/slash spend ENERGY (cut/pierce = work to shear tissue); blunt
+-- spends MOMENTUM (crush/fracture peak force ∝ impulse). E and p are
+-- the SWING's outputs; a LUNGE adds the whole body on the same channel,
+-- and `driver` is what the kind finally selects:
+--
+--   driver = E + ½·lungeMomentumScale·bodyMass·v_lunge²   (stab / slash)
+--          | p +    lungeMomentumScale·bodyMass·v_lunge   (blunt)
+--   perHp  = energyPerHp (stab/slash) | momentumPerHp (blunt)
+--
+-- The driver then crosses three distinct stages. `budget` is how much
+-- couples into the body; `sevDriver` is what survived the target's
+-- armour + tissue stack; only then is severity read off:
+--
+--   budget    = driver · η_kind · qualityF · (1 − natRes[kind])
+--                      · (1 − toughCut) · kindWeight
+--   sevDriver = penetrate(armour ++ tissue layers, budget, wp, kind)
+--   severity  = sevDriver · kindSeverityFactor[kind] / (partMaxHp · perHp)
+--                                          -- raw; the return is clamped 0..1
+--
+-- η_kind (`rsEff`) is weapon SUITABILITY for the kind and nothing more;
+-- qualityF = 0.6 + 0.4·buildQuality; kindWeight splits a combo attack
+-- across its components (1.0 for a single-kind swing). Concentration
+-- and material gates are NOT folded into η_kind — sharpness and tip
+-- hardness / edge shear enter later, through the penetrating power `wp`
+-- that divides each layer's absorb cost inside `penetrate`.
 --
 -- The velocity cap makes light weapons realistic: a strong arm can't
 -- pour all its work into flicking a needle (capped → less E and p);

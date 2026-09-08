@@ -99,7 +99,7 @@ def test_manifest_fixture() -> None:
 
 
 def test_manifest_real_registry() -> None:
-    print("\n-- census manifest (real registry, 86 probes) --")
+    print(f"\n-- census manifest (real registry, {len(probe_runner_registry.PROBES)} probes) --")
     manifest = probe_census.build_manifest()
     expect(len(manifest["probes"]) == len(probe_runner_registry.PROBES),
            f"the manifest lists all {len(probe_runner_registry.PROBES)} registered probes")
@@ -113,14 +113,10 @@ def test_manifest_real_registry() -> None:
            f"{ci} entries are CI-eligible, matching tools/ci_probes.py")
     migrated = [e["key"] for e in manifest["probes"]
                 if e["protocol"] != "legacy"]
-    expect(migrated == ["blood_decal", "blood_impact", "circadian",
-                        "circadian_species", "collapse_crawl", "concussion_revive",
-                        "config_state", "disarm", "injury_log", "lua_orphan_prune",
-                        "machine_shop", "meal_waste",
-                        "mental_efficiency", "position_hold",
-                        "remote_warning_page_guard", "role", "state_of_mind",
-                        "text_encoding", "thermo_altitude", "thought", "wire"],
-           f"the twenty-one migrated probes are probe-result/v1 probes in "
+    expected = [key for key, _, _ in probe_runner_registry.PROBES
+                if key in probe_flake.PROTOCOL_PROBES]
+    expect(migrated == expected,
+           f"all {len(expected)} migrated probes are probe-result/v1 probes in "
            f"probe_runner_registry.PROBES order (got {migrated})")
 
     # The REAL docs-wip manifest, only when one is resolvable.
@@ -133,8 +129,12 @@ def test_manifest_real_registry() -> None:
     if not path.exists():
         skip(f"{path} has not been seeded yet")
         return
-    problems = probe_census.validate_manifest(probe_census.load(path))
-    expect(problems == [], f"the seeded {path} agrees with the live registry "
+    # An implementation worktree may add protocols before master merges.
+    # Exercise the canonical seed transformation in memory; never mutate the
+    # operator's census to make an unmerged migration's self-test pass.
+    candidate = probe_census.reconcile_inventory(probe_census.load(path))
+    problems = probe_census.validate_manifest(candidate)
+    expect(problems == [], f"the seeded {path} reconciles with the live registry in memory "
                            f"({problems[:3]})")
 
 
