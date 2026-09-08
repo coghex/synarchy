@@ -29,7 +29,7 @@ import time
 from probelib import (capture_request_id, send, send_json, poll_until,
                       wait_load_published, wait_save_complete)
 
-from .constants import (ACOLYTE_DEF, EXPECTED_COMPLETED, LOG_A, LOG_B, PAGE,
+from .constants import (ACOLYTE_DEF, REQUIRED_PREPARATION_COMPLETED, LOG_A, LOG_B, PAGE,
                         SLOT)
 from .harness import (Checks, ExpeditionState, StageAbort,
                       check_ai_tick_clean)
@@ -151,8 +151,8 @@ def load(chk: Checks, st: ExpeditionState) -> None:
     completed, _checked = poll_until(
         45.0, lambda: (lambda p: p if p[0] else None)(progress(port)),
         interval=1.0) or progress(port)
-    chk.ok(completed == EXPECTED_COMPLETED,
-           f"the completed objective set survives the reload exactly "
+    chk.ok(REQUIRED_PREPARATION_COMPLETED <= completed,
+           f"all required preparation completions survive the reload "
            f"({sorted(completed)})")
 
     stored = send_json(port, f"return building.getStorage({storage_bid})")

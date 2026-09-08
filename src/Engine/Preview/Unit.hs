@@ -45,7 +45,6 @@ module Engine.Preview.Unit
   , directionDirName
   , parseDirectionDirName
   , previewDirectionOrder
-  , sortFrameFiles
   , defaultAnimationName
   , resolveAnimDirections
   , frameIndexAt
@@ -70,7 +69,7 @@ import Engine.Asset.YamlUnits (UnitYamlAnim(..))
 import Engine.Core.Types
     ( PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..)
     , PreviewFrame(..) )
-import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir, sortFrameFiles)
+import Engine.Preview.Discovery (ItemDirError(..), resolveItemDir)
 import Unit.Atlas.Index (renderAtlasLoadError)
 import Unit.Atlas.Types
     ( AtlasAnimation(..), AtlasDirectionRow(..), atlasCellUV )
