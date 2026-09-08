@@ -163,8 +163,10 @@ buildingGetBuildRequiredFn env = do
 --   restoring an already-built container never masquerades as a new
 --   construction event. This arm covers exactly
 --   'Building.Knowledge.SeedAtBuildCompletion' defs; the INSTANT-BUILT
---   class ('Building.Knowledge.SeedAtSpawn', which never calls this
---   verb at all) is seeded by "Building.Thread.Command" at placement.
+--   class ('Building.Knowledge.SeedWhenBuilt', which never calls this
+--   verb at all) is instead MARKED by "Building.Thread.Command" at
+--   placement and SEEDED later, by the building drain's sweep, once
+--   'Building.Types.currentActivity' reports Built — not at placement.
 --   'Building.Knowledge.Live.seedBuiltContainer'
 --   additionally refuses to overwrite an existing record, so a later
 --   re-crossing (progress driven back down and up again) cannot erase a
