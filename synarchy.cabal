@@ -338,6 +338,8 @@ library
                      Engine.Scripting.Lua.Util
                      Engine.Scripting.Lua.API
                      Engine.Scripting.Lua.API.Descriptor
+                     Engine.Scripting.Lua.CallStats
+                     Engine.Scripting.Lua.API.CallStats
                      Engine.Scripting.Lua.API.Internal
                      Engine.Scripting.Lua.API.Namespaces
                      Engine.Scripting.Lua.API.PageBinding
@@ -1708,6 +1710,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.PauseGate
                    Test.Headless.Lua.ScriptState
                    Test.Headless.Lua.TickInterval
+                   Test.Headless.Lua.CallStats
                    Test.Headless.Lua.UiDescriptors
                    Test.Headless.Lua.SchedulerFairness
                    Test.Headless.Lua.DragSelectDeferred

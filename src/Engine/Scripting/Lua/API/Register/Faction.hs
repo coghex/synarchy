@@ -8,19 +8,20 @@ module Engine.Scripting.Lua.API.Register.Faction
   ( registerFactionAPI
   ) where
 
+import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Faction
 import qualified HsLua as Lua
 
-registerFactionAPI ∷ Lua.LuaE Lua.Exception ()
-registerFactionAPI = do
+registerFactionAPI ∷ LuaCallStats → Lua.LuaE Lua.Exception ()
+registerFactionAPI callStats = do
   Lua.newtable
 
-  registerLuaFunction "relation"              factionRelationFn
-  registerLuaFunction "areAllies"             factionAreAlliesFn
-  registerLuaFunction "canAttack"             factionCanAttackFn
-  registerLuaFunction "isPlayerOwned"         factionIsPlayerOwnedFn
-  registerLuaFunction "isPlayerCommandable"   factionIsPlayerCommandableFn
-  registerLuaFunction "hasUnrestrictedCombat" factionHasUnrestrictedCombatFn
+  registerLuaFunction callStats "faction" "relation"              factionRelationFn
+  registerLuaFunction callStats "faction" "areAllies"             factionAreAlliesFn
+  registerLuaFunction callStats "faction" "canAttack"             factionCanAttackFn
+  registerLuaFunction callStats "faction" "isPlayerOwned"         factionIsPlayerOwnedFn
+  registerLuaFunction callStats "faction" "isPlayerCommandable"   factionIsPlayerCommandableFn
+  registerLuaFunction callStats "faction" "hasUnrestrictedCombat" factionHasUnrestrictedCombatFn
 
   Lua.setglobal (Lua.Name "faction")

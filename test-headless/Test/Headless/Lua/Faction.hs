@@ -20,6 +20,7 @@
 module Test.Headless.Lua.Faction (spec) where
 
 import UPrelude
+import Engine.Scripting.Lua.CallStats (newLuaCallStats)
 import Test.Hspec
 import qualified HsLua as Lua
 import qualified Data.Text as T
@@ -34,7 +35,8 @@ runsOkWith ∷ Text → Text → Expectation
 runsOkWith preludeText chunkText = do
     result ← Lua.run @Lua.Exception $ do
         Lua.openlibs
-        registerFactionAPI
+        callStats ← Lua.liftIO newLuaCallStats
+        registerFactionAPI callStats
         _ ← Lua.dostring (TE.encodeUtf8 preludeText)
         status ← Lua.dostring (TE.encodeUtf8 chunkText)
         case status of

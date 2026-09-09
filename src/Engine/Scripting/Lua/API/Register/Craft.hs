@@ -2,6 +2,7 @@ module Engine.Scripting.Lua.API.Register.Craft
   ( registerCraftAPI
   ) where
 
+import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Craft
 import Engine.Scripting.Lua.API.Power
@@ -15,8 +16,8 @@ import qualified HsLua as Lua
 
 -- | Populate and install the @craft@, @power@, and @repair@ global
 --   tables.
-registerCraftAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
-registerCraftAPI env = do
+registerCraftAPI ∷ LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception ()
+registerCraftAPI callStats env = do
   -- craft.get/getNames and the whole repair surface read the recipe
   -- (and item) catalogue through the `content-registries` capability
   -- (#890) rather than the full EngineEnv. They take DIFFERENT records
@@ -53,21 +54,21 @@ registerCraftAPI env = do
   --     manual-reorder controls, plus the discovery listing the AI's own
   --     scan starts from.
   Lua.newtable
-  registerLuaFunction "get"      (craftGetFn regs)
-  registerLuaFunction "getNames" (craftGetNamesFn regs)
-  registerLuaFunction "execute"  (craftExecuteFn env)
-  registerLuaFunction "executeAt" (craftExecuteAtFn env)
-  registerLuaFunction "addBill"           (craftAddBillFn env)
-  registerLuaFunction "cancelBill"        (craftCancelBillFn env)
-  registerLuaFunction "getBill"           (craftGetBillFn env)
-  registerLuaFunction "getBills"          (craftGetBillsFn env)
-  registerLuaFunction "claimBill"         (craftClaimBillFn env)
-  registerLuaFunction "releaseBill"       (craftReleaseBillFn env)
-  registerLuaFunction "addBillProgress"   (craftAddBillProgressFn env)
-  registerLuaFunction "completeBillCycle" (craftCompleteBillCycleFn env)
-  registerLuaFunction "setBillPaused"     (craftSetBillPausedFn env)
-  registerLuaFunction "setBillWorking"    (craftSetBillWorkingFn env)
-  registerLuaFunction "reorderBill"       (craftReorderBillFn env)
+  registerLuaFunction callStats "craft" "get"      (craftGetFn regs)
+  registerLuaFunction callStats "craft" "getNames" (craftGetNamesFn regs)
+  registerLuaFunction callStats "craft" "execute"  (craftExecuteFn env)
+  registerLuaFunction callStats "craft" "executeAt" (craftExecuteAtFn env)
+  registerLuaFunction callStats "craft" "addBill"           (craftAddBillFn env)
+  registerLuaFunction callStats "craft" "cancelBill"        (craftCancelBillFn env)
+  registerLuaFunction callStats "craft" "getBill"           (craftGetBillFn env)
+  registerLuaFunction callStats "craft" "getBills"          (craftGetBillsFn env)
+  registerLuaFunction callStats "craft" "claimBill"         (craftClaimBillFn env)
+  registerLuaFunction callStats "craft" "releaseBill"       (craftReleaseBillFn env)
+  registerLuaFunction callStats "craft" "addBillProgress"   (craftAddBillProgressFn env)
+  registerLuaFunction callStats "craft" "completeBillCycle" (craftCompleteBillCycleFn env)
+  registerLuaFunction callStats "craft" "setBillPaused"     (craftSetBillPausedFn env)
+  registerLuaFunction callStats "craft" "setBillWorking"    (craftSetBillWorkingFn env)
+  registerLuaFunction callStats "craft" "reorderBill"       (craftReorderBillFn env)
   Lua.setglobal (Lua.Name "craft")
 
   -- Power global (#358) — the placeable power-node registry. placeNode
@@ -79,15 +80,15 @@ registerCraftAPI env = do
   -- report the live wire-connectivity view: which nodes share a network
   -- and its current generation/drain/stored/capacity/powered status.
   Lua.newtable
-  registerLuaFunction "isPlaceable"       (powerIsPlaceableFn env)
-  registerLuaFunction "placeNode"         (powerPlaceNodeFn env)
-  registerLuaFunction "getNode"           (powerGetNodeFn env)
-  registerLuaFunction "getNodeForBuilding" (powerGetNodeForBuildingFn env)
-  registerLuaFunction "listNodes"         (powerListNodesFn env)
-  registerLuaFunction "listNetworks"       (powerListNetworksFn env)
-  registerLuaFunction "getNetworkForNode"  (powerGetNetworkForNodeFn env)
-  registerLuaFunction "isBuildingPowered"  (powerIsBuildingPoweredFn env)
-  registerLuaFunction "isStationPoweredForRecipe"
+  registerLuaFunction callStats "power" "isPlaceable"       (powerIsPlaceableFn env)
+  registerLuaFunction callStats "power" "placeNode"         (powerPlaceNodeFn env)
+  registerLuaFunction callStats "power" "getNode"           (powerGetNodeFn env)
+  registerLuaFunction callStats "power" "getNodeForBuilding" (powerGetNodeForBuildingFn env)
+  registerLuaFunction callStats "power" "listNodes"         (powerListNodesFn env)
+  registerLuaFunction callStats "power" "listNetworks"       (powerListNetworksFn env)
+  registerLuaFunction callStats "power" "getNetworkForNode"  (powerGetNetworkForNodeFn env)
+  registerLuaFunction callStats "power" "isBuildingPowered"  (powerIsBuildingPoweredFn env)
+  registerLuaFunction callStats "power" "isStationPoweredForRecipe"
                                             (powerIsStationPoweredForRecipeFn env)
   Lua.setglobal (Lua.Name "power")
 
@@ -98,8 +99,8 @@ registerCraftAPI env = do
   -- restricted to repair-tagged recipes; repairAt runs one repair
   -- against a targeted item instance.
   Lua.newtable
-  registerLuaFunction "get"      (repairGetFn regsView)
-  registerLuaFunction "getNames" (repairGetNamesFn regsView)
-  registerLuaFunction "repairAt"
+  registerLuaFunction callStats "repair" "get"      (repairGetFn regsView)
+  registerLuaFunction callStats "repair" "getNames" (repairGetNamesFn regsView)
+  registerLuaFunction callStats "repair" "repairAt"
                      (repairAtFn regsView (unitManagerRef env) env)
   Lua.setglobal (Lua.Name "repair")
