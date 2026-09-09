@@ -25,6 +25,7 @@ import World.Material.Id (MaterialId(..))
 import World.Material (MaterialRegistry)
 import Building.Types (BuildingId(..))
 import Unit.Types (UnitId)
+import Item.Knowledge (PortableObservation)
 import World.Page.Types (WorldPageId(..), WorldIdentity(..))
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import World.Tool.Types (ToolMode(..))
@@ -460,6 +461,31 @@ data WorldCommand
         --   live per-chunk overlays AND strips all WeSetStructure/
         --   WeClearStructure edits from the log so they don't replay on
         --   eviction/reload. The authoritative "wipe all structures".
+    | WorldRecordPortableKnowledge !Word64 !(Maybe PortableObservation)
+        -- ^ #2512: fold ONE portable container's observation into
+        --   'World.State.Types.wmPortableKnowledge' — @Just@ a measured
+        --   observation to remember, @Nothing@ to forget.
+        --
+        --   The observation is MEASURED by the caller, from the live
+        --   instance it located and the game time it read, and carried
+        --   here already taken. That is what keeps it a measurement of
+        --   the crate as it was when the player looked, rather than of
+        --   whatever it holds by the time the world thread gets to it.
+        --   MERGING it is the map owner's, which is why this carries an
+        --   observation rather than a finished record: whether a weigh
+        --   preserves an older contents observation is a fact about the
+        --   map at merge time, and the measuring thread must not guess
+        --   it.
+        --
+        --   Queued rather than written directly, for the reason
+        --   'WorldMarkLocationContentsSpawned' below is: the world
+        --   thread is the sole owner of the session state on
+        --   'World.State.Types.WorldManager', and a Lua-thread write
+        --   would race the two places that REPLACE that state wholesale
+        --   — a load publish and an Exit-to-Menu teardown — and could
+        --   land a departed session's crate memory in the one that
+        --   replaced it. Through the queue those orderings are FIFO and
+        --   decided.
     | WorldDestroy !WorldPageId
     | WorldDestroyAll
         -- ^ Tear down EVERY world (Exit to Menu): clears wmWorlds/wmVisible,

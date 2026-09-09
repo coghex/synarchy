@@ -13,6 +13,22 @@
 --   is revealed all at once, while a crate can be hefted without ever
 --   being opened.
 --
+--   __The three mutating verbs ENQUEUE.__ Each measures its
+--   observation here — from the instance it located and the clock it
+--   read, so the record describes the crate as it was when the player
+--   looked — and hands the MERGE to the world thread, which owns the
+--   session state 'World.State.Types.WorldManager' carries. A write
+--   from this thread would race the two places that replace that state
+--   wholesale (a load publish, an Exit-to-Menu teardown) and could land
+--   a departed session's crate memory in the session that replaced it.
+--   The same reasoning @world.markLocationContentsSpawned@ documents
+--   for 'World.Types.wsGenParamsRef'.
+--
+--   So a @true@ means ACCEPTED, and the record is readable once the
+--   world queue drains. The @false@ answers below are still decided
+--   synchronously — locatability is a read, and a verb that cannot find
+--   the instance enqueues nothing at all.
+--
 --   __PLC-7 ships no caller.__ Nothing in the shipped game observes a
 --   container yet — pickup and open are PLC-8's, the window is PLC-9's
 --   — so these verbs exist to be driven by tests, the console, and
@@ -29,7 +45,7 @@ module Engine.Scripting.Lua.API.Items.Knowledge
 import UPrelude
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
-import Data.IORef (readIORef, atomicModifyIORef')
+import Data.IORef (readIORef)
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.ContentRegistriesView
@@ -43,6 +59,8 @@ import Engine.Core.State (EngineEnv)
 import Engine.Scripting.Lua.API.Equipment (pushItemInstance)
 import Item.Knowledge
 import Item.Types (ItemInstance(..), ItemManager, ItemStorage(..))
+import qualified Engine.Core.Queue as Q
+import World.Command.Types (WorldCommand(..))
 import World.Item.Locate (LocatedItem(..), locateItemInstanceIn, sessionGroundItems)
 import World.State.Types (WorldManager(..))
 
@@ -116,12 +134,12 @@ itemGetContainerKnowledgeFn env = do
 --   existing contents observation survives untouched with its own older
 --   stamp.
 --
---   false — and no write at all — when the id names nothing live in the
---   session. The observation is OF a physical item, so there is nothing
---   to weigh.
+--   false — and nothing enqueued at all — when the id names nothing
+--   live in the session. The observation is OF a physical item, so
+--   there is nothing to weigh.
 itemObserveContainerWeightFn
     ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-itemObserveContainerWeightFn = observeWith observePortableWeight
+itemObserveContainerWeightFn = observeWith weighPortable
 
 -- | @item.observeContainerContents(instanceId)@ → bool. Record that the
 --   player has just OPENED this container: COPIES of its
@@ -133,10 +151,10 @@ itemObserveContainerWeightFn = observeWith observePortableWeight
 --   own: its contents ride along inside the copy, but nobody opened it,
 --   so it stays never-inspected until it is itself observed.
 --
---   false, and no write, when the id names nothing live.
+--   false, and nothing enqueued, when the id names nothing live.
 itemObserveContainerContentsFn
     ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-itemObserveContainerContentsFn = observeWith observePortableContents
+itemObserveContainerContentsFn = observeWith openPortable
 
 -- | @item.forgetContainerKnowledge(instanceId)@ → bool. Drop one
 --   container's record; afterwards it reads as @"unknown"@ again.
@@ -144,7 +162,9 @@ itemObserveContainerContentsFn = observeWith observePortableContents
 --   Deliberately does NOT locate the instance: forgetting is about the
 --   MEMORY, and the memory of a crate that has since been destroyed is
 --   exactly the record a caller most wants to be able to clear. Answers
---   whether a record was actually there to drop.
+--   whether a record was there to drop when the verb ran; the drop
+--   itself lands with the world thread's next drain, like the two
+--   observations above.
 itemForgetContainerKnowledgeFn
     ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 itemForgetContainerKnowledgeFn env = do
@@ -152,29 +172,28 @@ itemForgetContainerKnowledgeFn env = do
     case idArg of
         Nothing → Lua.pushboolean False >> return 1
         Just iid → do
-            dropped ← Lua.liftIO $ atomicModifyIORef'
-                (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
-                    let had = isJust (lookupPortable iid
-                                          (wmPortableKnowledge mgr))
-                    in ( mgr { wmPortableKnowledge =
-                                 forgetPortable iid (wmPortableKnowledge mgr) }
-                       , had )
+            dropped ← Lua.liftIO $ do
+                let wsc = toWorldSimCapability env
+                mgr ← readIORef (wsWorldManagerRef wsc)
+                let had = isJust (lookupPortable iid (wmPortableKnowledge mgr))
+                Q.writeQueue (wsWorldQueue wsc)
+                    (WorldRecordPortableKnowledge iid Nothing)
+                pure had
             Lua.pushboolean dropped
             return 1
 
--- | The shape both observation verbs share: locate, then fold the
---   observation into the manager's map under one atomic update.
+-- | The shape both observation verbs share: locate, MEASURE, enqueue.
 --
---   The located instance is read BEFORE the update and the fold is
---   applied inside it, which is the honest ordering for what this
---   records: an observation is of the item as it was when the player
---   looked, and the map is the only thing being mutated. Nothing here
---   writes to the live item — observing a crate must never change it.
+--   Measuring here rather than in the handler is the whole point — the
+--   located instance and the clock are read together, so what is
+--   remembered is the crate as it was at that instant rather than
+--   whatever it holds by the time the world thread drains. Nothing here
+--   writes to the live item, or to the map: observing a crate must
+--   change neither.
 observeWith
-    ∷ (ItemManager → Double → ItemInstance
-       → PortableKnowledge → PortableKnowledge)
+    ∷ (ItemManager → Double → ItemInstance → PortableObservation)
     → EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
-observeWith fold env = do
+observeWith build env = do
     idArg ← argInstanceId 1
     case idArg of
         Nothing → Lua.pushboolean False >> return 1
@@ -188,11 +207,10 @@ observeWith fold env = do
                         now ← readIORef (wsGameTimeRef wsc)
                         itemMgr ← readReadOnlyRef (crvItemManagerRef
                             (toContentRegistriesViewCapability env))
-                        atomicModifyIORef' (wsWorldManagerRef wsc) $ \mgr →
-                            ( mgr { wmPortableKnowledge =
-                                      fold itemMgr now (liInstance located)
-                                           (wmPortableKnowledge mgr) }
-                            , () )
+                        Q.writeQueue (wsWorldQueue wsc)
+                            (WorldRecordPortableKnowledge iid
+                                (Just (build itemMgr now
+                                             (liInstance located))))
                         pure True
             Lua.pushboolean ok
             return 1

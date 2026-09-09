@@ -33,7 +33,9 @@ import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Item.PortableKnowledge.Fixture
 import Unit.Types (UnitId(..), UnitManager(..), emptyUnitManager)
+import World.Thread (worldTickWith)
 import World.State.Types
+import World.Thread.Command.Basic (handleWorldDestroyAllCommand)
 import Engine.Core.Init (EngineInitResult(..))
 
 -- | A private engine with a real Lua backend, a two-page session, and
@@ -71,6 +73,22 @@ withBindings act = withIsolatedResourceRoot $ do
     writeIORef (gameTimeRef env) 500
     act (Bindings env ls)
 
+-- | Run ONE world-thread tick, draining the world queue.
+--
+--   The observe and forget verbs ENQUEUE (#2512): the world thread owns
+--   'World.State.Types.wmPortableKnowledge', so a Lua verb measures the
+--   observation synchronously and hands the merge to its owner. Every
+--   example that asserts on the resulting record therefore drives the
+--   real drain rather than expecting the write to have already
+--   happened — and the examples below that assert a record is ABSENT
+--   drain first too, so "absent" means the command never existed rather
+--   than merely that it had not run yet.
+drainWorld ∷ Bindings → IO ()
+drainWorld b = do
+    lastRef ← newIORef 0
+    _ ← worldTickWith (pure 0) (bnEnv b) lastRef
+    pure ()
+
 -- | Evaluate a Lua chunk and return its result as text. Chunks here
 --   return BOOLEANS and NUMBERS, never bare strings: the console
 --   quotes a string result, so a string assertion would be comparing
@@ -88,6 +106,14 @@ onCrate ∷ Bindings → Text → IO Bool
 onCrate b expr = luaBool b
     ("(function() local k = item.getContainerKnowledge(" <> tshow crateId
      <> ") return " <> expr <> " end)()")
+
+-- | Call one observe/forget verb and let its queued command run, so
+--   the example can assert on the record it produced.
+verb ∷ Bindings → Text → IO Bool
+verb b call = do
+    ok ← luaBool b call
+    drainWorld b
+    pure ok
 
 atTime ∷ Bindings → Double → IO ()
 atTime b t = writeIORef (gameTimeRef (bnEnv b)) t
@@ -142,7 +168,7 @@ spec = around withBindings $ do
         it "records the weight and its stamp, and NOTHING about the \
            \contents" $ \b → do
             atTime b 700
-            luaBool b ("item.observeContainerWeight(" <> tshow crateId <> ")")
+            verb b ("item.observeContainerWeight(" <> tshow crateId <> ")")
                 `shouldReturn` True
             onCrate b "k.state == 'weight-only'" `shouldReturn` True
             onCrate b "k.weighedAt == 700" `shouldReturn` True
@@ -150,24 +176,28 @@ spec = around withBindings $ do
             onCrate b "k.items == nil" `shouldReturn` True
             onCrate b "k.revealedAt == nil" `shouldReturn` True
 
-        it "answers false and writes nothing for an id nothing live \
-           \carries -- the observation is OF a physical item" $ \b → do
-            luaBool b ("item.observeContainerWeight(" <> tshow unlocatableId
+        it "answers false and ENQUEUES NOTHING for an id nothing live \
+           \carries -- the observation is OF a physical item, and the \
+           \drain proves no command was left behind to land later" $
+            \b → do
+            verb b ("item.observeContainerWeight(" <> tshow unlocatableId
                        <> ")") `shouldReturn` False
+            drainWorld b
             k ← knowledgeOf b
             knownPortableIds k `shouldBe` []
 
-        it "answers false for a string argument, and writes nothing" $
+        it "answers false for a string argument, and enqueues nothing" $
             \b → do
-            luaBool b ("item.observeContainerWeight('" <> tshow crateId
+            verb b ("item.observeContainerWeight('" <> tshow crateId
                        <> "')") `shouldReturn` False
+            drainWorld b
             knownPortableIds <$> knowledgeOf b `shouldReturn` []
 
     describe "item.observeContainerContents" $ do
         it "records the contents, the weight and BOTH stamps at the \
            \current game time" $ \b → do
             atTime b 800
-            luaBool b ("item.observeContainerContents(" <> tshow crateId
+            verb b ("item.observeContainerContents(" <> tshow crateId
                        <> ")") `shouldReturn` True
             onCrate b "k.state == 'known'"   `shouldReturn` True
             onCrate b "#k.items == 1"        `shouldReturn` True
@@ -178,10 +208,10 @@ spec = around withBindings $ do
            \revealedAt and the remembered contents where the open left \
            \them" $ \b → do
             atTime b 800
-            _ ← luaBool b ("item.observeContainerContents(" <> tshow crateId
+            _ ← verb b ("item.observeContainerContents(" <> tshow crateId
                            <> ")")
             atTime b 900
-            _ ← luaBool b ("item.observeContainerWeight(" <> tshow crateId
+            _ ← verb b ("item.observeContainerWeight(" <> tshow crateId
                            <> ")")
             onCrate b "k.weighedAt == 900"  `shouldReturn` True
             onCrate b "k.revealedAt == 800" `shouldReturn` True
@@ -197,7 +227,7 @@ spec = around withBindings $ do
                       (mkBuilding pkPageB "cargo_hold_S" HM.empty [crateEmpty])
                 , bmNextId = 2 }
             atTime b 850
-            _ ← luaBool b ("item.observeContainerContents(" <> tshow crateId
+            _ ← verb b ("item.observeContainerContents(" <> tshow crateId
                            <> ")")
             onCrate b "k.state == 'empty'" `shouldReturn` True
             onCrate b "k.items ~= nil"     `shouldReturn` True
@@ -207,14 +237,14 @@ spec = around withBindings $ do
            \itself observed -- and the kit IS observable, because the \
            \locator descends to it" $ \b → do
             atTime b 800
-            _ ← luaBool b ("item.observeContainerContents(" <> tshow crateId
+            _ ← verb b ("item.observeContainerContents(" <> tshow crateId
                            <> ")")
             kitState ← luaEval b
                 ("return item.getContainerKnowledge(" <> tshow kitId
                  <> ").state == 'unknown'")
             kitState `shouldBe` "true"
             atTime b 810
-            luaBool b ("item.observeContainerContents(" <> tshow kitId <> ")")
+            verb b ("item.observeContainerContents(" <> tshow kitId <> ")")
                 `shouldReturn` True
             luaBool b ("item.getContainerKnowledge(" <> tshow kitId
                        <> ").state == 'known'") `shouldReturn` True
@@ -224,7 +254,7 @@ spec = around withBindings $ do
             \b → do
             before' ← readIORef (buildingManagerRef (bnEnv b))
             atTime b 800
-            _ ← luaBool b ("item.observeContainerContents(" <> tshow crateId
+            _ ← verb b ("item.observeContainerContents(" <> tshow crateId
                            <> ")")
             after' ← readIORef (buildingManagerRef (bnEnv b))
             (biStorage <$> HM.lookup (BuildingId 1) (bmInstances after'))
@@ -235,12 +265,12 @@ spec = around withBindings $ do
         it "drops the record and reports that it did, then reports false \
            \for the second call" $ \b → do
             atTime b 800
-            _ ← luaBool b ("item.observeContainerWeight(" <> tshow crateId
+            _ ← verb b ("item.observeContainerWeight(" <> tshow crateId
                            <> ")")
-            luaBool b ("item.forgetContainerKnowledge(" <> tshow crateId
+            verb b ("item.forgetContainerKnowledge(" <> tshow crateId
                        <> ")") `shouldReturn` True
             onCrate b "k.state == 'unknown'" `shouldReturn` True
-            luaBool b ("item.forgetContainerKnowledge(" <> tshow crateId
+            verb b ("item.forgetContainerKnowledge(" <> tshow crateId
                        <> ")") `shouldReturn` False
 
         it "clears the memory of a crate that has since been DESTROYED \
@@ -248,24 +278,68 @@ spec = around withBindings $ do
            \able to drop, so it must not require locating anything" $
             \b → do
             atTime b 800
-            _ ← luaBool b ("item.observeContainerWeight(" <> tshow crateId
+            _ ← verb b ("item.observeContainerWeight(" <> tshow crateId
                            <> ")")
             -- The crate is gone from the session entirely.
             writeIORef (buildingManagerRef (bnEnv b)) emptyBuildingManager
                 { bmDefs = HM.singleton "cargo_hold_S" storageDef
                 , bmNextId = 2 }
-            luaBool b ("item.observeContainerWeight(" <> tshow crateId <> ")")
+            verb b ("item.observeContainerWeight(" <> tshow crateId <> ")")
                 `shouldReturn` False
-            luaBool b ("item.forgetContainerKnowledge(" <> tshow crateId
+            verb b ("item.forgetContainerKnowledge(" <> tshow crateId
                        <> ")") `shouldReturn` True
             knownPortableIds <$> knowledgeOf b `shouldReturn` []
+
+    describe "the world thread owns the merge (#2512)" $ do
+        it "the verb only ENQUEUES: nothing has changed by the time it \
+           \returns, and the record appears once the world thread \
+           \drains" $ \b → do
+            atTime b 800
+            luaBool b ("item.observeContainerWeight(" <> tshow crateId
+                       <> ")") `shouldReturn` True
+            -- Deliberately NOT drained yet. A Lua-thread write would
+            -- already be visible here, and this is what separates the
+            -- two designs.
+            knownPortableIds <$> knowledgeOf b `shouldReturn` []
+            drainWorld b
+            knownPortableIds <$> knowledgeOf b `shouldReturn` [crateId]
+
+        it "an Exit-to-Menu teardown queued AFTER the observation still \
+           \wins, because both run on the one owner in FIFO order -- a \
+           \departed session's crate memory cannot survive into the \
+           \next one" $ \b → do
+            atTime b 800
+            _ ← verb b ("item.observeContainerContents(" <> tshow crateId
+                        <> ")")
+            knownPortableIds <$> knowledgeOf b `shouldReturn` [crateId]
+            logger ← readIORef (loggerRef (bnEnv b))
+            handleWorldDestroyAllCommand (bnEnv b) logger
+            knownPortableIds <$> knowledgeOf b `shouldReturn` []
+
+        it "a weigh MERGES against the map as it is when the world \
+           \thread runs it, preserving a contents observation recorded \
+           \in between rather than one the Lua thread happened to see" $
+            \b → do
+            atTime b 800
+            luaBool b ("item.observeContainerWeight(" <> tshow crateId
+                       <> ")") `shouldReturn` True
+            -- The open is measured and queued BEHIND the weigh, so the
+            -- weigh merges into an empty map and the open then replaces
+            -- it. Both land in the order they were asked for.
+            atTime b 900
+            luaBool b ("item.observeContainerContents(" <> tshow crateId
+                       <> ")") `shouldReturn` True
+            drainWorld b
+            onCrate b "k.state == 'known'"   `shouldReturn` True
+            onCrate b "k.weighedAt == 900"   `shouldReturn` True
+            onCrate b "k.revealedAt == 900"  `shouldReturn` True
 
     describe "the shared window contract" $
         it "uses the SAME field names the building projection does, so \
            \one renderer consumes either -- plus weighedAt, which a \
            \building has no analogue for" $ \b → do
             atTime b 800
-            _ ← luaBool b ("item.observeContainerContents(" <> tshow crateId
+            _ ← verb b ("item.observeContainerContents(" <> tshow crateId
                            <> ")")
             shared ← onCrate b
                 "k.state ~= nil and k.items ~= nil and \

@@ -22,10 +22,13 @@
 --
 --   Everything here is PURE. The live owner is
 --   'World.State.Types.wmPortableKnowledge', located through
---   "World.Item.Locate" and driven from Lua by
---   "Engine.Scripting.Lua.API.Items.Knowledge"; nothing in gameplay
---   observes a container yet (PLC-8 is what calls these from pickup and
---   open).
+--   "World.Item.Locate"; a Lua verb
+--   ("Engine.Scripting.Lua.API.Items.Knowledge") MEASURES a
+--   'PortableObservation' and the world thread MERGES it
+--   ('World.Thread.Command.Basic'), which is why the merge rules live
+--   in 'applyPortableObservation' rather than in either caller. Nothing
+--   in gameplay observes a container yet (PLC-8 is what calls these
+--   from pickup and open).
 --
 --   __Four states, never conflated__ ('PortableKnowledgeState'):
 --   never-inspected (nothing is known), weight-only (it has been
@@ -53,13 +56,15 @@ module Item.Knowledge
     , PortableRecord(..)
     , PortableKnowledge(..)
     , PortableKnowledgeState(..)
+    , PortableObservation(..)
     , emptyPortableKnowledge
     , portableKnowledgeStateId
     , lookupPortable
     , portableRecordState
     , portableState
-    , observePortableWeightAt
-    , observePortableContentsAt
+    , weighPortable
+    , openPortable
+    , applyPortableObservation
     , observePortableWeight
     , observePortableContents
     , forgetPortable
@@ -183,42 +188,62 @@ portableRecordState (Just r) = case prContents r of
 portableState ∷ Word64 → PortableKnowledge → PortableKnowledgeState
 portableState iid = portableRecordState ∘ lookupPortable iid
 
--- | Record that this instance was WEIGHED at @now@ — and nothing else.
---   Any existing contents observation is preserved untouched, with its
---   own older stamp: hefting a crate you already opened tells you
---   nothing new about what is inside it.
-observePortableWeightAt
-    ∷ ItemManager → Double → ItemInstance → PortableRecord → PortableRecord
-observePortableWeightAt itemMgr now inst r =
-    r { prWeight = Just (WeightObservation (itemTotalWeight itemMgr inst) now) }
+-- | ONE observation, already MEASURED, on its way to the map.
+--
+--   The split exists because the two halves of an observation belong to
+--   different threads (#2512). Measuring is the caller's: it holds the
+--   live instance it located and the clock it read, so what is recorded
+--   is the crate as it was when the player looked. MERGING is the map
+--   owner's — 'World.Thread.Command.Basic' on the world thread — so a
+--   Lua-thread verb never has to read the map to decide what the merge
+--   should be, and can never decide it against a session that has since
+--   been replaced.
+--
+--   That split is exactly what makes 'Weighed' meaningful as a
+--   constructor rather than a finished record: "preserve whatever
+--   contents observation is there" is a fact about the map at merge
+--   time, which the measuring side does not have and must not guess.
+data PortableObservation
+    = Weighed !WeightObservation
+      -- ^ Hefted. Preserves any existing contents observation and its
+      --   own older stamp.
+    | Opened !WeightObservation !ContentsObservation
+      -- ^ Opened. REPLACES the whole record; both stamps are the
+      --   observation's own.
+    deriving (Show, Eq)
 
--- | Record that this instance was OPENED at @now@: the contents as they
---   are, AND the weight, both stamped @now@.
---
---   Both stamps move because both facts were genuinely just observed —
---   you cannot see inside a crate without also holding it. A later
---   weighing then advances 'prWeight' alone, which is what makes the
---   two stamps diverge in the honest direction (a fresh weight over
---   older contents), never the other way around.
---
---   Takes no prior record, which is how "replaces outright" is spelled
---   in the type rather than left as a rule to remember.
-observePortableContentsAt
-    ∷ ItemManager → Double → ItemInstance → PortableRecord
-observePortableContentsAt itemMgr now inst = PortableRecord
-    { prWeight   = Just (WeightObservation (itemTotalWeight itemMgr inst) now)
-    , prContents = Just (ContentsObservation (iiContents inst) now)
-    }
+-- | Measure a weight observation of @inst@ at @now@.
+weighPortable ∷ ItemManager → Double → ItemInstance → PortableObservation
+weighPortable itemMgr now inst =
+    Weighed (WeightObservation (itemTotalWeight itemMgr inst) now)
+
+-- | Measure a full open of @inst@ at @now@ — the contents as they are,
+--   the weight, and both stamps.
+openPortable ∷ ItemManager → Double → ItemInstance → PortableObservation
+openPortable itemMgr now inst = Opened
+    (WeightObservation (itemTotalWeight itemMgr inst) now)
+    (ContentsObservation (iiContents inst) now)
+
+-- | Merge one measured observation for @iid@ into the map. The ONE
+--   place the two merge rules live, so the pure model and the world
+--   thread's command handler cannot disagree about them.
+applyPortableObservation
+    ∷ Word64 → PortableObservation → PortableKnowledge → PortableKnowledge
+applyPortableObservation iid obs (PortableKnowledge m) =
+    PortableKnowledge $ case obs of
+        Weighed w    → HM.insert iid
+            (existing { prWeight = Just w }) m
+        Opened w c   → HM.insert iid (PortableRecord (Just w) (Just c)) m
+  where existing = fromMaybe emptyRecord (HM.lookup iid m)
 
 -- | Apply a weight observation to the whole map, creating the record if
 --   this is the first thing ever learned about the instance.
 observePortableWeight
     ∷ ItemManager → Double → ItemInstance
     → PortableKnowledge → PortableKnowledge
-observePortableWeight itemMgr now inst (PortableKnowledge m) =
-    PortableKnowledge $ HM.insert (iiInstanceId inst)
-        (observePortableWeightAt itemMgr now inst existing) m
-  where existing = fromMaybe emptyRecord (HM.lookup (iiInstanceId inst) m)
+observePortableWeight itemMgr now inst =
+    applyPortableObservation (iiInstanceId inst)
+        (weighPortable itemMgr now inst)
 
 -- | Apply a contents observation to the whole map. REPLACES the record
 --   outright — an open is a fresh look, never a diff against what was
@@ -226,9 +251,9 @@ observePortableWeight itemMgr now inst (PortableKnowledge m) =
 observePortableContents
     ∷ ItemManager → Double → ItemInstance
     → PortableKnowledge → PortableKnowledge
-observePortableContents itemMgr now inst (PortableKnowledge m) =
-    PortableKnowledge $ HM.insert (iiInstanceId inst)
-        (observePortableContentsAt itemMgr now inst) m
+observePortableContents itemMgr now inst =
+    applyPortableObservation (iiInstanceId inst)
+        (openPortable itemMgr now inst)
 
 emptyRecord ∷ PortableRecord
 emptyRecord = PortableRecord Nothing Nothing

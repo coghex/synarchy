@@ -794,6 +794,14 @@ data WorldManager = WorldManager
       --   which is why nothing about a crate's CURRENT page is stored
       --   here.
       --
+      --   WRITTEN ONLY BY THE WORLD THREAD
+      --   ('World.Thread.Command.Basic.handleWorldRecordPortableKnowledgeCommand',
+      --   merging a 'Item.Knowledge.PortableObservation' a Lua verb
+      --   measured and queued). That thread owns the session state this
+      --   record carries — it runs both of the wholesale replacements
+      --   below — so an observation is ordered against them by FIFO
+      --   instead of racing them.
+      --
       --   PERSISTED, unlike every other non-page field on this record:
       --   it is the live owner of the optional session component
       --   @"portable-knowledge"@

@@ -3,6 +3,7 @@ module World.Thread.Command.Basic
     , handleWorldSetCameraCommand
     , handleWorldDestroyCommand
     , handleWorldDestroyAllCommand
+    , handleWorldRecordPortableKnowledgeCommand
     ) where
 
 import UPrelude
@@ -24,7 +25,9 @@ import Unit.Command.Types (UnitCommand(..))
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
-import Item.Knowledge (emptyPortableKnowledge)
+import Item.Knowledge
+    ( PortableObservation
+    , applyPortableObservation, emptyPortableKnowledge, forgetPortable )
 import World.Blood.Teardown (enqueueBloodDisposalForPage, enqueueBloodDisposalAll)
 
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()
@@ -158,3 +161,38 @@ handleWorldDestroyAllCommand env logger = do
     Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitClearAll
     Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitEndSession
     logInfo logger CatWorld "All worlds destroyed"
+
+-- | #2512: fold ONE portable container's observation into the session's
+--   crate memory — @Just@ a finished record to remember, @Nothing@ to
+--   forget.
+--
+--   Lives here, on the world thread, because this thread is the sole
+--   owner of the session state 'WorldManager' carries: the two places
+--   that REPLACE that state wholesale (a load publish, and the
+--   Exit-to-Menu teardown above) both run on it, so a queued
+--   observation is ordered against them by FIFO rather than racing
+--   them. A Lua-thread write could land a departed session's crate
+--   memory in the session that replaced it; this cannot.
+--
+--   The observation arrives already MEASURED. The caller located the
+--   live instance and read the clock, so what is remembered is the
+--   crate as it was when the player looked, not as it is by the time
+--   this runs. Only the MERGE happens here, through the one
+--   'applyPortableObservation' the pure model uses, so this handler
+--   and "Item.Knowledge" cannot disagree about whether a weigh
+--   preserves an older contents observation.
+--
+--   'atomicModifyIORef'' rather than read-then-write for the same
+--   reason every other mutation of this record uses it: the projection
+--   counters are updated from other threads, and a read-modify-write
+--   would drop those.
+handleWorldRecordPortableKnowledgeCommand
+    ∷ EngineEnv → Word64 → Maybe PortableObservation → IO ()
+handleWorldRecordPortableKnowledgeCommand env iid mObs =
+    atomicModifyIORef'
+        (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+        ( mgr { wmPortableKnowledge = merge (wmPortableKnowledge mgr) }, () )
+  where
+    merge = case mObs of
+        Just obs → applyPortableObservation iid obs
+        Nothing  → forgetPortable iid

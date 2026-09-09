@@ -1098,6 +1098,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         logInfo logger CatWorld $
             "Save load: " <> renderEquipmentOrphan pid o
 
+    -- #2512: the FINAL ground map, read back off the ref rather than
+    -- reused from the value written into it above. Everything between
+    -- those two points can still put an item on this page --
+    -- 'revalidateStagedConstructDesignations' refunds a self-cleared
+    -- designation's paid materials into exactly this ref -- and a
+    -- refunded item is as live in the replacement session as any other.
+    -- Scrubbing against the pre-reconciliation value would drop the
+    -- memory of a crate the load then publishes.
+    finalGroundItems ← readIORef (wsGroundItemsRef worldState)
     pure PageStageResult
         { psrPage = StagedPage
             { spPageId        = pid
@@ -1111,11 +1120,12 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         , psrUnitOrphans     = uOrphans
         , psrUnitUnknownFactions = uUnknownFactions
         , psrUnitSimStates   = simStates'
-          -- #2512: from the STAGED ground map and the RESTORED managers
-          -- -- the three things this page is actually publishing --
-          -- walked by the canonical container enumeration.
+          -- #2512: from the page's FINAL ground map and the RESTORED
+          -- managers -- the three things this page is actually
+          -- publishing -- walked by the canonical container
+          -- enumeration.
         , psrLiveItemIds     = sessionLiveItemIds
-                                   [(pid, stagedGroundItems)]
+                                   [(pid, finalGroundItems)]
                                    restoredBm restoredUm
         , psrCamera          = mCamera
         , psrZoomAtlas       = mZoomAtlas

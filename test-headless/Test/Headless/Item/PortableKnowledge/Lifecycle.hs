@@ -32,10 +32,15 @@ import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Core.State
 import Item.Knowledge
-import Item.Ground (GroundItem(..), GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Test.Headless.Item.PortableKnowledge.Fixture
 import Unit.Types (UnitManager(..))
+import Item.Ground (GroundItem(..), GroundItems(..))
+import World.Construct.Attempt (firstConstructAttemptId)
+import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
+import World.Construct.Types
+    ( ConstructDesignation(..), ConstructStatus(..), ConstructTarget(..)
+    , StructurePiece(..) )
 import World.Load.Publish (publishStagedSession)
 import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
@@ -269,6 +274,71 @@ spec = do
                                 publishStagedSession env logger 1 staged
                                 knowledgeIn env
                                     `shouldReturn` emptyPortableKnowledge
+
+    describe "the scrub sees what the page actually publishes" $
+        it "keeps the record of an item a staging REFUND minted: the \
+           \live-id set is read off the page's ground ref AFTER \
+           \reconciliation, not off the value written into it before" $
+            withLiveCrateSession $ \env ws → do
+            logger ← readIORef (loggerRef env)
+            -- A paid structure designation whose pack has no registered
+            -- art. The private engine's art catalogue is empty, so
+            -- staging's revalidation resolves it as missing-art,
+            -- self-clears it, and refunds the receipt onto this page's
+            -- ground -- AFTER the decoded ground map has already been
+            -- written into wsGroundItemsRef.
+            writeIORef (wsConstructDesignationsRef ws) $ HM.singleton (3, 3)
+                ConstructDesignation
+                    { cdZ = 0
+                    , cdTarget = CtStructure
+                        (StructurePiece "no_such_pack" "floor" Nothing)
+                    , cdStatus = CsPending
+                    , cdProgress = 0
+                    , cdAttempt = firstConstructAttemptId
+                    , cdPayment = CpPaid (mkMaterialReceipt [("bandage", 1)])
+                    }
+            -- The refund draws from the save's own allocator, so the
+            -- item it mints carries exactly this id -- and the session
+            -- remembers a crate under it.
+            let refundedId = 1000 ∷ Word64
+            setKnowledge env
+                (observePortableWeight testItems 600
+                     (loose { iiInstanceId = refundedId })
+                     emptyPortableKnowledge)
+            let slot = "hspec_portable_knowledge_2512_refund"
+                cleanup = removePathForcibly ("saves/" <> slot)
+            cleanup
+            (`finally` cleanup) $ do
+                handleWorldSaveCommand env logger pageA slot
+                    "2026-09-08T00:00:00.000000Z" [] [] Nothing
+                matReg ← readIORef (materialRegistryRef env)
+                loaded ← loadWorld logger slot HS.empty HS.empty
+                case loaded of
+                    Left (_, e) → expectationFailure (T.unpack e)
+                    Right (sd, _, _) → do
+                        sdNextItemInstanceId sd `shouldBe` refundedId
+                        stagedOrErr ← stageSession env logger sd matReg
+                        case stagedOrErr of
+                            Left e → expectationFailure
+                                (T.unpack (renderStageError e))
+                            Right staged → case ssPages staged of
+                                [sp] → do
+                                    -- Non-vacuity: the refund really
+                                    -- happened, and it really landed on
+                                    -- the staged page under that id.
+                                    ground ← readIORef
+                                        (wsGroundItemsRef (spWorldState sp))
+                                    map (iiInstanceId ∘ giInst)
+                                        (HM.elems (gisItems ground))
+                                        `shouldSatisfy` elem refundedId
+                                    -- …so its memory is live knowledge,
+                                    -- not a dangling record.
+                                    knownPortableIds
+                                        (ssPortableKnowledge staged)
+                                        `shouldBe` [refundedId]
+                                other → expectationFailure
+                                    ("expected one staged page, got "
+                                     <> show (length other))
 
     describe "non-vacuity of the session fixtures" $
         it "the crate really is the only live remembered instance -- the \

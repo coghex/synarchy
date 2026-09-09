@@ -2504,7 +2504,12 @@ the scrub below cannot quietly discard the evidence for a rejection.
 **The scrub.** At load, `World.Load.Stage` drops any record whose
 instance is absent from the REPLACEMENT session's own complete live item
 enumeration, with one diagnostic naming the dropped ids — never a load
-failure, mirroring #1087's demolished-container scrub.
+failure, mirroring #1087's demolished-container scrub. That enumeration
+is read off each staged page's ground ref AFTER every reconciliation
+pass, not off the decoded map written into it earlier: a self-cleared
+construct designation refunds its paid materials onto exactly that ref
+during staging, and a refunded item is as live in the replacement
+session as any other.
 `World.Load.Publish` then installs the scrubbed map as part of the
 replacement `WorldManager`, so a load REPLACES the memory wholesale and
 an absent payload CLEARS it. Exit to Menu empties it in the same atomic
@@ -2523,6 +2528,24 @@ instance and record, answering false when it cannot be found;
 anything, since a destroyed crate's memory is the one a caller most
 needs to clear. Each verb refuses a non-number argument outright:
 `Lua.tointeger` coerces, so the string `"47"` must not act on crate 47.
+
+**Who writes the map.** The three mutating verbs MEASURE on the calling
+thread and ENQUEUE a `WorldRecordPortableKnowledge` command; the world
+thread merges it (`World.Thread.Command.Basic`). That split is the point,
+not an implementation detail. Measuring must happen where the located
+instance and the clock were read, or the record would describe the crate
+as it is when the command runs rather than when the player looked.
+Merging must happen on the world thread, which owns the session state
+`WorldManager` carries: the two places that REPLACE that state wholesale
+— a load publish and an Exit-to-Menu teardown — both run there, so a
+caller-thread write could land a departed session's crate memory in the
+session that replaced it, while a queued one is ordered against them by
+FIFO. It is also why the command carries a `PortableObservation` rather
+than a finished record: whether a weigh preserves an older contents
+observation is a fact about the map at merge time, which the measuring
+side does not have. The consequence for callers is that a verb's `true`
+means accepted, and the record is readable after the world queue drains
+— the same contract `world.markLocationContentsSpawned` has.
 
 PLC-7 ships no gameplay caller — pickup and open are PLC-8's, the window
 is PLC-9's.
