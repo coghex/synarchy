@@ -72,13 +72,20 @@ AFTER never saw and read them as this PR's own work -- a sibling merging
 between the branch update and this job would strip an approval it had
 nothing to do with.
 
-A conflicted replay is its own verdict, not a failure: `merge-index`
-exits non-zero when a path could not be content-merged, and the paths
-are read back from the scratch index with `ls-files -u` rather than by
-parsing the merge driver's prose. It STRIPS -- a resolution no reviewer
-saw is exactly what an approval must not carry -- and says which paths
-conflicted, even when AFTER itself contains a perfectly good committed
-resolution.
+A conflicted replay is its own verdict, not a failure. It STRIPS -- a
+resolution no reviewer saw is exactly what an approval must not carry --
+and says which paths conflicted, even when AFTER itself contains a
+perfectly good committed resolution.
+
+Telling that from a failure takes care, because `merge-index` exits
+non-zero for BOTH: a genuine content conflict, and an operational fault
+such as a merge driver it could not run. The scratch INDEX is what
+separates them and the only thing that can -- an unmerged entry exists
+exactly when a path really conflicted -- so the paths come from
+`ls-files -u`, and a non-zero exit that leaves nothing unmerged is a
+`replay-failed`, never a conflict with no paths to name. The merge
+driver's prose is not an interface and a non-empty stderr proves nothing
+about which case occurred.
 
 Fail-closed, and observably so
 ------------------------------
@@ -324,17 +331,28 @@ def _replay(git: Git, merge_base: str, ours: str, theirs: str
 
         merged, _, merge_err = git.capture(*MERGE_INDEX_FLAGS, env=env)
         if merged != 0:
-            # At least one path could not be content-merged. Name them
-            # from the index rather than by parsing the merge driver's
-            # prose, which is not a stable interface.
-            _, unmerged, _ = git.capture("ls-files", "-u", env=env)
-            paths = conflicted_paths(unmerged)
-            if not paths and not merge_err.strip():
-                return ("replay-unreadable",
-                        "the replay reported a conflict it could not name", "")
-            return ("replay-conflicted",
-                    "replaying the approved head onto the base conflicts in: "
-                    + _paths_summary(paths), "")
+            # A non-zero exit means the merge did not complete, but NOT
+            # yet why. `merge-index` exits non-zero both for a genuine
+            # content conflict and for an operational failure -- a merge
+            # driver that could not be run, a scratch directory that
+            # vanished -- and the two are different verdicts: one says
+            # the approved head cannot be replayed onto this base, the
+            # other says this job could not find out.
+            #
+            # The scratch INDEX is what separates them, and it is the
+            # only thing that can: an unmerged entry exists exactly when
+            # a path really conflicted. The merge driver's prose is not
+            # an interface, and a non-empty stderr proves nothing about
+            # which case this is.
+            code_u, unmerged, _ = git.capture("ls-files", "-u", env=env)
+            paths = conflicted_paths(unmerged) if code_u == 0 else []
+            if paths:
+                return ("replay-conflicted",
+                        "replaying the approved head onto the base conflicts "
+                        "in: " + _paths_summary(paths), "")
+            return ("replay-failed",
+                    "the merge step failed without leaving an unmerged path: "
+                    + (merge_err.strip() or f"git exited {merged}"), "")
 
         code, stdout, stderr = git.capture("write-tree", env=env)
         if code != 0:
@@ -873,6 +891,19 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
         check("fail-closed: the replayed tree cannot be written",
               decide(_FaultingGit(repo.path, ("write-tree",)),
                      before, after, "master", m0), STRIP, "replay-failed")
+        # The merge step failing OPERATIONALLY is a failure, not a
+        # conflict: nothing conflicted, the job just could not find out.
+        # Reporting it as a conflict would name no paths and tell a
+        # maintainer the approved head cannot be replayed, which is a
+        # different and wrong thing to have said.
+        merge_failed = decide(_FaultingGit(repo.path, MERGE_INDEX_FLAGS),
+                              before, after, "master", m0)
+        check("fail-closed: the merge step fails with nothing unmerged",
+              merge_failed, STRIP, "replay-failed")
+        if "conflict" in merge_failed.detail.lower():
+            failures.append(
+                "an operational merge failure must not be described as a "
+                f"conflict; got {merge_failed.detail!r}")
         # Exit 0 with unusable output is NOT a verdict: a merge-tree that
         # printed no object name has told us nothing, and the difference
         # between that and a crash is what the two reason codes carry.
@@ -1061,6 +1092,15 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
     ("invert the replay comparison",
      lambda t: _replace_once(t, "if replayed != after_tree:",
                              "if replayed == after_tree:")),
+    ("report an operational merge failure as a conflict",
+     lambda t: _replace_once(t, "            if paths:\n",
+                             "            if True:\n")),
+    ("trust the merge driver's stderr instead of the scratch index",
+     lambda t: _replace_once(
+         t, "            paths = conflicted_paths(unmerged) if code_u == 0 else []",
+         "            paths = conflicted_paths(unmerged) if code_u == 0 else []\n"
+         "            if merge_err.strip():\n"
+         "                paths = paths or ['(unknown)']")),
     ("treat a conflicted replay as clean",
      lambda t: _replace_once(t, "        if merged != 0:\n",
                              "        if False:\n")),
