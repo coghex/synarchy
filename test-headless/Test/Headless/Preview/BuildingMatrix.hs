@@ -249,6 +249,23 @@ spec = do
                        <$> matrixOf "fixture_building" (doc work)
         rolesOf "12.0" `shouldBe` Just [RoleConstruction]
         rolesOf "0.0"  `shouldBe` Just [RoleAppearance]
+
+        -- And with `build_work` OMITTED entirely, which is how the
+        -- unmigrated definitions this compatibility path exists for are
+        -- actually written: the gameplay DEFAULT of 0 applies, so the
+        -- key resolves to `appearance`. A preview defaulting it to
+        -- anything positive would expose the wrong role for exactly
+        -- those definitions.
+        let noWork = T.unlines
+                [ "name: \"fixture_building\""
+                , "visual_class: \"gateway\""
+                , "sprite: \"" <> T.pack (root </> "default.png") <> "\""
+                , "state_animations:"
+                , "  appearing: idle-anim"
+                , "animations:"
+                ] <> legacyAnim root "idle-anim" "idle"
+        (map drRole ∘ bdmRoles <$> matrixOf "fixture_building" noWork)
+            `shouldBe` Just [RoleAppearance]
         -- The discriminator is build_work and nothing else: the SAME
         -- animation name lands on two different roles.
         legacyRoleFor 12.0 `shouldBe` RoleConstruction
