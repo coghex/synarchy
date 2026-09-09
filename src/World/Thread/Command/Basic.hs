@@ -132,6 +132,11 @@ handleWorldDestroyAllCommand env logger = do
             -- same reason every other session-scoped value here is.
             m' { wmWorlds = [], wmVisible = []
                , wmPortableKnowledge = emptyPortableKnowledge
+               -- …and in the SAME update, so no reader can see the
+               -- cleared map under the departed session's epoch and
+               -- conclude a queued observation for it is still current
+               -- (#2512).
+               , wmSessionEpoch = wmSessionEpoch m' + 1
                , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)
@@ -187,11 +192,23 @@ handleWorldDestroyAllCommand env logger = do
 --   counters are updated from other threads, and a read-modify-write
 --   would drop those.
 handleWorldRecordPortableKnowledgeCommand
-    ∷ EngineEnv → Word64 → Maybe PortableObservation → IO ()
-handleWorldRecordPortableKnowledgeCommand env iid mObs =
+    ∷ EngineEnv → Word64 → Word64 → Maybe PortableObservation → IO ()
+handleWorldRecordPortableKnowledgeCommand env epoch iid mObs =
     atomicModifyIORef'
         (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
-        ( mgr { wmPortableKnowledge = merge (wmPortableKnowledge mgr) }, () )
+        -- REFUSED when the session has been replaced since the caller
+        -- measured. FIFO orders this command against the teardown and
+        -- the load publish, but ordering alone does not help when the
+        -- observation was measured BEFORE a teardown that is queued
+        -- AHEAD of it: the crate was genuinely there, the teardown
+        -- genuinely cleared the map, and re-inserting afterwards would
+        -- carry a departed session's memory into the next one, where a
+        -- reused instance id could pick it up.
+        ( if wmSessionEpoch mgr ≢ epoch
+            then mgr
+            else mgr { wmPortableKnowledge =
+                         merge (wmPortableKnowledge mgr) }
+        , () )
   where
     merge = case mObs of
         Just obs → applyPortableObservation iid obs

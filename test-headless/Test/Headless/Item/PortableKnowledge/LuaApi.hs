@@ -18,7 +18,7 @@ import UPrelude
 import Test.Hspec
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Building.Types
     (BuildingId(..), BuildingInstance(..), BuildingManager(..)
     , emptyBuildingManager)
@@ -33,6 +33,8 @@ import Test.Headless.Harness.Isolation (withIsolatedResourceRoot)
 import Test.Headless.Harness.Log (initializeEngineHeadlessQuiet)
 import Test.Headless.Item.PortableKnowledge.Fixture
 import Unit.Types (UnitId(..), UnitManager(..), emptyUnitManager)
+import qualified Engine.Core.Queue as Q
+import World.Command.Types (WorldCommand(..))
 import World.Thread (worldTickWith)
 import World.State.Types
 import World.Thread.Command.Basic (handleWorldDestroyAllCommand)
@@ -315,6 +317,50 @@ spec = around withBindings $ do
             logger ← readIORef (loggerRef (bnEnv b))
             handleWorldDestroyAllCommand (bnEnv b) logger
             knownPortableIds <$> knowledgeOf b `shouldReturn` []
+
+        it "a teardown queued BEFORE the observation still wins: the \
+           \crate is locatable when the verb runs, but the epoch it \
+           \measured under is gone by the time the command is drained, \
+           \so a departed session's memory cannot land in the one that \
+           \replaced it" $ \b → do
+            let env = bnEnv b
+            atTime b 800
+            -- The ordering FIFO alone cannot save: the teardown is
+            -- queued first, so it runs first -- but the verb below still
+            -- locates the crate, because nothing has torn anything down
+            -- yet.
+            Q.writeQueue (worldQueue env) WorldDestroyAll
+            luaBool b ("item.observeContainerContents(" <> tshow crateId
+                       <> ")") `shouldReturn` True
+            drainWorld b
+            mgr ← readIORef (worldManagerRef env)
+            -- Non-vacuity: the teardown really ran, and really moved the
+            -- session on.
+            map fst (wmWorlds mgr) `shouldBe` []
+            wmSessionEpoch mgr `shouldSatisfy` (> 0)
+            knownPortableIds (wmPortableKnowledge mgr) `shouldBe` []
+
+        it "…and the NEXT session, initialized after that teardown, \
+           \never inherits it either -- the refusal is by epoch, not by \
+           \the map happening to be empty at that instant" $ \b → do
+            let env = bnEnv b
+            atTime b 800
+            Q.writeQueue (worldQueue env) WorldDestroyAll
+            _ ← luaBool b ("item.observeContainerContents(" <> tshow crateId
+                           <> ")")
+            drainWorld b
+            -- A fresh page set for the next session, installed the way
+            -- the teardown's own fence lets it be: once the boundary is
+            -- complete.
+            wsNext ← emptyWorldState
+            writeIORef (wsGroundItemsRef wsNext) (groundWith [crate])
+            atomicModifyIORef' (worldManagerRef env) $ \m →
+                ( m { wmWorlds = [(pkPageA, wsNext)]
+                    , wmVisible = [pkPageA]
+                    , wmTeardownsPending = 0 }, () )
+            drainWorld b
+            knownPortableIds <$> knowledgeOf b `shouldReturn` []
+            onCrate b "k.state == 'unknown'" `shouldReturn` True
 
         it "a weigh MERGES against the map as it is when the world \
            \thread runs it, preserving a contents observation recorded \

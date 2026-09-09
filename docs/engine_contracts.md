@@ -2547,6 +2547,22 @@ side does not have. The consequence for callers is that a verb's `true`
 means accepted, and the record is readable after the world queue drains
 — the same contract `world.markLocationContentsSpawned` has.
 
+**FIFO is not enough on its own**, which is what `wmSessionEpoch` is
+for. A turn that queues `WorldDestroyAll` and THEN observes locates the
+outgoing crate perfectly well — the teardown has not run yet — so
+ordering alone would clear the map and then insert the departed
+session's memory straight back into it, where a reused instance id could
+pick it up. So every mutating verb reads the epoch from the SAME
+`WorldManager` it located in, the command carries it, and the handler
+refuses a command whose epoch has moved. The epoch is bumped by exactly
+the two wholesale replacements — Exit to Menu and a load publish — each
+in the same atomic step that installs the new page set, and a load needs
+it as much as a teardown does: unlike the unit and building queues, the
+world queue is not discarded at publish, so such a command really can
+still be sitting in it. A forget carries the epoch for the mirror-image
+reason: it must not reach across a boundary and delete a same-numbered
+record the next session legitimately owns.
+
 PLC-7 ships no gameplay caller — pickup and open are PLC-8's, the window
 is PLC-9's.
 

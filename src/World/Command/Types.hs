@@ -461,7 +461,7 @@ data WorldCommand
         --   live per-chunk overlays AND strips all WeSetStructure/
         --   WeClearStructure edits from the log so they don't replay on
         --   eviction/reload. The authoritative "wipe all structures".
-    | WorldRecordPortableKnowledge !Word64 !(Maybe PortableObservation)
+    | WorldRecordPortableKnowledge !Word64 !Word64 !(Maybe PortableObservation)
         -- ^ #2512: fold ONE portable container's observation into
         --   'World.State.Types.wmPortableKnowledge' — @Just@ a measured
         --   observation to remember, @Nothing@ to forget.
@@ -486,6 +486,19 @@ data WorldCommand
         --   land a departed session's crate memory in the one that
         --   replaced it. Through the queue those orderings are FIFO and
         --   decided.
+        --
+        --   FIFO alone is not enough, which is what the FIRST 'Word64'
+        --   is for: it is the SESSION EPOCH
+        --   ('World.State.Types.wmSessionEpoch') the caller read
+        --   alongside the page set it located the instance in, and the
+        --   handler refuses the command when that epoch has moved. A
+        --   queued observation can outlive its session — a turn that
+        --   queues @WorldDestroyAll@ and THEN observes locates the
+        --   outgoing crate perfectly well, because the teardown has not
+        --   run yet — and without the epoch, FIFO would clear the map
+        --   and then put the departed session's memory straight back
+        --   into it, where a reused instance id could pick it up. The
+        --   second 'Word64' is the instance id.
     | WorldDestroy !WorldPageId
     | WorldDestroyAll
         -- ^ Tear down EVERY world (Exit to Menu): clears wmWorlds/wmVisible,

@@ -193,6 +193,7 @@ publishStagedSession env logger requestId staged = do
     -- issued, which is exactly the ABA hazard the generation exists to
     -- close. (The handleWorldShowCommand calls below bump it further.)
     outgoingSelectionGen ← wmSelectionGen <$> readIORef (worldManagerRef env)
+    outgoingSessionEpoch ← wmSessionEpoch <$> readIORef (worldManagerRef env)
     writeIORef (worldManagerRef env) WorldManager
         { wmWorlds  = [ (spPageId p, spWorldState p) | p ← ssPages staged ]
         , wmVisible = []
@@ -223,6 +224,12 @@ publishStagedSession env logger requestId staged = do
         -- staging, so nothing installed here names a crate that is not
         -- present.
         , wmPortableKnowledge = ssPortableKnowledge staged
+        -- #2512: a load replaces the session as completely as a
+        -- teardown does, so an observation measured against the
+        -- outgoing one must not land here either — and unlike the unit
+        -- and building queues, the world queue is not discarded, so
+        -- such a command really can still be sitting in it.
+        , wmSessionEpoch = outgoingSessionEpoch + 1
         }
 
     -- Restore visibility through the real handler so its side effects

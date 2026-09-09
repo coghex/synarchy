@@ -243,8 +243,8 @@ handleWorldCommand env logger (WorldDestroy pageId)
   = handleWorldDestroyCommand env logger pageId
 handleWorldCommand env logger WorldDestroyAll
   = handleWorldDestroyAllCommand env logger
-handleWorldCommand env _ (WorldRecordPortableKnowledge iid mRecord)
-  = handleWorldRecordPortableKnowledgeCommand env iid mRecord
+handleWorldCommand env _ (WorldRecordPortableKnowledge epoch iid mObs)
+  = handleWorldRecordPortableKnowledgeCommand env epoch iid mObs
 handleWorldCommand env logger (WorldApplyFluids batch)
   = handleApplyFluidsCommand env logger batch
 handleWorldCommand env _ (WorldMarkLocationContentsSpawned pageId iid)

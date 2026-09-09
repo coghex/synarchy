@@ -779,6 +779,36 @@ data WorldManager = WorldManager
       --   NOT persisted: it names an in-flight cross-thread transition,
       --   and a save taken mid-teardown restores into a process where
       --   that transition does not exist.
+    , wmSessionEpoch ∷ !Word64
+      -- ^ Which SESSION the page set below belongs to (#2512).
+      --
+      --   Monotonic, and bumped by exactly the two transitions that
+      --   REPLACE a session wholesale:
+      --   'World.Thread.Command.Basic.handleWorldDestroyAllCommand'
+      --   (Exit to Menu) and
+      --   'World.Load.Publish.publishStagedSession' (a load). Both bump
+      --   it in the same step that installs the new page set, so no
+      --   reader can observe one without the other.
+      --
+      --   Distinct from 'wmSelectionGen' above, which answers "has the
+      --   ACTIVE PAGE moved" and deliberately does not move when a
+      --   teardown finds nothing visible. This answers "is this still
+      --   the same session at all", which a teardown always changes.
+      --
+      --   It exists because a queued command can outlive the session it
+      --   was issued for. A Lua verb that measures a portable-container
+      --   observation reads this alongside the page set it located in,
+      --   and 'World.Command.Types.WorldRecordPortableKnowledge' carries
+      --   it; the handler refuses a command whose epoch has moved.
+      --   Without that, a turn which queues @WorldDestroyAll@ and THEN
+      --   observes would locate the outgoing crate (the teardown has not
+      --   run yet), and FIFO would clear the map and then insert the
+      --   departed session's memory back into it — where a reused
+      --   instance id could pick it up.
+      --
+      --   NOT persisted: it names this process's session sequence, and a
+      --   restored session gets a fresh one from the publish that
+      --   installed it.
     , wmPortableKnowledge ∷ !PortableKnowledge
       -- ^ What the player remembers about each PORTABLE container,
       --   keyed by 'Item.Types.iiInstanceId' (#2512, epic #1231 PLC-7,
@@ -824,6 +854,7 @@ emptyWorldManager = WorldManager
     , wmProjectedVisible = []
     , wmSelectionPending = 0
     , wmTeardownsPending = 0
+    , wmSessionEpoch = 0
     , wmPortableKnowledge = emptyPortableKnowledge
     }
 

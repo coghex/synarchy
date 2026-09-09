@@ -109,7 +109,8 @@ itemGetContainerKnowledgeFn env = do
                 located ← locateFor env iid
                 im ← readReadOnlyRef (crvItemManagerRef
                                      (toContentRegistriesViewCapability env))
-                pure (lookupPortable iid (wmPortableKnowledge mgr), located, im)
+                pure ( lookupPortable iid (wmPortableKnowledge mgr)
+                     , snd <$> located, im )
             Lua.newtable
             pushTextField "state"
                 (portableKnowledgeStateId (portableRecordState mRecord))
@@ -176,8 +177,14 @@ itemForgetContainerKnowledgeFn env = do
                 let wsc = toWorldSimCapability env
                 mgr ← readIORef (wsWorldManagerRef wsc)
                 let had = isJust (lookupPortable iid (wmPortableKnowledge mgr))
+                -- Tagged with the epoch the map was READ under, for the
+                -- mirror-image reason an observation is: a forget
+                -- queued before a teardown must not reach across it and
+                -- delete a same-numbered record the NEXT session
+                -- legitimately owns.
                 Q.writeQueue (wsWorldQueue wsc)
-                    (WorldRecordPortableKnowledge iid Nothing)
+                    (WorldRecordPortableKnowledge (wmSessionEpoch mgr) iid
+                                                  Nothing)
                 pure had
             Lua.pushboolean dropped
             return 1
@@ -202,13 +209,13 @@ observeWith build env = do
                 mLocated ← locateFor env iid
                 case mLocated of
                     Nothing → pure False
-                    Just located → do
+                    Just (epoch, located) → do
                         let wsc = toWorldSimCapability env
                         now ← readIORef (wsGameTimeRef wsc)
                         itemMgr ← readReadOnlyRef (crvItemManagerRef
                             (toContentRegistriesViewCapability env))
                         Q.writeQueue (wsWorldQueue wsc)
-                            (WorldRecordPortableKnowledge iid
+                            (WorldRecordPortableKnowledge epoch iid
                                 (Just (build itemMgr now
                                              (liInstance located))))
                         pure True
@@ -242,13 +249,19 @@ argInstanceId i = do
 -- | Locate one live instance across the whole session — every page's
 --   ground items, unit inventories/equipment/accessories, and building
 --   materials/storage, recursively.
-locateFor ∷ EngineEnv → Word64 → IO (Maybe LocatedItem)
+--
+--   Answers the SESSION EPOCH it looked in alongside the instance,
+--   read from the very same 'WorldManager' the page set came from. That
+--   pairing is the point: a command tagged with an epoch read
+--   separately could name a session other than the one the crate was
+--   actually found in.
+locateFor ∷ EngineEnv → Word64 → IO (Maybe (Word64, LocatedItem))
 locateFor env iid = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     ground ← sessionGroundItems mgr
     bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-    pure (locateItemInstanceIn ground bm um iid)
+    pure ((,) (wmSessionEpoch mgr) <$> locateItemInstanceIn ground bm um iid)
 
 pushTextField ∷ Lua.Name → Text → Lua.LuaE Lua.Exception ()
 pushTextField key val = do
