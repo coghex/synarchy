@@ -3370,10 +3370,15 @@ Five rules the schema doc spells out and the gates hold:
 
 * the frame index is `floor (progress * n)` clamped — buildings'
   convention (`Building.Visual.pickBuildingFrame`);
-* a wall draws the SCREEN edge's sequence, so a wall family's declared
-  directions must run to equal lengths or registration refuses the pack;
-  the cap facemap rotates through `Structure.WallCatalog` as the STATIC
-  pair, and only the texture is swapped;
+* a wall draws the sequence of the edge whose art is really DRAWN —
+  `drawnWallEdge` asks `Structure.WallCatalog.rotatedWallArt` and takes
+  the screen edge only when it resolves, so the frame and the cap mask
+  can never name two appearances — and a family's declared directions
+  must run to equal lengths or registration refuses the pack;
+* a declared path that escapes the resource root is neither queued for
+  load nor opened: the loaders ask `structure.isSafeArtPath` (the
+  catalogue's own predicate) and send no handle, and registration
+  preflights it before measuring;
 * the last frame must occupy the static sprite's exact canvas, measured
   from the FILES at registration (`rvTextureSizeRef` is upload-filled and
   empty headless);

@@ -46,7 +46,13 @@ local function loadFrames(paths)
     if paths == nil then return nil end
     local frames = {}
     for i, path in ipairs(paths) do
-        frames[i] = { texture = path, texHandle = engine.loadTexture(path) }
+        -- Ask before loading, for the reason scripts/structures.lua's own
+        -- loadFrames does: an escaping path must not be queued.
+        if structure.isSafeArtPath and not structure.isSafeArtPath(path) then
+            frames[i] = { texture = path }
+        else
+            frames[i] = { texture = path, texHandle = engine.loadTexture(path) }
+        end
     end
     return frames
 end

@@ -52,6 +52,9 @@ import Structure.ArtCatalog
 import Structure.Facing
     (WallCaps(..), WallEdge(..), screenWallEdge, rotateWallCaps)
 import Structure.Palette (emptyTexPalette, internPath)
+import Structure.WallCatalog
+    ( StructureWallCatalog, WallArtEntry(..), emptyStructureWallCatalog
+    , registerWallFamily )
 import Structure.Render (structurePieceQuads)
 import Structure.Types
     ( ChunkStructures, StagedStructurePiece(..), StructurePieceData(..)
@@ -76,7 +79,7 @@ import World.Render.ViewBounds (ViewBounds, computeViewBounds)
 import World.Save.Component.PageActivity
     (ConstructDesignationDTO, fromConstructDTO, toConstructDTO)
 import World.Tile.Types (WorldTileData(..))
-import World.Construct.Plan (PlanWorld(..))
+import World.Construct.Plan (PlanWorld(..), structurePieceArtContext)
 
 import Test.Headless.Render.StructureGhostFixture (handleForPath)
 import Test.Headless.Structure.ConstructionFixture
@@ -123,6 +126,7 @@ spec = describe "structure construction frames" $ do
     refusalSpec
     renderSpec
     rotationSpec
+    rotationFallbackSpec
     handoffSpec
     absenceSpec
     roundTripSpec
@@ -329,6 +333,23 @@ refusalSpec = describe "registration" $ do
                 (Just (ConstructionSequence (staticAsset ApFloor)
                            (V.fromList [pathAsset bad])))
                 `shouldSatisfy` faultSays ["fixture_dungeon", "escapes"]
+
+    it "refuses an escaping path BEFORE asking whether it could be \
+       \measured — which is what lets the caller not open it" $ do
+        -- The Lua layer skips measurement entirely for a payload that
+        -- names an escaping path, so no size for it ever reaches here.
+        -- The escape must still be the reported fault; if "could not be
+        -- measured" won instead, the diagnostic would name the
+        -- consequence of the guard rather than the rule.
+        let ak = AppearanceKey Nothing ApFloor
+            bad = ConstructionSequence (staticAsset ApFloor)
+                      (V.fromList [pathAsset "../outside.png"])
+            reg = (withSequence ak (Just bad) fixtureRegistration)
+                    { parSizes = fixtureSizesOf }
+        outcomeOf reg `shouldSatisfy`
+            faultSays ["fixture_dungeon", "escapes"]
+        outcomeOf reg `shouldNotSatisfy`
+            faultSays ["could not be measured"]
 
     it "accepts an ordinary nested relative path" $
         outcomeOf (withSequence (AppearanceKey Nothing ApFloor)
@@ -577,6 +598,90 @@ rotationSpec = describe "a wall under construction" $ do
             L.nub (map faceMapId (concatMap quadVerts (V.toList got)))
                 `shouldBe` [fromIntegral (toInt wantFace)]
 
+-- | A wall catalogue that cannot rotate this fixture's art: two families
+--   both DECLARING every one of its paths, which 'registerWallFamily'
+--   marks ambiguous so 'rotatedWallArt' answers 'Nothing' rather than
+--   letting registration order pick a winner.
+ambiguousWallCatalog ∷ StructureWallCatalog
+ambiguousWallCatalog =
+    register rotateEdge (register id emptyStructureWallCatalog)
+  where
+    register f cat = fromMaybe (error "fixture ambiguity setup refused")
+                         (registerWallFamily (entries f) cat)
+    -- A repeat of the SAME family is an idempotent no-op, so the second
+    -- registration has to be a genuinely DIFFERENT family that declares
+    -- the same paths: the same twenty images, wired onto rotated edges.
+    -- That is contradictory pack data about every path this piece could
+    -- be placed with, which is what makes 'rotatedWallArt' decline.
+    entries f =
+        [ WallArtEntry (f e) Nothing (texOf e) (handleForPath (texOf e)) True
+        | e ← allWallEdges ]
+        ⧺ [ WallArtEntry (f e) (Just c) (faceOf e c)
+                         (handleForPath (faceOf e c)) True
+          | e ← allWallEdges, c ← allCaps ]
+    rotateEdge e = case e of
+        WallNE → WallNW; WallNW → WallSE; WallSE → WallSW; WallSW → WallNE
+    texOf e    = "fx/wall_" <> edgeCodeOf e <> ".png"
+    faceOf e c = "fx/wallface_" <> edgeCodeOf e <> "_" <> capsCode c <> ".png"
+
+-- | Every wall catalogue that refuses to rotate, with why.
+unrotatableCatalogs ∷ [(String, StructureWallCatalog)]
+unrotatableCatalogs =
+    [ ("an unregistered wall family", emptyStructureWallCatalog)
+    , ("a family whose paths two registrations contest", ambiguousWallCatalog) ]
+
+rotationFallbackSpec ∷ Spec
+rotationFallbackSpec =
+    describe "a wall whose art the catalogue will not rotate" $
+    forM_ unrotatableCatalogs $ \(label, catalog) → do
+
+        it (label ⧺ ": the frame follows the AUTHORED edge, because that \
+                    \is the edge whose cap mask is drawn") $
+            forM_ allWallEdges $ \authored →
+                forM_ allFacings $ \facing → do
+                    let sp = wallPiece authored
+                        ge = (envFor facing (paidAt sp 0.5) homeStructures
+                                  emptyStructureStage)
+                                 { geCatalog = catalog }
+                        want = framePathsFor
+                                   (AppearanceKey Nothing (ApWall authored)) !! 2
+                        got = snd (structureConstructionGhosts ge)
+                    got `shouldNotSatisfy` V.null
+                    L.nub (map sqTexture (V.toList got))
+                        `shouldBe` [handleForPath want]
+
+        it (label ⧺ ": the frame and the facemap name ONE appearance, \
+                    \through ordinary and front-wall geometry alike") $
+            forM_ [WallNE, WallSE] $ \authored →
+                forM_ allFacings $ \facing → do
+                    let sp = wallPiece authored
+                        ge = (envFor facing (paidAt sp 0.5) homeStructures
+                                  emptyStructureStage)
+                                 { geCatalog = catalog }
+                        got = snd (structureConstructionGhosts ge)
+                        -- Unrotated: the authored edge's uncapped mask,
+                        -- which is exactly what the placed piece draws
+                        -- through the same catalogue.
+                        wantFace = handleForPath
+                            ("fx/wallface_" <> edgeCodeOf authored <> "_00.png")
+                    got `shouldNotSatisfy` V.null
+                    L.nub (map faceMapId (concatMap quadVerts (V.toList got)))
+                        `shouldBe` [fromIntegral (toInt wantFace)]
+
+        it (label ⧺ ": the whole quad set still matches the placed piece \
+                    \drawn through the SAME catalogue") $
+            forM_ [WallNE, WallSE] $ \authored →
+                forM_ allFacings $ \facing → do
+                    let sp = wallPiece authored
+                        slot = wallSlotOf authored
+                        ge = (envFor facing (paidAt sp 0.5) homeStructures
+                                  emptyStructureStage)
+                                 { geCatalog = catalog }
+                        got = snd (structureConstructionGhosts ge)
+                    lifecycleShapes got `shouldBe`
+                        lifecycleShapes (V.fromList
+                            (placedQuadsWith catalog facing slot sp floorGridZ))
+
 -- * The handoff
 
 handoffSpec ∷ Spec
@@ -731,8 +836,16 @@ capsCode (WallCaps l r) = bit l <> bit r
 expectedFrame ∷ GhostEnv → StructurePiece → Float → ArtAsset
 expectedFrame ge sp progress =
     fromMaybe (error "fixture declared no frames for this appearance") $ do
-        ak ← constructionAppearanceAt (gePlan ge) (geFacing ge) sp homeTile
+        art ← resolveUnplacedArt fixtureCatalog (spPack sp) (spKind sp)
+                  (spEdge sp) (contextFor ge sp)
+        ak ← constructionAppearanceAt (gePlan ge) (geCatalog ge) (geFacing ge)
+                 sp homeTile art
         resolveConstructionFrame fixtureCatalog (spPack sp) ak progress
+
+-- | The world context the pass resolves art through, taken from the same
+--   shared derivation rather than restated.
+contextFor ∷ GhostEnv → StructurePiece → PieceArtContext
+contextFor ge sp = structurePieceArtContext (gePlan ge) sp homeTile
 
 paidAt ∷ StructurePiece → Float → ConstructDesignations
 paidAt sp progress = HM.singleton homeTile
@@ -858,8 +971,16 @@ chunkAt coord structures =
 --   through the palette entry point the construction pass never touches.
 placedQuads ∷ CameraFacing → StructureSlot → StructurePiece → Int
             → [SortableQuad]
-placedQuads facing slot sp gridZ =
-    structurePieceQuads fixtureWallCatalog palette handles
+placedQuads = placedQuadsWith fixtureWallCatalog
+
+wallSlotOf ∷ WallEdge → StructureSlot
+wallSlotOf e = case e of
+    WallNE → SWallNE; WallNW → SWallNW; WallSE → SWallSE; WallSW → SWallSW
+
+placedQuadsWith ∷ StructureWallCatalog → CameraFacing → StructureSlot
+                → StructurePiece → Int → [SortableQuad]
+placedQuadsWith catalog facing slot sp gridZ =
+    structurePieceQuads catalog palette handles
         (\h → fromIntegral (toInt h)) fixtureTexSizes facing zSlice effDepth
         1.0 (fst homeTile) (snd homeTile) slot
         (StructurePieceData texId faceId gridZ)

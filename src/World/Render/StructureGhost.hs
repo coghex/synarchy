@@ -57,6 +57,7 @@ module World.Render.StructureGhost
     , structureConstructionGhosts
     , structurePreviewGhosts
     , constructionAppearanceAt
+    , drawnWallEdge
     ) where
 
 import UPrelude
@@ -72,12 +73,12 @@ import Engine.Scene.Types (SortableQuad(..))
 import Structure.ArtCatalog
     ( AppearanceKey(..), AppearanceSlot(..), ArtAsset(..)
     , PieceArt(..), PieceArtContext(..), resolveConstructionFrame )
-import Structure.Facing (screenWallEdge)
+import Structure.Facing (WallEdge, screenWallEdge)
 import Structure.Render
     ( ResolvedPieceArt(..), opaqueTint, structurePieceQuadsResolved
     , translateQuad )
 import Structure.Types (StructureSlot)
-import Structure.WallCatalog (StructureWallCatalog)
+import Structure.WallCatalog (StructureWallCatalog, rotatedWallArt)
 import World.Construct.Art (structureCommittedAt)
 import World.Construct.Plan
     ( PlanOp(..), PlanOutcome(..), PlanResult(..), PlanWorld(..)
@@ -260,8 +261,9 @@ structureConstructionGhosts ge
             tint piece tile $
             resolveStructurePlan (gePlan ge) (PlanForAttempt (cdAttempt cd))
                                  (cdZ cd) piece tile
-    frameFor piece tile progress _art = do
-        ak ← constructionAppearanceAt (gePlan ge) (geFacing ge) piece tile
+    frameFor piece tile progress art = do
+        ak ← constructionAppearanceAt (gePlan ge) (geCatalog ge) (geFacing ge)
+                 piece tile art
         resolveConstructionFrame (pwCatalog (gePlan ge)) (spPack piece) ak
                                  progress
     alreadyBuilt piece (gx, gy) = fromMaybe False $ do
@@ -281,21 +283,45 @@ structureConstructionGhosts ge
 --   registration's equal-length rule for a wall family guarantees
 --   (requirement 5).
 --
+--   …but only where the wall really is rotated. 'rotatedWallArt' answers
+--   'Nothing' for art no registered family carries and for a path two
+--   families contest, and 'Structure.Render' then draws the piece
+--   exactly as authored — so this asks the SAME function, with the same
+--   arguments, and follows its answer. A screen-edge frame over an
+--   authored-edge cap mask would pair two different appearances, which
+--   is the one thing the shared-rotation discipline exists to prevent.
+--
 --   A wire's variant comes from the shared plan context, so a run being
 --   built resolves the same connection shape the placer will use.
 constructionAppearanceAt
-    ∷ PlanWorld → CameraFacing → StructurePiece → (Int, Int)
-    → Maybe AppearanceKey
-constructionAppearanceAt pw facing piece tile =
+    ∷ PlanWorld → StructureWallCatalog → CameraFacing → StructurePiece
+    → (Int, Int) → PieceArt → Maybe AppearanceKey
+constructionAppearanceAt pw catalog facing piece tile art =
     AppearanceKey Nothing <$> case spKind piece of
         "floor"   → Just ApFloor
         "ceiling" → Just ApCeiling
         "post"    → Just ApPost
-        "wall"    → Just (ApWall (screenWallEdge facing
-                                      (structurePieceWallEdge piece)))
+        "wall"    → Just (ApWall (drawnWallEdge catalog facing
+                                      (structurePieceWallEdge piece) art))
         "wire"    → Just (ApWire (pacWireShape
                                       (structurePieceArtContext pw piece tile)))
         _         → Nothing
+
+-- | The wall edge whose art is actually DRAWN for a piece authored on
+--   @edge@ at @facing@: the screen edge when the catalogue rotates this
+--   exact pair, and the authored edge when it declines to.
+--
+--   Exported for the same reason 'constructionAppearanceAt' is: a spec
+--   has to be able to name the answer without restating the rule.
+drawnWallEdge ∷ StructureWallCatalog → CameraFacing → WallEdge → PieceArt
+              → WallEdge
+drawnWallEdge catalog facing edge art
+    | isJust rotated = screenWallEdge facing edge
+    | otherwise      = edge
+  where
+    rotated = rotatedWallArt catalog facing edge
+        (aaPath (paTexture art), aaHandle (paTexture art))
+        (aaPath (paFacemap art), aaHandle (paFacemap art))
 
 -- | The PREVIEW state (D-19\/D-25): the armed piece drawn over every
 --   candidate of the current gesture at 25 %, red where the shared

@@ -85,6 +85,8 @@ module Structure.ArtCatalog
     , PackArtRegistration(..)
     , RegistrationOutcome(..)
     , registerPackArt
+      -- * Path safety
+    , escapingPath
       -- * Failure
     , ArtFault(..)
     , artFaultMessage

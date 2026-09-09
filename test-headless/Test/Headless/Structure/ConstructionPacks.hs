@@ -53,14 +53,16 @@ import Engine.Core.Init (EngineInitResult(..))
 import Engine.Core.Log
     ( LogBackend(..), LogConfig(..), LogEntry(..), LogLevel(..)
     , defaultLogConfig, initLogger )
-import Engine.Asset.Handle (toInt)
+import Engine.Asset.Handle (TextureHandle, toInt)
 import Engine.Core.State (EngineEnv(..))
 import Engine.Core.Thread (ThreadControl(..))
 import Engine.Scripting.Lua.API (registerLuaAPI)
 import Engine.Scripting.Lua.Thread (createLuaBackendState)
 import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Thread.Dispatch (processLuaMsg)
-import Engine.Scripting.Lua.Types (LuaBackendState(..), LuaMsg(..))
+import Engine.Scripting.Lua.Types
+    (LuaBackendState(..), LuaMsg(..), LuaToEngineMsg(..))
+import qualified Engine.Core.Queue as Q
 import Structure.ArtCatalog
 import Structure.Facing (WallEdge(..))
 import Structure.Palette (TexPalette(..))
@@ -282,6 +284,42 @@ payloadSpec = describe "the construction payload" $ do
                 warningsOf entries `shouldSatisfy`
                     any (namesAll ["cf_escape", "escapes"])
 
+    it "never QUEUES a load for a frame path that escapes the resource \
+       \root, and still refuses the pack by that name" $ \env → do
+        -- The loaders read a pack YAML and call `engine.loadTexture` on
+        -- every path in it BEFORE the declaration reaches the engine, so
+        -- an escaping path would be queued and only then refused. The
+        -- Lua-to-engine queue is the exact record of what was asked for.
+        _ ← drainLuaQueue env
+        (_, entries) ← withCapturedLog env $
+            loadPiecePack env "cf_escape_yaml" escapingPathPack
+        queued ← drainLuaQueue env
+        map snd queued `shouldNotSatisfy` elem escapingFramePath
+        -- …and the ordinary frames of the same pack WERE queued, so the
+        -- absence above is the guard and not a loader that queued
+        -- nothing at all.
+        map snd queued `shouldSatisfy`
+            \paths → all (`elem` paths)
+                (map T.unpack (framesFor "wall_ne" 2))
+        cat ← readIORef (structureArtCatalogRef env)
+        packArtResolves cat "cf_escape_yaml" `shouldBe` False
+        warningsOf entries `shouldSatisfy`
+            any (namesAll ["cf_escape_yaml", "escapes"])
+
+    it "exposes the engine's own rule to the loaders rather than a copy \
+       \of it" $ \env → do
+        ls ← newBareLuaBackend env
+        forM_ [ ("assets/a.png", "true"), ("fx/build/a_0.png", "true")
+              , ("../a.png", "false"), ("/etc/a.png", "false")
+              , ("a/../../b.png", "false"), ("~/a.png", "false")
+              , ("C:/a.png", "false"), ("a/./b.png", "false")
+              , ("", "false") ] $ \(path, want) →
+            evalDebug ls ("return tostring(structure.isSafeArtPath('"
+                            <> path <> "'))")
+                `shouldReturn` want
+        evalDebug ls "return tostring(structure.isSafeArtPath(nil))"
+            `shouldReturn` "false"
+
     it "refuses a SPARSE construction array rather than dropping what is \
        \past the gap" $ \env → do
         ls ← newBareLuaBackend env
@@ -429,6 +467,20 @@ unevenWallPack = defaultPack
     { psWalls = ("ne", Just (framesFor "wall_ne" 3))
                   : [ (e, Just (framesFor ("wall_" <> e) 2))
                     | e ← drop 1 wallEdges ] }
+
+-- | The one path this suite must never see opened or queued. Named
+--   once, so the fixture and the assertion cannot drift.
+escapingFramePath ∷ String
+escapingFramePath = "../outside_the_root.png"
+
+-- | A pack whose wall NW sequence names a path outside the resource
+--   root, with every other appearance well-formed.
+escapingPathPack ∷ PackSpec
+escapingPathPack = defaultPack
+    { psWalls = [ (e, Just (frames e)) | e ← wallEdges ] }
+  where
+    frames "nw" = [T.pack escapingFramePath, T.pack escapingFramePath]
+    frames e    = framesFor ("wall_" <> e) 2
 
 -- | An AUTHORED empty list, which is a typo'd pack and not an absent
 --   declaration — the loader passes it straight through so the engine
@@ -623,6 +675,22 @@ assetFailed env ls path = do
     stateRef ← newIORef ThreadRunning
     processLuaMsg env ls stateRef
         (LuaAssetFailed "texture" 4242 path "fixture failure")
+
+-- | Every texture load REQUESTED since the last drain: the handle and
+--   the path @engine.loadTexture@ asked the engine for. The exact record
+--   of what a loader queued, which is what "never opened" has to be
+--   asserted against — a headless session completes no upload, so the
+--   loaded-path registry stays empty whatever was asked for.
+drainLuaQueue ∷ EngineEnv → IO [(TextureHandle, FilePath)]
+drainLuaQueue env = go []
+  where
+    go acc = do
+        mMsg ← Q.tryReadQueue (luaToEngineQueue env)
+        case mMsg of
+            Nothing → pure (reverse acc)
+            Just msg → go $ case msg of
+                LuaLoadTextureRequest h path _ → (h, path) : acc
+                _                              → acc
 
 withCapturedLog ∷ EngineEnv → IO α → IO (α, [LogEntry])
 withCapturedLog env act = do

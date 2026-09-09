@@ -26,38 +26,48 @@ Three horizontal bands, each 96x64 pixels' worth of one tile:
   static:   band A = pure RED,   opaque
             band C = pure CYAN,  opaque    -> the unflagged control
 
-How a claim is attributed
--------------------------
-Three captures share ONE camera — pinned and zoomed before the first of
-them and never touched again — and the builder unit is spawned before it
-too, so it stands in all three and cancels out. Paused, at a fixed sun
+How a claim is attributed: difference AND position
+-------------------------------------------------
+The captures share ONE camera — pinned and zoomed before the first of
+them and never touched again — and the charged unit is spawned before it
+too, so it stands in all of them and cancels out. Paused, at a fixed sun
 angle, two such frames differ only where something was added between
-them, so:
+them:
 
-  baseline -> site        = exactly what the construction site drew
-  site     -> with static = exactly what the static control drew
+  baseline -> site        = the construction site, and its side effects
+  site     -> with static = the static control
 
-Every predicate below reads one of those two difference sets, never the
-whole frame buffer. That is what keeps terrain, HUD and the arena's
-per-process ground scatter out of the colour tests without needing to
-project a tile onto screen coordinates, and it is why an assertion is
-gated on its difference set being non-empty first: "no cyan" has to mean
-"clipped", not "nothing was placed".
+That NARROWS the search but is not on its own proof of provenance:
+`construction.addJobProgress` also stamps the D-18 corner slope into
+`ctSlopes`, which re-meshes the tile, so terrain pixels legitimately land
+in the first set. So every colour claim is also PLACED. Bands A (red) and
+B (green) sit inside the facemap's silhouette and are therefore drawn
+whatever the lifecycle flag does; their measured screen spans and their
+known canvas columns give the quad's scale and origin, and every other
+band's columns follow. Nothing reads the projection — the ruler is
+measured off the frame under test.
 
-Four claims:
+Each claim is also gated on its own difference set being non-empty
+first, so "no cyan" has to mean "clipped" and not "nothing was placed".
 
-  1. band C's BLUE is in what the SITE drew. Without the lifecycle flag
-     the reused facemap's zero alpha would multiply it away, so its
-     presence is the flag working.
+Five claims:
+
+  1. band C's BLUE is in what the SITE drew, in band C's own columns.
+     Without the lifecycle flag the reused facemap's zero alpha would
+     multiply it away, so its presence is the flag working.
   2. no CYAN is in what the STATIC CONTROL drew — the same art, same
      facemap, one tile over, unflagged. That is the existing alpha
      behaviour, unchanged.
-  3. band D paints nothing in either: the texture's own alpha still
+  3. band D's columns stay unpainted: the texture's own alpha still
      decides, flag or no flag.
   4. bands A, B and C come back at the SAME brightness. A is lit through
      a painted top mask, B through a zero-RGB one, C through no mask at
      all — so equality is the shader's zero-sum top-light fall-through
      surviving the alpha change, and the RGB path being untouched.
+  5. at a zoom inside the world's fade band, where `tileAlpha` is about
+     a half, band C comes back DIMMER — against its own baseline at the
+     same zoom, with the designation popped. Scene opacity travels on
+     the quad's tint and the flag does not touch it.
 
 Needs a GPU (Vulkan device) — manual-only, never CI-gated.
 
@@ -182,30 +192,44 @@ def write_fixture_art(root: str) -> None:
 # Pixel oracles
 # --------------------------------------------------------------------------
 def load_rgb(path: str):
+    return load_rgb_sized(path)[0]
+
+
+def load_rgb_sized(path: str):
+    """The capture's pixels and its WIDTH.
+
+    The width comes from the file rather than the window: on a HiDPI
+    display the framebuffer is larger than the window, and every located
+    assertion maps a flat pixel index back to (x, y) through it.
+    """
     from PIL import Image
     with Image.open(path) as im:
+        w = im.width
         raw = im.convert("RGB").tobytes()
-    return [tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)]
+    return [tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)], w
 
 
-def changed(before, after):
-    """The pixels `after` has that `before` did not, at the same position.
+def changed(before, after, width: int):
+    """`[(x, y, pixel)]` for every position `after` differs from `before`.
 
-    Every assertion below runs over one of these sets rather than over the
-    whole frame buffer. Two frames captured with the SAME camera, paused,
-    at a fixed sun angle differ only where something was added between
-    them, so a difference set is exactly "what this step drew" — no
-    terrain, no HUD, and no dependence on projecting a tile onto screen
-    coordinates.
+    Two frames captured with the SAME camera, paused, at a fixed sun
+    angle, with the same units standing in both, differ only where
+    something was added between them. So a difference set narrows the
+    search — but it is NOT on its own proof that a colour came from the
+    fixture: `construction.addJobProgress` also stamps the D-18 corner
+    slope into `ctSlopes`, which re-meshes the tile, so terrain pixels
+    are legitimately in the baseline->site set too.
 
-    That is what makes the colour predicates safe. Applied frame-wide
-    they would be at the mercy of whatever the arena's own art happens to
-    contain; applied to a difference set they can only see the thing the
-    step under test put there.
+    That is why every colour claim below is ALSO placed: the bands are
+    located from the frame's own red band and the rest are asserted
+    inside the columns that band implies. Difference plus position is
+    what makes "this is the fixture's blue" a statement about the
+    fixture.
     """
     if len(before) != len(after):
         return []
-    return [b for a, b in zip(before, after) if a != b]
+    return [(i % width, i // width, b)
+            for i, (a, b) in enumerate(zip(before, after)) if a != b]
 
 
 def dominant(pixels, channel: int, floor_: int = 90, others: int = 40):
@@ -216,22 +240,57 @@ def dominant(pixels, channel: int, floor_: int = 90, others: int = 40):
     usable label for "which band drew this pixel".
     """
     got = []
-    for px in pixels:
+    for x, y, px in pixels:
         rest = [v for i, v in enumerate(px) if i != channel]
         if px[channel] >= floor_ and all(v <= others for v in rest):
-            got.append(px[channel])
+            got.append((x, y, px))
     return got
 
 
 def cyanish(pixels, floor_: int = 90, red_max: int = 40, tol: int = 12):
-    return [px for px in pixels
+    return [(x, y, px) for x, y, px in pixels
             if px[0] <= red_max and px[1] >= floor_ and px[2] >= floor_
             and abs(px[1] - px[2]) <= tol]
 
 
 def whitish(pixels, floor_: int = 200, tol: int = 12):
-    return [px for px in pixels
+    return [(x, y, px) for x, y, px in pixels
             if min(px) >= floor_ and max(px) - min(px) <= tol]
+
+
+def bbox(pixels):
+    """(x0, y0, x1, y1) of a located pixel set, or None."""
+    if not pixels:
+        return None
+    xs = [x for x, _, _ in pixels]
+    ys = [y for _, y, _ in pixels]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def peak(pixels, channel: int):
+    return max(px[channel] for _, _, px in pixels)
+
+
+def band_columns(red_box, green_box, canvas_lo: int, canvas_hi: int):
+    """Predict a canvas column range's SCREEN columns from two known bands.
+
+    Band A (red) and band B (green) occupy fixed, adjacent canvas columns
+    and are both drawn whatever the lifecycle flag does — they are inside
+    the facemap's silhouette. Two known canvas spans and their two
+    measured screen spans give the quad's scale and origin, and every
+    other band follows. Nothing here reads the projection: it is measured
+    off the very frame under test.
+    """
+    lo_canvas, hi_canvas = BAND_A[0], BAND_B[1]
+    lo_screen, hi_screen = red_box[0], green_box[2] + 1
+    scale = (hi_screen - lo_screen) / float(hi_canvas - lo_canvas)
+    return (lo_screen + (canvas_lo - lo_canvas) * scale,
+            lo_screen + (canvas_hi - lo_canvas) * scale)
+
+
+def within(pixels, lo: float, hi: float, slack: float = 2.0) -> bool:
+    """Is every one of these pixels inside a screen column range?"""
+    return all(lo - slack <= x <= hi + slack for x, _, _ in pixels)
 
 
 # --------------------------------------------------------------------------
@@ -378,18 +437,33 @@ def main() -> int:
         # difference set, wherever it happens to be — which is a stronger
         # guarantee than putting it off-camera and hoping.
         #
-        # unit.spawn answers -1 while the unit registry is still settling
-        # after the arena opens, so poll rather than take the first
-        # answer: a -1 there is boot timing, not a refusal.
+        # Any unit on the active page will do, so an EXISTING one is
+        # preferred: `unit.spawn` answers -1 whenever the registry or the
+        # spawn tile is not ready, and depending on it made this step the
+        # probe's flakiest. Spawning stays as the fallback, still polled.
+        # The def name comes from the engine's OWN list rather than a
+        # hardcoded 'acolyte': `unit.spawn` answers -1 for a def the
+        # registry has not loaded yet, and the content load finishes one
+        # family at a time, so naming a specific unit made this the
+        # probe's flakiest step for no benefit — any unit can be charged
+        # an empty bill. The spawn is on the SITE tile, which the
+        # designation just proved is resident.
         def try_spawn():
-            raw = send(args.port, "return unit.spawn('acolyte',"
-                                  f" {site_x + 4}, {site_y + 4})")
+            raw = send(args.port,
+                       "local d = unit.listDefs();"
+                       " if not d or #d == 0 then return -1 end;"
+                       f" return unit.spawn(d[1], {site_x}, {site_y})")
             try:
                 uid = int(float((raw or "").strip()))
             except (TypeError, ValueError):
                 return None
             return uid if uid > 0 else None
-        builder = poll_until(60.0, try_spawn)
+
+        found = poll_until(20.0, lambda: send_json(
+            args.port, "local ids = unit.getAllIds();"
+                       " return ids and ids[1] and {uid = ids[1]} or nil"))
+        builder = (int(found["uid"]) if isinstance(found, dict)
+                   else poll_until(60.0, try_spawn))
         if not check(bool(builder),
                      "a unit exists to charge the (empty) bill to",
                      "unit.spawn never returned a real uid"):
@@ -398,7 +472,7 @@ def main() -> int:
         base_path = os.path.join(args.out, "0_baseline.png")
         if not check(capture(args.port, base_path), "captured the baseline"):
             return 1
-        base = load_rgb(base_path)
+        base, width = load_rgb_sized(base_path)
 
         print("phase 5: a PAID designation with declared frames")
         ok = send(args.port,
@@ -432,7 +506,7 @@ def main() -> int:
                      "captured the construction site"):
             return 1
         site = load_rgb(site_path)
-        site_px = changed(base, site)
+        site_px = changed(base, site, width)
         if not check(len(site_px) > 200,
                      "the construction site changed the frame at all",
                      f"{len(site_px)} px differ from the baseline"):
@@ -454,49 +528,136 @@ def main() -> int:
                      "captured the static control"):
             return 1
         with_ctrl = load_rgb(ctrl_path)
-        ctrl_px = changed(site, with_ctrl)
+        ctrl_px = changed(site, with_ctrl, width)
         if not check(len(ctrl_px) > 200,
                      "the static control changed the frame at all — so its "
                      "absence of cyan below is clipping, not an unplaced piece",
                      f"{len(ctrl_px)} px differ from the previous capture"):
             return 1
 
-        print("phase 7: read the two difference sets")
-        # Everything below reads ONLY pixels one of the two steps drew.
-        blues = dominant(site_px, 2)
-        check(len(blues) > 200,
-              "a frame pixel OUTSIDE the reused facemap's silhouette is "
-              "visible",
-              f"{len(blues)} blue-dominant px of {len(site_px)} the site drew")
-
-        check(not cyanish(ctrl_px),
-              "the UNFLAGGED static piece's out-of-silhouette pixels are "
-              "still clipped",
-              f"{len(cyanish(ctrl_px))} cyan px of {len(ctrl_px)} the "
-              "control drew")
-
-        check(not whitish(site_px) and not whitish(ctrl_px),
-              "a fully transparent frame pixel paints nothing, flag or no "
-              "flag",
-              f"{len(whitish(site_px))} + {len(whitish(ctrl_px))} white px")
-
+        print("phase 7: locate the fixture's bands, then read them")
+        # Bands A (red) and B (green) are INSIDE the facemap silhouette,
+        # so they are drawn whatever the lifecycle flag does — which is
+        # what makes them a usable ruler. Everything else is asserted
+        # against the columns they imply, so a terrain pixel the D-18
+        # slope stamp put into the difference set cannot satisfy a claim
+        # by being the right colour somewhere else on screen.
         reds = dominant(site_px, 0)
         greens = dominant(site_px, 1)
-        if check(bool(reds) and bool(greens) and bool(blues),
-                 "all three lit bands reached the frame buffer",
+        if not check(len(reds) > 100 and len(greens) > 100,
+                     "the two in-silhouette bands located the sprite",
+                     f"red={len(reds)} green={len(greens)}"):
+            return 1
+        red_box, green_box = bbox(reds), bbox(greens)
+        if not check(red_box[2] < green_box[0],
+                     "band A sits left of band B, as the fixture draws them",
+                     f"red={red_box} green={green_box}"):
+            return 1
+        c_lo, c_hi = band_columns(red_box, green_box, *BAND_C)
+        d_lo, d_hi = band_columns(red_box, green_box, *BAND_D)
+        print(f"        band C predicted at screen columns "
+              f"{c_lo:.1f}..{c_hi:.1f}, band D at {d_lo:.1f}..{d_hi:.1f}")
+
+        blues = dominant(site_px, 2)
+        check(len(blues) > 100 and within(blues, c_lo, c_hi),
+              "a frame pixel OUTSIDE the reused facemap's silhouette is "
+              "visible, in band C's own columns",
+              f"{len(blues)} blue px, bbox {bbox(blues)}")
+
+        cyans = cyanish(ctrl_px)
+        check(not cyans,
+              "the UNFLAGGED static piece's out-of-silhouette pixels are "
+              "still clipped",
+              f"{len(cyans)} cyan px of {len(ctrl_px)} the control drew, "
+              f"bbox {bbox(cyans)}")
+
+        whites = whitish(site_px) + whitish(ctrl_px)
+        check(not [p for p in whites if within([p], d_lo, d_hi)],
+              "a fully transparent frame pixel paints nothing, flag or no "
+              "flag",
+              f"{len(whites)} white px, bbox {bbox(whites)}")
+
+        if check(bool(blues), "all three lit bands reached the frame buffer",
                  f"red={len(reds)} green={len(greens)} blue={len(blues)}"):
-            peak = (max(reds), max(greens), max(blues))
-            check(max(peak) - min(peak) <= 6,
+            peaks = (peak(reds, 0), peak(greens, 1), peak(blues, 2))
+            check(max(peaks) - min(peaks) <= 6,
                   "a painted top mask, a zero-RGB mask and NO mask all light "
                   "the frame identically",
-                  f"peaks red/green/blue = {peak}")
+                  f"peaks red/green/blue = {peaks}")
+
+        print("phase 8: scene opacity still multiplies the flagged quad")
+        # `tileAlpha` is the zoom fade (World.Render: 1.0 below
+        # zoomFadeStart, ramping to 0 at zoomFadeEnd) and the
+        # construction pass draws at `opaqueTint tileAlpha`, so a zoom
+        # inside that band is a scene opacity below 1 with nothing else
+        # changed. Its own baseline is the SAME zoom with the designation
+        # cancelled, so the comparison is like for like.
+        fade_lo = send_json(args.port, "return camera.getZoomFadeStart()")
+        fade_hi = send_json(args.port, "return camera.getZoomFadeEnd()")
+        mid = (float(fade_lo) + float(fade_hi)) / 2.0 \
+            if isinstance(fade_lo, (int, float)) \
+            and isinstance(fade_hi, (int, float)) else 1.4
+        send(args.port, f"camera.setZoom({mid}); return 'ok'")
+        faded_path = os.path.join(args.out, "3_faded.png")
+        if not check(capture(args.port, faded_path),
+                     f"captured at zoom {mid} (scene opacity ~0.5)"):
+            return 1
+        faded = load_rgb(faded_path)
+        # The ATOMIC pop, not the queued cancel: `cancelDesignation` is
+        # fire-and-forget on the world thread, and this frame is paused.
+        # `cancelDesignationForRefund` removes the designation and
+        # returns it in one synchronous step, so the very next capture
+        # cannot still be showing it.
+        popped = send(args.port,
+                      f"local j = construction.cancelDesignationForRefund("
+                      f"'{page}', {site_x}, {site_y});"
+                      " return tostring(j ~= nil)", timeout=20.0)
+        gone = poll_until(30.0, lambda: send_json(
+            args.port, f"return construction.getDesignationAt('{page}',"
+                       f" {site_x}, {site_y})") is None)
+        if not check((popped or "").strip() == "true" and bool(gone),
+                     "the designation was cancelled",
+                     f"cancelDesignationForRefund -> {popped!r}"):
+            return 1
+        faded_base_path = os.path.join(args.out, "4_faded_baseline.png")
+        if not check(capture(args.port, faded_base_path),
+                     "captured the faded baseline"):
+            return 1
+        faded_px = changed(load_rgb(faded_base_path), faded, width)
+        check(len(faded_px) > 50,
+              "the site is still drawn at a scene opacity below 1",
+              f"{len(faded_px)} px differ once the designation goes")
+        faded_reds = dominant(faded_px, 0)
+        faded_greens = dominant(faded_px, 1)
+        faded_blues = dominant(faded_px, 2)
+        if check(bool(faded_reds) and bool(faded_greens) and bool(faded_blues),
+                 "the same three bands are still identifiable at the faded "
+                 "zoom",
+                 f"red={len(faded_reds)} green={len(faded_greens)} "
+                 f"blue={len(faded_blues)}"):
+            f_lo, f_hi = band_columns(bbox(faded_reds), bbox(faded_greens),
+                                      *BAND_C)
+            check(within(faded_blues, f_lo, f_hi),
+                  "…still in band C's own columns, re-measured at this zoom",
+                  f"blue bbox {bbox(faded_blues)} vs {f_lo:.1f}..{f_hi:.1f}")
+            # tileAlpha halves at the fade band's midpoint, and the quad's
+            # tint carries it, so the band blends with the ground behind
+            # instead of painting at full strength. A flag that made the
+            # texture's alpha authoritative for the TINT as well — rather
+            # than only for the face map — would leave this unchanged.
+            full, half = peak(blues, 2), peak(faded_blues, 2)
+            check(half <= full * 0.75,
+                  "…and the tint's alpha still multiplies the flagged quad: "
+                  "band C is dimmer at half scene opacity",
+                  f"peak blue {full} at full opacity vs {half} at ~0.5")
     finally:
         if not args.keep_open:
             quit_engine(args.port, proc)
         shutil.rmtree(FIXTURE_DIR, ignore_errors=True)
 
     print()
-    for name in ("0_baseline.png", "1_construction.png", "2_with_static.png"):
+    for name in ("0_baseline.png", "1_construction.png", "2_with_static.png",
+                 "3_faded.png", "4_faded_baseline.png"):
         print(f"  {os.path.join(args.out, name)}")
     print()
     if failures:

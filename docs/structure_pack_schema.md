@@ -133,6 +133,15 @@ A terminal texture-load failure on a declared FRAME makes the whole pack
 resolve nothing, exactly as a failed static sprite does, and is reported
 once per (pack, path) naming the appearance and the frame's position.
 
+**An escaping path is refused before anything opens it.** The rule is
+`Structure.ArtCatalog.escapingPath` and there is one copy of it. The
+loaders ask it through `structure.isSafeArtPath` and send the declaration
+WITHOUT a handle rather than calling `engine.loadTexture`, so such a path
+is never queued; `structure.registerPackArt` preflights the same
+predicate before it measures anything, so it is never read either. The
+missing handle is that guard's own consequence, so the escape check runs
+first and the reported fault names the escape rather than the handle.
+
 **Dimensions are measured from the files, not from
 `rvTextureSizeRef`.** That cache is filled by a completed GPU upload,
 which has not happened when a pack registers on the first Lua tick and
@@ -159,6 +168,15 @@ piece: `Structure.Render.structurePieceQuadsResolved` asks
 `Structure.WallCatalog.rotatedWallArt` about the STATIC pair — a
 construction frame is not registered art and could not identify a family
 — and then swaps only the texture.
+
+**…and the frame follows that answer, not the facing.**
+`rotatedWallArt` returns nothing for art no registered family carries and
+for a path two families contest, and the renderer then draws the piece
+exactly as authored. `World.Render.StructureGhost.drawnWallEdge` asks the
+same function with the same arguments and picks the screen edge only when
+it resolves, so the frame and the cap mask always name ONE appearance. A
+screen-edge frame over an authored-edge mask is the exact pairing the
+shared-rotation discipline exists to prevent.
 
 ## 6. The handoff
 

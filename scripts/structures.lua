@@ -56,7 +56,16 @@ local function loadFrames(paths)
     if paths == nil then return nil end
     local frames = {}
     for i, path in ipairs(paths) do
-        frames[i] = { texture = path, texHandle = engine.loadTexture(path) }
+        -- ASK BEFORE LOADING. `structure.isSafeArtPath` is the engine's
+        -- own declaration rule, not a copy of it, and a path that fails
+        -- it must not be queued for load at all — the declaration still
+        -- goes over with no handle, and the catalogue refuses the pack
+        -- naming the escape (its path check runs before its handle one).
+        if structure.isSafeArtPath and not structure.isSafeArtPath(path) then
+            frames[i] = { texture = path }
+        else
+            frames[i] = { texture = path, texHandle = engine.loadTexture(path) }
+        end
     end
     return frames
 end

@@ -21,6 +21,7 @@
 --   nothing else.
 module Engine.Scripting.Lua.API.StructureArt
     ( structureRegisterPackArtFn
+    , structureIsSafeArtPathFn
     , structurePackKindBuildableFn
     , structurePackBuildCostFn
     , structureResolvePieceArtFn
@@ -112,7 +113,17 @@ structureRegisterPackArtFn env = do
             -- lands long after this call. Only the paths a declared
             -- sequence actually names are touched, so a pack with no
             -- sequences reads nothing.
-            sizes ← Lua.liftIO (measureSequences (parFrames reg0))
+            -- Refuse an escaping path BEFORE any of it is opened. The
+            -- rule is a pack-data one and the catalogue enforces it
+            -- anyway, but by the time 'registerPackArt' runs the
+            -- measurement below has already read every path it names —
+            -- so a declaration pointing outside the resource root would
+            -- be opened and only then refused. Preflighting it here
+            -- means such a path is neither read nor measured, and the
+            -- catalogue still reports the same fault by the same rule.
+            sizes ← if any (escapingPath ∘ aaPath) (declaredAssets reg0)
+                        then pure HM.empty
+                        else Lua.liftIO (measureSequences (parFrames reg0))
             let reg = reg0 { parSizes = sizes }
             (outcome, cat) ← Lua.liftIO $
                 atomicModifyIORef' (rhStructureArtCatalogRef
@@ -402,6 +413,8 @@ structureRegisterPackArtFn env = do
                                      ("the entry has no `" <> what <> "`")))
                             Right
                     in do tex    ← need "texture"   mTex
+                          when (escapingPath tex) $
+                              Left (escapeFault pack role tex)
                           texH   ← need "texHandle" mTexH
                           frames ← eFrames
                           pure ( ak
@@ -437,10 +450,23 @@ structureRegisterPackArtFn env = do
         mTex  ← fieldString (-1) "texture"
         mTexH ← fieldHandle (-1) "texHandle"
         pure $ case (mTex, mTexH) of
+            (Just tex, _) | escapingPath tex → Left (escapeFault pack role tex)
             (Just tex, Just h) → Right (ArtAsset tex h)
-            _ → Left $ fault pack Nothing
-                    ("construction frames " <> tshow i <> " frame " <> tshow j)
+            _ → Left $ fault pack Nothing role
                     "the frame has no `texture` string and `texHandle` number"
+      where
+        role = "construction frames " <> tshow i <> " frame " <> tshow j
+
+    -- An escaping path is reported AS an escape even though the entry
+    -- also lacks a handle. A loader that asked `structure.isSafeArtPath`
+    -- first deliberately sends the declaration with no handle — that is
+    -- how a path outside the resource root is kept from ever being
+    -- queued — so the missing handle is this rule's own consequence and
+    -- must not be what the warning names.
+    escapeFault pack role path = ArtFault
+        { afPack = pack, afKind = Nothing, afRole = role
+        , afPath = Just path
+        , afReason = "the asset path escapes the resource root" }
 
     -- The APPEARANCE a construction entry's selectors name.
     appearanceSlotFor kind mEdge mCaps mShape = do
@@ -475,6 +501,13 @@ structureRegisterPackArtFn env = do
         simple k = k ⚟ guard (isNothing mEdge ∧ isNothing mCaps
                                 ∧ isNothing mShape)
 
+-- | Every asset any declared sequence names, static sprite included.
+declaredAssets ∷ PackArtRegistration → [ArtAsset]
+declaredAssets reg =
+    [ a
+    | (_, cs) ← parFrames reg
+    , a ← csStatic cs : V.toList (csFrames cs) ]
+
 -- | Measure every image a declared sequence's dimension check needs:
 --   the appearance's static sprite and the sequence's LAST frame.
 --
@@ -503,6 +536,26 @@ measureSequences seqs = HM.fromList ∘ catMaybes <$> mapM measure paths
                                             , JP.dynamicMap JP.imageHeight img ))
             _                 → Nothing
     ordNub = foldr (\x xs → x : filter (≢ x) xs) []
+
+-- | @structure.isSafeArtPath(path) → bool@ — may a pack declaration
+--   name this image at all?
+--
+--   THE rule, not a copy of it: it is
+--   'Structure.ArtCatalog.escapingPath', the same predicate
+--   'registerPackArt' refuses a declaration by. Exposed because the two
+--   pack loaders read a YAML and call @engine.loadTexture@ on every path
+--   in it BEFORE handing the declaration over, so without this a path
+--   pointing outside the resource root would be queued for load and only
+--   then refused. A loader that asks first sends the declaration anyway
+--   — with no handle, so the catalogue still names the escape rather
+--   than a missing handle, because that check runs first.
+--
+--   A non-string argument is not a safe path.
+structureIsSafeArtPathFn ∷ Lua.LuaE Lua.Exception Lua.NumResults
+structureIsSafeArtPathFn = do
+    mPath ← argString 1
+    Lua.pushboolean (maybe False (\p → p ≢ "" ∧ not (escapingPath p)) mPath)
+    return 1
 
 -- | @structure.isPackKindBuildable(pack, kind) → bool@ — does this
 --   pack's kind carry complete @build:@ metadata? Deliberately
