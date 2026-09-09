@@ -9,16 +9,20 @@
 #   - PR opened / updated → "review-approved" check FAILS
 #     (red = "review verdict pending", merging blocked)
 #   - reviewer applies `reviewed:approve`  → check PASSES
-#   - a synchronize push that changes this PR's own patch → label
-#     auto-removed AND the required check goes red for that head (stale
-#     approvals don't carry a changed PR through; re-approve)
-#   - a synchronize push that leaves this PR's own patch byte-identical
-#     (a "merge base into head" branch update, e.g. from strict branch
-#     protection's up-to-date-with-base requirement being satisfied by
-#     a human clicking "Update branch", or equivalent automation, after
-#     an unrelated sibling PR merges) → label is KEPT and the check
-#     stays green (#801 review, the original review-pr.py flakiness this
-#     caused)
+#   - a synchronize push that is NOT just the approved head replayed
+#     onto the new base → label auto-removed AND the required check goes
+#     red for that head (stale approvals don't carry a changed PR
+#     through; re-approve). That covers an edit, an addition, a
+#     deletion, a revert, and a replay that CONFLICTS.
+#   - a synchronize push that is exactly the approved head carried onto
+#     the base it merged in (a "merge base into head" branch update,
+#     e.g. from strict branch protection's up-to-date-with-base
+#     requirement being satisfied by a human clicking "Update branch",
+#     or equivalent automation, after a sibling PR merges) → label is
+#     KEPT and the check stays green (#801 review, the original
+#     review-pr.py flakiness this caused). Since #2591 that holds even
+#     when the sibling touched a file this PR also touches, as long as
+#     the two do not conflict.
 name: review-gate
 
 on:
@@ -26,14 +30,21 @@ on:
     types: [opened, reopened, synchronize, labeled, unlabeled]
 
 jobs:
-  # New commits that change this PR's own patch invalidate a prior
-  # approval: strip the label so the gate closes until the reviewer
-  # re-approves the updated code. A synchronize push that leaves this
-  # PR's own patch identical -- a base-branch update merged forward with
-  # no overlapping content -- leaves the label alone: the reviewed code
-  # hasn't actually changed, only the branch's ancestry has, and
-  # stripping it anyway causes exactly the kind of race that made
-  # review-pr.py report a spurious failure (#801 review).
+  # New commits that contribute anything of this PR's own invalidate a
+  # prior approval: strip the label so the gate closes until the reviewer
+  # re-approves the updated code. A synchronize push that is only the
+  # approved head replayed onto the base revision it merged in leaves the
+  # label alone: the reviewed work hasn't changed, only the branch's
+  # ancestry has, and stripping it anyway causes exactly the kind of race
+  # that made review-pr.py report a spurious failure (#801 review).
+  #
+  # #2591 replaced the raw-patch comparison that decided this. It named
+  # the SOURCE blob of every changed path, so moving the merge base made
+  # a clean, additive merge-forward into a shared file read as a content
+  # change -- and two PRs that both register a module in one manifest
+  # then stripped each other on every merge. The rule is now a replay:
+  # merge the approved head with the incorporated base revision and
+  # require the result to equal the pushed tree.
   #
   # The decision itself lives in tools/review_gate_decision.py (#1679),
   # not inline here, for two reasons. It compares the PR's own PATCH on
@@ -103,10 +114,10 @@ jobs:
                --base-ref "$BASE_REF" \
                --base-sha "$BASE_SHA"; then
             DECISION=keep
-            echo "this PR's own patch is unchanged -- keeping reviewed:approve"
+            echo "only the branch's ancestry moved -- keeping reviewed:approve"
           else
             DECISION=strip
-            echo "this PR's own patch changed -- stripping reviewed:approve"
+            echo "not a clean replay of the approved head -- content change, conflict, or an undeterminable result; stripping reviewed:approve"
           fi
           # Applies the decision, verifies it against GitHub, writes the
           # `decision` and `label_present` outputs, and exits non-zero
