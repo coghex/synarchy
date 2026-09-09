@@ -10,7 +10,20 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+# git comes from the git-core PPA, not from jammy. Ubuntu 22.04 ships
+# git 2.34, and `tools/review_gate_decision.py` replays a pull request's
+# approved head with `git merge-tree --write-tree`, which needs 2.38
+# (#2591). Without this the review gate's self-test fails here with
+# `fatal: unknown rev --write-tree` while passing on any developer's
+# machine. Nothing else in the toolchain moves: the PPA carries git
+# alone.
 RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    gnupg \
+    software-properties-common \
+ && add-apt-repository -y ppa:git-core/ppa \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
     bash \
     build-essential \

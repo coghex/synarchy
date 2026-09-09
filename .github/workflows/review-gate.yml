@@ -44,10 +44,12 @@ jobs:
   # change -- and two PRs that both register a module in one manifest
   # then stripped each other on every merge. The rule is now a replay:
   # merge the approved head with the incorporated base revision and
-  # require the result to equal the pushed tree. The replay runs on git's
-  # oldest plumbing (read-tree / merge-index / write-tree) rather than
-  # `merge-tree --write-tree`, so it behaves identically here and inside
-  # the Ubuntu 22.04 CI image the self-test runs in.
+  # require the result to equal the pushed tree. The replay is git's own
+  # merge (`merge-tree --write-tree`, the same `ort` strategy a real
+  # `git merge` runs) rather than a hand-rolled one: a path-by-path
+  # replay has no rename detection, so a PR that renames a file the base
+  # then edits would conflict under it and be stripped despite merging
+  # cleanly for real.
   #
   # The decision itself lives in tools/review_gate_decision.py (#1679),
   # not inline here, for two reasons. It compares the PR's own PATCH on
