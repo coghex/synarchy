@@ -53,6 +53,7 @@ import Engine.Core.Log
     , LoggerState(..), defaultLogConfig, initLogger )
 import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.CallStats (newLuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.World.Edit (worldDigTileFn)
 import Engine.Graphics.Camera (CameraFacing(..))
@@ -311,8 +312,9 @@ digCall env argList = do
         wsc = (toWorldSimCapability env) { wsWorldQueue = queue }
     Lua.run @Lua.Exception $ do
         Lua.openlibs
+        callStats ← Lua.liftIO newLuaCallStats
         Lua.newtable
-        registerLuaFunction "digTile" (worldDigTileFn cc wsc)
+        registerLuaFunction callStats "world" "digTile" (worldDigTileFn cc wsc)
         Lua.setglobal "world"
         st ← Lua.dostring
                 (TE.encodeUtf8 ("world.digTile(" <> argList <> ")"))

@@ -401,6 +401,22 @@ def _expect_descriptor_name(path: str, tokens: list[Token], i: int) -> tuple[str
     return name, i + len(shape)
 
 
+def _telemetry_prefix(path: str, tokens: list[Token], i: int) -> tuple[str | None, int]:
+    """Read the explicit `callStats "namespace"` context (#2483).
+
+    Historical raw/descriptor fixtures remain readable. Production Haskell
+    requires the context argument; whenever it is present the literal namespace
+    must agree with the table actually installed, including multi-table modules.
+    """
+    if i >= len(tokens) or tokens[i].text != "callStats":
+        return None, i
+    if (i + 1 >= len(tokens) or tokens[i + 1].kind != "string"
+            or not VERB_NAME_RE.fullmatch(tokens[i + 1].text)):
+        raise CertificationError(path, tokens[i].line,
+                                 "callStats requires a literal telemetry namespace")
+    return tokens[i + 1].text, i + 2
+
+
 def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], set[str], int]:
     """Read one registrar module's namespace->verb map.
 
@@ -416,6 +432,10 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
         registerLuaFunction "<verb>" (action)              -- the raw form
         registerLuaVerb (luaVerb "<verb>" ...) (action)    -- #2479's
                                                            -- descriptor form
+
+    Production registrations prefix either spelling with `callStats "<namespace>"`.
+    That literal must match the installed global, so telemetry cannot silently
+    attribute a verb to a neighbouring namespace.
 
     Both must name the verb with a string literal in that position. A
     descriptor built any other way, or attached to no open block, is a
@@ -442,6 +462,7 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
     # (verb, line, construct) -- the construct is carried so an
     # unpublished block names the spelling that actually opened it.
     pending: list[tuple[str, int, str]] = []
+    telemetry_namespaces: list[tuple[str, int]] = []
     # The namespace a `Lua.getglobal` opened since the last install, if any.
     # A later `Lua.newtable` does not clear it: Register/Debug.hs guards the
     # two on mutually exclusive branches of the same `isTbl` test, so the
@@ -471,6 +492,10 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
             name, i = _expect_lua_name(path, tokens, i + 1, "Lua.getglobal")
             open_kind, augment_of, augment_line = "global", name, line
         elif token.text == "registerLuaFunction":
+            namespace, next_i = _telemetry_prefix(path, tokens, i + 1)
+            if namespace is not None:
+                telemetry_namespaces.append((namespace, token.line))
+            i = next_i - 1
             if i + 1 >= len(tokens) or tokens[i + 1].kind != "string":
                 found = tokens[i + 1].text if i + 1 < len(tokens) else "end of file"
                 raise CertificationError(
@@ -488,7 +513,10 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
             registrations += 1
             i += 2
         elif token.text == "registerLuaVerb":
-            verb, i = _expect_descriptor_name(path, tokens, i + 1)
+            namespace, next_i = _telemetry_prefix(path, tokens, i + 1)
+            if namespace is not None:
+                telemetry_namespaces.append((namespace, token.line))
+            verb, i = _expect_descriptor_name(path, tokens, next_i)
             if open_kind is None:
                 raise CertificationError(
                     path, token.line,
@@ -515,6 +543,11 @@ def extract_registrations(path: str, text: str) -> tuple[dict[str, set[str]], se
                         f"namespace {name!r} augments an existing global whose stock "
                         "members this analyzer does not know")
                 augmenting.add(name)
+            for namespace, line in telemetry_namespaces:
+                if namespace != name:
+                    raise CertificationError(path, line,
+                        f"telemetry namespace {namespace!r} differs from installed namespace {name!r}")
+            telemetry_namespaces = []
             namespaces.setdefault(name, set()).update(verb for verb, _, _ in pending)
             pending = []
             open_kind, augment_of = None, None

@@ -29,6 +29,7 @@ module Engine.Scripting.Lua.API.Register.UI
   ) where
 
 import UPrelude
+import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaVerb)
 import Engine.Scripting.Lua.API.Descriptor
 import Engine.Scripting.Lua.API.UI
@@ -36,8 +37,8 @@ import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
 -- | Populate and install the @UI@ global table.
-registerUIAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
-registerUIAPI = void ∘ installUIAPI
+registerUIAPI ∷ LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception ()
+registerUIAPI callStats = void ∘ installUIAPI callStats
 
 -- * Shared argument and result shapes
 --
@@ -115,12 +116,12 @@ elementInfoRecord = TRecord
 
 -- | Install the @UI@ global table, yielding every descriptor it
 --   installed, in registration order.
-installUIAPI ∷ EngineEnv → Lua.LuaE Lua.Exception [LuaVerb]
-installUIAPI env = do
+installUIAPI ∷ LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception [LuaVerb]
+installUIAPI callStats env = do
   Lua.newtable
   descriptors ← sequence
     -- Pages
-    [ registerLuaVerb (luaVerb "newPage"
+    [ registerLuaVerb callStats "UI" (luaVerb "newPage"
         [ argReq "name" TString "Page name. Read with Lua.tostring, which also accepts a number."
         , argReq "layer" TString "Layer band: hud, overlay, menu, modal, tooltip or debug, matched case-insensitively; any other string falls back to menu."
         ]
@@ -128,41 +129,41 @@ installUIAPI env = do
             "The new page's handle, or nil when either argument is missing."])
         "Create a page on the named layer band.")
         (uiNewPageFn env)
-    , registerLuaVerb (luaVerb "deletePage"
+    , registerLuaVerb callStats "UI" (luaVerb "deletePage"
         [pageArg]
         retNone
         "Delete a page and recursively every element it owns, reporting any resulting control-focus change.")
         (uiDeletePageFn env)
-    , registerLuaVerb (luaVerb "showPage"
+    , registerLuaVerb callStats "UI" (luaVerb "showPage"
         [pageArg]
         retNone
         "Show a page. Its elements become eligible for rendering and hit-testing.")
         (uiShowPageFn env)
-    , registerLuaVerb (luaVerb "hidePage"
+    , registerLuaVerb callStats "UI" (luaVerb "hidePage"
         [pageArg]
         retNone
         "Hide a page, clearing text and control focus held on it and reporting the control-focus change (#745).")
         (uiHidePageFn env)
-    , registerLuaVerb (luaVerb "setPageInputExclusive"
+    , registerLuaVerb callStats "UI" (luaVerb "setPageInputExclusive"
         [ pageArg
         , flagArg "exclusive" "Whether this page establishes an input-exclusive modal boundary."
         ]
         retNone
         "Override a page's default modal-boundary classification, which creation derives from its layer (#742).")
         (uiSetPageInputExclusiveFn env)
-    , registerLuaVerb (luaVerb "isPageInputExclusive"
+    , registerLuaVerb callStats "UI" (luaVerb "isPageInputExclusive"
         [pageArg]
         (retVals [resVal "exclusive" TBoolean
             "Whether the page is input-exclusive; false for an unknown handle."])
         "Read a page's modal-boundary classification (#742).")
         (uiIsPageInputExclusiveFn env)
-    , registerLuaVerb (luaVerb "isInputBlocked"
+    , registerLuaVerb callStats "UI" (luaVerb "isInputBlocked"
         []
         (retVals [resVal "blocked" TBoolean
             "True while any visible page establishes an input-exclusive modal boundary."])
         "Whether gameplay input is currently blocked by a modal UI boundary (#742).")
         (uiIsInputBlockedFn env)
-    , registerLuaVerb (luaVerb "isPageInScope"
+    , registerLuaVerb callStats "UI" (luaVerb "isPageInScope"
         [pageArg]
         (retVals [resVal "inScope" TBoolean
             "True when the page is VISIBLE and at or above the modal boundary. UI.InputOwnership.pagesInScope is drawn from getVisiblePages, so a hidden page is out of scope even when no boundary exists at all; an unknown page is never in scope."])
@@ -170,7 +171,7 @@ installUIAPI env = do
         (uiIsPageInScopeFn env)
 
     -- Element creation
-    , registerLuaVerb (luaVerb "newElement"
+    , registerLuaVerb callStats "UI" (luaVerb "newElement"
         [ argReq "name" TString "Element name."
         , argReq "width" TNumber "Content width, in framebuffer pixels."
         , argReq "height" TNumber "Content height, in framebuffer pixels."
@@ -180,7 +181,7 @@ installUIAPI env = do
             "The new element's handle, or nil when any argument is missing."])
         "Create a bare element with no render data of its own.")
         (uiNewElementFn env)
-    , registerLuaVerb (luaVerb "newBox"
+    , registerLuaVerb callStats "UI" (luaVerb "newBox"
         [ argReq "name" TString "Element name."
         , argReq "width" TNumber "Content width, in framebuffer pixels."
         , argReq "height" TNumber "Content height, in framebuffer pixels."
@@ -197,7 +198,7 @@ installUIAPI env = do
             "The new element's handle, or nil when any argument is missing."])
         "Create a nine-slice box element.")
         (uiNewBoxFn env)
-    , registerLuaVerb (luaVerb "newText"
+    , registerLuaVerb callStats "UI" (luaVerb "newText"
         [ argReq "name" TString "Element name."
         , argReq "text" TString "Initial caption."
         , argReq "fontHandle" TInteger "Font handle from the asset API."
@@ -212,7 +213,7 @@ installUIAPI env = do
             "The new element's handle, or nil when any argument is missing."])
         "Create a text element.")
         (uiNewTextFn env)
-    , registerLuaVerb (luaVerb "newSprite"
+    , registerLuaVerb callStats "UI" (luaVerb "newSprite"
         [ argReq "name" TString "Element name."
         , argReq "width" TNumber "Content width, in framebuffer pixels."
         , argReq "height" TNumber "Content height, in framebuffer pixels."
@@ -229,7 +230,7 @@ installUIAPI env = do
         (uiNewSpriteFn env)
 
     -- The element tree
-    , registerLuaVerb (luaVerb "addToPage"
+    , registerLuaVerb callStats "UI" (luaVerb "addToPage"
         [ pageArg
         , elementArg
         , argReq "x" TNumber "Position relative to the page, in framebuffer pixels."
@@ -238,7 +239,7 @@ installUIAPI env = do
         retNone
         "Attach an element to a page at a position.")
         (uiAddToPageFn env)
-    , registerLuaVerb (luaVerb "addChild"
+    , registerLuaVerb callStats "UI" (luaVerb "addChild"
         [ argReq "parentHandle" TInteger elementHandleDoc
         , argReq "childHandle" TInteger elementHandleDoc
         , argReq "x" TNumber "Position relative to the parent, in framebuffer pixels."
@@ -247,17 +248,17 @@ installUIAPI env = do
         retNone
         "Attach an element as a child of another element.")
         (uiAddChildFn env)
-    , registerLuaVerb (luaVerb "removeElement"
+    , registerLuaVerb callStats "UI" (luaVerb "removeElement"
         [elementArg]
         retNone
         "Detach an element from its parent without deleting it, reporting any resulting control-focus change.")
         (uiRemoveElementFn env)
-    , registerLuaVerb (luaVerb "deleteElement"
+    , registerLuaVerb callStats "UI" (luaVerb "deleteElement"
         [elementArg]
         retNone
         "Delete an element and its subtree, reporting any resulting control-focus change.")
         (uiDeleteElementFn env)
-    , registerLuaVerb (luaVerb "findElementAt"
+    , registerLuaVerb callStats "UI" (luaVerb "findElementAt"
         [ argReq "x" TNumber "Framebuffer-pixel x to hit-test."
         , argReq "y" TNumber "Framebuffer-pixel y to hit-test."
         ]
@@ -265,13 +266,13 @@ installUIAPI env = do
             "Top-most visible element whose bounds contain the point, or nil."])
         "Hit-test every visible page for the top-most element at a point.")
         (uiFindElementAtFn env)
-    , registerLuaVerb (luaVerb "getElementOnClick"
+    , registerLuaVerb callStats "UI" (luaVerb "getElementOnClick"
         [elementArg]
         (retVals [resVal "callbackName" (TNullable TString)
             "The element's registered left-click callback name, or nil when it has none or the handle is unknown."])
         "Read an element's left-click callback name.")
         (uiGetElementOnClickFn env)
-    , registerLuaVerb (luaVerb "findHoverTarget"
+    , registerLuaVerb callStats "UI" (luaVerb "findHoverTarget"
         [ argReq "x" TNumber "Framebuffer-pixel x to hit-test."
         , argReq "y" TNumber "Framebuffer-pixel y to hit-test."
         ]
@@ -285,115 +286,115 @@ installUIAPI env = do
         (uiFindHoverTargetFn env)
 
     -- Per-element text buffers
-    , registerLuaVerb (luaVerb "enableTextInput"
+    , registerLuaVerb callStats "UI" (luaVerb "enableTextInput"
         [elementArg]
         retNone
         "Give an element a text buffer, making it eligible for text focus.")
         (uiEnableTextInputFn env)
-    , registerLuaVerb (luaVerb "getTextInput"
+    , registerLuaVerb callStats "UI" (luaVerb "getTextInput"
         [elementArg]
         (retVals [resVal "text" (TNullable TString)
             "The buffer's content, or nil when the element has no text buffer."])
         "Read an element's text-buffer content.")
         (uiGetTextFn env)
-    , registerLuaVerb (luaVerb "setTextInput"
+    , registerLuaVerb callStats "UI" (luaVerb "setTextInput"
         [ elementArg
         , argReq "text" TString "Replacement content. Read with Lua.tostring, which also accepts a number."
         ]
         retNone
         "Replace an element's text-buffer content, leaving the cursor at the end.")
         (uiSetTextInputFn env)
-    , registerLuaVerb (luaVerb "getCursor"
+    , registerLuaVerb callStats "UI" (luaVerb "getCursor"
         [elementArg]
         (retVals [resVal "position" (TNullable TInteger)
             "Zero-based code-point offset, or nil when the element has no text buffer."])
         "Read an element's text cursor position. Positions are code-point offsets, never UTF-8 byte offsets.")
         (uiGetCursorFn env)
-    , registerLuaVerb (luaVerb "setCursor"
+    , registerLuaVerb callStats "UI" (luaVerb "setCursor"
         [ elementArg
         , argReq "position" TInteger "Zero-based code-point offset; clamped to the buffer's length."
         ]
         retNone
         "Move an element's text cursor.")
         (uiSetCursorFn env)
-    , registerLuaVerb (luaVerb "insertChar"
+    , registerLuaVerb callStats "UI" (luaVerb "insertChar"
         [ elementArg
         , argReq "char" TString "Only its first code point is inserted; an empty string inserts nothing."
         ]
         retNone
         "Insert one character at the cursor.")
         (uiInsertCharFn env)
-    , registerLuaVerb (luaVerb "deleteBackward"
+    , registerLuaVerb callStats "UI" (luaVerb "deleteBackward"
         [elementArg]
         retNone
         "Delete the character before the cursor (Backspace).")
         (uiDeleteBackwardFn env)
-    , registerLuaVerb (luaVerb "deleteForward"
+    , registerLuaVerb callStats "UI" (luaVerb "deleteForward"
         [elementArg]
         retNone
         "Delete the character at the cursor (Delete).")
         (uiDeleteForwardFn env)
-    , registerLuaVerb (luaVerb "cursorLeft"
+    , registerLuaVerb callStats "UI" (luaVerb "cursorLeft"
         [elementArg]
         retNone
         "Move the text cursor one code point left.")
         (uiCursorLeftFn env)
-    , registerLuaVerb (luaVerb "cursorRight"
+    , registerLuaVerb callStats "UI" (luaVerb "cursorRight"
         [elementArg]
         retNone
         "Move the text cursor one code point right.")
         (uiCursorRightFn env)
-    , registerLuaVerb (luaVerb "cursorHome"
+    , registerLuaVerb callStats "UI" (luaVerb "cursorHome"
         [elementArg]
         retNone
         "Move the text cursor to the start of the buffer.")
         (uiCursorHomeFn env)
-    , registerLuaVerb (luaVerb "cursorEnd"
+    , registerLuaVerb callStats "UI" (luaVerb "cursorEnd"
         [elementArg]
         retNone
         "Move the text cursor to the end of the buffer.")
         (uiCursorEndFn env)
 
     -- Text focus and control focus (#745)
-    , registerLuaVerb (luaVerb "setFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "setFocus"
         [elementArg]
         retNone
         "Give an element TEXT-input focus, deciding which buffer receives typed characters.")
         (uiSetFocusFn env)
-    , registerLuaVerb (luaVerb "clearFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "clearFocus"
         []
         retNone
         "Clear text-input focus.")
         (uiClearFocusFn env)
-    , registerLuaVerb (luaVerb "getFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "getFocus"
         []
         (retVals [resVal "elementHandle" (TNullable TInteger)
             "The text-focused element, or nil when nothing holds text focus."])
         "Read the text-input focus.")
         (uiGetFocusFn env)
-    , registerLuaVerb (luaVerb "hasFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "hasFocus"
         [elementArg]
         (retVals [resVal "focused" TBoolean
             "Whether this element holds text focus; false for a missing or unknown handle."])
         "Whether an element holds text-input focus.")
         (uiHasFocusFn env)
-    , registerLuaVerb (luaVerb "setControlFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "setControlFocus"
         [elementArg]
         retNone
         "Give an element keyboard CONTROL focus, deciding what Enter/Space activates (#745). Reports the transition to Lua. UI.Manager.Focus.setControlFocus stores the handle WITHOUT checking that the element exists — keyboard dispatch validates lazily — so until then getControlFocus and hasControlFocus report an unknown handle back verbatim. Text focus is the opposite: UI.setFocus ignores a handle no element carries.")
         (uiSetControlFocusFn env)
-    , registerLuaVerb (luaVerb "clearControlFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "clearControlFocus"
         []
         retNone
         "Clear keyboard control focus, reporting the transition to Lua (#745).")
         (uiClearControlFocusFn env)
-    , registerLuaVerb (luaVerb "getControlFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "getControlFocus"
         []
         (retVals [resVal "elementHandle" (TNullable TInteger)
             "The stored control focus, or nil when nothing holds it. Not validated on read: a handle UI.setControlFocus stored is reported even when no such element exists, until keyboard dispatch's lazy validation clears it."])
         "Read the keyboard control focus (#745).")
         (uiGetControlFocusFn env)
-    , registerLuaVerb (luaVerb "hasControlFocus"
+    , registerLuaVerb callStats "UI" (luaVerb "hasControlFocus"
         [elementArg]
         (retVals [resVal "focused" TBoolean
             "Whether this handle is the stored control focus. False when the argument is missing; an unknown handle reads TRUE if it is the one UI.setControlFocus stored, because neither call validates it."])
@@ -401,7 +402,7 @@ installUIAPI env = do
         (uiHasControlFocusFn env)
 
     -- Element properties
-    , registerLuaVerb (luaVerb "setPosition"
+    , registerLuaVerb callStats "UI" (luaVerb "setPosition"
         [ elementArg
         , argReq "x" TNumber "Position relative to the parent or page, in framebuffer pixels."
         , argReq "y" TNumber "Position relative to the parent or page, in framebuffer pixels."
@@ -409,7 +410,7 @@ installUIAPI env = do
         retNone
         "Move an element.")
         (uiSetPositionFn env)
-    , registerLuaVerb (luaVerb "setSize"
+    , registerLuaVerb callStats "UI" (luaVerb "setSize"
         [ elementArg
         , argReq "width" TNumber "Content width, in framebuffer pixels."
         , argReq "height" TNumber "Content height, in framebuffer pixels."
@@ -417,125 +418,125 @@ installUIAPI env = do
         retNone
         "Resize an element's content rect.")
         (uiSetSizeFn env)
-    , registerLuaVerb (luaVerb "setVisible"
+    , registerLuaVerb callStats "UI" (luaVerb "setVisible"
         [ elementArg
         , flagArg "visible" "Whether this element is shown."
         ]
         retNone
         "Show or hide one element. A visible child of a hidden ancestor is still off screen.")
         (uiSetVisibleFn env)
-    , registerLuaVerb (luaVerb "isPageVisible"
+    , registerLuaVerb callStats "UI" (luaVerb "isPageVisible"
         [pageArg]
         (retVals [resVal "visible" TBoolean
             "Whether the page is shown; false for an unknown handle."])
         "Whether a page is currently shown.")
         (uiIsPageVisibleFn env)
-    , registerLuaVerb (luaVerb "getElementInfo"
+    , registerLuaVerb callStats "UI" (luaVerb "getElementInfo"
         [elementArg]
         (retVals [resVal "info" (TNullable elementInfoRecord)
             "The engine's authoritative state for this element, or nil when the handle is missing or unknown."])
         "Read one element's full engine-side state.")
         (uiGetElementInfoFn env)
-    , registerLuaVerb (luaVerb "getVisibleElements"
+    , registerLuaVerb callStats "UI" (luaVerb "getVisibleElements"
         []
         (retVals [resVal "elements" (TArray elementInfoRecord)
             "One record per element on every currently-visible page, in page order; an empty table when nothing is visible."])
         "Bulk-read every element on every visible page, in the same record shape UI.getElementInfo returns.")
         (uiGetVisibleElementsFn env)
-    , registerLuaVerb (luaVerb "setClickable"
+    , registerLuaVerb callStats "UI" (luaVerb "setClickable"
         [ elementArg
         , flagArg "clickable" "Whether this element accepts clicks."
         ]
         retNone
         "Set an element's clickable opt-in.")
         (uiSetClickableFn env)
-    , registerLuaVerb (luaVerb "setPointerBlocking"
+    , registerLuaVerb callStats "UI" (luaVerb "setPointerBlocking"
         [ elementArg
         , flagArg "blocking" "Whether this element consumes pointer input with no click callback of its own."
         ]
         retNone
         "Set an element's explicit pointer-blocking opt-in (#743).")
         (uiSetPointerBlockingFn env)
-    , registerLuaVerb (luaVerb "isPointerBlocking"
+    , registerLuaVerb callStats "UI" (luaVerb "isPointerBlocking"
         [elementArg]
         (retVals [resVal "blocking" TBoolean
             "The effective predicate: the explicit opt-in OR the callback-derived default. False for an unknown handle."])
         "Whether an element actually consumes a pointer event right now (#743).")
         (uiIsPointerBlockingFn env)
-    , registerLuaVerb (luaVerb "setScrollCapture"
+    , registerLuaVerb callStats "UI" (luaVerb "setScrollCapture"
         [ elementArg
         , flagArg "captures" "Whether this element captures wheel input. Independent of any click callback (#743)."
         ]
         retNone
         "Set an element's explicit scroll-capture opt-in (#743).")
         (uiSetScrollCaptureFn env)
-    , registerLuaVerb (luaVerb "isScrollCapturing"
+    , registerLuaVerb callStats "UI" (luaVerb "isScrollCapturing"
         [elementArg]
         (retVals [resVal "capturing" TBoolean
             "The raw ueCapturesScroll opt-in, which is the whole predicate: a click callback never implies scroll capture. False for an unknown handle."])
         "Whether an element captures wheel input (#743).")
         (uiIsScrollCapturingFn env)
-    , registerLuaVerb (luaVerb "setDragActivation"
+    , registerLuaVerb callStats "UI" (luaVerb "setDragActivation"
         [ elementArg
         , flagArg "dragActivation" "Whether this control activates on drag instead of on discrete release."
         ]
         retNone
         "Opt a control out of the discrete release-activation contract (#745). Only a slider knob or scrollbar thumb should.")
         (uiSetDragActivationFn env)
-    , registerLuaVerb (luaVerb "setSteppable"
+    , registerLuaVerb callStats "UI" (luaVerb "setSteppable"
         [ elementArg
         , flagArg "steppable" "Whether arrow keys step this control while it holds control focus."
         ]
         retNone
         "Opt a control in to arrow-key stepping (#745).")
         (uiSetSteppableFn env)
-    , registerLuaVerb (luaVerb "setTabIndex"
+    , registerLuaVerb callStats "UI" (luaVerb "setTabIndex"
         [ elementArg
         , argReq "index" TInteger "Explicit Tab-traversal position; unset elements sort by paint-traversal position."
         ]
         retNone
         "Set an element's explicit Tab order (#745).")
         (uiSetTabIndexFn env)
-    , registerLuaVerb (luaVerb "setInteractiveOverflow"
+    , registerLuaVerb callStats "UI" (luaVerb "setInteractiveOverflow"
         [ elementArg
         , flagArg "interactive" "Whether the visible border counts as part of the hit target."
         ]
         retNone
         "Opt an element's expanded visual bounds into interaction instead of content-only bounds (#749).")
         (uiSetInteractiveOverflowFn env)
-    , registerLuaVerb (luaVerb "isInteractiveOverflow"
+    , registerLuaVerb callStats "UI" (luaVerb "isInteractiveOverflow"
         [elementArg]
         (retVals [resVal "interactive" TBoolean
             "The raw opt-in on this element; false for an unknown handle."])
         "Read an element's interactive-overflow opt-in (#749).")
         (uiIsInteractiveOverflowFn env)
-    , registerLuaVerb (luaVerb "setClipChildren"
+    , registerLuaVerb callStats "UI" (luaVerb "setClipChildren"
         [ elementArg
         , flagArg "clips" "Whether this element clips its descendants to its own bounds."
         ]
         retNone
         "Opt an element into clipping its descendants (#747). It never clips itself.")
         (uiSetClipChildrenFn env)
-    , registerLuaVerb (luaVerb "isClipChildren"
+    , registerLuaVerb callStats "UI" (luaVerb "isClipChildren"
         [elementArg]
         (retVals [resVal "clips" TBoolean
             "The raw opt-in on this element, not the clip it is itself subject to. False for an unknown handle."])
         "Read an element's clip-children opt-in (#747).")
         (uiIsClipChildrenFn env)
-    , registerLuaVerb (luaVerb "getEffectiveClip"
+    , registerLuaVerb callStats "UI" (luaVerb "getEffectiveClip"
         [elementArg]
         (retVals [resVal "clip" (TNullable (rectRecord "The clip this element is subject to:"))
             "Intersection of every clipping ancestor's bounds. Nil when the handle is missing or unknown, or when no ancestor clips. The ancestor walk stops after 64 levels, truncating farther ancestry rather than nilling the result. Not area-checked: a fully disjoint intersection is still reported as a rect."])
         "Read the clip an element is actually subject to (#747), the same value rendering and hit-testing consult.")
         (uiGetEffectiveClipFn env)
-    , registerLuaVerb (luaVerb "setZIndex"
+    , registerLuaVerb callStats "UI" (luaVerb "setZIndex"
         [ elementArg
         , argReq "z" TInteger "Z-index within the element's own page band."
         ]
         retNone
         "Set an element's z-index.")
         (uiSetZIndexFn env)
-    , registerLuaVerb (luaVerb "setColor"
+    , registerLuaVerb callStats "UI" (luaVerb "setColor"
         [ elementArg
         , argReq "r" TNumber "Red, 0..1."
         , argReq "g" TNumber "Green, 0..1."
@@ -545,21 +546,21 @@ installUIAPI env = do
         retNone
         "Recolor an element, dispatching on its render-data variant (box, sprite or text). An element with no render data is untouched.")
         (uiSetColorFn env)
-    , registerLuaVerb (luaVerb "setText"
+    , registerLuaVerb callStats "UI" (luaVerb "setText"
         [ elementArg
         , argReq "text" TString "Replacement caption."
         ]
         retNone
         "Replace a text element's caption.")
         (uiSetTextFn env)
-    , registerLuaVerb (luaVerb "setSpriteTexture"
+    , registerLuaVerb callStats "UI" (luaVerb "setSpriteTexture"
         [ elementArg
         , argReq "textureHandle" TInteger "Texture handle from the asset API."
         ]
         retNone
         "Rebind a sprite's texture, leaving its UVs and mirror flag alone.")
         (uiSetSpriteTextureFn env)
-    , registerLuaVerb (luaVerb "setSpriteUV"
+    , registerLuaVerb callStats "UI" (luaVerb "setSpriteUV"
         [ elementArg
         , argReq "u0" TNumber "Left texture coordinate."
         , argReq "v0" TNumber "Top texture coordinate."
@@ -569,7 +570,7 @@ installUIAPI env = do
         retNone
         "Narrow a sprite to a sub-rect of its texture (#1259). Any missing argument leaves the sprite untouched; use UI.setSpriteFrame for a live animation frame.")
         (uiSetSpriteUVFn env)
-    , registerLuaVerb (luaVerb "setSpriteFrame"
+    , registerLuaVerb callStats "UI" (luaVerb "setSpriteFrame"
         [ elementArg
         , argReq "textureHandle" TInteger "Atlas texture handle for this frame."
         , argReq "u0" TNumber "Left texture coordinate."
@@ -581,28 +582,28 @@ installUIAPI env = do
         retNone
         "Publish texture, sub-rect and mirror as one manager transition (#1259) so the render thread never sees half a frame. Any missing required argument leaves the sprite untouched.")
         (uiSetSpriteFrameFn env)
-    , registerLuaVerb (luaVerb "setSpriteFlipX"
+    , registerLuaVerb callStats "UI" (luaVerb "setSpriteFlipX"
         [ elementArg
         , flagArg "flipX" "Whether the sprite is drawn horizontally mirrored."
         ]
         retNone
         "Mirror a sprite horizontally (#887). Visual only: geometry and interactive bounds are untouched.")
         (uiSetSpriteFlipXFn env)
-    , registerLuaVerb (luaVerb "setOnClick"
+    , registerLuaVerb callStats "UI" (luaVerb "setOnClick"
         [ elementArg
         , argReq "callbackName" TString "Name of the Lua callback to invoke on a left click."
         ]
         retNone
         "Register an element's left-click callback name.")
         (uiSetOnClickFn env)
-    , registerLuaVerb (luaVerb "setOnRightClick"
+    , registerLuaVerb callStats "UI" (luaVerb "setOnRightClick"
         [ elementArg
         , argReq "callbackName" TString "Name of the Lua callback to invoke on a right click."
         ]
         retNone
         "Register an element's right-click callback name.")
         (uiSetOnRightClickFn env)
-    , registerLuaVerb (luaVerb "removeFromPage"
+    , registerLuaVerb callStats "UI" (luaVerb "removeFromPage"
         [ pageArg
         , elementArg
         ]
@@ -611,14 +612,14 @@ installUIAPI env = do
         (uiRemoveFromPageFn env)
 
     -- Box textures
-    , registerLuaVerb (luaVerb "setBoxTextures"
+    , registerLuaVerb callStats "UI" (luaVerb "setBoxTextures"
         [ elementArg
         , argReq "boxTextureHandle" TInteger "Handle from UI.loadBoxTextures."
         ]
         retNone
         "Rebind a box element's nine-slice texture set.")
         (uiSetBoxTexturesFn env)
-    , registerLuaVerb (luaVerb "loadBoxTextures"
+    , registerLuaVerb callStats "UI" (luaVerb "loadBoxTextures"
         [ argReq "texCenter" TInteger "Center fill texture handle."
         , argReq "texN" TInteger "North edge texture handle."
         , argReq "texS" TInteger "South edge texture handle."
@@ -635,14 +636,14 @@ installUIAPI env = do
         (uiLoadBoxTexturesFn env)
 
     -- Tooltips
-    , registerLuaVerb (luaVerb "setTooltip"
+    , registerLuaVerb callStats "UI" (luaVerb "setTooltip"
         [ elementArg
         , argReq "text" TString "Tooltip body text."
         ]
         retNone
         "Attach a plain-text tooltip to an element.")
         (uiSetTooltipFn env)
-    , registerLuaVerb (luaVerb "setTooltipRich"
+    , registerLuaVerb callStats "UI" (luaVerb "setTooltipRich"
         [ elementArg
         , argReq "content" tooltipContentRecord
             "Tooltip content table. A non-table makes the call a no-op; every field inside is optional."
@@ -650,34 +651,34 @@ installUIAPI env = do
         retNone
         "Attach a tooltip with optional body text, a hint line, a width cap and a sprite row.")
         (uiSetTooltipRichFn env)
-    , registerLuaVerb (luaVerb "clearTooltip"
+    , registerLuaVerb callStats "UI" (luaVerb "clearTooltip"
         [elementArg]
         retNone
         "Remove any tooltip attached to an element.")
         (uiClearTooltipFn env)
-    , registerLuaVerb (luaVerb "setTooltipStyle"
+    , registerLuaVerb callStats "UI" (luaVerb "setTooltipStyle"
         [ argReq "style" tooltipStyleRecord
             "Style table. A non-table makes the call a no-op; every field inside is optional and an omitted one keeps its previous value."
         ]
         retNone
         "Configure the global tooltip look: fonts, box textures, colors, padding, delays and offsets.")
         (uiSetTooltipStyleFn env)
-    , registerLuaVerb (luaVerb "lockTooltip"
+    , registerLuaVerb callStats "UI" (luaVerb "lockTooltip"
         []
         retNone
         "Freeze the currently-shown tooltip in place. A no-op when no tooltip is visible.")
         (uiLockTooltipFn env)
-    , registerLuaVerb (luaVerb "unlockTooltip"
+    , registerLuaVerb callStats "UI" (luaVerb "unlockTooltip"
         []
         retNone
         "Release the tooltip lock and hide the tooltip.")
         (uiUnlockTooltipFn env)
-    , registerLuaVerb (luaVerb "toggleTooltipLock"
+    , registerLuaVerb callStats "UI" (luaVerb "toggleTooltipLock"
         []
         retNone
         "Lock the tooltip when one is showing and unlocked; otherwise unlock and hide.")
         (uiToggleTooltipLockFn env)
-    , registerLuaVerb (luaVerb "isTooltipLocked"
+    , registerLuaVerb callStats "UI" (luaVerb "isTooltipLocked"
         []
         (retVals [resVal "locked" TBoolean "Whether a tooltip is currently locked in place."])
         "Whether the tooltip is locked.")
@@ -685,13 +686,13 @@ installUIAPI env = do
 
     -- #2056: the presentation boundary. Two verbs, no more — see
     -- Engine.Scripting.Lua.API.UI.Presentation.
-    , registerLuaVerb (luaVerb "armPresentation"
+    , registerLuaVerb callStats "UI" (luaVerb "armPresentation"
         []
         (retVals [resVal "token" TInteger
             "A monotonic token standing for everything written to the UI manager so far. Never nil."])
         "Mint a presentation token. Arm it only once the page carrying the content is showing, and re-arm on every change.")
         (uiArmPresentationFn env)
-    , registerLuaVerb (luaVerb "isPresented"
+    , registerLuaVerb callStats "UI" (luaVerb "isPresented"
         [ argReq "token" TInteger "A token from UI.armPresentation. Type-checked first, so a numeric string is NOT accepted here (#1497); a missing, non-numeric or zero token is false."
         ]
         (retVals [resVal "presented" TBoolean
@@ -700,7 +701,7 @@ installUIAPI env = do
         (uiIsPresentedFn env)
 
     -- #747: the shared floating-placement contract
-    , registerLuaVerb (luaVerb "placePopup"
+    , registerLuaVerb callStats "UI" (luaVerb "placePopup"
         [ argReq "anchorX" TNumber "Anchor rect left edge, in framebuffer pixels."
         , argReq "anchorY" TNumber "Anchor rect top edge, in framebuffer pixels."
         , argReq "anchorW" TNumber "Anchor rect width, in framebuffer pixels."
@@ -716,7 +717,7 @@ installUIAPI env = do
             ])
         "Place a floating popup against an anchor, clamped to the current framebuffer. Always pushes three bare values, never a table; a missing required argument yields 0, 0, false.")
         (uiPlacePopupFn env)
-    , registerLuaVerb (luaVerb "fitVisibleRows"
+    , registerLuaVerb callStats "UI" (luaVerb "fitVisibleRows"
         [ argReq "preferredCount" TInteger "How many rows the caller would like to show."
         , argReq "rowHeight" TNumber "Row height, in framebuffer pixels."
         , argReq "availableHeight" TNumber "Space available for rows, in framebuffer pixels."
