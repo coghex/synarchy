@@ -30,6 +30,7 @@
 module Test.Headless.Lua.UiDescriptors (spec) where
 
 import UPrelude
+import Engine.Scripting.Lua.CallStats (newLuaCallStats)
 import Test.Hspec
 import Control.Exception (SomeAsyncException(..), AsyncException(UserInterrupt)
                          , throwIO, try)
@@ -337,7 +338,9 @@ newBareLuaBackend env = do
 --   production path. The registrar needs no standard library: it only
 --   builds a table and installs a global.
 uiDescriptors ∷ EngineEnv → IO [LuaVerb]
-uiDescriptors env = Lua.run (installUIAPI env)
+uiDescriptors env = do
+    stats ← newLuaCallStats
+    Lua.run (installUIAPI stats env)
 
 -- | @"\<name\>/\<lua type\>"@ for one descriptor, the form
 --   'liveUiMembers' reports the live table in.
@@ -406,15 +409,16 @@ fixtureLua = T.concat
 --   nothing to the certified surface.
 installGuardProbe ∷ LuaBackendState → IO ()
 installGuardProbe ls = Lua.runWith (lbsLuaState ls) $ do
+    stats ← Lua.liftIO newLuaCallStats
     Lua.newtable
-    _ ← registerLuaVerb
+    _ ← registerLuaVerb stats "guardProbe"
         (luaVerb "fine" [] (retVals [resVal "ok" TBoolean "Always true."])
             "Returns without raising anything.")
         (Lua.pushboolean True ≫ pure 1)
-    _ ← registerLuaVerb
+    _ ← registerLuaVerb stats "guardProbe"
         (luaVerb "boom" [] retNone "Raises an ordinary Haskell exception.")
         (Lua.liftIO (throwIO (userError "kaboom")))
-    _ ← registerLuaVerb
+    _ ← registerLuaVerb stats "guardProbe"
         (luaVerb "luaBoom" [] retNone "Raises a Lua exception.")
         (Lua.failLua "explicit lua error")
     Lua.setglobal (Lua.Name "guardProbe")

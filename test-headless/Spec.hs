@@ -151,6 +151,7 @@ import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Equipment.Reconcile as EquipmentReconcile
 import qualified Test.Headless.Lua.ScriptState as LuaScriptState
 import qualified Test.Headless.Lua.TickInterval as LuaTickInterval
+import qualified Test.Headless.Lua.CallStats as LuaCallStats
 import qualified Test.Headless.Lua.UiDescriptors as LuaUiDescriptors
 import qualified Test.Headless.Lua.SchedulerFairness as LuaSchedulerFairness
 import qualified Test.Headless.Graphics.SwapchainResize as GraphicsSwapchainResize
@@ -1010,6 +1011,7 @@ main = hspec $ do
     describe "Lua injury narration" LuaInjuryNarration.spec
     UISlider.spec
     UIBarFillColor.spec
+    LuaCallStats.spec
     LuaUiDescriptors.spec
     UIClickCorrelation.spec
     describe "World.Calendar" Calendar.spec

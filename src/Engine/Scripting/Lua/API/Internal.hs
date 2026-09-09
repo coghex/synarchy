@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.Internal
   ) where
 
 import UPrelude
+import Engine.Scripting.Lua.CallStats (LuaCallStats, withLuaCallStats)
 import qualified Control.Monad.Catch as Catch
 import Control.Exception (SomeException, SomeAsyncException
                          , fromException, displayException)
@@ -49,15 +50,16 @@ guardLuaAction name action = action `Catch.catch` handler
 
 -- | Register a Haskell function in the table on top of the stack,
 --   behind 'guardLuaAction'.
-registerLuaFunction ∷ BS.ByteString → Lua.LuaE Lua.Exception Lua.NumResults
+registerLuaFunction ∷ LuaCallStats → BS.ByteString → BS.ByteString → Lua.LuaE Lua.Exception Lua.NumResults
                     → Lua.LuaE Lua.Exception ()
-registerLuaFunction name action = do
-    Lua.pushHaskellFunction (guardLuaAction name action)
+registerLuaFunction callStats namespace name action = do
+    Lua.pushHaskellFunction (guardLuaAction name
+        (withLuaCallStats callStats (namespace <> "." <> name) action))
     Lua.setfield (-2) (Lua.Name name)
 
 -- | Register a Haskell function under its DESCRIPTOR's name (#2479,
 --   epic #1995 decision D-5) — the second registrar, alongside an
---   unchanged 'registerLuaFunction' rather than in place of it, so the
+--   shared 'registerLuaFunction' rather than in place of it, so the
 --   26 namespaces this pilot does not convert keep their registrations
 --   exactly as they are.
 --
@@ -70,7 +72,7 @@ registerLuaFunction name action = do
 --   It yields the descriptor it installed so a registrar can publish
 --   its own manifest from the very expressions that did the installing,
 --   rather than from a second list that could disagree with them.
-registerLuaVerb ∷ LuaVerb → Lua.LuaE Lua.Exception Lua.NumResults
+registerLuaVerb ∷ LuaCallStats → BS.ByteString → LuaVerb → Lua.LuaE Lua.Exception Lua.NumResults
                 → Lua.LuaE Lua.Exception LuaVerb
-registerLuaVerb verb action =
-    verb <$ registerLuaFunction (verbName verb) action
+registerLuaVerb callStats namespace verb action =
+    verb <$ registerLuaFunction callStats namespace (verbName verb) action

@@ -1265,7 +1265,32 @@ def test_escaped_quotes_do_not_end_a_string() -> None:
     expect_clean(root, "strings containing escaped quotes and backslashes")
 
 
+def test_telemetry_namespace_context_is_checked() -> None:
+    for descriptor in (False, True):
+        raw = (descriptor_registrar("engine", ["quit"]) if descriptor
+               else registrar("engine", ["quit"]))
+        spelling = "registerLuaVerb (" if descriptor else 'registerLuaFunction "'
+        replacement = ('registerLuaVerb callStats "engine" (' if descriptor
+                       else 'registerLuaFunction callStats "engine" "')
+        wired = raw.replace(spelling, replacement)
+        expect_clean(build({}, {"scripts/a.lua": "engine.quit()"},
+                           raw_registrars={"Engine": wired}), "telemetry registration")
+        for wrong in ('"other"', 'computedNamespace', '"bad.name"'):
+            broken = wired.replace('callStats "engine"', 'callStats ' + wrong)
+            expect_certification_failure(
+                build({}, {"scripts/a.lua": "engine.quit()"},
+                      raw_registrars={"Engine": broken}),
+                "namespace", "invalid telemetry attribution")
+    multi = (registrar("camera", ["getPosition"]).replace(
+                'registerLuaFunction "', 'registerLuaFunction callStats "camera" "')
+             + registrar("combat", ["attack"]).replace(
+                'registerLuaFunction "', 'registerLuaFunction callStats "combat" "'))
+    expect_clean(build({}, {"scripts/a.lua": "camera.getPosition(); combat.attack()"},
+                       raw_registrars={"Camera": multi}), "multiple telemetry namespaces")
+
+
 TESTS = [
+    test_telemetry_namespace_context_is_checked,
     test_ui_set_sprite_color_is_a_finding,
     test_the_post_1914_spelling_is_clean,
     test_renaming_a_registered_verb_fails_every_call_site,

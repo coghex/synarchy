@@ -24,6 +24,7 @@ import qualified HsLua as Lua
 import System.Directory (doesFileExist, removePathForcibly)
 
 import Engine.Core.State (EngineEnv(..))
+import Engine.Scripting.Lua.CallStats (newLuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.World.Lifecycle
     (worldCheckMapImagePlanFn, worldInitFn)
@@ -48,9 +49,10 @@ withWorldApi ∷ HasCallStack ⇒ EngineEnv → [Text] → Expectation
 withWorldApi env chunkLines = do
     result ← Lua.run @Lua.Exception $ do
         Lua.openlibs
+        callStats ← Lua.liftIO newLuaCallStats
         Lua.newtable
-        registerLuaFunction "init" (worldInitFn env)
-        registerLuaFunction "checkMapImagePlan" (worldCheckMapImagePlanFn env)
+        registerLuaFunction callStats "world" "init" (worldInitFn env)
+        registerLuaFunction callStats "world" "checkMapImagePlan" (worldCheckMapImagePlanFn env)
         Lua.setglobal "world"
         status ← Lua.dostring (TE.encodeUtf8 (T.intercalate "\n" chunkLines))
         case status of

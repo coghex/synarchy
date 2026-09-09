@@ -3,6 +3,7 @@ module Engine.Scripting.Lua.API.Register.Designation
   ) where
 
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
+import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Structure
 import Engine.Scripting.Lua.API.StructureArt
@@ -21,55 +22,55 @@ import qualified HsLua as Lua
 --   setAnchor/clearAnchor/designate from its tool, and
 --   nearestDesignation/getDesignationAt/cancelDesignation from its
 --   AI, except @plant@ which is single-tile and has no anchor).
-registerDesignationAPI ∷ EngineEnv → Lua.LuaE Lua.Exception ()
-registerDesignationAPI env = do
+registerDesignationAPI ∷ LuaCallStats → EngineEnv → Lua.LuaE Lua.Exception ()
+registerDesignationAPI callStats env = do
   -- Structure global — debug builder for walls / floors / ceilings.
   -- structure.place(gx,gy,slot,texHandle,faceHandle[,z]) / clear / clearAll / count.
   Lua.newtable
-  registerLuaFunction "place"    (structurePlaceFn env)
-  registerLuaFunction "stageWatermark" (structureStageWatermarkFn env)
-  registerLuaFunction "clear"    (structureClearFn env)
-  registerLuaFunction "clearAll" (structureClearAllFn env)
-  registerLuaFunction "count"    (structureCountFn env)
-  registerLuaFunction "loadedCount" (structureLoadedCountFn env)
-  registerLuaFunction "unresolvedPaletteIds" (structureUnresolvedPaletteIdsFn env)
-  registerLuaFunction "setPaletteHandle" (structureSetPaletteHandleFn env)
-  registerLuaFunction "paletteCount" (structurePaletteCountFn env)
-  registerLuaFunction "registerWallFamily" (structureRegisterWallFamilyFn env)
-  registerLuaFunction "registerPackArt" (structureRegisterPackArtFn env)
-  registerLuaFunction "isPackKindBuildable" (structurePackKindBuildableFn env)
-  registerLuaFunction "packBuildCost"      (structurePackBuildCostFn env)
-  registerLuaFunction "isSafeArtPath" structureIsSafeArtPathFn
-  registerLuaFunction "resolvePieceArt" (structureResolvePieceArtFn env)
-  registerLuaFunction "wireShape"    structureWireShapeFn
-  registerLuaFunction "wireNeighbors" (structureWireNeighborsFn env)
-  registerLuaFunction "floorZAt" (structureFloorZAtFn env)
-  registerLuaFunction "hasAt"    (structureHasAtFn env)
-  registerLuaFunction "getAt"    (structureGetAtFn env)
+  registerLuaFunction callStats "structure" "place"    (structurePlaceFn env)
+  registerLuaFunction callStats "structure" "stageWatermark" (structureStageWatermarkFn env)
+  registerLuaFunction callStats "structure" "clear"    (structureClearFn env)
+  registerLuaFunction callStats "structure" "clearAll" (structureClearAllFn env)
+  registerLuaFunction callStats "structure" "count"    (structureCountFn env)
+  registerLuaFunction callStats "structure" "loadedCount" (structureLoadedCountFn env)
+  registerLuaFunction callStats "structure" "unresolvedPaletteIds" (structureUnresolvedPaletteIdsFn env)
+  registerLuaFunction callStats "structure" "setPaletteHandle" (structureSetPaletteHandleFn env)
+  registerLuaFunction callStats "structure" "paletteCount" (structurePaletteCountFn env)
+  registerLuaFunction callStats "structure" "registerWallFamily" (structureRegisterWallFamilyFn env)
+  registerLuaFunction callStats "structure" "registerPackArt" (structureRegisterPackArtFn env)
+  registerLuaFunction callStats "structure" "isPackKindBuildable" (structurePackKindBuildableFn env)
+  registerLuaFunction callStats "structure" "packBuildCost"      (structurePackBuildCostFn env)
+  registerLuaFunction callStats "structure" "isSafeArtPath" structureIsSafeArtPathFn
+  registerLuaFunction callStats "structure" "resolvePieceArt" (structureResolvePieceArtFn env)
+  registerLuaFunction callStats "structure" "wireShape"    structureWireShapeFn
+  registerLuaFunction callStats "structure" "wireNeighbors" (structureWireNeighborsFn env)
+  registerLuaFunction callStats "structure" "floorZAt" (structureFloorZAtFn env)
+  registerLuaFunction callStats "structure" "hasAt"    (structureHasAtFn env)
+  registerLuaFunction callStats "structure" "getAt"    (structureGetAtFn env)
   Lua.setglobal (Lua.Name "structure")
 
   -- Construction designation tool (#95). Mirrors the mine-designation
   -- API: the tool drives setAnchor/clearAnchor/designate, the build AI
   -- (#96) drives getPendingJobs/nearestDesignation/setJobStatus.
   Lua.newtable
-  registerLuaFunction "setAnchor"          (constructSetAnchorFn (toWorldSimCapability env))
-  registerLuaFunction "clearAnchor"        (constructClearAnchorFn (toWorldSimCapability env))
-  registerLuaFunction "designate"          (constructDesignateFn (toWorldSimCapability env))
-  registerLuaFunction "cancelDesignation"  (constructCancelDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "cancelDesignationForRefund" (constructCancelDesignationForRefundFn (toWorldSimCapability env))
-  registerLuaFunction "getPendingJobs"     (constructGetPendingJobsFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationAt"   (constructGetDesignationAtFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationCount" (constructGetDesignationCountFn (toWorldSimCapability env))
-  registerLuaFunction "nearestDesignation" (constructNearestDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "setJobStatus"       (constructSetJobStatusFn (toWorldSimCapability env))
-  registerLuaFunction "addJobProgress"     (constructAddJobProgressFn (toWorldSimCapability env))
-  registerLuaFunction "payMaterials"       (constructPayMaterialsFn env)
-  registerLuaFunction "beginPlacement"     (constructBeginPlacementFn (toWorldSimCapability env))
-  registerLuaFunction "abortPlacement"     (constructAbortPlacementFn (toWorldSimCapability env))
-  registerLuaFunction "resolvePlan"        (constructResolvePlanFn env)
-  registerLuaFunction "setLineMode"        (constructSetLineModeFn (toWorldSimCapability env))
-  registerLuaFunction "setStructureTarget" (constructSetStructureTargetFn (toWorldSimCapability env))
-  registerLuaFunction "clearStructureTarget" (constructClearStructureTargetFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "setAnchor"          (constructSetAnchorFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "clearAnchor"        (constructClearAnchorFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "designate"          (constructDesignateFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "cancelDesignation"  (constructCancelDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "cancelDesignationForRefund" (constructCancelDesignationForRefundFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "getPendingJobs"     (constructGetPendingJobsFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "getDesignationAt"   (constructGetDesignationAtFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "getDesignationCount" (constructGetDesignationCountFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "nearestDesignation" (constructNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "setJobStatus"       (constructSetJobStatusFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "addJobProgress"     (constructAddJobProgressFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "payMaterials"       (constructPayMaterialsFn env)
+  registerLuaFunction callStats "construction" "beginPlacement"     (constructBeginPlacementFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "abortPlacement"     (constructAbortPlacementFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "resolvePlan"        (constructResolvePlanFn env)
+  registerLuaFunction callStats "construction" "setLineMode"        (constructSetLineModeFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "setStructureTarget" (constructSetStructureTargetFn (toWorldSimCapability env))
+  registerLuaFunction callStats "construction" "clearStructureTarget" (constructClearStructureTargetFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "construction")
 
   -- Chop designation tool (#97, re-shaped by #1856). The tool drives
@@ -80,23 +81,23 @@ registerDesignationAPI env = do
   -- nearestDesignation/getDesignationAt/cancelDesignation (claims are
   -- Lua-side, like dig jobs — no engine job status).
   Lua.newtable
-  registerLuaFunction "designateAt"         (chopDesignateAtFn env)
-  registerLuaFunction "designateInRect"     (chopDesignateInRectFn env)
-  registerLuaFunction "eraseAt"             (chopEraseAtFn env)
-  registerLuaFunction "eraseInRect"         (chopEraseInRectFn env)
-  registerLuaFunction "designateInstances"
+  registerLuaFunction callStats "chop" "designateAt"         (chopDesignateAtFn env)
+  registerLuaFunction callStats "chop" "designateInRect"     (chopDesignateInRectFn env)
+  registerLuaFunction callStats "chop" "eraseAt"             (chopEraseAtFn env)
+  registerLuaFunction callStats "chop" "eraseInRect"         (chopEraseInRectFn env)
+  registerLuaFunction callStats "chop" "designateInstances"
       (chopDesignateInstancesFn (toWorldSimCapability env))
-  registerLuaFunction "eraseInstances"
+  registerLuaFunction callStats "chop" "eraseInstances"
       (chopEraseInstancesFn (toWorldSimCapability env))
-  registerLuaFunction "cancelDesignation"   (chopCancelDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationAt"    (chopGetDesignationAtFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationsAt"
+  registerLuaFunction callStats "chop" "cancelDesignation"   (chopCancelDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "chop" "getDesignationAt"    (chopGetDesignationAtFn (toWorldSimCapability env))
+  registerLuaFunction callStats "chop" "getDesignationsAt"
       (chopGetDesignationsAtFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationForInstance"
+  registerLuaFunction callStats "chop" "getDesignationForInstance"
       (chopGetDesignationForInstanceFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationCount" (chopGetDesignationCountFn (toWorldSimCapability env))
-  registerLuaFunction "nearestDesignation"  (chopNearestDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "setDesignateTexture" (chopSetDesignateTextureFn (toWorldSimCapability env))
+  registerLuaFunction callStats "chop" "getDesignationCount" (chopGetDesignationCountFn (toWorldSimCapability env))
+  registerLuaFunction callStats "chop" "nearestDesignation"  (chopNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "chop" "setDesignateTexture" (chopSetDesignateTextureFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "chop")
 
   -- Till designation tool (#333). Mirrors the chop-designation API:
@@ -104,14 +105,14 @@ registerDesignationAPI env = do
   -- nearestDesignation/getDesignationAt/cancelDesignation (claims are
   -- Lua-side, like dig/chop jobs — no engine job status).
   Lua.newtable
-  registerLuaFunction "setAnchor"           (tillSetAnchorFn (toWorldSimCapability env))
-  registerLuaFunction "clearAnchor"         (tillClearAnchorFn (toWorldSimCapability env))
-  registerLuaFunction "designate"           (tillDesignateFn (toWorldSimCapability env))
-  registerLuaFunction "cancelDesignation"   (tillCancelDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationAt"    (tillGetDesignationAtFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationCount" (tillGetDesignationCountFn (toWorldSimCapability env))
-  registerLuaFunction "nearestDesignation"  (tillNearestDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "setDesignateTexture" (tillSetDesignateTextureFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "setAnchor"           (tillSetAnchorFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "clearAnchor"         (tillClearAnchorFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "designate"           (tillDesignateFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "cancelDesignation"   (tillCancelDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "getDesignationAt"    (tillGetDesignationAtFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "getDesignationCount" (tillGetDesignationCountFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "nearestDesignation"  (tillNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "setDesignateTexture" (tillSetDesignateTextureFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "till")
 
   -- Plant designation tool (#335). Single-tile, no anchor: the tool
@@ -119,10 +120,10 @@ registerDesignationAPI env = do
   -- getDesignationAt/cancelDesignation (claims are Lua-side, like dig/
   -- chop/till jobs — no engine job status).
   Lua.newtable
-  registerLuaFunction "designate"           (plantDesignateFn (toWorldSimCapability env))
-  registerLuaFunction "cancelDesignation"   (plantCancelDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationAt"    (plantGetDesignationAtFn (toWorldSimCapability env))
-  registerLuaFunction "getDesignationCount" (plantGetDesignationCountFn (toWorldSimCapability env))
-  registerLuaFunction "nearestDesignation"  (plantNearestDesignationFn (toWorldSimCapability env))
-  registerLuaFunction "setDesignateTexture" (plantSetDesignateTextureFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "designate"           (plantDesignateFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "cancelDesignation"   (plantCancelDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "getDesignationAt"    (plantGetDesignationAtFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "getDesignationCount" (plantGetDesignationCountFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "nearestDesignation"  (plantNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "setDesignateTexture" (plantSetDesignateTextureFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "plant")

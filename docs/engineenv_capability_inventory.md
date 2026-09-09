@@ -1144,6 +1144,16 @@ State that one subsystem owns belongs with that subsystem:
   main-render-thread-private, and no worker thread may reach it).
 - **Purely local state → a function parameter or a local `IORef`.**
 
+**Lua call telemetry (#2483)** follows this local-state rule:
+`Engine.Scripting.Lua.API.registerLuaAPI` allocates `LuaCallStats` once and
+passes it to every registrar. The installed closures and debug query/reset
+verbs share that ref on the owning Lua thread, including console calls.
+It adds no `EngineEnv` field, capability or cross-thread reader/writer.
+`Engine.Scripting.Lua.CallStats` owns masked bookkeeping; the persistence
+inventory §6 classifies the whole diagnostic window as `Exclude`.
+Gate: Hspec `Lua.CallStats` plus both inventory audits and their self-tests.
+
+
 **Worked example (#911, placed-location instance identity).** A placed
 location needed a stable, persisted, per-page identity: an id
 allocated at placement time, its definition id, anchor, resolved
