@@ -280,6 +280,24 @@ def _zoom_settle():
     time.sleep(0.2)
 
 
+def _row_key(row: dict) -> str | None:
+    """A dumped list row's stable selection key — the list item's own
+    value, which is what every selection callback speaks in. Falls back
+    to the drawn label only for a dump predating that field."""
+    return row.get("key") if row.get("key") is not None else row.get("label")
+
+
+def _selection_key(state: dict) -> str | None:
+    """The key of the row currently selected, in whichever vocabulary the
+    mode uses: the buildings viewer reports its combined-list identity in
+    `selection` (#2492), every other mode's `selected.path` IS its row
+    key."""
+    selection = state.get("selection") or {}
+    if selection.get("identity") is not None:
+        return selection["identity"]
+    return (state.get("selected") or {}).get("path")
+
+
 def check_zoom_object_identity(port: int, label: str, expect_reset: bool,
                                settle=None) -> bool:
     """Requirement 9. Click a DIFFERENT list row (located from the dump,
@@ -290,10 +308,18 @@ def check_zoom_object_identity(port: int, label: str, expect_reset: bool,
     category each texture IS the preview object, so it resets; in
     units/<name>, buildings/<name>, flora/<name> and structures/<name>
     the row selects another view of the SAME object, so it is
-    preserved."""
+    preserved.
+
+    Rows are matched on their stable selection KEY, never on the drawn
+    label. Since #2492 the buildings viewer's combined list holds
+    declared lifecycle rows beside the raw filesystem rows, two rows may
+    legitimately draw the same text, and its `selected` field is
+    deliberately the RAW projection of whatever row is active rather
+    than that row's own name — so a label comparison could both pick the
+    wrong row and then fail to notice the selection had changed."""
     rows = dump(port).get("rows") or []
-    selected = (dump(port).get("selected") or {}).get("label")
-    target = next((r for r in rows if r.get("label") != selected), None)
+    current = _selection_key(dump(port))
+    target = next((r for r in rows if _row_key(r) != current), None)
     if target is None:
         return check(f"{label}: object-identity zoom rule", False,
                      "no second visible row to select")
@@ -308,15 +334,16 @@ def check_zoom_object_identity(port: int, label: str, expect_reset: bool,
 
     click_element(port, target.get("bounds") or {})
     after = poll_until(10.0, lambda: (
-        (dump(port).get("selected") or {}).get("label") == target.get("label")
+        _selection_key(dump(port)) == _row_key(target)
         and dump(port))) or dump(port)
     if settle:
         settle()
         after = dump(port)
     ok_selected = check(f"{label}: the row selection really changed",
-                        (after.get("selected") or {}).get("label")
-                        == target.get("label"),
-                        after.get("selected"))
+                        _selection_key(after) == _row_key(target),
+                        f"selection={_selection_key(after)} "
+                        f"want={_row_key(target)} "
+                        f"selected={after.get('selected')}")
     got = (after.get("zoom") or {}).get("multiplier")
     if expect_reset:
         ok_rule = check(f"{label}: a different preview OBJECT resets the "

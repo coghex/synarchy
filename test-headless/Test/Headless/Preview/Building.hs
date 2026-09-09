@@ -463,6 +463,10 @@ spec = do
                     { bpmAnims  = Map.singleton "portal-idle" (anim 8 True [frame])
                     , bpmStates = Map.singleton "built" "portal-idle"
                     , bpmSprite = Just "assets/textures/buildings/x/default.png"
+                    -- The declared matrix (#2492) is a separate
+                    -- authority: this ladder is the RAW browser's own
+                    -- and must stay decided without one.
+                    , bpmMatrix = Nothing
                     }
                 entries = [ animated "idle" [frame]
                           , static "default.png"
@@ -477,6 +481,7 @@ spec = do
                                         ["assets/textures/buildings/x/construct/frame_001.png"])
                     , bpmStates = Map.singleton "construction" "x-construct"
                     , bpmSprite = Just sprite
+                    , bpmMatrix = Nothing
                     }
                 entries = [ animated "construct"
                               ["assets/textures/buildings/x/construct/frame_001.png"]
@@ -489,6 +494,7 @@ spec = do
                     { bpmAnims  = Map.empty        -- 'built' names a missing anim
                     , bpmStates = Map.singleton "built" "gone"
                     , bpmSprite = Nothing
+                    , bpmMatrix = Nothing
                     }
                 entries = [ static "ceiling.png" "assets/textures/buildings/x/ceiling.png"
                           , static "default.png" "assets/textures/buildings/x/default.png" ]

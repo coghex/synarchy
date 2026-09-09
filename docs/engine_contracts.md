@@ -846,7 +846,10 @@ fallback to source frames. The buildings viewer (#888) is the opposite
 authority split: the filesystem is authoritative and
 `data/buildings/<name>.yaml` only AUGMENTS a matched animation
 (association by CONTENT, never by equal names; playback defaults
-`fps=8`, `loop=false` — NOT the units viewer's `loop=true`).
+`fps=8`, `loop=false` — NOT the units viewer's `loop=true`). #2492
+LAYERS a declared lifecycle/facing matrix, read only from that same
+YAML, over that browser without replacing any of it — see §The declared
+lifecycle/facing matrix.
 
 Centered bounded zoom (#1907): every main preview display has ONE
 per-session zoom multiplier, `1` (the initial value AND the maximum,
@@ -869,14 +872,16 @@ filtering, both viewers, trimmed loading verified against the engine's
 own authoritative texture record, and zoom on all six display kinds via
 real `input.moveMouse`/`input.scroll`). Pure logic: hspec
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
-`"Preview.Building"` / `"Preview.Zoom"` — the last is the only BLOCKING
-automated gate zoom has, the probe being manual-only.
+`"Preview.Building"` / `"Preview.BuildingMatrix"` / `"Preview.Zoom"` /
+`"Preview.KeyboardNavigation"` — the last three are the only BLOCKING
+automated gates zoom, the buildings matrix and keyboard routing have,
+the probe being manual-only.
 
 
 Enforced by `tools/preview_cli_probe.py` (CI-eligible, no boot) and
 `tools/preview_probe.py` (manual-only, `needs-gpu`); pure logic by hspec
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
-`"Preview.Building"`.
+`"Preview.Building"` / `"Preview.BuildingMatrix"`.
 
 The real-boot probe preserves the windowed GLFW/Vulkan surface, swapchain,
 input, and resize paths, but sets `SYNARCHY_PREVIEW_HIDDEN=1` for its engine
@@ -1001,14 +1006,154 @@ resize behavior below is part of the probe's contract.
   `default.png`) lands on the last rung.
 - **Playback defaults are `fps=8`, `loop=false`** — `BuildingYamlAnim`'s
   own, NOT the units viewer's `loop=true`. One wall clock per selected
-  animation, reset on a real selection change but preserved across a
-  resize; end-of-clip REPLAYS (#1833) on the units viewer's identical
-  terms — every animation entry repeats indefinitely regardless of its
-  authored `loop`, the wrap coming from the index rather than a
-  restarted `entryStart`. A STATIC selection has no playback at all,
+  ROW, reset on a real selection change but preserved across a facing
+  change and a resize; end-of-clip REPLAYS (#1833) on the units viewer's
+  identical terms — every animated row repeats indefinitely regardless
+  of its authored `loop`, the wrap coming from the index rather than a
+  restarted `rowStart`. A STATIC selection has no playback at all,
   and forced replay does not change that: `buildingAssetView.update`
-  still advances nothing outside `entry.animated`, so a static entry
+  still advances nothing outside an animated row, so a static entry
   keeps exposing no `playback` in the dump.
+
+#### The declared lifecycle/facing matrix (#2492, BDA-4)
+
+`data/buildings/<name>.yaml` gains a SECOND, separate job here. It still
+only augments the filesystem browser above; it additionally supplies a
+DECLARED inspection matrix, and the two authorities never mix — nothing
+in the matrix discovers, filters, reorders or relabels a raw entry, and
+nothing in the browser reads the matrix.
+
+- **The declaration is decoded through the GAME's own field decoders**
+  (`Engine.Asset.YamlBuildings.defSprites` / `defRoleAnims` /
+  `defAnimations`, reached from `Engine.Preview.BuildingMatrix`), so the
+  closed `BuildingRole` vocabulary, the legacy `appearing` resolution
+  through `Building.Schema.legacyRoleFor` on `build_work` (default 0),
+  the canonical-vs-legacy `sprites`/`sprite` and `frames` forms, and
+  every rejection are literally the code the game applies.
+- **Every rejection lands in ONE fallback**: no declared rows at all,
+  and the complete raw browser with its existing default behavior. An
+  unknown lifecycle key, a legacy `appearing` beside the canonical role
+  it resolves to, both sprite forms, a negative or non-finite
+  `build_work`, a malformed animation, a missing or unreadable file, and
+  a file matching no definition all answer the same way. Never a
+  precedence rule, never a partial matrix, never a pre-boot rejection.
+- **Rows.** Declared lifecycle rows in the fixed order `construction`,
+  `appearance`, `built`, `destruction` (an UNDECLARED role is absent,
+  not reported missing), then the declared static-sprite row, then every
+  raw filesystem row in its existing relative order, label, kind, frame
+  order, fps, loop and playback. Identities are `lifecycle:<role>`,
+  `sprite` and `filesystem:<label>`, so a lifecycle row and the raw row
+  backing the same files cannot alias each other — duplicate-looking
+  rows are expected, not a bug. A role whose animation reference does
+  not resolve is RETAINED as a diagnostic row naming the role and the
+  reference, never silently reclassified as undeclared.
+- **Cells.** Four per declared row, in camera order south, west, north,
+  east, each holding that facing's COMPLETE ordered path list. A
+  canonical declaration keeps its four independently authored lists; a
+  legacy `sprite` repeats one path and a legacy `frames.default` repeats
+  its whole ordered list, and every such cell and its containing row are
+  marked `legacy` both structurally (the dump) and visibly (the cell
+  caption's `*`, plus a `legacy` flag on the enlarged view) so four
+  repeated views can never read as four authored ones. Provenance is
+  per ENTRY: one building may declare its sprite legacy and an animation
+  canonically, and the dump's top-level `declaration` is the SELECTED
+  declared entry's source, absent for a raw selection.
+- **Missing cells.** A cell is diagnostic when any declared path is
+  absent, a directory, a symlink (at the leaf OR any ancestor below the
+  building's folder), a special file, carries an unsupported extension,
+  or does not resolve under `assets/textures/buildings/<name>/` at all —
+  the last with its own `outside_root` reason, because requesting it
+  would break trimmed loading. Those verdicts come from ONE `lstat` walk
+  down every component below the building's folder, never from an
+  existence predicate first: `doesPathExist` FOLLOWS links, so a
+  dangling symlink would answer "absent" and never reach the symlink
+  rule. A missing cell never substitutes a path from another facing,
+  role, raw row or the static sprite, never requests its invalid texture
+  (its dump entry carries no `handle`), and draws a textureless marker.
+  The selection then reports `state == "ready"` with its diagnostic
+  flags — never `"loading"`, and never `"empty"`, which is #1690's
+  terminal bindless-failure state.
+- **Diagnostic state is reported per ROW, not only per cell.** Each
+  declared row — in `lifecycle`, in `staticSprite` and in the combined
+  `rows` alike, computed once so the three cannot disagree — carries
+  `missing`, `missingReason` and `missingCells` beside `resolved`.
+  `resolved` alone cannot say it: a row whose animation reference
+  resolved but whose west cell is absent is a real authoring fault, and
+  `rows` is the surface automated input uses to pick a row to click. A
+  raw row reports `undeclared` there instead. The dump also names the
+  marker ELEMENTS — per cell and for the enlarged region — so a gate can
+  read their visibility and text back through `UI.getElementInfo` and
+  prove the indicator was drawn, rather than trusting that a dump flag
+  implies a pixel.
+- **Compatibility.** `entries`, `defaultEntry` and `selected` keep their
+  pre-#2492 meaning: `entries` is the raw list in its existing order and
+  shape, `defaultEntry` is the unchanged raw ladder, and `selected` is
+  the RAW projection of the active row — a declared static projects onto
+  the raw static whose frame equals its SOUTH declared path, a lifecycle
+  row onto the first raw animated entry in label order whose frames
+  overlap ANY facing's declared paths, and it is absent when none does.
+  The projection is FACING-INDEPENDENT: changing facing never moves it.
+  The combined list is described by the separate `selection`,
+  `defaultSelection`, `lifecycle`, `staticSprite`, `filesystemEntries`,
+  `selectedLifecycle`, `selectedFacing`, `facingRow`, `rows` and
+  `totals` fields.
+- **Initial selection** is the declared `built` row, else the declared
+  sprite row, else `filesystem:<defaultEntry>`, else nothing for an
+  empty browser. A declared `built` row wins even when it is a pure
+  diagnostic. The initial facing is south, and the enlarged facing then
+  CARRIES across a row change so two roles can be compared from the same
+  view — falling back to south for a row that lacks it. A raw row clears
+  it (it has no facing model), so returning to a declared row through
+  one starts from south again.
+- **Input.** Up/Down move the combined list. Left/Right move the facing
+  strip in displayed order with wraparound, and only while a DECLARED
+  row is selected — a raw row has no facing model, so they stay
+  unhandled there exactly as before #2492. Held-key repeat uses the same
+  `previewManager` clock as unit directions; because facings wrap, a
+  hold continues until key-up rather than terminating at a boundary.
+  Clicking a facing cell (`onPreviewFacingClick`, a callback name
+  distinct from the units viewer's) enlarges it. A facing change never
+  resets the replay cycle, the zoom multiplier, the list selection or
+  the scroll offset.
+- **Zoom region.** A declared row reports `layout().enlarged` — the
+  sub-rect ABOVE the facing strip, the units viewer's rule — and a raw
+  row, having no strip, keeps the whole panel it always had. The
+  multiplier still follows the preview OBJECT (the building), so a row
+  change and a facing change both preserve it; only a new session
+  resets it.
+- **Resize** preserves the selected row IDENTITY, the selected facing,
+  the list scroll offset, the cycle-local playback phase and the zoom
+  multiplier, recomputing row, cell, enlarged-sprite and zoom bounds
+  without reselecting or restarting playback.
+- **Frame selection** matches gameplay WITHIN each forced-replay cycle:
+  `construction` maps the cycle phase onto build progress and compares
+  with `Building.Visual.pickBuildingFrame`; `appearance` and `built` use
+  cycle-local elapsed time against the same function; `destruction` uses
+  `Building.Destruction.destructionFrame`. Past that cycle the two
+  deliberately diverge — gameplay clamps a non-looping clip and expires
+  a destruction effect while the preview replays (#1833) — so equality
+  at an unbounded preview clock time is NOT the contract.
+  `pickBuildingFrame`'s last-frame pin fires only when no `built`
+  animation resolves, and no `built` row exists in that case, so no
+  declared row reaches it.
+
+Gates: hspec `--match "Preview.BuildingMatrix"` — the pure matrix,
+identity, projection, classification and gameplay-equality half, plus
+the CPU-only Lua half that drives the REAL `preview_manager` /
+`building_asset_view` / `preview_zoom` through the shared
+`Test.Headless.Preview.LuaHarness`; `--match "Preview.Zoom"` and
+`--match "Preview.KeyboardNavigation"` for the pane and routing
+regressions. `tools/preview/buildings.py` (through the manual-only,
+`needs-gpu` `tools/preview_probe.py --only buildings`) exercises the
+same surface against a live engine, locating rows by identity rather
+than by label. Its phase 8 generates a fixture building — gitignored,
+written to the canonical `assets/textures/buildings/<name>/` and
+`data/buildings/<name>.yaml` paths because that is where the viewer
+resolves one, and removed in a `finally` — because no shipped definition
+declares a canonical `sprites`/`frames` block, a `destruction` role, an
+unresolved animation reference, or art that is not on disk, so the
+missing, unresolved, legacy and provenance states have nowhere else to
+be verified through real marshalling and rendering.
 
 ### Centered bounded zoom (#1907)
 
@@ -1037,10 +1182,16 @@ drift onto different math.
 - **The zoom REGION.** In unit mode it is `layout()`'s `enlarged`
   sub-rect (`scripts/ui/unit_animation_view.lua`), never `panelBounds`
   — the panel also holds the direction row. It is both the wheel's
-  capture rect and the fit denominator. Every other mode uses
-  `panelBounds`. The fit for an atlas-backed unit frame uses the
-  compiled index's own CELL dimensions, never the sheet's
-  (`frameSize` asks `engine.getTextureSize` only for residency).
+  capture rect and the fit denominator. Since #2492 the buildings viewer
+  answers the same way, but per ROW CLASS: a DECLARED row draws a facing
+  strip and reports its own `enlarged` sub-rect, while a RAW filesystem
+  row has no strip and keeps the whole `panelBounds` it always had.
+  Every other mode uses `panelBounds`. Whichever it reports is the
+  region the sprite was actually fitted to, so a containment or
+  centering assertion runs against the real denominator in both cases.
+  The fit for an atlas-backed unit frame uses the compiled index's own
+  CELL dimensions, never the sheet's (`frameSize` asks
+  `engine.getTextureSize` only for residency).
 - **Input ownership.** The preview region owns an invisible element with
   `UI.setScrollCapture(handle, true)` and nothing else — no
   `UI.setClickable`, no `UI.setPointerBlocking`, because #743 made those
@@ -1057,7 +1208,13 @@ drift onto different math.
   The surface reuses a texture handle the session has ALREADY requested
   (at alpha 0), never a fresh load — focused-item mode allows no chrome
   at all (`tools/preview_probe.py`'s `allow_chrome=False`), so
-  `list.getChromeTexture()` there would break trimmed loading. It is
+  `list.getChromeTexture()` there would break trimmed loading. The
+  buildings viewer adopts that chrome handle EXPLICITLY (#2492): its
+  initial `built` row may legitimately be a pure diagnostic that
+  requests no texture at all, so a surface borrowed only from the first
+  frame the pane happened to load would never exist and the wheel would
+  leak to the gameplay/z-slice broadcasts for the whole session. That
+  mode always builds a list, so the handle is already in flight there. It is
   borrowed from the REQUEST, and the surface is installed as each mode's
   UI is built, NOT when the upload completes: an upload is asynchronous,
   so waiting for it would leave list and focused-item mode with no
@@ -1087,7 +1244,8 @@ drift onto different math.
   is its own object, so selecting a different one resets to `1`. Within
   `units/<name>`, `buildings/<name>`, `flora/<name>` or
   `structures/<name>` the object is the unit/building/item, so another
-  animation, direction, entry, stage or piece PRESERVES the multiplier;
+  animation, direction, entry, facing, stage or piece PRESERVES the
+  multiplier;
   so do playback, frame changes, and a framebuffer resize (which
   recomputes the fitted size from the new region). Zoom is never
   persisted between sessions.
@@ -1098,8 +1256,9 @@ drift onto different math.
   `onSelect` — a resize restores via `assetBrowser.selectEntrySilently`,
   which fires none — so resize preservation falls out of the existing
   restore contract rather than needing its own flag.
-- **Not zoomed:** list thumbnails and unit direction-row cells keep
-  their existing fixed sizing.
+- **Not zoomed:** list thumbnails, unit direction-row cells and the
+  buildings viewer's facing-strip cells keep their existing fixed
+  sizing.
 - **Degenerate geometry.** `previewZoom.fitRect` returns no rect at all
   for a missing/non-finite/non-positive box or source size, and callers
   then leave the previous geometry alone and retry — the same thing they
@@ -1173,6 +1332,13 @@ only), and textures within the requested category/item — never
 single file for the requested item: the units viewer's
 `data/units/<name>.yaml` and the buildings viewer's
 `data/buildings/<name>.yaml`.
+
+A DECLARED building path (#2492) that does not resolve under
+`assets/textures/buildings/<name>/` — after the same containment and
+symlink rules discovery applies — is a missing cell with its own
+`outside_root` reason and is never requested, so the buildings viewer
+keeps loading only the building's own textures plus list chrome however
+a definition is authored.
 
 `tools/preview_probe.py` verifies this against
 `engine.getLoadedTexturePaths()` — the distinct paths of `Engine.Asset`'s

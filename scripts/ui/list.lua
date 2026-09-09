@@ -993,6 +993,14 @@ function list.dump()
                             h = info and info.height or ls.itemHeight,
                         },
                         label = item.text,
+                        -- The item's own VALUE (#2492): `label` is only
+                        -- the text drawn, and two rows of one list may
+                        -- legitimately draw the same text, so a consumer
+                        -- resolving a dumped row back to its data needs
+                        -- the key the selection callbacks already speak
+                        -- in. Not to be confused with `value` below,
+                        -- which is this row's highlight state.
+                        key = item.value,
                         enabled = info ~= nil and info.clickable,
                         visible = info ~= nil and info.visible,
                         hovered = info ~= nil and info.hovered,

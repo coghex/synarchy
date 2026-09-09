@@ -28,7 +28,8 @@ filesystem/YAML/atlas expectations, the texture-loading check — live in
 
   simple     phases 1-2    bare simple-category list, focused item
   units      phases 3-4b   acolyte viewer, promoted tiller, the roster
-  buildings  phases 5-7    built-state, no-built-state, YAML-free
+  buildings  phases 5-8    built-state, no-built-state, YAML-free,
+                           the declared lifecycle/facing matrix
   dispatch   phases 8-9    grouped flora/structure items, category sweep
   zoom       phase 11      all six display kinds
 
@@ -110,6 +111,16 @@ Checks:
      is still recognized as an animation by the numbered-frame
      convention, reporting the documented fps=8 / loop=false defaults
      (NOT the units viewer's loop=true).
+  8. The declared lifecycle/facing matrix (#2492), against a
+     generated fixture building: no shipped definition declares a
+     canonical `sprites`/`frames` block, a `destruction` role, an
+     unresolved animation reference, or art that is not on disk, so the
+     missing/unresolved/legacy/provenance states have nowhere else to be
+     verified through the real engine. Every lifecycle row, the static
+     row, every raw row class and every facing is selected through its
+     own dump-reported bounds; no invalid declared path is ever
+     requested; and the fixture is removed again in a `finally`.
+
   7. Buildings with no YAML at all (--preview buildings/dungeon_1,
      #888): every entry is a static — including the `damaged/` subtree,
      which surfaces as ordinary item-relative statics rather than one
@@ -191,7 +202,7 @@ FAMILIES: tuple[Family, ...] = (
            ("check_units_mode", "check_units_promoted", "check_units_roster")),
     Family("buildings", buildings,
            ("check_buildings_mode", "check_buildings_without_built",
-            "check_buildings_without_yaml")),
+            "check_buildings_without_yaml", "check_buildings_matrix")),
     Family("dispatch", dispatch,
            ("check_flat_grouped_dispatch", "check_canonical_dispatch_sweep")),
     Family("zoom", zoom,
