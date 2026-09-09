@@ -110,7 +110,7 @@ saveComponentRegistry =
         (\ver d snap → onPages snap (applyCraftBills ver d))
     , registerComponent powerNodesCodec
         (\ver d snap → onPages snap (applyPowerNodes ver d))
-      -- #1087: the FIRST of the two OPTIONAL entries. Absent ⇒ every
+      -- #1087: the FIRST of the three OPTIONAL entries. Absent ⇒ every
       -- page keeps 'blankPageSnapshot''s empty knowledge map (every
       -- container never-inspected), which is what lets every pre-#1087
       -- baseline in docs/save_compat/manifest.json keep loading.

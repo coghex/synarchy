@@ -34,7 +34,12 @@ import World.Save.Envelope.Types
     , defaultEnvelopeLimits )
 import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotSaveMetadata)
-import World.Save.Types (missingPortableItemDefReferences, mpdrDefName, mpdrOwnerId)
+import World.Save.Types
+    (missingPortableItemDefReferences, mpdrDefName, mpdrOwnerId)
+import World.Save.Snapshot.Adapter (snapshotToSaveData)
+import World.Save.Integrity (IntegrityError(..), KnownEntities(..), luaReferenceErrors)
+import World.Save.Payload (LuaRefEdge(..))
+import Engine.Scripting.Lua.API.Save.Integrity (knownEntitiesFromSaveData)
 
 -- Fixtures -----------------------------------------------------------
 
@@ -309,6 +314,75 @@ spec = do
             allItemInstanceIds snap
                 `shouldMatchList` [crateId, kitId, bandageId]
             validateSessionSnapshot snap `shouldBe` []
+
+    describe "a remembered id is not a live reference (§11)" $ do
+        -- The locator answering Nothing is a fact about the LIVE
+        -- session; this is the separate fact about the SAVE's own
+        -- reference graph, which is what a Lua component's persisted
+        -- `item_instance` edge is resolved against.
+        --
+        -- Both snapshots below carry an allocator ABOVE every id in
+        -- play, so a non-resolving edge is reported as a plain
+        -- dangling reference rather than as one that outran the
+        -- allocator — the two are different findings, and this block is
+        -- about liveness, not about the bound.
+        let refPage items = (blankPageSnapshot pkPageA
+                                (defaultWorldGenParams { wgpSeed = 7 }))
+                { pgsGeneratedId = Just (fixtureGeneratedWorldIdForPage pkPageA)
+                , pgsGroundItems = groundWith items }
+            refSnapshot items = knowledgeSnapshot
+                { snapPages = HM.singleton pkPageA (refPage items)
+                , snapNextItemId = 100
+                , snapPortableKnowledge = PortableKnowledge $
+                    HM.singleton crateId (PortableRecord
+                        (Just (WeightObservation 31.25 1200))
+                        (Just (ContentsObservation [kit] 950.25)))
+                }
+            -- The kit is REMEMBERED inside the crate's record, and
+            -- nothing live carries it.
+            rememberedOnly = refSnapshot []
+            -- The same kit, now genuinely lying on the ground.
+            alsoLive = refSnapshot [kit]
+            keOf snap = knownEntitiesFromSaveData
+                (snapshotToSaveData
+                    (SaveRequestMeta "portable_refs" "ts" False) snap)
+            itemEdge iid = LuaRefEdge
+                { lreComponent = "unit_ai", lreKind = "item_instance"
+                , lreId = fromIntegral iid, lreOwner = Nothing
+                , lrePath = "job.carrying", lrePage = Nothing }
+
+        it "a remembered-only instance is absent from the save's \
+           \known-entity set, so nothing can resolve against it" $ do
+            HS.member (fromIntegral kitId)
+                (keItemInstances (keOf rememberedOnly)) `shouldBe` False
+            HS.member (fromIntegral bandageId)
+                (keItemInstances (keOf rememberedOnly)) `shouldBe` False
+
+        it "a Lua item_instance edge naming a remembered-only id is \
+           \reported as a tolerated DANGLING reference -- remembering a \
+           \crate must never make a stale live reference look live" $
+            case luaReferenceErrors HM.empty (keOf rememberedOnly)
+                     [itemEdge kitId] of
+                [e] → do
+                    ieCode e `shouldBe` "dangling-reference"
+                    ieRefValue e `shouldBe` tshow kitId
+                other → expectationFailure
+                    ("expected exactly one dangling-reference finding, got: "
+                     <> show other)
+
+        it "…while the SAME id and the SAME edge resolve once the item \
+           \is genuinely live, so the case above is about liveness \
+           \rather than about the edge being malformed" $ do
+            HS.member (fromIntegral kitId)
+                (keItemInstances (keOf alsoLive)) `shouldBe` True
+            luaReferenceErrors HM.empty (keOf alsoLive) [itemEdge kitId]
+                `shouldBe` []
+            -- …and the record is present either way, so what changed is
+            -- the live enumeration and nothing else.
+            knownPortableIds (snapPortableKnowledge alsoLive)
+                `shouldBe` [crateId]
+            knownPortableIds (snapPortableKnowledge rememberedOnly)
+                `shouldBe` [crateId]
 
     describe "remembered DEF NAMES are ordinary content references" $ do
         it "names a remembered item whose definition is no longer \

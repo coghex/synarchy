@@ -806,6 +806,14 @@ data WorldManager = WorldManager
       --   departed session's memory back into it — where a reused
       --   instance id could pick it up.
       --
+      --   That is the TEARDOWN hazard specifically. The load side is
+      --   already covered separately: @World.Thread.processAuthorizedSave@
+      --   flushes the world queue and discards every non-authorized
+      --   command when a @WorldLoadPublish@ is in it. The publish bumps
+      --   this anyway, so the field answers \"which session is this\"
+      --   rather than \"which teardown was this\", and so the handler's
+      --   refusal does not depend on that discard staying as it is.
+      --
       --   NOT persisted: it names this process's session sequence, and a
       --   restored session gets a fresh one from the publish that
       --   installed it.

@@ -45,8 +45,20 @@ import World.Load.Publish (publishStagedSession)
 import World.Load.Stage (renderStageError, stageSession)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Page.Types (WorldPageId(..))
+import qualified Data.ByteString as BS
+import qualified Data.HashSet as HS2
+import System.FilePath ((</>))
+import World.Save.Component (componentKnownIds)
+import World.Save.Component.Types (metadataComponentId, portableKnowledgeComponentId)
+import World.Save.Envelope (decodeSessionEnvelope)
+import World.Save.Envelope.Codec
+    (DecodedEnvelope(..), decodeEnvelope, encodeEnvelope)
+import World.Save.Envelope.Types
+    ( ComponentDescriptor(..), EnvelopeManifest(..), defaultEnvelopeLimits )
 import World.Save.Serialize (loadWorld)
-import World.Save.Types (SaveData(..))
+import World.Save.Snapshot (SessionSnapshot(..))
+import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
+import World.Save.Types (SaveData(..), SaveMetadata(..))
 import World.State.Types
 import World.Thread.Command.Basic (handleWorldDestroyAllCommand)
 import World.Thread.Command.Init (handleWorldInitCommand)
@@ -275,6 +287,86 @@ spec = do
                                 knowledgeIn env
                                     `shouldReturn` emptyPortableKnowledge
 
+    describe "a load that does not complete, and one that carries \
+             \nothing" $ do
+        it "a PRE-PUBLICATION failure leaves the outgoing session's \
+           \memory exactly where it was -- staging is the phase that \
+           \can still fail, and it publishes nothing at all when it \
+           \does" $ withLiveCrateSession $ \env _ws → do
+            logger ← readIORef (loggerRef env)
+            setKnowledge env twoRecords
+            let slot = "hspec_portable_knowledge_2512_stagefail"
+                cleanup = removePathForcibly ("saves/" <> slot)
+            cleanup
+            (`finally` cleanup) $ do
+                handleWorldSaveCommand env logger pageA slot
+                    "2026-09-08T00:00:00.000000Z" [] [] Nothing
+                matReg ← readIORef (materialRegistryRef env)
+                loaded ← loadWorld logger slot HS.empty HS.empty
+                case loaded of
+                    Left (_, e) → expectationFailure (T.unpack e)
+                    Right (sd, _, _) → do
+                        -- A save with no world pages: the FIRST branch
+                        -- `stageSession` refuses on, and a real refusal
+                        -- rather than a stubbed one.
+                        stagedOrErr ← stageSession env logger
+                            sd { sdWorlds = [] } matReg
+                        case stagedOrErr of
+                            Right _ → expectationFailure
+                                "a page-less save staged successfully"
+                            Left _  → pure ()
+                        -- Nothing published, so nothing replaced: the
+                        -- outgoing map is untouched, both records
+                        -- included -- including the one the incoming
+                        -- session would have scrubbed.
+                        knowledgeIn env `shouldReturn` twoRecords
+
+        it "publishing a REAL envelope with the portable-knowledge \
+           \component REMOVED clears a manager that already holds \
+           \knowledge -- absence is the empty map, applied through the \
+           \live lifecycle rather than only through the codec" $
+            withLiveCrateSession $ \env _ws → do
+            logger ← readIORef (loggerRef env)
+            setKnowledge env twoRecords
+            let slot = "hspec_portable_knowledge_2512_stripped"
+                cleanup = removePathForcibly ("saves/" <> slot)
+            cleanup
+            (`finally` cleanup) $ do
+                handleWorldSaveCommand env logger pageA slot
+                    "2026-09-08T00:00:00.000000Z" [] [] Nothing
+                -- The bytes this save really wrote, with one component
+                -- dropped -- the shape every pre-#2512 save on disk
+                -- genuinely has.
+                bytes ← BS.readFile ("saves" </> T.unpack slot
+                                            </> "world.synworld")
+                let stripped = withoutPortableKnowledge bytes
+                case decodeSessionEnvelope HS.empty HS.empty stripped of
+                    Left err → expectationFailure (T.unpack err)
+                    Right (meta, snap, _, _) → do
+                        -- Non-vacuity: the unstripped envelope really
+                        -- did carry the records.
+                        case decodeSessionEnvelope HS.empty HS.empty bytes of
+                            Left err → expectationFailure (T.unpack err)
+                            Right (_, full, _, _) →
+                                knownPortableIds (snapPortableKnowledge full)
+                                    `shouldMatchList` [crateId, looseId]
+                        snapPortableKnowledge snap
+                            `shouldBe` emptyPortableKnowledge
+                        matReg ← readIORef (materialRegistryRef env)
+                        let sd = snapshotToSaveData
+                                (SaveRequestMeta (smName meta) "ts" False) snap
+                        stagedOrErr ← stageSession env logger sd matReg
+                        case stagedOrErr of
+                            Left e → expectationFailure
+                                (T.unpack (renderStageError e))
+                            Right staged → do
+                                -- The live map is populated right up to
+                                -- the publish.
+                                knowledgeIn env `shouldReturn` twoRecords
+                                publishStagedSession env logger 1 staged
+                                knowledgeIn env
+                                    `shouldReturn` emptyPortableKnowledge
+
     describe "the scrub sees what the page actually publishes" $
         it "keeps the record of an item a staging REFUND minted: the \
            \live-id set is read off the page's ground ref AFTER \
@@ -351,3 +443,21 @@ spec = do
                 `shouldBe` [crateId]
             HM.keys (umInstances um) `shouldBe` []
             knownPortableIds twoRecords `shouldMatchList` [crateId, looseId]
+
+-- | The same envelope with its @"portable-knowledge"@ component dropped
+--   entirely — the manifest-level ABSENCE every save written before
+--   #2512 really has, produced from real bytes rather than described.
+withoutPortableKnowledge ∷ BS.ByteString → BS.ByteString
+withoutPortableKnowledge bytes =
+    case decodeEnvelope defaultEnvelopeLimits 1 allIds HS2.empty bytes of
+        Left err → error ("withoutPortableKnowledge: decode: " <> show err)
+        Right de →
+            let specs = [ (cdId d, cdVersion d, cdRequired d, raw)
+                        | d ← emComponents (deManifest de)
+                        , cdId d ≢ portableKnowledgeComponentId
+                        , Just raw ← [HM.lookup (cdId d) (dePayloads de)] ]
+            in case encodeEnvelope defaultEnvelopeLimits 1 specs of
+                Left err  → error ("withoutPortableKnowledge: encode: "
+                                   <> show err)
+                Right out → out
+  where allIds = HS2.insert metadataComponentId componentKnownIds

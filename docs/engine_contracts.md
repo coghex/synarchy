@@ -2554,14 +2554,23 @@ ordering alone would clear the map and then insert the departed
 session's memory straight back into it, where a reused instance id could
 pick it up. So every mutating verb reads the epoch from the SAME
 `WorldManager` it located in, the command carries it, and the handler
-refuses a command whose epoch has moved. The epoch is bumped by exactly
-the two wholesale replacements — Exit to Menu and a load publish — each
-in the same atomic step that installs the new page set, and a load needs
-it as much as a teardown does: unlike the unit and building queues, the
-world queue is not discarded at publish, so such a command really can
-still be sitting in it. A forget carries the epoch for the mirror-image
-reason: it must not reach across a boundary and delete a same-numbered
-record the next session legitimately owns.
+refuses a command whose epoch has moved.
+
+The hazard that guard closes is the TEARDOWN one specifically:
+`WorldDestroyAll` is an ordinary queued command, so a turn can queue it
+and then observe, and nothing else would stop the insert landing after
+the clear. A load publish is already covered by a different mechanism —
+`World.Thread.processAuthorizedSave` flushes the world queue and
+DISCARDS every non-authorized command when a `WorldLoadPublish` is in
+it, so no observation queued against the outgoing session survives to
+run against the restored one. The epoch is nonetheless bumped by the
+publish too, in the same atomic step that installs the new page set, so
+that it means "which session is this" for every reader rather than
+"which teardown was this", and so the refusal does not depend on that
+discard staying exactly as it is. A forget carries the epoch for the
+mirror-image reason an observation does: it must not reach across a
+boundary and delete a same-numbered record the next session
+legitimately owns.
 
 PLC-7 ships no gameplay caller — pickup and open are PLC-8's, the window
 is PLC-9's.

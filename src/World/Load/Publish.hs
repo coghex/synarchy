@@ -225,10 +225,16 @@ publishStagedSession env logger requestId staged = do
         -- present.
         , wmPortableKnowledge = ssPortableKnowledge staged
         -- #2512: a load replaces the session as completely as a
-        -- teardown does, so an observation measured against the
-        -- outgoing one must not land here either — and unlike the unit
-        -- and building queues, the world queue is not discarded, so
-        -- such a command really can still be sitting in it.
+        -- teardown does, so the epoch moves here too. Not because a
+        -- stale observation could otherwise survive into the restored
+        -- session — @World.Thread.processAuthorizedSave@ already
+        -- flushes the world queue and DISCARDS every non-authorized
+        -- command when a 'WorldLoadPublish' is in it — but so the field
+        -- means "which session is this" for every reader rather than
+        -- "which teardown was this", and so the refusal in
+        -- 'World.Thread.Command.Basic.handleWorldRecordPortableKnowledgeCommand'
+        -- does not silently depend on that discard staying exactly as
+        -- it is.
         , wmSessionEpoch = outgoingSessionEpoch + 1
         }
 

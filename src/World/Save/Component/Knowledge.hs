@@ -8,7 +8,11 @@
 --
 --   __This is the first OPTIONAL gameplay component__ — joined since by
 --   #1246's @"transfer-orders"@
---   ("World.Save.Component.Transfer"), on identical terms. Every OTHER
+--   ("World.Save.Component.Transfer") and #2512's
+--   @"portable-knowledge"@
+--   ("World.Save.Component.PortableKnowledge"), both on identical
+--   terms; those three are the whole optional set of the static Haskell
+--   registry. Every OTHER
 --   component in 'World.Save.Component.saveComponentRegistry' is
 --   required, and 'World.Save.Envelope.Codec.decodeEnvelope' refuses a
 --   modern envelope missing one. A container-knowledge payload cannot
