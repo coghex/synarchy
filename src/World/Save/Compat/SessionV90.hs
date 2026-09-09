@@ -112,6 +112,7 @@ import World.Save.Component
     ( metadataErrors, capComponentErrors )
 import World.Save.Integrity (IntegrityError(..), sessionIntegrityErrors)
 import World.Save.Types (SaveMetadata)
+import Item.Knowledge (emptyPortableKnowledge)
 import World.Save.Snapshot
     ( SessionSnapshot(..), LiveCameraSnapshot(..)
     , validateSessionSnapshot, structureEditPaletteErrors )
@@ -370,6 +371,13 @@ migrateSessionV90 meta sd = do
             , snapVisiblePages   = sd90VisiblePages sd
             , snapLiveCamera     = deriveLiveCamera sd
             , snapPages          = afterPower
+              -- #2512: EMPTY, never inferred. The B1 wire format
+              -- predates portable containers entirely, so a v90 payload
+              -- recorded no observation of any crate — and a crate's
+              -- live contents say nothing about whether the player ever
+              -- looked inside it. Exactly the absent-payload default
+              -- 'World.Save.Component.assembleSnapshot' installs.
+            , snapPortableKnowledge = emptyPortableKnowledge
             }
         crossErrs = capComponentErrors $
             map snapErr (validateSessionSnapshot snap)

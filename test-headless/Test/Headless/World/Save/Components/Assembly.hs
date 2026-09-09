@@ -262,7 +262,8 @@ spec = do
                                    , worldEditsComponentId, worldActivityComponentId
                                    , texPaletteComponentId
                                    , containerKnowledgeComponentId
-                                   , transferOrdersComponentId ]
+                                   , transferOrdersComponentId
+                                   , portableKnowledgeComponentId ]
                     ids `shouldMatchList` expected
                     (ComponentId "session" `elem` ids) `shouldBe` False
 

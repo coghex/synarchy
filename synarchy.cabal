@@ -623,6 +623,7 @@ library
                      Engine.Scripting.Lua.API.Items.Contents
                      Engine.Scripting.Lua.API.Items.Defs
                      Engine.Scripting.Lua.API.Items.Ground
+                     Engine.Scripting.Lua.API.Items.Knowledge
                      Engine.Scripting.Lua.API.Items.Render
                      Equipment.Types
                      Equipment.Reconcile
@@ -852,6 +853,8 @@ library
                      World.Spoil.Types
                      World.Mine.Apply
                      Item.Ground
+                     Item.Knowledge
+                     World.Item.Locate
                      World.Geology.Log
                      World.Geology.Hash
                      World.Geology.Crater
@@ -956,6 +959,7 @@ library
                      World.Save.Component.EntitySimulation
                      World.Save.Component.EntitySystems
                      World.Save.Component.Knowledge
+                     World.Save.Component.PortableKnowledge
                      World.Save.Component.Transfer
                      World.Save.Component
                      World.Save.Autosave
@@ -1344,6 +1348,13 @@ test-suite synarchy-test-headless
                    Test.Headless.Item.GroundPageOwnership
                    Test.Headless.Item.GroundSelection
                    Test.Headless.Item.Materialize
+                   Test.Headless.Item.PortableKnowledge
+                   Test.Headless.Item.PortableKnowledge.Fixture
+                   Test.Headless.Item.PortableKnowledge.Lifecycle
+                   Test.Headless.Item.PortableKnowledge.Locate
+                   Test.Headless.Item.PortableKnowledge.LuaApi
+                   Test.Headless.Item.PortableKnowledge.Model
+                   Test.Headless.Item.PortableKnowledge.Persistence
                    Test.Headless.Item.Temperature
                    Test.Headless.Item.BuffYaml
                    Test.Headless.Item.QualityTier

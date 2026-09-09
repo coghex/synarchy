@@ -335,6 +335,7 @@ import qualified Test.Headless.Save.Snapshot as SaveSnapshot
 import qualified Test.Headless.Location.Discovery as LocationDiscovery
 import qualified Test.Headless.World.LocationDiscovery as WorldLocationDiscovery
 import qualified Test.Headless.Building.Knowledge as ContainerKnowledge
+import qualified Test.Headless.Item.PortableKnowledge as PortableKnowledge
 import qualified Test.Headless.Item.NestedContents as NestedContents
 import qualified Test.Headless.Location.Instance as LocationInstance
 import qualified Test.Headless.Location.SignificantContents as LocationSignificantContents
@@ -1113,6 +1114,7 @@ main = hspec $ do
     LocationDiscovery.spec
     UnitFaction.spec
     ContainerKnowledge.spec
+    PortableKnowledge.spec
     LocationInstance.spec
     LocationSignificantContents.spec
     LocationNaming.spec

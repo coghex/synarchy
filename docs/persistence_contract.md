@@ -378,7 +378,7 @@ dropping the in-progress stamp.
   §1 applied to the format layer specifically.
 - **A NEW component may be declared OPTIONAL** when a save predating it
   has an honest, non-guessing default — the reader then treats an
-  ABSENT payload as that default instead of failing the load. Two
+  ABSENT payload as that default instead of failing the load. Three
   components in the static Haskell registry qualify so far, and each
   states its own justification in its module header. #1087's
   `container-knowledge` (the player's last-known container contents)
@@ -388,15 +388,24 @@ dropping the in-progress stamp.
   queue of durable transfer orders) is the second, on identical terms:
   "absent" means "no order is queued", which is true of every session
   that predates the component because there was nowhere for an order to
-  be stored at all. (On the Lua side `lua.tutorial_progress` is
-  separately optional under the same rule — §7 — so "second" here counts
-  the static Haskell registry, not the envelope as a whole.) This is a
+  be stored at all. #2512's `portable-knowledge` (what the player
+  remembers about each PORTABLE container, keyed by the item's own
+  `iiInstanceId`) is the third, again on identical terms: "absent"
+  means "no crate has ever been hefted or opened", which is true of
+  every session that had nowhere to record either. It is also the first
+  optional component that is SESSION-scoped rather than page-scoped — a
+  crate is carried between pages and owners, so its memory is keyed by
+  the crate and written once for the whole session — which changes
+  nothing about the optionality rule itself. (On the Lua side
+  `lua.tutorial_progress` is separately optional under the same rule —
+  §7 — so the count here is of the static Haskell registry, not of the
+  envelope as a whole.) This is a
   narrow exception to the rule above, not a general escape hatch — the
   decision is made ONCE, from `ccRequired`, in
   `World.Save.Component.Types.registerComponent`, and only the
   MANIFEST-level absence is tolerated: a component that IS declared but
   whose payload is malformed, truncated, or at an unsupported version
-  still fails exactly as a required one would. A THIRD optional
+  still fails exactly as a required one would. A FOURTH optional
   component has to justify itself against
   `Test.Headless.World.Save.Components`' explicit required/optional
   split assertion, which names every one of them.

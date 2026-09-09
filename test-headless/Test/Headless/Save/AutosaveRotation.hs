@@ -72,6 +72,7 @@ import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Fixture (the minimal* pattern every save gate in this suite uses)
@@ -131,6 +132,7 @@ minimalGlobals = SessionGlobals
         { lcsOwnerPage = Just page1
         , lcsX = 10, lcsY = 20, lcsZoom = 2, lcsFacing = FaceSouth
         }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | Publish a REAL autosave generation into @saves\/\<slot\>@. The

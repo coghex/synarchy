@@ -133,6 +133,7 @@ import Unit.Types
 import World.Page.Types (WorldPageId(..))
 import World.State.Types
     ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Item fixtures
 --
@@ -656,6 +657,7 @@ poisonedSaveWith units = snapshotToSaveData
                 { pgsGroundItems    = savedGroundItems
                 , pgsTransferOrders = savedOrders
                 , pgsUnits          = units })
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | The global item-instance cursor the save carries, above every

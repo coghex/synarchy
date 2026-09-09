@@ -51,6 +51,7 @@ import World.Generate.Types (WorldGenParams(..))
 import World.Page.Types (WorldIdentity(..), WorldPageId(..))
 import World.Page.GeneratedId (renderGeneratedWorldId)
 import Structure.Palette (emptyTexPalette)
+import Item.Knowledge (emptyPortableKnowledge)
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Save.Component.Types
 import World.Save.Component.Session
@@ -58,6 +59,7 @@ import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Component.Knowledge
 import World.Save.Component.Transfer
+import World.Save.Component.PortableKnowledge
 import World.Save.Integrity
     (IntegrityError(..), sessionIntegrityErrors, integrityErrorCap)
 
@@ -120,6 +122,15 @@ saveComponentRegistry =
       -- this slice: there was nowhere for an order to be stored at all.
     , registerComponent transferOrdersCodec
         (\ver d snap → onPages snap (applyTransferOrders ver d))
+      -- #2512: the THIRD OPTIONAL entry, and the first optional one
+      -- that is SESSION-scoped — a crate is carried between pages, so
+      -- its memory is keyed by the item and folded straight onto the
+      -- snapshot rather than onto every page's slice. Absent ⇒ the
+      -- skeleton's empty map (every portable container
+      -- never-inspected), which is what every baseline predating
+      -- portable containers honestly recorded.
+    , registerComponent portableKnowledgeCodec
+        (\ver d snap → Right (applyPortableKnowledge ver d snap))
     ]
   where
     onPages snap f = (\pages → snap { snapPages = pages }) ⊚ f (snapPages snap)
@@ -136,7 +147,10 @@ componentKnownIds = HS.fromList (map rcId saveComponentRegistry)
 --   payload has an honest, non-guessing meaning ("no container has ever
 --   been inspected") rather than a fabricated one. #1246's
 --   @"transfer-orders"@ is the second, on identical terms ("no order is
---   queued", true of every session that had nowhere to queue one).
+--   queued", true of every session that had nowhere to queue one), and
+--   #2512's @"portable-knowledge"@ is the third ("no crate has ever
+--   been hefted or opened", true of every session that had nowhere to
+--   record either).
 componentRequiredIds ∷ HS.HashSet ComponentId
 componentRequiredIds =
     HS.fromList [ rcId c | c ← saveComponentRegistry, rcRequired c ]
@@ -317,6 +331,11 @@ assembleSnapshot meta de = do
             { lcsOwnerPage = Nothing, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
         , snapPages          = HM.empty
+          -- #2512: an ABSENT @"portable-knowledge"@ payload leaves
+          -- exactly this — no crate remembered at all — which is what
+          -- makes the component's optionality honest rather than a
+          -- fabricated default.
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | Lift a whole-session snapshot invariant failure into a component

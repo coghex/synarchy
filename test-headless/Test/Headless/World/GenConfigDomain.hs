@@ -51,6 +51,7 @@ import World.Save.Snapshot (LiveCameraSnapshot(..), SessionSnapshot(..))
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Save.Types (SaveData)
 import World.State.Types (WorldState(..))
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * The leaf table every example is driven from
 
@@ -632,6 +633,7 @@ saveWith params = snapshotToSaveData
             , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceSouth }
         , snapPages          = HM.singleton stagedPageId
             (blankPageSnapshot stagedPageId params { wgpSeed = 0 })
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | Stage one such save and hand back the staged page's OWN gen params

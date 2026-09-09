@@ -63,6 +63,7 @@ import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Save.Types (SaveData(..), WorldPageSave(..))
 import World.State.Types (WorldState(..))
 import World.Time.Types (WorldTime(..), PreciseWorldTime(..))
+import Item.Knowledge (emptyPortableKnowledge)
 
 -----------------------------------------------------------------------
 -- * The values a save (or a script) can carry
@@ -363,6 +364,7 @@ saveWith (x, y, zoom) = snapshotToSaveData
         , snapPages          = HM.singleton stagedPageId
             (blankPageSnapshot stagedPageId arenaParams)
                 { pgsTimeHour = sentinelHour }
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | The decoded page such a save carries, for the pure examples above.

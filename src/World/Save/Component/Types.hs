@@ -135,6 +135,7 @@ module World.Save.Component.Types
     , powerNodesComponentId
     , containerKnowledgeComponentId
     , transferOrdersComponentId
+    , portableKnowledgeComponentId
     ) where
 
 import UPrelude
@@ -589,7 +590,7 @@ powerNodesComponentId  ∷ ComponentId
 powerNodesComponentId  = ComponentId "power-nodes"
 
 -- | #1087: the player's last-known container contents. The FIRST of the
---   two OPTIONAL Haskell-owned gameplay components — see
+--   three OPTIONAL Haskell-owned gameplay components — see
 --   "World.Save.Component.Knowledge"'s header for why a baseline that
 --   predates the feature must be allowed to carry no payload at all,
 --   and what an absent payload means.
@@ -601,7 +602,17 @@ containerKnowledgeComponentId = ComponentId "container-knowledge"
 --   "World.Save.Component.Transfer"'s header for the justification
 --   @docs\/persistence_contract.md@ §5 requires of each one, and note
 --   that @lua.tutorial_progress@ is already an optional component too;
---   this pair is the optional set of the STATIC Haskell registry
+--   these three are the optional set of the STATIC Haskell registry
 --   specifically, not of the envelope as a whole.
 transferOrdersComponentId ∷ ComponentId
 transferOrdersComponentId = ComponentId "transfer-orders"
+
+-- | #2512: what the player remembers about each PORTABLE container,
+--   keyed by item instance id. The THIRD OPTIONAL Haskell-owned
+--   gameplay component, and the FIRST optional one that is
+--   session-scoped rather than page-scoped — see
+--   "World.Save.Component.PortableKnowledge"'s header for the
+--   justification @docs\/persistence_contract.md@ §5 requires of each
+--   one, and for why a crate's memory cannot be a per-page slice.
+portableKnowledgeComponentId ∷ ComponentId
+portableKnowledgeComponentId = ComponentId "portable-knowledge"

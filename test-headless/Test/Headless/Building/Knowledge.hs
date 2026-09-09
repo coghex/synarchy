@@ -62,6 +62,7 @@ import World.Save.Snapshot.Adapter (snapshotToSaveData)
 import World.Save.Types (SaveData(..), WorldPageSave(..))
 import World.State.Types
     ( WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager )
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- Fixtures -----------------------------------------------------------
 
@@ -315,6 +316,7 @@ knowledgeSnapshot = buildSessionSnapshot globals [knowledgePage pageA]
         , sgLiveCamera = LiveCameraSnapshot
             { lcsOwnerPage = Just pageA, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
+        , sgPortableKnowledge = emptyPortableKnowledge
         }
 
 encodeFor ∷ SessionSnapshot → BS.ByteString

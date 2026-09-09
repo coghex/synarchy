@@ -24,6 +24,7 @@ import Unit.Command.Types (UnitCommand(..))
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
+import Item.Knowledge (emptyPortableKnowledge)
 import World.Blood.Teardown (enqueueBloodDisposalForPage, enqueueBloodDisposalAll)
 
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()
@@ -121,7 +122,13 @@ handleWorldDestroyAllCommand env logger = do
             -- destroy-alls can be accepted before the unit thread ticks
             -- once, each queuing its own pair — see the field's own doc
             -- and @World.Thread.processAllCommands@.
+            -- #2512: the next session's crates are DIFFERENT crates,
+            -- and an instance id is only unique within a session, so a
+            -- surviving memory could attach itself to an unrelated item.
+            -- Emptied in the same atomic update as the page set for the
+            -- same reason every other session-scoped value here is.
             m' { wmWorlds = [], wmVisible = []
+               , wmPortableKnowledge = emptyPortableKnowledge
                , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)

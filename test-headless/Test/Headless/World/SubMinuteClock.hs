@@ -66,6 +66,7 @@ import World.Thread (worldTickWith)
 import World.Thread.Command.Time (handleWorldSetDateCommand,
                                   handleWorldSetTimeCommand)
 import World.Types
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Shared helpers
 
@@ -660,6 +661,7 @@ sessionWith stored = SessionSnapshot
             , pgsDateDay      = 1
             , pgsTimeRemainder = stored
             }
+    , snapPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | @stored@ put through the REAL @world-pages@ codec and component

@@ -42,6 +42,7 @@ import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Item.Knowledge (emptyPortableKnowledge)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -104,6 +105,7 @@ minimalGlobals = SessionGlobals
         { lcsOwnerPage = Just page1
         , lcsX = 10, lcsY = 20, lcsZoom = 2, lcsFacing = FaceSouth
         }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 minimalItem ∷ Word64 → ItemInstance

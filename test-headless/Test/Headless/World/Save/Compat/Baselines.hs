@@ -68,6 +68,10 @@ import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
 import Building.Knowledge
     (ContainerKnowledge(..), ContainerRecord(..), emptyContainerKnowledge)
+import Item.Knowledge
+    ( PortableKnowledge(..), PortableRecord(..), WeightObservation(..)
+    , ContentsObservation(..), portableKnowledgeStateId
+    , portableRecordState )
 import World.Page.GeneratedId (newGeneratedWorldId)
 
 -- Manifest / canonical-summary parsing (requirement 14: the blocking
@@ -234,6 +238,27 @@ instance Aeson.FromJSON ExpectedPage where
         <*> o .:? "craftBills" .!= []
         <*> o .:? "powerNodes" .!= []
 
+-- | One remembered PORTABLE container (#2512), as a fixture's expected
+--   summary declares it. Every learned value is optional on the wire
+--   and compared as such: a @null@ weight or timestamp means "never
+--   learned", which a reader defaulting it to 0 could not tell from a
+--   real zero measurement.
+data ExpectedPortableRecord = ExpectedPortableRecord
+    { eprInstanceId   ∷ !Word64
+    , eprState        ∷ !Text
+    , eprStoredWeight ∷ !(Maybe Float)
+    , eprWeighedAt    ∷ !(Maybe Double)
+    , eprRevealedAt   ∷ !(Maybe Double)
+    , eprItems        ∷ !(Maybe [ExpectedItemInstance])
+    }
+
+instance Aeson.FromJSON ExpectedPortableRecord where
+    parseJSON = Aeson.withObject "portableRecord" $ \o →
+        ExpectedPortableRecord
+            <$> o .: "instanceId" <*> o .: "state"
+            <*> o .:? "storedWeight" <*> o .:? "weighedAt"
+            <*> o .:? "revealedAt" <*> o .:? "items"
+
 data ExpectedSummary = ExpectedSummary
     { esMeta ∷ !ExpectedMeta
     , esGameTime ∷ !Double
@@ -245,6 +270,10 @@ data ExpectedSummary = ExpectedSummary
     , esVisiblePages ∷ ![Text]
     , esPages ∷ ![ExpectedPage]
     , esLuaComponentCount ∷ !Int
+    , esPortableKnowledge ∷ ![ExpectedPortableRecord]
+      -- ^ #2512. Defaults to @[]@, which is what every fixture written
+      --   before the component existed genuinely restores: no crate has
+      --   ever been hefted or opened.
     , esIsMigratedLegacyBaseline ∷ !Bool
     }
 
@@ -254,6 +283,7 @@ instance Aeson.FromJSON ExpectedSummary where
         <*> o .: "nextBuildingId" <*> o .: "nextUnitId" <*> o .: "camera"
         <*> o .: "activePage" <*> o .: "visiblePages"
         <*> o .: "pages" <*> o .: "luaComponentCount"
+        <*> o .:? "portableKnowledge" .!= []
         <*> o .: "isMigratedLegacyBaseline"
 
 decodeJSONFile ∷ Aeson.FromJSON a ⇒ FilePath → IO (Either String a)
@@ -274,6 +304,43 @@ checkItemInstance actual expected = do
     length (iiContents actual) `shouldBe` length (eiiContents expected)
     forM_ (zip (iiContents actual) (eiiContents expected))
           (uncurry checkItemInstance)
+
+-- | Compare a decoded session's whole portable-container memory
+--   against what the fixture declares (#2512): the exact set of
+--   remembered instance ids, and for each one its derived state, both
+--   optional observation values, both optional stamps, and the
+--   remembered contents recursively.
+--
+--   The stamps are compared as 'Maybe's rather than defaulted, because
+--   the one thing this layer must never lose is the difference between
+--   "never learned" and "measured as zero" — and the one thing this
+--   fixture family exists to pin is that the two stamps move
+--   INDEPENDENTLY.
+checkPortableKnowledge
+    ∷ PortableKnowledge → [ExpectedPortableRecord] → Expectation
+checkPortableKnowledge actual expected = do
+    HS.fromList (HM.keys (pkRecords actual))
+        `shouldBe` HS.fromList (map eprInstanceId expected)
+    forM_ expected $ \e →
+        case HM.lookup (eprInstanceId e) (pkRecords actual) of
+            Nothing → expectationFailure
+                (show (eprInstanceId e) <> ": remembered container missing \
+                                           \from migrated snapshot")
+            Just r → do
+                portableKnowledgeStateId (portableRecordState (Just r))
+                    `shouldBe` eprState e
+                fmap woWeight (prWeight r) `shouldBe` eprStoredWeight e
+                fmap woAt (prWeight r) `shouldBe` eprWeighedAt e
+                fmap coAt (prContents r) `shouldBe` eprRevealedAt e
+                case (prContents r, eprItems e) of
+                    (Nothing, Nothing) → pure ()
+                    (Just c, Just items) → do
+                        length (coItems c) `shouldBe` length items
+                        forM_ (zip (coItems c) items)
+                              (uncurry checkItemInstance)
+                    _ → expectationFailure
+                        (show (eprInstanceId e) <> ": remembered contents \
+                              \presence disagrees with the expected summary")
 
 -- | Requirement 14: every manifest-declared complete-session fixture
 --   decodes, migrates and re-encodes to exactly the canonical summary
@@ -328,6 +395,17 @@ manifestFixturesSpec =
                             `shouldBe` map WorldPageId (esVisiblePages expected)
                         length luaComponents `shouldBe` esLuaComponentCount expected
                         isMigrated `shouldBe` esIsMigratedLegacyBaseline expected
+
+                        -- #2512: the SESSION-scoped portable-container
+                        -- memory. The exact id SET is compared, not just
+                        -- each declared record's presence, so a fixture
+                        -- carrying an extra remembered crate is caught
+                        -- here rather than passing on the subset. Every
+                        -- pre-#2512 fixture declares none and really
+                        -- restores none.
+                        checkPortableKnowledge
+                            (snapPortableKnowledge snap)
+                            (esPortableKnowledge expected)
 
                         snapGameTime snap `shouldBe` esGameTime expected
                         snapNextItemId snap `shouldBe` esNextItemId expected

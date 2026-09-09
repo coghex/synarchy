@@ -83,6 +83,7 @@ import World.Save.Snapshot
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldManager, emptyWorldState)
 import World.Tile.Types (WorldTileData(..))
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Fixture identity
 
@@ -365,6 +366,7 @@ encodedPalettePaths env = do
             , sgLiveCamera     = LiveCameraSnapshot
                 { lcsOwnerPage = Just visiblePage
                 , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceNorth }
+            , sgPortableKnowledge = emptyPortableKnowledge
             }
         pages = [ blankPageSnapshot visiblePage genParams ]
     snap ← case captureSessionSnapshot globals pages of

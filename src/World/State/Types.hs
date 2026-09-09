@@ -67,6 +67,7 @@ import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests,
                             emptyFloraHarvests, emptyPendingFloraHarvests)
 import World.Flora.CropPlot (CropPlots, emptyCropPlots)
 import World.Flora.Identity (firstPlantedFloraCursor)
+import Item.Knowledge (PortableKnowledge, emptyPortableKnowledge)
 import Item.Ground (GroundItems, emptyGroundItems)
 
 -- | Per-world GPU-upload bookkeeping for #606's procedurally generated
@@ -778,6 +779,31 @@ data WorldManager = WorldManager
       --   NOT persisted: it names an in-flight cross-thread transition,
       --   and a save taken mid-teardown restores into a process where
       --   that transition does not exist.
+    , wmPortableKnowledge ∷ !PortableKnowledge
+      -- ^ What the player remembers about each PORTABLE container,
+      --   keyed by 'Item.Types.iiInstanceId' (#2512, epic #1231 PLC-7,
+      --   @docs\/portable_loot_containers.md@ D-13\/D-24).
+      --
+      --   SESSION-scoped, which is the whole reason it lives here
+      --   rather than on 'WorldState' beside #1087's building-keyed
+      --   'wsContainerKnowledgeRef'. A crate is carried between pages
+      --   and owners; a page-scoped map would either lose its memory on
+      --   the move or have to copy it, and a copy is exactly what a
+      --   record keyed by the crate's own identity must never need.
+      --   Reads locate the live instance through "World.Item.Locate",
+      --   which is why nothing about a crate's CURRENT page is stored
+      --   here.
+      --
+      --   PERSISTED, unlike every other non-page field on this record:
+      --   it is the live owner of the optional session component
+      --   @"portable-knowledge"@
+      --   ("World.Save.Component.PortableKnowledge"), captured by
+      --   "World.Thread.Command.Save.WriteWorld" and installed by
+      --   "World.Load.Publish" as part of the replacement manager — so
+      --   a load REPLACES it wholesale (an absent payload therefore
+      --   clears it) and never merges the outgoing session's memories
+      --   into the restored one. Exit-to-Menu empties it with the page
+      --   set, since the next session's crates are different crates.
     }
 
 emptyWorldManager ∷ WorldManager
@@ -790,6 +816,7 @@ emptyWorldManager = WorldManager
     , wmProjectedVisible = []
     , wmSelectionPending = 0
     , wmTeardownsPending = 0
+    , wmPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME

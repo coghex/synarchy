@@ -28,6 +28,7 @@ import World.Save.Component.Page
 import World.Save.Component.Entities
 import World.Save.Component.Knowledge (containerKnowledgeCodec)
 import World.Save.Component.Transfer (transferOrdersCodec)
+import World.Save.Component.PortableKnowledge (portableKnowledgeCodec)
 import World.Save.Reference (SamePageRef(..))
 import World.Save.Snapshot
 import Location.Bounds (AbsBounds(..))
@@ -75,18 +76,21 @@ spec = do
                 b = stubComponent (ComponentId "b") [ComponentId "a"]
             isLeft (dependencyOrder [a, b]) `shouldBe` True
 
-        it "every gameplay component is required EXCEPT the two \
+        it "every gameplay component is required EXCEPT the three \
            \deliberately-optional ones -- requirement 7's rule, plus its \
            \documented exceptions: #1087's container-knowledge (absence \
-           \means no container has ever been inspected) and #1246's \
-           \transfer-orders (absence means no order is queued). Both \
-           \post-date every tracked compatibility baseline and both \
-           \absences are TRUE of such a session rather than invented. A \
-           \THIRD optional component has to be justified here rather \
-           \than slip in unnoticed" $
+           \means no container has ever been inspected), #1246's \
+           \transfer-orders (absence means no order is queued) and \
+           \#2512's portable-knowledge (absence means no crate has ever \
+           \been hefted or opened). All three post-date every tracked \
+           \compatibility baseline and all three absences are TRUE of \
+           \such a session rather than invented -- each had nowhere to \
+           \record the fact at all. A FOURTH optional component has to \
+           \be justified here rather than slip in unnoticed" $
             [ rcId c | c ← saveComponentRegistry, not (rcRequired c) ]
                 `shouldBe` [ containerKnowledgeComponentId
-                           , transferOrdersComponentId ]
+                           , transferOrdersComponentId
+                           , portableKnowledgeComponentId ]
 
     describe "per-component codecs" $ do
         it "each component round-trips its own slice of the snapshot at \
@@ -121,6 +125,9 @@ spec = do
             check worldEditsCodec
             check worldActivityCodec
             check texPaletteCodec
+            check containerKnowledgeCodec
+            check transferOrdersCodec
+            check portableKnowledgeCodec
 
         it "declares a stable id and current version of 1" $ do
             ccId coreSessionCodec `shouldBe` coreSessionComponentId
@@ -887,6 +894,12 @@ goldenRichPayloads =
     , ("power-nodes",         (58,   "beec8f6ff4c58c26"))
     , ("container-knowledge", (50,   "1ed7627acac89064"))
     , ("transfer-orders",     (58,   "beec8f6ff4c58c26"))
+      -- #2512: @portable-knowledge@ v1, and the SESSION-scoped shape's
+      -- signature -- 8 bytes for these fixtures, which is one empty
+      -- HashMap and nothing per page. Every other component here grows
+      -- with the page count; this one cannot, because a crate's memory
+      -- is keyed by the crate rather than by where it happens to sit.
+    , ("portable-knowledge",  (8,    "a8c7f832281a39c5"))
     ]
 
 goldenFullPayloads ∷ [(Text, (Int, Text))]
@@ -916,6 +929,9 @@ goldenFullPayloads =
     , ("power-nodes",         (58,  "0cadd98f962a6b12"))
     , ("container-knowledge", (29,  "1a075ce50a1643b1"))
     , ("transfer-orders",     (87,  "952016d6f5458b43"))
+      -- #2512: v1, session-scoped -- 8 bytes, one empty HashMap,
+      -- unchanged by this fixture's page count.
+    , ("portable-knowledge",  (8,    "a8c7f832281a39c5"))
     ]
 
 encodedPayloadDigests ∷ SessionSnapshot → [(Text, (Int, Text))]
@@ -953,6 +969,7 @@ codecProbes =
     , probeOf craftBillsCodec, probeOf powerNodesCodec
     , probeOf containerKnowledgeCodec
     , probeOf transferOrdersCodec
+    , probeOf portableKnowledgeCodec
     ]
 
 decodeErrorOf ∷ ComponentCodec a → Word32 → BS.ByteString → Maybe ComponentError

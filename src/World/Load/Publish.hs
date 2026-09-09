@@ -213,6 +213,16 @@ publishStagedSession env logger requestId staged = do
         -- left to complete and nothing may fence this session's page
         -- registrations.
         , wmTeardownsPending = 0
+        -- #2512: installed from the STAGED session, which means an
+        -- absent @"portable-knowledge"@ payload CLEARS whatever the
+        -- outgoing session remembered rather than leaving it standing.
+        -- A load replaces the whole session, and a crate memory keyed
+        -- by an instance id from a session that no longer exists is
+        -- exactly the merge contract §1 forbids. Dangling records were
+        -- already scrubbed against this session's own live items during
+        -- staging, so nothing installed here names a crate that is not
+        -- present.
+        , wmPortableKnowledge = ssPortableKnowledge staged
         }
 
     -- Restore visibility through the real handler so its side effects

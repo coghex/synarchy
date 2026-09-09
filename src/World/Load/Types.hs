@@ -27,6 +27,7 @@ import Data.ByteString (ByteString)
 import Engine.Graphics.Camera (Camera2D)
 import Structure.Palette (TexPalette)
 import Building.Types (BuildingManager)
+import Item.Knowledge (PortableKnowledge)
 import Unit.Types (UnitManager, UnitId)
 import Unit.Sim.Types (UnitSimState)
 import World.Material (MaterialRegistry)
@@ -92,6 +93,15 @@ data StagedSession = StagedSession
       --   broadcast. Data, not a live query: the Lua side must never
       --   have to ask the ACTIVE page about a per-page id belonging to
       --   some other page.
+    , ssPortableKnowledge ∷ !PortableKnowledge
+      -- ^ #2512: the session-wide portable-container memory, already
+      --   SCRUBBED against this replacement session's own complete live
+      --   item enumeration ("World.Load.Stage") — never against the
+      --   outgoing session's, which is about to be discarded. Publish
+      --   installs it verbatim onto the replacement
+      --   'World.State.Types.wmPortableKnowledge', which is what makes
+      --   an absent payload CLEAR whatever the outgoing session
+      --   remembered rather than leave it standing.
     , ssMaterialRegistry ∷ !MaterialRegistry
       -- ^ The off-session registry staged against (see
       --   "World.Load.Stage"'s haddock) — carried through so publish is

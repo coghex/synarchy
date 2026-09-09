@@ -135,6 +135,10 @@ snapshotToSaveData req snap = SaveData
                                      (snapNextBuildingId snap)
                                      (snapNextUnitId snap))
                                  (HM.elems (snapPages snap))
+      -- #2512: crosses unchanged and UNDUPLICATED. It is genuinely
+      -- global, so unlike the camera and the two id allocators below it
+      -- there is no legacy per-page slot to fabricate a copy into.
+    , sdPortableKnowledge  = snapPortableKnowledge snap
     }
 
 -- | One page's legacy 'WorldPageSave'. Camera position uses the live

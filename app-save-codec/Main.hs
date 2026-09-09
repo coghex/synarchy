@@ -76,6 +76,7 @@ import Craft.Bills (CraftBills(..), CraftBill(..), BillId(..))
 import Power.Types (PowerNodes(..), PowerNode(..), PowerNodeId(..))
 import Item.Ground (GroundItems(..))
 import Item.Types (ItemInstance(..))
+import Item.Knowledge
 
 -- | The live Lua persistent-component names @decodeSessionEnvelope@ is
 --   given as BOTH its known and its required set when deriving a
@@ -221,11 +222,33 @@ canonicalSummary meta snap luaComponentCount isMigrated = Aeson.object
     , "pages" .= map dumpPage
         (sortOn (\(WorldPageId p, _) → p) (HM.toList (snapPages snap)))
     , "luaComponentCount" .= luaComponentCount
+      -- #2512: SESSION-scoped, so it sits beside the other whole-session
+      -- values rather than inside 'dumpPage'. Absent from every expected
+      -- summary generated before this component existed, which is
+      -- exactly right for those fixtures -- the Baselines reader
+      -- defaults a missing key to the empty list, the value a save
+      -- carrying no such component really restores.
+    , "portableKnowledge" .= map dumpPortableRecord
+        (sortOn fst (HM.toList (pkRecords (snapPortableKnowledge snap))))
     , "isMigratedLegacyBaseline" .= isMigrated
     ]
   where
     cam = snapLiveCamera snap
     WorldPageId activePageText = snapActivePage snap
+
+-- | One remembered PORTABLE container (#2512). Both observations are
+--   independently optional and are emitted as such — a @null@ weight or
+--   reveal time means "never learned", which the reader must be able to
+--   tell from a zero.
+dumpPortableRecord ∷ (Word64, PortableRecord) → Aeson.Value
+dumpPortableRecord (iid, r) = Aeson.object
+    [ "instanceId" .= iid
+    , "state" .= portableKnowledgeStateId (portableRecordState (Just r))
+    , "storedWeight" .= fmap woWeight (prWeight r)
+    , "weighedAt" .= fmap woAt (prWeight r)
+    , "revealedAt" .= fmap coAt (prContents r)
+    , "items" .= fmap (map dumpItem ∘ coItems) (prContents r)
+    ]
 
 dumpItem ∷ ItemInstance → Aeson.Value
 dumpItem i = Aeson.object

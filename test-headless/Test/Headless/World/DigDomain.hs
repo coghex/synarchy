@@ -80,6 +80,7 @@ import World.Thread.Command.Edit.Dig (handleWorldDigTileCommand)
 -- re-export, which is how the production modules under test reach them
 -- too.
 import World.Types
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Geometry
 --
@@ -672,6 +673,7 @@ saveWith desigs = snapshotToSaveData
         , snapPages = HM.singleton fixturePage
             (blankPageSnapshot fixturePage arenaParams)
                 { pgsMineDesignations = HM.fromList desigs }
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | Stage that save and report the designations the staged (never
