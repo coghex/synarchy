@@ -299,7 +299,18 @@ bindlessFragmentShaderCode = $(compileShaderQ Nothing "frag" Nothing [glsl|
         
         vec4 color = texColor * fragColor;
         color.rgb *= brightness * fragBrightness;
-        outColor = vec4(color.rgb, color.a * faceAlpha);
+        // Lifecycle alpha: bit 1 of renderFlags (#2488).
+        // A structure construction frame reuses the FINISHED piece's
+        // face map for lighting, but a half-built wall's pixels do not
+        // share the finished wall's silhouette — so its own texture
+        // alpha is authoritative and the face map's is ignored. The RGB
+        // path above is untouched, including the zero-sum fall-through
+        // to top light, so a frame pixel over unpainted face-map RGB is
+        // lit exactly as any other unpainted pixel is.
+        float alpha = ((fragRenderFlags & 2u) != 0u)
+                    ? color.a
+                    : color.a * faceAlpha;
+        outColor = vec4(color.rgb, alpha);
     }
 |])
 

@@ -24,29 +24,64 @@
 
 local M = {}
 
-local PACK_PATH = "data/structure_packs/wire.yaml"
+-- The pack this module loads. A field rather than a local constant for
+-- the same reason scripts/structures.lua's `packDir` is one: a spec
+-- points the REAL loader at a fixture pack to exercise parsing, texture
+-- loading and registration together.
+M.packPath = "data/structure_packs/wire.yaml"
 
 local packCache = nil
 local function packDef()
     if packCache then return packCache end
-    packCache = engine.loadYaml(PACK_PATH)
+    packCache = engine.loadYaml(M.packPath)
     if not packCache then
-        engine.logWarn("wire: failed to load pack '" .. PACK_PATH .. "'")
+        engine.logWarn("wire: failed to load pack '" .. M.packPath .. "'")
     end
     return packCache
+end
+
+-- #2488's one declaration rule, shared with scripts/structures.lua.
+local frames = require("scripts.structure_frames")
+
+-- A `connections.<name>` entry, in either of the two forms the pack
+-- schema accepts:
+--
+--   isolated: assets/.../isolated.png                  -- legacy scalar
+--   cross:  { texture: assets/.../cross.png,           -- #2488
+--             construction: [ .../cross_0.png, … ] }
+--
+-- The scalar form is not deprecated: a connection with no construction
+-- sequence has nothing to say beyond its texture, and every shipped
+-- connection is in exactly that state. Anything else — a table with no
+-- `texture`, a number, a boolean — is a malformed pack and is reported
+-- rather than silently skipped, because a missing connection makes the
+-- engine refuse the whole pack with a less specific complaint.
+local function connectionEntry(name, entry)
+    if type(entry) == "string" then
+        return entry, nil
+    elseif type(entry) == "table" and type(entry.texture) == "string" then
+        return entry.texture, entry.construction
+    end
+    engine.logWarn("wire: connection '" .. tostring(name) ..
+        "' is neither a texture path nor a table with a `texture` path")
+    return nil, nil
 end
 
 local handleCache = nil
 local function handles()
     if handleCache then return handleCache end
     local pack = packDef()
-    if not pack then return { conn = {}, connPath = {} } end
-    local conn, connPath = {}, {}
-    for name, path in pairs(pack.connections or {}) do
-        conn[name] = engine.loadTexture(path)
-        connPath[name] = path
+    if not pack then return { conn = {}, connPath = {}, connBuild = {} } end
+    local conn, connPath, connBuild = {}, {}, {}
+    for name, entry in pairs(pack.connections or {}) do
+        local path, construction = connectionEntry(name, entry)
+        if path then
+            conn[name] = engine.loadTexture(path)
+            connPath[name] = path
+            connBuild[name] = frames.load(construction)
+        end
     end
-    handleCache = { conn = conn, connPath = connPath,
+    handleCache = { conn = conn, connPath = connPath, connBuild = connBuild,
                     face = engine.loadTexture(pack.facemap),
                     facePath = pack.facemap }
     return handleCache
@@ -105,12 +140,27 @@ function M.registerPackArt()
     registeredArt = true
     local h = handles()
     local b = pack.build and pack.build.wire
-    local art = {}
+    local art, construction = {}, {}
     for _, name in ipairs(WIRE_SHAPES) do
         if h.connPath[name] and h.facePath then
             art[#art + 1] = { kind = "wire", shape = name,
                               texture = h.connPath[name], texHandle = h.conn[name],
                               facemap = h.facePath, faceHandle = h.face }
+        end
+        -- #2488: each connection's own sequence, keyed to that exact
+        -- shape. A connection with none resolves none — a run being
+        -- built never borrows another shape's frames.
+        --
+        -- `~= nil`, not truthiness: `construction: false` decodes to Lua
+        -- `false`, which structure_frames.load hands back unchanged for
+        -- the engine to refuse as a non-array. Dropping it here would
+        -- turn a malformed declaration into an absent one and let the
+        -- pack register. Only `nil` is absence.
+        if h.connPath[name] and h.connBuild[name] ~= nil then
+            construction[#construction + 1] =
+                { kind = "wire", shape = name,
+                  texture = h.connPath[name], texHandle = h.conn[name],
+                  frames = h.connBuild[name] }
         end
     end
     -- #1844: a buildable kind states its exact cost, which is what the
@@ -123,9 +173,10 @@ function M.registerPackArt()
         kindEntry.materials = b.materials
     end
     structure.registerPackArt{
-        pack  = "wire",
-        kinds = { kindEntry },
-        art   = art,
+        pack         = "wire",
+        kinds        = { kindEntry },
+        art          = art,
+        construction = construction,
     }
 end
 

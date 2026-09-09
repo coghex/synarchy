@@ -3349,6 +3349,54 @@ materials → progress → place → stake); build costs in
 `data/structure_packs/*.yaml` `build:` blocks. Gate:
 `construction_probe.py` (stake phase runs LAST).
 
+### Structure construction presentation (#2488)
+
+A structure designation has three presentations and they are disjoint.
+UNPAID draws #1846's designation ghost at D-19's 60 %. PAID draws the
+authored CONSTRUCTION FRAME its own `cdProgress` selects, at full
+opacity, through the same `structurePieceQuadsResolved` body the placed
+piece uses. Anything else draws nothing.
+
+A pack declares an ordered frame list per authored APPEARANCE — one per
+`pieces.<kind>`, per `walls.<edge>` (all four caps share the sprite), per
+`variants.<name>` override and per Wire `connections.<name>`. Keyed to
+exactly that appearance: a variant never inherits the default's, and an
+appearance with no declaration resolves NONE, which is every shipped
+appearance today and draws nothing (BDA-15/BDA-16 author the art,
+BDA-13 enforces coverage). The gap is reported once per (pack,
+appearance) at registration, never per frame or per candidate.
+
+Five rules the schema doc spells out and the gates hold:
+
+* the frame index is `floor (progress * n)` clamped — buildings'
+  convention (`Building.Visual.pickBuildingFrame`);
+* a wall draws the sequence of the edge whose art is really DRAWN —
+  `drawnWallEdge` asks `Structure.WallCatalog.rotatedWallArt` and takes
+  the screen edge only when it resolves, so the frame and the cap mask
+  can never name two appearances — and a family's declared directions
+  must run to equal lengths or registration refuses the pack;
+* a declared path that escapes the resource root is neither queued for
+  load nor opened: the loaders ask `structure.isSafeArtPath` (the
+  catalogue's own predicate) and send no handle, and registration
+  preflights it before measuring;
+* the last frame must occupy the static sprite's exact canvas, measured
+  from the FILES at registration (`rvTextureSizeRef` is upload-filled and
+  empty headless);
+* the site keeps drawing until its piece is COMMITTED to the rendered
+  overlay — `World.Construct.Art.structureCommittedAt` ignores the
+  staging cache, because a staged-but-uncommitted piece is on screen
+  nowhere;
+* `renderFlagLifecycleAlpha` (bit 1) makes the frame's own alpha
+  authoritative so the reused facemap's silhouette cannot clip it; the
+  RGB/top-light path is untouched and an unflagged quad is unchanged.
+
+Saved designations carry no new field. Full schema, refusal table and
+ownership: [structure_pack_schema.md](structure_pack_schema.md). Gates:
+hspec `--match "structure construction frames"`, `--match "structure
+ghost"`, `--match "Structure.ArtCatalog"`; probes
+`construction_probe.py`, `wire_probe.py`, `structure_rotation_probe.py`,
+and the offscreen pixel gate `structure_construction_probe.py`.
+
 ---
 
 ## Roles (#265)

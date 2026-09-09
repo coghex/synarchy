@@ -47,3 +47,9 @@ stone
 
 # Playtest harness session traces (#647) — per-run output, never committed
 tools/playtest/sessions/
+
+# tools/structure_construction_probe.py's fixture art (#2488). Generated
+# into the resource root because a declared construction frame path that
+# escapes it is refused at registration; removed by the probe itself, and
+# listed here so an interrupted run leaves nothing to commit.
+.probe_construction_fixture/

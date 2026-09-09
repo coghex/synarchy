@@ -39,6 +39,7 @@ registerDesignationAPI env = do
   registerLuaFunction "registerPackArt" (structureRegisterPackArtFn env)
   registerLuaFunction "isPackKindBuildable" (structurePackKindBuildableFn env)
   registerLuaFunction "packBuildCost"      (structurePackBuildCostFn env)
+  registerLuaFunction "isSafeArtPath" structureIsSafeArtPathFn
   registerLuaFunction "resolvePieceArt" (structureResolvePieceArtFn env)
   registerLuaFunction "wireShape"    structureWireShapeFn
   registerLuaFunction "wireNeighbors" (structureWireNeighborsFn env)

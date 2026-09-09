@@ -13,7 +13,11 @@ local M = {}
 -- yaml; no Lua changes. Walls carry 4 cap-variant facemaps keyed "<left><right>"
 -- (1 = pillar notch carved that end; 00 = full wall).
 M.pack  = "dungeon_1"
-local PACK_DIR  = "data/structure_packs/"
+-- The directory `M.pack` is resolved under. A field rather than a local
+-- constant so a spec can point the REAL loader at a fixture pack — the
+-- only way to exercise pack parsing, texture loading and registration
+-- together — without a second, drifting copy of this module's logic.
+M.packDir = "data/structure_packs/"
 local WALL_DIRS = { "ne", "nw", "se", "sw" }
 local WALL_CAPS = { "00", "01", "10", "11" }
 
@@ -26,7 +30,7 @@ M.debug = false
 local packCache = nil
 local function packDef()
     if packCache then return packCache end
-    packCache = engine.loadYaml(PACK_DIR .. M.pack .. ".yaml")
+    packCache = engine.loadYaml(M.packDir .. M.pack .. ".yaml")
     if not packCache then
         engine.logWarn("structures: failed to load pack '" .. M.pack .. "'")
     end
@@ -38,6 +42,10 @@ end
 -- textures (and optionally facemaps); everything it doesn't list falls
 -- back to the default, so an unknown or partial variant still renders.
 local cache = {}
+
+-- #2488's one declaration rule, shared with scripts/wire.lua.
+local frames = require("scripts.structure_frames")
+
 -- Forward declaration: handles() registers each variant's wall art with
 -- the engine as it builds it, and registerWallFamily() reads the table
 -- handles() just filled in.
@@ -64,7 +72,12 @@ local function handles(variant)
         local o = over.pieces[slot] or {}
         local texPath, facePath = o.texture or p.texture, o.facemap or p.facemap
         h[slot] = { tex = engine.loadTexture(texPath), texPath = texPath,
-                    face = engine.loadTexture(facePath), facePath = facePath }
+                    face = engine.loadTexture(facePath), facePath = facePath,
+                    -- #2488: the construction sequence for THIS
+                    -- appearance. An override's own list or none —
+                    -- never the default's, which would show a variant
+                    -- being built out of the default's art.
+                    build = frames.load(frames.declaredBy(variant, o, p)) }
     end
     -- walls: one sprite + the 4 cap facemap variants (handles + paths).
     -- `own*` records whether THIS variant declared the path or inherited
@@ -86,7 +99,8 @@ local function handles(variant)
         h.walls[e] = { tex = engine.loadTexture(texPath), texPath = texPath,
                        face = faces, facePath = facePaths,
                        ownTex = (variant == nil) or (o.texture ~= nil),
-                       ownFace = ownFace }
+                       ownFace = ownFace,
+                       build = frames.load(frames.declaredBy(variant, o, w)) }
     end
     registerWallFamily(h, key)
     cache[key] = h
@@ -166,7 +180,41 @@ end
 -- kind, role) instead of rejecting the payload as unreadable. It reports
 -- the failure itself, naming exactly that — so nothing warns here.
 local registeredArt = false
-local function registerPackArtCatalog(h)
+
+-- One variant's construction entries (#2488), appended to `out`. The
+-- appearance's STATIC sprite travels with the sequence because that is
+-- what its last frame hands off to and what the engine measures it
+-- against — and because a variant's sprite has no entry in the `art`
+-- list at all (the catalogue stores default art only, since a
+-- designation carries no variant).
+--
+-- `build ~= nil` and NOT `build` -- shape preservation only reaches the
+-- engine if what it preserved is actually sent. `construction: false`
+-- decodes to Lua `false`, which structure_frames.load deliberately hands
+-- back unchanged for the engine to refuse as a non-array; a truthiness
+-- test here would drop it instead, and the pack would be ACCEPTED and
+-- merely reported as declaring nothing. Absence is the one state that
+-- means "no declaration", and only `nil` is absence.
+local function appendConstruction(out, h, variant)
+    for _, k in ipairs(PIECE_KINDS) do
+        local p = h[k]
+        if p and p.texPath and p.build ~= nil then
+            out[#out + 1] = { kind = k, variant = variant,
+                              texture = p.texPath, texHandle = p.tex,
+                              frames = p.build }
+        end
+    end
+    for _, e in ipairs(WALL_DIRS) do
+        local w = h.walls[e]
+        if w and w.texPath and w.build ~= nil then
+            out[#out + 1] = { kind = "wall", edge = e, variant = variant,
+                              texture = w.texPath, texHandle = w.tex,
+                              frames = w.build }
+        end
+    end
+end
+
+local function registerPackArtCatalog(h, variantHandles)
     if registeredArt or not structure.registerPackArt then return end
     local pack = packDef()
     if not pack then return end
@@ -191,7 +239,20 @@ local function registerPackArtCatalog(h)
             end
         end
     end
-    structure.registerPackArt{ pack = M.pack, kinds = kinds, art = art }
+    -- The default art's sequences first, then each variant's own. Variant
+    -- names are sorted so one registration payload is byte-identical
+    -- across runs — `pairs` order is not, and an idempotent repeat has to
+    -- compare equal to the stored declaration.
+    local construction = {}
+    appendConstruction(construction, h, nil)
+    local names = {}
+    for name, _ in pairs(variantHandles or {}) do names[#names + 1] = name end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        appendConstruction(construction, variantHandles[name], name)
+    end
+    structure.registerPackArt{ pack = M.pack, kinds = kinds, art = art,
+                               construction = construction }
 end
 
 -- Register every variant's wall art up front. A wall replayed from a save
@@ -206,10 +267,11 @@ function M.registerPackArt()
     if not pack then return end
     registeredPack = true
     local defaults = handles(nil)
+    local variantHandles = {}
     for name, _ in pairs(pack.variants or {}) do
-        handles(name)
+        variantHandles[name] = handles(name)
     end
-    registerPackArtCatalog(defaults)
+    registerPackArtCatalog(defaults, variantHandles)
 end
 
 -- Map a fractional in-tile hover position to the nearest diamond edge

@@ -234,10 +234,13 @@ data WorldCommand
         --   work (1.0 = done) and the sum is clamped to [0, 1].
         --
         --   NEITHER ghost ramps with it, and only a STRUCTURE job
-        --   sends this at all. A structure site is already invisible by
-        --   the time any progress is poured (#1846): D-15/D-16 make it
-        --   vanish when its materials are PAID for and show nothing
-        --   until the finished piece appears. A BUILDING designation
+        --   sends this at all. The two ghost states end at payment
+        --   (#1846: D-15/D-16 make the site leave the designated state
+        --   when its materials are PAID for); since #2488 the progress
+        --   this delta accumulates is what selects the paid site's
+        --   authored CONSTRUCTION FRAME, so it is read by the render
+        --   pass — as a frame index, never as an alpha ramp, and only
+        --   where the pack declares a sequence. A BUILDING designation
         --   accrues no progress here whatsoever (#1845) — it is staked
         --   into a real 'BuildingInstance' and the work accumulates on
         --   THAT, so its ghost holds a fixed 60 % until the staked

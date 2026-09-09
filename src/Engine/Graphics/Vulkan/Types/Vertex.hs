@@ -22,7 +22,8 @@ vertexAtlasIdOffset = 32
 vertexFaceMapIdOffset ∷ Int
 vertexFaceMapIdOffset = 36
 
--- | Per-vertex render flags (Word32 bitset). Bit 0 = SELECTED_OUTLINE.
+-- | Per-vertex render flags (Word32 bitset). Bit 0 = SELECTED_OUTLINE,
+-- bit 1 = LIFECYCLE_ALPHA (#2488).
 -- See bindless fragment shader for outline logic.
 vertexRenderFlagsOffset ∷ Int
 vertexRenderFlagsOffset = 40
@@ -80,6 +81,21 @@ noFaceMapVertexId = -1
 -- white outline around alpha-cutout sprite edges. Used by selected units.
 renderFlagSelected ∷ Word32
 renderFlagSelected = 1
+
+-- | Bit 1 of renderFlags (#2488): when set, the fragment shader takes
+-- the TEXTURE's own alpha as authoritative and does not multiply it by
+-- the face map's alpha.
+--
+-- Structure construction frames reuse the finished piece's face map for
+-- LIGHTING — that is the whole point, one authored mask per appearance
+-- rather than one per frame — but a half-built wall's pixels do not
+-- share the finished wall's silhouette. Without this bit every frame
+-- pixel outside that silhouette is clipped to nothing
+-- ('Engine.Graphics.Vulkan.ShaderCode': @color.a * faceAlpha@). The RGB
+-- path is untouched, so a frame pixel over unpainted face-map RGB still
+-- falls through to the shader's existing top-light weights.
+renderFlagLifecycleAlpha ∷ Word32
+renderFlagLifecycleAlpha = 2
 
 -- | A world vertex's cylinder coordinates (#483 longitude-local
 -- day\/night; widened by #2019): @u = gx - gy@ and @v = gx + gy@, each

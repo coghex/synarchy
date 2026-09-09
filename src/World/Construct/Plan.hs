@@ -44,6 +44,7 @@ module World.Construct.Plan
     , structurePieceSlot
     , structureFinalGridZ
     , structurePieceArtContext
+    , structurePieceWallEdge
     , resolvePlanPieceArt
     , resolveStructurePlan
     , planSurfaceZAt
@@ -353,19 +354,30 @@ structurePieceArtContext
 structurePieceArtContext pw piece (gx, gy) = case spKind piece of
     "wall" → defaultPieceArtContext
         { pacWallCaps = wallCapsAt (pwWorldSize pw) (pwTiles pw) (pwStage pw)
-                            (wallEdgeOf (spEdge piece)) gx gy }
+                            (structurePieceWallEdge piece) gx gy }
     "wire" → defaultPieceArtContext { pacWireShape = wireShapeOf }
     _      → defaultPieceArtContext
   where
-    wallEdgeOf mEdge = case mEdge of
-        Just "nw" → WallNW
-        Just "se" → WallSE
-        Just "sw" → WallSW
-        _         → WallNE
-
     wireShapeOf = wireShapeFor
         (wireNeighborsWithProposed (pwWorldSize pw) (pwTiles pw) (pwStage pw)
              (Just (pwDesignations pw)) (pwProposedWire pw) gx gy)
+
+-- | The AUTHORED wall edge a descriptor names, with the same
+--   edgeless-defaults-to-@ne@ rule 'structurePieceSlot',
+--   @scripts\/unit_ai_construct.lua@'s @placeStructurePiece@ and
+--   'Structure.ArtCatalog.resolveUnplacedArt' all apply — one
+--   derivation, so the cap facemap, the occupied slot, the resolved art
+--   and (since #2488) the construction sequence cannot disagree about
+--   which edge a designation names.
+--
+--   Meaningless for a non-wall descriptor and never consulted for one;
+--   a post's @spEdge@ is its CORNER and is a different vocabulary.
+structurePieceWallEdge ∷ StructurePiece → WallEdge
+structurePieceWallEdge piece = case spEdge piece of
+    Just "nw" → WallNW
+    Just "se" → WallSE
+    Just "sw" → WallSW
+    _         → WallNE
 
 -- | The exact texture and facemap this candidate would be built with, or
 --   'Nothing' when the pack, the kind or the art itself does not resolve

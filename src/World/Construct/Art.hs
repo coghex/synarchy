@@ -31,6 +31,7 @@
 --   cannot be confused for one another.
 module World.Construct.Art
     ( structurePresentAt
+    , structureCommittedAt
     , structureGridZAt
     , postCornerSlot
     , wallCapsAt
@@ -63,6 +64,27 @@ structurePresentAt ∷ Int → WorldTileData → StructureStage → StructureSlo
 structurePresentAt worldSize tileData stage slot gx gy =
     HM.member key (ssEntries stage)
       ∨ maybe False (HM.member key ∘ lcStructures) (lookupChunk coord tileData)
+  where
+    (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
+    key = (gx + dgx, gy + dgy, fromIntegral (fromEnum slot) ∷ Word8)
+
+-- | Is a piece present in this slot COMMITTED to the per-chunk overlay,
+--   ignoring the staging cache?
+--
+--   The distinction matters exactly once (#2488). The rendered scene is
+--   built from @lcStructures@ ('Structure.Render.structureChunkQuads');
+--   the staging cache is a read-your-writes fast path for queries and is
+--   drawn by nothing. So a construction site whose piece has been STAGED
+--   but not yet committed still has nothing on screen, and its
+--   construction presentation has to stay up until the replacement is
+--   actually represented — hiding it on 'structurePresentAt' would blank
+--   the tile for the width of the placement hand-off, which is precisely
+--   the intermediate empty frame requirement 6 forbids.
+--
+--   Seam-canonicalized like every other reader here.
+structureCommittedAt ∷ Int → WorldTileData → StructureSlot → Int → Int → Bool
+structureCommittedAt worldSize tileData slot gx gy =
+    maybe False (HM.member key ∘ lcStructures) (lookupChunk coord tileData)
   where
     (coord, _, (dgx, dgy)) = canonicalTileFrame worldSize gx gy
     key = (gx + dgx, gy + dgy, fromIntegral (fromEnum slot) ∷ Word8)

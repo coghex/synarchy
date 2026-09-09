@@ -63,6 +63,17 @@ module Structure.ArtCatalog
       -- * Art
     , ArtAsset(..)
     , PieceArt(..)
+      -- * Construction appearances (#2488)
+    , AppearanceSlot(..)
+    , AppearanceKey(..)
+    , appearanceSlotKind
+    , appearanceSlotRole
+    , appearanceKeyRole
+    , defaultAppearance
+    , artKeyAppearanceSlot
+    , ConstructionSequence(..)
+    , constructionFrameIndex
+    , constructionFrameAt
       -- * Build cost
     , BuildCost(..)
     , mkBuildCost
@@ -74,6 +85,8 @@ module Structure.ArtCatalog
     , PackArtRegistration(..)
     , RegistrationOutcome(..)
     , registerPackArt
+      -- * Path safety
+    , escapingPath
       -- * Failure
     , ArtFault(..)
     , artFaultMessage
@@ -85,6 +98,10 @@ module Structure.ArtCatalog
     , PieceArtContext(..)
     , defaultPieceArtContext
     , resolveUnplacedArt
+    , resolveConstructionSequence
+    , resolveConstructionFrame
+    , undeclaredConstructionAppearances
+    , missingConstructionMessage
     , packKindBuildable
     , packKindBuild
     , packArtResolves
@@ -95,6 +112,7 @@ import Data.List (sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Set as S
+import qualified Data.Vector as V
 import qualified Data.HashMap.Strict as HM
 import Engine.Asset.Handle (TextureHandle(..))
 import Structure.Facing (WallEdge(..), WallCaps(..), wallCapsCode)
@@ -152,14 +170,8 @@ artKeyRole k = case k of
     AkFloor      → "floor"
     AkCeiling    → "ceiling"
     AkPost       → "post"
-    AkWall e c   → "wall " <> edgeName e <> " cap " <> wallCapsCode c
+    AkWall e c   → "wall " <> wallEdgeCode e <> " cap " <> wallCapsCode c
     AkWire s     → "wire connection " <> wireShapeName s
-  where
-    edgeName e = case e of
-        WallNE → "ne"
-        WallNW → "nw"
-        WallSE → "se"
-        WallSW → "sw"
 
 -- | Every art slot a declared kind MUST carry. This is the inventory the
 --   all-or-nothing rule is checked against: omit one of these for a kind
@@ -190,6 +202,112 @@ data PieceArt = PieceArt
     { paTexture ∷ !ArtAsset
     , paFacemap ∷ !ArtAsset
     } deriving (Show, Eq)
+
+-- * Construction appearances (#2488)
+
+-- | Which authored STATIC APPEARANCE a construction sequence belongs to.
+--
+--   Deliberately coarser than 'ArtKey': a wall's four cap facemaps all
+--   draw ONE sprite ('walls.\<edge\>.texture'), so a pack declares one
+--   construction sequence per wall EDGE and not one per (edge, cap).
+--   Every other kind's appearance and its art slot coincide.
+data AppearanceSlot
+    = ApFloor
+    | ApCeiling
+    | ApPost
+    | ApWall !WallEdge
+    | ApWire !WireShape
+    deriving (Show, Eq, Ord)
+
+appearanceSlotKind ∷ AppearanceSlot → PieceKind
+appearanceSlotKind s = case s of
+    ApFloor   → KFloor
+    ApCeiling → KCeiling
+    ApPost    → KPost
+    ApWall _  → KWall
+    ApWire _  → KWire
+
+-- | The human name of an appearance, for the one diagnostic a missing or
+--   refused sequence emits. Names the appearance, never a frame path.
+appearanceSlotRole ∷ AppearanceSlot → Text
+appearanceSlotRole s = case s of
+    ApFloor   → "floor"
+    ApCeiling → "ceiling"
+    ApPost    → "post"
+    ApWall e  → "wall " <> wallEdgeCode e
+    ApWire w  → "wire connection " <> wireShapeName w
+
+wallEdgeCode ∷ WallEdge → Text
+wallEdgeCode e = case e of
+    WallNE → "ne"
+    WallNW → "nw"
+    WallSE → "se"
+    WallSW → "sw"
+
+-- | One addressable appearance of one pack: the variant it belongs to
+--   ('Nothing' = the pack's own default art) and the slot.
+--
+--   The variant is part of the KEY rather than a fallback chain, which is
+--   requirement 1's "a variant's override cannot inherit or substitute
+--   the default appearance's frames". A pack variant that declares no
+--   sequence resolves none — never the default's.
+data AppearanceKey = AppearanceKey
+    { apVariant ∷ !(Maybe Text)
+    , apSlot    ∷ !AppearanceSlot
+    } deriving (Show, Eq, Ord)
+
+appearanceKeyRole ∷ AppearanceKey → Text
+appearanceKeyRole k =
+    maybe "" (\v → "variant '" <> v <> "' ") (apVariant k)
+      <> appearanceSlotRole (apSlot k)
+
+-- | The appearance an art slot is drawn as in the pack's DEFAULT art.
+--   The only appearance a construction DESIGNATION can ever select: a
+--   designation carries pack \/ kind \/ edge and no variant, exactly as
+--   @scripts\/unit_ai_construct.lua@ builds it.
+defaultAppearance ∷ ArtKey → AppearanceKey
+defaultAppearance = AppearanceKey Nothing ∘ artKeyAppearanceSlot
+
+artKeyAppearanceSlot ∷ ArtKey → AppearanceSlot
+artKeyAppearanceSlot k = case k of
+    AkFloor    → ApFloor
+    AkCeiling  → ApCeiling
+    AkPost     → ApPost
+    AkWall e _ → ApWall e
+    AkWire w   → ApWire w
+
+-- | One appearance's authored construction playback: the ordered frames
+--   and the STATIC sprite the last of them hands off to.
+--
+--   'csStatic' is carried rather than derived because a VARIANT's
+--   appearance has no entry in 'pkArt' at all — the art catalogue stores
+--   default art only — and requirement 6's final-frame dimension check
+--   needs to name the sprite the sequence ends on either way.
+data ConstructionSequence = ConstructionSequence
+    { csStatic ∷ !ArtAsset
+    , csFrames ∷ !(V.Vector ArtAsset)
+      -- ^ Ordered, NON-EMPTY (registration refuses an empty list).
+    } deriving (Show, Eq)
+
+-- | The frame index a progress fraction selects, in the same convention
+--   'Building.Visual.pickBuildingFrame' uses: @floor (progress * n)@,
+--   clamped, so 0.0 selects the first frame and 1.0 the last.
+--
+--   A non-finite progress selects the FIRST frame rather than an
+--   arbitrary one: @floor@ of a NaN is unspecified, and a site whose
+--   progress has gone wrong must not pick a frame at random.
+constructionFrameIndex ∷ Int → Float → Int
+constructionFrameIndex n progress
+    | n ≤ 1          = 0
+    | isNaN progress = 0
+    | otherwise      = max 0 (min (n - 1) raw)
+  where
+    raw = floor (realToFrac progress * fromIntegral n ∷ Double) ∷ Int
+
+-- | The frame this sequence shows at @progress@.
+constructionFrameAt ∷ Float → ConstructionSequence → ArtAsset
+constructionFrameAt progress cs =
+    csFrames cs V.! constructionFrameIndex (V.length (csFrames cs)) progress
 
 -- * Build cost
 
@@ -242,6 +360,12 @@ data PackArt = PackArt
       --   refused — it simply cannot be PAID for, which is what a
       --   registration carrying no numbers honestly means.
     , pkArt       ∷ !(M.Map ArtKey PieceArt)
+    , pkFrames    ∷ !(M.Map AppearanceKey ConstructionSequence)
+      -- ^ #2488: the CONSTRUCTION playback each authored appearance
+      --   declares, keyed by ('AppearanceKey') variant and appearance —
+      --   never inherited, never substituted. An appearance absent here
+      --   resolves no sequence, which is requirement 8's "the site draws
+      --   nothing" and is what every shipped pack does today.
     , pkFailures  ∷ !(HM.HashMap Text Text)
       -- ^ Terminal texture-load failures: the failed PATH → its reason,
       --   recorded once each. Non-empty means the whole pack resolves
@@ -301,6 +425,18 @@ data PackArtRegistration = PackArtRegistration
       --   registration that omits it is not malformed, it is simply one
       --   the engine cannot charge against.
     , parEntries ∷ ![(ArtKey, PieceArt)]
+    , parFrames  ∷ ![(AppearanceKey, ConstructionSequence)]
+      -- ^ #2488: the construction sequences this pack declares, at most
+      --   one per appearance. Empty for a pack that declares none, which
+      --   is every shipped pack today.
+    , parSizes   ∷ !(HM.HashMap Text (Int, Int))
+      -- ^ Measured pixel dimensions, by path, for requirement 6's
+      --   final-frame check. The caller measures because the catalogue is
+      --   pure and the images are on disk; only the paths a declared
+      --   sequence names are ever consulted, so a pack with no sequences
+      --   needs none. A sequence whose static sprite or last frame is
+      --   NOT in here is refused — an unmeasurable image is a fault, not
+      --   a check to skip.
     } deriving (Show, Eq)
 
 data RegistrationOutcome
@@ -341,6 +477,7 @@ registerPackArt reg cat = case validate of
                         ∧ pkBuildable a ≡ pkBuildable b
                         ∧ pkBuild a ≡ pkBuild b
                         ∧ pkArt a ≡ pkArt b
+                        ∧ pkFrames a ≡ pkFrames b
 
     -- Name WHAT differs rather than dumping both declarations: the
     -- kinds usually match and the art is where a conflicting repeat
@@ -361,7 +498,8 @@ registerPackArt reg cat = case validate of
                 [ ("declared kinds", pkKinds existing ≢ pkKinds pack)
                 , ("buildable kinds", pkBuildable existing ≢ pkBuildable pack)
                 , ("build costs", pkBuild existing ≢ pkBuild pack)
-                , ("art", pkArt existing ≢ pkArt pack) ]
+                , ("art", pkArt existing ≢ pkArt pack)
+                , ("construction frames", pkFrames existing ≢ pkFrames pack) ]
             , differs ]
 
     fault mKind role mPath reason = ArtFault
@@ -399,11 +537,120 @@ registerPackArt reg cat = case validate of
             unless (M.member key artMap) $
                 Left (fault (Just k) (artKeyRole key) Nothing
                             "the registration supplies no art for this slot")
+        -- #2488: the construction sequences, under the same
+        -- all-or-nothing rule. Checked AFTER the static inventory so a
+        -- pack that is short of a sprite is reported as that rather than
+        -- as a sequence pointing at a slot it never declared.
+        frameMap ← validateFrames kindSet artMap
         pure PackArt { pkKinds     = kindSet
                      , pkBuildable = buildable
                      , pkBuild     = buildMap
                      , pkArt       = artMap
+                     , pkFrames    = frameMap
                      , pkFailures  = HM.empty }
+
+    -- #2488's registration rules, in a fixed order so the reported fault
+    -- is the first thing wrong: each sequence's own shape, then the
+    -- default-variant cross-check against the static art it hands off
+    -- to, then the final-frame dimensions, then the per-family length
+    -- agreement, then duplicate appearances.
+    validateFrames ∷ S.Set PieceKind → M.Map ArtKey PieceArt
+                   → Either ArtFault (M.Map AppearanceKey ConstructionSequence)
+    validateFrames kindSet artMap = do
+        forM_ (parFrames reg) $ \(ak, cs) → do
+            let kind  = appearanceSlotKind (apSlot ak)
+                role  = appearanceKeyRole ak <> " construction"
+                sFault = fault (Just kind) role
+            unless (kind `S.member` kindSet) $
+                Left (sFault Nothing
+                        "construction frames were supplied for a kind the \
+                        \registration does not declare")
+            when (V.null (csFrames cs)) $
+                Left (sFault Nothing "the construction frame list is empty")
+            checkFramePath kind role "static sprite" (csStatic cs)
+            forM_ (zip [1 ∷ Int ..] (V.toList (csFrames cs))) $ \(i, a) →
+                checkFramePath kind (role <> " frame " <> tshow i) "frame" a
+            let paths = map aaPath (V.toList (csFrames cs))
+            when (S.size (S.fromList paths) ≢ length paths) $
+                Left (sFault Nothing
+                        "the construction frame list names the same image \
+                        \more than once")
+            -- The DEFAULT art's sequence must hand off to the very
+            -- sprite this registration declares for the appearance. A
+            -- variant's cannot be cross-checked — the catalogue stores
+            -- default art only — so its static sprite is taken on the
+            -- payload's word and only measured.
+            when (isNothing (apVariant ak)) $
+                forM_ [ paTexture art
+                      | (key, art) ← M.toList artMap
+                      , artKeyAppearanceSlot key ≡ apSlot ak ] $ \declared →
+                    when (aaPath declared ≢ aaPath (csStatic cs)) $
+                        Left (sFault (Just (aaPath (csStatic cs)))
+                                ("the sequence hands off to a sprite this \
+                                 \pack does not declare for the appearance \
+                                 \("
+                                   <> aaPath declared <> ")"))
+            -- Requirement 6: the handoff is continuous only if the last
+            -- frame occupies exactly the static sprite's canvas.
+            lastDim   ← measured sFault (aaPath (V.last (csFrames cs)))
+            staticDim ← measured sFault (aaPath (csStatic cs))
+            when (lastDim ≢ staticDim) $
+                Left (sFault (Just (aaPath (V.last (csFrames cs))))
+                        ("the last construction frame is " <> dims lastDim
+                           <> " but its static sprite " <> aaPath (csStatic cs)
+                           <> " is " <> dims staticDim))
+        -- A wall family's four directions must run to the SAME length,
+        -- or one progress value would select different stages of the
+        -- build at different camera facings (requirement 5). A direction
+        -- the pack never declared stays absent instead (requirement 8).
+        forM_ (M.toList wallLengths) $ \(variant, lens) →
+            when (S.size (S.fromList (map snd lens)) > 1) $
+                Left (fault (Just KWall)
+                        (appearanceKeyRole (AppearanceKey variant (ApWall WallNE))
+                           <> " construction")
+                        Nothing
+                        ("this wall family's declared directions run to \
+                         \different lengths ("
+                           <> T.intercalate ", "
+                                [ wallEdgeCode e <> ": " <> tshow n
+                                | (e, n) ← sortOn (wallEdgeCode ∘ fst) lens ]
+                           <> "), so one progress value would select \
+                              \different stages at different facings"))
+        let frameMap = M.fromList (parFrames reg)
+        when (M.size frameMap ≢ length (parFrames reg)) $
+            Left (fault Nothing "construction frames" Nothing
+                        "the same appearance declares construction frames \
+                        \more than once")
+        pure frameMap
+      where
+        wallLengths = M.fromListWith (++)
+            [ (apVariant ak, [(e, V.length (csFrames cs))])
+            | (ak, cs) ← parFrames reg, ApWall e ← [apSlot ak] ]
+
+    dims (w, h) = tshow w <> "x" <> tshow h
+
+    measured sFault path = case HM.lookup path (parSizes reg) of
+        Just d  → Right d
+        Nothing → Left (sFault (Just path)
+                          "the image could not be measured, so the handoff \
+                          \dimensions cannot be checked")
+
+    -- A frame path is a RELATIVE resource path and nothing else. An
+    -- absolute path, a Windows separator, a drive\/scheme colon or a
+    -- `..` segment would let a pack YAML name an image outside the
+    -- resource root, which is not art this game ships.
+    checkFramePath kind role what asset = do
+        when (aaPath asset ≡ "") $
+            Left (fault (Just kind) (role <> " " <> what) Nothing
+                        "the asset path is empty")
+        when (escapingPath (aaPath asset)) $
+            Left (fault (Just kind) (role <> " " <> what) (Just (aaPath asset))
+                        "the asset path escapes the resource root")
+        let TextureHandle h = aaHandle asset
+        unless (h > 0) $
+            Left (fault (Just kind) (role <> " " <> what) (Just (aaPath asset))
+                        ("the texture handle is not a loaded handle ("
+                          <> tshow h <> ")"))
 
     checkAsset key role asset = do
         when (aaPath asset ≡ "") $
@@ -415,6 +662,20 @@ registerPackArt reg cat = case validate of
                         (Just (aaPath asset))
                         ("the texture handle is not a loaded handle ("
                           <> tshow h <> ")"))
+
+-- | Does this path leave the resource root? A leading separator, a
+--   Windows separator, a scheme\/drive colon or any @.@ \/ @..@ segment
+--   all do. Pure and total, so a pack's declaration is refused at
+--   registration rather than at the point some loader would have opened
+--   the file.
+escapingPath ∷ Text → Bool
+escapingPath path =
+    T.isPrefixOf "/" path
+      ∨ T.isPrefixOf "~" path
+      ∨ T.isInfixOf "\\" path
+      ∨ T.isInfixOf ":" path
+      ∨ any (\seg → seg ≡ ".." ∨ seg ≡ "." ∨ T.null seg)
+            (T.splitOn "/" path)
 
 -- | One terminal asset failure, coalesced across every pack it newly
 --   invalidated. ONE value, not one per pack: a facemap can legitimately
@@ -474,14 +735,26 @@ failPackArtPath path reason cat =
     -- Sorted by pack name so the one line — and any test reading it —
     -- sees a deterministic order rather than the hash map's.
     affected = sortOn fst
-        [ (n, p) | (n, p) ← HM.toList (sacPacks cat), isJust (slotFor p) ]
-    fresh = [ (n, artKeyKind ∘ fst <$> slotFor p, roleFor p)
+        [ (n, p) | (n, p) ← HM.toList (sacPacks cat)
+                 , isJust (slotFor p) ∨ isJust (frameSlotFor p) ]
+    fresh = [ (n, kindFor p, roleFor p)
             | (n, p) ← affected, not (HM.member path (pkFailures p)) ]
     updated = [ (n, p { pkFailures = HM.insert path reason (pkFailures p) })
               | (n, p) ← affected ]
+    -- A STATIC slot names the path first; a construction frame answers
+    -- only when no static slot does, so the familiar diagnostic is
+    -- unchanged for every pack that declares no frames (#2488).
+    kindFor p = case slotFor p of
+        Just (key, _) → Just (artKeyKind key)
+        Nothing       → appearanceSlotKind ∘ apSlot ∘ fst <$> frameSlotFor p
     roleFor p = case slotFor p of
-        Nothing          → "registered art"
         Just (key, half) → artKeyRole key <> " " <> half
+        Nothing → case frameSlotFor p of
+            Just (ak, Just i)  → appearanceKeyRole ak <> " construction frame "
+                                   <> tshow i
+            Just (ak, Nothing) → appearanceKeyRole ak
+                                   <> " construction static sprite"
+            Nothing            → "registered art"
     -- The first slot of this pack that names the path, and whether the
     -- path is that slot's texture, its facemap, or both — so the warning
     -- can say WHICH kind lost WHICH half. A path shared by several slots
@@ -497,6 +770,26 @@ failPackArtPath path reason cat =
         , let half | isTex ∧ isFace = "texture and facemap"
                    | isTex          = "texture"
                    | otherwise      = "facemap" ]
+    -- The lowest appearance whose construction sequence names the path,
+    -- and WHICH of its assets that is: a 1-based frame position, or
+    -- 'Nothing' for the sequence's own static sprite.
+    --
+    -- The static half is not redundant with 'slotFor'. A DEFAULT
+    -- appearance's static sprite is registered art and 'slotFor' finds
+    -- it, but a VARIANT's is carried only by its sequence ('csStatic' —
+    -- the catalogue stores default art only), so without this a
+    -- terminal failure on a variant's own sprite would match neither
+    -- lookup and leave the pack resolving everything, sequence
+    -- included. Like 'slotFor' the choice is diagnostic only: one
+    -- failed asset invalidates the whole pack, because a sequence is
+    -- only meaningful together with the sprite it hands off to.
+    frameSlotFor p = listToMaybe
+        [ (ak, mIndex)
+        | (ak, cs) ← M.toAscList (pkFrames p)
+        , (mIndex, a) ← (Nothing, csStatic cs)
+                          : [ (Just i, f)
+                            | (i, f) ← zip [1 ∷ Int ..] (V.toList (csFrames cs)) ]
+        , aaPath a ≡ path ]
 
 -- * Resolution
 
@@ -561,6 +854,48 @@ resolveUnplacedArt cat pack kindText mEdge ctx = do
         "se" → Just WallSE
         "sw" → Just WallSW
         _    → Nothing
+
+-- | The construction playback this pack declares for that exact
+--   appearance, or 'Nothing'.
+--
+--   'Nothing' is requirement 8: an unregistered pack, a pack whose art
+--   has terminally failed, and an appearance with no declaration all
+--   resolve NOTHING — never another appearance's frames, never the
+--   default's for a variant that declared none, and never a substitute.
+resolveConstructionSequence ∷ StructureArtCatalog → Text → AppearanceKey
+                            → Maybe ConstructionSequence
+resolveConstructionSequence cat pack ak = do
+    p ← HM.lookup pack (sacPacks cat)
+    guard (HM.null (pkFailures p))
+    M.lookup ak (pkFrames p)
+
+-- | The single frame that appearance shows at @progress@ (#2488), or
+--   'Nothing' when it declares no sequence.
+resolveConstructionFrame ∷ StructureArtCatalog → Text → AppearanceKey → Float
+                         → Maybe ArtAsset
+resolveConstructionFrame cat pack ak progress =
+    constructionFrameAt progress <$> resolveConstructionSequence cat pack ak
+
+-- | Every DEFAULT appearance this stored pack has static art for but no
+--   construction sequence, ascending.
+--
+--   Requirement 8's diagnostic granularity, computed from the pack the
+--   registration actually stored: once per (pack, appearance), never per
+--   frame and never per drawn candidate. The caller emits it on a FRESH
+--   registration only, so an idempotent repeat says nothing.
+undeclaredConstructionAppearances ∷ PackArt → [AppearanceKey]
+undeclaredConstructionAppearances p = S.toAscList $ S.fromList
+    [ ak
+    | key ← M.keys (pkArt p)
+    , let ak = defaultAppearance key
+    , not (M.member ak (pkFrames p)) ]
+
+-- | The ONE line a missing declaration emits.
+missingConstructionMessage ∷ Text → AppearanceKey → Text
+missingConstructionMessage pack ak = mconcat
+    [ "structure art: pack '", pack, "' appearance '", appearanceKeyRole ak
+    , "' declares no construction frames -- a paid site of it draws "
+    , "nothing until the piece appears" ]
 
 -- | Does this pack's kind have COMPLETE build metadata (@build_work@ and
 --   @materials@)? Deliberately independent of 'resolveUnplacedArt': a

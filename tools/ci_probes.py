@@ -379,6 +379,16 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                                   "exhaustively by the pure hspec groups "
                                   "World.Render.StructureRotation and "
                                   "World.Render.FrontWallLift, which DO gate on CI"),),
+    "structure_construction": (Reason(NEEDS_GPU, "offscreen boot: the #2488 "
+                                  "lifecycle-alpha flag is read in the FRAGMENT "
+                                  "shader, so only real pixels can show that a "
+                                  "construction frame survives the reused "
+                                  "facemap's silhouette while an unflagged "
+                                  "static piece does not -- no GPU on the CI "
+                                  "runner. Frame selection, rotation, the "
+                                  "handoff and the quad flag itself ARE gated "
+                                  "on CI, by the pure hspec group "
+                                  "\"structure construction frames\""),),
     "scene_primitives": (Reason(NEEDS_GPU, "offscreen boot: attributes engine.spawnText "
                                             "and a UI-layer engine.spawnSprite to bounded "
                                             "screenshot regions across every mutation verb "

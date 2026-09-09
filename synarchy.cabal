@@ -1445,6 +1445,9 @@ test-suite synarchy-test-headless
                    Test.Headless.World.StructureStage
                    Test.Headless.World.StructurePaletteResidue
                    Test.Headless.Structure.ArtCatalog
+                   Test.Headless.Structure.ConstructionFixture
+                   Test.Headless.Structure.ConstructionFrames
+                   Test.Headless.Structure.ConstructionPacks
                    Test.Headless.World.Spoil
                    Test.Headless.World.RenderedSurface
                    Test.Headless.World.IslandColumns
