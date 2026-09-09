@@ -1063,12 +1063,24 @@ nothing in the browser reads the matrix.
   building's folder), a special file, carries an unsupported extension,
   or does not resolve under `assets/textures/buildings/<name>/` at all —
   the last with its own `outside_root` reason, because requesting it
-  would break trimmed loading. A missing cell never substitutes a path
-  from another facing, role, raw row or the static sprite, never
-  requests its invalid texture (its dump entry carries no `handle`), and
-  draws a textureless marker. The selection then reports `state ==
-  "ready"` with its diagnostic flags — never `"loading"`, and never
-  `"empty"`, which is #1690's terminal bindless-failure state.
+  would break trimmed loading. Those verdicts come from ONE `lstat` walk
+  down every component below the building's folder, never from an
+  existence predicate first: `doesPathExist` FOLLOWS links, so a
+  dangling symlink would answer "absent" and never reach the symlink
+  rule. A missing cell never substitutes a path from another facing,
+  role, raw row or the static sprite, never requests its invalid texture
+  (its dump entry carries no `handle`), and draws a textureless marker.
+  The selection then reports `state == "ready"` with its diagnostic
+  flags — never `"loading"`, and never `"empty"`, which is #1690's
+  terminal bindless-failure state.
+- **Diagnostic state is reported per ROW, not only per cell.** Each
+  declared row — in `lifecycle`, in `staticSprite` and in the combined
+  `rows` alike, computed once so the three cannot disagree — carries
+  `missing`, `missingReason` and `missingCells` beside `resolved`.
+  `resolved` alone cannot say it: a row whose animation reference
+  resolved but whose west cell is absent is a real authoring fault, and
+  `rows` is the surface automated input uses to pick a row to click. A
+  raw row reports `undeclared` there instead.
 - **Compatibility.** `entries`, `defaultEntry` and `selected` keep their
   pre-#2492 meaning: `entries` is the raw list in its existing order and
   shape, `defaultEntry` is the unchanged raw ladder, and `selected` is
@@ -1185,7 +1197,13 @@ drift onto different math.
   The surface reuses a texture handle the session has ALREADY requested
   (at alpha 0), never a fresh load — focused-item mode allows no chrome
   at all (`tools/preview_probe.py`'s `allow_chrome=False`), so
-  `list.getChromeTexture()` there would break trimmed loading. It is
+  `list.getChromeTexture()` there would break trimmed loading. The
+  buildings viewer adopts that chrome handle EXPLICITLY (#2492): its
+  initial `built` row may legitimately be a pure diagnostic that
+  requests no texture at all, so a surface borrowed only from the first
+  frame the pane happened to load would never exist and the wheel would
+  leak to the gameplay/z-slice broadcasts for the whole session. That
+  mode always builds a list, so the handle is already in flight there. It is
   borrowed from the REQUEST, and the surface is installed as each mode's
   UI is built, NOT when the upload completes: an upload is asynchronous,
   so waiting for it would leave list and focused-item mode with no
