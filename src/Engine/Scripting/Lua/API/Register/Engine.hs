@@ -66,12 +66,15 @@ import Engine.Scripting.Lua.API.Infection (loadInfectionYamlFn)
 import Engine.Scripting.Lua.API.Craft (loadRecipeYamlFn)
 import Engine.Scripting.Lua.API.Locations (loadLocationYamlFn, locationListDefsFn)
 import Engine.Scripting.Lua.API.LootTables (loadLootTableYamlFn)
+import Engine.Scripting.Lua.API.LootProfiles (loadLootProfileYamlFn)
 import Engine.Scripting.Lua.API.Tutorial (loadTutorialDirFn, getTutorialTreeFn)
 import Engine.Scripting.Lua.API.Yaml (loadYamlFn)
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Core (toCoreCapability)
 import Engine.Core.Capability.ContentRegistries
   (toContentRegistriesCapability)
+import Engine.Core.Capability.ContentRegistriesView
+  (toContentRegistriesViewCapability)
 import qualified HsLua as Lua
 
 -- | engine.debugThrow() — deliberately throws a non-Lua Haskell
@@ -89,6 +92,10 @@ registerEngineAPI env backendState = do
   -- their logging. See docs/engineenv_capability_inventory.md SS7.6.
   let core = toCoreCapability env
       regs = toContentRegistriesCapability env
+      -- #2499: the loot-profile loader WRITES its own registry through
+      -- `regs` but only READS the item registry, so it takes the #1896
+      -- reader view for that one rather than the raw handle.
+      regsView = toContentRegistriesViewCapability env
   Lua.newtable
 
   registerLuaFunction "quit"              (quitFn env)
@@ -164,6 +171,8 @@ registerEngineAPI env backendState = do
                           (loadLocationYamlFn core regs env backendState)
   registerLuaFunction "listLocationDefs" (locationListDefsFn regs)
   registerLuaFunction "loadLootTableYaml" (loadLootTableYamlFn core regs)
+  registerLuaFunction "loadLootProfileYaml"
+                          (loadLootProfileYamlFn core regs regsView)
   registerLuaFunction "loadTutorialDir" (loadTutorialDirFn core regs)
   registerLuaFunction "getTutorialTree" (getTutorialTreeFn regs)
 

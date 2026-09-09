@@ -66,6 +66,7 @@ import Infection.Types (emptyInfectionManager)
 import Craft.Types (emptyRecipeManager)
 import Location.Types (emptyLocationRegistry)
 import LootTable.Types (emptyLootTableRegistry)
+import LootProfile.Types (emptyLootProfileRegistry)
 import Tutorial.Types (emptyTutorialRegistry)
 import World.Types (emptyWorldManager, emptyFloraCatalog)
 import World.Material (emptyMaterialRegistry)
@@ -464,6 +465,7 @@ initializeEngineWith logBackend = do
   recipeManagerRef ← newIORef emptyRecipeManager
   locationDefsRef ← newIORef emptyLocationRegistry
   lootTableRegistryRef ← newIORef emptyLootTableRegistry
+  lootProfileRegistryRef ← newIORef emptyLootProfileRegistry
   tutorialRegistryRef ← newIORef emptyTutorialRegistry
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/) and allocate the ring buffer.
@@ -574,6 +576,7 @@ initializeEngineWith logBackend = do
         , recipeManagerRef         = recipeManagerRef
         , locationDefsRef    = locationDefsRef
         , lootTableRegistryRef = lootTableRegistryRef
+        , lootProfileRegistryRef = lootProfileRegistryRef
         , tutorialRegistryRef = tutorialRegistryRef
         , eventStoreRef      = eventStoreRef
         , notificationCfgRef = notificationCfgRef

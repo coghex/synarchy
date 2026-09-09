@@ -121,6 +121,7 @@ luaPrelude enumeration = T.unlines
     , "  loadBuildingYaml = healthyYaml,"
     , "  loadUnitYaml = healthyYaml,"
     , "  loadLootTableYaml = healthyYaml,"
+    , "  loadLootProfileYaml = healthyYaml,"
     , "  loadLocationYaml = healthyYaml,"
     , "  loadItemYaml = function(p)"
     , "      recorded[#recorded + 1] = p; return 1, true end,"

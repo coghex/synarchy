@@ -201,6 +201,7 @@ BOOTSTRAP_LOADERS: list[tuple[str, str, bool]] = [
     ("data/buildings",   "engine.loadBuildingYaml",   False),
     ("data/units",       "engine.loadUnitYaml",       False),
     ("data/loot_tables", "engine.loadLootTableYaml",  False),
+    ("data/loot_profiles", "engine.loadLootProfileYaml", False),
     ("data/locations",   "engine.loadLocationYaml",   False),
 ]
 
@@ -219,7 +220,8 @@ BOOTSTRAP_LOADERS: list[tuple[str, str, bool]] = [
 #: and vegetation are NOT validated on the load path; they are in
 #: BOOTSTRAP_LOADERS because production loads them and locations
 #: resolve loot_table ids at spawn time (#90), not because a load can
-#: be rejected on them.
+#: be rejected on them; the same is true of loot profiles (#2499),
+#: which have no consumer at all yet.
 LOAD_VALIDATED_LOADERS = frozenset({
     "engine.loadUnitYaml",
     "engine.loadBuildingYaml",

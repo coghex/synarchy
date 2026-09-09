@@ -59,10 +59,10 @@ ARENA_LOG = "/tmp/startup_asset_logging_arena.log"
 #: that reads ONE per-file Debug line's authoritative count and path.
 #:
 #: The count phrase is spelled per family on purpose. It is not the same
-#: QUANTITY across the twelve -- materials, vegetation and flora return a
-#: TEXTURE total, loot tables 0 or 1 per file, the rest a definition
-#: count -- and a single generic pattern would quietly accept a line that
-#: had started reporting a different number.
+#: QUANTITY across the thirteen -- materials, vegetation and flora return
+#: a TEXTURE total, loot tables and loot profiles 0 or 1 per file, the
+#: rest a definition count -- and a single generic pattern would quietly
+#: accept a line that had started reporting a different number.
 FAMILIES: list[tuple[str, str, str, str]] = [
     ("material", "loadMaterialYaml", "data/materials",
      r"loadMaterialYaml: loaded (\d+) textures from (\S+)"),
@@ -86,6 +86,9 @@ FAMILIES: list[tuple[str, str, str, str]] = [
      r"loadUnitYaml: loaded (\d+) unit definitions from (\S+)"),
     ("loot_table", "loadLootTableYaml", "data/loot_tables",
      r"loadLootTableYaml: loaded (\d+) loot tables?(?: '[^']*')? from (\S+)"),
+    ("loot_profile", "loadLootProfileYaml", "data/loot_profiles",
+     r"loadLootProfileYaml: loaded (\d+) loot profiles?(?: '[^']*')? "
+     r"from (\S+)"),
     ("location", "loadLocationYaml", "data/locations",
      r"loadLocationYaml: loaded (\d+) locations from (\S+)"),
 ]
@@ -99,7 +102,7 @@ AGGREGATE_RE = re.compile(
     r"Startup assets: (\w+) loaded (\d+) from (\d+) file\(s\)")
 
 #: Info lines the startup path emits that are NOT aggregates. Their
-#: presence is asserted, so "the aggregate matcher counted 12" cannot be
+#: presence is asserted, so "the aggregate matcher counted 13" cannot be
 #: satisfied by a log that simply has nothing else in it.
 #:
 #: "Notification registry loaded" used to sit here too; #1928 moved it

@@ -5,6 +5,7 @@ module Engine.Scripting.Lua.API.Register.Item
 import Engine.Scripting.Lua.API.Internal (registerLuaFunction)
 import Engine.Scripting.Lua.API.Blood
 import Engine.Scripting.Lua.API.LootTables
+import Engine.Scripting.Lua.API.LootProfiles
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Forage (itemGetFoodFn)
 import Engine.Core.State (EngineEnv, statRNGRef)
@@ -53,6 +54,12 @@ registerItemAPI env = do
   Lua.newtable
   registerLuaFunction "roll"    (lootRollFn regs (statRNGRef env))
   registerLuaFunction "rollFor" (lootRollForFn regs)
+  -- Loot PROFILES (#2499) share this namespace by D-20 and are
+  -- read-only: `profile` answers one def as a fresh table, `listProfiles`
+  -- the sorted ids. A profile is not a table and is not rolled here —
+  -- realization is PLC-13's.
+  registerLuaFunction "profile"      (lootProfileFn regs)
+  registerLuaFunction "listProfiles" (lootListProfilesFn regs)
   Lua.setglobal (Lua.Name "loot")
 
   Lua.newtable

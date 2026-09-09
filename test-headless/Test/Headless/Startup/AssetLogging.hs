@@ -15,7 +15,7 @@
 --   technique 'Test.Headless.Item.Discovery' established) — stubbing is
 --   what makes each file's return distinguishable, which is the only
 --   way an aggregate can be proved to be that family's OWN sum rather
---   than a plausible number. The engine half drives the twelve real
+--   than a plausible number. The engine half drives the thirteen real
 --   @engine.load*Yaml@ bindings through a real Lua backend on a private
 --   headless engine, against real shipped data, with a capturing logger.
 --
@@ -59,7 +59,7 @@ import Engine.Scripting.Lua.Thread.Console (executeDebugLua)
 import Engine.Scripting.Lua.Types (LuaBackendState(..))
 
 -----------------------------------------------------------------------
--- The twelve scoped families
+-- The thirteen scoped families
 -----------------------------------------------------------------------
 
 -- | One registry family, as the startup loader enqueues it.
@@ -70,7 +70,7 @@ data Fam = Fam
     , famTree  ∷ Bool  -- ^ enumerated by @listFilesRecursive@ (items only)
     }
 
--- | Normal startup's twelve, in @queueNormalProfile@'s own order. The
+-- | Normal startup's thirteen, in @queueNormalProfile@'s own order. The
 --   tutorial tree is deliberately absent: it is ONE directory-level
 --   @engine.loadTutorialDir@ call, not a per-file YAML family (#1930's
 --   scope), and the texture-only phases are out of scope entirely.
@@ -87,10 +87,11 @@ normalFams =
     , Fam "data/buildings"   "building"   "loadBuildingYaml"   False
     , Fam "data/units"       "unit"       "loadUnitYaml"       False
     , Fam "data/loot_tables" "loot_table" "loadLootTableYaml"  False
+    , Fam "data/loot_profiles" "loot_profile" "loadLootProfileYaml" False
     , Fam "data/locations"   "location"   "loadLocationYaml"   False
     ]
 
--- | Arena startup's eleven: the same inventory minus flora
+-- | Arena startup's twelve: the same inventory minus flora
 --   (@queueArenaProfile@), and minus the tutorial.
 arenaFams ∷ [Fam]
 arenaFams = [ f | f ← normalFams, famId f ≢ "flora" ]
@@ -128,8 +129,8 @@ famLoadOrder f
 famCount ∷ Int → Text → Int
 famCount ix rel = 10 * ix + (if "f1.yaml" `T.isSuffixOf` rel then 1 else 2)
 
--- | @(family index, family)@ for the twelve, indices fixed by
---   'normalFams' so arena's eleven keep the same numbers.
+-- | @(family index, family)@ for the thirteen, indices fixed by
+--   'normalFams' so arena's twelve keep the same numbers.
 indexedFams ∷ [(Int, Fam)]
 indexedFams = zip [1 ..] normalFams
 
@@ -317,7 +318,7 @@ expectedAggregate f total files =
     <> " from " <> tshow files <> " file(s)"
 
 -----------------------------------------------------------------------
--- The engine half: the twelve real bindings
+-- The engine half: the thirteen real bindings
 -----------------------------------------------------------------------
 
 -- | A private headless engine plus a real Lua backend with the whole
@@ -410,9 +411,10 @@ mentioning verb lvl = filter (verb `T.isInfixOf`) ∘ entriesAt lvl
 
 -- | One family's Debug detail contract: the phrase carrying the
 --   AUTHORITATIVE count that binding returned. Spelled per family
---   because the quantity is not the same one across the twelve —
---   materials, vegetation and flora count TEXTURES, loot tables count
---   0 or 1 per file, and the rest count definitions.
+--   because the quantity is not the same one across the thirteen —
+--   materials, vegetation and flora count TEXTURES, loot tables and
+--   loot profiles count 0 or 1 per file, and the rest count
+--   definitions.
 detailFor ∷ Text → Int → Text
 detailFor verb n = case verb of
     "loadMaterialYaml"   → "loaded " <> tshow n <> " textures"
@@ -426,6 +428,7 @@ detailFor verb n = case verb of
     "loadBuildingYaml"   → "loaded " <> tshow n <> " building definitions"
     "loadUnitYaml"       → "loaded " <> tshow n <> " unit definitions"
     "loadLootTableYaml"  → "loaded " <> tshow n <> " loot table"
+    "loadLootProfileYaml" → "loaded " <> tshow n <> " loot profile"
     "loadLocationYaml"   → "loaded " <> tshow n <> " locations"
     _                    → "loaded " <> tshow n
 
@@ -445,14 +448,16 @@ shippedFile verb = case verb of
     "loadBuildingYaml"   → "data/buildings/furnace.yaml"
     "loadUnitYaml"       → "data/units/acolyte.yaml"
     "loadLootTableYaml"  → "data/loot_tables/ruin_common.yaml"
+    "loadLootProfileYaml" → "data/loot_profiles/ruin_industrial_salvage.yaml"
     "loadLocationYaml"   → "data/locations/ruin_small.yaml"
     _                    → ""
 
 -- | Other bindings a family's shipped file must be loaded AFTER, as
 --   @(verb, path)@ pairs called first.
 --
---   Only locations have one, and it is a REAL production ordering, not
---   a test convenience: since #917 a location's guaranteed significant
+--   Only locations and loot profiles have one, and each is a REAL
+--   production ordering, not a test convenience: since #917 a
+--   location's guaranteed significant
 --   content must resolve against the item registry, so
 --   @engine.loadLocationYaml@ rejects the whole file when the item it
 --   names is unregistered. @scripts/startup_loader.lua@ already loads
@@ -462,6 +467,15 @@ shippedFile verb = case verb of
 shippedPrereqs ∷ Text → [(Text, Text)]
 shippedPrereqs verb = case verb of
     "loadLocationYaml" → [("loadItemYaml", "data/items/processing_unit.yaml")]
+    -- The same real ordering one family earlier (#2499, D-20): a loot
+    -- profile resolves EVERY entry's item id at load and rejects the
+    -- whole file on the first unresolved one, so all eight of the
+    -- shipped profile's items are registered first.
+    "loadLootProfileYaml" →
+        [ ("loadItemYaml", "data/items/" <> item <> ".yaml")
+        | item ← [ "steel_bar", "electric_motor", "steel_hardware"
+                 , "high_voltage_battery", "steel_plate", "processing_unit"
+                 , "wiring", "rations" ] ]
     _                  → []
 
 -----------------------------------------------------------------------
@@ -530,13 +544,13 @@ spec = describe "Startup asset logging" $ do
     ------------------------------------------------------------------
     describe "the loader's per-family aggregates (requirements 2-4)" $ do
 
-        it "normal startup emits exactly the twelve scoped aggregates, \
+        it "normal startup emits exactly the thirteen scoped aggregates, \
            \each the sum of that family's own returned values" $ do
             r ← runProfile fullScenario "normal"
             aggregates r `shouldBe`
                 [ expectedAggregate f (famSum f) 2 | f ← normalFams ]
 
-        it "arena startup emits exactly eleven — the same inventory with \
+        it "arena startup emits exactly twelve — the same inventory with \
            \NO flora aggregate" $ do
             r ← runProfile fullScenario "arena"
             aggregates r `shouldBe`
