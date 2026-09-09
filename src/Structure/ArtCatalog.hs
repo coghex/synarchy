@@ -748,9 +748,11 @@ failPackArtPath path reason cat =
     roleFor p = case slotFor p of
         Just (key, half) → artKeyRole key <> " " <> half
         Nothing → case frameSlotFor p of
-            Just (ak, i) → appearanceKeyRole ak <> " construction frame "
-                             <> tshow i
-            Nothing      → "registered art"
+            Just (ak, Just i)  → appearanceKeyRole ak <> " construction frame "
+                                   <> tshow i
+            Just (ak, Nothing) → appearanceKeyRole ak
+                                   <> " construction static sprite"
+            Nothing            → "registered art"
     -- The first slot of this pack that names the path, and whether the
     -- path is that slot's texture, its facemap, or both — so the warning
     -- can say WHICH kind lost WHICH half. A path shared by several slots
@@ -767,13 +769,24 @@ failPackArtPath path reason cat =
                    | isTex          = "texture"
                    | otherwise      = "facemap" ]
     -- The lowest appearance whose construction sequence names the path,
-    -- and that frame's 1-based position. Like 'slotFor', diagnostic only:
-    -- one failed frame invalidates the whole pack, exactly as a failed
-    -- static sprite does, because the sequence is only meaningful whole.
+    -- and WHICH of its assets that is: a 1-based frame position, or
+    -- 'Nothing' for the sequence's own static sprite.
+    --
+    -- The static half is not redundant with 'slotFor'. A DEFAULT
+    -- appearance's static sprite is registered art and 'slotFor' finds
+    -- it, but a VARIANT's is carried only by its sequence ('csStatic' —
+    -- the catalogue stores default art only), so without this a
+    -- terminal failure on a variant's own sprite would match neither
+    -- lookup and leave the pack resolving everything, sequence
+    -- included. Like 'slotFor' the choice is diagnostic only: one
+    -- failed asset invalidates the whole pack, because a sequence is
+    -- only meaningful together with the sprite it hands off to.
     frameSlotFor p = listToMaybe
-        [ (ak, i)
+        [ (ak, mIndex)
         | (ak, cs) ← M.toAscList (pkFrames p)
-        , (i, a) ← zip [1 ∷ Int ..] (V.toList (csFrames cs))
+        , (mIndex, a) ← (Nothing, csStatic cs)
+                          : [ (Just i, f)
+                            | (i, f) ← zip [1 ∷ Int ..] (V.toList (csFrames cs)) ]
         , aaPath a ≡ path ]
 
 -- * Resolution

@@ -234,6 +234,40 @@ appearanceSpec = describe "an appearance" $ do
             (AppearanceKey Nothing ApFloor) `shouldBe` Nothing
         packArtResolves failed fixturePack `shouldBe` False
 
+    it "fails the whole pack when a VARIANT's own static sprite fails, \
+       \even though the catalogue stores no art for it" $ do
+        -- A variant's sprite is carried ONLY by its construction
+        -- sequence — the catalogue stores default art — so it is
+        -- reachable through nothing else. Before this it matched neither
+        -- the art scan nor the frame scan, and the pack went on
+        -- resolving everything.
+        let ak = AppearanceKey (Just damagedVariant) ApFloor
+            path = staticPathFor ak
+            (failed, report) = failPackArtPath path "missing" fixtureCatalog
+        -- The fixture really does keep this path out of the static art…
+        map (aaPath ∘ paTexture ∘ snd) (parEntries fixtureRegistration)
+            `shouldNotSatisfy` elem path
+        afrTracked report `shouldBe` True
+        let message = artAssetFailureMessage (fromJust (afrFailure report))
+        message `shouldSatisfy` T.isInfixOf fixturePack
+        message `shouldSatisfy`
+            T.isInfixOf "variant 'damaged' floor construction static sprite"
+        packArtResolves failed fixturePack `shouldBe` False
+        resolveConstructionSequence failed fixturePack
+            (AppearanceKey Nothing ApFloor) `shouldBe` Nothing
+        resolveConstructionSequence failed fixturePack ak `shouldBe` Nothing
+
+    it "still names the STATIC ART slot when a default appearance's \
+       \sprite fails, not its sequence" $ do
+        -- The default half is reachable both ways, and the art scan
+        -- must keep answering for it — the familiar diagnostic is
+        -- unchanged for every pack that declares no frames at all.
+        let (_, report) = failPackArtPath "fx/floor.png" "missing"
+                              fixtureCatalog
+            message = artAssetFailureMessage (fromJust (afrFailure report))
+        message `shouldSatisfy` T.isInfixOf "asset 'floor texture'"
+        message `shouldNotSatisfy` T.isInfixOf "construction static sprite"
+
     it "reports each failed frame once and stays silent on a repeat" $ do
         let framePath = firstOf (framePathsFor (AppearanceKey Nothing ApPost))
             (once, r1) = failPackArtPath framePath "gone" fixtureCatalog

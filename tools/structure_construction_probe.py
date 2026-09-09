@@ -26,16 +26,34 @@ Three horizontal bands, each 96x64 pixels' worth of one tile:
   static:   band A = pure RED,   opaque
             band C = pure CYAN,  opaque    -> the unflagged control
 
-Four claims, one capture each:
+How a claim is attributed
+-------------------------
+Three captures share ONE camera — pinned and zoomed before the first of
+them and never touched again — and the builder unit is spawned before it
+too, so it stands in all three and cancels out. Paused, at a fixed sun
+angle, two such frames differ only where something was added between
+them, so:
 
-  1. band C's BLUE reaches the frame buffer. Without the lifecycle flag
+  baseline -> site        = exactly what the construction site drew
+  site     -> with static = exactly what the static control drew
+
+Every predicate below reads one of those two difference sets, never the
+whole frame buffer. That is what keeps terrain, HUD and the arena's
+per-process ground scatter out of the colour tests without needing to
+project a tile onto screen coordinates, and it is why an assertion is
+gated on its difference set being non-empty first: "no cyan" has to mean
+"clipped", not "nothing was placed".
+
+Four claims:
+
+  1. band C's BLUE is in what the SITE drew. Without the lifecycle flag
      the reused facemap's zero alpha would multiply it away, so its
      presence is the flag working.
-  2. the SAME piece's art drawn as an ordinary STATIC structure — the
-     control, one tile over, same facemap, unflagged — shows no CYAN.
-     That is the existing alpha behaviour, unchanged.
-  3. band D paints nothing: the texture's own alpha still decides, flag
-     or no flag, so a transparent frame pixel stays transparent.
+  2. no CYAN is in what the STATIC CONTROL drew — the same art, same
+     facemap, one tile over, unflagged. That is the existing alpha
+     behaviour, unchanged.
+  3. band D paints nothing in either: the texture's own alpha still
+     decides, flag or no flag.
   4. bands A, B and C come back at the SAME brightness. A is lit through
      a painted top mask, B through a zero-RGB one, C through no mask at
      all — so equality is the shader's zero-sum top-light fall-through
@@ -170,6 +188,26 @@ def load_rgb(path: str):
     return [tuple(raw[i:i + 3]) for i in range(0, len(raw), 3)]
 
 
+def changed(before, after):
+    """The pixels `after` has that `before` did not, at the same position.
+
+    Every assertion below runs over one of these sets rather than over the
+    whole frame buffer. Two frames captured with the SAME camera, paused,
+    at a fixed sun angle differ only where something was added between
+    them, so a difference set is exactly "what this step drew" — no
+    terrain, no HUD, and no dependence on projecting a tile onto screen
+    coordinates.
+
+    That is what makes the colour predicates safe. Applied frame-wide
+    they would be at the mercy of whatever the arena's own art happens to
+    contain; applied to a difference set they can only see the thing the
+    step under test put there.
+    """
+    if len(before) != len(after):
+        return []
+    return [b for a, b in zip(before, after) if a != b]
+
+
 def dominant(pixels, channel: int, floor_: int = 90, others: int = 40):
     """Pixels where one channel is strong and the other two are near zero.
 
@@ -246,9 +284,23 @@ def register_fixture_pack(port: int) -> str:
 
 
 def capture(port: int, path: str, settle: float = 1.5) -> bool:
+    """One capture, with no way to mistake a stale file for a fresh one.
+
+    The path is REMOVED first and the engine's own reply is checked, so a
+    screenshot that never happened cannot be read back as the frame under
+    test — which is exactly how a pixel gate turns into a pass that
+    compared nothing.
+    """
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
     time.sleep(settle)
-    send(port, f"return debug.captureScreenshot('{path}')", timeout=30.0)
-    return os.path.exists(path)
+    reply = (send(port, f"return tostring(debug.captureScreenshot('{path}'))",
+                  timeout=30.0) or "").strip()
+    if reply.lower() in ("false", "nil", ""):
+        return False
+    return os.path.exists(path) and os.path.getsize(path) > 4096
 
 
 def main() -> int:
@@ -297,44 +349,38 @@ def main() -> int:
         ax, ay = int(anchor["gx"]), int(anchor["gy"])
         print(f"        anchor tile ({ax}, {ay}) on page '{page}'")
 
-        print("phase 4: register the fixture pack")
+        print("phase 4: register the fixture pack, then FIX the camera")
         if not check(register_fixture_pack(args.port) == "true",
                      "structure.registerPackArt accepted the fixture pack"):
             return 1
 
-        # A baseline BEFORE anything of ours is on screen. The arena's own
-        # ground scatter is re-randomised per process, so a colour that
-        # happens to occur naturally must be discounted rather than
-        # assumed absent.
-        base_path = os.path.join(args.out, "0_baseline.png")
-        if not check(capture(args.port, base_path), "captured the baseline"):
-            return 1
-        base = load_rgb(base_path)
-
-        print("phase 5: a PAID designation with declared frames")
         site_x, site_y = ax, ay
         ctrl_x, ctrl_y = ax + 2, ay
-        ok = send(args.port,
-                  f"return tostring(construction.designate('{page}',"
-                  f" {site_x}, {site_y}, {site_x}, {site_y}, 'structure',"
-                  f" '{PACK}', 'floor'))", timeout=20.0)
-        check((ok or "").strip() == "true", "the designation was accepted")
-        job = poll_until(30.0, lambda: send_json(
-            args.port, f"return construction.getDesignationAt('{page}',"
-                       f" {site_x}, {site_y})"))
-        if not check(isinstance(job, dict) and "attempt" in job,
-                     "the designation landed", f"got {job!r}"):
-            return 1
-        attempt = int(job["attempt"])
+        # The camera is pinned and zoomed BEFORE the baseline and never
+        # touched again, so all three captures share one framing. That is
+        # what makes a pixel difference between them attributable to what
+        # was added between them, and nothing else — a baseline framed
+        # differently would let terrain or HUD pixels move into and out of
+        # the colour predicates on their own.
+        floor_z = send_json(args.port,
+                            f"return (world.getTerrainAt({site_x}, {site_y}))")
+        pin_camera_to_tile(args.port, site_x + 1, site_y,
+                           (int(floor_z) + 1) if isinstance(floor_z, int) else 26)
+        send(args.port, "camera.setZoom(0.25); return 'ok'")
 
-        # payMaterials charges a UNIT's inventory. The fixture's cost is
-        # an authored EMPTY bill — a real, valid paid state — so any unit
-        # will do and none has to be carrying anything; what the call is
-        # here for is the receipt, which is what makes the designation
-        # PAID and therefore drawn by the construction pass at all.
+        # The builder is spawned BEFORE the baseline, deliberately.
+        # `payMaterials` charges a UNIT's inventory, and the fixture's
+        # cost is an authored EMPTY bill — a real, valid paid state — so
+        # any unit will do and none has to be carrying anything; what the
+        # call is for is the receipt, which is what makes the designation
+        # PAID and therefore drawn at all. Spawning it here rather than
+        # later means it stands in EVERY capture and cancels out of every
+        # difference set, wherever it happens to be — which is a stronger
+        # guarantee than putting it off-camera and hoping.
+        #
         # unit.spawn answers -1 while the unit registry is still settling
-        # after the arena opens, so poll it rather than taking the first
-        # answer — a -1 here is a boot-timing flake, not a real refusal.
+        # after the arena opens, so poll rather than take the first
+        # answer: a -1 there is boot timing, not a refusal.
         def try_spawn():
             raw = send(args.port, "return unit.spawn('acolyte',"
                                   f" {site_x + 4}, {site_y + 4})")
@@ -348,6 +394,26 @@ def main() -> int:
                      "a unit exists to charge the (empty) bill to",
                      "unit.spawn never returned a real uid"):
             return 1
+
+        base_path = os.path.join(args.out, "0_baseline.png")
+        if not check(capture(args.port, base_path), "captured the baseline"):
+            return 1
+        base = load_rgb(base_path)
+
+        print("phase 5: a PAID designation with declared frames")
+        ok = send(args.port,
+                  f"return tostring(construction.designate('{page}',"
+                  f" {site_x}, {site_y}, {site_x}, {site_y}, 'structure',"
+                  f" '{PACK}', 'floor'))", timeout=20.0)
+        check((ok or "").strip() == "true", "the designation was accepted")
+        job = poll_until(30.0, lambda: send_json(
+            args.port, f"return construction.getDesignationAt('{page}',"
+                       f" {site_x}, {site_y})"))
+        if not check(isinstance(job, dict) and "attempt" in job,
+                     "the designation landed", f"got {job!r}"):
+            return 1
+        attempt = int(job["attempt"])
+
         paid = send(args.port,
                     f"return tostring(construction.payMaterials('{page}',"
                     f" {site_x}, {site_y}, {attempt}, {builder}))",
@@ -361,6 +427,17 @@ def main() -> int:
                        f" {site_x}, {site_y})") or {}).get("paid") is True)
         check(bool(got), "the paid state is readable back")
 
+        site_path = os.path.join(args.out, "1_construction.png")
+        if not check(capture(args.port, site_path),
+                     "captured the construction site"):
+            return 1
+        site = load_rgb(site_path)
+        site_px = changed(base, site)
+        if not check(len(site_px) > 200,
+                     "the construction site changed the frame at all",
+                     f"{len(site_px)} px differ from the baseline"):
+            return 1
+
         print("phase 6: the unflagged STATIC control, one tile over")
         z = send_json(args.port,
                       f"return (world.getTerrainAt({ctrl_x}, {ctrl_y}))")
@@ -368,44 +445,43 @@ def main() -> int:
                       f"local hs = engine.loadTexture('{STATIC_PATH}');"
                       f" local hf = engine.loadTexture('{FACE_PATH}');"
                       f" return tostring(structure.place({ctrl_x}, {ctrl_y},"
-                      f" 'floor', hs, hf, {int(z) + 1 if isinstance(z, int) else 1},"
+                      f" 'floor', hs, hf,"
+                      f" {int(z) + 1 if isinstance(z, int) else 1},"
                       f" '{STATIC_PATH}', '{FACE_PATH}'))", timeout=20.0)
         check((placed or "").strip() == "true", "the static control placed")
-
-        print("phase 7: capture and read the pixels")
-        floor_z = send_json(args.port,
-                            f"return structure.floorZAt({ctrl_x}, {ctrl_y})")
-        pin_camera_to_tile(args.port, ax + 1, ay,
-                           int(floor_z) if isinstance(floor_z, int) else 26)
-        send(args.port, "camera.setZoom(0.25); return 'ok'")
-        shot_path = os.path.join(args.out, "1_construction.png")
-        if not check(capture(args.port, shot_path), "captured the scene"):
+        ctrl_path = os.path.join(args.out, "2_with_static.png")
+        if not check(capture(args.port, ctrl_path),
+                     "captured the static control"):
             return 1
-        shot = load_rgb(shot_path)
+        with_ctrl = load_rgb(ctrl_path)
+        ctrl_px = changed(site, with_ctrl)
+        if not check(len(ctrl_px) > 200,
+                     "the static control changed the frame at all — so its "
+                     "absence of cyan below is clipping, not an unplaced piece",
+                     f"{len(ctrl_px)} px differ from the previous capture"):
+            return 1
 
-        blues = dominant(shot, 2)
-        base_blues = dominant(base, 2)
-        check(len(blues) > 200 and len(blues) > len(base_blues) + 200,
+        print("phase 7: read the two difference sets")
+        # Everything below reads ONLY pixels one of the two steps drew.
+        blues = dominant(site_px, 2)
+        check(len(blues) > 200,
               "a frame pixel OUTSIDE the reused facemap's silhouette is "
               "visible",
-              f"{len(blues)} blue-dominant px (baseline {len(base_blues)})")
+              f"{len(blues)} blue-dominant px of {len(site_px)} the site drew")
 
-        cyans = cyanish(shot)
-        base_cyans = cyanish(base)
-        check(len(cyans) <= len(base_cyans) + 20,
+        check(not cyanish(ctrl_px),
               "the UNFLAGGED static piece's out-of-silhouette pixels are "
               "still clipped",
-              f"{len(cyans)} cyan px (baseline {len(base_cyans)})")
+              f"{len(cyanish(ctrl_px))} cyan px of {len(ctrl_px)} the "
+              "control drew")
 
-        whites = whitish(shot)
-        base_whites = whitish(base)
-        check(len(whites) <= len(base_whites) + 20,
+        check(not whitish(site_px) and not whitish(ctrl_px),
               "a fully transparent frame pixel paints nothing, flag or no "
               "flag",
-              f"{len(whites)} white px (baseline {len(base_whites)})")
+              f"{len(whitish(site_px))} + {len(whitish(ctrl_px))} white px")
 
-        reds = dominant(shot, 0)
-        greens = dominant(shot, 1)
+        reds = dominant(site_px, 0)
+        greens = dominant(site_px, 1)
         if check(bool(reds) and bool(greens) and bool(blues),
                  "all three lit bands reached the frame buffer",
                  f"red={len(reds)} green={len(greens)} blue={len(blues)}"):
@@ -420,7 +496,8 @@ def main() -> int:
         shutil.rmtree(FIXTURE_DIR, ignore_errors=True)
 
     print()
-    print(f"  {os.path.join(args.out, '1_construction.png')}")
+    for name in ("0_baseline.png", "1_construction.png", "2_with_static.png"):
+        print(f"  {os.path.join(args.out, name)}")
     print()
     if failures:
         print(f"structure_construction_probe: {failures} failure(s)")
