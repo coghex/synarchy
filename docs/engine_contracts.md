@@ -1080,7 +1080,11 @@ nothing in the browser reads the matrix.
   `resolved` alone cannot say it: a row whose animation reference
   resolved but whose west cell is absent is a real authoring fault, and
   `rows` is the surface automated input uses to pick a row to click. A
-  raw row reports `undeclared` there instead.
+  raw row reports `undeclared` there instead. The dump also names the
+  marker ELEMENTS — per cell and for the enlarged region — so a gate can
+  read their visibility and text back through `UI.getElementInfo` and
+  prove the indicator was drawn, rather than trusting that a dump flag
+  implies a pixel.
 - **Compatibility.** `entries`, `defaultEntry` and `selected` keep their
   pre-#2492 meaning: `entries` is the raw list in its existing order and
   shape, `defaultEntry` is the unchanged raw ladder, and `selected` is
