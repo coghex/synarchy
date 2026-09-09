@@ -1,0 +1,7 @@
+items:
+  - name: "lantern"
+    display_name: "Lantern"
+    sprite: "assets/textures/items/supply/lantern.png"
+    weight: 0.6
+    bulk: 1.5
+    category: Supplies
