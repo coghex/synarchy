@@ -46,14 +46,23 @@ because the base's own changes are on BOTH sides of the comparison; and
 it still catches an edit, an addition, a deletion and a REVERT, because
 none of those can be reproduced by replaying the approved head.
 
-Why merge-tree, and which base
-------------------------------
-`git merge-tree --write-tree` performs the merge entirely in the object
-database -- no worktree, no index, nothing to clean up in the CI checkout
-this job shares with other steps -- and prints the merged tree's object
-name, which is what makes the result comparable to a real commit's tree.
-Comparing TREES compares content and file modes together, over the whole
-repository, so a mode-only change is a mismatch like any other.
+How the replay runs, and which base
+-----------------------------------
+`git merge-tree --write-tree` would do it in one call, but it needs git
+2.38 and this project's CI image is Ubuntu 22.04, whose git is 2.34 --
+so the decision would strip every pull request there while passing on a
+developer's newer machine. `_replay` uses git's oldest stable plumbing
+instead, which behaves identically on both: `read-tree -i -m` for the
+three-way INDEX merge, then `merge-index -o git-merge-one-file -a` to
+run git's own content merge over whatever that left unmerged (the step
+that makes two additive edits to one file merge rather than conflict --
+the whole point of #2591), then `write-tree`.
+
+The index and work tree are redirected into a temporary directory that
+is removed on the way out, so nothing touches the CI checkout this job
+shares with other steps. Comparing TREES compares content and file modes
+together, over the whole repository, so a mode-only change is a mismatch
+like any other.
 
 The replay base is the base revision AFTER actually incorporated
 (`merge-base(base, AFTER)`), never the base tip this checkout fetched.
@@ -63,11 +72,13 @@ AFTER never saw and read them as this PR's own work -- a sibling merging
 between the branch update and this job would strip an approval it had
 nothing to do with.
 
-A conflicted replay is its own verdict, not a failure: `merge-tree`
-reports a conflict as exit 1 while still writing the tree and naming the
-conflicted paths. It STRIPS -- a resolution no reviewer saw is exactly
-what an approval must not carry -- and says which paths conflicted, even
-when AFTER itself contains a perfectly good committed resolution.
+A conflicted replay is its own verdict, not a failure: `merge-index`
+exits non-zero when a path could not be content-merged, and the paths
+are read back from the scratch index with `ls-files -u` rather than by
+parsing the merge driver's prose. It STRIPS -- a resolution no reviewer
+saw is exactly what an approval must not carry -- and says which paths
+conflicted, even when AFTER itself contains a perfectly good committed
+resolution.
 
 Fail-closed, and observably so
 ------------------------------
@@ -122,20 +133,28 @@ NULL_SHA = "0" * 40
 KEEP = "keep"
 STRIP = "strip"
 
-#: The frozen replay command. Every term is load-bearing and the
-#: self-test pins the tuple:
-#:   merge-tree    a three-way merge performed entirely in the object
-#:                 database -- no worktree, no index, nothing to clean up
-#:                 in the CI checkout the job shares with other steps
-#:   --write-tree  write the merged tree and print its object name, which
-#:                 is what makes the result COMPARABLE to a real commit's
-#:                 tree instead of a patch that has to be re-interpreted
-#: The two commits to merge follow. The replay's own base is left for
-#: merge-tree to derive: where BEFORE and the incorporated revision have
-#: SEVERAL merge bases (a criss-cross history), git's recursive strategy
-#: merges them, which is what a real merge would do -- pinning one
-#: candidate would replay something git itself would never produce.
-MERGE_TREE_FLAGS = ("merge-tree", "--write-tree")
+#: The frozen replay commands. Every term is load-bearing and the
+#: self-test pins both tuples.
+#:
+#: `git merge-tree --write-tree` would do this in one call, but it needs
+#: git 2.38 and this project's CI image is Ubuntu 22.04, whose git is
+#: 2.34 -- so the decision would strip every pull request there while
+#: passing on a developer's newer machine. This recipe is git's own
+#: three-way merge through its oldest stable plumbing, and it runs the
+#: same on both:
+#:   read-tree -i -m <base> <ours> <theirs>
+#:                 the three-way INDEX merge, leaving whatever it cannot
+#:                 resolve trivially at stages 1/2/3. `-i` because the
+#:                 scratch work tree is empty and must not be consulted.
+#:   merge-index -o git-merge-one-file -a
+#:                 runs git's own content merge over exactly those
+#:                 unmerged entries -- the step that makes two additive
+#:                 edits to one file merge instead of conflicting, which
+#:                 is the whole point of #2591. `-o` finishes every path
+#:                 rather than stopping at the first failure, and a
+#:                 non-zero exit means at least one truly conflicted.
+READ_TREE_FLAGS = ("read-tree", "-i", "-m")
+MERGE_INDEX_FLAGS = ("merge-index", "-o", "git-merge-one-file", "-a")
 
 
 class Decision(NamedTuple):
@@ -170,7 +189,8 @@ class Git:
             return False, err.strip()
         return True, out
 
-    def capture(self, *args: str) -> tuple[int, str, str]:
+    def capture(self, *args: str, env: dict[str, str] | None = None
+                ) -> tuple[int, str, str]:
         """(exit code, stdout, stderr) -- the whole result, unflattened.
 
         `run` collapses a non-zero exit to `False` and discards stdout,
@@ -188,6 +208,7 @@ class Git:
                 capture_output=True,
                 text=True,
                 check=False,
+                env={**os.environ, **env} if env else None,
             )
         except OSError as error:  # git absent, repo_dir gone, ...
             return -1, "", str(error)
@@ -228,13 +249,11 @@ def base_candidates(base_ref: str, base_sha: str) -> list[str]:
 
 
 def replay_tree(stdout: str) -> str:
-    """The merged tree object name `git merge-tree --write-tree` printed.
+    """The merged tree object name `git write-tree` printed.
 
-    It is the FIRST line on both exits that write one: a clean merge
-    prints the tree alone, a conflicted merge prints the tree and then an
-    informational section. Anything else -- no output, or a first line
-    that is not an object name -- is unreadable rather than a verdict,
-    and the caller fails closed on it.
+    Anything else -- no output, or a line that is not an object name --
+    is unreadable rather than a verdict, and the caller fails closed on
+    it rather than comparing a string it does not understand.
     """
     first = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
     if len(first) == 40 and all(c in "0123456789abcdef" for c in first):
@@ -243,16 +262,15 @@ def replay_tree(stdout: str) -> str:
 
 
 def conflicted_paths(stdout: str) -> list[str]:
-    """The paths a conflicted `merge-tree` named, for the job log.
+    """The paths still unmerged, from `git ls-files -u`, for the job log.
 
-    The conflicted-file section follows the tree and an empty line, one
-    `<mode> <object> <stage>\t<path>` record per stage, so a path
-    appears up to three times. Reported de-duplicated, in first-seen
-    order, and best-effort: a shape this cannot parse still leaves the
-    decision a STRIP, only a less specific one.
+    One `<mode> <object> <stage>\t<path>` record per surviving stage, so
+    a path appears up to three times. Reported de-duplicated, in
+    first-seen order, and best-effort: a shape this cannot parse still
+    leaves the decision a STRIP, only a less specific one.
     """
     paths: list[str] = []
-    for line in stdout.splitlines()[1:]:
+    for line in stdout.splitlines():
         _, tab, path = line.partition("\t")
         path = path.strip()
         if tab and path and path not in paths:
@@ -268,6 +286,65 @@ def _paths_summary(paths: list[str]) -> str:
     if len(paths) > 5:
         shown += f", ... (+{len(paths) - 5} more)"
     return shown
+
+
+def _replay(git: Git, merge_base: str, ours: str, theirs: str
+            ) -> tuple[str, str, str]:
+    """Merge `ours` and `theirs` over `merge_base`, in scratch space.
+
+    Returns (reason, detail, tree): an empty reason and the merged tree's
+    object name on success, or a STRIP reason code and its explanation.
+    The caller turns a reason into the `Decision`, so every reason code
+    this module can produce is visible at ONE place. Nothing here
+    touches the repository's own index or working tree -- both are
+    redirected into a temporary directory that is removed on the way out,
+    because this runs inside the same CI checkout other steps are using.
+
+    The git directory is resolved rather than inherited, so redirecting
+    the work tree cannot leave git guessing where the repository is.
+    """
+    ok, git_dir = git.run("rev-parse", "--absolute-git-dir")
+    git_dir = git_dir.strip() if ok else ""
+    if not git_dir:
+        return ("replay-failed",
+                "could not locate the repository's git directory", "")
+
+    with tempfile.TemporaryDirectory(prefix="review-gate-replay-") as scratch:
+        env = {
+            "GIT_DIR": git_dir,
+            "GIT_WORK_TREE": scratch,
+            "GIT_INDEX_FILE": str(Path(scratch) / "index"),
+        }
+        code, _, stderr = git.capture(
+            *READ_TREE_FLAGS, merge_base, ours, theirs, env=env)
+        if code != 0:
+            return ("replay-failed",
+                    "could not replay the approved head onto the base: "
+                    + (stderr.strip() or f"git exited {code}"), "")
+
+        merged, _, merge_err = git.capture(*MERGE_INDEX_FLAGS, env=env)
+        if merged != 0:
+            # At least one path could not be content-merged. Name them
+            # from the index rather than by parsing the merge driver's
+            # prose, which is not a stable interface.
+            _, unmerged, _ = git.capture("ls-files", "-u", env=env)
+            paths = conflicted_paths(unmerged)
+            if not paths and not merge_err.strip():
+                return ("replay-unreadable",
+                        "the replay reported a conflict it could not name", "")
+            return ("replay-conflicted",
+                    "replaying the approved head onto the base conflicts in: "
+                    + _paths_summary(paths), "")
+
+        code, stdout, stderr = git.capture("write-tree", env=env)
+        if code != 0:
+            return ("replay-failed", "could not write the replayed tree: "
+                    + (stderr.strip() or f"git exited {code}"), "")
+        tree = replay_tree(stdout)
+        if not tree:
+            return ("replay-unreadable",
+                    "the replay produced no readable tree object name", "")
+        return ("", "", tree)
 
 
 def decide(git: Git, before: str, after: str, base_ref: str, base_sha: str) -> Decision:
@@ -354,20 +431,14 @@ def decide(git: Git, before: str, after: str, base_ref: str, base_sha: str) -> D
     # clean, additive merge into a file the PR also owns read as a
     # content change, which is what stripped approvals from sibling PRs
     # that both edit a shared manifest (#2591).
-    code, stdout, stderr = git.capture(
-        *MERGE_TREE_FLAGS, resolved_before, replay_base)
-    if code not in (0, 1):
-        return Decision(STRIP, "replay-failed",
-                        "could not replay the approved head onto the base: "
-                        + ((stderr or stdout).strip() or f"git exited {code}"))
-    replayed = replay_tree(stdout)
-    if not replayed:
-        return Decision(STRIP, "replay-unreadable",
-                        "the replay produced no readable tree object name")
-    if code == 1:
-        return Decision(STRIP, "replay-conflicted",
-                        "replaying the approved head onto the base conflicts in: "
-                        + _paths_summary(conflicted_paths(stdout)))
+    reason, detail, replayed = _replay(git, shared.strip(), resolved_before,
+                                       replay_base)
+    if reason == "replay-failed":
+        return Decision(STRIP, "replay-failed", detail)
+    if reason == "replay-conflicted":
+        return Decision(STRIP, "replay-conflicted", detail)
+    if reason == "replay-unreadable":
+        return Decision(STRIP, "replay-unreadable", detail)
 
     if replayed != after_tree:
         # Deliberately the SAME reason code an edit, an addition, a
@@ -401,14 +472,15 @@ class _FaultingGit(Git):
         self._occurrence = occurrence
         self._seen = 0
 
-    def capture(self, *args: str) -> tuple[int, str, str]:
+    def capture(self, *args: str, env: dict[str, str] | None = None
+                ) -> tuple[int, str, str]:
         # Faulted at the ONE seam every invocation now passes through,
         # so a fault reaches `run`'s callers and `capture`'s alike.
         if args[: len(self._prefix)] == self._prefix:
             self._seen += 1
             if self._seen == self._occurrence:
                 return 128, "", "injected git failure"
-        return super().capture(*args)
+        return super().capture(*args, env=env)
 
 
 class _MuteGit(Git):
@@ -425,10 +497,11 @@ class _MuteGit(Git):
         super().__init__(repo_dir)
         self._prefix = prefix
 
-    def capture(self, *args: str) -> tuple[int, str, str]:
+    def capture(self, *args: str, env: dict[str, str] | None = None
+                ) -> tuple[int, str, str]:
         if args[: len(self._prefix)] == self._prefix:
             return 0, "", ""
-        return super().capture(*args)
+        return super().capture(*args, env=env)
 
 
 class _Repo:
@@ -795,13 +868,16 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
               decide(_FaultingGit(repo.path, ("rev-parse", f"{after}^{{tree}}")),
                      before, after, "master", m0), STRIP, "after-tree-failed")
         check("fail-closed: the replay command fails",
-              decide(_FaultingGit(repo.path, MERGE_TREE_FLAGS),
+              decide(_FaultingGit(repo.path, READ_TREE_FLAGS),
+                     before, after, "master", m0), STRIP, "replay-failed")
+        check("fail-closed: the replayed tree cannot be written",
+              decide(_FaultingGit(repo.path, ("write-tree",)),
                      before, after, "master", m0), STRIP, "replay-failed")
         # Exit 0 with unusable output is NOT a verdict: a merge-tree that
         # printed no object name has told us nothing, and the difference
         # between that and a crash is what the two reason codes carry.
         check("fail-closed: the replay output is unreadable",
-              decide(_MuteGit(repo.path, MERGE_TREE_FLAGS),
+              decide(_MuteGit(repo.path, ("write-tree",)),
                      before, after, "master", m0), STRIP, "replay-unreadable")
         check("fail-closed: no base revision resolves",
               decide(git, before, after, "no-such-branch", ""), STRIP, "base-unresolvable")
@@ -863,13 +939,19 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
         if base_candidates("master", "master") != ["origin/master", "master"]:
             failures.append("base_candidates should not repeat a candidate")
 
-        # ---- the frozen replay command ----
-        if MERGE_TREE_FLAGS != ("merge-tree", "--write-tree"):
+        # ---- the frozen replay commands ----
+        if READ_TREE_FLAGS != ("read-tree", "-i", "-m"):
             failures.append(
-                "MERGE_TREE_FLAGS changed: merge-tree performs the replay "
-                "entirely in the object database, and --write-tree is what "
-                "makes its result a tree name comparable to a real commit's. "
-                f"Got {MERGE_TREE_FLAGS!r}")
+                "READ_TREE_FLAGS changed: -m is the three-way index merge "
+                "and -i keeps the empty scratch work tree out of it. "
+                f"Got {READ_TREE_FLAGS!r}")
+        if MERGE_INDEX_FLAGS != ("merge-index", "-o", "git-merge-one-file", "-a"):
+            failures.append(
+                "MERGE_INDEX_FLAGS changed: git-merge-one-file is git's own "
+                "content merge -- without it two additive edits to one file "
+                "stay unmerged, which is the defect #2591 fixed -- -a runs "
+                "it over every unmerged entry and -o finishes them all. "
+                f"Got {MERGE_INDEX_FLAGS!r}")
 
         # ---- replay_tree reads only a real object name, off line one ----
         tree = "0" * 40
@@ -979,13 +1061,22 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
     ("invert the replay comparison",
      lambda t: _replace_once(t, "if replayed != after_tree:",
                              "if replayed == after_tree:")),
-    ("treat a conflicted replay as clean (exit 1 accepted as success)",
-     lambda t: _replace_once(t, "    if code == 1:\n",
-                             "    if False:\n")),
+    ("treat a conflicted replay as clean",
+     lambda t: _replace_once(t, "        if merged != 0:\n",
+                             "        if False:\n")),
     ("replay onto the FETCHED base tip instead of the incorporated one",
      lambda t: _replace_once(
-         t, "        *MERGE_TREE_FLAGS, resolved_before, replay_base)",
-         "        *MERGE_TREE_FLAGS, resolved_before, base)")),
+         t, "    reason, detail, replayed = _replay(git, shared.strip(), resolved_before,\n"
+            "                                       replay_base)",
+         "    reason, detail, replayed = _replay(git, shared.strip(), resolved_before,\n"
+         "                                       base)")),
+    ("skip the content merge, leaving trivially-unmergeable paths conflicted",
+     lambda t: _replace_once(
+         t, "        merged, _, merge_err = git.capture(*MERGE_INDEX_FLAGS, env=env)",
+         "        merged, merge_err = 0, ''")),
+    ("redirect neither the index nor the work tree into scratch space",
+     lambda t: _replace_once(
+         t, '            "GIT_INDEX_FILE": str(Path(scratch) / "index"),\n', "")),
     ("accept any first line as the replay tree",
      lambda t: _replace_once(
          t, '    if len(first) == 40 and all(c in "0123456789abcdef" for c in first):\n'
@@ -996,9 +1087,9 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
      lambda t: _replace_once(
          t, "    if replayed != after_tree:",
          "    if False and replayed != after_tree:")),
-    ("drop --write-tree from the frozen replay command",
-     lambda t: _replace_once(t, 'MERGE_TREE_FLAGS = ("merge-tree", "--write-tree")',
-                             'MERGE_TREE_FLAGS = ("merge-tree",)')),
+    ("drop -m from the frozen read-tree command",
+     lambda t: _replace_once(t, 'READ_TREE_FLAGS = ("read-tree", "-i", "-m")',
+                             'READ_TREE_FLAGS = ("read-tree", "-i")')),
     ("prefer a stale local base ref over origin/<ref>",
      lambda t: _replace_once(t, '        f"origin/{base_ref}" if base_ref else "",\n'
                                 '        base_sha or "",\n'
@@ -1010,7 +1101,7 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
      lambda t: _replace_once(t, '        base_sha or "",\n', "")),
     ("report no conflicted paths at all",
      lambda t: _replace_once(t, "    paths: list[str] = []\n"
-                                "    for line in stdout.splitlines()[1:]:",
+                                "    for line in stdout.splitlines():",
                              "    paths: list[str] = []\n"
                              "    for line in []:")),
 )
