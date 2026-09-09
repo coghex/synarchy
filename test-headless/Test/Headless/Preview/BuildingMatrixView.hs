@@ -234,6 +234,21 @@ spec = do
       , "  if prev then assert(c.bounds.x > prev, 'cells advance rightwards') end"
       , "  prev = c.bounds.x"
       , "end"
+      , "-- #1907 requirement 3: the enlarged sprite must not overlap the"
+      , "-- strip, so a DECLARED row's zoom region is the sub-rect ABOVE"
+      , "-- it -- shorter than the panel, and clear of every cell."
+      , "local d2 = pm.dump()"
+      , "assert(d2.zoom.region.height < d2.panelBounds.height,"
+      , "    'the declared region excludes the strip: '"
+      , "    .. tostring(d2.zoom.region.height) .. ' vs panel '"
+      , "    .. tostring(d2.panelBounds.height))"
+      , "local regionBottom = d2.zoom.region.y + d2.zoom.region.height"
+      , "for _, c in ipairs(d2.facingRow) do"
+      , "  assert(c.bounds.y >= regionBottom,"
+      , "      c.facing .. ' cell overlaps the enlarged region')"
+      , "end"
+      , "assertContained('building enlarged', d2.zoom.sprite, d2.zoom.region)"
+      , "assertCentered('building enlarged', d2.zoom.sprite, d2.zoom.region)"
       ]
 
     it "moves through all four facings and back to the start" $ runsOk $ lns
