@@ -53,3 +53,13 @@ tools/playtest/sessions/
 # escapes it is refused at registration; removed by the probe itself, and
 # listed here so an interrupted run leaves nothing to commit.
 .probe_construction_fixture/
+
+# tools/preview/buildings.py's #2492 matrix fixture. Generated into the
+# resource root because the buildings viewer resolves a building's art at
+# assets/textures/buildings/<name>/ and its declaration at
+# data/buildings/<name>.yaml, and no shipped building declares the
+# missing, unresolved or canonical states the probe has to verify.
+# Removed by the probe itself, and listed here so an interrupted run
+# leaves nothing to commit.
+assets/textures/buildings/probe_matrix_fixture/
+data/buildings/probe_matrix_fixture.yaml

@@ -1146,7 +1146,14 @@ the CPU-only Lua half that drives the REAL `preview_manager` /
 regressions. `tools/preview/buildings.py` (through the manual-only,
 `needs-gpu` `tools/preview_probe.py --only buildings`) exercises the
 same surface against a live engine, locating rows by identity rather
-than by label.
+than by label. Its phase 8 generates a fixture building — gitignored,
+written to the canonical `assets/textures/buildings/<name>/` and
+`data/buildings/<name>.yaml` paths because that is where the viewer
+resolves one, and removed in a `finally` — because no shipped definition
+declares a canonical `sprites`/`frames` block, a `destruction` role, an
+unresolved animation reference, or art that is not on disk, so the
+missing, unresolved, legacy and provenance states have nowhere else to
+be verified through real marshalling and rendering.
 
 ### Centered bounded zoom (#1907)
 

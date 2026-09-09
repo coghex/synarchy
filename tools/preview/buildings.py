@@ -25,7 +25,9 @@ facade's inventory (`python3 tools/preview_probe.py --only buildings`).
 """
 from __future__ import annotations
 
+import base64
 import os
+import shutil
 import time
 from probelib import quit_engine, send, poll_until
 
@@ -662,3 +664,327 @@ def check_declared_matrix(port: int, name: str) -> bool:
     return all([ok_order, ok_distinct, ok_absent, ok_legacy, ok_cells,
                 ok_totals, ok_select, ok_strip, ok_click, ok_wrap, ok_hold,
                 ok_raw])
+
+
+# --- #2492's live matrix fixture ------------------------------------
+#
+# No shipped building declares a canonical `sprites`/`frames` block, a
+# `destruction` role, an unresolved animation reference, or art that is
+# not on disk — so the acceptance's "verifies missing, unresolved,
+# legacy, and provenance states" is unreachable from the eight checked-in
+# definitions. This phase generates one building that declares all of
+# them, exercises it through the real engine, and removes it again.
+#
+# It lives at the canonical paths rather than a temporary root because
+# that is where the viewer resolves a building: `resolveItemDir` takes a
+# single directory name under `assets/textures/buildings`, and
+# `buildingDataPath` reads `data/buildings/<name>.yaml`. Both paths are
+# gitignored, and the teardown runs in a `finally`.
+
+FIXTURE = "probe_matrix_fixture"
+FIXTURE_ROOT = os.path.join("assets", "textures", "buildings", FIXTURE)
+FIXTURE_YAML = os.path.join("data", "buildings", FIXTURE + ".yaml")
+
+# A 1x1 PNG. The viewer only needs `engine.getTextureSize` to answer, so
+# the pixels are immaterial — what matters is that a declared-and-present
+# path really loads while a declared-and-invalid one really cannot.
+_PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQ"
+    "DwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+def _png(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(_PNG_1X1)
+
+
+def write_matrix_fixture() -> None:
+    """One building declaring every state the acceptance names.
+
+    Roles: a CANONICAL `construction` whose four facings are all on disk;
+    a CANONICAL `appearance` whose four facings are the four invalid
+    kinds; a LEGACY multi-frame `built` on disk; and a `destruction`
+    naming an animation the definition never declares. Plus a LEGACY
+    sprite — so one definition answers `canonical` and `legacy` for
+    different entries, which is exactly what entry-specific provenance
+    means.
+
+    Raw classes present beside them: two animation directories, a
+    top-level loose static, and a nested static.
+    """
+    remove_matrix_fixture()
+    for name in ("default.png", "loose.png"):
+        _png(os.path.join(FIXTURE_ROOT, name))
+    _png(os.path.join(FIXTURE_ROOT, "sub", "nested.png"))
+    for facing in ("s", "w", "n", "e"):
+        _png(os.path.join(FIXTURE_ROOT, "build", f"{facing}.png"))
+    for i in range(2):
+        _png(os.path.join(FIXTURE_ROOT, "idle", f"frame_{i:03d}.png"))
+
+    # The four invalid kinds, one per facing of `appearance`.
+    os.makedirs(os.path.join(FIXTURE_ROOT, "broken_dir.png"), exist_ok=True)
+    os.symlink("default.png", os.path.join(FIXTURE_ROOT, "broken_link.png"))
+    with open(os.path.join(FIXTURE_ROOT, "broken.txt"), "w") as fh:
+        fh.write("")
+    os.mkfifo(os.path.join(FIXTURE_ROOT, "broken_fifo.png"))
+
+    def p(*parts: str) -> str:
+        return "/".join((FIXTURE_ROOT.replace(os.sep, "/"),) + parts)
+
+    os.makedirs(os.path.dirname(FIXTURE_YAML), exist_ok=True)
+    with open(FIXTURE_YAML, "w") as fh:
+        fh.write(f"""buildings:
+  - name: "{FIXTURE}"
+    display_name: "Probe Matrix Fixture"
+    category: "Test"
+    visual_class: "gateway"
+    tile_size: {{ x: 1, y: 1 }}
+    build_work: 12.0
+    sprite: "{p('default.png')}"
+    state_animations:
+      construction: build-anim
+      appearance:   broken-anim
+      built:        idle-anim
+      destruction:  no-such-anim
+    animations:
+      build-anim:
+        fps: 8
+        loop: false
+        frames:
+          south: ["{p('build', 's.png')}"]
+          west:  ["{p('build', 'w.png')}"]
+          north: ["{p('build', 'n.png')}"]
+          east:  ["{p('build', 'e.png')}"]
+      broken-anim:
+        fps: 8
+        loop: false
+        frames:
+          south: ["{p('broken_dir.png')}"]
+          west:  ["{p('broken_link.png')}"]
+          north: ["{p('broken.txt')}"]
+          east:  ["{p('broken_fifo.png')}"]
+      idle-anim:
+        fps: 8
+        loop: false
+        frames:
+          default:
+            - "{p('idle', 'frame_000.png')}"
+            - "{p('idle', 'frame_001.png')}"
+""")
+
+
+def remove_matrix_fixture() -> None:
+    """Teardown. Never a variable/wildcard delete: both paths are the
+    module constants above and nothing else."""
+    fifo = os.path.join(FIXTURE_ROOT, "broken_fifo.png")
+    if os.path.exists(fifo) or os.path.islink(fifo):
+        os.remove(fifo)
+    shutil.rmtree(FIXTURE_ROOT, ignore_errors=True)
+    if os.path.exists(FIXTURE_YAML):
+        os.remove(FIXTURE_YAML)
+
+
+def select_row(port: int, identity: str) -> dict:
+    """Select the combined row with this identity by CLICKING its
+    dump-reported bounds, scrolling it into view with the keyboard first
+    when the list is taller than the panel.
+
+    Bounds, never a hardcoded coordinate — and identity, never a label:
+    a lifecycle row and the raw row backing the same files draw
+    different text but either could move.
+    """
+    for _ in range(40):
+        row = row_by_identity(dump(port), identity)
+        if row is not None:
+            break
+        press_preview_key(port, "Down", lambda _s: True)
+    else:
+        return dump(port)
+    click_element(port, row.get("bounds") or {})
+    return poll_until(10.0, lambda: (
+        (lambda s: s if (s.get("selection") or {}).get("identity") == identity
+            and s.get("state") == "ready" else None)(dump(port)))) or dump(port)
+
+
+def check_buildings_matrix(port: int) -> bool:
+    """8. Every lifecycle role, the static row, every raw row class and
+    every facing — selected through dump-reported bounds against a live
+    engine — plus the missing, unresolved, legacy and provenance states
+    the shipped definitions cannot express (#2492).
+    """
+    print("8. declared lifecycle/facing matrix "
+          f"(--preview buildings/{FIXTURE}): every role, class and facing")
+    write_matrix_fixture()
+    proc = None
+    try:
+        proc = boot_preview(port, f"8. buildings/{FIXTURE}",
+                            f"buildings/{FIXTURE}",
+                            "preview engine (buildings matrix)")
+        d = poll_state(port, "ready")
+
+        want_rows = [
+            "lifecycle:construction", "lifecycle:appearance",
+            "lifecycle:built", "lifecycle:destruction", "sprite",
+            "filesystem:build", "filesystem:default.png",
+            "filesystem:idle", "filesystem:loose.png",
+            "filesystem:sub/nested.png",
+        ]
+        got_rows = [r.get("identity") for r in (d.get("rows") or [])]
+        ok_rows = check("the combined list is every declared row in role "
+                        "order, then every raw row in label order",
+                        got_rows == want_rows,
+                        f"got={got_rows} want={want_rows}")
+
+        # The raw browser is untouched by any of it: the invalid kinds
+        # are not entries, and the animation directories still are.
+        ok_raw = check("the raw browser still holds exactly its own "
+                       "entries — no invalid kind became one",
+                       dumped_building_entries(d) == [
+                           ("build", True), ("default.png", False),
+                           ("idle", True), ("loose.png", False),
+                           ("sub/nested.png", False)],
+                       dumped_building_entries(d))
+
+        ok_default = check("the declared built row is the initial "
+                           "selection, while defaultEntry stays raw",
+                           d.get("defaultSelection") == "lifecycle:built"
+                           and (d.get("selection") or {}).get("identity")
+                               == "lifecycle:built"
+                           and d.get("defaultEntry") == "idle"
+                           and (d.get("selected") or {}).get("label") == "idle",
+                           f"defaultSelection={d.get('defaultSelection')} "
+                           f"defaultEntry={d.get('defaultEntry')} "
+                           f"selected={d.get('selected')}")
+
+        ok_totals = check("the totals report the declared diagnostics",
+                          (d.get("totals") or {}).get("missingCells") == 8
+                          and (d.get("totals") or {})
+                              .get("unresolvedLifecycleRows") == 1
+                          and (d.get("totals") or {})
+                              .get("undeclaredFilesystemEntries") == 2,
+                          d.get("totals"))
+
+        # Every DECLARED row, selected through its own bounds, with its
+        # own expected provenance and diagnostic state.
+        expected = {
+            "lifecycle:construction": ("canonical", False, True, {}),
+            "lifecycle:appearance": ("canonical", False, True, {
+                "south": "directory", "west": "symlink",
+                "north": "unsupported_extension", "east": "special"}),
+            "lifecycle:built": ("legacy", True, True, {}),
+            "lifecycle:destruction": ("canonical", False, False, {
+                "south": "unresolved", "west": "unresolved",
+                "north": "unresolved", "east": "unresolved"}),
+            "sprite": ("legacy", True, True, {}),
+        }
+        ok_declared = True
+        for identity, (source, legacy, resolved, bad) in expected.items():
+            state = select_row(port, identity)
+            sel = state.get("selection") or {}
+            facings = [c.get("facing") for c in (state.get("facingRow") or [])]
+            reasons = {c.get("facing"): c.get("missingReason")
+                       for c in (state.get("facingRow") or [])
+                       if c.get("missing")}
+            requested = [c.get("facing") for c in (state.get("facingRow") or [])
+                         if c.get("missing") and c.get("handle") is not None]
+            ok_declared = check(
+                f"{identity}: selected by bounds, four facings, "
+                f"declaration={source}, legacy={legacy}, "
+                f"resolved={resolved}, diagnostics={sorted(bad.items())}",
+                sel.get("identity") == identity
+                and state.get("state") == "ready"
+                and facings == ["south", "west", "north", "east"]
+                and state.get("declaration") == source
+                and sel.get("legacy") is legacy
+                and sel.get("resolved") is resolved
+                and reasons == bad
+                and not requested,
+                f"selection={sel} declaration={state.get('declaration')} "
+                f"facings={facings} reasons={reasons} "
+                f"state={state.get('state')} "
+                f"requested-invalid={requested}") and ok_declared
+
+            # Every facing of every declared row, clicked through its
+            # own dump-reported bounds.
+            for facing in ["west", "north", "east", "south"]:
+                cell = next((c for c in (dump(port).get("facingRow") or [])
+                             if c.get("facing") == facing), None)
+                if cell is None or not cell.get("bounds"):
+                    ok_declared = check(f"{identity}: {facing} cell is "
+                                        "clickable", False, cell) and False
+                    break
+                click_element(port, cell["bounds"])
+                got = poll_until(10.0, lambda: (
+                    (lambda s: s if s.get("selectedFacing") == facing
+                        and s.get("state") == "ready" else None)(
+                            dump(port)))) or dump(port)
+                # Enlarging a diagnostic facing must terminate, not hang.
+                if (got.get("selectedFacing") != facing
+                        or got.get("state") != "ready"
+                        or (got.get("selection") or {}).get("identity")
+                            != identity):
+                    ok_declared = check(
+                        f"{identity}: enlarging {facing} terminates without "
+                        "reselecting the row", False,
+                        f"facing={got.get('selectedFacing')} "
+                        f"state={got.get('state')} "
+                        f"selection={got.get('selection')}") and False
+                    break
+                want_missing = facing in bad
+                if bool(got.get("path")) is want_missing:
+                    ok_declared = check(
+                        f"{identity}: {facing} resolves a path only when it "
+                        "is not diagnostic", False,
+                        f"missing={want_missing} path={got.get('path')}"
+                    ) and False
+                    break
+            else:
+                ok_declared = check(f"{identity}: every facing enlarges "
+                                    "through its own bounds, and a "
+                                    "diagnostic one resolves no path",
+                                    True) and ok_declared
+
+        # Every RAW row class: an animation directory, a top-level loose
+        # static, and a nested static. None has a facing model.
+        ok_rawrows = True
+        for identity in ("filesystem:build", "filesystem:loose.png",
+                         "filesystem:sub/nested.png"):
+            state = select_row(port, identity)
+            sel = state.get("selection") or {}
+            ok_rawrows = check(
+                f"{identity}: selectable, with no facing strip and no "
+                "declaration",
+                sel.get("identity") == identity
+                and sel.get("kind") == "filesystem"
+                and state.get("state") == "ready"
+                and not (state.get("facingRow") or [])
+                and state.get("selectedFacing") is None
+                and state.get("declaration") is None
+                and (state.get("selected") or {}).get("label")
+                    == identity.split(":", 1)[1],
+                f"selection={sel} facingRow={state.get('facingRow')} "
+                f"declaration={state.get('declaration')} "
+                f"selected={state.get('selected')}") and ok_rawrows
+
+        # Trimmed loading, with the sharper claim this fixture allows:
+        # not one of the invalid declared paths was ever requested.
+        root_prefix = os.path.join("assets", "textures", "buildings",
+                                   FIXTURE) + os.sep
+        ok_trimmed = check_trimmed_loading(port, root_prefix,
+                                           allow_chrome=True)
+        loaded = dump(port).get("loadedPaths") or []
+        invalid = [p for p in loaded
+                   if os.path.basename(p) in ("broken_dir.png",
+                                              "broken_link.png",
+                                              "broken.txt",
+                                              "broken_fifo.png")]
+        ok_never = check("no invalid declared path was ever requested",
+                         not invalid, invalid)
+
+        return all([ok_rows, ok_raw, ok_default, ok_totals, ok_declared,
+                    ok_rawrows, ok_trimmed, ok_never])
+    finally:
+        if proc is not None:
+            quit_engine(port, proc)
+        remove_matrix_fixture()
