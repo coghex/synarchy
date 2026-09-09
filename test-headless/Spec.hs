@@ -89,6 +89,8 @@ import qualified Test.Headless.Unit.Atlas as UnitAtlas
 import qualified Test.Headless.Unit.Atlas.Loader as UnitAtlasLoader
 import qualified Test.Headless.Preview.UnitAnimation as PreviewUnitAnimation
 import qualified Test.Headless.Preview.Building as PreviewBuilding
+import qualified Test.Headless.Preview.BuildingMatrix as PreviewBuildingMatrix
+import qualified Test.Headless.Preview.BuildingMatrixView as PreviewBuildingMatrixView
 import qualified Test.Headless.Preview.Zoom as PreviewZoom
 import qualified Test.Headless.Preview.KeyboardNavigation as PreviewKeyboardNavigation
 import qualified Test.Headless.World.Save.Sanitize as SaveSanitize
@@ -776,6 +778,9 @@ main = hspec $ do
     describe "Preview.Discovery" PreviewDiscovery.spec
     describe "Preview.UnitAnimation" PreviewUnitAnimation.spec
     describe "Preview.Building" PreviewBuilding.spec
+    describe "Preview.BuildingMatrix" $ do
+      PreviewBuildingMatrix.spec
+      describe "the shipped Lua viewer" PreviewBuildingMatrixView.spec
     describe "Preview.Zoom" PreviewZoom.spec
     describe "building asset schema and lifecycle roles"
         BuildingAssetSchema.spec

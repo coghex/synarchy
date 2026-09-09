@@ -6,6 +6,19 @@ module Engine.Asset.YamlBuildings
     , BuildingYamlFile(..)
     , parseBuildingAnim
     , parseBuildingTileSize
+      -- * Shared field decoders
+      --
+      --   Exported so 'Engine.Preview.Building' resolves a building's
+      --   DECLARED matrix (#2492) through the very code the game
+      --   decodes it with, rather than a preview-only restatement that
+      --   could drift: same closed lifecycle vocabulary, same legacy
+      --   @appearing@ resolution through 'legacyRoleFor', same
+      --   canonical-vs-legacy sprite and frame forms, same rejections.
+    , defSprites
+    , defRoleAnims
+    , defAnimations
+    , optionalFloat
+    , nonNegative
     , loadBuildingYaml
     , loadBuildingYamlOutcome
     ) where
