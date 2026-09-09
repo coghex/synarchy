@@ -131,7 +131,7 @@ managerHarness ∷ Text
 managerHarness = lns
     [ uiStub
     , engineStub
-    , "BROWSER_STEPS, DIRECTION_STEPS = {}, {}"
+    , "BROWSER_STEPS, DIRECTION_STEPS, FACING_STEPS = {}, {}, {}"
     , "local browsers = {}"
     , "local nextBrowser = 1"
     , "assetBrowserStub = {"
@@ -170,12 +170,23 @@ managerHarness = lns
     , "  dump=function() return {ready=true,direction='south',directions={},"
     , "      zoom={multiplier=UNIT_ZOOM,region=UNIT_PANEL}} end,"
     , "}"
+    -- The building spy mirrors the real view's #2492 surface: setRow
+    -- rather than setEntry, and a facing move that answers whether the
+    -- SELECTED row had a facing model at all. FACING_STEPS records
+    -- routing; the real-view group below proves the wraparound itself.
     , "buildingViewStub = {"
     , "  new=function(p) BUILD_PANEL=p.panel; BUILD_ZOOM=p.zoom; return 1 end,"
-    , "  setEntry=function(_,e) BUILD_ENTRY=e.label; BUILD_ENTRY_SETS=(BUILD_ENTRY_SETS or 0)+1 end,"
+    , "  setRow=function(_,r) BUILD_ENTRY=r.label; BUILD_ROW=r"
+    , "      BUILD_ENTRY_SETS=(BUILD_ENTRY_SETS or 0)+1 end,"
+    , "  setFacing=function() return true end,"
+    , "  selectAdjacentFacing=function(_,step)"
+    , "      if not BUILD_ROW or BUILD_ROW.kind == 'filesystem' then return false end"
+    , "      table.insert(FACING_STEPS,step); return true end,"
     , "  getZoomRegion=function() return BUILD_PANEL end, setZoom=function(_,z) BUILD_ZOOM=z end,"
     , "  setPanel=function(_,p) BUILD_PANEL=p end, update=function() end, destroy=function() end,"
-    , "  dump=function() return {ready=true,animated=false,zoom={multiplier=BUILD_ZOOM,region=BUILD_PANEL}} end,"
+    , "  handleCellClick=function() return nil end,"
+    , "  dump=function() return {ready=true,animated=false,facing='south',"
+    , "      zoom={multiplier=BUILD_ZOOM,region=BUILD_PANEL}} end,"
     , "}"
     , "package.loaded['scripts.ui.asset_browser']=assetBrowserStub"
     , "package.loaded['scripts.ui.list']={getChromeTexture=function() return 90 end}"
@@ -307,14 +318,39 @@ spec = do
             , "    'direction changes do not reselect/restart the animation')"
             ]
 
-        it "routes building Up/Down through the same selection path and ignores Left/Right" $ runsOk $ lns
+        it "routes building Up/Down through the same selection path and ignores Left/Right on a RAW row" $ runsOk $ lns
             [ managerHarness
             , "local entries={{label='idle',frames={'a.png'}},{label='default.png',frames={'b.png'}}}"
             , "local pm=bootManager({mode='building',building={name='b',defaultEntry='idle',"
             , "    entries=entries}},{category='buildings',item='b'})"
             , "assert(BUILD_ENTRY_SETS==1 and pm.onKeyDown('Down'))"
             , "assert(BROWSER_STEPS[1]==1 and BUILD_ENTRY_SETS==2)"
+            , "-- A YAML-less building declares nothing, so every row is raw"
+            , "-- and Left/Right stay unhandled exactly as before #2492."
+            , "assert(pm.dump().selection.kind=='filesystem')"
             , "assert(not pm.onKeyDown('Left') and not pm.onKeyDown('Right'))"
+            , "assert(#FACING_STEPS==0,'a raw row must not reach the facing strip')"
+            ]
+
+        it "routes building Left/Right to the facing strip once a DECLARED row is selected" $ runsOk $ lns
+            [ managerHarness
+            , "local cells={} for _,f in ipairs({'south','west','north','east'}) do"
+            , "  table.insert(cells,{facing=f,paths={'a.png'},missing=false,legacy=true}) end"
+            , "local building={name='b',defaultEntry='idle',defaultSelection='lifecycle:built',"
+            , "  entries={{label='idle',animated=true,fps=8,loop=false,frames={'a.png'}}},"
+            , "  declared={{identity='lifecycle:built',kind='lifecycle',label='built',"
+            , "    role='built',animation='idle-anim',resolved=true,fps=8,loop=false,"
+            , "    source='legacy',legacy=true,projected='idle',cells=cells}},"
+            , "  filesystemClasses={{label='idle',identity='filesystem:idle',"
+            , "    declared={'lifecycle:built'},undeclared=false}}}"
+            , "local pm=bootManager({mode='building',building=building},"
+            , "    {category='buildings',item='b'})"
+            , "assert(pm.dump().selection.identity=='lifecycle:built',"
+            , "    'the declared built row is the initial selection')"
+            , "assert(pm.onKeyDown('Left') and pm.onKeyDown('Right'))"
+            , "assert(#FACING_STEPS==2 and FACING_STEPS[1]==-1 and FACING_STEPS[2]==1)"
+            , "assert(BUILD_ENTRY_SETS==1,"
+            , "    'a facing change must not reselect the row')"
             ]
 
         it "moves immediately, repeats after a short delay at a fast fixed cadence, and stops exactly on key-up" $ runsOk $ lns

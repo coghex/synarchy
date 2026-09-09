@@ -1,5 +1,5 @@
-"""The `buildings` family: the buildings viewer (#888) in its normal
-built-state, no-built-state, and YAML-free forms.
+"""The `buildings` family: the buildings viewer (#888, #2492) in its
+normal built-state, no-built-state, and YAML-free forms.
 
 Three scenarios, one fresh hidden boot each:
 
@@ -9,7 +9,16 @@ Three scenarios, one fresh hidden boot each:
 
 This module owns the building expectations: the numbered-frame
 convention, the `data/buildings/<name>.yaml` scanner, the
-filesystem+YAML entry list, and the built-state default label.
+filesystem+YAML entry list, the built-state default label, and — since
+#2492 — the declared lifecycle/facing matrix layered over that browser.
+
+Row lookups go through `row_by_identity` / `filesystem_rows`, never by
+matching a dumped row's LABEL against a raw entry: the combined list
+holds declared rows beside raw ones and the two may legitimately draw
+the same text, so a label match could click the wrong row. The raw
+`entries` / `defaultEntry` / `selected` / trimmed-loading checks below
+are deliberately unchanged — they gate exactly what they gated before,
+which is the point of keeping those dump fields meaning what they meant.
 
 A library, not a probe: registered nowhere, runnable only through the
 facade's inventory (`python3 tools/preview_probe.py --only buildings`).
@@ -22,7 +31,8 @@ from probelib import quit_engine, send, poll_until
 
 from .harness import (boot_preview, check, check_forced_replay,
                       check_no_gameplay_scripts_loaded, check_trimmed_loading,
-                      click_element, dump, poll_state, window_size)
+                      click_element, dump, hold_preview_key, poll_state,
+                      press_preview_key, window_size)
 
 def is_frame_name(f: str) -> bool:
     """The checked-in numbered-frame convention, mirroring
@@ -46,7 +56,7 @@ def building_yaml(name: str) -> dict:
     reads a unit file. The per-animation defaults restated here (fps 8,
     loop FALSE) are BuildingYamlAnim's own — note loop differs from the
     units schema's default of true."""
-    out: dict = {"sprite": None, "built": None, "anims": {}}
+    out: dict = {"sprite": None, "built": None, "anims": {}, "roles": {}}
     path = os.path.join("data", "buildings", name + ".yaml")
     if not os.path.exists(path):
         return out
@@ -71,8 +81,15 @@ def building_yaml(name: str) -> dict:
                     section, section_indent = "animations", indent
                 continue
             if section == "state_animations":
-                if stripped.startswith("built:"):
-                    out["built"] = stripped.split(":", 1)[1].strip().strip('"')
+                # Every declared role, not just `built` (#2492): the
+                # lifecycle rows the viewer exposes are exactly these,
+                # in Building.Schema's fixed order.
+                key, _, value = stripped.partition(":")
+                key, value = key.strip(), value.strip().strip('"')
+                if key and value:
+                    out["roles"][key] = value
+                    if key == "built":
+                        out["built"] = value
                 continue
             # section == "animations": a key at the block's own child
             # indent starts a new animation; anything deeper belongs to it.
@@ -135,6 +152,33 @@ def expected_building_entries(name: str) -> list[tuple[str, bool]]:
 def dumped_building_entries(d: dict) -> list[tuple[str, bool]]:
     return [(e.get("label"), e.get("animated") is True)
             for e in (d.get("entries") or [])]
+
+
+def row_by_identity(d: dict, identity: str) -> dict | None:
+    """The visible combined row with this stable identity, or None when
+    it is scrolled out of view. Identity, never label: `built -> idle`
+    and the raw `idle` directory are two different rows."""
+    return next((r for r in (d.get("rows") or [])
+                 if r.get("identity") == identity), None)
+
+
+def filesystem_rows(d: dict) -> list[dict]:
+    """Only the RAW rows of the combined list — the ones whose label is
+    a filesystem entry label and whose behavior #888 fixed."""
+    return [r for r in (d.get("rows") or []) if r.get("kind") == "filesystem"]
+
+
+def declared_identities(name: str) -> list[str]:
+    """The row identities the building's YAML must produce, in the fixed
+    order Building.Schema.BuildingRole enumerates, then the sprite —
+    derived from the file, so the dump is checked against the
+    declaration rather than against itself."""
+    meta = building_yaml(name)
+    order = ["construction", "appearance", "built", "destruction"]
+    out = [f"lifecycle:{r}" for r in order if r in meta["roles"]]
+    if meta["sprite"] is not None:
+        out.append("sprite")
+    return out
 
 
 def built_default_label(name: str) -> str | None:
@@ -228,7 +272,7 @@ def check_buildings_mode(port: int) -> bool:
         # selection exposes NO playback at all, which is exactly what
         # distinguishes it from an animation entry.
         statics = {label for label, animated in expected if not animated}
-        row = next((r for r in (post.get("rows") or [])
+        row = next((r for r in filesystem_rows(post)
                     if r.get("label") in statics), None)
         if row is None:
             ok_static = check("clicking a static row selects it with no playback",
@@ -262,7 +306,7 @@ def check_buildings_mode(port: int) -> bool:
         anim_loops = {e.get("label"): e.get("loop")
                       for e in (cur.get("entries") or [])
                       if e.get("animated") is True}
-        nonloop = next((r for r in (cur.get("rows") or [])
+        nonloop = next((r for r in filesystem_rows(cur)
                         if anim_loops.get(r.get("label")) is False), None)
         if nonloop is None:
             ok_replay = check("a loop:false animation entry replays "
@@ -289,13 +333,15 @@ def check_buildings_mode(port: int) -> bool:
                 selected_at, pb2.get("frameCount"), pb2.get("fps")) \
                 and ok_truthful
 
+        ok_matrix = check_declared_matrix(port, name)
+
         # Requirement 1: only THIS building's textures (plus list chrome).
         root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         ok_no_gameplay = check_no_gameplay_scripts_loaded(port)
 
         return all([ok_mode, ok_entries, ok_default, ok_meta, ok_advance,
-                    ok_resize, ok_replay, ok_static, ok_trimmed,
+                    ok_resize, ok_replay, ok_static, ok_matrix, ok_trimmed,
                     ok_no_gameplay])
     finally:
         quit_engine(port, proc)
@@ -342,9 +388,37 @@ def check_buildings_without_built(port: int) -> bool:
                               and demolish.get("loop") is False,
                               demolish)
 
+        # #2492: with no `built` role declared, the initial combined-list
+        # selection falls to the declared SPRITE row — and `defaultEntry`
+        # and `selected` still name the raw entry they always did.
+        got_ids = [r.get("identity") for r in (d.get("rows") or [])]
+        ok_matrix = check("declares construction + sprite only, and the "
+                          "sprite row is the initial selection",
+                          got_ids[:len(declared_identities(name))]
+                          == declared_identities(name)
+                          and (d.get("selection") or {}).get("identity")
+                              == "sprite"
+                          and d.get("defaultSelection") == "sprite",
+                          f"rows={got_ids} "
+                          f"selection={d.get('selection')} "
+                          f"defaultSelection={d.get('defaultSelection')}")
+
+        # demolish/ is browsable but no YAML mentions it: it must be
+        # classified UNDECLARED and still be a first-class raw row.
+        fs = {e.get("label"): e for e in (d.get("filesystemEntries") or [])}
+        ok_undeclared = check("a YAML-less directory is classified "
+                              "undeclared without being filtered out",
+                              "demolish" in fs
+                              and fs["demolish"].get("undeclared") is True
+                              and "construct" in fs
+                              and fs["construct"].get("declared")
+                                  == ["lifecycle:construction"],
+                              fs)
+
         root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
-        return all([ok_fixture, ok_entries, ok_default, ok_convention, ok_trimmed])
+        return all([ok_fixture, ok_entries, ok_default, ok_convention,
+                    ok_matrix, ok_undeclared, ok_trimmed])
     finally:
         quit_engine(port, proc)
 
@@ -385,9 +459,206 @@ def check_buildings_without_yaml(port: int) -> bool:
                            f"selected={d.get('selected')}")
         ok_no_playback = check("a static selection exposes no playback",
                                d.get("playback") is None, d.get("playback"))
+        # #2492 requirement 4: no YAML means no declared rows at all, and
+        # the raw browser behaves exactly as it did before the matrix
+        # existed — including having no facing model to navigate.
+        ok_no_matrix = check("a YAML-less building exposes no declared rows "
+                             "and keeps every raw row selectable",
+                             not (d.get("lifecycle") or [])
+                             and d.get("staticSprite") is None
+                             and d.get("declaration") is None
+                             and not (d.get("facingRow") or [])
+                             and d.get("selectedFacing") is None
+                             and len(filesystem_rows(d)) == len(d.get("rows") or [])
+                             and (d.get("totals") or {})
+                                 .get("undeclaredFilesystemEntries")
+                                 == len(d.get("entries") or []),
+                             f"lifecycle={d.get('lifecycle')} "
+                             f"staticSprite={d.get('staticSprite')} "
+                             f"totals={d.get('totals')}")
+
         root_prefix = os.path.join("assets", "textures", "buildings", name) + os.sep
         ok_trimmed = check_trimmed_loading(port, root_prefix, allow_chrome=True)
         return all([ok_fixture, ok_entries, ok_nested, ok_default,
-                    ok_no_playback, ok_trimmed])
+                    ok_no_playback, ok_no_matrix, ok_trimmed])
     finally:
         quit_engine(port, proc)
+
+
+def check_declared_matrix(port: int, name: str) -> bool:
+    """#2492: the declared lifecycle/facing matrix, driven through the
+    live viewer.
+
+    Everything here is located from the dump — row identities and
+    facing-cell bounds — never from a hardcoded coordinate or a label
+    match, so a geometry or ordering regression fails rather than being
+    clicked past.
+    """
+    meta = building_yaml(name)
+    want_ids = declared_identities(name)
+    d = dump(port)
+
+    # The combined list: declared rows first, in the fixed role order,
+    # then every raw row in its existing relative order.
+    got_ids = [r.get("identity") for r in (d.get("rows") or [])]
+    raw_ids = [f"filesystem:{label}"
+               for label, _ in dumped_building_entries(d)]
+    ok_order = check("combined rows are the declared rows in role order, "
+                     "then every raw row in its existing order",
+                     got_ids == want_ids + raw_ids,
+                     f"got={got_ids} want={want_ids + raw_ids}")
+
+    ok_distinct = check("every combined row identity is distinct",
+                        len(set(got_ids)) == len(got_ids), got_ids)
+
+    # An UNDECLARED role is absent, never reported as missing.
+    declared_roles = [e.get("role") for e in (d.get("lifecycle") or [])]
+    ok_absent = check("an undeclared lifecycle role produces no row at all",
+                      sorted(r for r in declared_roles if r)
+                      == sorted(meta["roles"].keys()),
+                      f"dump={declared_roles} yaml={sorted(meta['roles'])}")
+
+    # Every shipped building declares its art legacy today, so every
+    # cell must be flagged legacy and repeat one list four times.
+    lifecycle = d.get("lifecycle") or []
+    ok_legacy = check("each declared entry reports its OWN provenance, and "
+                      "a legacy entry flags all four repeated cells",
+                      bool(lifecycle)
+                      and all(e.get("declaration") in ("legacy", "canonical")
+                              for e in lifecycle)
+                      and all(all(c.get("legacy") is True
+                                  for c in (e.get("cells") or []))
+                              for e in lifecycle
+                              if e.get("declaration") == "legacy"),
+                      [(e.get("identity"), e.get("declaration"),
+                        [c.get("legacy") for c in (e.get("cells") or [])])
+                       for e in lifecycle])
+
+    ok_cells = check("every declared entry has exactly four cells in camera "
+                     "order south, west, north, east",
+                     all([c.get("facing") for c in (e.get("cells") or [])]
+                         == ["south", "west", "north", "east"]
+                         for e in lifecycle + ([d["staticSprite"]]
+                                               if d.get("staticSprite") else [])),
+                     [[c.get("facing") for c in (e.get("cells") or [])]
+                      for e in lifecycle])
+
+    # The shipped art really is on disk, so nothing here is diagnostic —
+    # which is what makes a future missing-art regression visible.
+    totals = d.get("totals") or {}
+    ok_totals = check("a fully-authored building reports no missing cells "
+                      "and no unresolved lifecycle rows",
+                      totals.get("missingCells") == 0
+                      and totals.get("unresolvedLifecycleRows") == 0,
+                      totals)
+
+    # Selecting a declared row, then each of its facings, through
+    # dump-reported bounds only.
+    built = row_by_identity(d, "lifecycle:built")
+    if built is None:
+        return all([ok_order, ok_distinct, ok_absent, ok_legacy, ok_cells,
+                    ok_totals,
+                    check("the declared built row is visible to click",
+                          False, got_ids)])
+
+    click_element(port, built.get("bounds") or {})
+    after = poll_until(10.0, lambda: (
+        (lambda s: s if (s.get("selection") or {}).get("identity")
+            == "lifecycle:built" and s.get("state") == "ready" else None)(
+                dump(port)))) or dump(port)
+    ok_select = check("clicking the declared built row selects it, reports "
+                      "its provenance, and still projects `selected` onto "
+                      "the RAW entry",
+                      (after.get("selection") or {}).get("identity")
+                      == "lifecycle:built"
+                      and after.get("declaration") in ("legacy", "canonical")
+                      and (after.get("selected") or {}).get("label")
+                          == built_default_label(name),
+                      f"selection={after.get('selection')} "
+                      f"declaration={after.get('declaration')} "
+                      f"selected={after.get('selected')}")
+
+    facings = [c.get("facing") for c in (after.get("facingRow") or [])]
+    ok_strip = check("the facing strip shows four cells in camera order",
+                     facings == ["south", "west", "north", "east"], facings)
+
+    ok_click = True
+    for want in ["west", "north", "east", "south"]:
+        cell = next((c for c in (dump(port).get("facingRow") or [])
+                     if c.get("facing") == want), None)
+        if cell is None or not cell.get("bounds"):
+            ok_click = check(f"facing cell {want} is clickable", False, cell)
+            break
+        click_element(port, cell["bounds"])
+        got = poll_until(10.0, lambda: (
+            (lambda s: s if s.get("selectedFacing") == want else None)(
+                dump(port)))) or dump(port)
+        if got.get("selectedFacing") != want:
+            ok_click = check(f"clicking the {want} cell enlarges it", False,
+                             f"selectedFacing={got.get('selectedFacing')}")
+            break
+        # A facing change must not reselect the row.
+        if (got.get("selection") or {}).get("identity") != "lifecycle:built":
+            ok_click = check("a facing change does not reselect the row",
+                             False, got.get("selection"))
+            break
+    else:
+        ok_click = check("each facing cell enlarges its own view when "
+                         "clicked through its dump-reported bounds, without "
+                         "reselecting the row", True)
+
+    # Keyboard wraparound, through a REAL key tap on the same row: the
+    # last click above left the strip on south, so Left must wrap.
+    wrapped, _ = press_preview_key(
+        port, "Left", lambda st: st.get("selectedFacing") == "east")
+    ok_wrap = check("Left from south wraps round to east",
+                    wrapped.get("selectedFacing") == "east",
+                    wrapped.get("selectedFacing"))
+
+    # Held repeat reaches the strip too, and stops on release.
+    #
+    # The hold is proved by COUNTING moves, and the release by the facing
+    # then holding still — not by comparing the observation that ended
+    # the hold against the state after it. Release is enqueued after that
+    # observation, so one more repeat can legitimately land in between;
+    # asserting those two are equal would be asserting a race, not the
+    # contract. Facings WRAP, so a hold never terminates itself.
+    seen: list[str] = []
+
+    def moved(st: dict) -> bool:
+        facing = st.get("selectedFacing")
+        if facing and (not seen or seen[-1] != facing):
+            seen.append(facing)
+        return len(seen) >= 3
+
+    hold_preview_key(port, "Right", moved)
+    settled = dump(port).get("selectedFacing")
+    still = poll_until(1.5, lambda: (
+        (lambda s: (s,) if s.get("selectedFacing") != settled else None)(
+            dump(port))))
+    ok_hold = check("a held Right repeats through the facing strip and stops "
+                    "moving once released",
+                    len(seen) >= 3 and still is None,
+                    f"visited={seen} settled={settled} "
+                    f"moved-after-release={still}")
+
+    # And a RAW row still has no facing model at all.
+    raw = next((r for r in filesystem_rows(dump(port))), None)
+    ok_raw = True
+    if raw is not None:
+        click_element(port, raw.get("bounds") or {})
+        back = poll_until(10.0, lambda: (
+            (lambda s: s if (s.get("selection") or {}).get("identity")
+                == raw.get("identity") else None)(dump(port)))) or dump(port)
+        ok_raw = check("a raw filesystem row exposes no facing strip and no "
+                       "declaration",
+                       not (back.get("facingRow") or [])
+                       and back.get("selectedFacing") is None
+                       and back.get("declaration") is None,
+                       f"facingRow={back.get('facingRow')} "
+                       f"selectedFacing={back.get('selectedFacing')} "
+                       f"declaration={back.get('declaration')}")
+
+    return all([ok_order, ok_distinct, ok_absent, ok_legacy, ok_cells,
+                ok_totals, ok_select, ok_strip, ok_click, ok_wrap, ok_hold,
+                ok_raw])

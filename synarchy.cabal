@@ -460,6 +460,7 @@ library
                      Engine.Preview.Discovery
                      Engine.Preview.Unit
                      Engine.Preview.Building
+                     Engine.Preview.BuildingMatrix
                      Engine.Core.Types
                      Engine.Core.Log
                      Engine.Core.Log.Types
@@ -1382,6 +1383,9 @@ test-suite synarchy-test-headless
                    Test.Headless.Preview.Discovery
                    Test.Headless.Preview.UnitAnimation
                    Test.Headless.Preview.Building
+                   Test.Headless.Preview.BuildingMatrix
+                   Test.Headless.Preview.BuildingMatrixView
+                   Test.Headless.Preview.LuaHarness
                    Test.Headless.Preview.Zoom
                    Test.Headless.Preview.KeyboardNavigation
                    Test.Headless.World.Save.Sanitize

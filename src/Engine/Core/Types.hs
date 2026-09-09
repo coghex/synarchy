@@ -10,6 +10,9 @@ module Engine.Core.Types
   , PreviewAnim(..)
   , PreviewUnit(..)
   , PreviewBuildingEntry(..)
+  , PreviewFacingCell(..)
+  , PreviewDeclaredEntry(..)
+  , PreviewFsClass(..)
   , PreviewBuilding(..)
   , PreviewBrowse(..)
   ) where
@@ -181,9 +184,107 @@ data PreviewBuildingEntry = PreviewBuildingEntry
     --   a static entry. Never empty.
   } deriving (Eq, Show)
 
+-- | One camera facing of a DECLARED matrix entry (#2492): that
+--   facing's own complete ordered path list, and whether the viewer can
+--   actually show it.
+--
+--   A cell is DIAGNOSTIC rather than displayable when any one of its
+--   declared paths fails the building-preview asset boundary. It then
+--   keeps its declared paths — they are what the diagnostic is ABOUT —
+--   but the viewer must never request a texture for them, and must
+--   never substitute a path from another facing, role, static sprite or
+--   raw filesystem row in their place.
+data PreviewFacingCell = PreviewFacingCell
+  { pfcFacing        ∷ !Text
+    -- ^ @"south"@ \/ @"west"@ \/ @"north"@ \/ @"east"@ — the camera
+    --   order 'Building.Schema.canonicalFacings' fixes.
+  , pfcPaths         ∷ ![Text]
+    -- ^ The facing's complete ordered declared path list: one path for
+    --   a static sprite, the whole frame list for an animation. Empty
+    --   only for an UNRESOLVED lifecycle row, which declares an
+    --   animation name the definition never defines.
+  , pfcMissing       ∷ !Bool
+  , pfcMissingReason ∷ !(Maybe Text)
+    -- ^ Why this cell is diagnostic: @"absent"@, @"directory"@,
+    --   @"symlink"@, @"special"@, @"unsupported_extension"@,
+    --   @"outside_root"@ (a declared path that does not resolve under
+    --   the building's own asset folder — the trimmed-loading rule) or
+    --   @"unresolved"@ (the lifecycle row's animation reference itself).
+    --   'Nothing' exactly when 'pfcMissing' is 'False'.
+  , pfcLegacy        ∷ !Bool
+    -- ^ This cell's content was REPLICATED from one pre-#2080
+    --   declaration rather than authored for this facing. True for
+    --   every cell of a legacy entry, so four repeated views can never
+    --   read as four authored ones.
+  } deriving (Eq, Show)
+
+-- | One row of the DECLARED inspection matrix (#2492), read only from
+--   @data\/buildings\/\<name\>.yaml@: a lifecycle role, or the
+--   building's static sprite.
+--
+--   Declaration provenance is per-ENTRY, never per-building: a
+--   definition may legitimately declare its sprite legacy and one
+--   animation canonically, so each row reports the 'AssetSource' of its
+--   OWN 'Building.Schema.FacingAssets'.
+data PreviewDeclaredEntry = PreviewDeclaredEntry
+  { pdeIdentity ∷ !Text
+    -- ^ The row's stable selection identity: @"lifecycle:\<role\>"@ or
+    --   @"sprite"@. Distinct from every @"filesystem:\<label\>"@, so a
+    --   lifecycle row and the raw row backing the same files can never
+    --   alias each other.
+  , pdeKind     ∷ !Text
+    -- ^ @"lifecycle"@ or @"sprite"@.
+  , pdeLabel    ∷ !Text
+    -- ^ The row's display label.
+  , pdeRole     ∷ !(Maybe Text)
+    -- ^ The lifecycle role key; 'Nothing' for the sprite row.
+  , pdeAnimName ∷ !(Maybe Text)
+    -- ^ The animation name @state_animations@ referenced; 'Nothing' for
+    --   the sprite row.
+  , pdeResolved ∷ !Bool
+    -- ^ Whether 'pdeAnimName' resolved to an @animations@ entry. A
+    --   'False' lifecycle row is RETAINED as a diagnostic — never
+    --   silently reclassified as undeclared, and never filled from
+    --   another animation.
+  , pdeFps      ∷ !Float
+  , pdeLoop     ∷ !Bool
+  , pdeSource   ∷ !Text
+    -- ^ @"canonical"@ or @"legacy"@ — this entry's own provenance.
+  , pdeLegacy   ∷ !Bool
+  , pdeCells    ∷ ![PreviewFacingCell]
+    -- ^ Exactly four cells, in camera order south, west, north, east.
+  , pdeProjected ∷ !(Maybe Text)
+    -- ^ The raw filesystem label this row projects onto for the
+    --   compatibility @selected@ field, resolved by the pre-#2492
+    --   matching rules and deliberately FACING-INDEPENDENT. 'Nothing'
+    --   when no raw entry overlaps this declaration.
+  } deriving (Eq, Show)
+
+-- | How one RAW filesystem row relates to the declared matrix (#2492).
+--   Classification only: no raw entry is ever filtered, reordered or
+--   relabelled by it.
+data PreviewFsClass = PreviewFsClass
+  { pfcsLabel      ∷ !Text
+    -- ^ The raw entry's own label, unchanged.
+  , pfcsIdentity   ∷ !Text
+    -- ^ @"filesystem:\<label\>"@.
+  , pfcsDeclared   ∷ ![Text]
+    -- ^ Identities of the declared rows whose paths this row's frames
+    --   overlap, in declared order. Empty exactly when 'pfcsUndeclared'.
+  , pfcsUndeclared ∷ !Bool
+  } deriving (Eq, Show)
+
 -- | A resolved @--preview buildings/\<name\>@ target (#888): every
 --   animation subdirectory and loose static texture the building's own
 --   asset folder holds, ordered by label, plus the default selection.
+--
+--   #2492 layers a DECLARED lifecycle\/facing matrix over that browser.
+--   The two authorities stay separate: 'pbEntries' is still exactly
+--   what the filesystem holds, in exactly its existing order, and
+--   'pbDeclared' is read only from the building's own YAML. Rows from
+--   the two have distinct selection identities even when they display
+--   the same files, which is why duplicate-looking rows are expected
+--   rather than a bug.
 data PreviewBuilding = PreviewBuilding
   { pbName    ∷ !Text
   , pbEntries ∷ ![PreviewBuildingEntry]
@@ -192,6 +293,22 @@ data PreviewBuilding = PreviewBuilding
     --   YAML defines a usable one, else its @sprite@, else
     --   @default.png@, else the first entry — empty only when the
     --   folder holds no browsable texture at all.
+    --
+    --   Deliberately unchanged by #2492: it names a RAW entry, and the
+    --   probe and the existing fixtures read it as one.
+  , pbDeclared ∷ ![PreviewDeclaredEntry]
+    -- ^ The declared rows, in the fixed order @construction@,
+    --   @appearance@, @built@, @destruction@, then the static sprite.
+    --   Empty for a building whose YAML is missing, unreadable,
+    --   malformed, matches no definition, or cannot yield a usable
+    --   declared matrix — every one of which preserves the complete raw
+    --   browser and its existing default behavior.
+  , pbFsClasses ∷ ![PreviewFsClass]
+    -- ^ One entry per 'pbEntries' row, in the same order.
+  , pbDefaultSelection ∷ !Text
+    -- ^ The stable identity of the row selected initially: the declared
+    --   @built@ row, else the declared sprite row, else
+    --   @"filesystem:\<pbDefault\>"@, else empty for an empty browser.
   } deriving (Eq, Show)
 
 -- | Resolved browsing state, computed once in @Main@ before boot so the

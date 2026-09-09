@@ -34,7 +34,8 @@ import Engine.Core.State (EngineEnv, EngineLifecycle(..), loadStatusRef)
 import Engine.Core.Types
     (EngineConfig(..), bootProfileTag, PreviewBrowse(..), PreviewEntry(..)
     , PreviewUnit(..), PreviewAnim(..), PreviewFrameDir(..), PreviewFrame(..)
-    , PreviewBuilding(..), PreviewBuildingEntry(..))
+    , PreviewBuilding(..), PreviewBuildingEntry(..)
+    , PreviewDeclaredEntry(..), PreviewFacingCell(..), PreviewFsClass(..))
 import Engine.Core.Log (logInfo, logWarn, logDebug, LogCategory(..))
 import Engine.Load.Status (loadInProgress)
 import World.Pause (imposePauseHeld, releasePauseHeld)
@@ -305,8 +306,58 @@ getPreviewBrowseFn env = do
       Lua.newtable
       pushTextField "name"         (pbName building)
       pushTextField "defaultEntry" (pbDefault building)
+      -- #2492's combined-list entry point. Without these three fields
+      -- the declared matrix never reaches Lua at all and the viewer
+      -- silently degrades to the pre-#2492 flat browser, so they are
+      -- pushed UNCONDITIONALLY — an empty `declared` is requirement 4's
+      -- fallback stated positively, not an absent field.
+      pushTextField "defaultSelection" (pbDefaultSelection building)
       pushArray pushBuildingEntry (pbEntries building)
       Lua.setfield (-2) "entries"
+      pushArray pushDeclaredEntry (pbDeclared building)
+      Lua.setfield (-2) "declared"
+      pushArray pushFsClass (pbFsClasses building)
+      Lua.setfield (-2) "filesystemClasses"
+
+    pushDeclaredEntry d = do
+      Lua.newtable
+      pushTextField "identity" (pdeIdentity d)
+      pushTextField "kind"     (pdeKind d)
+      pushTextField "label"    (pdeLabel d)
+      pushTextField "source"   (pdeSource d)
+      forM_ (pdeRole d)      $ \r → pushTextField "role" r
+      forM_ (pdeAnimName d)  $ \a → pushTextField "animation" a
+      forM_ (pdeProjected d) $ \l → pushTextField "projected" l
+      Lua.pushboolean (pdeResolved d)
+      Lua.setfield (-2) "resolved"
+      Lua.pushnumber (realToFrac (pdeFps d))
+      Lua.setfield (-2) "fps"
+      Lua.pushboolean (pdeLoop d)
+      Lua.setfield (-2) "loop"
+      Lua.pushboolean (pdeLegacy d)
+      Lua.setfield (-2) "legacy"
+      pushArray pushFacingCell (pdeCells d)
+      Lua.setfield (-2) "cells"
+
+    pushFacingCell c = do
+      Lua.newtable
+      pushTextField "facing" (pfcFacing c)
+      pushArray (Lua.pushstring ∘ TE.encodeUtf8) (pfcPaths c)
+      Lua.setfield (-2) "paths"
+      Lua.pushboolean (pfcMissing c)
+      Lua.setfield (-2) "missing"
+      forM_ (pfcMissingReason c) $ \r → pushTextField "missingReason" r
+      Lua.pushboolean (pfcLegacy c)
+      Lua.setfield (-2) "legacy"
+
+    pushFsClass f = do
+      Lua.newtable
+      pushTextField "label"    (pfcsLabel f)
+      pushTextField "identity" (pfcsIdentity f)
+      pushArray (Lua.pushstring ∘ TE.encodeUtf8) (pfcsDeclared f)
+      Lua.setfield (-2) "declared"
+      Lua.pushboolean (pfcsUndeclared f)
+      Lua.setfield (-2) "undeclared"
 
     pushBuildingEntry e = do
       Lua.newtable

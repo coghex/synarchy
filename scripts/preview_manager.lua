@@ -51,6 +51,18 @@
 -- names). scripts/ui/building_asset_view.lua owns the panel sprite and
 -- the animation clock.
 --
+-- #2492 (BDA-4) layers the DECLARED lifecycle/facing matrix over that
+-- browser without replacing any of it. The building list becomes one
+-- COMBINED list: the declared lifecycle rows in the fixed role order,
+-- then the declared static-sprite row, then every raw filesystem row in
+-- exactly its existing relative order, label, kind and playback. Rows
+-- carry stable identities -- `lifecycle:<role>`, `sprite`,
+-- `filesystem:<label>` -- so a lifecycle row and the raw row backing the
+-- very same files cannot alias each other, which is why duplicate-looking
+-- rows are expected here rather than a bug. Left/Right reach the facing
+-- strip when a declared row is selected and are ignored on a raw row,
+-- which has no facing model.
+--
 -- #1907 adds centered bounded zoom, the one piece of state that spans
 -- every mode: ONE multiplier per session, previewZoom.MAX (the aspect
 -- fit) down to previewZoom.MIN, applied to whichever pane the mode owns
@@ -109,9 +121,14 @@ local unitData = nil    -- the resolved PreviewUnit table from the engine
 local animViewId = nil
 local selectedAnim = nil
 
--- Phase 4 (#888) building state.
+-- Phase 4 (#888) building state; #2492's combined list.
 local buildingData = nil   -- the resolved PreviewBuilding table
 local buildingViewId = nil
+-- The ordered combined rows, and the identity of the selected one.
+-- `selectedEntry` deliberately holds an IDENTITY rather than a label:
+-- two rows may legitimately display the same label, and the restore
+-- path after a resize has to reselect exactly the row that was active.
+local buildingRows = nil
 local selectedEntry = nil
 
 -----------------------------------------------------------
@@ -650,48 +667,90 @@ end
 -- Building asset viewer (#888, Phase 4)
 -----------------------------------------------------------
 
-local function findBuildingEntry(entryLabel)
-    for _, e in ipairs(buildingData and buildingData.entries or {}) do
-        if e.label == entryLabel then return e end
+-- The combined row list (#2492 requirement 9): declared lifecycle rows
+-- in the fixed role order the engine already sorted them into, then the
+-- declared static-sprite row, then every raw filesystem row in its
+-- existing relative order. Built ONCE per payload and reused by the
+-- list, the view, the input routing and the dump, so those four can
+-- never disagree about what row N is.
+--
+-- Nothing here filters, reorders or relabels a raw entry: `entries`
+-- arrives already ordered by Engine.Preview.Building and is appended
+-- verbatim.
+local function buildCombinedRows(building)
+    local rows = {}
+    for _, d in ipairs(building and building.declared or {}) do
+        table.insert(rows, {
+            identity = d.identity,
+            kind = d.kind,
+            label = d.label,
+            declared = d,
+        })
+    end
+    local classes = {}
+    for _, c in ipairs(building and building.filesystemClasses or {}) do
+        classes[c.label] = c
+    end
+    for _, e in ipairs(building and building.entries or {}) do
+        table.insert(rows, {
+            identity = "filesystem:" .. tostring(e.label),
+            kind = "filesystem",
+            label = e.label,
+            entry = e,
+            class = classes[e.label],
+        })
+    end
+    return rows
+end
+
+local function findBuildingRow(identity)
+    for _, r in ipairs(buildingRows or {}) do
+        if r.identity == identity then return r end
     end
     return nil
 end
 
--- A genuine entry selection: always starts the clip fresh from the
--- current wall clock (a static entry simply never advances from frame
--- zero). The resize path deliberately does NOT come through here — it
--- must preserve the playback phase, see buildBuildingUI.
+-- A genuine row selection: always starts one forced-replay cycle fresh
+-- from the current wall clock (a static row simply never advances from
+-- frame zero). The resize path deliberately does NOT come through here —
+-- it must preserve the playback phase, see buildBuildingUI.
 local function onBuildingEntrySelected(value, _label, _index)
-    local entry = findBuildingEntry(value)
-    if not entry or not buildingViewId then return end
+    local row = findBuildingRow(value)
+    if not row or not buildingViewId then return end
     selectedEntry = value
     -- As above: a new selection owns a new handle set (#1690).
     viewHandles = {}
     -- "loading" until the frames actually upload; previewManager.update
     -- promotes it, so `state` means the same thing here as in every
-    -- other mode.
+    -- other mode. A row whose selected cell is MISSING has nothing to
+    -- upload and reaches "ready" on the very next update, which is what
+    -- makes a diagnostic terminal instead of a load that never lands.
     readyState = "loading"
-    buildingAssetView.setEntry(buildingViewId, entry, engine.realTime())
+    buildingAssetView.setRow(buildingViewId, row, engine.realTime(), nil)
 end
 
--- restoreEntry/restoreScroll: nil for the initial build (a fresh
--- default selection). Real values on the resize rebuild, where the
--- selected entry, list scroll offset, AND playback phase must all
--- survive — so the restore path silently re-selects the list row and
--- only re-panels the view, never re-entering setEntry (which would
--- reset the clock).
-local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
+-- restoreEntry/restoreScroll/restoreFacing: nil for the initial build (a
+-- fresh default selection). Real values on the resize rebuild, where the
+-- selected row IDENTITY, selected facing, list scroll offset, AND
+-- cycle-local playback phase must all survive (#2492 requirement 18) —
+-- so the restore path silently re-selects the list row and only
+-- re-panels the view, never re-entering setRow (which would reset the
+-- clock).
+local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll,
+                               restoreFacing)
     mode = "building"
     buildingData = building
+    buildingRows = buildCombinedRows(building)
 
     assetBrowser.init()
 
     local listItems = {}
-    for i, e in ipairs(building.entries or {}) do
-        -- The label IS the value: entry labels are unique within a
-        -- building folder (they're distinct relative paths), and
-        -- Engine.Preview.Building already ordered them.
-        listItems[i] = { label = e.label, path = e.label }
+    for i, r in ipairs(buildingRows) do
+        -- The IDENTITY is the value, not the label: two rows may
+        -- legitimately display the same text (a lifecycle row and the
+        -- raw directory backing it), and the shared list resolves a
+        -- selection by value.
+        listItems[i] = { label = r.label, path = r.identity }
     end
 
     browserId = assetBrowser.new({
@@ -713,8 +772,10 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
     if not buildingViewId then
         buildingViewId = buildingAssetView.new({
             page = page,
+            font = labelFont,
             panel = panelBounds,
             requestTexture = requestViewTexture,
+            chromeTexture = list.getChromeTexture(),
             -- #1907: a building is ONE preview object — same rule as
             -- the units viewer above.
             zoom = zoomMultiplier,
@@ -728,11 +789,18 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll)
         selectedEntry = restoreEntry
         -- Phase-preserving: only the panel geometry changed.
         buildingAssetView.setPanel(buildingViewId, panelBounds)
+        if restoreFacing then
+            buildingAssetView.setFacing(buildingViewId, restoreFacing)
+        end
     else
-        -- Requirement 1: state_animations.built, else sprite, else
-        -- default.png, else the first entry — already decided by
-        -- Engine.Preview.Building, never re-derived here.
-        assetBrowser.selectEntry(browserId, building.defaultEntry)
+        -- Requirement 13: the declared `built` row, else the declared
+        -- sprite row, else the raw row the unchanged defaultEntry ladder
+        -- named — already decided by Engine.Preview.BuildingMatrix,
+        -- never re-derived here. Initial facing south, resolved by the
+        -- view itself.
+        assetBrowser.selectEntry(browserId,
+            building.defaultSelection or ("filesystem:"
+                .. tostring(building.defaultEntry)))
     end
 
     if restoreScroll and restoreScroll > 0 then
@@ -945,6 +1013,7 @@ function previewManager.shutdown()
     unitData = nil
     selectedAnim = nil
     buildingData = nil
+    buildingRows = nil
     selectedEntry = nil
     textureCache = {}
     viewHandles = {}
@@ -984,20 +1053,34 @@ function previewManager.onScrollDown(elemHandle)
     return assetBrowser.handleCallback("onScrollDown", elemHandle)
 end
 
--- Every browser mode shares the adjacent-entry path. Left/Right reach only
--- the unit direction row; focused-item mode has neither owner and therefore
--- ignores all four arrows.
+-- Every browser mode shares the adjacent-entry path. Left/Right reach the
+-- unit direction row and — since #2492 — the buildings viewer's facing
+-- strip, which exists only while a DECLARED row is selected: a raw
+-- filesystem row has no facing model, so Left/Right there stay
+-- unhandled exactly as they were before. Focused-item mode has neither
+-- owner and therefore ignores all four arrows.
+--
+-- selectAdjacentFacing answers false itself when the selected row has no
+-- cells, so the building branch needs no separate row-class test here;
+-- that keeps ONE authority on what a facing move means.
+local function adjacentFacing(step)
+    if mode == "unit" and animViewId then
+        return unitAnimationView.selectAdjacentDirection(animViewId, step)
+    elseif mode == "building" and buildingViewId then
+        return buildingAssetView.selectAdjacentFacing(buildingViewId, step)
+    end
+    return false
+end
+
 navigateKey = function(key)
     if key == "Up" then
         return browserId and assetBrowser.selectAdjacent(browserId, -1) or false
     elseif key == "Down" then
         return browserId and assetBrowser.selectAdjacent(browserId, 1) or false
     elseif key == "Left" then
-        return mode == "unit" and animViewId
-            and unitAnimationView.selectAdjacentDirection(animViewId, -1) or false
+        return adjacentFacing(-1)
     elseif key == "Right" then
-        return mode == "unit" and animViewId
-            and unitAnimationView.selectAdjacentDirection(animViewId, 1) or false
+        return adjacentFacing(1)
     end
     return false
 end
@@ -1061,6 +1144,15 @@ function previewManager.onPreviewDirectionClick(elemHandle)
     return unitAnimationView.handleCellClick(animViewId, elemHandle) ~= nil
 end
 
+-- #2492 requirement 16: the buildings viewer's own facing cells. A
+-- SEPARATE callback name from the units viewer's, not a shared one: the
+-- two views own disjoint element sets, and one name would make each
+-- view's dispatch depend on the other's handles never colliding.
+function previewManager.onPreviewFacingClick(elemHandle)
+    if not buildingViewId then return false end
+    return buildingAssetView.handleCellClick(buildingViewId, elemHandle) ~= nil
+end
+
 -- Preview windows are resizable (App.Preview reuses the normal window
 -- config), so a bare-category list or a focused item must reflow on
 -- resize instead of leaving stale bounds/sprite dimensions behind
@@ -1093,15 +1185,18 @@ function previewManager.onFramebufferResize(width, height)
         buildUnitUI(unitData, width, height, selectedAnim, prevScroll,
                     prevDump and prevDump.direction or nil)
     elseif mode == "building" then
-        -- #888 amendment: the selected entry, list scroll offset, AND
-        -- playback phase all survive a reflow — same shape as unit
-        -- mode above (list rebuilt, view only re-panelled).
+        -- #888 amendment + #2492 requirement 18: the selected row
+        -- IDENTITY, the selected facing, the list scroll offset, AND the
+        -- cycle-local playback phase all survive a reflow — same shape
+        -- as unit mode above (list rebuilt, view only re-panelled).
         local prevScroll = browserId and assetBrowser.getScrollOffset(browserId) or 0
+        local prevDump = buildingViewId and buildingAssetView.dump(buildingViewId)
         if browserId then
             assetBrowser.destroy(browserId)
             browserId = nil
         end
-        buildBuildingUI(buildingData, width, height, selectedEntry, prevScroll)
+        buildBuildingUI(buildingData, width, height, selectedEntry, prevScroll,
+                        prevDump and prevDump.facing or nil)
     end
     -- #1907: the multiplier is untouched by a resize (nothing above
     -- writes it, and every mode's restore path is the SILENT one that
@@ -1214,13 +1309,22 @@ function previewManager.dump()
         out.panelBounds = panelBounds
         out.playback = animViewId and unitAnimationView.dump(animViewId) or nil
     elseif mode == "building" then
-        -- #888 Requirement 4 + its amendment: the FULL ordered entry
+        -- #888 Requirement 4 + its amendment: the FULL ordered RAW entry
         -- list with each entry's static/animation identity and
         -- effective fps/loop, the current selection, per-visible-row
         -- interactive bounds/handles, the scroll offset, and — for an
-        -- ANIMATION selection only — the live playback state. A static
+        -- ANIMATED selection only — the live playback state. A static
         -- selection exposes no playback at all, which is exactly what
         -- distinguishes it.
+        --
+        -- #2492 keeps every one of those fields meaning exactly what it
+        -- meant before and adds the combined list beside them:
+        -- `entries`/`defaultEntry`/`selected` stay the RAW projection
+        -- (so tools/preview/buildings.py's existing checks keep
+        -- gating what they always gated), while `selection`,
+        -- `defaultSelection`, `lifecycle`, `staticSprite`,
+        -- `filesystemEntries` and the identity-carrying `rows` describe
+        -- the combined list.
         out.building = buildingData and buildingData.name or nil
         out.entries = {}
         for i, e in ipairs(buildingData and buildingData.entries or {}) do
@@ -1235,14 +1339,141 @@ function previewManager.dump()
         end
         out.entryCount = #out.entries
         out.defaultEntry = buildingData and buildingData.defaultEntry or nil
-        out.selected = {
-            label = assetBrowser.getSelectedLabel(browserId),
-            path  = assetBrowser.getSelectedPath(browserId),
-        }
-        out.scrollOffset = assetBrowser.getScrollOffset(browserId)
-        out.rows = assetBrowser.dump(browserId)
-        out.panelBounds = panelBounds
+        out.defaultSelection = buildingData
+            and buildingData.defaultSelection or nil
+
+        local selectedRow = findBuildingRow(selectedEntry)
         local view = buildingViewId and buildingAssetView.dump(buildingViewId)
+
+        -- Requirement 11's compatibility projection: `selected` still
+        -- names a RAW entry. For a raw row that is the row itself; for a
+        -- declared row it is the deterministic raw entry the pre-#2492
+        -- matching rules pick, and it is absent when none overlaps.
+        -- Deliberately facing-independent — turning the camera in the
+        -- viewer never moves it.
+        local projected = nil
+        if selectedRow then
+            if selectedRow.kind == "filesystem" then
+                projected = selectedRow.label
+            else
+                projected = (selectedRow.declared or {}).projected
+            end
+        end
+        out.selected = projected and {
+            label = projected,
+            path  = projected,
+        } or nil
+
+        -- The combined list's own selection, kept separate from the
+        -- projection above so a probe can tell a lifecycle row from the
+        -- raw row it happens to project onto.
+        out.selection = selectedRow and {
+            identity = selectedRow.identity,
+            kind = selectedRow.kind,
+            label = selectedRow.label,
+            missing = view and view.missing == true or false,
+            missingReason = view and view.missingReason or nil,
+            resolved = view and view.resolved,
+            declaration = view and view.declaration or nil,
+            legacy = view and view.legacy == true or false,
+        } or nil
+        out.declaration = (selectedRow and selectedRow.kind ~= "filesystem")
+            and (selectedRow.declared or {}).source or nil
+        out.selectedLifecycle = (selectedRow and selectedRow.kind == "lifecycle")
+            and (selectedRow.declared or {}).role or nil
+        out.selectedFacing = view and view.facing or nil
+        out.facingRow = view and view.facingRow or nil
+        out.path = view and view.path or nil
+        out.frameIndex = view and view.frameIndex or nil
+
+        -- The declared matrix, split the way requirement 12 names it.
+        out.lifecycle = {}
+        out.staticSprite = nil
+        local missingCells, unresolvedRows = 0, 0
+        for _, d in ipairs(buildingData and buildingData.declared or {}) do
+            local cells = {}
+            for i, c in ipairs(d.cells or {}) do
+                cells[i] = {
+                    facing = c.facing,
+                    frameCount = #(c.paths or {}),
+                    paths = c.paths,
+                    missing = c.missing == true,
+                    missingReason = c.missingReason,
+                    legacy = c.legacy == true,
+                }
+                if c.missing == true then missingCells = missingCells + 1 end
+            end
+            local entry = {
+                identity = d.identity,
+                kind = d.kind,
+                label = d.label,
+                role = d.role,
+                animation = d.animation,
+                resolved = d.resolved == true,
+                fps = d.fps,
+                loop = d.loop == true,
+                declaration = d.source,
+                legacy = d.legacy == true,
+                projected = d.projected,
+                cells = cells,
+            }
+            if d.kind == "sprite" then
+                out.staticSprite = entry
+            else
+                if d.resolved ~= true then
+                    unresolvedRows = unresolvedRows + 1
+                end
+                table.insert(out.lifecycle, entry)
+            end
+        end
+
+        -- Every raw entry, classified but never filtered.
+        out.filesystemEntries = {}
+        local undeclaredCount = 0
+        for i, r in ipairs(buildingRows or {}) do
+            if r.kind == "filesystem" then
+                local c = r.class or {}
+                local undeclared = (c.undeclared ~= false)
+                    and #(c.declared or {}) == 0
+                if undeclared then undeclaredCount = undeclaredCount + 1 end
+                table.insert(out.filesystemEntries, {
+                    label = r.label,
+                    identity = r.identity,
+                    declared = c.declared or {},
+                    undeclared = undeclared,
+                })
+            end
+        end
+        out.totals = {
+            missingCells = missingCells,
+            unresolvedLifecycleRows = unresolvedRows,
+            undeclaredFilesystemEntries = undeclaredCount,
+        }
+
+        out.scrollOffset = assetBrowser.getScrollOffset(browserId)
+        -- The visible rows, each carrying the identity, kind and
+        -- diagnostic state of the COMBINED row it draws — so automated
+        -- input locates a row by identity rather than by a label two
+        -- rows may share. `key` is the list item's own value, which is
+        -- the identity buildBuildingUI handed it.
+        out.rows = assetBrowser.dump(browserId)
+        local byIdentity = {}
+        for _, r in ipairs(buildingRows or {}) do byIdentity[r.identity] = r end
+        for _, dumped in ipairs(out.rows) do
+            local r = byIdentity[dumped.key]
+            if r then
+                dumped.identity = r.identity
+                dumped.kind = r.kind
+                if r.kind ~= "filesystem" then
+                    local d = r.declared or {}
+                    dumped.role = d.role
+                    dumped.resolved = d.resolved == true
+                    dumped.declaration = d.source
+                    dumped.legacy = d.legacy == true
+                end
+            end
+        end
+        out.panelBounds = panelBounds
         if view and view.animated then
             out.playback = view
         end

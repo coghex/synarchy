@@ -63,6 +63,9 @@ import Building.Schema (faViews, facingKey)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Asset.YamlBuildings (BuildingYamlAnim(..))
 import Engine.Core.Types (PreviewBuilding(..), PreviewBuildingEntry(..))
+import Engine.Preview.BuildingMatrix
+    ( BuildingDeclaredMatrix, classifyFsEntries, declaredMatrixOf
+    , defaultSelectionIdentity, resolveDeclaredEntries )
 import Engine.Preview.Discovery
     ( ItemDirError, isSupportedTextureFile, resolveItemDir, sortFrameFiles )
 
@@ -100,11 +103,20 @@ data BuildingPreviewMeta = BuildingPreviewMeta
     { bpmAnims  ∷ !(Map.Map Text BuildingYamlAnim)
     , bpmStates ∷ !(Map.Map Text Text)
     , bpmSprite ∷ !(Maybe Text)
+    , bpmMatrix ∷ !(Maybe BuildingDeclaredMatrix)
+      -- ^ The DECLARED lifecycle\/facing matrix (#2492), resolved
+      --   through the game's own field decoders and INDEPENDENT of the
+      --   three tolerant fields above: a definition whose
+      --   @state_animations@ names an unknown key still augments the raw
+      --   browser exactly as it did before, and simply exposes no
+      --   declared rows. 'Nothing' is requirement 4's fallback in every
+      --   one of its forms.
     } deriving (Eq, Show)
 
 emptyBuildingPreviewMeta ∷ BuildingPreviewMeta
 emptyBuildingPreviewMeta = BuildingPreviewMeta
-    { bpmAnims = Map.empty, bpmStates = Map.empty, bpmSprite = Nothing }
+    { bpmAnims = Map.empty, bpmStates = Map.empty, bpmSprite = Nothing
+    , bpmMatrix = Nothing }
 
 -- | A deliberately narrow view of the building YAML — just the fields
 --   above. Reusing 'BuildingYamlAnim'\'s own 'FromJSON' instance keeps
@@ -118,14 +130,26 @@ data BuildingAnimMetaDef = BuildingAnimMetaDef
     , bamdSprite ∷ !(Maybe Text)
     , bamdStates ∷ !(Map.Map Text Text)
     , bamdAnims  ∷ !(Map.Map Text BuildingYamlAnim)
+    , bamdMatrix ∷ !(Maybe BuildingDeclaredMatrix)
+      -- ^ #2492's declared matrix, decoded in the SAME pass but with
+      --   its own totality: 'declaredMatrixOf' answers 'Nothing' for
+      --   every rejection instead of failing this def, so adding the
+      --   matrix cannot make a building that browsed before stop
+      --   browsing.
     }
 
 instance FromJSON BuildingAnimMetaDef where
-    parseJSON = withObject "BuildingAnimMetaDef" $ \v → BuildingAnimMetaDef
-        ⊚ v .:  "name"
-        ⊛ pure (metaSprite v)
-        ⊛ v .:? "state_animations" .!= Map.empty
-        ⊛ v .:? "animations"       .!= Map.empty
+    parseJSON = withObject "BuildingAnimMetaDef" $ \v → do
+        name ← v .: "name"
+        states ← v .:? "state_animations" .!= Map.empty
+        anims ← v .:? "animations" .!= Map.empty
+        pure BuildingAnimMetaDef
+            { bamdName   = name
+            , bamdSprite = metaSprite v
+            , bamdStates = states
+            , bamdAnims  = anims
+            , bamdMatrix = declaredMatrixOf name v
+            }
 
 -- | The SOUTH static, read from either declaration form (#2080): the
 --   canonical @sprites.south@, else the legacy singular @sprite@.
@@ -182,6 +206,7 @@ loadBuildingPreviewMeta name = do
         { bpmAnims  = bamdAnims d
         , bpmStates = bamdStates d
         , bpmSprite = bamdSprite d
+        , bpmMatrix = bamdMatrix d
         }
 
 -- * Pure classification / ordering rules
@@ -404,8 +429,21 @@ buildPreviewBuilding root name = resolveItemDir root name ⌦ \case
         let buildingName = T.pack name
         meta    ← loadBuildingPreviewMeta buildingName
         entries ← discoverBuildingEntries (bpmAnims meta) dir
+        -- The declared matrix is resolved against the building's OWN
+        -- folder, never the category root: that containment denominator
+        -- is what makes a declared path pointing at another building's
+        -- art a missing cell rather than a texture request outside the
+        -- requested item (the trimmed-loading rule).
+        declared ← maybe (pure [])
+                         (resolveDeclaredEntries dir entries)
+                         (bpmMatrix meta)
+        let rawDefault = defaultBuildingEntry meta entries
         pure (Right PreviewBuilding
-            { pbName    = buildingName
-            , pbEntries = entries
-            , pbDefault = defaultBuildingEntry meta entries
+            { pbName             = buildingName
+            , pbEntries          = entries
+            , pbDefault          = rawDefault
+            , pbDeclared         = declared
+            , pbFsClasses        = classifyFsEntries declared entries
+            , pbDefaultSelection =
+                defaultSelectionIdentity declared rawDefault entries
             })
