@@ -18,39 +18,84 @@ which carried an approval onto a materially different patch. Reverting
 the PR's LAST change was worse still: the post-push file list was empty,
 so nothing could ever intersect it.
 
-The repair is to stop reasoning about file NAMES and compare the PR's own
-PATCH on each side of the push:
+#1679 repaired that by comparing the PR's own PATCH on each side, as
+`git diff --raw <merge-base(base, X)> X`. That fixed the revert, but the
+raw record names the SOURCE blob as well as the destination, so moving
+the merge base changed the record for every path the base had touched.
+A clean, purely additive merge-forward into a file the PR also owns
+therefore read as a content change (#2591):
 
-    patch(X) = git diff --raw <merge-base(base, X)> X
+    approved R1 adds a line to a shared manifest
+    the base adds a DIFFERENT line to the same manifest and merges in
+    source blob moved, destination blob moved -> "patch changed" -> STRIP
 
-`patch(BEFORE) == patch(AFTER)` is exactly "the reviewed content did not
-change"; anything else is a content change, whether it added, edited,
-deleted or REVERTED. A merge-forward that touches only paths this PR does
-not own leaves both the source and the destination blob of every
-PR-owned path alone, so the two raw diffs are byte-identical and the
-approval survives -- #842's goal, now reached by a rule a revert cannot
-erase.
+Nothing of the PR's own had changed. Two sibling pull requests that both
+register a module in one manifest strip each other's approval every time
+one of them merges first, and each then pays for a full opposite-brand
+rereview of an unchanged patch.
 
-Why the raw diff, and why these flags
--------------------------------------
-`--raw` names, per changed path, the source blob, the destination blob,
-both file modes and the change status. Comparing that is comparing
-CONTENT: two patches agree only when every path they touch starts and
-ends at the same bytes. `--abbrev=40` pins full object names so an
-abbreviation-length change -- `core.abbrev`, or git's own auto-sizing as
-a repository grows -- can never read as a content change. `--no-renames`
-pins the record SHAPE: `diff.renames` is on by default but is
-user-configurable, so leaving it unpinned would let the same patch be
-reported as `R100 old new` on one machine and `D old` + `A new` on
-another. Records are compared as an UNORDERED SET, because `git diff`
-orders by path within one invocation but the two invocations need not
-enumerate the same paths.
+The rule this module applies instead asks the question the gate actually
+means, and asks it once:
+
+    replay = merge(BEFORE, base-revision-incorporated-into-AFTER)
+    KEEP iff that merge is conflict-free and replay's tree == AFTER's tree
+
+"AFTER is nothing more than BEFORE carried onto the new base" is exactly
+what an approval may survive. It is insensitive to where the base moved,
+because the base's own changes are on BOTH sides of the comparison; and
+it still catches an edit, an addition, a deletion and a REVERT, because
+none of those can be reproduced by replaying the approved head.
+
+How the replay runs, and which base
+-----------------------------------
+`git merge-tree --write-tree` runs git's REAL merge -- the same `ort`
+strategy an ordinary `git merge` uses, rename detection included -- and
+prints the merged tree's object name. Both halves are requirements.
+
+Fidelity is not a convenience here. A hand-rolled replay built from
+`read-tree` and `git-merge-one-file` merges path by path with no rename
+detection, so a pull request that renames a file the base then edits
+conflicts under it while merging cleanly for real: the gate would strip
+an approval this contract says it must keep. Whatever performs the
+replay has to BE git's merge.
+
+Writing a tree is what makes the result comparable to a real commit's,
+and it keeps the whole merge in the object database -- no worktree, no
+index, nothing to clean up in the CI checkout this job shares with other
+steps, and no cost proportional to the size of the repository.
+
+It needs git >= 2.38, which is why `.github/ci/Dockerfile` takes git from
+the git-core PPA rather than Ubuntu 22.04's 2.34.
+
+The replay base is the base revision AFTER actually incorporated
+(`merge-base(base, AFTER)`), never the base tip this checkout fetched.
+`base_candidates` deliberately allows `origin/<ref>` to be AHEAD of what
+the update merged in, so replaying onto the tip would pull in commits
+AFTER never saw and read them as this PR's own work -- a sibling merging
+between the branch update and this job would strip an approval it had
+nothing to do with.
+
+A conflicted replay is its own verdict, not a failure. It STRIPS -- a
+resolution no reviewer saw is exactly what an approval must not carry --
+and says which paths conflicted, even when AFTER itself contains a
+perfectly good committed resolution.
+
+Telling that from a FAILURE is the exit code's job and nothing else's:
+0 merged cleanly, 1 merged with conflicts, anything higher did not run
+to completion. Inspecting leftover state instead would misread the third
+case as the second, because an interrupted merge leaves unmerged entries
+behind for every path it was part-way through, conflicted or not -- and
+would then name those paths, which is worse than saying nothing. "The
+merge failed" and "the approved head cannot be replayed onto this base"
+are different things to tell a maintainer.
 
 Fail-closed, and observably so
 ------------------------------
 Every predicate below selects STRIP unless it can positively prove the
-push was content-free, preserving the original job's rule that staleness
-which cannot be ruled out is treated as real. Each returns its OWN reason
+push was a clean replay of the approved head, preserving the original
+job's rule that staleness which cannot be ruled out is treated as real.
+A conflict, a replay whose tree differs from the pushed one, and any
+failure to establish either are all strips. Each returns its OWN reason
 code rather than falling through to a neighbour's: that is what makes
 requirement 8 checkable, since bypassing any single rule then changes the
 reason a case reports even when a later rule would reach the same
@@ -97,17 +142,26 @@ NULL_SHA = "0" * 40
 KEEP = "keep"
 STRIP = "strip"
 
-#: The frozen inspection command for one side's patch. Every term is
-#: load-bearing and the self-test pins the tuple:
-#:   --raw        content, not just names: both blobs, both modes, status
-#:   --no-renames determinism -- `diff.renames` is on by default and is
-#:                user-configurable, so leaving it unpinned makes the
-#:                record SHAPE (`R100 old new` vs `D old` + `A new`)
-#:                depend on the machine the job happens to run on
-#:   --abbrev=40  full object names, so an abbreviation-length change
-#:                (core.abbrev, or git's own auto-sizing as a repository
-#:                grows) can never read as a content change
-RAW_DIFF_FLAGS = ("diff", "--raw", "--no-renames", "--abbrev=40")
+#: The frozen replay command. Every term is load-bearing and the
+#: self-test pins the tuple:
+#:   merge-tree    git's REAL merge, through the same `ort` strategy an
+#:                 ordinary `git merge` runs -- rename detection
+#:                 included. That fidelity is the requirement, not a
+#:                 convenience: a hand-rolled `read-tree` +
+#:                 `git-merge-one-file` replay merges path by path, so a
+#:                 pull request that renames a file the base then edits
+#:                 conflicts under it while merging cleanly for real,
+#:                 and the gate would strip an approval the contract
+#:                 says it must keep.
+#:   --write-tree  write the merged tree and print its object name,
+#:                 which is what makes the result comparable to a real
+#:                 commit's tree. It also performs the whole merge in
+#:                 the object database: no worktree, no index, nothing
+#:                 to clean up in the CI checkout this job shares.
+#:
+#: Needs git >= 2.38, which is why .github/ci/Dockerfile installs git
+#: from the git-core PPA rather than taking Ubuntu 22.04's 2.34.
+MERGE_TREE_FLAGS = ("merge-tree", "--write-tree")
 
 
 class Decision(NamedTuple):
@@ -137,6 +191,23 @@ class Git:
         self.repo_dir = str(repo_dir)
 
     def run(self, *args: str) -> tuple[bool, str]:
+        code, out, err = self.capture(*args)
+        if code != 0:
+            return False, err.strip()
+        return True, out
+
+    def capture(self, *args: str) -> tuple[int, str, str]:
+        """(exit code, stdout, stderr) -- the whole result, unflattened.
+
+        `run` collapses a non-zero exit to `False` and discards stdout,
+        which is right for a command whose only useful answer is its
+        output. `git merge-tree` is not such a command: it reports a
+        CONFLICT as exit 1 while still writing the tree and the
+        conflicted paths to stdout, so a caller that could only see the
+        boolean could not tell a conflict from a crash, nor say which
+        paths conflicted. Both callers go through one seam so the
+        self-test's fault injection still reaches every invocation.
+        """
         try:
             completed = subprocess.run(
                 ("git", "-C", self.repo_dir, *args),
@@ -145,10 +216,8 @@ class Git:
                 check=False,
             )
         except OSError as error:  # git absent, repo_dir gone, ...
-            return False, str(error)
-        if completed.returncode != 0:
-            return False, (completed.stderr or "").strip()
-        return True, completed.stdout
+            return -1, "", str(error)
+        return completed.returncode, completed.stdout, completed.stderr or ""
 
 
 def _resolve_commit(git: Git, revision: str) -> str:
@@ -184,32 +253,91 @@ def base_candidates(base_ref: str, base_sha: str) -> list[str]:
     return ordered
 
 
-def patch_identity(raw_diff: str) -> frozenset[str]:
-    """The content identity of a patch, from `git diff --raw` output.
+def replay_tree(stdout: str) -> str:
+    """The merged tree object name `git write-tree` printed.
 
-    Each retained record already carries both blob names, both modes and
-    the status, so equality of these sets is equality of the patch's
-    effect. Order is discarded deliberately (see the module docstring).
+    Anything else -- no output, or a line that is not an object name --
+    is unreadable rather than a verdict, and the caller fails closed on
+    it rather than comparing a string it does not understand.
     """
-    return frozenset(line for line in raw_diff.splitlines() if line.strip())
+    first = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
+    if len(first) == 40 and all(c in "0123456789abcdef" for c in first):
+        return first
+    return ""
 
 
-def _patch_summary(before: frozenset[str], after: frozenset[str]) -> str:
-    """Name a few paths that differ, so the CI log says what moved."""
+def conflicted_paths(stdout: str) -> list[str]:
+    """The paths a conflicted `merge-tree` named, for the job log.
+
+    Its conflicted-file section follows the tree line, one
+    `<mode> <object> <stage>\t<path>` record per stage, so a path
+    appears up to three times; the human-readable messages after it
+    carry no tab and are skipped by the same test. Reported
+    de-duplicated, in first-seen order, and best-effort: a shape this
+    cannot parse still leaves the decision a STRIP, only a less specific
+    one.
+    """
     paths: list[str] = []
-    for record in sorted(before ^ after):
-        _, _, path = record.partition("\t")
-        path = path.strip() or record
-        if path not in paths:
+    for line in stdout.splitlines()[1:]:
+        _, tab, path = line.partition("\t")
+        path = path.strip()
+        if tab and path and path not in paths:
             paths.append(path)
+    return paths
+
+
+def _paths_summary(paths: list[str]) -> str:
+    """Name a few paths, so the CI log says what moved."""
+    if not paths:
+        return "(no paths reported)"
     shown = ", ".join(paths[:5])
     if len(paths) > 5:
         shown += f", ... (+{len(paths) - 5} more)"
     return shown
 
 
+def _replay(git: Git, ours: str, theirs: str) -> tuple[str, str, str]:
+    """Merge `ours` and `theirs` the way `git merge` would.
+
+    Returns (reason, detail, tree): an empty reason and the merged tree's
+    object name on success, or a STRIP reason code and its explanation.
+    The caller turns a reason into the `Decision`, so every reason code
+    this module can produce is visible at ONE place.
+
+    `merge-tree` reports the three outcomes apart by EXIT CODE, and that
+    is the only reliable way to tell them apart:
+
+        0   merged cleanly; stdout is the tree
+        1   merged with conflicts; stdout is the tree, then one
+            `<mode> <object> <stage>\t<path>` record per conflicted
+            stage, then human-readable messages
+        >1  did not run to completion at all
+
+    Inspecting leftover state instead would misread the third case as
+    the second: an interrupted merge leaves unmerged entries behind for
+    every path that needed a content merge, whether or not any of them
+    actually conflicted. "The merge failed" and "the approved head
+    cannot be replayed onto this base" are different things to tell a
+    maintainer, and only the exit code separates them.
+    """
+    code, stdout, stderr = git.capture(*MERGE_TREE_FLAGS, ours, theirs)
+    if code not in (0, 1):
+        return ("replay-failed",
+                "could not replay the approved head onto the base: "
+                + ((stderr or stdout).strip() or f"git exited {code}"), "")
+    tree = replay_tree(stdout)
+    if not tree:
+        return ("replay-unreadable",
+                "the replay produced no readable tree object name", "")
+    if code == 1:
+        return ("replay-conflicted",
+                "replaying the approved head onto the base conflicts in: "
+                + _paths_summary(conflicted_paths(stdout)), "")
+    return ("", "", tree)
+
+
 def decide(git: Git, before: str, after: str, base_ref: str, base_sha: str) -> Decision:
-    """KEEP only for a push that provably changed no PR-owned content."""
+    """KEEP only for a push that provably replays the approved head."""
     before = (before or "").strip()
     after = (after or "").strip()
 
@@ -257,31 +385,57 @@ def decide(git: Git, before: str, after: str, base_ref: str, base_sha: str) -> D
                         "no base-branch revision resolved from: "
                         + (", ".join(tried) if tried else "(nothing supplied)"))
 
-    ok, merge_base_before = git.run("merge-base", base, resolved_before)
-    merge_base_before = merge_base_before.strip() if ok else ""
-    if not merge_base_before:
-        return Decision(STRIP, "before-merge-base-failed",
-                        "no merge base between the base branch and 'before'")
-    ok, merge_base_after = git.run("merge-base", base, resolved_after)
-    merge_base_after = merge_base_after.strip() if ok else ""
-    if not merge_base_after:
+    # The REPLAY BASE: the base-branch revision actually incorporated
+    # into AFTER, not the tip the checkout happens to have fetched.
+    # `base` is explicitly allowed to be AHEAD of what the update merged
+    # in (see base_candidates), so replaying onto `base` itself would
+    # pull in base commits AFTER never saw and read them as this PR's
+    # own work. The merge base is exactly the incorporated revision.
+    ok, replay_base = git.run("merge-base", base, resolved_after)
+    replay_base = replay_base.strip() if ok else ""
+    if not replay_base:
         return Decision(STRIP, "after-merge-base-failed",
                         "no merge base between the base branch and 'after'")
 
-    ok, raw_before = git.run(*RAW_DIFF_FLAGS, merge_base_before, resolved_before)
-    if not ok:
-        return Decision(STRIP, "before-patch-failed",
-                        f"could not read the PR's patch before the push: {raw_before}")
-    ok, raw_after = git.run(*RAW_DIFF_FLAGS, merge_base_after, resolved_after)
-    if not ok:
-        return Decision(STRIP, "after-patch-failed",
-                        f"could not read the PR's patch after the push: {raw_after}")
+    # A three-way merge needs the two sides to share history at all.
+    # Checking it here rather than letting merge-tree refuse keeps the
+    # specific diagnostic: "these histories are unrelated" is a different
+    # thing for a maintainer to read than a generic replay failure.
+    ok, shared = git.run("merge-base", replay_base, resolved_before)
+    if not ok or not shared.strip():
+        return Decision(STRIP, "before-merge-base-failed",
+                        "no merge base between the base branch and 'before'")
 
-    patch_before = patch_identity(raw_before)
-    patch_after = patch_identity(raw_after)
-    if patch_before != patch_after:
+    ok, after_tree = git.run("rev-parse", f"{resolved_after}^{{tree}}")
+    after_tree = after_tree.strip() if ok else ""
+    if not after_tree:
+        return Decision(STRIP, "after-tree-failed",
+                        "could not read the tree of 'after'")
+
+    # Replay the APPROVED head onto the revision the update brought in.
+    # What this asks is exactly the question the gate exists to answer:
+    # "is AFTER nothing more than BEFORE carried onto the new base?" A
+    # raw-diff comparison could not ask it, because moving the base
+    # changes the source blob of every path the base touched -- so a
+    # clean, additive merge into a file the PR also owns read as a
+    # content change, which is what stripped approvals from sibling PRs
+    # that both edit a shared manifest (#2591).
+    reason, detail, replayed = _replay(git, resolved_before, replay_base)
+    if reason == "replay-failed":
+        return Decision(STRIP, "replay-failed", detail)
+    if reason == "replay-conflicted":
+        return Decision(STRIP, "replay-conflicted", detail)
+    if reason == "replay-unreadable":
+        return Decision(STRIP, "replay-unreadable", detail)
+
+    if replayed != after_tree:
+        # Deliberately the SAME reason code an edit, an addition, a
+        # deletion or a revert has always produced: each of those is one
+        # way for the pushed tree to differ from the replay, and none of
+        # them ever had a code of its own to preserve.
         return Decision(STRIP, "patch-changed",
-                        "this PR's own patch changed: " + _patch_summary(patch_before, patch_after))
+                        "this push is not a clean replay of the approved head: "
+                        f"replayed {replayed}, pushed {after_tree}")
     return Decision(KEEP, "ancestry-only",
                     "this PR's own patch is unchanged -- only the branch's ancestry moved")
 
@@ -306,12 +460,34 @@ class _FaultingGit(Git):
         self._occurrence = occurrence
         self._seen = 0
 
-    def run(self, *args: str) -> tuple[bool, str]:
+    def capture(self, *args: str) -> tuple[int, str, str]:
+        # Faulted at the ONE seam every invocation now passes through,
+        # so a fault reaches `run`'s callers and `capture`'s alike.
         if args[: len(self._prefix)] == self._prefix:
             self._seen += 1
             if self._seen == self._occurrence:
-                return False, "injected git failure"
-        return super().run(*args)
+                return 128, "", "injected git failure"
+        return super().capture(*args)
+
+
+class _MuteGit(Git):
+    """A `Git` whose chosen invocation SUCCEEDS with empty output.
+
+    Distinct from `_FaultingGit`: a command that exits 0 and prints
+    nothing usable is not a failure git will report, and the decision
+    has to refuse it on its own. Nothing in a well-formed repository
+    makes `merge-tree` do that, so the branch is reached this way rather
+    than by re-implementing the decision.
+    """
+
+    def __init__(self, repo_dir, prefix: tuple[str, ...]) -> None:
+        super().__init__(repo_dir)
+        self._prefix = prefix
+
+    def capture(self, *args: str) -> tuple[int, str, str]:
+        if args[: len(self._prefix)] == self._prefix:
+            return 0, "", ""
+        return super().capture(*args)
 
 
 class _Repo:
@@ -527,9 +703,13 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
         check("a renamed file survives a merge-forward",
               decide(Git(repo.path), before, after, "master", m1), KEEP, "ancestry-only")
 
-        # A merge-forward that also touches a PR-owned path is NOT
-        # ancestry-only: the reviewed lines now sit on different base
-        # content, so it strips.
+        # A merge-forward that also touches a PR-owned path, without
+        # conflicting, IS ancestry-only (#2591). The reviewed lines sit
+        # on different base content afterwards, but the PR contributed
+        # nothing new: AFTER is exactly BEFORE replayed onto the base.
+        # This is the shape two sibling PRs editing one shared manifest
+        # produce every time the first of them merges, and stripping it
+        # cost every such PR a rereview of an unchanged patch.
         repo = new_repo("merge-forward-overlapping")
         m0 = _base_world(repo)
         repo.checkout("pr", create=True)
@@ -543,8 +723,157 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
         before = repo.commit("R1b: the PR owns B too")
         after = repo.merge("upstream", "Merge master into the PR branch")
         repo.set_remote_ref("master", m1)
-        check("a merge-forward onto a PR-owned path is not ancestry-only",
+        check("a clean merge-forward onto a PR-owned path is ancestry-only",
+              decide(Git(repo.path), before, after, "master", m1), KEEP, "ancestry-only")
+
+        # ... and the same graph judged when origin has already advanced
+        # PAST the revision the update actually brought in. The replay
+        # base is the incorporated revision, never the fetched tip, so a
+        # sibling merging between the update and this job must not make
+        # its commits read as this PR's own work.
+        repo.checkout("upstream")
+        repo.write("untouched.txt", "untouched, advanced again\n")
+        m2 = repo.commit("M2: the base advances again, after the update")
+        repo.set_remote_ref("master", m2)
+        check("origin ahead of the revision the update incorporated",
+              decide(Git(repo.path), before, after, "master", m2), KEEP, "ancestry-only")
+
+        # The same clean overlapping update, plus one extra PR edit: the
+        # push is no longer only a replay, so it strips.
+        repo = new_repo("overlapping-plus-edit")
+        m0 = _base_world(repo)
+        repo.checkout("pr", create=True)
+        repo.write("a.txt", "a from the PR\n")
+        repo.write("b.txt", _b_with(0, "b1 from the PR\n"))
+        before = repo.commit("R1: the PR owns A and B")
+        repo._git("checkout", "--quiet", "-B", "upstream", m0)
+        repo.write("b.txt", _b_with(8, "b9 advanced on master\n"))
+        m1 = repo.commit("M1: base advances on a path the PR also owns")
+        repo.checkout("pr")
+        repo.merge("upstream", "Merge master into the PR branch")
+        repo.write("a.txt", "a from the PR, revised after the merge\n")
+        after = repo.commit("R2: an edit rolled into the same push")
+        repo.set_remote_ref("master", m1)
+        check("a clean merge-forward carrying an extra edit strips",
               decide(Git(repo.path), before, after, "master", m1), STRIP, "patch-changed")
+
+        # And the same shape where the extra change is a REVERT of
+        # approved content -- the defect #1679 fixed, restated against
+        # the replacement rule: a revert cannot reproduce the replay.
+        repo = new_repo("overlapping-plus-revert")
+        m0 = _base_world(repo)
+        repo.checkout("pr", create=True)
+        repo.write("a.txt", "a from the PR\n")
+        repo.write("b.txt", _b_with(0, "b1 from the PR\n"))
+        before = repo.commit("R1: the PR owns A and B")
+        repo._git("checkout", "--quiet", "-B", "upstream", m0)
+        repo.write("b.txt", _b_with(8, "b9 advanced on master\n"))
+        m1 = repo.commit("M1: base advances on a path the PR also owns")
+        repo.checkout("pr")
+        repo.merge("upstream", "Merge master into the PR branch")
+        repo.write("a.txt", "a base\n")  # back to M0's content
+        after = repo.commit("R2: revert A to its base content")
+        repo.set_remote_ref("master", m1)
+        check("a clean merge-forward carrying a revert strips",
+              decide(Git(repo.path), before, after, "master", m1), STRIP, "patch-changed")
+
+        # A replay that genuinely conflicts strips and names the paths,
+        # even though AFTER itself is a committed manual resolution and
+        # so has nothing wrong with it. The gate cannot vouch for a
+        # resolution no reviewer saw.
+        repo = new_repo("replay-conflicted")
+        m0 = _base_world(repo)
+        repo.checkout("pr", create=True)
+        repo.write("b.txt", _b_with(4, "b5 from the PR\n"))
+        before = repo.commit("R1: the PR edits one line of B")
+        repo._git("checkout", "--quiet", "-B", "upstream", m0)
+        repo.write("b.txt", _b_with(4, "b5 advanced on master\n"))
+        m1 = repo.commit("M1: the base edits the SAME line")
+        repo.checkout("pr")
+        # `-X ours` lets the harness build the merge without git
+        # stopping on the conflict; the resolution is then written
+        # explicitly, which is what a human resolving by hand produces.
+        repo._git("merge", "--quiet", "--no-ff", "-X", "ours",
+                  "-m", "Merge master into the PR branch", "upstream")
+        repo.write("b.txt", _b_with(4, "b5 resolved by hand\n"))
+        after = repo.commit("R2: a committed manual resolution")
+        repo.set_remote_ref("master", m1)
+        conflicted = decide(Git(repo.path), before, after, "master", m1)
+        check("a conflicted replay strips even when AFTER resolved it",
+              conflicted, STRIP, "replay-conflicted")
+        if "b.txt" not in conflicted.detail:
+            failures.append(
+                "a conflicted replay must name the conflicted paths; got "
+                f"{conflicted.detail!r}")
+
+        # A rename the base then EDITS. `git merge` follows the rename
+        # and applies the edit to the new path, so AFTER is a clean
+        # merge-forward and the approval must survive. A path-by-path
+        # replay conflicts on `a.txt` here and would strip it, which is
+        # why the replay has to be git's real strategy rather than a
+        # hand-rolled one. The rename case above only moves an unrelated
+        # base path and cannot catch this.
+        repo = new_repo("rename-then-base-edit")
+        m0 = _base_world(repo)
+        repo.checkout("pr", create=True)
+        repo._git("mv", "a.txt", "renamed.txt")
+        before = repo.commit("R1: rename A")
+        repo._git("checkout", "--quiet", "-B", "upstream", m0)
+        repo.write("a.txt", "a edited on master\n")
+        m1 = repo.commit("M1: the base edits the file the PR renamed")
+        repo.checkout("pr")
+        after = repo.merge("upstream", "Merge master into the PR branch")
+        repo.set_remote_ref("master", m1)
+        check("a rename the base then edits is still ancestry-only",
+              decide(Git(repo.path), before, after, "master", m1),
+              KEEP, "ancestry-only")
+
+        # An operational failure on a replay that really does need a
+        # content merge. The distinction is the EXIT CODE, never
+        # leftover state: an interrupted merge leaves unmerged entries
+        # for every path it was mid-way through, so reading those would
+        # report a conflict that never happened -- and name paths to go
+        # with it, which is worse than saying nothing.
+        repo = new_repo("nontrivial-replay-failure")
+        m0 = _base_world(repo)
+        repo.checkout("pr", create=True)
+        repo.write("b.txt", _b_with(0, "b1 from the PR\n"))
+        before = repo.commit("R1: the PR edits one end of B")
+        repo._git("checkout", "--quiet", "-B", "upstream", m0)
+        repo.write("b.txt", _b_with(8, "b9 advanced on master\n"))
+        m1 = repo.commit("M1: the base edits the other end")
+        repo.checkout("pr")
+        after = repo.merge("upstream", "Merge master into the PR branch")
+        repo.set_remote_ref("master", m1)
+        # The control: this replay is a real content merge that succeeds.
+        check("the fixture really needs a content merge",
+              decide(Git(repo.path), before, after, "master", m1),
+              KEEP, "ancestry-only")
+        failed = decide(_FaultingGit(repo.path, MERGE_TREE_FLAGS),
+                        before, after, "master", m1)
+        check("a replay that fails mid content-merge is a failure",
+              failed, STRIP, "replay-failed")
+        if "conflict" in failed.detail.lower():
+            failures.append(
+                "an operational replay failure must not be described as a "
+                f"conflict; got {failed.detail!r}")
+
+        # A file-MODE change with identical content: the trees differ, so
+        # comparing tree object names catches what a content-only
+        # comparison would wave through.
+        repo = new_repo("mode-only")
+        m0 = _base_world(repo)
+        repo.checkout("pr", create=True)
+        repo.write("a.txt", "a from the PR\n")
+        before = repo.commit("R1: modify A")
+        # Chmod on DISK, not just in the index: `commit` re-adds the
+        # worktree, which would otherwise put the old mode straight back.
+        (Path(repo.path) / "a.txt").chmod(0o755)
+        after = repo.commit("R2: make A executable, same bytes")
+        repo.set_remote_ref("master", m0)
+        check("a mode-only change is not a clean replay",
+              decide(Git(repo.path), before, after, "master", m0),
+              STRIP, "patch-changed")
 
         # ---- requirement 5: every fail-closed predicate selects STRIP ----
         repo = new_repo("fail-closed")
@@ -573,12 +902,19 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
         check("fail-closed: the push diff fails",
               decide(_FaultingGit(repo.path, ("diff", "--name-only")),
                      before, after, "master", m0), STRIP, "push-diff-failed")
-        check("fail-closed: the first patch inspection fails",
-              decide(_FaultingGit(repo.path, ("diff", "--raw"), occurrence=1),
-                     before, after, "master", m0), STRIP, "before-patch-failed")
-        check("fail-closed: the second patch inspection fails",
-              decide(_FaultingGit(repo.path, ("diff", "--raw"), occurrence=2),
-                     before, after, "master", m0), STRIP, "after-patch-failed")
+        check("fail-closed: AFTER's tree cannot be read",
+              decide(_FaultingGit(repo.path, ("rev-parse", f"{after}^{{tree}}")),
+                     before, after, "master", m0), STRIP, "after-tree-failed")
+        check("fail-closed: the replay command fails",
+              decide(_FaultingGit(repo.path, MERGE_TREE_FLAGS),
+                     before, after, "master", m0), STRIP, "replay-failed")
+
+        # Exit 0 with unusable output is NOT a verdict: a merge-tree that
+        # printed no object name has told us nothing, and the difference
+        # between that and a crash is what the two reason codes carry.
+        check("fail-closed: the replay output is unreadable",
+              decide(_MuteGit(repo.path, MERGE_TREE_FLAGS),
+                     before, after, "master", m0), STRIP, "replay-unreadable")
         check("fail-closed: no base revision resolves",
               decide(git, before, after, "no-such-branch", ""), STRIP, "base-unresolvable")
 
@@ -594,17 +930,26 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
               decide(Git(repo.path), before, after, "master", m0), STRIP, "push-empty")
 
         # Unrelated histories: `git merge-base` genuinely fails.
+        # BEFORE is unrelated to the base while AFTER is not, so the
+        # replay base resolves and it is the REPLAY's own base that
+        # cannot be established. AFTER joins the two histories, which is
+        # the only way to reach this guard now that the incorporated
+        # revision is derived from AFTER.
         repo = new_repo("unrelated-before")
         m0 = _base_world(repo)
         repo._git("checkout", "--quiet", "--orphan", "orphan")
-        repo._git("rm", "-rq", "--cached", ".")
+        # From the WORKTREE as well as the index: `commit` re-adds the
+        # worktree, so a cached-only removal would leave the orphan root
+        # holding the base's files and make the join an empty push.
+        repo._git("rm", "-rqf", ".")
         repo.write("orphan.txt", "an unrelated root\n")
         orphan_one = repo.commit("O1: an unrelated root commit")
-        repo.write("orphan.txt", "an unrelated root, revised\n")
-        orphan_two = repo.commit("O2")
+        repo._git("merge", "--quiet", "--no-ff", "--allow-unrelated-histories",
+                  "-m", "Join the unrelated histories", m0)
+        joined = repo.head()
         repo.set_remote_ref("master", m0)
         check("fail-closed: no merge base with 'before'",
-              decide(Git(repo.path), orphan_one, orphan_two, "master", m0),
+              decide(Git(repo.path), orphan_one, joined, "master", m0),
               STRIP, "before-merge-base-failed")
 
         repo = new_repo("unrelated-after")
@@ -630,21 +975,41 @@ def _self_test() -> int:  # noqa: C901 - a flat list of cases reads best flat
         if base_candidates("master", "master") != ["origin/master", "master"]:
             failures.append("base_candidates should not repeat a candidate")
 
-        # ---- the frozen inspection command ----
-        if RAW_DIFF_FLAGS != ("diff", "--raw", "--no-renames", "--abbrev=40"):
+        # ---- the frozen replay command ----
+        if MERGE_TREE_FLAGS != ("merge-tree", "--write-tree"):
             failures.append(
-                "RAW_DIFF_FLAGS changed: --raw compares content rather than "
-                "names, --no-renames pins the record shape against a "
-                "machine's diff.renames setting, and --abbrev=40 pins full "
-                f"object names. Got {RAW_DIFF_FLAGS!r}")
+                "MERGE_TREE_FLAGS changed: merge-tree runs git's REAL merge "
+                "strategy (rename detection included) and --write-tree is "
+                "what makes its result a tree name comparable to a real "
+                f"commit's. Got {MERGE_TREE_FLAGS!r}")
 
-        # ---- patch_identity is order-insensitive and blank-tolerant ----
-        if patch_identity("x\ny\n") != patch_identity("y\nx\n"):
-            failures.append("patch_identity must not depend on record order")
-        if patch_identity("x\n\n") != patch_identity("x\n"):
-            failures.append("patch_identity must ignore blank records")
-        if patch_identity("") != frozenset():
-            failures.append("an empty patch must be the empty identity")
+        # ---- replay_tree reads only a real object name, off line one ----
+        tree = "0" * 40
+        if replay_tree(tree + "\n") != tree:
+            failures.append("replay_tree must read a clean merge's tree")
+        if replay_tree(tree + "\n\n100644 abc 1\tx\n") != tree:
+            failures.append(
+                "replay_tree must read the tree off line ONE, so a "
+                "conflicted merge's own tree is still available")
+        for bad, label in (("", "no output"),
+                           ("not-a-tree\n", "a non-object first line"),
+                           ("0" * 39 + "\n", "a short object name"),
+                           ("z" * 40 + "\n", "a non-hex object name")):
+            if replay_tree(bad) != "":
+                failures.append(f"replay_tree must reject {label}")
+
+        # ---- conflicted_paths de-duplicates the per-stage records ----
+        conflicted = (tree + "\n\n"
+                      "100644 aaa 1\tsrc/a.txt\n"
+                      "100644 bbb 2\tsrc/a.txt\n"
+                      "100644 ccc 3\tsrc/a.txt\n"
+                      "100644 ddd 1\tsrc/b.txt\n")
+        if conflicted_paths(conflicted) != ["src/a.txt", "src/b.txt"]:
+            failures.append(
+                "conflicted_paths must report each conflicted path once, in "
+                f"first-seen order; got {conflicted_paths(conflicted)!r}")
+        if conflicted_paths(tree + "\n") != []:
+            failures.append("a clean merge names no conflicted path")
 
     for failure in failures:
         print(f"  FAIL: {failure}")
@@ -712,28 +1077,44 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
      lambda t: _bypass_guard(t, "before-merge-base-failed")),
     ("bypass the AFTER merge-base guard",
      lambda t: _bypass_guard(t, "after-merge-base-failed")),
-    ("bypass the BEFORE patch-inspection guard",
-     lambda t: _bypass_guard(t, "before-patch-failed")),
-    ("bypass the AFTER patch-inspection guard",
-     lambda t: _bypass_guard(t, "after-patch-failed")),
+    ("bypass the AFTER tree-read guard",
+     lambda t: _bypass_guard(t, "after-tree-failed")),
+    ("bypass the replay-failure guard", lambda t: _bypass_guard(t, "replay-failed")),
+    ("bypass the unreadable-replay guard",
+     lambda t: _bypass_guard(t, "replay-unreadable")),
+    ("bypass the conflicted-replay guard",
+     lambda t: _bypass_guard(t, "replay-conflicted")),
     ("never strip on a changed patch", lambda t: _bypass_guard(t, "patch-changed")),
     ("always strip, never keep",
      lambda t: _replace_once(t, 'return Decision(KEEP, "ancestry-only",',
                              'return Decision(STRIP, "ancestry-only",')),
-    ("invert the patch comparison",
-     lambda t: _replace_once(t, "if patch_before != patch_after:",
-                             "if patch_before == patch_after:")),
-    ("compare file NAMES instead of content (the #1679 defect itself)",
+    ("invert the replay comparison",
+     lambda t: _replace_once(t, "if replayed != after_tree:",
+                             "if replayed == after_tree:")),
+    ("report an operational replay failure as a conflict",
+     lambda t: _replace_once(t, "    if code not in (0, 1):",
+                             "    if code not in (0, 1, 128):")),
+    ("treat a conflicted replay as clean",
+     lambda t: _replace_once(t, "    if code == 1:\n",
+                             "    if False:\n")),
+    ("replay onto the FETCHED base tip instead of the incorporated one",
      lambda t: _replace_once(
-         t, "    return frozenset(line for line in raw_diff.splitlines() if line.strip())",
-         "    return frozenset(line.partition(chr(9))[2].strip()\n"
-         "                     for line in raw_diff.splitlines() if line.strip())")),
-    ("drop --no-renames from the frozen inspection command",
-     lambda t: _replace_once(t, 'RAW_DIFF_FLAGS = ("diff", "--raw", "--no-renames", "--abbrev=40")',
-                             'RAW_DIFF_FLAGS = ("diff", "--raw", "--abbrev=40")')),
-    ("drop --abbrev=40 from the frozen inspection command",
-     lambda t: _replace_once(t, 'RAW_DIFF_FLAGS = ("diff", "--raw", "--no-renames", "--abbrev=40")',
-                             'RAW_DIFF_FLAGS = ("diff", "--raw", "--no-renames")')),
+         t, "    reason, detail, replayed = _replay(git, resolved_before, replay_base)",
+         "    reason, detail, replayed = _replay(git, resolved_before, base)")),
+
+    ("accept any first line as the replay tree",
+     lambda t: _replace_once(
+         t, '    if len(first) == 40 and all(c in "0123456789abcdef" for c in first):\n'
+            "        return first\n"
+            '    return ""',
+         "    return first")),
+    ("compare only the replayed tree's PATHS, not the tree itself",
+     lambda t: _replace_once(
+         t, "    if replayed != after_tree:",
+         "    if False and replayed != after_tree:")),
+    ("drop --write-tree from the frozen replay command",
+     lambda t: _replace_once(t, 'MERGE_TREE_FLAGS = ("merge-tree", "--write-tree")',
+                             'MERGE_TREE_FLAGS = ("merge-tree",)')),
     ("prefer a stale local base ref over origin/<ref>",
      lambda t: _replace_once(t, '        f"origin/{base_ref}" if base_ref else "",\n'
                                 '        base_sha or "",\n'
@@ -743,10 +1124,11 @@ _MUTATIONS: tuple[tuple[str, object], ...] = (
                                 '        base_sha or "",')),
     ("ignore the event's base.sha fallback",
      lambda t: _replace_once(t, '        base_sha or "",\n', "")),
-    ("let record ORDER decide patch identity",
-     lambda t: _replace_once(
-         t, "    return frozenset(line for line in raw_diff.splitlines() if line.strip())",
-         "    return tuple(line for line in raw_diff.splitlines() if line.strip())")),
+    ("report no conflicted paths at all",
+     lambda t: _replace_once(t, "    paths: list[str] = []\n"
+                                "    for line in stdout.splitlines()[1:]:",
+                             "    paths: list[str] = []\n"
+                             "    for line in []:")),
 )
 
 
