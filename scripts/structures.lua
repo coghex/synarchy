@@ -43,44 +43,8 @@ end
 -- back to the default, so an unknown or partial variant still renders.
 local cache = {}
 
--- One appearance's ordered construction frames (#2488), as the engine's
--- registration wants them: {texture=path, texHandle=handle} in the
--- pack's own declared order. nil for an appearance that declares none —
--- which every shipped appearance currently does, and which the engine
--- reads as "this site draws nothing until the piece appears".
---
--- The list is passed through EXACTLY as authored, including an empty
--- one: the engine refuses an empty list by name, and silently turning
--- it into "no declaration" would hide a typo'd pack.
-local function loadFrames(paths)
-    if paths == nil then return nil end
-    local frames = {}
-    for i, path in ipairs(paths) do
-        -- ASK BEFORE LOADING. `structure.isSafeArtPath` is the engine's
-        -- own declaration rule, not a copy of it, and a path that fails
-        -- it must not be queued for load at all — the declaration still
-        -- goes over with no handle, and the catalogue refuses the pack
-        -- naming the escape (its path check runs before its handle one).
-        if structure.isSafeArtPath and not structure.isSafeArtPath(path) then
-            frames[i] = { texture = path }
-        else
-            frames[i] = { texture = path, texHandle = engine.loadTexture(path) }
-        end
-    end
-    return frames
-end
-
--- Which construction declaration an appearance uses. A VARIANT reads its
--- own override's and nothing else: inheriting the default's would build a
--- damaged wall out of the intact wall's frames, which requirement 1
--- forbids outright. Written as an explicit branch rather than the
--- `variant and o.construction or base.construction` idiom, which silently
--- falls back to the default whenever the override declares none — exactly
--- the inheritance being ruled out.
-local function frameDecl(variant, over, base)
-    if variant then return over.construction end
-    return base.construction
-end
+-- #2488's one declaration rule, shared with scripts/wire.lua.
+local frames = require("scripts.structure_frames")
 
 -- Forward declaration: handles() registers each variant's wall art with
 -- the engine as it builds it, and registerWallFamily() reads the table
@@ -113,7 +77,7 @@ local function handles(variant)
                     -- appearance. An override's own list or none —
                     -- never the default's, which would show a variant
                     -- being built out of the default's art.
-                    build = loadFrames(frameDecl(variant, o, p)) }
+                    build = frames.load(frames.declaredBy(variant, o, p)) }
     end
     -- walls: one sprite + the 4 cap facemap variants (handles + paths).
     -- `own*` records whether THIS variant declared the path or inherited
@@ -136,7 +100,7 @@ local function handles(variant)
                        face = faces, facePath = facePaths,
                        ownTex = (variant == nil) or (o.texture ~= nil),
                        ownFace = ownFace,
-                       build = loadFrames(frameDecl(variant, o, w)) }
+                       build = frames.load(frames.declaredBy(variant, o, w)) }
     end
     registerWallFamily(h, key)
     cache[key] = h

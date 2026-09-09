@@ -8,7 +8,9 @@ for the arc is
 [`building_directional_assets_design.md`](building_directional_assets_design.md).
 
 Owners: `scripts/structures.lua` and `scripts/wire.lua` (reading the
-YAML and loading its textures), `Engine.Scripting.Lua.API.StructureArt`
+YAML and loading its textures), `scripts/structure_frames.lua` (the one
+declaration-to-payload rule both share),
+`Engine.Scripting.Lua.API.StructureArt`
 (the `structure.registerPackArt` payload and the image measurement),
 `Structure.ArtCatalog` (the vocabulary, the registration rules and
 resolution), `World.Render.StructureGhost` (the one consumer that draws
@@ -101,10 +103,22 @@ exactly that state.
 **A declaration is keyed to exactly one appearance.** A variant's
 override never inherits or substitutes the default's frames, and an
 appearance with no declaration resolves no sequence — never another
-appearance's. `scripts/structures.lua`'s `frameDecl` is written as an
-explicit branch for that reason: the `variant and over.construction or
+appearance's. `scripts/structure_frames.lua`'s `declaredBy` is written as
+an explicit branch for that reason: the `variant and over.construction or
 base.construction` idiom silently falls back to the default whenever the
 override declares none, which is the inheritance this rule forbids.
+
+**The loaders preserve a declaration's SHAPE and normalise nothing.**
+`scripts/structure_frames.lua` is the one place either pack schema turns
+a `construction:` value into a registration payload, and it rebuilds a
+list BY KEY rather than with `ipairs`: `engine.loadYaml` decodes a YAML
+null to a Lua `nil`, so `[a, null, c]` arrives as a table with a hole,
+and `ipairs` would stop at it and hand the engine a dense one-frame list
+indistinguishable from an authored one — silently dropping every later
+stage. The gap is copied through so the engine's own density check sees
+it, a value that is not a list at all goes over untouched so the engine
+refuses it as one, and an entry that is present but not a path becomes an
+entry the engine refuses by index. Every judgement stays the engine's.
 
 ## 4. What the engine refuses
 

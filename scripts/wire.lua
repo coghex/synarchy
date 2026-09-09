@@ -40,22 +40,8 @@ local function packDef()
     return packCache
 end
 
--- One connection's ordered construction frames (#2488), in the shape the
--- engine's registration wants them.
-local function loadFrames(paths)
-    if paths == nil then return nil end
-    local frames = {}
-    for i, path in ipairs(paths) do
-        -- Ask before loading, for the reason scripts/structures.lua's own
-        -- loadFrames does: an escaping path must not be queued.
-        if structure.isSafeArtPath and not structure.isSafeArtPath(path) then
-            frames[i] = { texture = path }
-        else
-            frames[i] = { texture = path, texHandle = engine.loadTexture(path) }
-        end
-    end
-    return frames
-end
+-- #2488's one declaration rule, shared with scripts/structures.lua.
+local frames = require("scripts.structure_frames")
 
 -- A `connections.<name>` entry, in either of the two forms the pack
 -- schema accepts:
@@ -88,11 +74,11 @@ local function handles()
     if not pack then return { conn = {}, connPath = {}, connBuild = {} } end
     local conn, connPath, connBuild = {}, {}, {}
     for name, entry in pairs(pack.connections or {}) do
-        local path, frames = connectionEntry(name, entry)
+        local path, construction = connectionEntry(name, entry)
         if path then
             conn[name] = engine.loadTexture(path)
             connPath[name] = path
-            connBuild[name] = loadFrames(frames)
+            connBuild[name] = frames.load(construction)
         end
     end
     handleCache = { conn = conn, connPath = connPath, connBuild = connBuild,

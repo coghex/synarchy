@@ -193,6 +193,42 @@ pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
         packArtResolves cat "cf_empty" `shouldBe` False
         warningsOf entries `shouldSatisfy` any (namesAll ["cf_empty", "empty"])
 
+    it "refuses a sequence with a NULL gap rather than closing over it" $
+        \env → do
+            -- The loader must not walk the declaration with `ipairs`:
+            -- `engine.loadYaml` turns a YAML null into a Lua nil, and
+            -- `ipairs` stops at the hole — which would send a DENSE
+            -- one-frame list the engine has no way to tell from an
+            -- authored one, silently dropping every later stage. The
+            -- gap has to survive to the engine's own density check.
+            (_, entries) ← withCapturedLog env $
+                loadPiecePack env "cf_gap" gappedPack
+            cat ← readIORef (structureArtCatalogRef env)
+            packArtResolves cat "cf_gap" `shouldBe` False
+            framePathsOf cat "cf_gap" (appearance Nothing ApFloor)
+                `shouldBe` Nothing
+            warningsOf entries `shouldSatisfy`
+                any (namesAll ["cf_gap", "sparse"])
+            framePathsOf cat "cf_gap" (appearance Nothing (ApWall WallNE))
+                `shouldBe` Nothing
+
+    it "still QUEUES the frames past a gap, so nothing is dropped in \
+       \silence before the engine sees the declaration" $ \env → do
+        _ ← drainLuaQueue env
+        _ ← loadPiecePack env "cf_gap_queue" gappedPack
+        queued ← map snd <$> drainLuaQueue env
+        queued `shouldSatisfy`
+            elem (T.unpack (artDir <> "floor_build_2.png"))
+
+    it "refuses a `construction:` that is a scalar rather than a list" $
+        \env → do
+            (_, entries) ← withCapturedLog env $
+                loadPiecePack env "cf_scalar" scalarPack
+            cat ← readIORef (structureArtCatalogRef env)
+            packArtResolves cat "cf_scalar" `shouldBe` False
+            warningsOf entries `shouldSatisfy`
+                any (namesAll ["cf_scalar", "not an array"])
+
     it "makes the pack resolve nothing once a declared FRAME terminally \
        \fails to load, naming the frame" $ \env → do
         ls ← loadPiecePack env "cf_failframe" defaultPack
@@ -428,6 +464,9 @@ data PackSpec = PackSpec
     { psPieces  ∷ [(Text, Maybe [Text])]   -- ^ floor \/ ceiling \/ post
     , psWalls   ∷ [(Text, Maybe [Text])]   -- ^ ne \/ nw \/ se \/ sw
     , psVariant ∷ Bool                     -- ^ emit the @damaged@ block
+    , psScalarFloorConstruction ∷ Bool
+      -- ^ Emit the floor's @construction:@ as a SCALAR path rather than
+      --   a list, which is not a sequence at all.
     }
 
 -- | Nothing declared anywhere — today's shipped shape.
@@ -435,7 +474,8 @@ barePack ∷ PackSpec
 barePack = PackSpec
     { psPieces = [ (k, Nothing) | k ← ["floor", "ceiling", "post"] ]
     , psWalls  = [ (e, Nothing) | e ← wallEdges ]
-    , psVariant = False }
+    , psVariant = False
+    , psScalarFloorConstruction = False }
 
 wallEdges ∷ [Text]
 wallEdges = ["ne", "nw", "se", "sw"]
@@ -485,6 +525,25 @@ escapingPathPack = defaultPack
 -- | An AUTHORED empty list, which is a typo'd pack and not an absent
 --   declaration — the loader passes it straight through so the engine
 --   can refuse it by name.
+-- | A floor sequence with a YAML NULL in the middle. `engine.loadYaml`
+--   turns that into a Lua nil, so the declaration reaches the loader as
+--   a table with a HOLE — and a loader that walked it with `ipairs`
+--   would stop at the hole and hand the engine a dense ONE-frame list,
+--   silently dropping every later stage.
+gappedPack ∷ PackSpec
+gappedPack = defaultPack
+    { psPieces = [ ("floor", Just [ artDir <> "floor_build_0.png"
+                                  , yamlNull
+                                  , artDir <> "floor_build_2.png" ])
+                 , ("ceiling", Nothing), ("post", Nothing) ] }
+
+-- | A `construction:` that is a scalar rather than a list at all.
+scalarPack ∷ PackSpec
+scalarPack = defaultPack
+    { psPieces = [ ("floor", Just [])   -- replaced below
+                 , ("ceiling", Nothing), ("post", Nothing) ]
+    , psScalarFloorConstruction = True }
+
 emptyListPack ∷ PackSpec
 emptyListPack = defaultPack
     { psPieces = [ ("floor", Just []), ("ceiling", Nothing)
@@ -529,7 +588,9 @@ piecePackYaml name ps = T.concat $
           ([ "  " <> k <> ":"
            , "    texture: " <> artDir <> k <> ".png"
            , "    facemap: " <> artDir <> "face.png" ]
-           ⧺ constructionLines 4 frames)
+           ⧺ (if k ≡ "floor" ∧ psScalarFloorConstruction ps
+                then ["    construction: " <> artDir <> "floor_build_0.png"]
+                else constructionLines 4 frames))
       | (k, frames) ← psPieces ps ]
     ⧺ [ "walls:\n" ]
     ⧺ [ T.unlines
@@ -546,16 +607,24 @@ piecePackYaml name ps = T.concat $
 --   authored EMPTY list emits the key with no items, because "declared
 --   empty" and "not declared" are different states the engine treats
 --   differently.
+--   Two spellings are special. An authored EMPTY list is @[]@ — a bare
+--   @construction:@ with no items decodes as NULL, which is
+--   indistinguishable from an absent key. And 'yamlNull' emits a bare
+--   @-@, the gap the loaders must not close over.
 constructionLines ∷ Int → Maybe [Text] → [Text]
 constructionLines indent frames = case frames of
     Nothing  → []
-    -- A bare `construction:` with no items decodes as NULL, which is
-    -- indistinguishable from an absent key; an authored empty list is
-    -- spelled `[]`, and that is the state the engine refuses by name.
     Just []  → [pad <> "construction: []"]
     Just ps  → (pad <> "construction:")
-                 : [ pad <> "  - " <> p | p ← ps ]
-  where pad = T.replicate indent " "
+                 : [ pad <> "  -" <> item p | p ← ps ]
+  where
+    pad = T.replicate indent " "
+    item p | p ≡ yamlNull = ""
+           | otherwise    = " " <> p
+
+-- | The frame-list entry that decodes to a Lua @nil@.
+yamlNull ∷ Text
+yamlNull = "\SOHnull"
 
 variantBlock ∷ Text
 variantBlock = T.unlines $
