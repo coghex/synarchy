@@ -38,6 +38,9 @@ mixedBrowse = lns
     , "           missingReason = reason, legacy = legacy }"
     , "end"
     , "local B = 'assets/textures/buildings/mixed/'"
+    -- Four DISTINCT paths per facing, so an enlarged view that failed
+    -- to re-point at the newly selected facing's art would keep showing
+    -- the previous texture and be caught rather than looking identical.
     , "local canonical = {"
     , "  cell('south', { B..'s.png' }, false, nil, false),"
     , "  cell('west',  { B..'w.png' }, false, nil, false),"
@@ -153,6 +156,68 @@ diagnosticOnlyBrowse = lns
     , "pm.update(0.016)"
     ]
 
+-- | The four invalid-cell kinds @mixedBrowse@ does not carry, on the
+--   initial @built@ row so every one is reachable by a facing move.
+--
+--   Requirement 19 names absent, directory, symlink, unsupported
+--   extension and special-file cells explicitly, and it names them for
+--   the REAL-view gate: the Haskell classifier decides those verdicts,
+--   but only here do they have to survive marshalling and reach the
+--   presentation as distinct, never-requested, non-loading diagnostics.
+invalidCellsBrowse ∷ Text
+invalidCellsBrowse = lns
+    [ "local function cell(f, path, reason)"
+    , "  return { facing = f, paths = { path }, missing = true,"
+    , "           missingReason = reason, legacy = false }"
+    , "end"
+    , "local B = 'assets/textures/buildings/invalid/'"
+    , "local cells = {"
+    , "  cell('south', B..'a_dir.png',  'directory'),"
+    , "  cell('west',  B..'a_link.png', 'symlink'),"
+    , "  cell('north', B..'a.txt',      'unsupported_extension'),"
+    , "  cell('east',  B..'a_fifo.png', 'special') }"
+    , "local building = { name = 'invalid', defaultEntry = 'default.png',"
+    , "  defaultSelection = 'lifecycle:built',"
+    , "  entries = {"
+    , "    { label = 'default.png', animated = false, fps = 8, loop = false,"
+    , "      frames = { B..'default.png' } } },"
+    , "  declared = {"
+    , "    { identity = 'lifecycle:built', kind = 'lifecycle',"
+    , "      label = 'built \226\134\146 broken', role = 'built',"
+    , "      animation = 'broken', resolved = true, fps = 8, loop = false,"
+    , "      source = 'canonical', legacy = false, cells = cells } },"
+    , "  filesystemClasses = {"
+    , "    { label = 'default.png', identity = 'filesystem:default.png',"
+    , "      declared = {}, undeclared = true } } }"
+    , "local pm = bootPreview({ mode = 'building', building = building },"
+    , "                       { category = 'buildings', item = 'invalid' })"
+    , "pm.update(0.016)"
+    ]
+
+-- | A building whose YAML exists but is MALFORMED (or matches no
+--   definition, or names an unknown lifecycle key): the engine yields
+--   no usable matrix, so it marshals an EMPTY @declared@ list and no
+--   @defaultSelection@ — distinct on the wire from the YAML-less
+--   payload below, and required to behave identically.
+malformedYamlBrowse ∷ Text
+malformedYamlBrowse = lns
+    [ "local B = 'assets/textures/buildings/malformed/'"
+    , "local building = { name = 'malformed', defaultEntry = 'idle',"
+    , "  declared = {}, filesystemClasses = {"
+    , "    { label = 'idle', identity = 'filesystem:idle',"
+    , "      declared = {}, undeclared = true },"
+    , "    { label = 'default.png', identity = 'filesystem:default.png',"
+    , "      declared = {}, undeclared = true } },"
+    , "  entries = {"
+    , "    { label = 'idle', animated = true, fps = 8, loop = false,"
+    , "      frames = { B..'idle/frame_000.png', B..'idle/frame_001.png' } },"
+    , "    { label = 'default.png', animated = false, fps = 8, loop = false,"
+    , "      frames = { B..'default.png' } } } }"
+    , "local pm = bootPreview({ mode = 'building', building = building },"
+    , "                       { category = 'buildings', item = 'malformed' })"
+    , "pm.update(0.016)"
+    ]
+
 -- | A YAML-less building: the pre-#2492 payload exactly, with no
 --   @declared@, no @defaultSelection@ and no classes.
 rawOnlyBrowse ∷ Text
@@ -188,6 +253,15 @@ findRow = lns
     , "function centerOf(bounds)"
     , "  return bounds.x + bounds.w / 2, bounds.y + bounds.h / 2"
     , "end"
+    -- The UI oracle answers from the records the shipped code wrote, so
+    -- these read back a real write rather than restating an expectation.
+    , "function elemOf(handle)"
+    , "  assert(handle, 'the dump reported no element handle')"
+    , "  local e = elements[handle]"
+    , "  assert(e, 'element ' .. tostring(handle) .. ' does not exist')"
+    , "  return e"
+    , "end"
+    , "function shown(handle) return elemOf(handle).visible == true end"
     ]
 
 spec ∷ Spec
@@ -512,6 +586,134 @@ spec = do
       , "end"
       ]
 
+  describe "what is actually drawn" $ do
+    it "re-points the enlarged sprite at the newly selected facing's own \
+       \texture, and hides the missing marker while it does" $ runsOk $ lns
+      [ harness, mixedBrowse, findRow
+      , "-- The canonical row declares four DISTINCT paths, so a view"
+      , "-- that changed only its dump would keep the same texture on"
+      , "-- screen and fail here."
+      , "assetBrowserStub.selectEntry(1, 'lifecycle:construction')"
+      , "pm.update(0.016)"
+      , "local d = pm.dump()"
+      , "assert(d.selectedFacing == 'south')"
+      , "local sprite = elemOf(d.spriteElement)"
+      , "assert(sprite.visible == true, 'the enlarged sprite is drawn')"
+      , "assert(shown(d.missingElement) == false,"
+      , "    'and the missing marker is not')"
+      , "local southTex = sprite.tex"
+      , "assert(southTex, 'the enlarged sprite really holds a texture')"
+      , "-- north is the other loadable canonical facing."
+      , "local north = cellByFacing(pm, 'north')"
+      , "assert(pm.onPreviewFacingClick(north.hitHandle))"
+      , "pm.update(0.016)"
+      , "local after = elemOf(pm.dump().spriteElement)"
+      , "assert(after.tex ~= southTex,"
+      , "    'the enlarged view must show the NEW facings own art')"
+      , "assert(after.tex == elemOf(north.spriteElement).tex,"
+      , "    'and specifically that cells own texture')"
+      , "assert(after.visible == true and shown(pm.dump().missingElement) == false)"
+      ]
+
+    it "draws the missing marker and hides the sprite, in the cell and \
+       \in the enlarged region alike" $ runsOk $ lns
+      [ harness, mixedBrowse, findRow
+      , "assetBrowserStub.selectEntry(1, 'lifecycle:construction')"
+      , "pm.update(0.016)"
+      , "local west = cellByFacing(pm, 'west')"
+      , "assert(west.missing == true)"
+      , "-- The CELL: marker visible, sprite hidden, and no handle."
+      , "assert(shown(west.missingElement), 'the cell marker is drawn')"
+      , "assert(elemOf(west.missingElement).text ~= nil"
+      , "   and #elemOf(west.missingElement).text > 0,"
+      , "    'and it carries a visible mark, not an empty string')"
+      , "assert(shown(west.spriteElement) == false,"
+      , "    'the cell sprite must be hidden, not left showing stale art')"
+      , "assert(west.handle == nil)"
+      , "-- A loadable sibling is the control: the marker is not simply"
+      , "-- visible everywhere."
+      , "local south = cellByFacing(pm, 'south')"
+      , "assert(shown(south.missingElement) == false"
+      , "   and shown(south.spriteElement) == true)"
+      , "-- The ENLARGED region, once that facing is selected."
+      , "assert(pm.onPreviewFacingClick(west.hitHandle))"
+      , "pm.update(0.016)"
+      , "local d = pm.dump()"
+      , "assert(shown(d.missingElement), 'the enlarged marker is drawn')"
+      , "assert(shown(d.spriteElement) == false,"
+      , "    'and the enlarged sprite is hidden')"
+      , "assert(d.state == 'ready' and d.path == nil)"
+      ]
+
+    it "marks a legacy row visibly -- a `*` on every cell caption and \
+       \the enlarged legacy flag -- and a canonical row not at all" $
+      runsOk $ lns
+      [ harness, mixedBrowse, findRow
+      , "-- The legacy built row: four repeated views must never read as"
+      , "-- four authored ones (#2492 requirement 6)."
+      , "assert(pm.dump().selection.identity == 'lifecycle:built')"
+      , "assert(shown(pm.dump().legacyElement),"
+      , "    'the enlarged legacy flag is drawn')"
+      , "assert(elemOf(pm.dump().legacyElement).text == 'legacy',"
+      , "    tostring(elemOf(pm.dump().legacyElement).text))"
+      , "for _, c in ipairs(pm.dump().facingRow) do"
+      , "  local caption = elemOf(c.labelElement).text"
+      , "  assert(caption:sub(-1) == '*',"
+      , "      c.facing .. ' caption must carry the legacy mark, got '"
+      , "      .. tostring(caption))"
+      , "end"
+      , "-- The canonical row is the control, through the same reads."
+      , "assetBrowserStub.selectEntry(1, 'lifecycle:construction')"
+      , "pm.update(0.016)"
+      , "assert(shown(pm.dump().legacyElement) == false,"
+      , "    'a canonical row draws no legacy flag')"
+      , "for _, c in ipairs(pm.dump().facingRow) do"
+      , "  local caption = elemOf(c.labelElement).text"
+      , "  assert(caption:sub(-1) ~= '*',"
+      , "      c.facing .. ' caption must NOT be marked legacy: ' .. caption)"
+      , "  assert(#caption > 0, 'and must still name its facing')"
+      , "end"
+      ]
+
+    it "presents every invalid-cell kind as its own distinct, \
+       \never-requested diagnostic" $ runsOk $ lns
+      [ harness, invalidCellsBrowse, findRow
+      , "local want = { south = 'directory', west = 'symlink',"
+      , "               north = 'unsupported_extension', east = 'special' }"
+      , "local d = pm.dump()"
+      , "assert(d.selection.identity == 'lifecycle:built')"
+      , "assert(d.state == 'ready', tostring(d.state))"
+      , "for _, c in ipairs(d.facingRow) do"
+      , "  assert(c.missing == true, c.facing)"
+      , "  assert(c.missingReason == want[c.facing],"
+      , "      c.facing .. ': ' .. tostring(c.missingReason)"
+      , "      .. ' want ' .. tostring(want[c.facing]))"
+      , "  assert(c.handle == nil, c.facing .. ' requested its bad path')"
+      , "  assert(c.path == nil, c.facing .. ' resolved a path anyway')"
+      , "  assert(shown(c.missingElement), c.facing .. ' drew no marker')"
+      , "  assert(shown(c.spriteElement) == false,"
+      , "      c.facing .. ' left its sprite showing')"
+      , "end"
+      , "assert(d.totals.missingCells == 4)"
+      , "-- Nothing under the building's own root was ever requested."
+      , "for _, p in ipairs(d.loadedPaths) do"
+      , "  assert(p:find('assets/textures/ui/', 1, true) == 1,"
+      , "      'a diagnostic row loaded: ' .. p)"
+      , "end"
+      , "-- Every one stays terminal as it is enlarged in turn."
+      , "for _, facing in ipairs({'west', 'north', 'east'}) do"
+      , "  local cell = cellByFacing(pm, facing)"
+      , "  assert(pm.onPreviewFacingClick(cell.hitHandle))"
+      , "  pm.update(0.016)"
+      , "  local e = pm.dump()"
+      , "  assert(e.selectedFacing == facing)"
+      , "  assert(e.selection.missingReason == want[facing],"
+      , "      facing .. ': ' .. tostring(e.selection.missingReason))"
+      , "  assert(e.state == 'ready' and e.path == nil)"
+      , "  assert(shown(e.missingElement) and shown(e.spriteElement) == false)"
+      , "end"
+      ]
+
   describe "legacy declarations" $
     it "marks every repeated cell and its row legacy, and a canonical \
        \row neither" $ runsOk $ lns
@@ -643,6 +845,29 @@ spec = do
       , "    'a loop:false raw clip still wraps to 0')"
       , "assert(pm2.dump().playback.loop == false,"
       , "    'and its AUTHORED loop is still reported verbatim')"
+      ]
+
+    it "treats a MALFORMED or unmatched YAML exactly like a missing one \
+       \-- an empty declaration is not a partial one" $ runsOk $ lns
+      [ harness, malformedYamlBrowse, findRow
+      , "-- The engine yields no usable matrix, so it marshals an EMPTY"
+      , "-- `declared` and no `defaultSelection` -- distinct on the wire"
+      , "-- from the YAML-less payload, and required to behave the same."
+      , "local d = pm.dump()"
+      , "assert(#d.rows == 2 and #d.entries == 2)"
+      , "assert(#d.lifecycle == 0 and d.staticSprite == nil)"
+      , "assert(d.declaration == nil)"
+      , "assert(d.selection.identity == 'filesystem:idle',"
+      , "    'the unchanged raw defaultEntry ladder still decides')"
+      , "assert(d.selected.label == 'idle' and d.defaultEntry == 'idle')"
+      , "assert(d.selectedFacing == nil and #(d.facingRow or {}) == 0)"
+      , "assert(not pm.onKeyDown('Left') and not pm.onKeyDown('Right'))"
+      , "assert(d.totals.undeclaredFilesystemEntries == 2)"
+      , "-- The raw browser keeps its existing playback, too."
+      , "assert(d.playback ~= nil and d.playback.frameCount == 2)"
+      , "NOW = 0.14; pm.update(0.016)"
+      , "assert(pm.dump().playback.frameIndex == 1)"
+      , "assert(math.abs(d.zoom.region.width - d.panelBounds.width) < 1e-6)"
       ]
 
     it "still selects, resizes and zooms a raw row after a declared \

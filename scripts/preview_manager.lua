@@ -1394,6 +1394,12 @@ function previewManager.dump()
             and (selectedRow.declared or {}).role or nil
         out.selectedFacing = view and view.facing or nil
         out.facingRow = view and view.facingRow or nil
+        -- The enlarged view's marker elements (#2492 requirements 6/7):
+        -- a probe reads their visibility and text to prove the missing
+        -- and legacy indicators are actually drawn, not merely flagged.
+        out.spriteElement = view and view.spriteElement or nil
+        out.missingElement = view and view.missingElement or nil
+        out.legacyElement = view and view.legacyElement or nil
         out.path = view and view.path or nil
         out.frameIndex = view and view.frameIndex or nil
 

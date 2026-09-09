@@ -86,12 +86,19 @@ uiStub = lns
     , "                       pointerBlocking = false }"
     , "      return id"
     , "  end,"
-    , "  newText = function(name)"
+    -- Text is RETAINED, and so is visibility: the buildings viewer
+    -- encodes two contract facts in text elements alone — the missing
+    -- marker and the legacy flags (#2492 requirements 6 and 7) — and a
+    -- stub that dropped the string would let a fixture "verify" a
+    -- marker that was never drawn.
+    , "  newText = function(name, text)"
     , "      local id = nextElem; nextElem = nextElem + 1"
-    , "      elements[id] = { name = name, width = 0, height = 0, x = 0, y = 0,"
-    , "                       visible = true }"
+    , "      elements[id] = { name = name, text = text, width = 0, height = 0,"
+    , "                       x = 0, y = 0, visible = true }"
     , "      return id"
     , "  end,"
+    , "  setText = function(id, t)"
+    , "      local e = elements[id]; if e then e.text = t end end,"
     , "  addToPage = function(_p, id, x, y)"
     , "      local e = elements[id]; if e then e.x = x; e.y = y end end,"
     , "  addChild = function(_p, id, x, y)"
@@ -115,10 +122,14 @@ uiStub = lns
     , "      local e = elements[id]; if e then e.pointerBlocking = v end end,"
     , "  setOnClick = function() end,"
     , "  deleteElement = function(id) elements[id] = nil end,"
+    -- Reports what the shipped code actually WROTE, text and visibility
+    -- included, so a fixture asserting a marker is on screen is reading
+    -- a real write back rather than restating its own expectation.
     , "  getElementInfo = function(id)"
     , "      local e = elements[id]"
     , "      if not e then return nil end"
-    , "      return { x = e.x, y = e.y, width = e.width, height = e.height }"
+    , "      return { x = e.x, y = e.y, width = e.width, height = e.height,"
+    , "               text = e.text, visible = e.visible, tex = e.tex }"
     , "  end,"
     , "}"
     ]

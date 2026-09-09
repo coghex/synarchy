@@ -725,6 +725,14 @@ function buildingAssetView.dump(id)
             -- missing cell would mean a request was made.
             handle = c.handle,
             hitHandle = c.hitId,
+            -- The ELEMENTS whose visibility and text carry this cell's
+            -- verdict on screen (#2492 requirements 6 and 7). Reported
+            -- so a probe — and the CPU-only fixture — can assert the
+            -- marker is really drawn and the sprite really hidden,
+            -- rather than trusting that a dump flag implies a pixel.
+            spriteElement = c.spriteId,
+            missingElement = c.missingId,
+            labelElement = c.labelId,
             missing = c.missing,
             missingReason = c.missingReason,
             legacy = c.legacy,
@@ -755,6 +763,11 @@ function buildingAssetView.dump(id)
     -- rendered bounds, read back from UI.getElementInfo rather than
     -- restated from this module's own arithmetic, so a probe verifies
     -- where the sprite really is.
+    -- The enlarged view's own elements, for the same reason.
+    out.spriteElement = v.spriteId
+    out.missingElement = v.missingId
+    out.legacyElement = v.legacyId
+
     local info = v.spriteId and UI.getElementInfo(v.spriteId)
     out.zoom = {
         multiplier = v.zoom,
