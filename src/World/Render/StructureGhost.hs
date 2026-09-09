@@ -172,8 +172,10 @@ resolvedArt pa = ResolvedPieceArt
 --
 --   Paid IS the durable transition (D-15\/D-16, and #1844 replaced
 --   @cdMaterialsPaid@ with the receipt whose presence is the paid
---   state): from payment until the finished piece appears, a structure
---   site draws nothing at all.
+--   state), so this pass ends exactly where payment lands. What happens
+--   from there is 'structureConstructionGhosts' (#2488): the authored
+--   frame the site's own progress selects, or — for an appearance that
+--   declares none, which is every shipped one today — still nothing.
 --
 --   Each designation is resolved on behalf of its OWN attempt
 --   ('PlanForAttempt'), or every one of them would count itself as the

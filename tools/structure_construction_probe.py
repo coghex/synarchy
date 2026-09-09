@@ -332,15 +332,21 @@ def main() -> int:
         # will do and none has to be carrying anything; what the call is
         # here for is the receipt, which is what makes the designation
         # PAID and therefore drawn by the construction pass at all.
-        raw = send(args.port,
-                   f"return unit.spawn('acolyte', {site_x + 4}, {site_y + 4})")
-        try:
-            builder = int(float((raw or "").strip()))
-        except (TypeError, ValueError):
-            builder = -1
-        if not check(builder > 0,
+        # unit.spawn answers -1 while the unit registry is still settling
+        # after the arena opens, so poll it rather than taking the first
+        # answer — a -1 here is a boot-timing flake, not a real refusal.
+        def try_spawn():
+            raw = send(args.port, "return unit.spawn('acolyte',"
+                                  f" {site_x + 4}, {site_y + 4})")
+            try:
+                uid = int(float((raw or "").strip()))
+            except (TypeError, ValueError):
+                return None
+            return uid if uid > 0 else None
+        builder = poll_until(60.0, try_spawn)
+        if not check(bool(builder),
                      "a unit exists to charge the (empty) bill to",
-                     f"unit.spawn returned {raw!r}"):
+                     "unit.spawn never returned a real uid"):
             return 1
         paid = send(args.port,
                     f"return tostring(construction.payMaterials('{page}',"

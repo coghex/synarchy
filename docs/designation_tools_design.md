@@ -280,10 +280,11 @@ concrete precondition
   - once committed, a **60% designated ghost** answers "this is queued to be
     built here" — the same art, visibly more solid than the preview, and
     never showing invalid-placement feedback;
-  - when construction actually begins, a structure ghost disappears and
-    leaves the site visually empty until the finished piece appears, while a
-    work-constructed building switches to its own required
-    construction-progress art.
+  - when construction actually begins, a structure ghost gives way to the
+    **authored construction frame** its progress selects (#2488 — or, for an
+    appearance whose pack declares no sequence, to nothing at all, which is
+    every shipped appearance until BDA-15/BDA-16), while a work-constructed
+    building switches to its own required construction-progress art.
   No state uses a dedicated structure/building marker texture or a generic
   progress fallback.
 - Every tool remains visually legible at ordinary gameplay zoom and under the

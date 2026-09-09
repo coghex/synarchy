@@ -473,12 +473,18 @@ missingArtSpec =
         scanned `shouldBe` 1
         quads `shouldSatisfy` V.null
 
--- * Work hides the site
+-- * Payment ends the DESIGNATED state
 
+-- | Since #2488 a paid site is not necessarily invisible — it draws the
+--   construction frame its appearance declares, from
+--   'structureConstructionGhosts'. What stays true, and is what this
+--   example is about, is that payment ends the state THIS pass draws:
+--   the two passes are disjoint, so nothing is ever drawn twice. The
+--   shipped packs declare no frames, so a paid site of one still shows
+--   nothing at all — which "structure construction frames" covers.
 workSpec ∷ SpecWith [PackFixture]
 workSpec =
-    it "a paid designation draws nothing until the finished piece \
-       \appears" $ \packs → do
+    it "a paid designation leaves the DESIGNATED state" $ \packs → do
         let sp = StructurePiece dungeonPack "floor" Nothing
             unpaid = newConstructDesignation surfaceZ (CtStructure sp)
                          (ConstructAttemptId 1)
@@ -487,6 +493,14 @@ workSpec =
                 (ghostEnvAt packs FaceSouth (HM.singleton (canon homeTile) d)))
         ghosts unpaid `shouldSatisfy` (not ∘ V.null)
         ghosts paid `shouldSatisfy` V.null
+        -- …and the SHIPPED packs declare no construction sequence, so
+        -- the pass that took over from payment draws nothing for them
+        -- either: a paid site of a shipped pack is still empty
+        -- (#2488 requirement 8), and this is the suite that reads the
+        -- real pack YAML.
+        let construction d = snd (structureConstructionGhosts
+                (ghostEnvAt packs FaceSouth (HM.singleton (canon homeTile) d)))
+        construction paid `shouldSatisfy` V.null
 
 -- * Line mode
 
