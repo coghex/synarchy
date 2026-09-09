@@ -29,15 +29,19 @@ module Engine.Scripting.Lua.API.StructureArt
     ) where
 
 import UPrelude
+import Control.Exception (SomeException, try)
 import Data.IORef (readIORef, atomicModifyIORef')
+import qualified Codec.Picture as JP
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import qualified Data.Vector as V
 import qualified HsLua as Lua
 
 import Engine.Asset.Handle (TextureHandle(..))
 import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
-import Engine.Core.Log (LogCategory(..), logWarn)
+import Engine.Core.Log (LogCategory(..), logInfo, logWarn)
 import Engine.Core.State (EngineEnv, loggerRef)
 import Engine.Scripting.Lua.API.Structure (resolveStructurePage)
 import Engine.Scripting.Lua.Util (isDenseArray)
@@ -62,6 +66,25 @@ import World.Types
 --   >             { kind = "wall", edge = "ne", caps = "00", ... },
 --   >             { kind = "wire", shape = "cross", ... } } }
 --
+--   @construction@ (#2488) is OPTIONAL and declares one ordered frame
+--   sequence per authored APPEARANCE — coarser than @art@, because a
+--   wall's four cap facemaps share one sprite:
+--
+--   > construction = { { kind = "wall", edge = "ne", variant = nil,
+--   >                    texture = <the appearance's static sprite>,
+--   >                    texHandle = h,
+--   >                    frames = { { texture = p1, texHandle = h1 }, … } } }
+--
+--   @variant@ names a pack variant and defaults to the pack's own
+--   default art. A sequence is keyed to EXACTLY that appearance: a
+--   variant's cannot inherit or substitute the default's, and an
+--   appearance with no entry resolves none. The engine refuses the whole
+--   pack — the same all-or-nothing rule the static art is under — for an
+--   empty list, a duplicate or escaping frame path, an unloaded handle,
+--   a wall family whose declared directions run to different lengths, a
+--   last frame whose pixel dimensions differ from the static sprite's,
+--   or a conflicting repeat.
+--
 --   @kinds@ is the EXPLICIT declared-kind inventory the completeness
 --   check runs against: declaring a kind obliges the payload to carry
 --   every one of its art slots (one each for @floor@\/@ceiling@\/@post@,
@@ -81,13 +104,27 @@ structureRegisterPackArtFn env = do
     eReg ← readRegistration
     ok ← case eReg of
         Left fault → warn fault ≫ pure False
-        Right reg → do
-            outcome ← Lua.liftIO $
+        Right reg0 → do
+            -- Requirement 6's dimension check needs PIXELS, and the
+            -- catalogue is pure. Measure here — the images are on disk
+            -- and the Lua thread can read them — rather than waiting for
+            -- an upload that a headless session never performs and that
+            -- lands long after this call. Only the paths a declared
+            -- sequence actually names are touched, so a pack with no
+            -- sequences reads nothing.
+            sizes ← Lua.liftIO (measureSequences (parFrames reg0))
+            let reg = reg0 { parSizes = sizes }
+            (outcome, cat) ← Lua.liftIO $
                 atomicModifyIORef' (rhStructureArtCatalogRef
                                       (toRenderHandoffCapability env))
-                                   (registerPackArt reg)
+                                   (\c → let (c', o) = registerPackArt reg c
+                                         in (c', (o, c')))
             case outcome of
-                ArtRegistered            → pure True
+                -- Requirement 8's diagnostic, on a FRESH registration
+                -- only: once per (pack, appearance), never per frame and
+                -- never per drawn candidate. An idempotent repeat is
+                -- silent, so a pack cannot report itself twice.
+                ArtRegistered → reportUndeclared cat (parPack reg) ≫ pure True
                 ArtAlreadyRegistered     → pure True
                 ArtRegistrationRefused f → warn f ≫ pure False
     Lua.pushboolean ok
@@ -96,6 +133,13 @@ structureRegisterPackArtFn env = do
     warn f = do
         logger ← Lua.liftIO $ readIORef (loggerRef env)
         logWarn logger CatLua (artFaultMessage f)
+
+    reportUndeclared cat pack = case HM.lookup pack (sacPacks cat) of
+        Nothing → pure ()
+        Just stored → do
+            logger ← Lua.liftIO $ readIORef (loggerRef env)
+            forM_ (undeclaredConstructionAppearances stored) $ \ak →
+                logInfo logger CatLua (missingConstructionMessage pack ak)
 
     -- A payload that cannot even be READ still reports through the same
     -- one-warning channel, and still names as much of pack / kind /
@@ -123,7 +167,15 @@ structureRegisterPackArtFn env = do
                     eKinds ← arrayField pack "kinds" "declared kinds"
                                         (readKind pack)
                     eArt   ← arrayField pack "art" "art entries" (readArt pack)
-                    pure (PackArtRegistration pack <$> eKinds <*> eArt)
+                    -- #2488: OPTIONAL, so an ABSENT `construction` is an
+                    -- empty declaration rather than a malformed payload
+                    -- (every shipped pack is in exactly that state).
+                    -- A PRESENT one must still be a dense array of
+                    -- tables, like `art`.
+                    eFrames ← optionalArrayField pack "construction"
+                                  "construction frames" (readSequence pack)
+                    pure (PackArtRegistration pack <$> eKinds <*> eArt
+                            <*> eFrames <*> pure HM.empty)
 
     -- Push spec[name], read it as a dense array, pop. A non-table field
     -- is malformed rather than empty: an absent `art` list is not a pack
@@ -141,6 +193,18 @@ structureRegisterPackArtFn env = do
                 else readArray pack role readOne
         Lua.pop 1
         pure r
+
+    -- 'arrayField' for a key a payload may legitimately omit: absent is
+    -- an empty declaration, present-but-not-a-table is still malformed.
+    optionalArrayField ∷ Text → Lua.Name → Text
+                       → (Int → Lua.LuaE Lua.Exception (Either ArtFault α))
+                       → Lua.LuaE Lua.Exception (Either ArtFault [α])
+    optionalArrayField pack name role readOne = do
+        ty ← Lua.getfield 1 name
+        Lua.pop 1
+        if ty ≡ Lua.TypeNil
+            then pure (Right [])
+            else arrayField pack name role readOne
 
     -- Every element must be a table AND parse, or the whole array is a
     -- fault: a payload assembled from the entries that happened to be
@@ -306,6 +370,91 @@ structureRegisterPackArtFn env = do
                   (if role ≡ "" then "art entry " <> tshow i
                                 else role <> " (art entry " <> tshow i <> ")")
 
+    -- #2488: one appearance's construction sequence. The selectors are
+    -- the APPEARANCE's, so a wall entry names its edge and NOT a cap
+    -- code — the four caps of one edge share the sprite the sequence
+    -- builds toward, and a payload that thinks otherwise is mis-shaped.
+    readSequence ∷ Text → Int
+                 → Lua.LuaE Lua.Exception
+                       (Either ArtFault (AppearanceKey, ConstructionSequence))
+    readSequence pack i = do
+        mKind    ← fieldString (-1) "kind"
+        mEdge    ← fieldString (-1) "edge"
+        mCaps    ← fieldString (-1) "caps"
+        mShape   ← fieldString (-1) "shape"
+        mVariant ← fieldString (-1) "variant"
+        mTex     ← fieldString (-1) "texture"
+        mTexH    ← fieldHandle (-1) "texHandle"
+        eFrames  ← readFrames pack i
+        pure $ case mKind ⌦ pieceKindFromText of
+            Nothing → Left $ seqFault Nothing ""
+                "the entry names no recognised piece kind"
+            Just kind → case appearanceSlotFor kind mEdge mCaps mShape of
+                Nothing → Left $ seqFault (Just kind) ""
+                    "the entry's edge/shape selectors do not name one of \
+                    \this kind's appearances"
+                Just aslot →
+                    let ak   = AppearanceKey mVariant aslot
+                        role = appearanceKeyRole ak <> " construction"
+                        need ∷ Text → Maybe α → Either ArtFault α
+                        need what = maybe
+                            (Left (seqFault (Just kind) (role <> " " <> what)
+                                     ("the entry has no `" <> what <> "`")))
+                            Right
+                    in do tex    ← need "texture"   mTex
+                          texH   ← need "texHandle" mTexH
+                          frames ← eFrames
+                          pure ( ak
+                               , ConstructionSequence
+                                   { csStatic = ArtAsset tex texH
+                                   , csFrames = V.fromList frames } )
+      where
+        seqFault mKind role =
+            fault pack mKind
+                  (if role ≡ "" then "construction frames " <> tshow i
+                                else role <> " (construction frames "
+                                       <> tshow i <> ")")
+
+    -- The ORDERED frame list. Dense-array-checked like every other array
+    -- in this payload: a sparse `frames` would silently drop stages, and
+    -- a sequence missing a stage is not a shorter sequence, it is wrong.
+    readFrames ∷ Text → Int
+               → Lua.LuaE Lua.Exception (Either ArtFault [ArtAsset])
+    readFrames pack i = do
+        ty ← Lua.getfield (-1) "frames"
+        r ← if ty ≢ Lua.TypeTable
+              then pure ∘ Left $ fault pack Nothing
+                       ("construction frames " <> tshow i)
+                       "the entry's `frames` is not an array"
+              else readArray pack ("construction frames " <> tshow i)
+                             (readFrame pack i)
+        Lua.pop 1
+        pure r
+
+    readFrame ∷ Text → Int → Int
+              → Lua.LuaE Lua.Exception (Either ArtFault ArtAsset)
+    readFrame pack i j = do
+        mTex  ← fieldString (-1) "texture"
+        mTexH ← fieldHandle (-1) "texHandle"
+        pure $ case (mTex, mTexH) of
+            (Just tex, Just h) → Right (ArtAsset tex h)
+            _ → Left $ fault pack Nothing
+                    ("construction frames " <> tshow i <> " frame " <> tshow j)
+                    "the frame has no `texture` string and `texHandle` number"
+
+    -- The APPEARANCE a construction entry's selectors name.
+    appearanceSlotFor kind mEdge mCaps mShape = do
+        guard (isNothing mCaps)
+        case kind of
+            KFloor   → ApFloor   ⚟ guard (noneOf [mEdge, mShape])
+            KCeiling → ApCeiling ⚟ guard (noneOf [mEdge, mShape])
+            KPost    → ApPost    ⚟ guard (noneOf [mEdge, mShape])
+            KWall    → guard (isNothing mShape)
+                         ≫ (ApWall <$> (mEdge ⌦ wallEdgeFromText))
+            KWire    → guard (isNothing mEdge)
+                         ≫ (ApWire <$> (mShape ⌦ wireShapeFromName))
+      where noneOf = all isNothing
+
     -- A wall entry MUST name both its edge and its cap code, a wire
     -- entry MUST name its shape, and the three simple kinds must name
     -- none of them: an entry carrying a selector its kind has no use for
@@ -325,6 +474,35 @@ structureRegisterPackArtFn env = do
       where
         simple k = k ⚟ guard (isNothing mEdge ∧ isNothing mCaps
                                 ∧ isNothing mShape)
+
+-- | Measure every image a declared sequence's dimension check needs:
+--   the appearance's static sprite and the sequence's LAST frame.
+--
+--   Reads the files directly rather than consulting
+--   'Engine.Core.Capability.RenderView.rvTextureSizeRef'. That cache is
+--   populated by a completed GPU upload, which has not happened when a
+--   pack registers on the first Lua tick and never happens at all in a
+--   headless session — so a check written against it would be silently
+--   vacuous exactly where it is asserted. A path that cannot be read is
+--   simply left out of the map, and 'registerPackArt' refuses the pack
+--   for it by name.
+measureSequences ∷ [(AppearanceKey, ConstructionSequence)]
+                 → IO (HM.HashMap Text (Int, Int))
+measureSequences seqs = HM.fromList ∘ catMaybes <$> mapM measure paths
+  where
+    paths = ordNub
+        [ path
+        | (_, cs) ← seqs
+        , path ← aaPath (csStatic cs)
+                   : [ aaPath (V.last fs) | let fs = csFrames cs
+                                          , not (V.null fs) ] ]
+    measure path = do
+        r ← try (JP.readImage (T.unpack path))
+        pure $ case r ∷ Either SomeException (Either String JP.DynamicImage) of
+            Right (Right img) → Just (path, ( JP.dynamicMap JP.imageWidth img
+                                            , JP.dynamicMap JP.imageHeight img ))
+            _                 → Nothing
+    ordNub = foldr (\x xs → x : filter (≢ x) xs) []
 
 -- | @structure.isPackKindBuildable(pack, kind) → bool@ — does this
 --   pack's kind carry complete @build:@ metadata? Deliberately

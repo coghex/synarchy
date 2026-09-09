@@ -78,6 +78,8 @@ registerArtOnlyPack env =
         { parPack    = artOnlyPackName
         , parKinds   = [(KFloor, False, Nothing)]
         , parEntries = [(AkFloor, art "artonly_floor")]
+        , parFrames  = []
+        , parSizes   = HM.empty
         }
 
 dungeonRegistration ∷ PackArtRegistration
@@ -97,6 +99,8 @@ dungeonRegistration = PackArtRegistration
         ⧺ [ (AkWall e c, art "wall")
           | e ← [WallNE, WallNW, WallSE, WallSW]
           , c ← [ WallCaps l r | l ← [False, True], r ← [False, True] ] ]
+    , parFrames  = []
+    , parSizes   = HM.empty
     }
 
 wireRegistration ∷ PackArtRegistration
@@ -104,6 +108,8 @@ wireRegistration = PackArtRegistration
     { parPack = fixtureWirePack
     , parKinds = [(KWire, True, Just fixtureWireCost)]
     , parEntries = [ (AkWire s, art "wire") | s ← allWireShapes ]
+    , parFrames  = []
+    , parSizes   = HM.empty
     }
 
 -- | One art slot. The paths and handles are arbitrary but must be

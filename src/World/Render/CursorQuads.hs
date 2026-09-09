@@ -38,7 +38,8 @@ import World.Construct.Extent (structureDragExtent)
 import World.Construct.Plan (PlanWorld(..))
 import Structure.Render (translateQuad)
 import World.Render.StructureGhost
-    ( GhostEnv(..), structureDesignationGhosts, structurePreviewGhosts )
+    ( GhostEnv(..), structureConstructionGhosts, structureDesignationGhosts
+    , structurePreviewGhosts )
 import World.Render.Camera (placementCamera, quadCacheMargins)
 import World.Render.ViewBounds
     (computeViewBounds, expandViewBounds, viewBoundsAt)
@@ -392,7 +393,14 @@ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
         -- The DESIGNATED state (D-19): a world annotation like every
         -- other marker, so it shows in every tool mode.
         structureGhosts = structureDesignationGhosts ghostEnv
-        structureGhostQuads = snd structureGhosts
+        -- The UNDER-CONSTRUCTION state (#2488): a PAID site, drawn solid
+        -- at the frame its progress selects. Disjoint from the pass
+        -- above by construction — that one takes the unpaid
+        -- designations and this one the paid — so no designation is
+        -- drawn twice, and a pack that declares no frames still yields
+        -- nothing here.
+        constructionGhosts = structureConstructionGhosts ghostEnv
+        structureGhostQuads = snd structureGhosts <> snd constructionGhosts
 
     -- The committed BUILDING designation (#1845, D-19): ONE ghost of the
     -- building's own art, at D-19's 60 %, never tinted — the red is
@@ -654,7 +662,7 @@ renderWorldCursorQuadsScanned env bm pageId worldState tileAlpha = do
           -- using a category marker (#1846); their candidates are the
           -- unpaid structure sites the ghost builder enumerates, counted
           -- by that builder itself so the two cannot drift.
-          + fst structureGhosts
+          + fst structureGhosts + fst constructionGhosts
         hoverScanned  = if isJust hoverResult then 1 else 0
         selectScanned = if isJust (worldSelectedTile cs') then 1 else 0
     return $ case toolMode of

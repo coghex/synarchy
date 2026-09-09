@@ -268,6 +268,8 @@ import qualified Test.Headless.World.CropPlant as CropPlant
 import qualified Test.Headless.World.StructureStage as StructureStage
 import qualified Test.Headless.World.StructurePaletteResidue as StructurePaletteResidue
 import qualified Test.Headless.Structure.ArtCatalog as StructureArtCatalog
+import qualified Test.Headless.Structure.ConstructionFrames as StructureConstructionFrames
+import qualified Test.Headless.Structure.ConstructionPacks as StructureConstructionPacks
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
@@ -1059,6 +1061,8 @@ main = hspec $ do
     -- real scripts/structures.lua and scripts/wire.lua, so parity is
     -- against the builder rather than a table written in the test.
     StructureArtCatalog.spec
+    StructureConstructionFrames.spec
+    StructureConstructionPacks.spec
 
     -- #1602: its own headless engine (no worker threads), so a queued
     -- BuildingSpawn / WorldDesignateConstruct stays in its queue and

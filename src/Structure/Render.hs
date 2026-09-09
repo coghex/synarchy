@@ -68,6 +68,7 @@ import Engine.Graphics.Vulkan.Types.Vertex (Vertex(..), Vec2(..), Vec4(..)
                                            , QuadCorners(..), QuadUV(..)
                                            , QuadPayload(..), quadVertices
                                            , rectCorners, fullQuadUV
+                                           , renderFlagLifecycleAlpha
                                            , tileWorldUV)
 import World.Grid (tileWidth
                    , tileHeight
@@ -285,6 +286,22 @@ data ResolvedPieceArt = ResolvedPieceArt
     , rpaFacemap     ∷ !TextureHandle      -- ^ its facemap (sun shading)
     , rpaTexturePath ∷ !(Maybe Text)
     , rpaFacemapPath ∷ !(Maybe Text)
+    , rpaLifecycle   ∷ !(Maybe TextureHandle)
+      -- ^ #2488: a CONSTRUCTION frame drawn in place of the sprite,
+      --   while everything else about the piece stays the finished
+      --   one's.
+      --
+      --   The identity is deliberately still the static appearance's:
+      --   'rpaTexture' \/ 'rpaTexturePath' are what the wall-rotation
+      --   catalogue is asked about, so a half-built wall rotates by the
+      --   same family lookup a finished one does, and the FACEMAP it
+      --   draws with is that rotation's own cap mask (requirement 4). A
+      --   construction frame is never registered art and could not
+      --   identify a family at all.
+      --
+      --   Present only for a paid structure designation whose resolved
+      --   appearance declares frames; every other producer leaves it
+      --   'Nothing' and is bit-identical to before.
     } deriving (Show, Eq)
 
 -- | The tint a fully opaque piece draws with at a given @tileAlpha@ —
@@ -323,6 +340,7 @@ structurePieceQuads catalog palette handles lookupSlot texSizes
                     , rpaFacemap     = fh
                     , rpaTexturePath = lookupPath (spdTexId spd) palette
                     , rpaFacemapPath = lookupPath (spdFaceId spd) palette
+                    , rpaLifecycle   = Nothing
                     }
                 (spdGridZ spd)
         _ → []
@@ -351,15 +369,21 @@ structurePieceQuadsResolved catalog lookupSlot texSizes facing zSlice effDepth
                             tint gx gy slot art gridZ =
     if isPost slot
     then toList $ postToQuad lookupSlot facing zSlice effDepth
-                             tint gx gy slot piece texSizes
+                             tint flags gx gy slot piece texSizes
     else if isScreenFrontWall facing slot
     then frontWallStrips lookupSlot facing zSlice effDepth
-                         tint gx gy slot piece texSizes
+                         tint flags gx gy slot piece texSizes
     else toList $ structureToQuad lookupSlot facing zSlice effDepth
-                                  tint gx gy slot piece texSizes
+                                  tint flags gx gy slot piece texSizes
   where
     (th', fh') = rotatedArt (rpaTexture art) (rpaFacemap art)
-    piece = StructurePiece th' fh' gridZ
+    -- #2488: the construction frame REPLACES the (rotated) sprite and
+    -- nothing else. The facemap stays 'fh'' — the rotation's own cap
+    -- mask — and the flag makes the frame's own alpha authoritative so
+    -- no frame pixel is clipped by that mask's silhouette.
+    piece = StructurePiece (fromMaybe th' (rpaLifecycle art)) fh' gridZ
+    flags | isJust (rpaLifecycle art) = renderFlagLifecycleAlpha
+          | otherwise                 = 0
     isPost s = s ≡ SPostN ∨ s ≡ SPostE ∨ s ≡ SPostS ∨ s ≡ SPostW
     toList = maybe [] (:[])
     -- A wall's sprite + cap facemap travel together onto the screen edge
@@ -412,10 +436,11 @@ isScreenFrontWall facing slot =
 structureToQuad
     ∷ (TextureHandle → Word32)
     → CameraFacing → Int → Int → Vec4
+    → Word32                                   -- ^ 'renderFlags' bitset
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-structureToQuad lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
+structureToQuad lookupSlot facing zSlice effDepth tint flags gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if not (pieceWithinSliceBand zSlice effDepth gridZ)
@@ -470,7 +495,6 @@ structureToQuad lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
-            flags = 0
             wuv   = tileWorldUV gx gy
 
             (v0, v1, v2, v3) =
@@ -527,10 +551,11 @@ wallStripCount = 16
 frontWallStrips
     ∷ (TextureHandle → Word32)
     → CameraFacing → Int → Int → Vec4
+    → Word32                                   -- ^ 'renderFlags' bitset
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → [SortableQuad]
-frontWallStrips lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
+frontWallStrips lookupSlot facing zSlice effDepth tint flags gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if not (pieceWithinSliceBand zSlice effDepth gridZ)
@@ -554,7 +579,6 @@ frontWallStrips lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))
-            flags = 0
             wuv   = tileWorldUV gx gy
 
             -- The screen edge this wall is drawn on and its art's canvas-x
@@ -630,10 +654,11 @@ postInset = 0.0
 postToQuad
     ∷ (TextureHandle → Word32)
     → CameraFacing → Int → Int → Vec4
+    → Word32                                   -- ^ 'renderFlags' bitset
     → Int → Int → StructureSlot → StructurePiece
     → HM.HashMap TextureHandle (Int, Int)
     → Maybe SortableQuad
-postToQuad lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
+postToQuad lookupSlot facing zSlice effDepth tint flags gx gy slot piece texSizes =
     let gridZ     = spGridZ piece
         relativeZ = gridZ - zSlice
     in if not (pieceWithinSliceBand zSlice effDepth gridZ)
@@ -686,7 +711,6 @@ postToQuad lookupSlot facing zSlice effDepth tint gx gy slot piece texSizes =
 
             actualSlot = lookupSlot texHandle
             faceSlot   = fromIntegral (lookupSlot (spFaceMap piece))  -- postface
-            flags = 0
             wuv   = tileWorldUV gx gy
             (v0, v1, v2, v3) =
                 quadVertices (rectCorners (Vec2 drawX drawY) (Vec2 quadW quadH))

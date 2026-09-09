@@ -54,7 +54,9 @@ module World.Render.StructureGhost
     , designatedGhostAlpha
     , ghostPieceTint
     , structureDesignationGhosts
+    , structureConstructionGhosts
     , structurePreviewGhosts
+    , constructionAppearanceAt
     ) where
 
 import UPrelude
@@ -67,14 +69,20 @@ import Engine.Asset.Handle (TextureHandle)
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Vulkan.Types.Vertex (Vec4)
 import Engine.Scene.Types (SortableQuad(..))
-import Structure.ArtCatalog (ArtAsset(..), PieceArt(..))
+import Structure.ArtCatalog
+    ( AppearanceKey(..), AppearanceSlot(..), ArtAsset(..)
+    , PieceArt(..), PieceArtContext(..), resolveConstructionFrame )
+import Structure.Facing (screenWallEdge)
 import Structure.Render
-    (ResolvedPieceArt(..), structurePieceQuadsResolved, translateQuad)
+    ( ResolvedPieceArt(..), opaqueTint, structurePieceQuadsResolved
+    , translateQuad )
 import Structure.Types (StructureSlot)
 import Structure.WallCatalog (StructureWallCatalog)
+import World.Construct.Art (structureCommittedAt)
 import World.Construct.Plan
     ( PlanOp(..), PlanOutcome(..), PlanResult(..), PlanWorld(..)
-    , resolvePlanPieceArt, resolveStructurePlan )
+    , resolvePlanPieceArt, resolveStructurePlan, structurePieceArtContext
+    , structurePieceSlot, structurePieceWallEdge )
 import World.Construct.Types
     ( ConstructDesignation(..), ConstructTarget(..), StructurePiece(..)
     , constructDesignationPaid )
@@ -118,17 +126,34 @@ data GhostEnv = GhostEnv
 --   'PlanVisibleInvalid'.
 ghostQuadsFor ∷ GhostEnv → Vec4 → StructurePiece → (Int, Int) → PlanResult
               → [SortableQuad]
-ghostQuadsFor ge tint piece tile@(gx, gy) pr = fromMaybe [] $ do
+ghostQuadsFor ge = ghostQuadsWith ge Nothing
+
+-- | 'ghostQuadsFor' with an optional LIFECYCLE resolver (#2488).
+--
+--   'Nothing' is the two ghost states, which draw the static sprite.
+--   @Just f@ is the construction pass, for which the frame is not an
+--   embellishment but the whole reason to draw: if @f@ resolves nothing
+--   the candidate emits NOTHING, because requirement 8's answer for an
+--   appearance with no declaration is that the site keeps drawing
+--   nothing — not that it falls back to the finished sprite.
+ghostQuadsWith ∷ GhostEnv → Maybe (PieceArt → Maybe ArtAsset) → Vec4
+               → StructurePiece → (Int, Int) → PlanResult → [SortableQuad]
+ghostQuadsWith ge lifecycle tint piece tile@(gx, gy) pr = fromMaybe [] $ do
     slot   ← prSlot pr
     gridZ  ← prFinalZ pr
     art    ← resolvePlanPieceArt (gePlan ge) piece tile
+    mFrame ← case lifecycle of
+        Nothing → pure Nothing
+        Just f  → Just <$> f art
     wrapOff ← isChunkVisibleWrapped (geFacing ge)
                   (pwWorldSize (gePlan ge)) (geViewBounds ge)
                   (geCamX ge) (geCamY ge) (fst (globalToChunk gx gy))
     pure $ map (translateQuad wrapOff) $
         structurePieceQuadsResolved (geCatalog ge) (geLookupSlot ge)
             (geTexSizes ge) (geFacing ge) (geZSlice ge) (geEffDepth ge)
-            tint gx gy (slot ∷ StructureSlot) (resolvedArt art) gridZ
+            tint gx gy (slot ∷ StructureSlot)
+            (resolvedArt art) { rpaLifecycle = aaHandle <$> mFrame }
+            gridZ
 
 -- | #1842's catalogue answer, in the shape the shared render body takes.
 --   Both paths are always present here — that is the whole reason a
@@ -139,6 +164,7 @@ resolvedArt pa = ResolvedPieceArt
     , rpaFacemap     = aaHandle (paFacemap pa)
     , rpaTexturePath = Just (aaPath (paTexture pa))
     , rpaFacemapPath = Just (aaPath (paFacemap pa))
+    , rpaLifecycle   = Nothing
     }
 
 -- | The DESIGNATED state (D-19): every committed structure designation
@@ -176,6 +202,98 @@ structureDesignationGhosts ge
     quads (tile, cd, piece) = ghostQuadsFor ge tint piece tile $
         resolveStructurePlan (gePlan ge) (PlanForAttempt (cdAttempt cd))
                              (cdZ cd) piece tile
+
+-- | The UNDER-CONSTRUCTION state (#2488): every PAID structure
+--   designation whose resolved appearance declares construction frames,
+--   drawn solid at the frame its own 'cdProgress' selects.
+--
+--   Before this a paid site drew NOTHING between the moment its
+--   materials were spent and the moment the finished piece appeared,
+--   which for a wall is most of the job. The gap was never a decision —
+--   #1846 had no art to fill it with, and the generic blueprint it
+--   replaced is gone.
+--
+--   Four things this pass is deliberately NOT:
+--
+--     * Not a ghost. It draws at 'Structure.Render.opaqueTint', the very
+--       tint a placed piece uses, because a site being physically built
+--       is not a proposal. D-19's 25 % \/ 60 % lifecycle multipliers
+--       belong to the two states that ARE proposals, and both are
+--       untouched.
+--     * Not a second geometry path. The frame goes through
+--       'structurePieceQuadsResolved' exactly as the ghost and the
+--       placed piece do, so #1712's rotation, #415's front-wall strips
+--       and 'postToQuad'\'s inset are not reimplemented (requirement 3).
+--     * Not a fallback. An appearance with no declaration resolves no
+--       frame and the site keeps drawing nothing, which is requirement
+--       8 and is what every shipped pack does today. Nothing substitutes
+--       a blueprint, a fade, another appearance's frames or the static
+--       sprite.
+--     * Not a duplicate of the finished piece. A site stops drawing the
+--       moment its piece is COMMITTED to the overlay the structure pass
+--       renders — and not a moment earlier: 'structureCommittedAt'
+--       ignores the staging cache precisely because a staged-but-
+--       uncommitted piece is on screen nowhere, and blanking the tile
+--       for the width of that hand-off is the intermediate empty frame
+--       requirement 6 forbids.
+structureConstructionGhosts ∷ GhostEnv → (Int, V.Vector SortableQuad)
+structureConstructionGhosts ge
+    | HM.null designs = (0, V.empty)
+    | otherwise = (length candidates, V.fromList (concatMap quads candidates))
+  where
+    designs = pwDesignations (gePlan ge)
+    tint = opaqueTint (geTileAlpha ge)
+    candidates =
+        [ (tile, cd, piece)
+        | (tile, cd) ← HM.toList designs
+        , CtStructure piece ← [cdTarget cd]
+        , constructDesignationPaid cd
+        , not (alreadyBuilt piece tile)
+        ]
+    -- Resolved on behalf of its OWN attempt, exactly as the designated
+    -- state is: every other outstanding designation is still a conflict,
+    -- but this one is not its own.
+    quads (tile, cd, piece) =
+        ghostQuadsWith ge (Just (frameFor piece tile (cdProgress cd)))
+            tint piece tile $
+            resolveStructurePlan (gePlan ge) (PlanForAttempt (cdAttempt cd))
+                                 (cdZ cd) piece tile
+    frameFor piece tile progress _art = do
+        ak ← constructionAppearanceAt (gePlan ge) (geFacing ge) piece tile
+        resolveConstructionFrame (pwCatalog (gePlan ge)) (spPack piece) ak
+                                 progress
+    alreadyBuilt piece (gx, gy) = fromMaybe False $ do
+        slot ← structurePieceSlot piece
+        pure (structureCommittedAt (pwWorldSize (gePlan ge))
+                  (pwTiles (gePlan ge)) slot gx gy)
+
+-- | Which authored appearance this candidate is DRAWN as at @facing@.
+--
+--   For every kind but a wall it is the kind itself, and the camera
+--   cannot change it. A WALL's authored edge does not move but the
+--   screen edge it occupies does ('Structure.Facing.screenWallEdge',
+--   #1712), and the sprite drawn is the family's art for THAT edge — so
+--   the construction sequence has to be that edge's too, or a turning
+--   camera would show one direction's build stages on another
+--   direction's wall. The frame INDEX is unaffected, which is what
+--   registration's equal-length rule for a wall family guarantees
+--   (requirement 5).
+--
+--   A wire's variant comes from the shared plan context, so a run being
+--   built resolves the same connection shape the placer will use.
+constructionAppearanceAt
+    ∷ PlanWorld → CameraFacing → StructurePiece → (Int, Int)
+    → Maybe AppearanceKey
+constructionAppearanceAt pw facing piece tile =
+    AppearanceKey Nothing <$> case spKind piece of
+        "floor"   → Just ApFloor
+        "ceiling" → Just ApCeiling
+        "post"    → Just ApPost
+        "wall"    → Just (ApWall (screenWallEdge facing
+                                      (structurePieceWallEdge piece)))
+        "wire"    → Just (ApWire (pacWireShape
+                                      (structurePieceArtContext pw piece tile)))
+        _         → Nothing
 
 -- | The PREVIEW state (D-19\/D-25): the armed piece drawn over every
 --   candidate of the current gesture at 25 %, red where the shared

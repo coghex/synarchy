@@ -294,6 +294,10 @@ PROBES = [
      "authoritative count only at CatAsset Debug (#1930; offscreen, needs a GPU)"),
     ("state_of_mind", "state_of_mind_probe.py",
      "unified consciousness/mood model: pain/awareness drift, no-hunger-config fallback, locomotor-collapse regression guard (#350)"),
+    ("structure_construction", "structure_construction_probe.py",
+     "GPU offscreen pixel check: a paid structure site's construction frame "
+     "survives the reused facemap's alpha silhouette while an unflagged "
+     "static piece does not, and a zero-RGB mask still takes top light (#2488)"),
     ("structure_rotation", "structure_rotation_probe.py",
      "GPU offscreen visual check: one stamped room captured at all four "
      "camera facings — rotated wall art, terrain interleave, billboard lift (#1712)"),

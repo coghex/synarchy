@@ -32,6 +32,7 @@ module Test.Headless.Render.StructureGhostFixture
 
 import UPrelude
 import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Yaml as Y
@@ -143,6 +144,8 @@ parsePiecePack = withObject "structure pack" $ \o → do
                                 , (KPost, AkPost)]
                 , a ← artFor kind ]
                 ⧺ wallEntries
+            , parFrames  = []
+            , parSizes   = HM.empty
             }
         , pfWallEntries =
             [ WallArtEntry e Nothing tex (handleForPath tex) True
@@ -168,6 +171,8 @@ parseWirePack = withObject "wire pack" $ \o → do
             , parKinds   = [ (KWire, isJust (M.lookup KWire costs)
                             , M.lookup KWire costs) ]
             , parEntries = entries
+            , parFrames  = []
+            , parSizes   = HM.empty
             }
         , pfWallEntries = []
         }
