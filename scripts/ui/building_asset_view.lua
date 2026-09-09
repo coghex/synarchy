@@ -361,10 +361,14 @@ end
 -- Select a row. ALWAYS resets the playback clock: requirement 14 makes
 -- one forced-replay cycle per row selection, which is the window
 -- requirement 15's gameplay-equality fixtures are stated within.
--- 'keepFacing' carries the enlarged facing across, so switching rows
--- doesn't silently snap the reviewer back to south when the new row also
--- has their facing.
-function buildingAssetView.setRow(id, row, now, keepFacing)
+--
+-- The enlarged FACING carries across a row change (v.facing outlives the
+-- row), so comparing the same view of two lifecycle roles does not snap
+-- the reviewer back to south between them; south is only the fallback,
+-- for the first selection and for a row that lacks the current facing.
+-- A raw row has no facing model at all and clears it, so returning to a
+-- declared row through one starts from south again.
+function buildingAssetView.setRow(id, row, now)
     local v = views[id]
     if not v then return end
     v.row = row
@@ -373,8 +377,7 @@ function buildingAssetView.setRow(id, row, now, keepFacing)
     v.ready = false
     v.fitKey = nil
     buildCells(v)
-    v.facing = isDeclared(row) and resolveFacing(v, keepFacing or v.facing)
-        or nil
+    v.facing = isDeclared(row) and resolveFacing(v, v.facing) or nil
 
     if not v.spriteId then
         v.spriteId = UI.newSprite("preview_building_sprite", 1, 1,

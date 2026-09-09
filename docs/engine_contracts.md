@@ -1084,7 +1084,11 @@ nothing in the browser reads the matrix.
 - **Initial selection** is the declared `built` row, else the declared
   sprite row, else `filesystem:<defaultEntry>`, else nothing for an
   empty browser. A declared `built` row wins even when it is a pure
-  diagnostic. The initial facing is south.
+  diagnostic. The initial facing is south, and the enlarged facing then
+  CARRIES across a row change so two roles can be compared from the same
+  view — falling back to south for a row that lacks it. A raw row clears
+  it (it has no facing model), so returning to a declared row through
+  one starts from south again.
 - **Input.** Up/Down move the combined list. Left/Right move the facing
   strip in displayed order with wraparound, and only while a DECLARED
   row is selected — a raw row has no facing model, so they stay

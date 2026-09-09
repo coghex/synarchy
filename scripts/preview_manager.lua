@@ -726,7 +726,7 @@ local function onBuildingEntrySelected(value, _label, _index)
     -- upload and reaches "ready" on the very next update, which is what
     -- makes a diagnostic terminal instead of a load that never lands.
     readyState = "loading"
-    buildingAssetView.setRow(buildingViewId, row, engine.realTime(), nil)
+    buildingAssetView.setRow(buildingViewId, row, engine.realTime())
 end
 
 -- restoreEntry/restoreScroll/restoreFacing: nil for the initial build (a

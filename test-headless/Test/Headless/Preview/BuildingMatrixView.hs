@@ -267,6 +267,38 @@ spec = do
       , "end"
       ]
 
+    it "carries the enlarged facing across a row change, and clears it \
+       \for a row with no facing model" $ runsOk $ lns
+      [ harness, mixedBrowse, findRow
+      , "assert(pm.onKeyDown('Right')); assert(pm.onKeyUp('Right'))"
+      , "assert(pm.onKeyDown('Right')); assert(pm.onKeyUp('Right'))"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().selectedFacing == 'north',"
+      , "    tostring(pm.dump().selectedFacing))"
+      , "-- Another DECLARED row keeps the reviewer on the same view,"
+      , "-- which is the whole point of comparing two roles side by side."
+      , "assetBrowserStub.selectEntry(1, 'lifecycle:construction')"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().selection.identity == 'lifecycle:construction')"
+      , "assert(pm.dump().selectedFacing == 'north',"
+      , "    'a row change must not snap back to south, got '"
+      , "    .. tostring(pm.dump().selectedFacing))"
+      , "-- A RAW row has no facing model, so it clears the facing"
+      , "-- entirely rather than reporting a stale one."
+      , "assetBrowserStub.selectEntry(1, 'filesystem:idle')"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().selectedFacing == nil,"
+      , "    tostring(pm.dump().selectedFacing))"
+      , "-- Coming back therefore starts from south again: a raw row has"
+      , "-- no facing to carry, and inventing a remembered one for a row"
+      , "-- class that has no facing model would be state nothing asks"
+      , "-- for."
+      , "assetBrowserStub.selectEntry(1, 'lifecycle:built')"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().selectedFacing == 'south',"
+      , "    tostring(pm.dump().selectedFacing))"
+      ]
+
     it "repeats a held Left/Right on the preview's own clock and stops \
        \exactly on key-up" $ runsOk $ lns
       [ harness, mixedBrowse, findRow
