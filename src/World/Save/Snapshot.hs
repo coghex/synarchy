@@ -56,6 +56,7 @@ import World.Construct.Types (ConstructDesignations)
 import Craft.Bills (CraftBills)
 import Unit.Transfer.Orders (TransferOrders)
 import Building.Knowledge (ContainerKnowledge)
+import Item.Knowledge (PortableKnowledge(..))
 import Power.Types (PowerNodes)
 import World.Chop.Types (ChopDesignations, PendingChopDesignations)
 import World.Till.Types (TillDesignations)
@@ -96,6 +97,13 @@ data SessionGlobals = SessionGlobals
       --   never copied into every page merely because the old
       --   'WorldPageSave' schema had nowhere else to put a global
       --   zoom/facing pair (contract requirement 5).
+    , sgPortableKnowledge ∷ !PortableKnowledge
+      -- ^ #2512: what the player remembers about each PORTABLE
+      --   container, read once from 'World.State.Types.wmPortableKnowledge'.
+      --   Genuinely global for the same reason the camera above is: a
+      --   crate is carried between pages, so its memory is keyed by the
+      --   crate and belongs to the session, never duplicated into every
+      --   page's slot the way #1087's building-keyed knowledge is.
     } deriving (Show, Eq)
 
 -- | The live render camera's position/zoom/facing. 'lcsOwnerPage' is
@@ -229,6 +237,13 @@ data SessionSnapshot = SessionSnapshot
     , snapVisiblePages   ∷ ![WorldPageId]
     , snapLiveCamera     ∷ !LiveCameraSnapshot
     , snapPages          ∷ !(HM.HashMap WorldPageId PageSnapshot)
+    , snapPortableKnowledge ∷ !PortableKnowledge
+      -- ^ #2512: the session-wide portable-container memory, keyed by
+      --   'Item.Types.iiInstanceId'. Like 'snapPages' it is a whole-
+      --   session value rather than a per-page one, and like
+      --   'PageSnapshot''s 'pgsContainerKnowledge' its remembered
+      --   instances are HISTORICAL OBSERVATIONS, deliberately absent
+      --   from 'allItemInstanceIds' below — see that function's note.
     } deriving (Show, Eq)
 
 -- | One failed invariant, naming the specific component/identity that
@@ -277,6 +292,7 @@ buildSessionSnapshot globals pages = SessionSnapshot
     , snapVisiblePages   = sgVisiblePages globals
     , snapLiveCamera     = sgLiveCamera globals
     , snapPages          = HM.fromList [ (pgsPageId p, p) | p ← pages ]
+    , snapPortableKnowledge = sgPortableKnowledge globals
     }
 
 -- | Every referential-integrity invariant a valid snapshot must
@@ -395,8 +411,9 @@ orphanedUnitSimStateErrors snap =
 --   elsewhere in the session, must be caught too — the pre-#760
 --   version only ever looked at each container's OUTER id.
 --
---   'pgsContainerKnowledge' (#1087) is deliberately NOT walked here,
---   and must never be added: its remembered instances are historical
+--   'pgsContainerKnowledge' (#1087) and 'snapPortableKnowledge'
+--   (#2512) are deliberately NOT walked here,
+--   and must never be added: their remembered instances are historical
 --   OBSERVATIONS of items that live (or lived) somewhere else in this
 --   very list, not additional live entities. Folding them in would
 --   report every remembered item as a duplicate live id, and — worse —
@@ -408,6 +425,12 @@ orphanedUnitSimStateErrors snap =
 --   reference resolution in "World.Save.Integrity". Their DEF NAMES
 --   remain ordinary content references, validated by
 --   'World.Save.Types.missingItemDefReferences' like any other.
+--
+--   The two layers differ only in where the tolerated dangling record
+--   is scrubbed: #1087's against its own page's restored buildings,
+--   #2512's against the WHOLE replacement session's live item
+--   enumeration ("World.Load.Stage"), because a crate belongs to no
+--   page in particular.
 allItemInstanceIds ∷ SessionSnapshot → [Word64]
 allItemInstanceIds snap =
     [ iiInstanceId i

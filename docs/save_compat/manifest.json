@@ -2437,6 +2437,98 @@
           "expectedCanonicalSummary": "test-headless/data/save-compat/y1-subminute-clock-remainder.expected.json"
         }
       ]
+    },
+    {
+      "id": "z1-portable-container-knowledge",
+      "description": "The first envelope carrying #2512's optional session-scoped portable-knowledge component: a first-aid kit dropped on the ground, OPENED (contents + both stamps) and then separately WEIGHED, so the fixture holds a nonempty record whose weighedAt is strictly later than its revealedAt -- the independence of the two observation timestamps, which a single-stamp shape could not represent.",
+      "declaredAt": "2026-09-08",
+      "declaredByIssue": 2512,
+      "supportStatus": "supported",
+      "migrationTarget": "current",
+      "migratedBy": "no migration -- portable-knowledge v1 is the current shape; this baseline exists so the component's CURRENT version is exercised by real bytes",
+      "components": [
+        {
+          "id": "metadata",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "core-session",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "texture-palette",
+          "version": 1,
+          "required": true
+        },
+        {
+          "id": "world-pages",
+          "version": 11,
+          "required": true
+        },
+        {
+          "id": "world-edits",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "world-activity",
+          "version": 6,
+          "required": true
+        },
+        {
+          "id": "buildings",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "units",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "unit-sim",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "craft-bills",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "power-nodes",
+          "version": 2,
+          "required": true
+        },
+        {
+          "id": "lua.building_spawn",
+          "version": 3,
+          "required": true
+        },
+        {
+          "id": "lua.unit_ai",
+          "version": 9,
+          "required": true
+        },
+        {
+          "id": "portable-knowledge",
+          "version": 1,
+          "required": false
+        }
+      ],
+      "fixtures": [
+        {
+          "id": "z1-portable-container-knowledge",
+          "path": "test-headless/data/save-compat/z1-portable-container-knowledge.bin",
+          "kind": "complete-session",
+          "sha256": "c11f08e347c13af2357774b5bc8218666d3672aee523b49dcc019525615763c4",
+          "sizeBytes": 912196,
+          "provenance": "Generated through the real codec (tools/save_compat_audit.py --generate-session): a real headless engine booted in an isolated resource root, world.init('generated_page', 42, 16, 3), building.spawn('cargo_hold_S', 0, 0), unit.spawn('acolyte', 0,0, 0, 'player'), then return item.spawnGround('first_aid_kit', 4, 4) ~= nil; return (function() local id = (function() local g = item.listGround() or {}; for _,e in ipairs(g) do if e.defName == 'first_aid_kit' then return e.instanceId end end return nil end)(); if not id then return false end; return item.observeContainerContents(id) end)(), settled 6.0s and held until `(function() local id = (function() local g = item.listGround() or {}; for _,e in ipairs(g) do if e.defName == 'first_aid_kit' then return e.instanceId end end return nil end)(); if not id then return false end; item.observeContainerWeight(id); local k = item.getContainerKnowledge(id); return k ~= nil and k.state == 'known' and #k.items > 0 and k.weighedAt ~= nil and k.revealedAt ~= nil and k.weighedAt > k.revealedAt end)()`, then engine.saveWorld -- the exact production save path an ordinary player save takes. Its canonical summary was derived directly from the real decoded SessionSnapshot (dump_canonical_summary), not hand-transcribed.",
+          "expectedCanonicalSummary": "test-headless/data/save-compat/z1-portable-container-knowledge.expected.json"
+        }
+      ]
     }
   ],
   "retiredBaselinesComment": "Empty for now (round-7 review): the #760-only split-Haskell-plus-opaque-lua-state shape previously listed here as 'never declared, no removal needed' is now a REAL declared baseline (b2-split-haskell-lua-state, above) -- issue #766 requirement 3 explicitly requires supporting it, regardless of whether a manifest existed to declare it at the time. Nothing this manifest has ever declared has since been retired.",

@@ -71,6 +71,7 @@ import World.Thread.Command.Time
     (handleWorldSetDateCommand, setDateClampWarning)
 import World.Thread.Time (tickWorldTime)
 import World.Types
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Calendars
 
@@ -521,6 +522,7 @@ saveWith cc (WorldDate y mo d) = snapshotToSaveData
                 , pgsDateMonth = mo
                 , pgsDateDay   = d
                 }
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | Stage one such save and hand back the staged page's OWN date — read

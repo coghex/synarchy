@@ -52,6 +52,7 @@ import World.Save.Snapshot
 import World.Save.Snapshot.Adapter (SaveRequestMeta(..), snapshotToSaveData)
 import World.Save.Types
     ( SaveData, UnitInstanceSnapshot(..), UnitSnapshot(..), toUnitSnapshot )
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Content the examples reconcile against
 
@@ -395,6 +396,7 @@ saveWith units = snapshotToSaveData
             ((blankPageSnapshot pageId
                   defaultWorldGenParams { wgpSeed = 0 })
                  { pgsUnits = units })
+        , snapPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | Install the fixture content on the live registries, stage a save

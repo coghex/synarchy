@@ -91,6 +91,7 @@ import Building.Knowledge (emptyContainerKnowledge)
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Item.Knowledge (emptyPortableKnowledge)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -237,6 +238,7 @@ minimalGlobals active = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just active, lcsX = 0, lcsY = 0, lcsZoom = 1
         , lcsFacing = FaceSouth }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | A bill on @page1@ whose station is a building that exists ONLY on

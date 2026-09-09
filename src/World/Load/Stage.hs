@@ -91,6 +91,8 @@ import Engine.Core.Capability.RenderHandoff
     (RenderHandoffCapability(..), toRenderHandoffCapability)
 import Building.Types (BuildingManager(..), BuildingId(..), BuildingDef)
 import Building.Knowledge (prunedContainerIds, retainContainers)
+import Item.Knowledge (prunedPortableIds, retainPortables)
+import World.Item.Locate (sessionLiveItemIds)
 import World.Save.Integrity
     ( pageEntitiesFrom, danglingOrderRefErrors, capIntegrityErrors
     , renderIntegrityReport, loadReconcileContextFrom )
@@ -132,6 +134,15 @@ data PageStageResult = PageStageResult
       --   (#912). Those units load as 'Unit.Faction.fallbackFaction';
       --   the session aggregate warns once per distinct tag.
     , psrUnitSimStates ∷ !(HM.HashMap UnitId UnitSimState)
+    , psrLiveItemIds ∷ !(HS.HashSet Word64)
+      -- ^ #2512: every 'Item.Types.iiInstanceId' this page ACTUALLY
+      --   staged — the sanitized ground map (#2336 drops a phantom
+      --   item, and a record for one must not survive it), plus the
+      --   restored unit and building managers, recursively through
+      --   nested contents. Collected here rather than read back off the
+      --   decoded page so the session's portable-knowledge scrub tests
+      --   membership against the replacement session as it will really
+      --   exist, never as the save described it.
     , psrCamera      ∷ !(Maybe Camera2D)
     , psrZoomAtlas   ∷ !(Maybe (Int, Int, BS.ByteString))
     , psrPreview     ∷ !(Maybe (Int, Int, BS.ByteString))
@@ -342,6 +353,39 @@ stageSession env logger saveData registry = case sdWorlds saveData of
               -- is the allocator the published session must carry.
               -- Identity when nothing self-cleared.
               stagedNextItemId ← readIORef stagedItemIdRef
+              -- #2512: scrub the session's portable-container memories
+              -- against the REPLACEMENT session's own complete live item
+              -- enumeration -- every staged page's ground items, unit
+              -- inventories/equipment/accessories, building materials
+              -- and storage, recursively -- never the outgoing
+              -- session's, which this publish is about to discard.
+              --
+              -- A record whose crate is nowhere in the incoming session
+              -- is dropped with a DIAGNOSTIC, never a load failure: the
+              -- same judgement #1087 makes about a demolished
+              -- container's lingering memory. The crate is gone, so
+              -- nothing would ever clear the record and no surface
+              -- would ever show it. (Its remembered items' DEF NAMES
+              -- were already validated before staging began --
+              -- 'World.Save.Types.missingPortableItemDefReferences' --
+              -- so this cannot be what makes a save with a
+              -- deregistered def load.)
+              let stagedLiveItemIds =
+                      HS.unions (map psrLiveItemIds results)
+                  savedPortable = sdPortableKnowledge saveData
+                  stalePortable =
+                      prunedPortableIds stagedLiveItemIds savedPortable
+                  stagedPortableKnowledge =
+                      retainPortables stagedLiveItemIds savedPortable
+              unless (null stalePortable) $
+                  logInfo logger CatWorld $
+                      "Save load: dropping " <> tshow (length stalePortable)
+                      <> " portable-container knowledge record(s) whose item \
+                         \instance no longer exists in this session ("
+                      <> T.intercalate ", "
+                             (map (\iid → "#" <> tshow iid)
+                                  (L.sort stalePortable))
+                      <> ")"
               pure $ case mCamera of
                   -- Every staged session resolves exactly one active page
                   -- (the fallback above), which always stages a camera —
@@ -366,6 +410,7 @@ stageSession env logger saveData registry = case sdWorlds saveData of
                       , ssPreview       = mPreview
                       , ssReconcile     = loadReconcileContextFrom
                                             (knownEntitiesFromSaveData saveData)
+                      , ssPortableKnowledge = stagedPortableKnowledge
                       , ssMaterialRegistry = registry
                       }
 
@@ -1053,6 +1098,15 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         logInfo logger CatWorld $
             "Save load: " <> renderEquipmentOrphan pid o
 
+    -- #2512: the FINAL ground map, read back off the ref rather than
+    -- reused from the value written into it above. Everything between
+    -- those two points can still put an item on this page --
+    -- 'revalidateStagedConstructDesignations' refunds a self-cleared
+    -- designation's paid materials into exactly this ref -- and a
+    -- refunded item is as live in the replacement session as any other.
+    -- Scrubbing against the pre-reconciliation value would drop the
+    -- memory of a crate the load then publishes.
+    finalGroundItems ← readIORef (wsGroundItemsRef worldState)
     pure PageStageResult
         { psrPage = StagedPage
             { spPageId        = pid
@@ -1066,6 +1120,13 @@ stagePage logger registry palette catalog buildingDefs unitDefs
         , psrUnitOrphans     = uOrphans
         , psrUnitUnknownFactions = uUnknownFactions
         , psrUnitSimStates   = simStates'
+          -- #2512: from the page's FINAL ground map and the RESTORED
+          -- managers -- the three things this page is actually
+          -- publishing -- walked by the canonical container
+          -- enumeration.
+        , psrLiveItemIds     = sessionLiveItemIds
+                                   [(pid, finalGroundItems)]
+                                   restoredBm restoredUm
         , psrCamera          = mCamera
         , psrZoomAtlas       = mZoomAtlas
         , psrPreview         = mPreview

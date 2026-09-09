@@ -297,6 +297,13 @@ handleWorldSaveCommand env logger pageId saveName timestampTxt luaComponents
                                 -- showing what the player last saw (#216).
                                 , sgVisiblePages   = wmVisible mgr
                                 , sgLiveCamera     = liveCamera
+                                -- #2512: read off the SAME manager
+                                -- snapshot the page/visibility fields
+                                -- above come from, so the capture can
+                                -- never pair one session's pages with
+                                -- another's crate memories.
+                                , sgPortableKnowledge =
+                                    wmPortableKnowledge mgr
                                 }
                         case captureSessionSnapshot globals pages of
                           Left errs → do

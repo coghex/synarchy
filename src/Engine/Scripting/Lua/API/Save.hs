@@ -54,6 +54,8 @@ import World.Save.Types (SaveMetadata(..), SaveData(..), WorldPageSave(..)
                         , AutosaveRequest(..)
                         , missingDefReferences, renderMissingDefRef
                         , missingItemDefReferences, renderMissingItemDefRef
+                        , missingPortableItemDefReferences
+                        , renderMissingPortableItemDefRef
                         , missingSignificantItemReferences
                         , renderMissingSignificantItemRef
                         , missingRecipeReferences, renderMissingRecipeRef
@@ -923,6 +925,16 @@ continueLoad env logger requestId saveName descriptors = do
                     | w ← sdWorlds saveData ]
                 missingItems =
                     missingItemDefReferences (HM.keysSet (imDefs im)) pages
+                -- #2512: a PORTABLE container's remembered contents are
+                -- session-scoped rather than page-scoped, so they are
+                -- checked from the session field rather than from
+                -- `pages` — on exactly the contract above, and BEFORE
+                -- "World.Load.Stage" scrubs a record whose crate is
+                -- gone, which would otherwise quietly drop the evidence
+                -- this rejection is made of.
+                missingPortableItems =
+                    missingPortableItemDefReferences (HM.keysSet (imDefs im))
+                        (sdPortableKnowledge saveData)
                 -- #917: an UNSPAWNED significant obligation names the
                 -- item the next chunk load will try to spawn. If that
                 -- def is gone the spawn fails on every attempt and the
@@ -949,6 +961,7 @@ continueLoad env logger requestId saveName descriptors = do
                 missingInfections =
                     missingInfectionReferences infMgr pages
                 allMissing = length missing + length missingItems
+                    + length missingPortableItems
                     + length missingSignificant
                     + length missingRecipes
                     + length missingBillOutputItems
@@ -960,6 +973,7 @@ continueLoad env logger requestId saveName descriptors = do
                 allMessages =
                     map renderMissingDefRef missing
                     ⧺ map renderMissingItemDefRef missingItems
+                    ⧺ map renderMissingPortableItemDefRef missingPortableItems
                     ⧺ map renderMissingSignificantItemRef missingSignificant
                     ⧺ map renderMissingRecipeRef missingRecipes
                     ⧺ map renderMissingBillOutputItemRef

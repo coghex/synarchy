@@ -63,6 +63,7 @@ import World.Save.Snapshot.Adapter
 import World.Render.Zoom.Types (ZoomMapMode(..))
 import Structure.Palette (emptyTexPalette)
 import Engine.Graphics.Camera (CameraFacing(..))
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- The two pages the engine half creates. Same seed, same world size,
 -- same plate count, different page ids: requirement 3's "independently
@@ -147,6 +148,7 @@ snapshotWith active rest =
         , sgLiveCamera = LiveCameraSnapshot
             { lcsOwnerPage = Nothing, lcsX = 0, lcsY = 0
             , lcsZoom = 1, lcsFacing = FaceSouth }
+        , sgPortableKnowledge = emptyPortableKnowledge
         }
     mkPage (pid, gid) =
         (blankPageSnapshot pid defaultWorldGenParams) { pgsGeneratedId = gid }

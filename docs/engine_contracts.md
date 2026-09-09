@@ -63,6 +63,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Position hold (#1216)](#position-hold-1216)
 - [Player transfers: the three player-facing modes](#player-transfers-the-three-player-facing-modes)
 - [Nested ownership moves (#2487)](#nested-ownership-moves-2487)
+- [Portable container knowledge (#2512)](#portable-container-knowledge-2512)
 - [Commanded-order stall budget (#920/#1291)](#commanded-order-stall-budget-9201291)
 - [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
 - [Unit and combat animations headless](#unit-and-combat-animations-headless)
@@ -2424,6 +2425,160 @@ Gate: hspec `--match "Item.Ownership"`, whose capacity cases are each
 mutation-tested by loosening the fixture bound one unit past the guard
 and asserting the verdict flips, and whose structural writer guard holds
 the allowlist above.
+
+## Portable container knowledge (#2512)
+
+What the player REMEMBERS about a portable container — a crate, a
+toolbox, a kit — as opposed to what it physically holds. Keyed by the
+item's own `iiInstanceId`, so the record follows the crate across pages
+and owners and is never copied on a move
+(`docs/portable_loot_containers.md` D-7/D-13/D-24). The model is
+`Item.Knowledge`; the live owner is the SESSION-scoped
+`World.State.Types.wmPortableKnowledge`. `Building.Knowledge` is the
+building-keyed, page-scoped sibling and is deliberately a separate
+type.
+
+**Four states, never conflated** (`portableKnowledgeStateId`):
+
+| State | Id | Means |
+|---|---|---|
+| never-inspected | `unknown` | nothing is known — no record, or a record carrying neither observation |
+| weight-only | `weight-only` | hefted, never opened |
+| known-empty | `empty` | opened, and there was nothing in it |
+| known-contents | `known` | opened, and this is what was inside |
+
+`empty` and `unknown` are different facts and must never be rendered as
+one another, exactly as in the building layer. The two ids the building
+projection also has carry the SAME spellings, so one window renderer
+consumes either.
+
+**Two independently stamped observations.** A record holds an optional
+weight observation (the recursive `itemTotalWeight` of the WHOLE crate —
+its own mass, its fill and everything nested — plus the game-time it was
+weighed) and an optional contents observation (full `ItemInstance`
+COPIES of `iiContents` plus the game-time they were seen). The rules:
+
+- Weighing records the weight and its stamp and NOTHING else; any
+  existing contents observation survives untouched with its own older
+  stamp.
+- Opening records the contents, the weight, and BOTH stamps at the
+  current time — you cannot see inside a crate without holding it — and
+  REPLACES the whole record rather than merging.
+- So the stamps diverge in one direction only: a fresh weight over
+  older contents. `weighedAt < revealedAt` is not reachable.
+- An observation never mutates the live item, and a container NESTED
+  inside an observed crate gets no record of its own until it is itself
+  observed.
+- Capacity is never remembered: it is read live from the located
+  instance's `iiStorage`, and is simply absent when the instance cannot
+  be located or declares none — never a fabricated `0`.
+
+**The locator.** `World.Item.Locate` answers "where is this instance,
+and what does it look like now" across every page's ground items, unit
+inventories/equipment/accessories and building materials/storage,
+recursively through nesting, using the container set
+`World.Save.Types.pageItemContainers` enumerates and the walk
+`flattenItemInstances` performs — so a container added to a unit or a
+building reaches it from the same one edit that makes the save system
+see it. Hidden pages are walked like visible ones. A REMEMBERED-only id
+never resolves: an observation holds copies, and a copy is not a live
+entity.
+
+**Persistence.** The optional session component `portable-knowledge`
+(v1, `World.Save.Component.PortableKnowledge`) — the third optional
+component in the static Haskell registry and the first SESSION-scoped
+one. Absence restores the empty map (every crate never-inspected);
+a present payload that is malformed or at an unsupported version fails
+the load. `csValidate` refuses a remembered weight or either timestamp
+that is not finite and non-negative, and deliberately does NOT re-derive
+the weight from the remembered contents.
+
+Remembered instance ids are HISTORICAL OBSERVATIONS: excluded from
+`allItemInstanceIds`, the allocator bound, the duplicate-live-id check
+and live `item_instance` resolution — they may legitimately overlap a
+live id or sit above the allocator. Their def names remain ordinary
+content references, validated by
+`World.Save.Types.missingPortableItemDefReferences` BEFORE staging, so
+the scrub below cannot quietly discard the evidence for a rejection.
+
+**The scrub.** At load, `World.Load.Stage` drops any record whose
+instance is absent from the REPLACEMENT session's own complete live item
+enumeration, with one diagnostic naming the dropped ids — never a load
+failure, mirroring #1087's demolished-container scrub. That enumeration
+is read off each staged page's ground ref AFTER every reconciliation
+pass, not off the decoded map written into it earlier: a self-cleared
+construct designation refunds its paid materials onto exactly that ref
+during staging, and a refunded item is as live in the replacement
+session as any other.
+`World.Load.Publish` then installs the scrubbed map as part of the
+replacement `WorldManager`, so a load REPLACES the memory wholesale and
+an absent payload CLEARS it. Exit to Menu empties it in the same atomic
+update that clears the page set: an instance id is only unique within a
+session.
+
+**Lua surface** (`item.*`, `Engine.Scripting.Lua.API.Items.Knowledge`):
+`getContainerKnowledge(instanceId)` →
+`{state, items, storedWeight, weighedAt, revealedAt, capacity}` with
+every field but `state` present ONLY when known — reading a missing
+field as `0` is the conflation the four states exist to prevent, and an
+OBSERVED-empty crate answers an EMPTY `items` table rather than none.
+`observeContainerWeight` / `observeContainerContents` locate the
+instance and record, answering false when it cannot be found;
+`forgetContainerKnowledge` drops a record and does NOT require locating
+anything, since a destroyed crate's memory is the one a caller most
+needs to clear. Each verb refuses a non-number argument outright:
+`Lua.tointeger` coerces, so the string `"47"` must not act on crate 47.
+
+**Who writes the map.** The three mutating verbs MEASURE on the calling
+thread and ENQUEUE a `WorldRecordPortableKnowledge` command; the world
+thread merges it (`World.Thread.Command.Basic`). That split is the point,
+not an implementation detail. Measuring must happen where the located
+instance and the clock were read, or the record would describe the crate
+as it is when the command runs rather than when the player looked.
+Merging must happen on the world thread, which owns the session state
+`WorldManager` carries: the two places that REPLACE that state wholesale
+— a load publish and an Exit-to-Menu teardown — both run there, so a
+caller-thread write could land a departed session's crate memory in the
+session that replaced it, while a queued one is ordered against them by
+FIFO. It is also why the command carries a `PortableObservation` rather
+than a finished record: whether a weigh preserves an older contents
+observation is a fact about the map at merge time, which the measuring
+side does not have. The consequence for callers is that a verb's `true`
+means accepted, and the record is readable after the world queue drains
+— the same contract `world.markLocationContentsSpawned` has.
+
+**FIFO is not enough on its own**, which is what `wmSessionEpoch` is
+for. A turn that queues `WorldDestroyAll` and THEN observes locates the
+outgoing crate perfectly well — the teardown has not run yet — so
+ordering alone would clear the map and then insert the departed
+session's memory straight back into it, where a reused instance id could
+pick it up. So every mutating verb reads the epoch from the SAME
+`WorldManager` it located in, the command carries it, and the handler
+refuses a command whose epoch has moved.
+
+The hazard that guard closes is the TEARDOWN one specifically:
+`WorldDestroyAll` is an ordinary queued command, so a turn can queue it
+and then observe, and nothing else would stop the insert landing after
+the clear. A load publish is already covered by a different mechanism —
+`World.Thread.processAuthorizedSave` flushes the world queue and
+DISCARDS every non-authorized command when a `WorldLoadPublish` is in
+it, so no observation queued against the outgoing session survives to
+run against the restored one. The epoch is nonetheless bumped by the
+publish too, in the same atomic step that installs the new page set, so
+that it means "which session is this" for every reader rather than
+"which teardown was this", and so the refusal does not depend on that
+discard staying exactly as it is. A forget carries the epoch for the
+mirror-image reason an observation does: it must not reach across a
+boundary and delete a same-numbered record the next session
+legitimately owns.
+
+PLC-7 ships no gameplay caller — pickup and open are PLC-8's, the window
+is PLC-9's.
+
+Gate: hspec `--match "Portable container knowledge"`, plus
+`python3 tools/persistence_inventory_audit.py` and
+`python3 tools/save_compat_audit.py` for the component's inventory rows
+and fixture.
 
 ## Commanded-order stall budget (#920/#1291)
 

@@ -82,6 +82,7 @@ import World.Save.Payload (emptyLoadReconcileContext)
 import World.State.Types
     (WorldManager(..), WorldState(..), emptyWorldState, emptyWorldManager)
 import World.Tile.Types (WorldTileData(..))
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- * Fixture identities
 
@@ -269,6 +270,7 @@ stagedSessionWith bills = do
         , ssPreview       = Nothing
         , ssReconcile     = emptyLoadReconcileContext
         , ssMaterialRegistry = emptyMaterialRegistry
+        , ssPortableKnowledge = emptyPortableKnowledge
         }
 
 -- | The LIVE 'WorldState' registered under @pid@, read back off the

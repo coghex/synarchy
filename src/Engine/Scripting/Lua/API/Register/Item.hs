@@ -8,6 +8,9 @@ import Engine.Scripting.Lua.API.LootTables
 import Engine.Scripting.Lua.API.LootProfiles
 import Engine.Scripting.Lua.API.Items
 import Engine.Scripting.Lua.API.Forage (itemGetFoodFn)
+import Engine.Scripting.Lua.API.Items.Knowledge
+  ( itemGetContainerKnowledgeFn, itemObserveContainerWeightFn
+  , itemObserveContainerContentsFn, itemForgetContainerKnowledgeFn )
 import Engine.Core.State (EngineEnv, statRNGRef)
 import Engine.Core.Capability.ContentRegistries
   (toContentRegistriesCapability)
@@ -78,4 +81,19 @@ registerItemAPI env = do
   registerLuaFunction "getGroundForUnit" (itemGetGroundForUnitFn env)
   registerLuaFunction "getFood"      (itemGetFoodFn env)
   registerLuaFunction "debugQuads"   (itemDebugQuadsFn env)
+  -- PORTABLE container knowledge (#2512) — what the player remembers
+  -- about a crate, keyed by its own instance id and carried across
+  -- pages and owners with it. The read verb answers the same field
+  -- names `building.getContainerKnowledge` does, so one window renders
+  -- either; the two observe verbs are what PLC-8's pickup and open will
+  -- call, and nothing in the shipped game calls them yet. See
+  -- Engine.Scripting.Lua.API.Items.Knowledge.
+  registerLuaFunction "getContainerKnowledge"
+                                     (itemGetContainerKnowledgeFn env)
+  registerLuaFunction "observeContainerWeight"
+                                     (itemObserveContainerWeightFn env)
+  registerLuaFunction "observeContainerContents"
+                                     (itemObserveContainerContentsFn env)
+  registerLuaFunction "forgetContainerKnowledge"
+                                     (itemForgetContainerKnowledgeFn env)
   Lua.setglobal (Lua.Name "item")

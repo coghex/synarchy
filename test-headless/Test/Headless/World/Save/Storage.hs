@@ -75,6 +75,7 @@ import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -145,6 +146,7 @@ minimalGlobals = SessionGlobals
         { lcsOwnerPage = Just page1
         , lcsX = 10, lcsY = 20, lcsZoom = 2, lcsFacing = FaceSouth
         }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | A valid, captured snapshot whose seed is the one distinguishing

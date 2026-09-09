@@ -3,6 +3,7 @@ module World.Thread.Command.Basic
     , handleWorldSetCameraCommand
     , handleWorldDestroyCommand
     , handleWorldDestroyAllCommand
+    , handleWorldRecordPortableKnowledgeCommand
     ) where
 
 import UPrelude
@@ -24,6 +25,9 @@ import Unit.Command.Types (UnitCommand(..))
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
+import Item.Knowledge
+    ( PortableObservation
+    , applyPortableObservation, emptyPortableKnowledge, forgetPortable )
 import World.Blood.Teardown (enqueueBloodDisposalForPage, enqueueBloodDisposalAll)
 
 handleWorldTickCommand ∷ EngineEnv → LoggerState → Double → IO ()
@@ -121,7 +125,18 @@ handleWorldDestroyAllCommand env logger = do
             -- destroy-alls can be accepted before the unit thread ticks
             -- once, each queuing its own pair — see the field's own doc
             -- and @World.Thread.processAllCommands@.
+            -- #2512: the next session's crates are DIFFERENT crates,
+            -- and an instance id is only unique within a session, so a
+            -- surviving memory could attach itself to an unrelated item.
+            -- Emptied in the same atomic update as the page set for the
+            -- same reason every other session-scoped value here is.
             m' { wmWorlds = [], wmVisible = []
+               , wmPortableKnowledge = emptyPortableKnowledge
+               -- …and in the SAME update, so no reader can see the
+               -- cleared map under the departed session's epoch and
+               -- conclude a queued observation for it is still current
+               -- (#2512).
+               , wmSessionEpoch = wmSessionEpoch m' + 1
                , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)
@@ -151,3 +166,50 @@ handleWorldDestroyAllCommand env logger = do
     Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitClearAll
     Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) UnitEndSession
     logInfo logger CatWorld "All worlds destroyed"
+
+-- | #2512: fold ONE portable container's observation into the session's
+--   crate memory — @Just@ a finished record to remember, @Nothing@ to
+--   forget.
+--
+--   Lives here, on the world thread, because this thread is the sole
+--   owner of the session state 'WorldManager' carries: the two places
+--   that REPLACE that state wholesale (a load publish, and the
+--   Exit-to-Menu teardown above) both run on it, so a queued
+--   observation is ordered against them by FIFO rather than racing
+--   them. A Lua-thread write could land a departed session's crate
+--   memory in the session that replaced it; this cannot.
+--
+--   The observation arrives already MEASURED. The caller located the
+--   live instance and read the clock, so what is remembered is the
+--   crate as it was when the player looked, not as it is by the time
+--   this runs. Only the MERGE happens here, through the one
+--   'applyPortableObservation' the pure model uses, so this handler
+--   and "Item.Knowledge" cannot disagree about whether a weigh
+--   preserves an older contents observation.
+--
+--   'atomicModifyIORef'' rather than read-then-write for the same
+--   reason every other mutation of this record uses it: the projection
+--   counters are updated from other threads, and a read-modify-write
+--   would drop those.
+handleWorldRecordPortableKnowledgeCommand
+    ∷ EngineEnv → Word64 → Word64 → Maybe PortableObservation → IO ()
+handleWorldRecordPortableKnowledgeCommand env epoch iid mObs =
+    atomicModifyIORef'
+        (wsWorldManagerRef (toWorldSimCapability env)) $ \mgr →
+        -- REFUSED when the session has been replaced since the caller
+        -- measured. FIFO orders this command against the teardown and
+        -- the load publish, but ordering alone does not help when the
+        -- observation was measured BEFORE a teardown that is queued
+        -- AHEAD of it: the crate was genuinely there, the teardown
+        -- genuinely cleared the map, and re-inserting afterwards would
+        -- carry a departed session's memory into the next one, where a
+        -- reused instance id could pick it up.
+        ( if wmSessionEpoch mgr ≢ epoch
+            then mgr
+            else mgr { wmPortableKnowledge =
+                         merge (wmPortableKnowledge mgr) }
+        , () )
+  where
+    merge = case mObs of
+        Just obs → applyPortableObservation iid obs
+        Nothing  → forgetPortable iid

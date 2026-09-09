@@ -82,6 +82,7 @@ import Unit.Direction (Direction(..))
 import Building.Knowledge (emptyContainerKnowledge)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Fixtures (mirror Test.Headless.Save.Snapshot's minimal* pattern)
@@ -273,6 +274,7 @@ minimalGlobals = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just page1
         , lcsX = 7, lcsY = 8, lcsZoom = 3, lcsFacing = FaceEast }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | A placed location owing @entries@ (#917), with every other field

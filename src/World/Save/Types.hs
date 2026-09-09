@@ -28,6 +28,9 @@ module World.Save.Types
     , MissingItemDefRef(..)
     , renderMissingItemDefRef
     , missingItemDefReferences
+    , MissingPortableItemDefRef(..)
+    , renderMissingPortableItemDefRef
+    , missingPortableItemDefReferences
     , MissingSignificantItemRef(..)
     , renderMissingSignificantItemRef
     , missingSignificantItemReferences
@@ -108,6 +111,8 @@ import Infection.Types (InfectionManager, lookupInfection)
 import Equipment.Types (EquipmentClassManager)
 import Equipment.Reconcile
     (EquipmentOrphan(..), reconcileUnitEquipment)
+import Item.Knowledge
+    (PortableKnowledge(..), PortableRecord(..), ContentsObservation(..))
 import Item.Ground (GroundItems(..), GroundItem(..))
 import Engine.Graphics.Camera (CameraFacing(..))
 import Building.Types (BuildingId(..), BuildingInstance(..), BuildingDef(..)
@@ -144,7 +149,7 @@ saveMagic = 0x53595241
 --   @docs\/persistence_contract.md@ both instruct maintainers to bump
 --   it, so it is a documented maintainer-facing marker, not dead code.
 currentSaveVersion ∷ Int
-currentSaveVersion = 101
+currentSaveVersion = 102
 
 -- | The shape of the tagged save envelope's fixed 16-byte header
 --   (issue #759, save-overhaul B1): magic, the envelope FRAMING
@@ -562,6 +567,17 @@ data SaveData = SaveData
     , sdWorlds       ∷ ![WorldPageSave]
         -- ^ Every saved world page, one entry per live page in
         --   wmWorlds at save time.
+    , sdPortableKnowledge ∷ !PortableKnowledge
+        -- ^ #2512: what the player remembers about each PORTABLE
+        --   container, keyed by 'Item.Types.iiInstanceId'. A GLOBAL
+        --   field beside 'sdGameTime' rather than a per-page one, for
+        --   the reason the layer exists: a crate moves between pages
+        --   and owners, so its memory belongs to the session and is
+        --   never copied into a page. Restores onto
+        --   'World.State.Types.wmPortableKnowledge' through
+        --   "World.Load.Stage"'s scrub and "World.Load.Publish"'s
+        --   replacement manager. #1087's BUILDING-keyed knowledge stays
+        --   per-page in 'wpsContainerKnowledge'.
     } deriving (Show, Serialize, Generic)
 
 -- | The primary/active world page in a save — the one that restores as
@@ -1201,6 +1217,57 @@ missingItemDefReferences itemDefs pages = concatMap pageRefs pages
         [ MissingItemDefRef src pid (iiInstanceId i) (iiDefName i)
         | i ← flattenItemInstances inst
         , not (HS.member (iiDefName i) itemDefs) ]
+
+-- | A remembered PORTABLE-container item (#2512) whose 'iiDefName' does
+--   not resolve against the currently-registered item definitions.
+--
+--   Its own type rather than a 'MissingItemDefRef', because the
+--   portable-knowledge layer is SESSION-scoped: there is no page to
+--   name, and inventing one — the crate's current page, the active page
+--   — would be a fabricated fact in a diagnostic whose whole job is to
+--   be precise about what a save actually contains. What it names
+--   instead is the remembering CRATE's own instance id, which is the
+--   identity the record is keyed by.
+data MissingPortableItemDefRef = MissingPortableItemDefRef
+    { mpdrOwnerId ∷ !Word64   -- ^ the remembering container's 'iiInstanceId'
+    , mpdrItemId  ∷ !Word64   -- ^ the remembered item's own 'iiInstanceId'
+    , mpdrDefName ∷ !Text     -- ^ the unresolved item definition name
+    } deriving (Show, Eq)
+
+renderMissingPortableItemDefRef ∷ MissingPortableItemDefRef → Text
+renderMissingPortableItemDefRef r =
+    "portable container knowledge for item #" <> tshow (mpdrOwnerId r)
+        <> " remembers item #" <> tshow (mpdrItemId r)
+        <> ", which references unknown item definition '"
+        <> mpdrDefName r <> "'"
+
+-- | Every item def name a portable container's REMEMBERED contents
+--   reference that is absent from the registered item-definition key
+--   set, recursively through nested contents.
+--
+--   #2512, on exactly the contract 'missingItemDefReferences' applies to
+--   #1087's building-keyed memories: a remembered item's DEF NAME is an
+--   ordinary persisted content reference and a save naming a
+--   deregistered def is refused, while its INSTANCE ID is exempt from
+--   live-entity treatment (see 'World.Save.Snapshot.allItemInstanceIds').
+--
+--   Checked for EVERY record, including one whose owning crate no
+--   longer exists anywhere in the session. That ordering is deliberate:
+--   the dangling-owner scrub is a tolerated, non-blocking load-boundary
+--   diagnostic ("World.Load.Stage"), so letting it run first would
+--   silently discard the very records this rejection is about and turn
+--   a refused save into an accepted one.
+missingPortableItemDefReferences
+    ∷ HS.HashSet Text                     -- ^ registered item def names
+    → PortableKnowledge
+    → [MissingPortableItemDefRef]
+missingPortableItemDefReferences itemDefs (PortableKnowledge records) =
+    [ MissingPortableItemDefRef owner (iiInstanceId i) (iiDefName i)
+    | (owner, r) ← L.sortOn fst (HM.toList records)
+    , c    ← maybeToList (prContents r)
+    , inst ← coItems c
+    , i    ← flattenItemInstances inst
+    , not (HS.member (iiDefName i) itemDefs) ]
 
 -- | A saved GUARANTEED SIGNIFICANT obligation (#917) that has not been
 --   spawned yet and whose stored item def name no longer resolves.

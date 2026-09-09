@@ -75,6 +75,7 @@ import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldId)
 import Test.Headless.Harness.Isolation (withExclusiveTempDirectory)
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Scratch root
@@ -262,6 +263,7 @@ sessionWith gids =
             , sgLiveCamera     = LiveCameraSnapshot
                 { lcsOwnerPage = Just active
                 , lcsX = 10, lcsY = 20, lcsZoom = 2, lcsFacing = FaceSouth }
+            , sgPortableKnowledge = emptyPortableKnowledge
             }
     in case captureSessionSnapshot globals pages of
         Right s   → s

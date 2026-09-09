@@ -78,6 +78,7 @@ import qualified Data.Serialize as S
 import World.Construct.Attempt (firstConstructAttemptId)
 import World.Flora.Identity (firstPlantedFloraCursor)
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Item.Knowledge (emptyPortableKnowledge)
 
 -- ---------------------------------------------------------------------
 -- Pure tick harness
@@ -313,6 +314,7 @@ globalsAt now = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just testPage
         , lcsX = 0, lcsY = 0, lcsZoom = 1, lcsFacing = FaceEast }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 snapshotAt ∷ Double → UnitSimState → SessionSnapshot

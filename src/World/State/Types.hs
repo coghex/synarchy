@@ -67,6 +67,7 @@ import World.Flora.Harvest (FloraHarvests, PendingFloraHarvests,
                             emptyFloraHarvests, emptyPendingFloraHarvests)
 import World.Flora.CropPlot (CropPlots, emptyCropPlots)
 import World.Flora.Identity (firstPlantedFloraCursor)
+import Item.Knowledge (PortableKnowledge, emptyPortableKnowledge)
 import Item.Ground (GroundItems, emptyGroundItems)
 
 -- | Per-world GPU-upload bookkeeping for #606's procedurally generated
@@ -778,6 +779,77 @@ data WorldManager = WorldManager
       --   NOT persisted: it names an in-flight cross-thread transition,
       --   and a save taken mid-teardown restores into a process where
       --   that transition does not exist.
+    , wmSessionEpoch ∷ !Word64
+      -- ^ Which SESSION the page set below belongs to (#2512).
+      --
+      --   Monotonic, and bumped by exactly the two transitions that
+      --   REPLACE a session wholesale:
+      --   'World.Thread.Command.Basic.handleWorldDestroyAllCommand'
+      --   (Exit to Menu) and
+      --   'World.Load.Publish.publishStagedSession' (a load). Both bump
+      --   it in the same step that installs the new page set, so no
+      --   reader can observe one without the other.
+      --
+      --   Distinct from 'wmSelectionGen' above, which answers "has the
+      --   ACTIVE PAGE moved" and deliberately does not move when a
+      --   teardown finds nothing visible. This answers "is this still
+      --   the same session at all", which a teardown always changes.
+      --
+      --   It exists because a queued command can outlive the session it
+      --   was issued for. A Lua verb that measures a portable-container
+      --   observation reads this alongside the page set it located in,
+      --   and 'World.Command.Types.WorldRecordPortableKnowledge' carries
+      --   it; the handler refuses a command whose epoch has moved.
+      --   Without that, a turn which queues @WorldDestroyAll@ and THEN
+      --   observes would locate the outgoing crate (the teardown has not
+      --   run yet), and FIFO would clear the map and then insert the
+      --   departed session's memory back into it — where a reused
+      --   instance id could pick it up.
+      --
+      --   That is the TEARDOWN hazard specifically. The load side is
+      --   already covered separately: @World.Thread.processAuthorizedSave@
+      --   flushes the world queue and discards every non-authorized
+      --   command when a @WorldLoadPublish@ is in it. The publish bumps
+      --   this anyway, so the field answers \"which session is this\"
+      --   rather than \"which teardown was this\", and so the handler's
+      --   refusal does not depend on that discard staying as it is.
+      --
+      --   NOT persisted: it names this process's session sequence, and a
+      --   restored session gets a fresh one from the publish that
+      --   installed it.
+    , wmPortableKnowledge ∷ !PortableKnowledge
+      -- ^ What the player remembers about each PORTABLE container,
+      --   keyed by 'Item.Types.iiInstanceId' (#2512, epic #1231 PLC-7,
+      --   @docs\/portable_loot_containers.md@ D-13\/D-24).
+      --
+      --   SESSION-scoped, which is the whole reason it lives here
+      --   rather than on 'WorldState' beside #1087's building-keyed
+      --   'wsContainerKnowledgeRef'. A crate is carried between pages
+      --   and owners; a page-scoped map would either lose its memory on
+      --   the move or have to copy it, and a copy is exactly what a
+      --   record keyed by the crate's own identity must never need.
+      --   Reads locate the live instance through "World.Item.Locate",
+      --   which is why nothing about a crate's CURRENT page is stored
+      --   here.
+      --
+      --   WRITTEN ONLY BY THE WORLD THREAD
+      --   ('World.Thread.Command.Basic.handleWorldRecordPortableKnowledgeCommand',
+      --   merging a 'Item.Knowledge.PortableObservation' a Lua verb
+      --   measured and queued). That thread owns the session state this
+      --   record carries — it runs both of the wholesale replacements
+      --   below — so an observation is ordered against them by FIFO
+      --   instead of racing them.
+      --
+      --   PERSISTED, unlike every other non-page field on this record:
+      --   it is the live owner of the optional session component
+      --   @"portable-knowledge"@
+      --   ("World.Save.Component.PortableKnowledge"), captured by
+      --   "World.Thread.Command.Save.WriteWorld" and installed by
+      --   "World.Load.Publish" as part of the replacement manager — so
+      --   a load REPLACES it wholesale (an absent payload therefore
+      --   clears it) and never merges the outgoing session's memories
+      --   into the restored one. Exit-to-Menu empties it with the page
+      --   set, since the next session's crates are different crates.
     }
 
 emptyWorldManager ∷ WorldManager
@@ -790,6 +862,8 @@ emptyWorldManager = WorldManager
     , wmProjectedVisible = []
     , wmSelectionPending = 0
     , wmTeardownsPending = 0
+    , wmSessionEpoch = 0
+    , wmPortableKnowledge = emptyPortableKnowledge
     }
 
 -- | Advance the page-selection generation (#1602). Call inside the SAME

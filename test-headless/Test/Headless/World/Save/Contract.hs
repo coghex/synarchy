@@ -125,6 +125,7 @@ import World.Flora.Identity
     ( firstPlantedFloraCursor, generatedFloraInstanceId
     , plantedFloraInstanceId )
 import Test.Headless.Harness.GeneratedIds (fixtureGeneratedWorldIdForPage)
+import Item.Knowledge (emptyPortableKnowledge)
 
 page1, page2 ∷ WorldPageId
 page1 = WorldPageId "page1"
@@ -616,6 +617,7 @@ richGlobals = SessionGlobals
     , sgLiveCamera     = LiveCameraSnapshot
         { lcsOwnerPage = Just page1, lcsX = 12.5, lcsY = 7.5, lcsZoom = 3
         , lcsFacing = FaceEast }
+    , sgPortableKnowledge = emptyPortableKnowledge
     }
 
 representativeSnapshot ∷ SessionSnapshot

@@ -13,8 +13,9 @@
 --     ("World.Save.Component.saveComponentRegistry") — @"core-session"@,
 --     @"texture-palette"@, @"world-pages"@, @"world-edits"@,
 --     @"world-activity"@, @"buildings"@, @"units"@, @"unit-sim"@,
---     @"craft-bills"@, @"power-nodes"@, plus the two OPTIONAL entries
---     @"container-knowledge"@ (#1087) and @"transfer-orders"@ (#1246),
+--     @"craft-bills"@, @"power-nodes"@, plus the three OPTIONAL entries
+--     @"container-knowledge"@ (#1087), @"transfer-orders"@ (#1246) and
+--     @"portable-knowledge"@ (#2512),
 --     whose absence is a legitimate default rather than a decode
 --     failure — each independently versioned, converted to/from
 --     "World.Save.Snapshot"'s 'SessionSnapshot'.
