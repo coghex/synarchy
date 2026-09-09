@@ -561,6 +561,7 @@ library
                      Unit.Command.Types
                      Unit.Direction
                      Unit.Faction
+                     Unit.Faction.Profile
                      Unit.Sim.Types
                      Unit.Thread
                      Unit.Thread.Command
@@ -1639,6 +1640,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Location.Discovery
                    Test.Headless.Location.Fixture
                    Test.Headless.Unit.Faction
+                   Test.Headless.Unit.FactionProfile
                    Test.Headless.Lua.Faction
                    Test.Headless.Location.Instance
                    Test.Headless.Location.SignificantContents

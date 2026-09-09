@@ -373,6 +373,7 @@ import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
 import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
+import qualified Test.Headless.Unit.FactionProfile as UnitFactionProfile
 import qualified Test.Headless.Capability.Building as CapabilityBuilding
 import qualified Test.Headless.Capability.ContentRegistriesView as CapabilityContentRegistriesView
 import qualified Test.Headless.Capability.Events as CapabilityEvents
@@ -1122,6 +1123,7 @@ main = hspec $ do
     LocationBounds.spec
     LocationDiscovery.spec
     UnitFaction.spec
+    UnitFactionProfile.spec
     ContainerKnowledge.spec
     PortableKnowledge.spec
     LocationInstance.spec
