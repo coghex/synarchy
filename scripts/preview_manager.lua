@@ -769,6 +769,17 @@ local function buildBuildingUI(building, fbW, fbH, restoreEntry, restoreScroll,
         return
     end
 
+    -- #1907's capturing surface needs SOME already-requested handle, and
+    -- until #2492 the building's own first frame was always one. A
+    -- fully diagnostic selection requests nothing at all — which the
+    -- initial `built` row is allowed to be, by design — so without this
+    -- the surface would never be created and the wheel would leak to
+    -- the gameplay broadcasts for the whole session. The list's chrome
+    -- is the right donor: this mode always builds a list, so the handle
+    -- is already in flight and adopting it loads nothing new. (Focused
+    -- ITEM mode, which allows no chrome at all, never reaches here.)
+    adoptZoomSurfaceTexture(list.getChromeTexture())
+
     if not buildingViewId then
         buildingViewId = buildingAssetView.new({
             page = page,
@@ -1417,6 +1428,23 @@ function previewManager.dump()
                 projected = d.projected,
                 cells = cells,
             }
+            -- The row-level diagnostic summary (#2492 requirement 12's
+            -- "diagnostic state"), computed here so `lifecycle`,
+            -- `staticSprite` and the combined `rows` below all report
+            -- the SAME answer. `resolved` alone cannot say it: a row
+            -- whose animation resolved but whose west cell is absent is
+            -- a real authoring fault, and without this it would read as
+            -- healthy through every surface but the facing strip.
+            entry.missingCells = 0
+            for _, c in ipairs(cells) do
+                if c.missing then
+                    entry.missingCells = entry.missingCells + 1
+                    if entry.missingReason == nil then
+                        entry.missingReason = c.missingReason
+                    end
+                end
+            end
+            entry.missing = entry.missingCells > 0
             if d.kind == "sprite" then
                 out.staticSprite = entry
             else
@@ -1459,6 +1487,11 @@ function previewManager.dump()
         out.rows = assetBrowser.dump(browserId)
         local byIdentity = {}
         for _, r in ipairs(buildingRows or {}) do byIdentity[r.identity] = r end
+        local diagnosticByIdentity = {}
+        for _, e in ipairs(out.lifecycle) do diagnosticByIdentity[e.identity] = e end
+        if out.staticSprite then
+            diagnosticByIdentity[out.staticSprite.identity] = out.staticSprite
+        end
         for _, dumped in ipairs(out.rows) do
             local r = byIdentity[dumped.key]
             if r then
@@ -1466,10 +1499,23 @@ function previewManager.dump()
                 dumped.kind = r.kind
                 if r.kind ~= "filesystem" then
                     local d = r.declared or {}
+                    local diag = diagnosticByIdentity[r.identity] or {}
                     dumped.role = d.role
                     dumped.resolved = d.resolved == true
                     dumped.declaration = d.source
                     dumped.legacy = d.legacy == true
+                    -- The same diagnostic summary the `lifecycle` /
+                    -- `staticSprite` entries carry, so a row located
+                    -- from `rows` alone still says whether its art is
+                    -- there — the surface automated input actually uses
+                    -- to pick a row to click.
+                    dumped.missing = diag.missing == true
+                    dumped.missingReason = diag.missingReason
+                    dumped.missingCells = diag.missingCells or 0
+                else
+                    local c = r.class or {}
+                    dumped.undeclared = (c.undeclared ~= false)
+                        and #(c.declared or {}) == 0
                 end
             end
         end

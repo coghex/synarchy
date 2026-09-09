@@ -55,8 +55,10 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Types as Aeson (parseMaybe)
 import Data.List (find)
 import Data.Foldable (toList)
-import System.Directory (doesPathExist, pathIsSymbolicLink)
-import System.Posix.Files (getSymbolicLinkStatus, isRegularFile, isDirectory)
+import Control.Exception (IOException, try)
+import System.Posix.Files
+    ( FileStatus, getSymbolicLinkStatus, isDirectory, isRegularFile
+    , isSymbolicLink )
 import System.FilePath (pathSeparator, splitDirectories, joinPath)
 import Building.Schema
     ( AssetSource(..), BuildingRole(..), FacingAssets(..), faViews
@@ -184,8 +186,7 @@ missingReasonKey CellOutsideRoot          = Just "outside_root"
 missingReasonKey CellUnresolved           = Just "unresolved"
 
 -- | Judge ONE declared path against the building-preview asset
---   boundary, in the order the checks can be answered without trusting
---   the previous one:
+--   boundary:
 --
 --   1. containment under @root@ — a purely syntactic test, so it runs
 --      before any filesystem call reaches a path that should never be
@@ -194,29 +195,63 @@ missingReasonKey CellUnresolved           = Just "unresolved"
 --      'Engine.Preview.Discovery.isSupportedTextureFile' applies to
 --      discovery, so a browsable path and a declared one can never
 --      disagree about what a texture is;
---   3. existence, then the TYPE from a real @lstat@.
+--   3. ONE @lstat@ walk down every component below @root@.
 --
---   The symlink test comes before the directory\/regular reading for the
---   same reason 'Engine.Preview.Building.discoverBuildingEntries' keeps
---   its own: @lstat@ not following links is what makes a symlink a
---   non-regular file, but "symlinks are refused" is a stated rule and
---   must not survive only as a side effect of how a type is read.
---   Neither existence predicate answers the type question —
---   @doesDirectoryExist@ misses a FIFO and @doesFileExist@ accepts one.
+--   The walk answers existence, the symlink rule and the type together,
+--   and it must: those three questions cannot be asked independently
+--   without getting one of them wrong.
+--
+--   * Existence CANNOT come first. @doesPathExist@ follows links, so a
+--     DANGLING symlink — a real authoring fault, and one a reviewer
+--     needs named — reads as absent and never reaches the symlink test
+--     at all. @lstat@ does not follow, so it sees the link itself.
+--   * The symlink rule covers every component below @root@, not just
+--     the leaf: @root\/link\/frame_000.png@ with a symlinked @link\/@
+--     would otherwise pass a leaf-only test and load another tree's
+--     texture through a contained-looking path.
+--   * The symlink test still precedes the type reading, for the reason
+--     'Engine.Preview.Building.discoverBuildingEntries' keeps its own:
+--     @lstat@ not following links is what makes a symlink a non-regular
+--     file, but "symlinks are refused" is a stated rule and must not
+--     survive only as a side effect of how a type is read.
+--   * Neither existence predicate answers the type question —
+--     @doesDirectoryExist@ misses a FIFO and @doesFileExist@ accepts
+--     one — so the type comes from the same @lstat@.
 classifyDeclaredPath ∷ FilePath → Text → IO CellStatus
 classifyDeclaredPath root declared
     | not (containedIn root path) = pure CellOutsideRoot
     | not (isSupportedTextureFile path) = pure CellUnsupportedExtension
-    | otherwise = do
-        exists ← doesPathExist path
-        if not exists then pure CellAbsent else do
-            anyLink ← anyAncestorIsSymlink root path
-            if anyLink then pure CellSymlink else do
-                st ← getSymbolicLinkStatus path
-                pure $ if isDirectory st then CellDirectory
-                       else if isRegularFile st then CellLoadable
-                       else CellSpecial
-  where path = T.unpack declared
+    | otherwise = walkChain (norm root) (drop (length (norm root)) (norm path))
+  where
+    path = T.unpack declared
+    norm = filter (≢ ".") ∘ splitDirectories ∘ normSlashes
+
+    -- An empty remainder means the declared path IS the root, which
+    -- 'containedIn' has already refused; it is restated rather than
+    -- assumed away.
+    walkChain _ [] = pure CellAbsent
+    walkChain acc (c : cs) = do
+        let acc' = acc ⧺ [c]
+        mst ← lstatOf (joinPath acc')
+        case mst of
+            -- lstat fails only when this component does not exist at
+            -- all — a dangling link exists as a link and is caught
+            -- above it.
+            Nothing → pure CellAbsent
+            Just st
+                | isSymbolicLink st → pure CellSymlink
+                | not (null cs) →
+                    -- An intermediate component must be a real
+                    -- directory; anything else cannot contain the rest
+                    -- of the path.
+                    if isDirectory st then walkChain acc' cs
+                    else pure CellAbsent
+                | isDirectory st  → pure CellDirectory
+                | isRegularFile st → pure CellLoadable
+                | otherwise        → pure CellSpecial
+
+    lstatOf p = either (const Nothing) Just
+        ⊚ (try (getSymbolicLinkStatus p) ∷ IO (Either IOException FileStatus))
 
 -- | Whether @path@ names something at or under @root@, judged
 --   syntactically on normalized components. An absolute path, a @..@
@@ -233,20 +268,6 @@ containedIn root path =
     stripComponents (x : xs) (y : ys)
         | x ≡ y     = stripComponents xs ys
         | otherwise = Nothing
-
--- | Whether any component of @path@ BELOW @root@ is a symlink. The
---   whole chain matters, not just the leaf: @root/link/frame_000.png@
---   with a symlinked @link/@ would otherwise pass a leaf-only test and
---   load another tree's texture through a contained-looking path.
-anyAncestorIsSymlink ∷ FilePath → FilePath → IO Bool
-anyAncestorIsSymlink root path = go (norm root) (drop (length (norm root)) (norm path))
-  where
-    norm = filter (≢ ".") ∘ splitDirectories ∘ normSlashes
-    go _ [] = pure False
-    go acc (c : cs) = do
-        let acc' = acc ⧺ [c]
-        isLink ← pathIsSymbolicLink (joinPath acc')
-        if isLink then pure True else go acc' cs
 
 -- | Platform-independent path comparison: YAML always spells its paths
 --   with @\/@, while a discovered path is built with

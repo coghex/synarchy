@@ -407,6 +407,39 @@ spec = do
         map pfcMissingReason (pdeCells s) `shouldBe`
             replicate 4 (Just "outside_root")
 
+    it "names a DANGLING symlink as a symlink, not as absent" $
+      withTree $ \_ _ root → do
+        -- The ordering trap: an existence predicate FOLLOWS the link, so
+        -- a broken one reads as "no such file" and never reaches the
+        -- symlink rule. A reviewer needs the real fault named.
+        createFileLink (root </> "gone.png") (root </> "dangling.png")
+        let doc = T.unlines
+                [ "name: \"fixture_building\""
+                , "visual_class: \"gateway\""
+                , "sprite: \"" <> T.pack (root </> "dangling.png") <> "\""
+                , "state_animations: {}"
+                , "animations: {}"
+                ]
+        m ← requireMatrix "fixture_building" doc
+        rows ← resolveDeclaredEntries root [] m
+        s ← requireRow spriteIdentity rows
+        map pfcMissingReason (pdeCells s) `shouldBe`
+            replicate 4 (Just "symlink")
+        -- And the control: a plainly absent path still reads absent, so
+        -- the case above is not just "everything is a symlink now".
+        let absentDoc = T.unlines
+                [ "name: \"fixture_building\""
+                , "visual_class: \"gateway\""
+                , "sprite: \"" <> T.pack (root </> "nothing.png") <> "\""
+                , "state_animations: {}"
+                , "animations: {}"
+                ]
+        m2 ← requireMatrix "fixture_building" absentDoc
+        rows2 ← resolveDeclaredEntries root [] m2
+        s2 ← requireRow spriteIdentity rows2
+        map pfcMissingReason (pdeCells s2) `shouldBe`
+            replicate 4 (Just "absent")
+
     it "refuses a path that escapes through a symlinked ANCESTOR, not \
        \just a symlinked leaf" $ withTree $ \_ _ root → do
         createDirectoryLink (root </> "idle") (root </> "linked")

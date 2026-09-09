@@ -118,6 +118,41 @@ mixedBrowse = lns
     , "pm.update(0.016)"
     ]
 
+-- | A building whose initial selection is WHOLLY diagnostic: the
+--   declared @built@ row is unresolved, so a fresh session requests no
+--   building texture at all before the first wheel event.
+--
+--   Requirement 13 makes this reachable on purpose — a declared @built@
+--   row stays selectable as a diagnostic — and #1907 still requires the
+--   preview region to own a scroll-capturing surface. The two together
+--   are the case a viewer that borrowed its surface handle from the
+--   first frame it happened to load could not serve.
+diagnosticOnlyBrowse ∷ Text
+diagnosticOnlyBrowse = lns
+    [ "local function cell(f)"
+    , "  return { facing = f, paths = {}, missing = true,"
+    , "           missingReason = 'unresolved', legacy = false }"
+    , "end"
+    , "local cells = { cell('south'), cell('west'), cell('north'), cell('east') }"
+    , "local B = 'assets/textures/buildings/broken/'"
+    , "local building = { name = 'broken', defaultEntry = 'default.png',"
+    , "  defaultSelection = 'lifecycle:built',"
+    , "  entries = {"
+    , "    { label = 'default.png', animated = false, fps = 8, loop = false,"
+    , "      frames = { B..'default.png' } } },"
+    , "  declared = {"
+    , "    { identity = 'lifecycle:built', kind = 'lifecycle',"
+    , "      label = 'built \226\134\146 gone', role = 'built',"
+    , "      animation = 'gone', resolved = false, fps = 0, loop = false,"
+    , "      source = 'canonical', legacy = false, cells = cells } },"
+    , "  filesystemClasses = {"
+    , "    { label = 'default.png', identity = 'filesystem:default.png',"
+    , "      declared = {}, undeclared = true } } }"
+    , "local pm = bootPreview({ mode = 'building', building = building },"
+    , "                       { category = 'buildings', item = 'broken' })"
+    , "pm.update(0.016)"
+    ]
+
 -- | A YAML-less building: the pre-#2492 payload exactly, with no
 --   @declared@, no @defaultSelection@ and no classes.
 rawOnlyBrowse ∷ Text
@@ -409,6 +444,72 @@ spec = do
       , "assert(pm.onKeyDown('Right')); pm.update(0.016)"
       , "assert(pm.dump().selection.missing == false)"
       , "assert(pm.dump().path ~= nil)"
+      ]
+
+  describe "a wholly diagnostic session" $ do
+    it "still owns a scroll-capturing zoom surface, having requested no \
+       \building texture at all" $ runsOk $ lns
+      [ harness, diagnosticOnlyBrowse, findRow
+      , "local d = pm.dump()"
+      , "assert(d.selection.identity == 'lifecycle:built')"
+      , "assert(d.selection.missing == true and d.selection.resolved == false)"
+      , "assert(d.state == 'ready')"
+      , "-- The premise: nothing under the building's own root was ever"
+      , "-- requested, so a surface borrowed from the first loaded frame"
+      , "-- would not exist. Only list chrome is allowed to be in flight."
+      , "for _, p in ipairs(d.loadedPaths) do"
+      , "  assert(p:find('assets/textures/ui/', 1, true) == 1,"
+      , "      'a diagnostic session loaded a building texture: ' .. p)"
+      , "end"
+      , "assert(d.zoom.surface ~= nil,"
+      , "    'the preview region must own a capturing surface (#1907)')"
+      , "assert(elements[d.zoom.surface].scrollCapture == true,"
+      , "    'and it must actually capture scroll')"
+      , "assert(elements[d.zoom.surface].clickable == false"
+      , "   and elements[d.zoom.surface].pointerBlocking == false,"
+      , "    'capture ONLY: #743 keeps the three policies independent')"
+      , "-- And the wheel really reaches it, rather than leaking to the"
+      , "-- gameplay/z-slice broadcasts for the whole session."
+      , "assert(pm.onUIScroll(d.zoom.surface, 0, 2))"
+      , "pm.update(0.016)"
+      , "assert(pm.dump().zoom.multiplier < 1,"
+      , "    tostring(pm.dump().zoom.multiplier))"
+      ]
+
+    it "reports the diagnostic state on the ROW, so a row located from \
+       \`rows` alone says whether its art is there" $ runsOk $ lns
+      [ harness, mixedBrowse, findRow
+      , "-- A row whose animation RESOLVED but whose west cell is absent"
+      , "-- is a real authoring fault. `resolved` alone cannot say so."
+      , "local construction = rowByIdentity(pm, 'lifecycle:construction')"
+      , "assert(construction.resolved == true, 'the reference resolved')"
+      , "assert(construction.missing == true,"
+      , "    'yet one of its cells is not there')"
+      , "assert(construction.missingReason == 'absent',"
+      , "    tostring(construction.missingReason))"
+      , "assert(construction.missingCells == 1,"
+      , "    tostring(construction.missingCells))"
+      , "-- A wholly unresolved row, and a healthy one, are both distinct"
+      , "-- from it through the same fields."
+      , "local gone = rowByIdentity(pm, 'lifecycle:destruction')"
+      , "assert(gone.resolved == false and gone.missing == true"
+      , "   and gone.missingReason == 'unresolved' and gone.missingCells == 4)"
+      , "local built = rowByIdentity(pm, 'lifecycle:built')"
+      , "assert(built.resolved == true and built.missing == false"
+      , "   and built.missingReason == nil and built.missingCells == 0,"
+      , "    'a healthy row reports no diagnostic at all')"
+      , "-- The sprite row too, and a raw row instead reports whether it"
+      , "-- backs any declaration."
+      , "assert(rowByIdentity(pm, 'sprite').missing == false)"
+      , "assert(rowByIdentity(pm, 'filesystem:stray.png').undeclared == true)"
+      , "assert(rowByIdentity(pm, 'filesystem:idle').undeclared == false)"
+      , "-- and `lifecycle` agrees with `rows`, rather than the two"
+      , "-- surfaces disagreeing about the same row."
+      , "for _, e in ipairs(pm.dump().lifecycle) do"
+      , "  local r = rowByIdentity(pm, e.identity)"
+      , "  assert(r.missing == e.missing and r.missingCells == e.missingCells,"
+      , "      e.identity .. ': rows and lifecycle disagree')"
+      , "end"
       ]
 
   describe "legacy declarations" $
