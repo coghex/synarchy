@@ -120,6 +120,13 @@ it, a value that is not a list at all goes over untouched so the engine
 refuses it as one, and an entry that is present but not a path becomes an
 entry the engine refuses by index. Every judgement stays the engine's.
 
+Shape preservation only reaches the engine if what it preserved is
+actually SENT, so both loaders test the declaration with `~= nil` and
+never for truth. `construction: false` decodes to Lua `false`; a
+truthiness test would drop it, the payload would be indistinguishable
+from one that declared nothing, and the pack would register — a malformed
+declaration quietly downgraded to an absent one. Only `nil` is absence.
+
 ## 4. What the engine refuses
 
 `structure.registerPackArt` is all-or-nothing per pack, and construction

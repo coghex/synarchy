@@ -187,10 +187,18 @@ local registeredArt = false
 -- against — and because a variant's sprite has no entry in the `art`
 -- list at all (the catalogue stores default art only, since a
 -- designation carries no variant).
+--
+-- `build ~= nil` and NOT `build` -- shape preservation only reaches the
+-- engine if what it preserved is actually sent. `construction: false`
+-- decodes to Lua `false`, which structure_frames.load deliberately hands
+-- back unchanged for the engine to refuse as a non-array; a truthiness
+-- test here would drop it instead, and the pack would be ACCEPTED and
+-- merely reported as declaring nothing. Absence is the one state that
+-- means "no declaration", and only `nil` is absence.
 local function appendConstruction(out, h, variant)
     for _, k in ipairs(PIECE_KINDS) do
         local p = h[k]
-        if p and p.texPath and p.build then
+        if p and p.texPath and p.build ~= nil then
             out[#out + 1] = { kind = k, variant = variant,
                               texture = p.texPath, texHandle = p.tex,
                               frames = p.build }
@@ -198,7 +206,7 @@ local function appendConstruction(out, h, variant)
     end
     for _, e in ipairs(WALL_DIRS) do
         local w = h.walls[e]
-        if w and w.texPath and w.build then
+        if w and w.texPath and w.build ~= nil then
             out[#out + 1] = { kind = "wall", edge = e, variant = variant,
                               texture = w.texPath, texHandle = w.tex,
                               frames = w.build }

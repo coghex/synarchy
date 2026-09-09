@@ -150,7 +150,13 @@ function M.registerPackArt()
         -- #2488: each connection's own sequence, keyed to that exact
         -- shape. A connection with none resolves none — a run being
         -- built never borrows another shape's frames.
-        if h.connPath[name] and h.connBuild[name] then
+        --
+        -- `~= nil`, not truthiness: `construction: false` decodes to Lua
+        -- `false`, which structure_frames.load hands back unchanged for
+        -- the engine to refuse as a non-array. Dropping it here would
+        -- turn a malformed declaration into an absent one and let the
+        -- pack register. Only `nil` is absence.
+        if h.connPath[name] and h.connBuild[name] ~= nil then
             construction[#construction + 1] =
                 { kind = "wire", shape = name,
                   texture = h.connPath[name], texHandle = h.conn[name],

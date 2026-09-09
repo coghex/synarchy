@@ -229,6 +229,23 @@ pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
             warningsOf entries `shouldSatisfy`
                 any (namesAll ["cf_scalar", "not an array"])
 
+    it "refuses a `construction:` that is the literal false — a present \
+       \declaration, not an absent one" $ \env → do
+        -- `false` is the value a truthiness test silently drops. If the
+        -- loader omitted it the payload would be indistinguishable from
+        -- one that declared nothing, and the pack would REGISTER: a
+        -- malformed declaration quietly downgraded to no declaration.
+        (_, entries) ← withCapturedLog env $
+            loadPiecePack env "cf_false" falsePack
+        cat ← readIORef (structureArtCatalogRef env)
+        packArtResolves cat "cf_false" `shouldBe` False
+        warningsOf entries `shouldSatisfy`
+            any (namesAll ["cf_false", "not an array"])
+        -- …and it is reported as MALFORMED rather than as an appearance
+        -- that simply declares nothing.
+        warningsOf entries `shouldNotSatisfy`
+            any (T.isInfixOf "declares no construction frames")
+
     it "makes the pack resolve nothing once a declared FRAME terminally \
        \fails to load, naming the frame" $ \env → do
         ls ← loadPiecePack env "cf_failframe" defaultPack
@@ -244,7 +261,7 @@ pieceLoadSpec = describe "a pack whose YAML declares construction frames" $ do
 -- * The wire pack, through scripts/wire.lua
 
 wireLoadSpec ∷ SpecWith EngineEnv
-wireLoadSpec = describe "the wire pack" $
+wireLoadSpec = describe "the wire pack" $ do
     it "accepts a LEGACY scalar connection beside the new table form, and \
        \gives each shape only its own frames" $ \env → do
         writeWirePack
@@ -272,6 +289,27 @@ wireLoadSpec = describe "the wire pack" $
              (resolveUnplacedArt cat "wire" "wire" Nothing
                   (defaultPieceArtContext { pacWireShape = WireCross }))
             `shouldBe` Just (artDir <> "wire_cross.png")
+
+    it "refuses a table-form connection whose `construction:` is the \
+       \literal false, and leaves whatever was stored alone" $ \env → do
+        -- The wire loader registers under the literal `wire` a wire
+        -- designation carries, so this shares that name with the example
+        -- above whichever order they run in. A REFUSED registration
+        -- stores nothing, so the assertion is that the call fails, says
+        -- why, and changes nothing.
+        before ← packArtResolves <$> readIORef (structureArtCatalogRef env)
+                                 <*> pure "wire"
+        writeWirePackWith falseConnectionYaml
+        ls ← newBareLuaBackend env
+        (_, entries) ← withCapturedLog env $ runLua ls $ T.concat
+            [ "local w = require('scripts.wire'); "
+            , "w.packPath = '", fixtureDirText, "wire_false.yaml'; "
+            , "w.registerPackArt();" ]
+        after ← packArtResolves <$> readIORef (structureArtCatalogRef env)
+                                <*> pure "wire"
+        after `shouldBe` before
+        warningsOf entries `shouldSatisfy`
+            any (namesAll ["wire", "not an array"])
 
 -- * Requirement 8's diagnostic
 
@@ -464,9 +502,10 @@ data PackSpec = PackSpec
     { psPieces  ∷ [(Text, Maybe [Text])]   -- ^ floor \/ ceiling \/ post
     , psWalls   ∷ [(Text, Maybe [Text])]   -- ^ ne \/ nw \/ se \/ sw
     , psVariant ∷ Bool                     -- ^ emit the @damaged@ block
-    , psScalarFloorConstruction ∷ Bool
-      -- ^ Emit the floor's @construction:@ as a SCALAR path rather than
-      --   a list, which is not a sequence at all.
+    , psFloorConstructionScalar ∷ Maybe Text
+      -- ^ Emit the floor's @construction:@ as this raw SCALAR rather
+      --   than a list — a path, or @false@ — neither of which is a
+      --   sequence at all.
     }
 
 -- | Nothing declared anywhere — today's shipped shape.
@@ -475,7 +514,7 @@ barePack = PackSpec
     { psPieces = [ (k, Nothing) | k ← ["floor", "ceiling", "post"] ]
     , psWalls  = [ (e, Nothing) | e ← wallEdges ]
     , psVariant = False
-    , psScalarFloorConstruction = False }
+    , psFloorConstructionScalar = Nothing }
 
 wallEdges ∷ [Text]
 wallEdges = ["ne", "nw", "se", "sw"]
@@ -540,9 +579,17 @@ gappedPack = defaultPack
 -- | A `construction:` that is a scalar rather than a list at all.
 scalarPack ∷ PackSpec
 scalarPack = defaultPack
-    { psPieces = [ ("floor", Just [])   -- replaced below
-                 , ("ceiling", Nothing), ("post", Nothing) ]
-    , psScalarFloorConstruction = True }
+    { psFloorConstructionScalar = Just (artDir <> "floor_build_0.png") }
+
+-- | A `construction:` that is the literal @false@.
+--
+--   Its own case, not a variation on the scalar one: `false` is the
+--   value a TRUTHINESS test drops. A loader that omitted it would leave
+--   the pack looking like one that declared nothing, and it would
+--   register — which is the opposite of the all-or-nothing rule a
+--   malformed declaration is under.
+falsePack ∷ PackSpec
+falsePack = defaultPack { psFloorConstructionScalar = Just "false" }
 
 emptyListPack ∷ PackSpec
 emptyListPack = defaultPack
@@ -588,9 +635,9 @@ piecePackYaml name ps = T.concat $
           ([ "  " <> k <> ":"
            , "    texture: " <> artDir <> k <> ".png"
            , "    facemap: " <> artDir <> "face.png" ]
-           ⧺ (if k ≡ "floor" ∧ psScalarFloorConstruction ps
-                then ["    construction: " <> artDir <> "floor_build_0.png"]
-                else constructionLines 4 frames))
+           ⧺ (case (k, psFloorConstructionScalar ps) of
+                ("floor", Just raw) → ["    construction: " <> raw]
+                _                   → constructionLines 4 frames))
       | (k, frames) ← psPieces ps ]
     ⧺ [ "walls:\n" ]
     ⧺ [ T.unlines
@@ -637,6 +684,28 @@ variantBlock = T.unlines $
     ⧺ [ "    walls:"
       , "      ne:"
       , "        texture: " <> artDir <> "damaged_wall_ne.png" ]
+
+-- | A wire pack whose @cross@ connection declares @construction: false@.
+falseConnectionYaml ∷ Text
+falseConnectionYaml = T.unlines $
+    [ "name: wire_false"
+    , "build:"
+    , "  wire: { build_work: 1.5, materials: { wiring: 1 } }"
+    , "facemap: " <> artDir <> "face.png"
+    , "connections:" ]
+    ⧺ concat
+        [ if shape ≡ wireShapeName WireCross
+            then [ "  " <> shape <> ":"
+                 , "    texture: " <> artDir <> "wire_" <> shape <> ".png"
+                 , "    construction: false" ]
+            else [ "  " <> shape <> ": " <> artDir <> "wire_" <> shape
+                     <> ".png" ]
+        | shape ← map wireShapeName [minBound .. maxBound] ]
+
+writeWirePackWith ∷ Text → IO ()
+writeWirePackWith body = do
+    writeFixtureImages
+    TIO.writeFile (fixtureDir </> "wire_false.yaml") body
 
 -- | The wire fixture: two connections in the NEW table form with
 --   sequences, and fourteen in the LEGACY scalar form.
