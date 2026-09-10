@@ -372,6 +372,7 @@ import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
 import qualified Test.Headless.Lua.BuildingSpawnSentinel as LuaBuildingSpawnSentinel
 import qualified Test.Headless.Lua.WorkClaimCapacity as LuaWorkClaimCapacity
+import qualified Test.Headless.Lua.CraftBillQueuePriority as LuaCraftBillQueue
 import qualified Test.Headless.Lua.WorkClockBounds as LuaWorkClockBounds
 import qualified Test.Headless.Lua.Faction as LuaFaction
 import qualified Test.Headless.Unit.Faction as UnitFaction
@@ -956,6 +957,7 @@ main = hspec $ do
     describe "Craft.Execute" CraftExecute.spec
     ItemRepairFinite.spec
     describe "Craft.Bills" CraftBills.spec
+    LuaCraftBillQueue.spec
     describe "Power.Types" PowerTypes.spec
     describe "Power.Network" PowerNetwork.spec
     describe "Language.Semantic" LanguageSemantic.spec
