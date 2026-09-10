@@ -69,6 +69,7 @@ exactly why the detail could move out of the always-loaded file.
 - [The expedition loop: the unprepared control](#the-expedition-loop-the-unprepared-control)
 - [Unit and combat animations headless](#unit-and-combat-animations-headless)
 - [Movement arenas](#movement-arenas)
+- [Movement tick: residual time across waypoints (#2473)](#movement-tick-residual-time-across-waypoints-2473)
 - [Construction (#95/#96)](#construction-9596)
 - [Roles (#265)](#roles-265)
 - [Crafting and bills (#325/#326/#329/#343/#795)](#crafting-and-bills-325326329343795)
@@ -3468,6 +3469,130 @@ persistence half through the real component codec, `validatePages` and
 save→load→save cycles are compared through the real codec while paused,
 so a remainder dropped anywhere on the capture/encode/decode/stage path
 breaks it.
+
+---
+
+## Movement tick: residual time across waypoints (#2473)
+
+The per-unit mover (`Unit.Thread.Movement.PathAdvance`) spends one tick's
+elapsed budget along the route, not on one segment of it. Reaching a
+waypoint COSTS the time that waypoint's own distance requires at the
+segment's effective speed, and whatever is left continues along the next
+segment inside the same tick.
+
+Before this, a tick that reached a waypoint snapped there and returned,
+discarding the unspent remainder — so a unit crossing waypoints lost
+motion in proportion to tick size. The retained reproduction
+(`docs/audit_evidence/2026-09-05/movement_timing.ghci`) drives one second
+of game time over a flat route from x = 0.4: four 0.25 s ticks ended at
+1.25, ten 0.10 s ticks at 1.40, and twenty 0.05 s ticks at 1.45. All
+three now end at 1.40.
+
+**The guarantee.** Where the effective terrain speed stays constant,
+equal admitted elapsed time yields equal travelled distance however the
+elapsed time is partitioned, to within `arrivalTolerance` (1e-4 tiles)
+per waypoint crossed.
+
+An arrival is billed at the segment's own effective SPEED — the
+unclamped `rawStepLength` — never at the protected-clamped step.
+`maxProtectedStep` is a cumulative distance ceiling, not a speed limit:
+billing a cap-active arrival for its clamped budget would overcharge it
+(0.44 s instead of 0.067 s for a 0.4-tile waypoint at 6 tiles/s) and
+starve the continued segment even where the ceiling never binds again.
+The clamped step still decides reachability and still bounds distance.
+
+**What it excludes.** Three paths deliberately DROP their unused
+elapsed time and are outside the guarantee:
+
+- a tick that exhausts `maxProtectedStep`;
+- a tick that exhausts the continuation bound;
+- a tick that stops for a transition (climb or fall) or a replan.
+
+It also excludes any tick whose effective speed itself changes.
+Effective speed is the commanded speed scaled by the slope grade and
+divided by the surface material factor under the unit's feet
+(`rawStepLength`), and an ORDINARY non-arriving step samples both ONCE,
+at the tick's start tile. So a step that crosses a terrain boundary
+without reaching a waypoint is still partition-dependent, and its
+resulting `UnitSimState` is byte-identical to the pre-#2473 mover's.
+Boundary-based time integration for those steps is a separate,
+unmade change; do not add it here.
+
+**The arrival tolerance.** `arrivalTolerance` is 1e-4 tiles. A step that
+REACHES its sub-goal is charged the sub-goal's exact distance, so nothing
+a step buys is unpaid for. The tolerance itself is a bounded exception to
+that, and the only one: a sub-goal ALREADY within it is reconciled at
+zero elapsed cost, which is what lets a legitimately zero effective step
+finish an arrival instead of stranding the unit (see the invalid-budget
+rule below). It is capped at 1e-4 tiles per waypoint precisely so that
+exception stays inside the floating-point residue of the snap arithmetic
+rather than becoming free travel.
+
+It replaced a 0.1-tile `arrivalEpsilon` sized to prevent overshoot — a
+job the charge-what-you-reach rule now does at any tick size — under
+which a 0.05-tile step snapped a full 0.1 tiles, and a last waypoint a
+tenth of a tile short of the target cleared that target through a
+separate per-axis check. Both are gone. The final-target test is now the
+SAME radial test against the SAME tolerance the sub-goal arrival uses:
+per-axis comparisons admitted a target 1.27 times the tolerance away when
+it was offset diagonally, and left that last leg neither travelled nor
+charged.
+
+**Per-segment behavior.** Each continuation is a fresh movement segment
+from the waypoint's exact position: material and slope are RESAMPLED
+there, and the same cost, snap-validation, replan, cliff and fall logic a
+fresh tick would apply is applied again. The existing arrival
+distinction is unchanged — a protected arrival snap stays subject to
+`snapBlocked`, while a fall-permitted arrival snap still bypasses the
+cost and fall checks. The one per-tick gate that does NOT re-run is
+`tickUnit`'s protected-terrain check (`FallProhibited` against a
+`MoveWorld` that is not the mover's own page): the `MoveWorld` is fixed
+for the tick and cannot change under a continuation.
+
+**The protected ceiling is cumulative.** A `FallProhibited` request's
+total PATH LENGTH in one tick — summed across every continued segment
+and every turn — never exceeds `maxProtectedStep` (0.9 tiles). Do not
+reset it at a waypoint, measure only endpoint displacement, remove it,
+raise it, or bypass it; that bound is what makes the single
+`stepCostUnder` check a complete check (#1217).
+
+**Invalid budgets and the continuation bound.** A NaN or infinite
+effective step refuses movement outright, BEFORE any arrival decision:
+no snap, no waypoint pop, no cleared target. A finite ZERO effective
+step refuses all movement too, with one carve-out — when the remaining
+distance to the current sub-goal is already within `arrivalTolerance`,
+that arrival completes at zero time cost (still subject to
+`snapBlocked`) and nothing continues past it. The carve-out exists
+because zero speed is an in-domain command and #2204's `sanitiseElapsed`
+can hand a tick `dt = 0`; without it a unit standing on its own target
+would never clear it. At most `maxWaypointContinuations` (64) sub-goals
+are crossed after a tick's first segment; on exhaustion the unconsumed
+route stays in `usLocalPath`, the unused elapsed time is dropped, and NO
+elapsed-time debt carries into the next tick — nothing stores one.
+
+**`usMoveGrade`** names the grade of the last segment that consumed
+movement time. A continued segment that consumes none (a blocked-snap
+replan, a zero-length waypoint) does not overwrite it, and the value is
+zero only when no segment in the tick consumed movement time. A
+single-segment tick keeps its pre-#2473 behavior exactly, including
+stamping the grade before a replan or a transition that moved nothing.
+
+**Gates.** The Hspec describe `Movement carries residual time across
+waypoints` (in `test-headless/Test/Headless/Unit/Pathing/Hazard.hs`)
+drives the real `tickUnit` over the three reproduction schedules, the
+waypoint resampling, the cumulative ceiling across a turn, the
+continuation bound, the invalid-step refusals, and the identical-state
+boundary case. The neighbouring describes `the movement tick` and
+`stepCostUnder at the configured fall boundary` hold the hazard policy
+this repair must not disturb. Live evidence is `tools/movement_probe.py`
+(default, `--course cliff`, `--course ramp`) and
+`tools/wander_hazard_probe.py`; run engine probes ONE AT A TIME, and
+A/B `wander_hazard_probe.py` stage D against an unmodified checkout
+before attributing a failure to a change.
+
+No new state field, worker, RNG draw, or save change is involved.
+
+---
 
 ---
 
