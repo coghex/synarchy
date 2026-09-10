@@ -1,0 +1,4439 @@
+{
+  "schema": "map-page-codec-measurement/v1",
+  "date_utc": "2026-09-10T14:01:26.804203+00:00",
+  "platform": "macOS-26.6-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "python": "3.14.6",
+  "logical_cpu_count": 16,
+  "generation_capabilities": 4,
+  "measurement_capabilities": 1,
+  "load_average_at_report": [
+    8.2138671875,
+    6.6533203125,
+    6.4375
+  ],
+  "ghc": "9.12.2",
+  "git_head": "4492f79bae18a9f91bef6db0bc8c39f77173d2e1",
+  "command": [
+    "tools/map_page_codec_measure.py",
+    "--output",
+    "/tmp/foreground-2303-run-1"
+  ],
+  "corpus_sha256": "909e3a7beb7cac76563abca311f90ba594a1cf3da55d65241e280a89e0571572",
+  "tool_source_sha256": {
+    "tools/map_codec/Corpus.hs": "6adf7677bd358cc1ba68367c91263fcc8d8cbd3e9bc080b73ae470b34dbb7ec4",
+    "tools/map_codec/Main.hs": "f5c338c94416dcb088755b291bdf28a2f54973f992f2b3c901c75126c2999ba5",
+    "tools/map_page_codec_bridge.py": "06eb6d27964905fd17736f722f29e7c1ead9c67d0616c04557c9ef2b3e4ddd5b",
+    "tools/map_page_codec_measure.py": "9988a480e6f556cc3b7f1d3672b21666af632717623a9cf2c2a7d2b591bfd039",
+    "tools/map_page_codec_model.py": "bbcd9fdd6f8516e403b98b6cb48b3d97dd74465ca96b9218fe94651e444adac8"
+  },
+  "packages": [
+    [
+      "Cabal",
+      "3.14.1.0"
+    ],
+    [
+      "Cabal",
+      "3.16.1.0"
+    ],
+    [
+      "Cabal-syntax",
+      "3.14.1.0"
+    ],
+    [
+      "Cabal-syntax",
+      "3.16.1.0"
+    ],
+    [
+      "GLFW-b",
+      "3.3.9.1"
+    ],
+    [
+      "HUnit",
+      "1.6.2.0"
+    ],
+    [
+      "JuicyPixels",
+      "3.3.9"
+    ],
+    [
+      "OneTuple",
+      "0.4.3"
+    ],
+    [
+      "QuickCheck",
+      "2.18.0.0"
+    ],
+    [
+      "StateVar",
+      "1.2.2"
+    ],
+    [
+      "adjunctions",
+      "4.4.4"
+    ],
+    [
+      "aeson",
+      "2.2.5.0"
+    ],
+    [
+      "alex",
+      "3.5.4.2"
+    ],
+    [
+      "ansi-terminal",
+      "1.1.5"
+    ],
+    [
+      "ansi-terminal-types",
+      "1.1.3"
+    ],
+    [
+      "array",
+      "0.5.8.0"
+    ],
+    [
+      "assoc",
+      "1.1.1"
+    ],
+    [
+      "async",
+      "2.2.6"
+    ],
+    [
+      "attoparsec",
+      "0.14.4"
+    ],
+    [
+      "auto-update",
+      "0.2.7"
+    ],
+    [
+      "base",
+      "4.21.0.0"
+    ],
+    [
+      "base-orphans",
+      "0.9.4"
+    ],
+    [
+      "base-unicode-symbols",
+      "0.2.4.2"
+    ],
+    [
+      "bifunctors",
+      "5.6.3"
+    ],
+    [
+      "binary",
+      "0.8.9.3"
+    ],
+    [
+      "binary-orphans",
+      "1.0.6"
+    ],
+    [
+      "bindings-DSL",
+      "1.0.25"
+    ],
+    [
+      "bindings-GLFW",
+      "3.3.9.3"
+    ],
+    [
+      "bitvec",
+      "1.1.6.0"
+    ],
+    [
+      "boring",
+      "0.2.2.1"
+    ],
+    [
+      "bytes",
+      "0.17.5"
+    ],
+    [
+      "bytestring",
+      "0.12.2.0"
+    ],
+    [
+      "cabal-doctest",
+      "1.0.12"
+    ],
+    [
+      "call-stack",
+      "0.4.0"
+    ],
+    [
+      "cereal",
+      "0.5.8.3"
+    ],
+    [
+      "character-ps",
+      "0.1"
+    ],
+    [
+      "clock",
+      "0.8.4"
+    ],
+    [
+      "colour",
+      "2.3.7"
+    ],
+    [
+      "comonad",
+      "5.0.10"
+    ],
+    [
+      "conduit",
+      "1.3.6.1"
+    ],
+    [
+      "conduit-extra",
+      "1.3.8"
+    ],
+    [
+      "constraints",
+      "0.14.4"
+    ],
+    [
+      "constraints-extras",
+      "0.4.0.2"
+    ],
+    [
+      "containers",
+      "0.7"
+    ],
+    [
+      "contravariant",
+      "1.5.6"
+    ],
+    [
+      "cryptohash-sha256",
+      "0.11.102.1"
+    ],
+    [
+      "data-fix",
+      "0.3.4"
+    ],
+    [
+      "deepseq",
+      "1.5.1.0"
+    ],
+    [
+      "dependent-map",
+      "0.4.0.1"
+    ],
+    [
+      "dependent-sum",
+      "0.7.2.0"
+    ],
+    [
+      "directory",
+      "1.3.9.0"
+    ],
+    [
+      "distributive",
+      "0.6.3"
+    ],
+    [
+      "dlist",
+      "1.0"
+    ],
+    [
+      "easy-file",
+      "0.2.5"
+    ],
+    [
+      "exceptions",
+      "0.10.9"
+    ],
+    [
+      "extra",
+      "1.8.1"
+    ],
+    [
+      "fast-logger",
+      "3.2.7"
+    ],
+    [
+      "file-embed",
+      "0.0.16.0"
+    ],
+    [
+      "file-io",
+      "0.1.5"
+    ],
+    [
+      "filepath",
+      "1.5.4.0"
+    ],
+    [
+      "free",
+      "5.2"
+    ],
+    [
+      "ghc-bignum",
+      "1.3"
+    ],
+    [
+      "ghc-boot-th",
+      "9.12.2"
+    ],
+    [
+      "ghc-internal",
+      "9.1202.0"
+    ],
+    [
+      "ghc-prim",
+      "0.13.0"
+    ],
+    [
+      "hashable",
+      "1.5.1.0"
+    ],
+    [
+      "haskell-lexer",
+      "1.2.1"
+    ],
+    [
+      "hsc2hs",
+      "0.68.10"
+    ],
+    [
+      "hslua",
+      "2.5.0"
+    ],
+    [
+      "hslua-aeson",
+      "2.3.2"
+    ],
+    [
+      "hslua-classes",
+      "2.3.2"
+    ],
+    [
+      "hslua-core",
+      "2.3.2.1"
+    ],
+    [
+      "hslua-marshalling",
+      "2.3.2"
+    ],
+    [
+      "hslua-objectorientation",
+      "2.5.0"
+    ],
+    [
+      "hslua-packaging",
+      "2.4.1"
+    ],
+    [
+      "hslua-typing",
+      "0.2.0"
+    ],
+    [
+      "hspec",
+      "2.11.17"
+    ],
+    [
+      "hspec-core",
+      "2.11.17"
+    ],
+    [
+      "hspec-discover",
+      "2.11.17"
+    ],
+    [
+      "hspec-expectations",
+      "0.8.4"
+    ],
+    [
+      "indexed-traversable",
+      "0.1.5"
+    ],
+    [
+      "indexed-traversable-instances",
+      "0.1.2.1"
+    ],
+    [
+      "integer-conversion",
+      "0.1.1"
+    ],
+    [
+      "integer-logarithms",
+      "1.0.5"
+    ],
+    [
+      "invariant",
+      "0.6.5"
+    ],
+    [
+      "kan-extensions",
+      "5.2.8"
+    ],
+    [
+      "lens",
+      "5.3.6"
+    ],
+    [
+      "libyaml",
+      "0.1.4"
+    ],
+    [
+      "libyaml-clib",
+      "0.2.5"
+    ],
+    [
+      "lifted-base",
+      "0.2.3.12"
+    ],
+    [
+      "linear",
+      "1.23.3"
+    ],
+    [
+      "lua",
+      "2.3.4"
+    ],
+    [
+      "monad-control",
+      "1.0.3.1"
+    ],
+    [
+      "monad-logger",
+      "0.3.42"
+    ],
+    [
+      "monad-loops",
+      "0.4.3"
+    ],
+    [
+      "mono-traversable",
+      "1.0.21.0"
+    ],
+    [
+      "mtl",
+      "2.3.1"
+    ],
+    [
+      "network",
+      "3.2.8.0"
+    ],
+    [
+      "network-uri",
+      "2.6.4.2"
+    ],
+    [
+      "optparse-applicative",
+      "0.19.0.0"
+    ],
+    [
+      "os-string",
+      "2.0.7"
+    ],
+    [
+      "parallel",
+      "3.3.0.0"
+    ],
+    [
+      "parsec",
+      "3.1.18.0"
+    ],
+    [
+      "pretty",
+      "1.1.3.6"
+    ],
+    [
+      "prettyprinter",
+      "1.7.2"
+    ],
+    [
+      "prettyprinter-ansi-terminal",
+      "1.1.4"
+    ],
+    [
+      "primitive",
+      "0.9.1.0"
+    ],
+    [
+      "process",
+      "1.6.25.0"
+    ],
+    [
+      "profunctors",
+      "5.6.3"
+    ],
+    [
+      "quickcheck-io",
+      "0.2.0"
+    ],
+    [
+      "random",
+      "1.3.1"
+    ],
+    [
+      "reflection",
+      "2.1.9"
+    ],
+    [
+      "resourcet",
+      "1.3.0"
+    ],
+    [
+      "rts",
+      "1.0.2"
+    ],
+    [
+      "safe-exceptions",
+      "0.1.7.4"
+    ],
+    [
+      "scientific",
+      "0.3.8.1"
+    ],
+    [
+      "semialign",
+      "1.4"
+    ],
+    [
+      "semigroupoids",
+      "6.0.2"
+    ],
+    [
+      "some",
+      "1.0.6"
+    ],
+    [
+      "split",
+      "0.2.5"
+    ],
+    [
+      "splitmix",
+      "0.1.3.2"
+    ],
+    [
+      "stm",
+      "2.5.3.1"
+    ],
+    [
+      "stm-chans",
+      "3.0.0.11"
+    ],
+    [
+      "streaming-commons",
+      "0.2.3.1"
+    ],
+    [
+      "strict",
+      "0.5.1"
+    ],
+    [
+      "synarchy",
+      "0.1.0.0"
+    ],
+    [
+      "tagged",
+      "0.8.10"
+    ],
+    [
+      "tasty",
+      "1.5.4"
+    ],
+    [
+      "template-haskell",
+      "2.23.0.0"
+    ],
+    [
+      "temporary",
+      "1.3"
+    ],
+    [
+      "text",
+      "2.1.2"
+    ],
+    [
+      "text-iso8601",
+      "0.1.1.1"
+    ],
+    [
+      "text-short",
+      "0.1.6.1"
+    ],
+    [
+      "th-abstraction",
+      "0.7.2.0"
+    ],
+    [
+      "th-compat",
+      "0.1.7"
+    ],
+    [
+      "these",
+      "1.2.1"
+    ],
+    [
+      "time",
+      "1.14"
+    ],
+    [
+      "time-compat",
+      "1.9.9"
+    ],
+    [
+      "transformers",
+      "0.6.1.2"
+    ],
+    [
+      "transformers-base",
+      "0.4.6.1"
+    ],
+    [
+      "transformers-compat",
+      "0.7.2"
+    ],
+    [
+      "typed-process",
+      "0.2.13.0"
+    ],
+    [
+      "unix",
+      "2.8.6.0"
+    ],
+    [
+      "unix-compat",
+      "0.7.4.1"
+    ],
+    [
+      "unix-time",
+      "0.5.0"
+    ],
+    [
+      "unliftio",
+      "0.2.25.1"
+    ],
+    [
+      "unliftio-core",
+      "0.2.1.0"
+    ],
+    [
+      "unordered-containers",
+      "0.2.21"
+    ],
+    [
+      "utf8-string",
+      "1.0.2"
+    ],
+    [
+      "uuid-types",
+      "1.0.6.1"
+    ],
+    [
+      "vector",
+      "0.13.2.0"
+    ],
+    [
+      "vector-algorithms",
+      "0.9.1.0"
+    ],
+    [
+      "vector-stream",
+      "0.1.0.1"
+    ],
+    [
+      "vector-th-unbox",
+      "0.2.2"
+    ],
+    [
+      "vulkan",
+      "3.26.6"
+    ],
+    [
+      "vulkan-utils",
+      "0.5.10.6"
+    ],
+    [
+      "witherable",
+      "0.5"
+    ],
+    [
+      "yaml",
+      "0.11.11.2"
+    ],
+    [
+      "zlib",
+      "0.7.1.1"
+    ]
+  ],
+  "inventories": [
+    {
+      "coarse_cutoff": 0,
+      "levels": [
+        {
+          "level": 0,
+          "u": 2,
+          "v": 4
+        }
+      ],
+      "size": 64
+    },
+    {
+      "coarse_cutoff": 1,
+      "levels": [
+        {
+          "level": 0,
+          "u": 5,
+          "v": 9
+        },
+        {
+          "level": 1,
+          "u": 3,
+          "v": 5
+        },
+        {
+          "level": 2,
+          "u": 2,
+          "v": 3
+        }
+      ],
+      "size": 136
+    },
+    {
+      "coarse_cutoff": 3,
+      "levels": [
+        {
+          "level": 0,
+          "u": 32,
+          "v": 64
+        },
+        {
+          "level": 1,
+          "u": 16,
+          "v": 32
+        },
+        {
+          "level": 2,
+          "u": 8,
+          "v": 16
+        },
+        {
+          "level": 3,
+          "u": 4,
+          "v": 8
+        },
+        {
+          "level": 4,
+          "u": 2,
+          "v": 4
+        }
+      ],
+      "size": 1024
+    },
+    {
+      "coarse_cutoff": 6,
+      "levels": [
+        {
+          "level": 0,
+          "u": 256,
+          "v": 512
+        },
+        {
+          "level": 1,
+          "u": 128,
+          "v": 256
+        },
+        {
+          "level": 2,
+          "u": 64,
+          "v": 128
+        },
+        {
+          "level": 3,
+          "u": 32,
+          "v": 64
+        },
+        {
+          "level": 4,
+          "u": 16,
+          "v": 32
+        },
+        {
+          "level": 5,
+          "u": 8,
+          "v": 16
+        },
+        {
+          "level": 6,
+          "u": 4,
+          "v": 8
+        },
+        {
+          "level": 7,
+          "u": 2,
+          "v": 4
+        }
+      ],
+      "size": 8192
+    }
+  ],
+  "rows": [
+    {
+      "id": "s42-w64-northwest",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "a40dbc3844779f4ea1208183c0a123fb8299d33b02e18e5a70f53d305078d617",
+      "encoded_sha256": "a40dbc3844779f4ea1208183c0a123fb8299d33b02e18e5a70f53d305078d617",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        2000,
+        0,
+        0,
+        0,
+        1000
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 2962000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 4212000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        },
+        {
+          "nanoseconds": 2967000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 2967000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29229056,
+      "peak_rss_increment_bytes": 2244608,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-northwest",
+      "codec": "png",
+      "payload_encoded_bytes": 57794,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 57826,
+      "ratio": 0.05471884509985011,
+      "rgba_sha256": "a40dbc3844779f4ea1208183c0a123fb8299d33b02e18e5a70f53d305078d617",
+      "encoded_sha256": "4b946b26184c24ff9de026cb1d46fa7c68aeaf0ffdf06f8c22a38aead20e982d",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        10810000,
+        10807000,
+        11094000,
+        10692000,
+        10942000
+      ],
+      "encode_median_ns": 10810000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3192000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3178000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        },
+        {
+          "nanoseconds": 3255000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        }
+      ],
+      "isolated_decode_median_ns": 3192000,
+      "baseline_samples": [
+        {
+          "input_bytes": 57794,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 57794,
+          "peak_process_rss_bytes": 27164672
+        },
+        {
+          "input_bytes": 57794,
+          "peak_process_rss_bytes": 27164672
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27164672,
+      "peak_rss_increment_bytes": 8126464,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 28897,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 581713541, 2947482843",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 57793,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-northeast",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "8ccb6a5fd8866acf48a8a083ca18b7d5c40004a45d707fe44e28a206b0369a9c",
+      "encoded_sha256": "8ccb6a5fd8866acf48a8a083ca18b7d5c40004a45d707fe44e28a206b0369a9c",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        1000,
+        0,
+        1000,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3081000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 2937000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 2928000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        }
+      ],
+      "isolated_decode_median_ns": 2937000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29278208
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29245440,
+      "peak_rss_increment_bytes": 2228224,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-northeast",
+      "codec": "png",
+      "payload_encoded_bytes": 59005,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 59037,
+      "ratio": 0.055864774637011914,
+      "rgba_sha256": "8ccb6a5fd8866acf48a8a083ca18b7d5c40004a45d707fe44e28a206b0369a9c",
+      "encoded_sha256": "39fd7f27e3b60f8570d8aaa3aeb903b8d901e19d359e591919be7999e74c95d4",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        10564000,
+        10801000,
+        10656000,
+        10628000,
+        10671000
+      ],
+      "encode_median_ns": 10656000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3318000,
+          "ok": true,
+          "peak_process_rss_bytes": 35340288
+        },
+        {
+          "nanoseconds": 3088000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        },
+        {
+          "nanoseconds": 3197000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 3197000,
+      "baseline_samples": [
+        {
+          "input_bytes": 59005,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 59005,
+          "peak_process_rss_bytes": 27197440
+        },
+        {
+          "input_bytes": 59005,
+          "peak_process_rss_bytes": 27181056
+        }
+      ],
+      "peak_process_rss_median_bytes": 35323904,
+      "baseline_peak_rss_median_bytes": 27181056,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 29502,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2863268555, 1652390328",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 59004,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-west-midnorth",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "8c40364c214339c6bff77f84aa2ea3c130fcf7deaa85dc343117236d8d2ce134",
+      "encoded_sha256": "8c40364c214339c6bff77f84aa2ea3c130fcf7deaa85dc343117236d8d2ce134",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        2000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 4191000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 4336000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 3089000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 4191000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        }
+      ],
+      "peak_process_rss_median_bytes": 31457280,
+      "baseline_peak_rss_median_bytes": 29229056,
+      "peak_rss_increment_bytes": 2228224,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-west-midnorth",
+      "codec": "png",
+      "payload_encoded_bytes": 70057,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 70089,
+      "ratio": 0.06632291934775697,
+      "rgba_sha256": "8c40364c214339c6bff77f84aa2ea3c130fcf7deaa85dc343117236d8d2ce134",
+      "encoded_sha256": "0cd4ffbb8b21d45565272b1e12679e211b7517b1243ab6cfd0cf5cac9e19de72",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        11141000,
+        11006000,
+        10627000,
+        10812000,
+        11150000
+      ],
+      "encode_median_ns": 11006000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3292000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        },
+        {
+          "nanoseconds": 3154000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3340000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 3292000,
+      "baseline_samples": [
+        {
+          "input_bytes": 70057,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 70057,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 70057,
+          "peak_process_rss_bytes": 27148288
+        }
+      ],
+      "peak_process_rss_median_bytes": 35307520,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8159232,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 35028,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 1231663968, 710454616",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 70056,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-east-midnorth",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "341b79fc05bf3c82aa2cf75a60dde57d104e54c2ec3fa9fba630d0a7802f7069",
+      "encoded_sha256": "341b79fc05bf3c82aa2cf75a60dde57d104e54c2ec3fa9fba630d0a7802f7069",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        2000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 2911000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        },
+        {
+          "nanoseconds": 2951000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 3237000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 2951000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29261824,
+      "peak_rss_increment_bytes": 2211840,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-east-midnorth",
+      "codec": "png",
+      "payload_encoded_bytes": 78757,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 78789,
+      "ratio": 0.07455544368574846,
+      "rgba_sha256": "341b79fc05bf3c82aa2cf75a60dde57d104e54c2ec3fa9fba630d0a7802f7069",
+      "encoded_sha256": "d4bad8ffe05b35129bfbba9eec70c05a45e281e4752a76cc08a2d23589699a82",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        11326000,
+        11567000,
+        11293000,
+        11658000,
+        11521000
+      ],
+      "encode_median_ns": 11521000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3414000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3550000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3367000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 3414000,
+      "baseline_samples": [
+        {
+          "input_bytes": 78757,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 78757,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 78757,
+          "peak_process_rss_bytes": 27164672
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 39378,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3233454137, 2295933096",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 78756,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-west-midsouth",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "fcf53be7bbb1f39f1c6a82e180a77ed89371d04c11346b3a5074eeaa3955b458",
+      "encoded_sha256": "fcf53be7bbb1f39f1c6a82e180a77ed89371d04c11346b3a5074eeaa3955b458",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        1000,
+        0,
+        1000,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 2965000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 4106000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 2932000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        }
+      ],
+      "isolated_decode_median_ns": 2965000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        }
+      ],
+      "peak_process_rss_median_bytes": 31457280,
+      "baseline_peak_rss_median_bytes": 29245440,
+      "peak_rss_increment_bytes": 2211840,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-west-midsouth",
+      "codec": "png",
+      "payload_encoded_bytes": 68039,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 68071,
+      "ratio": 0.06441335220820905,
+      "rgba_sha256": "fcf53be7bbb1f39f1c6a82e180a77ed89371d04c11346b3a5074eeaa3955b458",
+      "encoded_sha256": "4a01d33f17f1630411020c01029ce3366f7be644ce418d9c8745e87bb3ad5702",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        10252000,
+        10340000,
+        10369000,
+        10297000,
+        10460000
+      ],
+      "encode_median_ns": 10340000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3215000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3297000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        },
+        {
+          "nanoseconds": 3373000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        }
+      ],
+      "isolated_decode_median_ns": 3297000,
+      "baseline_samples": [
+        {
+          "input_bytes": 68039,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 68039,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 68039,
+          "peak_process_rss_bytes": 27197440
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 34019,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3727102835, 383029022",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 68038,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-east-midsouth",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "076c8d2fd19c4b0e7a3a3eab55906432455c61116dca2e77932fe5d4652db143",
+      "encoded_sha256": "076c8d2fd19c4b0e7a3a3eab55906432455c61116dca2e77932fe5d4652db143",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        1000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 2913000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 2948000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        },
+        {
+          "nanoseconds": 2946000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 2946000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29278208
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29245440,
+      "peak_rss_increment_bytes": 2228224,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-east-midsouth",
+      "codec": "png",
+      "payload_encoded_bytes": 78108,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 78140,
+      "ratio": 0.0739413162954776,
+      "rgba_sha256": "076c8d2fd19c4b0e7a3a3eab55906432455c61116dca2e77932fe5d4652db143",
+      "encoded_sha256": "b363c22b955b828d833f54de793a2e99ea80fef9256515ce80493b83b0a981aa",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        11359000,
+        11364000,
+        11202000,
+        11099000,
+        11438000
+      ],
+      "encode_median_ns": 11359000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3227000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        },
+        {
+          "nanoseconds": 3387000,
+          "ok": true,
+          "peak_process_rss_bytes": 35340288
+        },
+        {
+          "nanoseconds": 3384000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 3384000,
+      "baseline_samples": [
+        {
+          "input_bytes": 78108,
+          "peak_process_rss_bytes": 27164672
+        },
+        {
+          "input_bytes": 78108,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 78108,
+          "peak_process_rss_bytes": 27164672
+        }
+      ],
+      "peak_process_rss_median_bytes": 35307520,
+      "baseline_peak_rss_median_bytes": 27164672,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 39054,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3907803908, 1420316285",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 78107,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-southwest",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "65ed1d5fbf4aeb7bb92e3a397d0499aa810eb7b13861eb7cd50e4ee508204447",
+      "encoded_sha256": "65ed1d5fbf4aeb7bb92e3a397d0499aa810eb7b13861eb7cd50e4ee508204447",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        2000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 4153000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 2916000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 2885000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 2916000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        }
+      ],
+      "peak_process_rss_median_bytes": 31457280,
+      "baseline_peak_rss_median_bytes": 29245440,
+      "peak_rss_increment_bytes": 2211840,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-southwest",
+      "codec": "png",
+      "payload_encoded_bytes": 53472,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 53504,
+      "ratio": 0.050629078411482384,
+      "rgba_sha256": "65ed1d5fbf4aeb7bb92e3a397d0499aa810eb7b13861eb7cd50e4ee508204447",
+      "encoded_sha256": "c83fdf5f8682b3ee7e951fbcde752719988720abbff019eb48032cccbbd75749",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        10104000,
+        10475000,
+        10014000,
+        10266000,
+        10369000
+      ],
+      "encode_median_ns": 10266000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3245000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        },
+        {
+          "nanoseconds": 3077000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        },
+        {
+          "nanoseconds": 3073000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 3077000,
+      "baseline_samples": [
+        {
+          "input_bytes": 53472,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 53472,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 53472,
+          "peak_process_rss_bytes": 27131904
+        }
+      ],
+      "peak_process_rss_median_bytes": 35323904,
+      "baseline_peak_rss_median_bytes": 27131904,
+      "peak_rss_increment_bytes": 8192000,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 26736,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3556196762, 1161102725",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 53471,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-southeast",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "ab64cb72384c807f0e1b35cb66183b19011dca66ee645b0a32f696c8ef928435",
+      "encoded_sha256": "ab64cb72384c807f0e1b35cb66183b19011dca66ee645b0a32f696c8ef928435",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        4000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3018000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 3011000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 3026000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 3018000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29229056,
+      "peak_rss_increment_bytes": 2244608,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s42-w64-southeast",
+      "codec": "png",
+      "payload_encoded_bytes": 52464,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 52496,
+      "ratio": 0.04967524110887372,
+      "rgba_sha256": "ab64cb72384c807f0e1b35cb66183b19011dca66ee645b0a32f696c8ef928435",
+      "encoded_sha256": "b66963d15e52789b7e33d246ddcb8af6126bf6111c7400b0d42ff179cef1c289",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        10305000,
+        10661000,
+        10111000,
+        10453000,
+        10572000
+      ],
+      "encode_median_ns": 10453000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3321000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3108000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3202000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        }
+      ],
+      "isolated_decode_median_ns": 3202000,
+      "baseline_samples": [
+        {
+          "input_bytes": 52464,
+          "peak_process_rss_bytes": 27164672
+        },
+        {
+          "input_bytes": 52464,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 52464,
+          "peak_process_rss_bytes": 27131904
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 26232,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3449542872, 772672891",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 52463,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-northwest",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "e7aeb75a3182fd56c4079341fc328e068844ff3c9f2df7f9c45ce7a07cc468b1",
+      "encoded_sha256": "e7aeb75a3182fd56c4079341fc328e068844ff3c9f2df7f9c45ce7a07cc468b1",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        2000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3788000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 4087000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 3069000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        }
+      ],
+      "isolated_decode_median_ns": 3788000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29261824,
+      "peak_rss_increment_bytes": 2211840,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-northwest",
+      "codec": "png",
+      "payload_encoded_bytes": 57711,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 57743,
+      "ratio": 0.05464030492513134,
+      "rgba_sha256": "e7aeb75a3182fd56c4079341fc328e068844ff3c9f2df7f9c45ce7a07cc468b1",
+      "encoded_sha256": "4cde58214b8a198bad84297d101ba27113cc5d2aab34cf90da74484fc5a1f17c",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        12587000,
+        12605000,
+        12597000,
+        12625000,
+        12920000
+      ],
+      "encode_median_ns": 12605000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3193000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3050000,
+          "ok": true,
+          "peak_process_rss_bytes": 35340288
+        },
+        {
+          "nanoseconds": 3073000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        }
+      ],
+      "isolated_decode_median_ns": 3073000,
+      "baseline_samples": [
+        {
+          "input_bytes": 57711,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 57711,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 57711,
+          "peak_process_rss_bytes": 27148288
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 28855,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 240594692, 878157808",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 57710,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-center",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "b299f39257dd52abd424b3282933435b6187dfaa4c41f97f5bc12186b84de951",
+      "encoded_sha256": "b299f39257dd52abd424b3282933435b6187dfaa4c41f97f5bc12186b84de951",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        1000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 4122000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        },
+        {
+          "nanoseconds": 2970000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 2916000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 2970000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29245440,
+      "peak_rss_increment_bytes": 2228224,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-center",
+      "codec": "png",
+      "payload_encoded_bytes": 70946,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 70978,
+      "ratio": 0.06716415085769656,
+      "rgba_sha256": "b299f39257dd52abd424b3282933435b6187dfaa4c41f97f5bc12186b84de951",
+      "encoded_sha256": "109a539e41c9e31fff03d749d1c0ba4d0e5c43ce5c773d9dcef94c93f75aa514",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        11423000,
+        11326000,
+        11351000,
+        11438000,
+        11472000
+      ],
+      "encode_median_ns": 11423000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3325000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 3269000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        },
+        {
+          "nanoseconds": 3204000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 3269000,
+      "baseline_samples": [
+        {
+          "input_bytes": 70946,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 70946,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 70946,
+          "peak_process_rss_bytes": 27131904
+        }
+      ],
+      "peak_process_rss_median_bytes": 35307520,
+      "baseline_peak_rss_median_bytes": 27131904,
+      "peak_rss_increment_bytes": 8175616,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 35473,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 1173436526, 719868451",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 70945,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-southeast",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "f989e9281edadf9a244b09c19f23256413064f7afcaf89ccf364a4108c03e656",
+      "encoded_sha256": "f989e9281edadf9a244b09c19f23256413064f7afcaf89ccf364a4108c03e656",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        1000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 3481000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 3003000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 2978000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        }
+      ],
+      "isolated_decode_median_ns": 3003000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29229056,
+      "peak_rss_increment_bytes": 2244608,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-southeast",
+      "codec": "png",
+      "payload_encoded_bytes": 24904,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 24936,
+      "ratio": 0.02359611803358113,
+      "rgba_sha256": "f989e9281edadf9a244b09c19f23256413064f7afcaf89ccf364a4108c03e656",
+      "encoded_sha256": "4943a767a818dadc8ea4abef62d75b8544ae1e9ab43b4e7e9dc76ec901776c3a",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        5782000,
+        5754000,
+        5592000,
+        5727000,
+        5830000
+      ],
+      "encode_median_ns": 5754000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 2817000,
+          "ok": true,
+          "peak_process_rss_bytes": 35323904
+        },
+        {
+          "nanoseconds": 2960000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 2852000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        }
+      ],
+      "isolated_decode_median_ns": 2852000,
+      "baseline_samples": [
+        {
+          "input_bytes": 24904,
+          "peak_process_rss_bytes": 27164672
+        },
+        {
+          "input_bytes": 24904,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 24904,
+          "peak_process_rss_bytes": 27148288
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 12452,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3933229765, 2127681601",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 24903,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-level1",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "0b8a685d45609c9077f5b95fb5aa9b46763b6a597af0d125a9af2902ae0096da",
+      "encoded_sha256": "0b8a685d45609c9077f5b95fb5aa9b46763b6a597af0d125a9af2902ae0096da",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        1000,
+        0,
+        0,
+        0,
+        1000
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 2920000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        },
+        {
+          "nanoseconds": 4178000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        },
+        {
+          "nanoseconds": 3040000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 3040000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29229056,
+      "peak_rss_increment_bytes": 2244608,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-level1",
+      "codec": "png",
+      "payload_encoded_bytes": 222576,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 222608,
+      "ratio": 0.2106466411300701,
+      "rgba_sha256": "0b8a685d45609c9077f5b95fb5aa9b46763b6a597af0d125a9af2902ae0096da",
+      "encoded_sha256": "beb530fbe66da6b330174c3ecefeb40389d135c6a1ed0e3cdc9421d0b7b43fe5",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        25413000,
+        25515000,
+        25275000,
+        25517000,
+        25601000
+      ],
+      "encode_median_ns": 25515000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 4707000,
+          "ok": true,
+          "peak_process_rss_bytes": 35274752
+        },
+        {
+          "nanoseconds": 4742000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        },
+        {
+          "nanoseconds": 4613000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        }
+      ],
+      "isolated_decode_median_ns": 4707000,
+      "baseline_samples": [
+        {
+          "input_bytes": 222576,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 222576,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 222576,
+          "peak_process_rss_bytes": 27148288
+        }
+      ],
+      "peak_process_rss_median_bytes": 35307520,
+      "baseline_peak_rss_median_bytes": 27131904,
+      "peak_rss_increment_bytes": 8175616,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 111288,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 1491552015, 1644609075",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 222575,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-root",
+      "codec": "raw",
+      "payload_encoded_bytes": 1056784,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 1056816,
+      "ratio": 1.000030280549289,
+      "rgba_sha256": "cd0fd94f85f90c24e5bc852f2f0a4812ffe940f6696ff0e3636e8d2ebd6d9da7",
+      "encoded_sha256": "cd0fd94f85f90c24e5bc852f2f0a4812ffe940f6696ff0e3636e8d2ebd6d9da7",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        2000,
+        0,
+        0,
+        0,
+        0
+      ],
+      "encode_median_ns": 0,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 4069000,
+          "ok": true,
+          "peak_process_rss_bytes": 31457280
+        },
+        {
+          "nanoseconds": 2992000,
+          "ok": true,
+          "peak_process_rss_bytes": 31490048
+        },
+        {
+          "nanoseconds": 3780000,
+          "ok": true,
+          "peak_process_rss_bytes": 31473664
+        }
+      ],
+      "isolated_decode_median_ns": 3780000,
+      "baseline_samples": [
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29245440
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29261824
+        },
+        {
+          "input_bytes": 1056784,
+          "peak_process_rss_bytes": 29229056
+        }
+      ],
+      "peak_process_rss_median_bytes": 31473664,
+      "baseline_peak_rss_median_bytes": 29245440,
+      "peak_rss_increment_bytes": 2228224,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 528392,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        },
+        {
+          "offset": 1056783,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": true,
+          "native_reason": null,
+          "different_bytes": 1,
+          "different_pixels": 1
+        }
+      ],
+      "corruption_detected": true
+    },
+    {
+      "id": "s1337-w136-root",
+      "codec": "png",
+      "payload_encoded_bytes": 327308,
+      "external_checksum_bytes": 32,
+      "encoded_bytes": 327340,
+      "ratio": 0.30975109388484307,
+      "rgba_sha256": "cd0fd94f85f90c24e5bc852f2f0a4812ffe940f6696ff0e3636e8d2ebd6d9da7",
+      "encoded_sha256": "0aaa3bc43bf1b440e1f5dec68ae11880241437328fa409ee70a8eb7eaeff60d0",
+      "in_process_identical": true,
+      "fresh_process_identical": true,
+      "deterministic": true,
+      "round_trip": true,
+      "encode_samples_ns": [
+        22665000,
+        22747000,
+        22668000,
+        23250000,
+        22456000
+      ],
+      "encode_median_ns": 22668000,
+      "isolated_decode_samples": [
+        {
+          "nanoseconds": 5582000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        },
+        {
+          "nanoseconds": 6334000,
+          "ok": true,
+          "peak_process_rss_bytes": 35307520
+        },
+        {
+          "nanoseconds": 5682000,
+          "ok": true,
+          "peak_process_rss_bytes": 35291136
+        }
+      ],
+      "isolated_decode_median_ns": 5682000,
+      "baseline_samples": [
+        {
+          "input_bytes": 327308,
+          "peak_process_rss_bytes": 27131904
+        },
+        {
+          "input_bytes": 327308,
+          "peak_process_rss_bytes": 27148288
+        },
+        {
+          "input_bytes": 327308,
+          "peak_process_rss_bytes": 27148288
+        }
+      ],
+      "peak_process_rss_median_bytes": 35291136,
+      "baseline_peak_rss_median_bytes": 27148288,
+      "peak_rss_increment_bytes": 8142848,
+      "corruptions": [
+        {
+          "offset": 0,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid PNG file, signature broken",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 163654,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 3708030387, 3202242744",
+          "different_bytes": null,
+          "different_pixels": null
+        },
+        {
+          "offset": 327307,
+          "xor": 1,
+          "external_integrity_ok": false,
+          "native_decoder_ok": false,
+          "native_reason": "Invalid CRC : 2923585666, 2923585667",
+          "different_bytes": null,
+          "different_pixels": null
+        }
+      ],
+      "corruption_detected": true
+    }
+  ],
+  "checks": {
+    "raw": {
+      "pages": 13,
+      "passed": true
+    },
+    "png": {
+      "pages": 13,
+      "passed": true
+    }
+  },
+  "aggregate": {
+    "raw": {
+      "pages": 13,
+      "encoded_bytes_total": 13738608,
+      "decoded_bytes_total": 13738192,
+      "aggregate_ratio": 1.000030280549289,
+      "encoded_bytes_median": 1056816,
+      "encoded_bytes_min": 1056816,
+      "encoded_bytes_max": 1056816,
+      "encode_medians_sum_ns": 0,
+      "isolated_decode_medians_sum_ns": 41472000,
+      "isolated_decode_page_median_ns": 2970000,
+      "peak_process_rss_max_bytes": 31473664
+    },
+    "png": {
+      "pages": 13,
+      "encoded_bytes_total": 1221557,
+      "decoded_bytes_total": 13738192,
+      "aggregate_ratio": 0.08891686766351788,
+      "encoded_bytes_median": 68071,
+      "encoded_bytes_min": 24936,
+      "encoded_bytes_max": 327340,
+      "encode_medians_sum_ns": 164376000,
+      "isolated_decode_medians_sum_ns": 45638000,
+      "isolated_decode_page_median_ns": 3269000,
+      "peak_process_rss_max_bytes": 35323904
+    }
+  },
+  "bulk": {
+    "raw": {
+      "nanoseconds": 144011000,
+      "pages": 39,
+      "peak_process_rss_bytes": 142065664
+    },
+    "png": {
+      "nanoseconds": 125165000,
+      "pages": 39,
+      "peak_process_rss_bytes": 118259712
+    }
+  },
+  "quota_models": [
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 48160,
+        "hits": 0,
+        "misses": 48160,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15852240,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 0,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 48160,
+        "hits": 5616,
+        "misses": 42544,
+        "hit_rate": 0.11661129568106313,
+        "peak_resident_bytes": 63408960,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3170448,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.11596118108610365
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 48160,
+        "hits": 42198,
+        "misses": 5962,
+        "hit_rate": 0.8762043189368771,
+        "peak_resident_bytes": 254692656,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 12681792,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8713194301053067
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 1019827440,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 47556720,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.9230848647532521
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16800,
+        "hits": 0,
+        "misses": 16800,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15852240,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 0,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16800,
+        "hits": 1458,
+        "misses": 15342,
+        "hit_rate": 0.08678571428571429,
+        "peak_resident_bytes": 63408960,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3170448,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.08541300527240774
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16800,
+        "hits": 14688,
+        "misses": 2112,
+        "hit_rate": 0.8742857142857143,
+        "peak_resident_bytes": 254692656,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 12681792,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.860456942003515
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 1019827440,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 47556720,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8738722905682484
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16660,
+        "hits": 0,
+        "misses": 16660,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15852240,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 0,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16660,
+        "hits": 0,
+        "misses": 16660,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 63408960,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3170448,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16660,
+        "hits": 210,
+        "misses": 16450,
+        "hit_rate": 0.012605042016806723,
+        "peak_resident_bytes": 254692656,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 12681792,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.012404016538688719
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16660,
+        "hits": 2222,
+        "misses": 14438,
+        "hit_rate": 0.1333733493397359,
+        "peak_resident_bytes": 1019827440,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 47556720,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.14453632604843472
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 48160,
+        "hits": 0,
+        "misses": 48160,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15852240,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 0,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 48160,
+        "hits": 5616,
+        "misses": 42544,
+        "hit_rate": 0.11661129568106313,
+        "peak_resident_bytes": 63408960,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3170448,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.11596118108610365
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 48160,
+        "hits": 42198,
+        "misses": 5962,
+        "hit_rate": 0.8762043189368771,
+        "peak_resident_bytes": 254692656,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 12681792,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8713194301053067
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 1019827440,
+        "distinct_working_set_bytes": 3889082880,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 47556720,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.9230848647532521
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16800,
+        "hits": 0,
+        "misses": 16800,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15852240,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 0,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16800,
+        "hits": 1458,
+        "misses": 15342,
+        "hit_rate": 0.08678571428571429,
+        "peak_resident_bytes": 63408960,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3170448,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.08541300527240774
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16800,
+        "hits": 14688,
+        "misses": 2112,
+        "hit_rate": 0.8742857142857143,
+        "peak_resident_bytes": 254692656,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 12681792,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.860456942003515
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "frontier",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 1019827440,
+        "distinct_working_set_bytes": 2227768128,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 47556720,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8738722905682484
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16660,
+        "hits": 0,
+        "misses": 16660,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15852240,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 0,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16660,
+        "hits": 0,
+        "misses": 16660,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 63408960,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3170448,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16660,
+        "hits": 210,
+        "misses": 16450,
+        "hit_rate": 0.012605042016806723,
+        "peak_resident_bytes": 254692656,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 12681792,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.012404016538688719
+    },
+    {
+      "codec": "raw",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 1056816,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16660,
+        "hits": 2222,
+        "misses": 14438,
+        "hit_rate": 0.1333733493397359,
+        "peak_resident_bytes": 1019827440,
+        "distinct_working_set_bytes": 8137483200,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 47556720,
+        "distinct_working_set_bytes": 47556720,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.14453632604843472
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 48160,
+        "hits": 42070,
+        "misses": 6090,
+        "hit_rate": 0.873546511627907,
+        "peak_resident_bytes": 15928614,
+        "distinct_working_set_bytes": 250501280,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 816852,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8686764402230023
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 63714456,
+        "distinct_working_set_bytes": 250501280,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.9230848647532521
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 250501280,
+        "distinct_working_set_bytes": 250501280,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.9230848647532521
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 250501280,
+        "distinct_working_set_bytes": 250501280,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.9230848647532521
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "frontier",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16800,
+        "hits": 14688,
+        "misses": 2112,
+        "hit_rate": 0.8742857142857143,
+        "peak_resident_bytes": 15928614,
+        "distinct_working_set_bytes": 143493668,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 816852,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.860456942003515
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "frontier",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 63714456,
+        "distinct_working_set_bytes": 143493668,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8738722905682484
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "frontier",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 143493668,
+        "distinct_working_set_bytes": 143493668,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8738722905682484
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "frontier",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 143493668,
+        "distinct_working_set_bytes": 143493668,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8738722905682484
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16660,
+        "hits": 210,
+        "misses": 16450,
+        "hit_rate": 0.012605042016806723,
+        "peak_resident_bytes": 15928614,
+        "distinct_working_set_bytes": 524146700,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 816852,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.012404016538688719
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16660,
+        "hits": 2152,
+        "misses": 14508,
+        "hit_rate": 0.129171668667467,
+        "peak_resident_bytes": 63714456,
+        "distinct_working_set_bytes": 524146700,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.14040165386887182
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16660,
+        "hits": 4980,
+        "misses": 11680,
+        "hit_rate": 0.29891956782713086,
+        "peak_resident_bytes": 254993966,
+        "distinct_working_set_bytes": 524146700,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.30744240992321326
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "median",
+      "assumed_bytes_per_unmeasured_page": 68071,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16660,
+        "hits": 8960,
+        "misses": 7700,
+        "hit_rate": 0.5378151260504201,
+        "peak_resident_bytes": 524146700,
+        "distinct_working_set_bytes": 524146700,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 3063195,
+        "distinct_working_set_bytes": 3063195,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.5425280567040756
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 48160,
+        "hits": 0,
+        "misses": 48160,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15712320,
+        "distinct_working_set_bytes": 1204611200,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 654680,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 48160,
+        "hits": 41830,
+        "misses": 6330,
+        "hit_rate": 0.8685631229235881,
+        "peak_resident_bytes": 63503960,
+        "distinct_working_set_bytes": 1204611200,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3273400,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8637208341936816
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 254997860,
+        "distinct_working_set_bytes": 1204611200,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 13420940,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.918438984100764
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "home-expeditions",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 48160,
+        "hits": 44480,
+        "misses": 3680,
+        "hit_rate": 0.9235880398671097,
+        "peak_resident_bytes": 1019991440,
+        "distinct_working_set_bytes": 1204611200,
+        "distinct_pages": 3680
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 14730300,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.9230848647532521
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "frontier",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16800,
+        "hits": 0,
+        "misses": 16800,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15712320,
+        "distinct_working_set_bytes": 690032720,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 654680,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "frontier",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16800,
+        "hits": 14688,
+        "misses": 2112,
+        "hit_rate": 0.8742857142857143,
+        "peak_resident_bytes": 63503960,
+        "distinct_working_set_bytes": 690032720,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3273400,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.860456942003515
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "frontier",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 254997860,
+        "distinct_working_set_bytes": 690032720,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 13420940,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8606912712360867
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "frontier",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16800,
+        "hits": 14692,
+        "misses": 2108,
+        "hit_rate": 0.8745238095238095,
+        "peak_resident_bytes": 690032720,
+        "distinct_working_set_bytes": 690032720,
+        "distinct_pages": 2108
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 14730300,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.8738722905682484
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 16777216,
+      "main_quota_bytes": 15938356,
+      "aux_quota_bytes": 838860,
+      "main": {
+        "requests": 16660,
+        "hits": 0,
+        "misses": 16660,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 15712320,
+        "distinct_working_set_bytes": 2520518000,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 654680,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.0
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 67108864,
+      "main_quota_bytes": 63753421,
+      "aux_quota_bytes": 3355443,
+      "main": {
+        "requests": 16660,
+        "hits": 140,
+        "misses": 16520,
+        "hit_rate": 0.008403361344537815,
+        "peak_resident_bytes": 63503960,
+        "distinct_working_set_bytes": 2520518000,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 3273400,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.008269344359125812
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 268435456,
+      "main_quota_bytes": 255013684,
+      "aux_quota_bytes": 13421772,
+      "main": {
+        "requests": 16660,
+        "hits": 824,
+        "misses": 15836,
+        "hit_rate": 0.049459783913565425,
+        "peak_resident_bytes": 254997860,
+        "distinct_working_set_bytes": 2520518000,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 0,
+        "misses": 270,
+        "hit_rate": 0.0,
+        "peak_resident_bytes": 13420940,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.048670998227997635
+    },
+    {
+      "codec": "png",
+      "sizing_assumption": "maximum",
+      "assumed_bytes_per_unmeasured_page": 327340,
+      "trace": "distant-inspection",
+      "total_quota_bytes": 1073741824,
+      "main_quota_bytes": 1020054733,
+      "aux_quota_bytes": 53687091,
+      "main": {
+        "requests": 16660,
+        "hits": 4334,
+        "misses": 12326,
+        "hit_rate": 0.2601440576230492,
+        "peak_resident_bytes": 1019991440,
+        "distinct_working_set_bytes": 2520518000,
+        "distinct_pages": 7700
+      },
+      "auxiliary": {
+        "requests": 270,
+        "hits": 225,
+        "misses": 45,
+        "hit_rate": 0.8333333333333334,
+        "peak_resident_bytes": 14730300,
+        "distinct_working_set_bytes": 14730300,
+        "distinct_pages": 45
+      },
+      "combined_hit_rate": 0.26928529238038984
+    }
+  ]
+}

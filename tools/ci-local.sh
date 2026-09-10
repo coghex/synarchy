@@ -674,6 +674,10 @@ python3 tools/ci_cache_epoch.py --self-test
 python3 tools/ci_cache_cleanup.py --self-test
 python3 tools/ci_cache_report.py --self-test
 
+# #2303: only pure fixture and arithmetic checks, never the measurement.
+step "map-page codec measurement self-test"
+python3 tools/test_map_page_codec_measure.py
+
 # The gate that keeps this file honest (#1355, generalized to CI's two
 # audited workers in #2272): fails if a `python3 tools/*.py` check runs in
 # ci.yml's test-and-audits or static-audits worker and not here, or here and
