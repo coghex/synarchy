@@ -117,8 +117,8 @@ instance Hashable ChunkKey where
 chunkKeyFor ∷ WorldPageId → WorldGenParams → ChunkCoord → ChunkKey
 chunkKeyFor pid params = ChunkKey pid . canonicalChunkCoord params
 
--- | A page GENERATION: which incarnation of a 'WorldPageId' a request
---   was made against.
+-- | A page GENERATION: which INCARNATION of a 'WorldPageId' a piece of
+--   in-flight work was computed against.
 --
 --   Process-unique and monotonic, never persisted. A page id is reused
 --   constantly — @main_world@ is re-initialised on every Exit to Menu,
@@ -127,6 +127,26 @@ chunkKeyFor pid params = ChunkKey pid . canonicalChunkCoord params
 --   'World.State.Types.WorldState'. So the epoch is allocated where that
 --   state is, which is what makes \"the same page, a later generation\"
 --   distinguishable at all: a page-id comparison cannot see it.
+--
+--   It is the page's ONE incarnation epoch, not a chunk-request-only
+--   value. Two kinds of work carry it:
+--
+--     * a chunk request ('ChunkRequest'), so a generation result
+--       arriving after its page was replaced is recognisable as
+--       superseded (#2001);
+--     * a fluid writeback batch
+--       ('World.Command.Types.FluidWritebackBatch'), stamped from the
+--       sim's copy of it ('Sim.State.Types.swsIncarnation') so the world
+--       thread can refuse output the simulation computed against a page
+--       this id no longer names (#2477).
+--
+--   Both read the SAME value out of the page's own
+--   'World.State.Types.wsChunkResidencyRef'. There is no second epoch
+--   and no way for the two to disagree: nothing advances it, and a new
+--   one exists only where a new 'World.State.Types.WorldState' does.
+--   The name is historical — it predates the writeback use — and is kept
+--   deliberately (#2477): it is spelled at ~50 sites, and a rename would
+--   move far more code than the meaning it corrects.
 newtype ChunkGeneration = ChunkGeneration Word64
     deriving (Show, Eq, Ord)
 

@@ -53,6 +53,7 @@ import Sim.Topology
     (SimTopology, simCardinalNeighbors, simTopologyForParams)
 import Test.Headless.Harness
     (moveCamera, queueChunks, sendWorldCommand, waitForWorldInit)
+import World.Chunk.Residency (ChunkGeneration)
 import World.Fluid.Internal (FluidMap)
 import World.Generate.Arena (arenaGenForSeed, generateArenaChunks)
 import World.Types
@@ -63,7 +64,8 @@ import World.Types
 --   'Sim.Command.Types.SimChunkLoaded' carries except the page id, which
 --   every collection below is already filtered by.
 data Seed = Seed
-    { seedTopo    ∷ SimTopology
+    { seedEpoch   ∷ ChunkGeneration
+    , seedTopo    ∷ SimTopology
     , seedCoord   ∷ ChunkCoord
     , seedFluid   ∷ FluidMap
     , seedTerrain ∷ VU.Vector Int
@@ -238,8 +240,8 @@ hideShow env pid = do
 
 seedsFor ∷ WorldPageId → [SimCommand] → [Seed]
 seedsFor pid cmds =
-    [ Seed topo coord fluidMap terrainMap
-    | SimChunkLoaded p topo coord fluidMap terrainMap ← cmds, p ≡ pid ]
+    [ Seed epoch topo coord fluidMap terrainMap
+    | SimChunkLoaded p epoch topo coord fluidMap terrainMap ← cmds, p ≡ pid ]
 
 unloadsFor ∷ WorldPageId → [SimCommand] → [ChunkCoord]
 unloadsFor pid cmds = [ coord | SimChunkUnloaded p coord ← cmds, p ≡ pid ]
@@ -249,7 +251,7 @@ unloadsFor pid cmds = [ coord | SimChunkUnloaded p coord ← cmds, p ≡ pid ]
 --   sending two commands the handlers discarded.
 cycleFor ∷ WorldPageId → [SimCommand] → (Int, Int)
 cycleFor pid cmds =
-    ( length [ () | SimActivateWorld p _ ← cmds, p ≡ pid ]
+    ( length [ () | SimActivateWorld p _ _ ← cmds, p ≡ pid ]
     , length [ () | SimDeactivateWorld p ← cmds, p ≡ pid ] )
 
 -- * Replaying captured seeds
@@ -268,7 +270,8 @@ replaySeeds topo = foldl' step empty
         , swsTopology    = topo
         }
     step sws s = sws
-        { swsTopology = seedTopo s
+        { swsTopology    = seedTopo s
+        , swsIncarnation = Just (seedEpoch s)
         , swsChunks   = HM.insert (seedCoord s)
                             (loadedChunkState (seedFluid s) (seedTerrain s))
                             (swsChunks sws)

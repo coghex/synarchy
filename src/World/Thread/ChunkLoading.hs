@@ -29,9 +29,9 @@ import World.Generate.Arena (generateFlatChunk)
 import World.Generate.Constants (chunkLoadRadius)
 import World.Chunk.Admit
     ( admitResidentChunks, claimChunkGeneration, claimedChunkCoord
-    , reconcileResidentChunks, releaseEvictedChunks )
+    , pageIncarnation, reconcileResidentChunks, releaseEvictedChunks )
 import World.Chunk.Queue (settleDrainedPhase)
-import World.Chunk.Residency (canonicalChunkCoord)
+import World.Chunk.Residency (ChunkGeneration, canonicalChunkCoord)
 import World.Grid (zoomFadeEnd)
 import World.Slope (recomputeNeighborSlopes
                     , slopeRecomputeAffected
@@ -237,7 +237,9 @@ updateChunkLoading env logger = do
                                 -- Notify sim thread of loaded chunks. Use
                                 -- newChunks' so the sim sees post-replay
                                 -- fluid + terrain (player edits matter).
-                                admitChunksToSim env params pageId newChunks'
+                                epoch ← pageIncarnation worldState
+                                admitChunksToSim env params pageId epoch
+                                                 newChunks'
                                 -- Stamp any placed locations on the loaded
                                 -- chunks (#89).
                                 dispatchLocationStamps env params pageId newChunks'
@@ -320,18 +322,26 @@ dispatchLocationStamps env params pageId chunks =
 --   construction for the init paths in "World.Thread.Command.Init" too.
 --   Call it AFTER the chunks are admitted to residency, so the payload
 --   is the post-admission fluid map the tile map actually holds.
+--
+--   The incarnation epoch is a PARAMETER, threaded in from the sending
+--   page's own state ('World.Chunk.Admit.pageIncarnation'), because this
+--   builder does not hold the page's 'World.State.Types.WorldState' and
+--   must never mint one: an epoch allocated here would make a
+--   replacement page indistinguishable from the page it replaced, which
+--   is the single thing the value exists to detect (#2477).
 admitChunksToSim ∷ EngineEnv → WorldGenParams → WorldPageId
-                 → [LoadedChunk] → IO ()
-admitChunksToSim env params pageId chunks =
-    forM_ (simChunkSeeds params pageId chunks) $
+                 → ChunkGeneration → [LoadedChunk] → IO ()
+admitChunksToSim env params pageId epoch chunks =
+    forM_ (simChunkSeeds params pageId epoch chunks) $
         Q.writeQueue (wsSimQueue (toWorldSimCapability env))
 
 -- | The pure seed list 'admitChunksToSim' enqueues: page id, the page's
---   seam topology (#2044), coord, fluid map and terrain surface map, one
---   entry per chunk in input order.
-simChunkSeeds ∷ WorldGenParams → WorldPageId → [LoadedChunk] → [SimCommand]
-simChunkSeeds params pageId chunks =
-    [ SimChunkLoaded pageId (simTopologyForParams params)
+--   incarnation epoch (#2477) and seam topology (#2044), coord, fluid map
+--   and terrain surface map, one entry per chunk in input order.
+simChunkSeeds ∷ WorldGenParams → WorldPageId → ChunkGeneration
+              → [LoadedChunk] → [SimCommand]
+simChunkSeeds params pageId epoch chunks =
+    [ SimChunkLoaded pageId epoch (simTopologyForParams params)
                      (lcCoord lc) (lcFluidMap lc) (lcTerrainSurfaceMap lc)
     | lc ← chunks ]
 
@@ -518,7 +528,8 @@ drainInitQueues env logger = do
                         -- these SimChunkLoaded messages must be enqueued
                         -- first — otherwise the final batch can race the
                         -- settle and never be simulated. (post-replay)
-                        admitChunksToSim env params pageId newChunks'
+                        epoch ← pageIncarnation worldState
+                        admitChunksToSim env params pageId epoch newChunks'
                         -- Stamp any placed locations on the loaded chunks (#89).
                         dispatchLocationStamps env params pageId newChunks'
 

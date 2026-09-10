@@ -38,7 +38,8 @@ import World.Flora.Designation (admitChunkFlora)
 import World.Generate.Arena (generateArenaChunks, arenaGenForSeed)
 import World.Chunk.Queue (initialChunkQueue, seedInitialQueue)
 import World.Chunk.Residency (canonicalChunkCoord)
-import World.Chunk.Admit (claimChunkGeneration, publishSeedChunks)
+import World.Chunk.Admit
+    (claimChunkGeneration, pageIncarnation, publishSeedChunks)
 import World.Geology (buildTimeline)
 import World.Geology.Log (formatPlatesSummary)
 import World.Plate (generatePlates, elevationAtGlobal)
@@ -539,8 +540,10 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- the init queue drains: a seed written after that point would miss
     -- the settle. The centre is excluded from the queue this seeds
     -- ('initialChunkQueue'), so no later drain can seed it a second
-    -- time.
-    admitChunksToSim env params pageId [centerChunk]
+    -- time. The epoch is this page's own, read from the state this
+    -- function just built (#2477).
+    centreEpoch ← pageIncarnation worldState
+    admitChunksToSim env params pageId centreEpoch [centerChunk]
 
     -- Step 7: Queue remaining chunks
     writeIORef phaseRef (LoadPhase1 7 totalSteps)
@@ -684,12 +687,14 @@ handleWorldInitArenaCommand env logger pageId = do
     -- so without this every chunk stayed inert until an edit landed in
     -- it, and fluid placed in one chunk could not flow into an unedited
     -- neighbour. Same builder as the streaming loaders, one seed per
-    -- chunk, using the same 'arenaParams' the topology is derived from.
+    -- chunk, using the same 'arenaParams' the topology is derived from
+    -- and this page's own incarnation epoch (#2477).
     --
     -- Enqueued after the chunks are resident and BEFORE LoadDone is
     -- published: LoadDone is what world.waitForInit and the dump path's
     -- settle wait on, so a seed written after it could race the settle.
-    admitChunksToSim env arenaParams pageId allChunks
+    arenaEpoch ← pageIncarnation worldState
+    admitChunksToSim env arenaParams pageId arenaEpoch allChunks
 
     -- Mark as fully loaded immediately (no progressive loading needed)
     writeIORef (wsLoadPhaseRef worldState) LoadDone

@@ -45,6 +45,7 @@ import UI.Manager (clearElementFocus, clearControlFocus)
 import UI.Tooltip (clearTooltipLock)
 import UI.Types (UIPageManager(upmHovered))
 import World.Types
+import World.Chunk.Admit (pageIncarnation)
 import World.Load.Types (StagedPage(..), StagedSession(..))
 import World.Pause (beginPauseEpoch)
 import World.Blood.Teardown (enqueueBloodDisposalAll)
@@ -290,11 +291,17 @@ publishStagedSession env logger requestId staged = do
     forM_ (ssPages staged) $ \p → do
         -- Every seed carries the page's own seam topology (#2044); it is
         -- read from the staged page's gen params, which staging has
-        -- already populated.
+        -- already populated. Its incarnation epoch comes from the same
+        -- state (#2477) — a republish under a reused page id builds a
+        -- fresh 'WorldState' and therefore a fresh epoch, which is
+        -- exactly what makes the outgoing session's in-flight batches
+        -- refusable.
         topo ← pageSimTopology (spWorldState p)
+        epoch ← pageIncarnation (spWorldState p)
         forM_ (spSimSeeds p) $ \(coord, fluidMap, terrainMap) →
             Q.writeQueue (simQueue env)
-                (SimChunkLoaded (spPageId p) topo coord fluidMap terrainMap)
+                (SimChunkLoaded (spPageId p) epoch topo coord fluidMap
+                                terrainMap)
         forM_ (spLocationStamps p) $ \(lid, gx, gy) →
             Q.writeQueue (luaQueue env)
                 (LuaStampLocation (unWorldPageId (spPageId p)) lid gx gy)

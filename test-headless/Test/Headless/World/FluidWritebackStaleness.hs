@@ -56,6 +56,7 @@ import Engine.Core.State (EngineEnv(..))
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Test.Headless.Harness (sendWorldCommand, waitForWorldInit)
+import World.Chunk.Admit (pageIncarnation)
 import World.Thread.Command (handleApplyFluidsCommandWith)
 import World.Edit.Apply (replayEdits)
 import World.Edit.Types (WorldEdit(..))
@@ -116,7 +117,7 @@ spec =
                 }
             fresh = perturbed (epUntouched ep) 0 (epUntBefore ep)
 
-        deliverBatch env stalePageId [stale, fresh]
+        deliverBatch env (epState ep) stalePageId [stale, fresh]
 
         edited ← chunkAt (epState ep) (epEdited ep)
         -- Requirements 1 and 7: every field 'applyOneWriteback' writes
@@ -151,7 +152,7 @@ spec =
         -- accepted again — so fluid keeps flowing from the edited state
         -- instead of the chunk being frozen out forever.
         let resumed = perturbed (epEdited ep) gen (epAfter ep)
-        deliverBatch env recoveryPageId [resumed]
+        deliverBatch env (epState ep) recoveryPageId [resumed]
 
         edited ← chunkAt (epState ep) (epEdited ep)
         lcFluidMap edited          `shouldBe` fwFluid resumed
@@ -172,9 +173,15 @@ spec =
         let allStale = [ perturbed (epEdited ep) 0 (epAfter ep)
                        , perturbed (epUntouched ep) 99 (epUntBefore ep)
                        ]
+        -- The page's OWN incarnation, so the batch clears the #2477
+        -- fence and the per-chunk #1596 fence is what drops it. Stamping
+        -- it any other way would prove nothing about this example.
+        epoch ← pageIncarnation (epState ep)
         ack ← newEmptyMVar
         sendWorldCommand env
-            (WorldApplyFluids (FluidWritebackBatch ackPageId allStale (Just ack)))
+            (WorldApplyFluids
+                (FluidWritebackBatch ackPageId (Just epoch) allStale
+                                     (Just ack)))
         acked ← timeout ackTimeoutMicros (takeMVar ack)
         -- Applied, not merely delivered: dropping every writeback is one
         -- of the nothing-to-do cases the handler has always completed
@@ -213,9 +220,9 @@ spec =
         logger ← readIORef (loggerRef env)
         ack ← newEmptyMVar
         let boom = ErrorCall "writeback application blew up"
-            batch = FluidWritebackBatch ackPageId [] (Just ack)
+            batch = FluidWritebackBatch ackPageId Nothing [] (Just ack)
         raised ← try $ handleApplyFluidsCommandWith
-            (\_ _ _ _ → throwIO boom) env logger batch
+            (\_ _ _ _ _ → throwIO boom) env logger batch
 
         -- Rethrown, unchanged: 'Engine.Core.Thread' classifies this
         -- exception exactly as it did before, so the world worker keeps
@@ -264,7 +271,7 @@ saveSpec =
                     , fwSurf     = lcSurfaceMap (epBefore ep)
                     , fwSideDeco = lcSideDeco (epBefore ep)
                     }
-            deliverBatch env savePageId [stale]
+            deliverBatch env (epState ep) savePageId [stale]
 
             sendWorldCommand env
                 (WorldSave savePageId saveSlotName
@@ -349,7 +356,8 @@ withEditedPage env pageId = do
     -- FIFO barrier: an empty batch applies nothing and still acks.
     barrier ← newEmptyMVar
     sendWorldCommand env
-        (WorldApplyFluids (FluidWritebackBatch pageId [] (Just barrier)))
+        (WorldApplyFluids
+            (FluidWritebackBatch pageId Nothing [] (Just barrier)))
     awaitAck barrier
     after ← chunkAt ws editedCoord
 
@@ -410,12 +418,20 @@ perturbed coord gen lc = FluidWriteback
     , fwSideDeco = VU.replicate chunkCells 5
     }
 
--- | Send one batch and block until the world thread has handled it.
-deliverBatch ∷ EngineEnv → WorldPageId → [FluidWriteback] → IO ()
-deliverBatch env pageId writebacks = do
+-- | Send one batch stamped with the page's OWN incarnation epoch, and
+--   block until the world thread has handled it.
+--
+--   Every example here is about the per-chunk freshness fence (#1596),
+--   so each batch has to clear the incarnation fence in front of it
+--   (#2477) — a batch stamped any other way would be refused whole and
+--   the per-chunk decision would never be reached.
+deliverBatch ∷ EngineEnv → WorldState → WorldPageId → [FluidWriteback] → IO ()
+deliverBatch env ws pageId writebacks = do
+    epoch ← pageIncarnation ws
     ack ← newEmptyMVar
     sendWorldCommand env
-        (WorldApplyFluids (FluidWritebackBatch pageId writebacks (Just ack)))
+        (WorldApplyFluids
+            (FluidWritebackBatch pageId (Just epoch) writebacks (Just ack)))
     awaitAck ack
 
 ackTimeoutMicros ∷ Int
@@ -449,7 +465,7 @@ chunkAt ws coord = do
 editGenFromSimQueue ∷ EngineEnv → WorldPageId → ChunkCoord → IO Word64
 editGenFromSimQueue env pageId coord = do
     cmds ← Q.flushQueue (simQueue env)
-    let gens = [ g | SimChunkEdited p _ c g _ _ ← cmds
+    let gens = [ g | SimChunkEdited p _ _ c g _ _ ← cmds
                    , p ≡ pageId, c ≡ coord ]
     case gens of
         [] → expectationFailure

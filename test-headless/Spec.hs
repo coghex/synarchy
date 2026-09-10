@@ -110,6 +110,7 @@ import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.FluidWritebackStaleness as FluidWritebackStaleness
+import qualified Test.Headless.World.FluidWritebackIncarnation as FluidWritebackIncarnation
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
 import qualified Test.Headless.World.SelectTileZ as SelectTileZ
@@ -556,6 +557,11 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         FluidWritebackStaleness.spec
         describe "persistence contract" FluidWritebackStaleness.saveSpec
+    -- Own engine (#2477): DESTROYS and re-creates a page under the same
+    -- id, and drives the sim's own command handler and emit step by
+    -- hand against the live world thread -- none of which the
+    -- shared-worlds engine above may see.
+    aroundAll withHeadlessEngine FluidWritebackIncarnation.spec
     -- Own engine (#1858): the only example in the suite that PUBLISHES
     -- a loaded session, which replaces every live page -- so it must
     -- never run inside the shared-worlds engine, and nothing may be

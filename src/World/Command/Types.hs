@@ -19,6 +19,7 @@ import Control.Concurrent.MVar (MVar)
 import Engine.Asset.Handle (TextureHandle(..))
 import Location.Instance (LocationInstanceId, LocationLifecycle)
 import Structure.Types (StructureStageToken(..), StructureCommitWindow(..))
+import World.Chunk.Residency (ChunkGeneration)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Flora.Identity (FloraInstanceId)
 import World.Material.Id (MaterialId(..))
@@ -79,20 +80,38 @@ data FluidAckOutcome
       --   releases the waiter rather than swallowing the error.
     deriving (Eq, Show)
 
--- | A batch of fluid writebacks for ONE world plus an optional ack
---   'MVar', signalled once the world thread has finished with the batch
---   — with 'FluidAckApplied' when it applied, 'FluidAckFailed' when it
---   raised. The 'WorldPageId' scopes the batch so the world thread
---   applies it only to the world that produced it (not every visible
---   world, #59). Runtime ticks pass 'Nothing' (fire-and-forget); the
---   dump's synchronous fast-settle passes 'Just' and waits on it so the
---   write lands before it reads.
+-- | A batch of fluid writebacks for ONE INCARNATION of one world, plus
+--   an optional ack 'MVar', signalled once the world thread has
+--   finished with the batch — with 'FluidAckApplied' when it applied,
+--   'FluidAckFailed' when it raised. Runtime ticks pass 'Nothing'
+--   (fire-and-forget); the dump's synchronous fast-settle passes 'Just'
+--   and waits on it so the write lands before it reads.
+--
+--   The 'WorldPageId' scopes the batch so the world thread applies it
+--   only to the world that produced it (not every visible world, #59),
+--   and the 'ChunkGeneration' beside it says WHICH incarnation of that
+--   id produced it (#2477). A page id is reused constantly — a reinit,
+--   an arena replacement, a load republish — and each of those builds a
+--   fresh 'World.State.Types.WorldState' whose never-edited chunks all
+--   sit at live-edit generation zero, exactly where a batch computed
+--   against the PREVIOUS incarnation was stamped. So the id alone
+--   cannot tell the two apart and the per-chunk 'fwEditGen' fence
+--   (#1596) reads them as fresh. The world thread refuses any batch
+--   whose epoch is not the live page's own, ahead of that fence; see
+--   'World.Thread.Command.applyFluidWritebacks'.
+--
+--   'Nothing' means the sim never held an epoch for this page — no
+--   topology-bearing message has reached it — and is refused for the
+--   same reason: nothing establishes which incarnation it computed
+--   against.
 data FluidWritebackBatch =
-    FluidWritebackBatch !WorldPageId ![FluidWriteback]
+    FluidWritebackBatch !WorldPageId !(Maybe ChunkGeneration)
+                        ![FluidWriteback]
                         !(Maybe (MVar FluidAckOutcome))
 instance Show FluidWritebackBatch where
-    show (FluidWritebackBatch pid ws _) =
-        "FluidWritebackBatch(" <> show pid <> ", " <> show (length ws) <> ")"
+    show (FluidWritebackBatch pid mGen ws _) =
+        "FluidWritebackBatch(" <> show pid <> ", " <> show mGen <> ", "
+        <> show (length ws) <> ")"
 
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int (Maybe WorldIdentity)

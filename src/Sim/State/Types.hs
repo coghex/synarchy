@@ -13,6 +13,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
+import World.Chunk.Residency (ChunkGeneration)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Internal (FluidMap)
@@ -47,6 +48,27 @@ data SimWorldState = SimWorldState
         --   instead of missing on a raw key. Carried by every command
         --   that seeds a chunk into this world or activates it, so a page
         --   with anything to simulate always has it.
+    , swsIncarnation ∷ !(Maybe ChunkGeneration)
+        -- ^ WHICH INCARNATION of 'WorldPageId' this sim state belongs to
+        --   (#2477): the page-incarnation epoch the page's own
+        --   'World.State.Types.WorldState' minted, carried here by every
+        --   command that seeds a chunk into this world or activates it,
+        --   exactly as 'swsTopology' is.
+        --
+        --   It is stamped onto every 'World.Command.Types.FluidWritebackBatch'
+        --   this page emits — per tick and under
+        --   'Sim.Command.Types.SimFastSettleAll', active or stored — so the
+        --   world thread can refuse a batch computed against an
+        --   incarnation it has since replaced. The sim NEVER compares it;
+        --   the decision belongs to the world thread, the sole writer of
+        --   'World.State.Types.wsTilesRef', exactly like the per-chunk
+        --   'scsEditGen' fence (#1596).
+        --
+        --   'Nothing' until the first such message arrives. A batch
+        --   stamped 'Nothing' is refused rather than trusted: nothing has
+        --   said which incarnation this state was computed against.
+        --   Never serialized — it is process-unique and meaningless
+        --   across a save.
     , swsSolidEvents ∷ !(Seq.Seq SolidificationEvent)
         -- ^ Solidification events this page's ticks have produced, in
         --   emission order (#2481). Transient simulation OUTPUT, not
@@ -97,6 +119,11 @@ emptySimWorldState = SimWorldState
     -- same answer 'World.State.Types.pageWrapWorldSize' gives a page with
     -- no gen params.
     , swsTopology    = SimFlatTopology
+    -- …and for the same reason no incarnation is known yet: the epoch
+    -- belongs to a page's 'World.State.Types.WorldState', which only a
+    -- topology-bearing message can hand over. A batch emitted from this
+    -- state before one arrives is refused by the world thread (#2477).
+    , swsIncarnation = Nothing
     -- Nothing has reacted yet, so a fresh world's event history is
     -- empty — the same value boot and load reconstruction start from.
     , swsSolidEvents = Seq.empty

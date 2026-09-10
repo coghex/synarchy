@@ -16,6 +16,7 @@ import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
 import Sim.Command.Types (SimCommand(..))
+import World.Chunk.Admit (pageIncarnation)
 import World.Types
 
 -- | After a live terrain/fluid edit lands in the chunk, re-seed that
@@ -53,8 +54,10 @@ syncEditToSim wsc pageId ws lc = do
         in (HM.insert coord g gens, g)
     -- The page's seam topology rides along so the sim wakes the chunk
     -- physically across the u seam, not a raw neighbour key the page
-    -- stores nothing under (#2044).
+    -- stores nothing under (#2044), and its incarnation epoch rides
+    -- along with it (#2477) — both read from the page being edited.
     topo ← pageSimTopology ws
+    epoch ← pageIncarnation ws
     Q.writeQueue (wsSimQueue wsc) $
-        SimChunkEdited pageId topo coord editGen
+        SimChunkEdited pageId epoch topo coord editGen
             (lcFluidMap lc) (lcTerrainSurfaceMap lc)

@@ -28,14 +28,17 @@ module World.Chunk.Admit
     , releaseEvictedChunks
     , withTransientChunkClaim
     , readChunkOwner
+    , pageIncarnation
     ) where
 
 import UPrelude
 import Control.Exception (finally)
 import Data.IORef (readIORef, atomicModifyIORef')
 import World.Chunk.Residency
-    ( ChunkKey, ChunkOwner, ChunkRequest, ClaimKind(..), ClaimOutcome(..)
-    , RequestOutcome(..), admitChunk, chunkKeyFor, claimChunk, crKey, ckCoord
+    ( ChunkGeneration, ChunkKey, ChunkOwner, ChunkRequest, ClaimKind(..)
+    , ClaimOutcome(..)
+    , RequestOutcome(..), admitChunk, chunkKeyFor, chunkOwnerGeneration
+    , claimChunk, crKey, ckCoord
     , evictChunk, mintChunkRequest, releaseChunk, requestChunk )
 import World.Chunk.Types (ChunkCoord(..))
 import World.Tile.Types (WorldTileData(..))
@@ -56,6 +59,25 @@ claimedChunkCoord = ckCoord . crKey
 -- | The page's residency owner, for callers that only observe it.
 readChunkOwner ∷ WorldState → IO ChunkOwner
 readChunkOwner ws = readIORef (wsChunkResidencyRef ws)
+
+-- | This page's INCARNATION epoch: the 'ChunkGeneration' its own
+--   'WorldState' minted (#2001).
+--
+--   One value, read two ways. A chunk request is tagged with it so a
+--   result arriving after the page was replaced can be recognised as
+--   superseded; a sim message carries it so a fluid writeback batch
+--   computed against a previous incarnation of the same 'WorldPageId'
+--   can be refused (#2477). There is no second epoch and no way for the
+--   two readings to disagree — a page has exactly one, allocated with
+--   its 'WorldState' and never advanced.
+--
+--   Read, never allocated: a caller that needs the epoch for a message
+--   it is about to send takes it from the SENDING page's state through
+--   here. Minting one at a send site would make a replacement page
+--   indistinguishable from the page it replaced, which is the single
+--   thing the value exists to detect.
+pageIncarnation ∷ WorldState → IO ChunkGeneration
+pageIncarnation ws = chunkOwnerGeneration ⊚ readChunkOwner ws
 
 -- | Register DURABLE demand for these coords, returning the ones the
 --   caller must SCHEDULE — in input order, one entry per physical chunk.
