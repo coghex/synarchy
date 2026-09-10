@@ -3792,6 +3792,40 @@ effectiveness (±10), so quality assertions must pin the
 neutral-effectiveness precondition (#878). Gates: `craft_probe.py`,
 `craft_bill_probe.py`.
 
+**Bill selection order (#2523).** A station's queue is ordered by
+`cbSeq`, not by `cbId`: `billsForStation` sorts on it and `reorderBill`
+swaps only that field, so the panel's displayed order is the authority
+on what a worker takes next. `scripts/unit_ai_craft.lua`'s
+`findCraftBill` therefore ranks candidates by DISTANCE first, and only
+then by queue order — and only between bills at the SAME station, which
+is the only scope `seq` is comparable in. Three consequences:
+
+- A fresh selection takes the earliest bill in that station's displayed
+  queue among the ones the worker can currently claim and perform.
+  Moving an unclaimed bill up or down changes subsequent fresh
+  selections. Every existing eligibility filter is unchanged and still
+  applies first, so an earlier bill that is paused, freshly claimed by
+  someone else, unaffordable, off-page or knowledge-gated is skipped
+  rather than blocking a later one.
+- Proximity still wins between stations: a queue position at a distant
+  station never becomes a global priority. An exact equal-distance tie
+  between DIFFERENT stations goes to the lower station id, purely so the
+  outcome cannot depend on the order `craft.getBills()` returns rows in
+  (the AI's no-argument listing is `sortOn cbId`; nothing may rely on
+  that).
+- FRESH selections only. Reordering never revokes a claim or preempts an
+  in-progress job: a worker holding a bill keeps `craft_lock_utility`
+  and its `craftJob`, and `completeBillCycle` still chains an unpaused
+  repeating bill into its next cycle without re-entering `findCraftBill`.
+  So a repeating bill that keeps its claim across cycles continuing to
+  run is not a violation of this rule.
+
+Gate: hspec `--match "craft bill queue priority"`
+(`Test.Headless.Lua.CraftBillQueuePriority`), which drives the real
+`craftUtility` over a stubbed engine API and re-runs every case with the
+listing reversed. `seq` is already a persisted `CraftBill` field, so
+nothing here is a serialization change.
+
 ---
 
 ## Power (#358-#361, #590/#591, #1206)

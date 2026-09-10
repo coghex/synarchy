@@ -124,8 +124,43 @@ local function craftMaterialsAvailable(uid, fromX, fromY, demands, params)
     return true
 end
 
+-- The station panel's displayed order key (#330): billsForStation sorts
+-- on `seq`, NOT on the bill id, and reorderBill swaps only `seq`. seq
+-- starts equal to the id at add time, which is why the two agree until
+-- the player actually reorders. The engine pushes seq on every bill
+-- table, so the fallback here only covers a bill table that predates it.
+local function billSeq(bill)
+    return bill.seq or bill.id
+end
+
+-- Is a candidate at distance `d` a better pick than the incumbent
+-- `best`? (#2523)
+--
+-- Distance still decides FIRST, so proximity between stations keeps its
+-- meaning and a station's queue position never becomes a global
+-- priority. Two bills at the SAME station always tie on distance (same
+-- building info, same arithmetic), and that tie is broken by the
+-- station's displayed queue order -- which is what the player is
+-- actually manipulating when they move a bill up or down. An
+-- equal-distance tie between DIFFERENT stations is broken by the lower
+-- station id, purely so the outcome cannot depend on the order
+-- craft.getBills happens to return rows in.
+--
+-- Before this the test was `d <= bestD`: every same-station bill tied,
+-- and the LAST one scanned won, which under the id-ordered listing meant
+-- the newest bill always beat every earlier one in the queue.
+local function craftCandidateBetter(d, bill, best)
+    if not best then return true end
+    if d ~= best.dist then return d < best.dist end
+    if bill.station == best.bill.station then
+        return billSeq(bill) < billSeq(best.bill)
+    end
+    return bill.station < best.bill.station
+end
+
 -- Nearest workable bill within craft_scan_range, or nil (station alive + Built,
 -- unclaimed, stock target not met (#795), knowledge cleared, demands sourceable).
+-- Ties at one station go to the station queue's earliest bill (#2523).
 local function findCraftBill(uid, fromX, fromY, params)
     -- #1673: craft.getBills reads the ACTIVE page's bill store on its
     -- own, independently of the page the actor was selected from, so
@@ -140,7 +175,7 @@ local function findCraftBill(uid, fromX, fromY, params)
     local bills = craft.getBills()
     if not bills or #bills == 0 then return nil end
     local now = engine.gameTime()
-    local best, bestD = nil, params.craft_scan_range
+    local best = nil
     for _, bill in ipairs(bills) do
         if not billPausedForUs(bill, uid)
            and not billClaimedByOther(bill, uid, now, params.craft_claim_timeout)
@@ -160,10 +195,10 @@ local function findCraftBill(uid, fromX, fromY, params)
                         local d = distance(fromX, fromY,
                                            binfo.gridX + tw / 2,
                                            binfo.gridY + th / 2)
-                        if d <= bestD then
+                        if d <= params.craft_scan_range
+                           and craftCandidateBetter(d, bill, best) then
                             best = { bill = bill, recipe = recipe,
                                      demands = demands, dist = d }
-                            bestD = d
                         end
                     end
                 end
