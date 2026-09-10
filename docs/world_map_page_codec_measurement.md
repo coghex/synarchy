@@ -2,7 +2,8 @@
 
 This manual experiment supplies evidence for WML-6 and the owner's Q-17
 decision. It does not install a codec, cache, quota, or eviction policy.
-Results and the owner decision are pending the recorded runs below.
+Two complete runs agree byte-for-byte. The owner shipping decision remains
+open; no codec or quota has been installed in the game.
 
 ## Reproduce
 
@@ -172,7 +173,163 @@ the maximum measured size as a sensitivity case. These are explicitly
 assumed extrapolations, not measured sizes of the large world's unseen pages.
 The corpus maximum is not a proven worst-case size for every generated page.
 
-## Recorded results and owner decision
+## Recorded results
 
-Pending the complete, reproducible runs. No shipping selection is implied
-by this protocol or by the numerical quotas explored above.
+Measured 2026-09-10 on macOS 26.6, arm64, 16 logical CPUs, GHC 9.12.2.
+Resolved libraries: JuicyPixels 3.3.9, cryptohash-sha256 0.11.102.1,
+zlib 0.7.1.1. The measurement code is commit `4492f79ba`; the JSON
+records its full SHA, exact tool-source hashes, corpus hash and package plan.
+
+```sh
+python3 tools/map_page_codec_measure.py --output /tmp/foreground-2303-run-1
+python3 tools/map_page_codec_measure.py --output /tmp/foreground-2303-run-2 --compare /tmp/foreground-2303-run-1
+```
+
+[Complete first-run samples](measurements/world_map_codec_20260910_run1.json),
+[complete independent repeat](measurements/world_map_codec_20260910_run2.json),
+and [observed corpus classifications](measurements/world_map_codec_20260910_corpus.json)
+are retained without page-image binaries. There are 13 pages under each
+candidate. All 26 page/candidate pairs pass round-trip, in-process and
+fresh-process byte equality, and external corruption detection.
+
+### Derived aggregate results
+
+Totals, ratios and medians below are **derived** from the directly measured
+per-page lengths and timing samples. The ratio is encoded total divided by
+13 × 1,056,784 decoded bytes. Encoded totals include 32 digest bytes per page.
+
+| Candidate | Total stored bytes | Ratio to decoded | Median page bytes | Median isolated decode | Sum of page encode medians | Maximum per-page median peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| raw | 13,738,608 | 1.000030 | 1,056,816 | 2.970 ms | 0.000 ms | 30.016 MiB |
+| png | 1,221,557 | 0.088917 | 68,071 | 3.269 ms | 164.376 ms | 33.688 MiB |
+
+Raw encoding is the identity operation; its zero median is below the clock
+resolution for this operation, **not** a claim that hashing or storage is free.
+The raw stored size is decoded bytes plus 32. PNG uses 8.892% of decoded
+bytes over this corpus: a derived 91.109% saving relative to the raw candidate.
+
+### Per-page results
+
+Each cell below is derived from retained measured samples: timing is the
+within-page median; encoded size is a directly observed file length plus the
+explicit 32-byte integrity allowance. Raw size is 1,056,816 bytes for every
+row and raw encode median is below clock resolution for every row.
+
+| Page | PNG bytes | PNG encode ms | Raw isolated decode ms | PNG isolated decode ms | Raw peak RSS MiB | PNG peak RSS MiB |
+|---|---:|---:|---:|---:|---:|---:|
+| s42-w64-northwest | 57,826 | 10.810 | 2.967 | 3.192 | 30.016 | 33.656 |
+| s42-w64-northeast | 59,037 | 10.656 | 2.937 | 3.197 | 30.016 | 33.688 |
+| s42-w64-west-midnorth | 70,089 | 11.006 | 4.191 | 3.292 | 30.000 | 33.672 |
+| s42-w64-east-midnorth | 78,789 | 11.521 | 2.951 | 3.414 | 30.016 | 33.656 |
+| s42-w64-west-midsouth | 68,071 | 10.340 | 2.965 | 3.297 | 30.000 | 33.656 |
+| s42-w64-east-midsouth | 78,140 | 11.359 | 2.946 | 3.384 | 30.016 | 33.672 |
+| s42-w64-southwest | 53,504 | 10.266 | 2.916 | 3.077 | 30.000 | 33.688 |
+| s42-w64-southeast | 52,496 | 10.453 | 3.018 | 3.202 | 30.016 | 33.656 |
+| s1337-w136-northwest | 57,743 | 12.605 | 3.788 | 3.073 | 30.016 | 33.656 |
+| s1337-w136-center | 70,978 | 11.423 | 2.970 | 3.269 | 30.016 | 33.672 |
+| s1337-w136-southeast | 24,936 | 5.754 | 3.003 | 2.852 | 30.016 | 33.656 |
+| s1337-w136-level1 | 222,608 | 25.515 | 3.040 | 4.707 | 30.016 | 33.672 |
+| s1337-w136-root | 327,340 | 22.668 | 3.780 | 5.682 | 30.016 | 33.656 |
+
+Peak RSS is whole-process memory as defined above. Raw baseline medians
+span 27.875–27.906 MiB and PNG baselines 25.875–25.922 MiB. Derived peak
+increments span 2.109–2.141 MiB for raw and 7.750–7.812 MiB for PNG; these
+include process/allocator effects and are not substitutes for the exact
+1.008 MiB decoded payload. All individual samples remain in the JSON.
+
+The separate bulk run decodes 39 pages (three corpus passes) per candidate.
+
+- raw: measured 144.011 ms total; derived 3.693 ms/page.
+- png: measured 125.165 ms total; derived 3.209 ms/page.
+
+These bulk averages are not the isolated page latencies above.
+
+### Integrity and byte reproduction
+
+Each candidate was subjected to 39 payload corruptions (three offsets ×
+13 pages). The external SHA-256 check detected all 39 for each candidate.
+Raw native decoding accepted all 39 with exactly one changed RGBA byte and
+one changed pixel apiece. PNG native decoding rejected all 39; output damage
+is not applicable for those rejections. The JSON records every exact offset
+and rejection reason. This finite experiment does not prove detection of
+every possible corruption.
+
+All in-process and fresh-process encodes were byte-identical, and all pristine
+decodes exactly matched RGBA. Raw encoding is trivially deterministic because
+it is the identity; PNG determinism is measured under the pinned library set.
+The 13 regenerated RGBA files also directly match
+the initial one-capability corpus trial, providing an additional cross-capability
+check. The independent second run also passes every check with no direct-byte
+mismatches. Its corpus classifications, encoded sizes, and quota-model results
+match the first run exactly. Its median isolated latencies are 3.014 ms for raw
+and 3.271 ms for PNG, versus 2.970 ms and 3.269 ms in the first run. Only
+timing and observed memory samples vary, as the protocol permits.
+
+### Cache sensitivity (assumed page pricing; derived hit rates)
+
+The following table uses the **maximum measured PNG page size**, 327,340
+bytes, for every unmeasured trace page. It is a sensitivity assumption, not
+a measured large-world distribution. Hit rates include cold first requests
+and overlapping view requests, not just returns to previously visited areas.
+
+| Total quota MiB | Main quota MiB | Auxiliary quota MiB | Home/expeditions hit % | Frontier hit % | Distant inspection hit % | Auxiliary hit % |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 15.20 | 0.80 | 0.00 | 0.00 | 0.00 | 0.00 |
+| 64 | 60.80 | 3.20 | 86.86 | 87.43 | 0.84 | 0.00 |
+| 256 | 243.20 | 12.80 | 92.36 | 87.45 | 4.95 | 0.00 |
+| 1024 | 972.80 | 51.20 | 92.36 | 87.45 | 26.01 | 83.33 |
+
+For comparison, raw pricing is measured and constant at 1,056,816 bytes/page
+(the median and maximum cases coincide):
+
+| Total quota MiB | Home/expeditions hit % | Frontier hit % | Distant inspection hit % | Auxiliary hit % |
+|---:|---:|---:|---:|---:|
+| 16 | 0.00 | 0.00 | 0.00 | 0.00 |
+| 64 | 11.66 | 8.68 | 0.00 | 0.00 |
+| 256 | 87.62 | 87.43 | 1.26 | 0.00 |
+| 1024 | 92.36 | 87.45 | 13.34 | 83.33 |
+
+With **median-size pricing** (68,071 bytes/page), the home trace reaches
+92.36% at 64 MiB and gains nothing at larger tested quotas. Distant inspection
+still benefits: 12.92% at 64 MiB, 29.89% at 256 MiB and 53.78% at 1024 MiB.
+
+The 5% auxiliary partition exposes a policy assumption: 45 pages priced at
+327,340 bytes need 14,730,300 bytes (14.048 MiB), so the 12.8 MiB partition
+inside a 256 MiB total cannot retain a complete sweep. Its zero hit rate is
+LRU thrashing under that declared trace, not a missing-world or calculation
+failure. A different partition or a larger total must be evaluated before
+selecting this as a shipping policy.
+
+The full JSON includes both codecs, both pricing assumptions, every quota,
+main/auxiliary request and hit counts, cold-miss counts, peak resident bytes,
+and distinct working-set sizes. At maximum-size pricing the main PNG distinct
+working sets are 1,148.807 MiB (home), 658.066 MiB (frontier) and
+2,403.753 MiB (distant inspection); these are trace-wide distinct bytes,
+not simultaneous residency requirements.
+
+### Validation
+
+- Production `cabal build all` and `cabal build synarchy-test-headless`: pass.
+- Targeted `map pyramid (#2298)` Hspec group: 45 examples, zero failures.
+- `python3 tools/test_map_page_codec_measure.py`: 12 tests, pass.
+- `python3 tools/ci_parity_audit.py --self-test`, the parity audit itself,
+  and `python3 tools/unicode_operator_audit.py`: pass.
+- Both full measurement commands above: pass, 26 page/candidate pairs each,
+  with no direct-byte mismatches in the independent repeat.
+- `python3 tools/map_page_codec_measure.py --corpus-only --output /tmp/foreground-2303-corpus-final`:
+  pass, all 13 pages' actual terrain/boundary claims verified. Its RGBA and
+  corpus metadata directly match the full runs.
+
+### Recommendation and owner decision
+
+**Recommendation:** prefer PNG for the next artifact-format slice.
+Its space reduction is large, with modest measured decode cost and all
+required correctness checks passing. No third codec dependency is justified
+by this comparison. Independent reproduction confirms the result. The
+recommendation is evidence for the owner, not an automatic shipping decision.
+
+A 256 MiB total is a useful modest-budget candidate for ordinary expeditions,
+but the auxiliary partition needs a separate decision and measurement.
+Distant inspection benefits from more space; the owner should choose the
+intended experience before a quota is selected. These are proposed budgets,
+not runtime defaults. **Q-17 remains open.**
