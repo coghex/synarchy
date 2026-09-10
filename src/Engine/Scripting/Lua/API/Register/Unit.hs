@@ -22,6 +22,12 @@ import Engine.Scripting.Lua.API.Units.Medical
 -- surface. Its own module because it is the one verb that must commit
 -- against the SAME reference combat debits, not another stat accessor.
 import Engine.Scripting.Lua.API.Units.Stance (unitRecoverStanceFn)
+-- #2470's atomic stamina commit, imported directly for the same reason.
+-- Its own module beside the stance verb: it likewise commits against the
+-- SAME reference combat debits, and additionally REPORTS what it
+-- committed so the physiology tick's exhaustion rules read storage
+-- rather than a script-side estimate.
+import Engine.Scripting.Lua.API.Units.Stamina (unitCommitStaminaFn)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -65,6 +71,7 @@ registerUnitAPI callStats env = do
   registerLuaFunction callStats "unit" "setStat"     (unitSetStatFn env)
   registerLuaFunction callStats "unit" "getAllStats" (unitGetAllStatsFn env)
   registerLuaFunction callStats "unit" "recoverStance" (unitRecoverStanceFn env)
+  registerLuaFunction callStats "unit" "commitStamina" (unitCommitStaminaFn env)
   registerLuaFunction callStats "unit" "getInventory" (unitGetInventoryFn env)
   registerLuaFunction callStats "unit" "getItemContents" (unitGetItemContentsFn env)
   registerLuaFunction callStats "unit" "treatBleeding" (unitTreatBleedingFn env)
