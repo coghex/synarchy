@@ -1,0 +1,19 @@
+[
+  {"seed":42,"size":64,"plates":3,"pages":[
+    {"id":"s42-w64-northwest","level":0,"u":0,"v":0,"categories":["transparency","latitude-edge","longitude-seam","parity","ice"]},
+    {"id":"s42-w64-northeast","level":0,"u":1,"v":0,"categories":["parity"]},
+    {"id":"s42-w64-west-midnorth","level":0,"u":0,"v":1,"categories":["parity"]},
+    {"id":"s42-w64-east-midnorth","level":0,"u":1,"v":1,"categories":["parity"]},
+    {"id":"s42-w64-west-midsouth","level":0,"u":0,"v":2,"categories":["parity"]},
+    {"id":"s42-w64-east-midsouth","level":0,"u":1,"v":2,"categories":["parity"]},
+    {"id":"s42-w64-southwest","level":0,"u":0,"v":3,"categories":["transparency","latitude-edge","parity"]},
+    {"id":"s42-w64-southeast","level":0,"u":1,"v":3,"categories":["parity"]}
+  ]},
+  {"seed":1337,"size":136,"plates":3,"pages":[
+    {"id":"s1337-w136-northwest","level":0,"u":0,"v":0,"categories":["transparency","latitude-edge","longitude-seam","parity"]},
+    {"id":"s1337-w136-center","level":0,"u":2,"v":4,"categories":["varied-land","parity"]},
+    {"id":"s1337-w136-southeast","level":0,"u":4,"v":8,"categories":["transparency","latitude-edge","longitude-seam","parity"]},
+    {"id":"s1337-w136-level1","level":1,"u":1,"v":2,"categories":["parity"]},
+    {"id":"s1337-w136-root","level":2,"u":0,"v":1,"categories":["longitude-seam","parity","ocean","lava"]}
+  ]}
+]

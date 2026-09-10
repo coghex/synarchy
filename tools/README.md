@@ -4,6 +4,23 @@ Python scripts for auditing/regression-testing world generation, and for
 driving/verifying engine and game-logic behavior against a real headless
 engine instance.
 
+## Manual map-page codec measurement (#2303)
+
+`python3 tools/map_page_codec_measure.py --corpus-only` generates and verifies
+the tracked terrain-page corpus. The same command without `--corpus-only`
+compares raw RGBA8 and JuicyPixels PNG, retains isolated decode/memory samples,
+checks byte determinism and corruption behavior, and models bounded fine-cache
+quotas. It prints a fresh retained output directory; `--output <new-path>`
+selects one explicitly, and `--compare <previous-run>` adds direct-byte
+reproducibility checks against an earlier complete run.
+
+The command compiles a tool-only Haskell bridge against the existing library
+under the shared build lock. It uses no new dependency or production mode.
+Only `python3 tools/test_map_page_codec_measure.py` is a CI gate; the expensive
+measurement stays manual. See [the measurement protocol and results](../docs/world_map_page_codec_measurement.md)
+for timing boundaries, terrain checks, memory baselines, quota assumptions,
+and the owner's shipping decision.
+
 ## Pre-push gate: `ci-local.sh`
 
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local

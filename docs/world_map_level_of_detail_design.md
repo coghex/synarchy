@@ -424,9 +424,10 @@ checked dimensions, and the same fixed-slot retirement protocol.
 
 Decoded RGBA8 sizes above are known, but encoded page ratios and random-access
 decode costs are not. Before the artifact schema freezes a codec or disk-cache
-budget, a delivery slice must capture representative default and analytical
+budget, a delivery slice must capture representative default terrain
 pages spanning ocean, varied land, ice, and other high-contrast boundaries;
-compare raw checksummed pages with PNG through the repository's existing
+analytical modes are runtime tints under D-13, never stored page variants.
+The slice must compare raw checksummed pages with PNG through the existing
 JuicyPixels dependency and any additional codec only after justifying its new
 dependency; and record encoded bytes, encode/decode wall time, peak decoded
 memory, deterministic-byte behavior, and corruption localization. D-12 makes
