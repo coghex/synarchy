@@ -40,10 +40,13 @@ import Item.Types (ItemDef(..), ItemInstance(..)
                   , itemTotalWeight)
 import World.Types (WorldManager(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
-                       → Float → Float → Int → Faction → WorldPageId → IO ()
-handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
+                       → Float → Float → Int → Faction → WorldPageId
+                       → ChunkGeneration → IO ()
+handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId epoch = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Drop the spawn if its world no longer exists. A spawn queued
     -- before a teardown would otherwise be drained after it and
@@ -53,12 +56,31 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
     -- because its replacement holds the name and the queued
     -- @UnitClearPage@ retires the pre-cutoff row afterwards.
     wmgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
+    let mPage     = lookup pageId (wmWorlds wmgr)
+        worldGone = isNothing mPage
+    -- #2476: the page id is a reusable NAME, so "the page exists" is not
+    -- "the page this request was admitted for exists". A same-id re-init
+    -- registers a DIFFERENT 'WorldState' under it, and this command may
+    -- already have been dequeued when that transition ran — in which
+    -- case the transition's immediate retirement saw nothing to remove
+    -- and its queued 'UnitClearPage' has not been reached yet, so the
+    -- insertion below would make an old incarnation's unit live under
+    -- the replacement's name. Comparing the page's INCARNATION epoch is
+    -- what settles it, and it is checked here rather than left to the
+    -- clear because between the two the unit is externally visible.
+    replaced ← case mPage of
+        Nothing → pure False
+        Just ws → (≢ epoch) ⊚ pageIncarnation ws
     case HM.lookup defName (umDefs um) of
         _ | worldGone → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatThread
                 "UnitSpawn: dropping spawn for a destroyed world (teardown)"
+        _ | replaced → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatThread $
+                "UnitSpawn: dropping spawn admitted for a previous \
+                \incarnation of page " <> unWorldPageId pageId
         Nothing → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatThread $

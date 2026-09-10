@@ -28,6 +28,8 @@ import Building.Placement
     , remoteCheck, isRemote
     )
 import Building.Reservation (reserveFootprint)
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 import Location.Bounds (remotePortalThresholdTiles)
 import World.Types
     ( WorldManager(..), WorldState(..), WorldGenParams(..) )
@@ -174,8 +176,15 @@ buildingSpawnFn env = do
                                 case eBid of
                                     Left reason → pure (Left reason)
                                     Right bid → do
+                                        -- #2476: the page INCARNATION
+                                        -- this placement was validated
+                                        -- against, read from the state
+                                        -- resolved above and under the
+                                        -- lifecycle lock.
+                                        epoch ← pageIncarnation ws
                                         enqueueSpawn env bindArg
                                             bid defName cgx cgy gz pid
+                                            epoch
                                         pure (Right bid)
                     (_, Nothing, _) → pure (Left "unknown building")
                     (_, _, Nothing)  → pure (Left "no active world")
@@ -441,12 +450,14 @@ visiblePageStateFrom env = do
 --   forwards the same 'BuildingSpawn' from there
 --   ("World.Thread.Command.BoundSpawn").
 enqueueSpawn ∷ EngineEnv → Maybe Lua.Integer
-             → BuildingId → Text → Int → Int → Int → WorldPageId → IO ()
-enqueueSpawn env mBind bid defName gx gy gz pid = case mBind of
+             → BuildingId → Text → Int → Int → Int → WorldPageId
+             → ChunkGeneration → IO ()
+enqueueSpawn env mBind bid defName gx gy gz pid epoch = case mBind of
     Nothing   → Q.writeQueue (bcBuildingQueue (toBuildingCapability env)) $
-        BuildingSpawn bid defName gx gy gz pid
+        BuildingSpawn bid defName gx gy gz pid epoch
     Just want → Q.writeQueue (wsWorldQueue (toWorldSimCapability env)) $
         WorldSpawnBoundBuilding bid defName gx gy gz pid (fromIntegral want)
+                                epoch
 
 -- | Is the page a binding names no longer the visible one (#1602)? The
 --   generation check above already covers this — it moves on every

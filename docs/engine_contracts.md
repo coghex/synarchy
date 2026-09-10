@@ -2369,6 +2369,33 @@ handler — which runs ahead of that tick's movement, and
 `publishToRender` maps over the instances and would never visit an
 orphan anyway.
 
+The retirement precedes the `wmWorlds` write, and on the init paths that
+order is load-bearing: registering first would open an interval in which
+the replacement is reachable while the departed incarnation's rows are
+still in their managers, and every verb that resolves an entity's page
+reads those two in exactly that order.
+
+**A spawn already dequeued is refused at its own commit.** Neither half
+of the teardown can catch a spawn command that had already left its
+queue when the transition ran: the immediate retirement finds no
+instance to remove, and the queued clear is enqueued behind nothing. So
+`UnitSpawn`, `BuildingSpawn` and `WorldSpawnBoundBuilding` each carry
+the page's `ChunkGeneration` incarnation epoch (#2474's existing
+per-`WorldState` value, read by the admission from the page it resolved,
+inside the lifecycle lock). `handleUnitSpawnCommand` and the shared
+`applyBuildingSpawn` compare it against the page's current epoch and
+drop a mismatch exactly as they drop an absent page — retiring the
+footprint claim with it. "The page exists" and "the page this request
+was validated against exists" are different questions, and only the
+epoch answers the second.
+
+What this does NOT close is a caller that reads an entity, is
+descheduled across the whole transition, and then resolves the page and
+writes. That is the ordinary read-then-write straddle every entity verb
+already has against `UnitDestroy` / `BuildingDestroy`, not something a
+page teardown introduces; closing it would mean holding the lifecycle
+lock across every verb's durable mutation, which is a separate change.
+
 **Not a session boundary.** Neither path joins #2291's
 `wmTeardownsPending` fence or enqueues `UnitEndSession` /
 `BuildingEndSession`: one page ending is not the session ending.

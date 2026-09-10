@@ -53,6 +53,7 @@ import Building.Types
 import Building.Command.Types (BuildingCommand(..))
 import Building.Placement (canPlaceAt, PlacementResult(..))
 import Building.Reservation (reserveFootprint)
+import World.Chunk.Admit (pageIncarnation)
 import Location.Instance (emptyLocationInstances)
 import Craft.Bills (BillId(..))
 import Craft.Types (RecipeDef(..), lookupRecipe)
@@ -251,10 +252,16 @@ placeNodeOn env ws pid defName uid gx gy role param = do
                                     rollback item ix
                                     pure (Left reason)
                                 Right bid → do
+                                    -- #2476: the incarnation this
+                                    -- placement was validated against,
+                                    -- read from the resolved state
+                                    -- under the lifecycle lock.
+                                    epoch ← pageIncarnation ws
                                     Q.writeQueue
                                         (bcBuildingQueue
                                             (toBuildingCapability env)) $
-                                        BuildingSpawn bid defName cgx cgy gz pid
+                                        BuildingSpawn bid defName cgx cgy gz
+                                                      pid epoch
                                     nid ← atomicModifyIORef' (wsPowerNodesRef ws) $
                                         addPowerNode bid role param
                                     pure (Right (nid, bid))

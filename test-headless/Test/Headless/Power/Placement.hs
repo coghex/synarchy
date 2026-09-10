@@ -428,7 +428,7 @@ ownershipSpec = describe "power placement page ownership (#1205)" $ do
         nextBid `shouldBe` 2
         queued ← drainBuildingQueue env
         case queued of
-            [BuildingSpawn bid defName sx sy _ pid] → do
+            [BuildingSpawn bid defName sx sy _ pid _] → do
                 bid `shouldBe` BuildingId 1
                 defName `shouldBe` "solar_panel"
                 (sx, sy) `shouldBe` (placeX, placeY)
@@ -549,7 +549,7 @@ footprintClaimSpec =
         -- Exactly the shed's spawn was ever queued.
         queued ← drainBuildingQueue env
         case queued of
-            [BuildingSpawn bid defName _ _ _ _] → do
+            [BuildingSpawn bid defName _ _ _ _ _] → do
                 bid `shouldBe` BuildingId 1
                 defName `shouldBe` "shed"
             other → expectationFailure $

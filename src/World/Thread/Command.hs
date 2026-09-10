@@ -160,9 +160,9 @@ handleWorldCommand env logger (WorldSetConstructAnchor pageId gx gy)
 handleWorldCommand env logger (WorldClearConstructAnchor pageId)
   = handleWorldClearConstructAnchorCommand env logger pageId
 handleWorldCommand env logger
-    (WorldSpawnBoundBuilding bid defName gx gy gz pageId bindGen)
+    (WorldSpawnBoundBuilding bid defName gx gy gz pageId bindGen epoch)
   = handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
-                                         pageId bindGen
+                                         pageId bindGen epoch
 handleWorldCommand env logger
     (WorldDesignateConstruct pageId gx1 gy1 gx2 gy2 tgt mBindGen)
   = handleWorldDesignateConstructCommand env logger pageId gx1 gy1 gx2 gy2 tgt

@@ -306,7 +306,15 @@ a construction payment, a container reveal, a power placement — and could
 spend it into durable state on the replacement that outlives it. Removing
 it immediately makes a page teardown behave as `UnitDestroy` /
 `BuildingDestroy` already do, so no per-verb validation is needed at all.
-The queued clears remain the #58 mop-up for spawns already in flight. A clear retires only matching-page rows below its cutoff, so
+The queued clears remain the #58 mop-up for spawns already in flight, and
+the retirement precedes the `wmWorlds` write so no old row is ever visible
+beside the replacement.
+
+A spawn command that had already been DEQUEUED when the transition ran is
+caught by neither half, so each spawn command carries the page's
+`ChunkGeneration` incarnation epoch (D-3's value, read by the admission
+under the lock) and its commit drops a mismatch — the same arm that drops
+an absent page, claim retirement included. A clear retires only matching-page rows below its cutoff, so
 old work is retired while every replacement admission survives — including an
 unbound building's reservation and a page-bound building the world thread
 commits ahead of the delayed clear. It is the OUTERMOST coordination boundary

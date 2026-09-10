@@ -48,6 +48,7 @@ import Engine.Scripting.Lua.API.PageBinding
 import Engine.Scripting.Lua.API.Units.MotionArgs
     (defaultingSpeed, readMotionArg, requiredCoordinate, requiredSpeed)
 import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
+import World.Chunk.Admit (pageIncarnation)
 
 
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
@@ -234,10 +235,21 @@ unitSpawnFn env = do
                             let (uid', um'') = nextUnitId um'
                             in (um'', uid')
 
+                        -- #2476: the page's INCARNATION, read from the
+                        -- very state this admission resolved and inside
+                        -- the lifecycle lock, so a same-id re-init
+                        -- cannot slip between the two. The handler
+                        -- compares it before inserting; without it the
+                        -- page NAME alone would let a request admitted
+                        -- for a departed incarnation materialise on its
+                        -- replacement whenever the command was dequeued
+                        -- before that page's clear was even enqueued.
+                        epoch ← pageIncarnation ws
+
                         -- Enqueue spawn command, stamped with the active
                         -- world so the unit is world-scoped (#78).
                         Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
-                            UnitSpawn uid name gx gy gz faction pageId
+                            UnitSpawn uid name gx gy gz faction pageId epoch
 
                         return (Right (fromIntegral (unUnitId uid) ∷ Int))
 

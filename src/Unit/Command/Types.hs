@@ -11,9 +11,11 @@ import Unit.Faction (Faction(..))
 import Unit.Sim.Types (Pose(..))
 import Unit.Pathing.Hazard (MoveHazardPolicy(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Residency (ChunkGeneration)
 
 data UnitCommand
     = UnitSpawn !UnitId !Text !Float !Float !Int !Faction !WorldPageId
+               !ChunkGeneration
         -- ^ pre-allocated ID, defName, gridX, gridY, gridZ, faction,
         --   owning world page (stamped from the active world at spawn so
         --   the unit is world-scoped, #78).
@@ -23,6 +25,20 @@ data UnitCommand
         --   the boundary rather than travelling as a string nobody
         --   validates. Ownership/alliance/attack questions are answered
         --   by "Unit.Faction", never by comparing two of these.
+        --
+        --   The 'World.Chunk.Residency.ChunkGeneration' is the page
+        --   INCARNATION this request was admitted against (#2476), read
+        --   from the target page's own state inside the lifecycle lock
+        --   the admission holds. A page id is a reusable NAME, so the
+        --   page field alone cannot tell the handler whether the page
+        --   standing under that name is still the one this request was
+        --   validated for: a same-id re-init between admission and drain
+        --   registers a DIFFERENT 'World.State.Types.WorldState' under
+        --   it. Comparing epochs at the commit is what makes a request
+        --   admitted for a departed incarnation drop instead of
+        --   materialising on its replacement — the case a queued
+        --   page clear cannot catch, because the command may already
+        --   have been dequeued when that clear was enqueued.
     | UnitDestroy !UnitId
     | UnitTeleport !UnitId !Float !Float !(Maybe Int)
         -- ^ unitId, gridX, gridY, optional gridZ (Nothing = surface lookup)

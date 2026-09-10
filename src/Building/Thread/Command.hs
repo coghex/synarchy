@@ -24,6 +24,8 @@ import qualified Engine.Core.Queue as Q
 import World.Generate.Types (WorldGenParams(..))
 import World.State.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 import Building.Types
 import Building.Destruction
     ( captureDestructionEffect, destructionExpired
@@ -96,9 +98,9 @@ handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
                       → ContentRegistriesViewCapability → BuildingCapability
                       → BuildingCommand → IO ()
 handleBuildingCommand logRef sim reg bld
-                      (BuildingSpawn bid defName gx gy gz pageId) = do
+                      (BuildingSpawn bid defName gx gy gz pageId epoch) = do
     logger ← readIORef logRef
-    applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId
+    applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch
 
 handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
     -- #2091: the destruction presentation's frame zero. Same clock as
@@ -214,8 +216,8 @@ handleBuildingCommand _ _ _ _ BuildingEndSession = return ()
 applyBuildingSpawn ∷ LoggerState → WorldSimCapability
                    → ContentRegistriesViewCapability → BuildingCapability
                    → BuildingId → Text → Int → Int → Int → WorldPageId
-                   → IO ()
-applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
+                   → ChunkGeneration → IO ()
+applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch = do
     bm ← readIORef (bcBuildingManagerRef bld)
     -- Drop the spawn if its world is gone — a spawn queued before a
     -- teardown would otherwise re-insert an orphan building into the
@@ -228,11 +230,28 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
     wmgr ← readIORef (wsWorldManagerRef sim)
     let mPage     = lookup pageId (wmWorlds wmgr)
         worldGone = isNothing mPage
+    -- #2476: "the page exists" is not "the page this request was
+    -- admitted for exists" — the id is a reusable NAME, and a same-id
+    -- re-init registers a different 'WorldState' under it. This command
+    -- may already have been dequeued when that transition ran, so
+    -- neither the transition's immediate retirement nor its queued
+    -- clear can be relied on to catch it; between the insertion and the
+    -- clear the building would be externally visible on the
+    -- replacement. Shared by BOTH routes, so a page-bound placement is
+    -- held to it too.
+    replaced ← case mPage of
+        Nothing → pure False
+        Just ws → (≢ epoch) ⊚ pageIncarnation ws
     case HM.lookup defName (bmDefs bm) of
         -- #2326: every path that drops the spawn retires what that
         -- request left behind — its footprint claim, and any power node
         -- already allocated against the id it was promised.
         _ | worldGone → dropRequest
+        _ | replaced → do
+            dropRequest
+            logDebug logger CatThread $
+                "BuildingSpawn: dropping spawn admitted for a previous \
+                \incarnation of page " <> unWorldPageId pageId
         Nothing → do
             dropRequest
             logWarn logger CatThread $

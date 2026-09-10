@@ -6,9 +6,11 @@ module Building.Command.Types
 import UPrelude
 import Building.Types (BuildingId(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Residency (ChunkGeneration)
 
 data BuildingCommand
     = BuildingSpawn !BuildingId !Text !Int !Int !Int !WorldPageId
+                    !ChunkGeneration
         -- ^ pre-allocated id, defName, anchor gx, gy, gz, owning world
         --   page (stamped from the active world so the building is
         --   world-scoped, #76).
@@ -24,6 +26,20 @@ data BuildingCommand
         --   same 'Building.Thread.Command.applyBuildingSpawn' body, so
         --   this queue stays the route for every UNBOUND spawn without
         --   the two ever diverging.
+        --
+        --   The 'World.Chunk.Residency.ChunkGeneration' is the page
+        --   INCARNATION this request was admitted against (#2476), read
+        --   from the target page's own state inside the lifecycle lock
+        --   the admission holds. A page id is a reusable NAME, so the
+        --   page field alone cannot tell the handler whether the page
+        --   standing under that name is still the one this request was
+        --   validated for: a same-id re-init between admission and drain
+        --   registers a DIFFERENT 'World.State.Types.WorldState' under
+        --   it. Comparing epochs at the commit is what makes a request
+        --   admitted for a departed incarnation drop instead of
+        --   materialising on its replacement — the case a queued
+        --   page clear cannot catch, because the command may already
+        --   have been dequeued when that clear was enqueued.
     | BuildingDestroy !BuildingId
     | BuildingClearAll
         -- ^ Drop every building instance + selection. Enqueued by

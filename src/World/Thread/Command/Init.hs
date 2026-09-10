@@ -826,26 +826,37 @@ registerPageIncarnation env pageId register = do
         -- what re-activates the incoming one.
         Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
 
-
-        atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
-            (register mgr, ())
-
-        -- Retire the replaced incarnation's entities through the queues,
-        -- for the same reason destroy-all uses them (#58): the unit
-        -- thread drains across this transition, so a clear applied here
-        -- would race the spawns already queued ahead of it. A pre-cutoff
-        -- spawn still inserts (its page IS registered — the replacement
-        -- holds the name) and is then retired by the clear behind it.
+        -- Retire the replaced incarnation's rows BEFORE the replacement
+        -- is registered, and immediately rather than only through the
+        -- queue — see
+        -- 'World.Thread.Command.Basic.handleWorldDestroyCommand' for
+        -- why "eventually" is not enough and why this is not the direct
+        -- clear #58 forbids.
+        --
+        -- The ORDER is the point here, and it is the opposite of the
+        -- destroy path's for the same reason. Registering first would
+        -- open an interval in which the replacement is reachable
+        -- through @wmWorlds@ while the departed incarnation's units and
+        -- buildings are still in their managers — and every verb that
+        -- resolves an entity's page reads those two in that order, so it
+        -- would pair an old entity with the new page and write durable
+        -- state that outlives the row. Retiring first closes it: at no
+        -- instant is an old row visible beside the replacement.
         when replaced $ do
-            -- Retire the replaced incarnation's rows immediately as
-            -- well as through the queue — see
-            -- 'World.Thread.Command.Basic.handleWorldDestroyCommand'
-            -- for why "eventually" is not enough and why this is not
-            -- the direct clear #58 forbids.
             atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
                 (fst (retirePageUnits pageId unitCutoff um), ())
             atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
                 (retirePageBuildings pageId bldCutoff bm, ())
+
+        atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
+            (register mgr, ())
+
+        -- The queued halves stay: the immediate retirement above cannot
+        -- see a spawn that is still on its queue, and the sim states
+        -- belong to the unit thread. A pre-cutoff spawn dequeued before
+        -- this transition ran is caught by neither — it is refused at
+        -- its own commit, by the page-incarnation epoch it carries.
+        when replaced $ do
             Q.writeQueue (ucUnitQueue unitCombat)
                          (UnitClearPage pageId unitCutoff)
             Q.writeQueue (bcBuildingQueue building)

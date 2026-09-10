@@ -959,6 +959,39 @@ survivalSpec = describe "the replacement's admissions survive" $ do
             unitExists ls uid       `shouldReturn` "false"
             buildingResolves ls bid `shouldReturn` "false"
 
+    forM_ paths $ \p →
+        it ("a spawn already dequeued when " <> pathName p
+            <> " ran cannot insert afterwards") $ \(env, ls) → do
+            resetScene env
+            _ ← spawnUnitOn ls incPage unitTile
+            bid ← spawnBuildingOn ls buildingDefName oldTile incPage Nothing
+            -- Take the commands OFF their queues first. That is the
+            -- schedule neither half of the teardown can catch: the
+            -- transition's immediate retirement finds no instance to
+            -- remove because the spawn has not run, and its queued
+            -- clear is enqueued BEHIND nothing, so re-queuing the spawn
+            -- afterwards puts it after the clear. Without the
+            -- page-incarnation epoch on the command, the insertion
+            -- below would make an old incarnation's entity live under
+            -- the replacement's name — externally visible to every
+            -- verb until some later clear, and to Lua in between.
+            heldUnits ← Q.flushQueue (unitQueue env)
+            heldBuildings ← Q.flushQueue (buildingQueue env)
+            length heldUnits     `shouldBe` 1
+            length heldBuildings `shouldBe` 1
+            pathRun p env
+            mapM_ (Q.writeQueue (unitQueue env)) heldUnits
+            mapM_ (Q.writeQueue (buildingQueue env)) heldBuildings
+            drainEntities env
+            -- Refused at its own commit, by the epoch it carries.
+            rows ← rowsOn env incPage
+            rUnits rows     `shouldBe` []
+            rBuildings rows `shouldBe` []
+            simStateIds env `shouldReturn` []
+            -- And the refused building's claim is retired with it, so
+            -- its tiles are not held against the replacement forever.
+            rClaims rows `shouldNotSatisfy` elem bid
+
     it "a spawn admitted before a destroy and drained after it is \
        \dropped by the absent-page guard, leaking no claim" $
         \(env, ls) → do
