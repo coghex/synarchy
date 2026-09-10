@@ -413,25 +413,44 @@ advanceSegment pc reg now dtLeft mw stats us mt (gx, gy) isFirst allowance =
        then (us, Nothing)
        else if step ≥ dist
        -- The step REACHES the sub-goal, so charge it exactly the time
-       -- that distance costs at this segment's effective speed and carry
-       -- the rest on. `dist / step` is that fraction by construction:
-       -- `step` is the distance this segment's whole remaining budget
-       -- buys. A negative step never lands here — it moves AWAY from the
-       -- sub-goal — so the ratio is in (0, 1].
+       -- that distance costs at this segment's effective SPEED and carry
+       -- the rest on.
+       --
+       -- The fraction is taken against `rawStep`, never the clamped
+       -- `step`. `maxProtectedStep` is a cumulative DISTANCE ceiling, not
+       -- a speed: a protected request commanded faster than the ceiling
+       -- allows still crosses the ground it does cross at its commanded
+       -- speed. Charging `dist / step` on a cap-active segment would bill
+       -- the arrival for the whole clamped budget — at 6 tiles/s a 0.4-tile
+       -- waypoint would cost 0.44 s instead of 0.067 s — and hand a slower
+       -- continued segment far too little time even where the ceiling
+       -- itself never binds again. `step` still decides REACHABILITY and
+       -- still bounds the distance travelled.
+       --
+       -- The ratio is in (0, 1] by construction: a negative step never
+       -- lands here (it moves AWAY from the sub-goal), and
+       -- `dist ≤ step ≤ rawStep` whenever the clamp is active.
        then if snapBlocked
             then blockedSnap
             else continueAfter (arrived { usMoveGrade = grade })
-                               (dtLeft * realToFrac (dist / step))
+                               (dtLeft * realToFrac (dist / rawStep))
        else
        -- An ordinary step, which spends the whole remaining budget and
        -- ends the tick. Terrain is sampled once, at this segment's start
        -- tile, exactly as it always was.
-            let moved = moveToward pc reg now stats stamped mt mw dx dy dist step
-                held  = usRealX moved ≡ usRealX us ∧ usRealY moved ≡ usRealY us
-            in ( if isFirst ∨ not held
-                 then moved
-                 else moved { usMoveGrade = usMoveGrade us }
-               , Nothing )
+       --
+       -- Whether it consumed movement time is read from the OUTCOME, not
+       -- from whether the coordinates changed: a positive continued step
+       -- shorter than the Float resolution of the unit's position spends
+       -- the whole remaining budget and still rounds to the same x/y, and
+       -- inferring "nothing happened" from that would hand `usMoveGrade`
+       -- back to the previous segment.
+            case moveToward pc reg now stats stamped mt mw dx dy dist step of
+                (moved, Stepped)  → (moved, Nothing)
+                (moved, Diverted)
+                    | isFirst     → (moved, Nothing)
+                    | otherwise   →
+                        (moved { usMoveGrade = usMoveGrade us }, Nothing)
 
 -- | Ceiling on a hazard-PROTECTED request's per-tick displacement, in
 --   tiles (#1217, review round 2).
@@ -486,15 +505,19 @@ arriveAtSubGoal stats us mt (gx, gy) mWtd =
             -- path; otherwise resume greedy heading toward the final
             -- target (unless we're already there).
             -- Popping the LAST waypoint only ends the request when it
-            -- really is the final target. The tolerance here is the
-            -- floating-point one, not the old 0.1-per-axis slack that
-            -- used to clear a target the unit was still a tenth of a
-            -- tile short of (#2473); a last waypoint near but distinct
-            -- from the target falls through to greedy mode, and the
-            -- continuation charges the remaining distance.
-            let arrivedAtFinal =
-                    abs (gx - mtTargetX mt) < arrivalTolerance
-                    ∧ abs (gy - mtTargetY mt) < arrivalTolerance
+            -- really is the final target. This is the SAME radial test
+            -- the sub-goal arrival uses, against the same tolerance —
+            -- not the old per-axis pair, under which a target offset by
+            -- 0.9 of the tolerance on BOTH axes read as reached at 1.27
+            -- times it, and not the 0.1-per-axis slack before that, which
+            -- cleared a target the unit was still a tenth of a tile short
+            -- of (#2473). A last waypoint near but distinct from the
+            -- target falls through to greedy mode, and the continuation
+            -- charges the remaining distance.
+            let ddx = gx - mtTargetX mt
+                ddy = gy - mtTargetY mt
+                arrivedAtFinal =
+                    sqrt (ddx * ddx + ddy * ddy) ≤ arrivalTolerance
             in if null rest ∧ arrivedAtFinal
                then us' { usLocalPath = []
                         , usTarget    = Nothing
@@ -506,6 +529,21 @@ arriveAtSubGoal stats us mt (gx, gy) mWtd =
         [] →
             -- Greedy mode: subGoal was the final target, so we've arrived.
             us' { usTarget = Nothing, usState = Idle }
+
+-- | What a 'moveToward' segment did with the budget it was handed.
+--
+--   The continuation loop needs the two apart (#2473): only a 'Stepped'
+--   segment consumed movement time, and a coordinate comparison cannot
+--   tell them apart when the step is real but smaller than the position's
+--   own Float resolution.
+data StepOutcome
+    = Stepped
+      -- ^ An ordinary step. The whole remaining budget went into moving,
+      --   whether or not the resulting coordinates differ.
+    | Diverted
+      -- ^ A replan or a climb/fall transition. The unit did not move; the
+      --   tick's remaining budget is deliberately dropped.
+    deriving (Eq, Show)
 
 -- | Step one tick toward the sub-goal. Cost-check first; on block or
 --   high-cost (greedy mode only) trigger replan. If the next tile
@@ -523,7 +561,7 @@ moveToward
     → Float    -- dy
     → Float    -- distance to sub-goal
     → Float    -- step length this tick
-    → UnitSimState
+    → (UnitSimState, StepOutcome)
 moveToward pc reg now stats us mt mw dx dy dist step =
     let mWtd = mwTiles mw
         nx   = dx / dist
@@ -592,9 +630,9 @@ moveToward pc reg now stats us mt mw dx dy dist step =
             _ → Nothing
     in case mCost of
         Nothing →
-            replan pc reg us mt mw srcTile
+            (replan pc reg us mt mw srcTile, Diverted)
         Just c | not followingPath ∧ (c > pcReplanCostThreshold pc ∨ matEdge) →
-            replan pc reg us mt mw srcTile
+            (replan pc reg us mt mw srcTile, Diverted)
         Just _ → case (mCliff, mFall) of
             (Just (srcZ, dstZ), _) →
                 -- Face the CLIFF, not the unit's walking sub-step.
@@ -607,8 +645,9 @@ moveToward pc reg now stats us mt mw dx dy dist step =
                     (dgx, dgy) = dstTile
                     cliffDx    = fromIntegral (dgx - sx) ∷ Float
                     cliffDy    = fromIntegral (dgy - sy) ∷ Float
-                in startClimb now stats us (dstTile, dstZ) srcZ
-                              (cliffDx, cliffDy)
+                in ( startClimb now stats us (dstTile, dstZ) srcZ
+                                 (cliffDx, cliffDy)
+                   , Diverted )
             (_, Just (srcZ, dstZ)) →
                 -- Fall: same facing logic as climb, but the unit
                 -- launches into the air rather than grabbing rock.
@@ -616,18 +655,20 @@ moveToward pc reg now stats us mt mw dx dy dist step =
                     (dgx, dgy) = dstTile
                     fallDx     = fromIntegral (dgx - sx) ∷ Float
                     fallDy     = fromIntegral (dgy - sy) ∷ Float
-                in startFall now us (dstTile, dstZ) srcZ
-                             (fallDx, fallDy)
+                in ( startFall now us (dstTile, dstZ) srcZ
+                                (fallDx, fallDy)
+                   , Diverted )
             _ →
                 let (dgx, dgy) = dstTile
                     newZ       = lookupZ mWtd dgx dgy (usGridZ us)
-                in us { usRealX  = newX
-                      , usRealY  = newY
-                      , usGridZ  = newZ
-                      , usRealZ  = fromIntegral newZ
-                      , usFacing = vectorToDirection nx ny
-                      , usState  = gaitForPose (usPose us) stats mt
-                      }
+                in ( us { usRealX  = newX
+                        , usRealY  = newY
+                        , usGridZ  = newZ
+                        , usRealZ  = fromIntegral newZ
+                        , usFacing = vectorToDirection nx ny
+                        , usState  = gaitForPose (usPose us) stats mt
+                        }
+                   , Stepped )
 
 -- | Walking vs Running gait, by whether the commanded speed crosses the
 --   unit's run-anim threshold (def.run_threshold × def.max_speed). This

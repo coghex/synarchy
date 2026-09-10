@@ -134,15 +134,20 @@ tiledWorld column =
                            , ctVeg    = VU.singleton 0 }
     in worldWith (zChunk (const 5)) { lcTiles = cols }
 
--- | Material 1 is firm ground; material 2 is exactly twice as slow.
---   Registered directly rather than through the YAML loader — these
---   cases are about the mover, not the authoring domain (#1734 owns
+-- | Four @move_cost@ classes: 1 is firm ground, 2 is exactly twice as
+--   slow, 4 is twenty times slower (slow enough that a continued segment
+--   stays well under the protected ceiling), and 3 is slow enough that a
+--   real positive step lands under the Float resolution of the unit's own
+--   position. Registered directly rather than through the YAML loader —
+--   these cases are about the mover, not the authoring domain (#1734 owns
 --   that boundary).
-twoMaterials ∷ MaterialRegistry
-twoMaterials =
+moveCosts ∷ MaterialRegistry
+moveCosts =
     registerMaterial 1 (defaultMaterialProps { mpMoveCost = 1.0 })
         (registerMaterial 2 (defaultMaterialProps { mpMoveCost = 2.0 })
-            emptyMaterialRegistry)
+            (registerMaterial 3 (defaultMaterialProps { mpMoveCost = 1.0e7 })
+                (registerMaterial 4 (defaultMaterialProps { mpMoveCost = 20.0 })
+                    emptyMaterialRegistry)))
 
 -- | Firm ground west of x = 2, the slow material from x = 2 on: a
 --   boundary a continuation STARTING at x = 2 must resample across.
@@ -153,6 +158,18 @@ slowEastWorld = tiledWorld (\lx → (if lx < 2 then 1 else 2, 0))
 --   partition-dependence counterexample puts it.
 slowFromOneWorld ∷ WorldTileData
 slowFromOneWorld = tiledWorld (\lx → (if lx < 1 then 1 else 2, 0))
+
+-- | Firm ground west of x = 6, twenty-times-slower ground from x = 6:
+--   slow enough that a continued segment starting there stays under the
+--   protected ceiling, so the ceiling cannot mask a mis-billed arrival.
+slowFromSixWorld ∷ WorldTileData
+slowFromSixWorld = tiledWorld (\lx → (if lx < 6 then 1 else 4, 0))
+
+-- | A downhill column at x = 1 and near-immobilising ground everywhere
+--   else, so a continuation off the slope takes a real positive step that
+--   is nonetheless too small to change the unit's Float position.
+crawlOffSlopeWorld ∷ WorldTileData
+crawlOffSlopeWorld = tiledWorld (\lx → if lx ≡ 1 then (1, 2) else (3, 0))
 
 -- | Slope bit 1 marks the EAST neighbour as one z below, so an
 --   east-bound unit standing on such a column is heading straight down
@@ -651,6 +668,21 @@ spec = do
             usTarget us' `shouldBe` Nothing
             usState us'  `shouldBe` Idle
 
+        it "does not clear a DIAGONALLY near final target" $ do
+            -- Offset by 0.9 of the tolerance on each axis: inside a
+            -- per-axis pair of comparisons, but 1.27 times the tolerance
+            -- away radially, so the last leg must still be travelled and
+            -- charged.
+            let off = 0.9 * arrivalTolerance
+                fx  = 2.0 + off
+                fy  = 2.0 + off
+                us  = moverOn (1.5, 2.0) 0 (MoveTarget fx fy 1.0 FallPermitted)
+                              [(2.0, 2.0)]
+                us' = tickUnit pc reg 1.0 1.0 noWorld stats us
+            (usRealX us', usRealY us') `shouldBe` (fx, fy)
+            usTarget us' `shouldBe` Nothing
+            usState us'  `shouldBe` Idle
+
         it "charges the last leg rather than snapping it" $ do
             -- A budget that reaches the waypoint with only 0.02 tiles of
             -- travel left over gets 0.02 tiles, not the whole 0.05.
@@ -664,9 +696,33 @@ spec = do
         -- starts ON the slow tile and buys 0.25, not another 0.5.
         let us  = moverOn (1.5, 0.5) 5 (MoveTarget 4.0 0.5 1.0 FallPermitted)
                           [(2.0, 0.5), (4.0, 0.5)]
-            us' = tickUnit pc twoMaterials 1.0 1.0
+            us' = tickUnit pc moveCosts 1.0 1.0
                            (ownPageWorld slowEastWorld) stats us
         usRealX us' `shouldBe` 2.25
+
+    it "bills a cap-active protected arrival at its effective SPEED" $ do
+        -- Speed 6 over a 1 s tick is 6 tiles of raw travel, so the 0.9
+        -- ceiling clamps the first segment's step. The waypoint at x = 6
+        -- is 0.5 tiles away, and 0.5 tiles at 6 tiles/s costs 1/12 s, not
+        -- the 5/9 s that billing against the clamped 0.9 would charge.
+        -- The continuation then crosses twenty-times-slower ground, where
+        -- the ceiling never binds again, so the mis-billing is visible in
+        -- the distance rather than hidden by the clamp.
+        let us  = moverOn (5.5, 0.5) 5 (MoveTarget 12.5 0.5 6.0 FallProhibited)
+                          [(6.0, 0.5), (12.5, 0.5)]
+            us' = tickUnit pc moveCosts 1.0 1.0
+                           (ownPageWorld slowFromSixWorld) stats us
+            -- 1 - 0.5/6 seconds left, at 6/20 tiles per second.
+            expected = 6.0 + 0.3 * (1 - 0.5 / 6)
+        abs (usRealX us' - realToFrac expected)
+            `shouldSatisfy` (< arrivalTolerance)
+        -- Billing against the clamped step would have left 1 - 0.5/0.9
+        -- seconds and stopped short, near x = 6.13.
+        usRealX us' `shouldSatisfy` (> 6.2)
+        -- ...and the ceiling still bounds the whole tick's path length,
+        -- which is what makes this a billing fix and not a relaxed cap.
+        (0.5 + abs (usRealX us' - 6.0))
+            `shouldSatisfy` (≤ maxProtectedStep + arrivalTolerance)
 
     describe "usMoveGrade across a multi-segment tick" $ do
         -- Only local x = 1 slopes, so the segment that starts there and
@@ -690,6 +746,20 @@ spec = do
                 us' = tickUnit pc reg 1.0 1.0 slopeMw stats us
             usTarget us'    `shouldBe` Nothing
             usMoveGrade us' `shouldBe` (-1)
+
+        it "belongs to a step too small to change the position" $ do
+            -- The continuation off the slope takes a real positive step
+            -- of about 5e-8 tiles — the whole remaining budget on ground
+            -- with move_cost 1e7 — which rounds away at x = 2 (a Float
+            -- there resolves to ≈ 2.4e-7). It spent the time, so the
+            -- grade is ITS grade; reading consumption off the coordinates
+            -- would hand the downhill segment's -1 back.
+            let us  = moverOn (1.5, 0.5) 5 (MoveTarget 4.0 0.5 1.0 FallPermitted)
+                              [(2.0, 0.5), (4.0, 0.5)]
+                us' = tickUnit pc moveCosts 1.0 1.0
+                               (ownPageWorld crawlOffSlopeWorld) stats us
+            usRealX us'     `shouldBe` 2.0
+            usMoveGrade us' `shouldBe` 0
 
         it "is zero when no segment consumed movement time" $ do
             let us  = moverOn (1.5, 0.5) 5
@@ -777,7 +847,7 @@ spec = do
                                (MoveTarget 8.5 0.5 2.0 FallPermitted)
                                [(8.5, 0.5)]
             slowMw = ownPageWorld slowFromOneWorld
-            tickOf t dt = tickUnit pc twoMaterials t dt slowMw stats
+            tickOf t dt = tickUnit pc moveCosts t dt slowMw stats
 
         it "produces exactly the state the pre-#2473 mover produced" $
             -- Only the fields an ordinary step writes have moved — the
@@ -815,8 +885,9 @@ spec = do
             let continued = tickUnit pc reg 1.0 1.0 dropRidge stats
                                 (crossing FallProhibited 10)
                 -- The same segment, run as a FRESH tick from the
-                -- waypoint on the budget the continuation had left.
-                fresh = tickUnit pc reg 1.0 (1 - 0.4 / 0.9) dropRidge stats
+                -- waypoint on the budget the continuation had left:
+                -- 0.4 tiles at 1 tile/s leaves 0.6 s of the second.
+                fresh = tickUnit pc reg 1.0 0.6 dropRidge stats
                             (moverOn (7.6, 3.5) 10
                                 (MoveTarget 11.5 3.5 1.0 FallProhibited)
                                 [(11.5, 3.5)])

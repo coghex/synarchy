@@ -3493,6 +3493,14 @@ equal admitted elapsed time yields equal travelled distance however the
 elapsed time is partitioned, to within `arrivalTolerance` (1e-4 tiles)
 per waypoint crossed.
 
+An arrival is billed at the segment's own effective SPEED — the
+unclamped `rawStepLength` — never at the protected-clamped step.
+`maxProtectedStep` is a cumulative distance ceiling, not a speed limit:
+billing a cap-active arrival for its clamped budget would overcharge it
+(0.44 s instead of 0.067 s for a 0.4-tile waypoint at 6 tiles/s) and
+starve the continued segment even where the ceiling never binds again.
+The clamped step still decides reachability and still bounds distance.
+
 **What it excludes.** Three paths deliberately DROP their unused
 elapsed time and are outside the guarantee:
 
@@ -3510,15 +3518,25 @@ resulting `UnitSimState` is byte-identical to the pre-#2473 mover's.
 Boundary-based time integration for those steps is a separate,
 unmade change; do not add it here.
 
-**The arrival tolerance.** `arrivalTolerance` is 1e-4 tiles and absorbs
-floating-point residue only: a step that REACHES its sub-goal is charged
-the sub-goal's exact distance, so the tolerance never grants distance the
-elapsed time did not pay for. It replaced a 0.1-tile `arrivalEpsilon`
-sized to prevent overshoot — a job the charge-what-you-reach rule now
-does at any tick size — under which a 0.05-tile step snapped a full 0.1
-tiles, and a last waypoint a tenth of a tile short of the target cleared
-that target through a separate per-axis check. Both are gone; the same
-tolerance now governs the final-target test.
+**The arrival tolerance.** `arrivalTolerance` is 1e-4 tiles. A step that
+REACHES its sub-goal is charged the sub-goal's exact distance, so nothing
+a step buys is unpaid for. The tolerance itself is a bounded exception to
+that, and the only one: a sub-goal ALREADY within it is reconciled at
+zero elapsed cost, which is what lets a legitimately zero effective step
+finish an arrival instead of stranding the unit (see the invalid-budget
+rule below). It is capped at 1e-4 tiles per waypoint precisely so that
+exception stays inside the floating-point residue of the snap arithmetic
+rather than becoming free travel.
+
+It replaced a 0.1-tile `arrivalEpsilon` sized to prevent overshoot — a
+job the charge-what-you-reach rule now does at any tick size — under
+which a 0.05-tile step snapped a full 0.1 tiles, and a last waypoint a
+tenth of a tile short of the target cleared that target through a
+separate per-axis check. Both are gone. The final-target test is now the
+SAME radial test against the SAME tolerance the sub-goal arrival uses:
+per-axis comparisons admitted a target 1.27 times the tolerance away when
+it was offset diagonally, and left that last leg neither travelled nor
+charged.
 
 **Per-segment behavior.** Each continuation is a fresh movement segment
 from the waypoint's exact position: material and slope are RESAMPLED
