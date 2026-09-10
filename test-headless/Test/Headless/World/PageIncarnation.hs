@@ -451,6 +451,22 @@ simStateIds env =
     sort . map unUnitId . HM.keys . utsSimStates
         <$> readIORef (ucUtsRef (toUnitCombatCapability env))
 
+-- | The two selection sets exactly as the managers hold them, with no
+--   page filter applied.
+--
+--   'Rows' reports selection page-scoped, which is the right view for
+--   "what does this page still own" but is VACUOUS as a gate on the
+--   clear's own selection handling: it resolves a selected id through
+--   the page's instance map, so an id left selected after its instance
+--   was removed reads as absent either way. These two readers are what
+--   an assertion about the selection itself must use.
+selectionsRaw ∷ EngineEnv → IO ([Word32], Maybe Word32)
+selectionsRaw env = do
+    um ← readIORef (unitManagerRef env)
+    bm ← readIORef (buildingManagerRef env)
+    pure ( sort (map unUnitId (HS.toList (umSelected um)))
+         , unBuildingId <$> bmSelected bm )
+
 allocators ∷ EngineEnv → IO (Word32, Word32)
 allocators env = do
     um ← readIORef (unitManagerRef env)
@@ -718,6 +734,10 @@ teardownSpec = describe "the old incarnation's rows are retired" $ do
             drainEntities env
             rowsOn env incPage `shouldReturn` noRows
             simStateIds env    `shouldReturn` []
+            -- Read RAW, not through the page filter: an id left in
+            -- 'umSelected'/'bmSelected' after its instance was retired
+            -- is exactly the leak a page-scoped view cannot see.
+            selectionsRaw env  `shouldReturn` ([], Nothing)
             -- Requirement 4: the allocators are never rewound.
             (u1, b1) ← allocators env
             u1 `shouldSatisfy` (≥ u0)
@@ -923,6 +943,7 @@ scopeSpec = describe "scoping and no-ops" $ do
         -- clear did not touch it" is a real claim rather than a
         -- vacuous one.
         rBuildingSel visibleBefore `shouldSatisfy` isJust
+        (selUnitsBefore, selBuildingBefore) ← selectionsRaw env
         simsBefore    ← simStateIds env
         destroyPage env keepPage
         drainEntities env
@@ -936,6 +957,15 @@ scopeSpec = describe "scoping and no-ops" $ do
         after `shouldBe` visibleBefore
             { rBuildings = sort (rClaims visibleBefore ++ rBuildings visibleBefore)
             , rClaims    = [] }
+        -- Read raw: the destroyed page's unit leaves the selection set
+        -- and the visible page's building keeps the single-slot
+        -- building selection, which a page-filtered view could not
+        -- distinguish from "cleared".
+        (selUnitsAfter, selBuildingAfter) ← selectionsRaw env
+        selBuildingAfter `shouldBe` selBuildingBefore
+        selUnitsAfter `shouldSatisfy` (\a → length a < length selUnitsBefore)
+        forM_ selUnitsAfter $ \u →
+            rUnits visibleBefore `shouldSatisfy` elem u
         -- The visible page's units keep their sim states; only the
         -- hidden page's went.
         simsAfter ← simStateIds env
