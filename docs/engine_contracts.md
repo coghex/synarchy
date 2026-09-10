@@ -2258,6 +2258,19 @@ exactly one per page: `World.Chunk.Admit.pageIncarnation` is how anything
 reads it, nothing advances it, and a new one exists only where a new
 `WorldState` does. It is never persisted — it is meaningless across a save.
 
+**Replacing a page id discards its simulation state first.** The epoch is
+recorded per page, so a replacement's first seed would otherwise re-label
+whatever the outgoing incarnation left under that key — and writebacks derived
+from those retained chunks would then carry the *live* epoch and pass the fence
+below. Every same-id replacement therefore enqueues `SimDropWorld` for the id
+before registering the replacement and long before its first seed:
+`WorldDestroy`, `WorldDestroyAll` and `World.Load.Publish` already did;
+`WorldInit` and `WorldInitArena` do too (#2477), which is the one replacement
+that reaches no teardown of its own. The sim queue is FIFO, so "drop, then seed
+the same id" is correct in queue order whatever the overlap. The drop also
+clears `swsActive`, which is right — the flag belonged to a page that no longer
+exists — and every caller shows a page after initialising it.
+
 ### Simulation writebacks (#2477)
 
 **A fluid writeback batch is applied only to the incarnation it was

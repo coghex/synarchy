@@ -11,6 +11,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
+import Sim.Command.Types (SimCommand(..))
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import World.Blood.Teardown (enqueueBloodDisposalForPage)
 import Control.DeepSeq (force)
@@ -122,6 +123,29 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- where no page yet exists under this id.
     do preMgr ← readIORef (wsWorldManagerRef worldSim)
        enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
+
+    -- …and DISCARD any simulation state standing under this id, before
+    -- the replacement is registered below and long before its first seed
+    -- is enqueued (#2477). Re-init is the one same-id replacement that
+    -- reaches no teardown of its own: 'WorldDestroy',
+    -- 'WorldDestroyAll' and 'World.Load.Publish' each drop the outgoing
+    -- page's sim state first, but this path used to leave the PREVIOUS
+    -- incarnation's chunks, dirty set and active flag in place under the
+    -- same key. The sim records a page's incarnation epoch from every
+    -- topology-bearing message, so the replacement's first seed would
+    -- otherwise re-label the old incarnation's retained chunks with the
+    -- NEW epoch — and writebacks derived from them would then pass the
+    -- very fence that exists to refuse them.
+    --
+    -- Unconditional and FIFO, exactly as
+    -- 'World.Load.Publish.publishStagedSession' does it: for an id no
+    -- page has held this is a no-op, and for one that exists "drop, then
+    -- seed the same id" is correct in queue order whatever the overlap.
+    -- It clears 'Sim.State.Types.swsActive' too, which is right — the
+    -- flag belonged to a page that no longer exists — and every caller
+    -- shows the page after initialising it, which is what re-activates
+    -- the incoming one.
+    Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
 
     -- register early so lua can read the loading phase
     atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
@@ -631,6 +655,24 @@ handleWorldInitArenaCommand env logger pageId = do
     -- its blood-texture GPU resources (#788) before it drops out below.
     do preMgr ← readIORef (wsWorldManagerRef worldSim)
        enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
+
+    -- …and DISCARD any simulation state standing under this id, before
+    -- the replacement is registered below and long before its first seed
+    -- is enqueued (#2477). Re-init is the one same-id replacement that
+    -- reaches no teardown of its own: 'WorldDestroy',
+    -- 'WorldDestroyAll' and 'World.Load.Publish' each drop the outgoing
+    -- page's sim state first, but this path used to leave the PREVIOUS
+    -- incarnation's chunks, dirty set and active flag in place under the
+    -- same key. The sim records a page's incarnation epoch from every
+    -- topology-bearing message, so the replacement's first seed would
+    -- otherwise re-label the old incarnation's retained chunks with the
+    -- NEW epoch — and writebacks derived from them would then pass the
+    -- very fence that exists to refuse them.
+    --
+    -- Same rule as 'handleWorldInitCommand' above, for the same reason:
+    -- an arena replaces a page wholesale, which is one of the reuses the
+    -- incarnation epoch exists to distinguish.
+    Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
 
     -- Register early so textures sent after this command are routed correctly
     atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →

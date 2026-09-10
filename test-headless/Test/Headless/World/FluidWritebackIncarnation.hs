@@ -35,6 +35,10 @@
 --     * @the epoch on the wire@ drives the real sim command handler and
 --       the real emit step, so a missing assignment in "Sim.Thread"
 --       fails here rather than passing behind a hand-built batch.
+--     * @same-id replacement@ covers the one reuse that reaches no
+--       teardown of its own — a direct re-init — where recording the
+--       incoming epoch on state the OUTGOING page left behind would
+--       re-label exactly the chunks the fence exists to refuse.
 --
 --   Like "Test.Headless.World.FluidWritebackStaleness", nothing here
 --   runs a sim thread: the interleaving under test is one a live sim
@@ -48,9 +52,10 @@ module Test.Headless.World.FluidWritebackIncarnation (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar)
 import Data.IORef (IORef, newIORef, readIORef)
-import Data.List (sort)
+import Data.List (findIndex, sort)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Text as T
@@ -59,6 +64,7 @@ import qualified Data.Vector.Unboxed as VU
 import System.Timeout (timeout)
 
 import Engine.Core.Clock (monotonicSeconds)
+import qualified Engine.Core.Queue as Q
 import Engine.Core.State (EngineEnv(..))
 import Sim.Command.Types
     (FastSettleOutcome(..), FastSettleRequest(..), SimCommand(..))
@@ -85,6 +91,10 @@ fencePageId = WorldPageId "fwi_fence_w8"
 replayPageId ∷ WorldPageId
 replayPageId = WorldPageId "fwi_replay_w8"
 
+-- | …and its own again, because it re-initialises one in place.
+reinitPageId ∷ WorldPageId
+reinitPageId = WorldPageId "fwi_reinit_w8"
+
 chunkCells ∷ Int
 chunkCells = chunkSize * chunkSize
 
@@ -98,6 +108,7 @@ spec = describe "fluid writeback incarnation fence (#2477)" $ do
     decisionSpec
     fenceSpec
     wireSpec
+    replacementSpec
 
 -- * The decision itself
 
@@ -272,6 +283,76 @@ wireSpec = describe "the epoch on the wire" $ do
         settle env fencePageId freshSws `shouldReturn` Just FastSettleApplied
         appliedSeed ws freshCoord freshBefore
 
+-- * Same-id replacement
+
+replacementSpec ∷ SpecWith EngineEnv
+replacementSpec = describe "same-id replacement" $ do
+
+    it "drops the previous incarnation's sim state before any seed \
+       \carrying the replacement's epoch, when a page id is \
+       \re-initialised in place with no WorldDestroy" $ \env → do
+        first' ← page env reinitPageId
+        firstEpoch ← pageIncarnation first'
+
+        -- A clean window on the sim queue. Nothing drains it in a
+        -- headless fixture, so what the re-init writes is all that is
+        -- left in it afterwards, in the order the sim would read it.
+        _ ← Q.flushQueue (simQueue env)
+
+        -- The DIRECT re-init: no WorldDestroy, no load publish, no exit
+        -- to menu — the one same-id replacement that reaches none of
+        -- their teardowns.
+        sendWorldCommand env (WorldInit reinitPageId 45 8 3 Nothing)
+        second' ← waitForReplacement env reinitPageId firstEpoch
+        secondEpoch ← pageIncarnation second'
+
+        cmds ← Q.flushQueue (simQueue env)
+        let dropAt = findIndex (isDropFor reinitPageId) cmds
+            seedAt = findIndex (isSeedFor reinitPageId) cmds
+            epochs = seedEpochs reinitPageId cmds
+
+        -- The re-init seeded the replacement at all, so the ordering
+        -- claim below is about something.
+        epochs `shouldNotBe` []
+        -- …every seed names the INCOMING incarnation…
+        epochs `shouldSatisfy` all (≡ secondEpoch)
+        -- …and the drop precedes the first of them. The sim reads this
+        -- queue in order, so that is the whole guarantee.
+        case (dropAt, seedAt) of
+            (Nothing, _) → expectationFailure
+                "re-initialising a live page id enqueued no SimDropWorld"
+            (_, Nothing) → expectationFailure
+                "re-initialising a live page id enqueued no seed"
+            (Just d, Just t) → d `shouldSatisfy` (< t)
+
+    it "discards the retained chunks on that drop, rather than leaving \
+       \them for the next seed to re-label with the new epoch" $ \env → do
+        ws ← page env fencePageId
+        (outgoing, lc) ← nthChunk ws 5
+        (incoming, _) ← nthChunk ws 6
+        topo ← pageSimTopology ws
+        old ← newChunkGeneration
+        new ← newChunkGeneration
+        let seed epoch coord = SimChunkLoaded fencePageId epoch topo coord
+                                   (lcFluidMap lc) (lcTerrainSurfaceMap lc)
+
+        -- What the world-side drop is protecting against, stated: the
+        -- epoch is recorded on the PAGE's state, so a seed for the
+        -- replacement re-labels whatever the outgoing incarnation left
+        -- under that key — and writebacks derived from those chunks then
+        -- carry the live epoch and pass the fence.
+        relabelled ← runSim env [seed old outgoing, seed new incoming]
+        swsIncarnation relabelled `shouldBe` Just new
+        sort (HM.keys (swsChunks relabelled))
+            `shouldBe` sort [outgoing, incoming]
+
+        -- With the drop in between — which the example above proves the
+        -- re-init enqueues first — there is nothing left to re-label.
+        dropped ← runSim env
+            [seed old outgoing, SimDropWorld fencePageId, seed new incoming]
+        swsIncarnation dropped `shouldBe` Just new
+        HM.keys (swsChunks dropped) `shouldBe` [incoming]
+
 -- Fixture ---------------------------------------------------------
 
 -- | The shared page, generated on first use. Every example takes a
@@ -284,6 +365,54 @@ page env pageId = do
         Nothing → do
             sendWorldCommand env (WorldInit pageId 45 8 3 Nothing)
             waitForWorldInit env pageId 120
+
+-- | Wait for a page id to come back under a DIFFERENT incarnation, which
+--   is what a re-init in place produces: the outgoing page is still
+--   registered and still @LoadDone@ when the command is enqueued, so
+--   waiting on the phase alone can answer with the page being replaced.
+waitForReplacement ∷ EngineEnv → WorldPageId → ChunkGeneration
+                   → IO WorldState
+waitForReplacement env pageId outgoing = go (1200 ∷ Int)
+  where
+    go 0 = expectationFailure
+        ("page never came back under a new incarnation: " ⧺ show pageId)
+        ≫ error "unreachable"
+    go n = do
+        mWs ← getWorldState env pageId
+        case mWs of
+            Nothing → retry n
+            Just ws → do
+                epoch ← pageIncarnation ws
+                phase ← readIORef (wsLoadPhaseRef ws)
+                if epoch ≢ outgoing ∧ phase ≡ LoadDone
+                    then pure ws
+                    else retry n
+    retry n = threadDelay 100000 ≫ go (n - 1)
+
+-- | 'SimDropWorld' for this page.
+isDropFor ∷ WorldPageId → SimCommand → Bool
+isDropFor pageId cmd = case cmd of
+    SimDropWorld p → p ≡ pageId
+    _              → False
+
+-- | A chunk seed for this page.
+isSeedFor ∷ WorldPageId → SimCommand → Bool
+isSeedFor pageId cmd = case cmd of
+    SimChunkLoaded p _ _ _ _ _ → p ≡ pageId
+    _                          → False
+
+-- | Every epoch this page's seeds carry, in queue order.
+seedEpochs ∷ WorldPageId → [SimCommand] → [ChunkGeneration]
+seedEpochs pageId cmds =
+    [ epoch | SimChunkLoaded p epoch _ _ _ _ ← cmds, p ≡ pageId ]
+
+-- | Fold a command sequence through the production transition and return
+--   the page's resulting sim state.
+runSim ∷ EngineEnv → [SimCommand] → IO SimWorldState
+runSim env cmds = do
+    simRef ← freshSimState
+    forM_ cmds (drive env simRef)
+    simWorld simRef fencePageId
 
 -- | The @n@th resident chunk in coordinate order — deterministic, so two
 --   examples asking for different indices provably get different chunks.
