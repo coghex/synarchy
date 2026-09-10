@@ -2,8 +2,9 @@
 
 This manual experiment supplies evidence for WML-6 and the owner's Q-17
 decision. It does not install a codec, cache, quota, or eviction policy.
-Two complete runs agree byte-for-byte. The owner shipping decision remains
-open; no codec or quota has been installed in the game.
+Two complete runs agree byte-for-byte. On 2026-09-10 the owner selected PNG
+and required all three map-use patterns to be critical. The disk quota and
+auxiliary-world accounting remain open; no runtime defaults have changed.
 
 ## Reproduce
 
@@ -148,8 +149,8 @@ The model covers three declared patterns, all reproducible in
 Each position requests an assumed 8 × 5-page 4K viewport plus a one-page
 ring (10 × 7), in row-major order, wrapping longitude and clipping latitude.
 This is a synthetic request conversion, not a measured renderer footprint
-or observed player telemetry. Home-and-expeditions is the provisional main
-case; the others test sensitivity.
+or observed player telemetry. The owner requires all three patterns to be
+critical; each must be assessed separately. No weighted average selects a quota.
 
 Each cache starts empty and applies byte-bounded LRU. Every page request,
 including repeated requests within overlapping views, counts once in the
@@ -301,19 +302,76 @@ failure. A different partition or a larger total must be evaluated before
 selecting this as a shipping policy.
 
 The full JSON includes both codecs, both pricing assumptions, every quota,
-main/auxiliary request and hit counts, cold-miss counts, peak resident bytes,
+main/auxiliary request, hit and total miss counts, peak resident bytes,
 and distinct working-set sizes. At maximum-size pricing the main PNG distinct
 working sets are 1,148.807 MiB (home), 658.066 MiB (frontier) and
 2,403.753 MiB (distant inspection); these are trace-wide distinct bytes,
 not simultaneous residency requirements.
 
+### Expanded comparison after owner clarification
+
+The owner selected PNG and declared all three camera patterns critical on
+2026-09-10. The original measurement archives above remain unchanged. This
+[derived cache replay](measurements/world_map_cache_20260910_all_three.json)
+reuses their measured PNG lengths and verified inventories, extends the quota
+sweep to 512, 2048, 3072 and 4096 MiB, and separates first requests from repeat
+requests. No new codec timing or terrain generation is claimed.
+
+```sh
+python3 tools/map_page_codec_measure.py --replay-cache docs/measurements/world_map_codec_20260910_run1.json --output /tmp/foreground-2303-all-three
+```
+
+The replay records its input SHA-256, model/entry-point source hashes, and
+command. Repeat requests are total requests minus distinct pages. Repeat
+misses are total misses minus first requests, including oversized-page bypass
+misses. Repeat hit rate divides hits by repeat requests; overlapping viewports
+count as repeats, so this is not exclusively a distant-return metric. An
+unbounded cache could serve 92.36%, 87.45% and 53.78% of *all* requests in the
+home, frontier and distant traces respectively; the remainder are first reads.
+
+Here every unmeasured page costs the corpus maximum, 327,340 bytes. The same
+assumed 95% main / 5% auxiliary partition is used throughout:
+
+| Total quota | Home repeat hit % | Frontier repeat hit % | Distant repeat hit % | Auxiliary repeat hit % |
+|---|---:|---:|---:|---:|
+| 256 MiB | 100.00 | 100.00 | 9.20 | 0.00 |
+| 512 MiB | 100.00 | 100.00 | 31.23 | 100.00 |
+| 1 GiB | 100.00 | 100.00 | 48.37 | 100.00 |
+| 2 GiB | 100.00 | 100.00 | 83.19 | 100.00 |
+| 3 GiB | 100.00 | 100.00 | 100.00 | 100.00 |
+| 4 GiB | 100.00 | 100.00 | 100.00 | 100.00 |
+
+At median pricing, distant repeat hit rates are 55.58%, 97.41% and 100% at
+256 MiB, 512 MiB and 1 GiB respectively. The large gap between these pricing
+cases is uncertainty in unseen page sizes, not measurement of player behavior.
+
+**Revised proposal: 3 GiB total optional fine-page disk cache.** It is the
+smallest tested quota that produces zero repeat misses across every trace
+under both pricing assumptions. This is a proposed retention target chosen
+for this comparison, not an owner-approved performance requirement. The
+previous 256 MiB suggestion favored expeditions and is withdrawn because
+it does not satisfy that proposed target for distant inspection.
+
+At 3 GiB the modeled partition is 2918.4 MiB main and 153.6 MiB auxiliary.
+The small-world trace needs only 14.048 MiB at maximum pricing. That leaves
+headroom in the auxiliary partition but withholds space from the main world;
+a smaller fixed reserve or shared pool would be a different policy requiring
+its own comparison. The 95/5 split remains an experiment assumption pending
+owner selection. These bytes exclude mandatory coarse/root artifacts,
+filesystem allocation/metadata, manifests and temporary writes. This is a
+logical encoded-data-plus-digest budget, not a bound on total folder size.
+Neither the small corpus nor these finite synthetic traces prove universal
+retention or interactive latency, and the corpus maximum is no worst-case bound.
+
 ### Validation
 
 - Production `cabal build all` and `cabal build synarchy-test-headless`: pass.
 - Targeted `map pyramid (#2298)` Hspec group: 45 examples, zero failures.
-- `python3 tools/test_map_page_codec_measure.py`: 12 tests, pass.
+- `python3 tools/test_map_page_codec_measure.py`: 13 tests, pass.
 - `python3 tools/ci_parity_audit.py --self-test`, the parity audit itself,
   and `python3 tools/unicode_operator_audit.py`: pass.
+- Expanded cache replay agrees for both independent measurement inputs;
+  original quota results are preserved and miss-accounting/quota bounds pass.
 - Both full measurement commands above: pass, 26 page/candidate pairs each,
   with no direct-byte mismatches in the independent repeat.
 - `python3 tools/map_page_codec_measure.py --corpus-only --output /tmp/foreground-2303-corpus-final`:
@@ -322,14 +380,13 @@ not simultaneous residency requirements.
 
 ### Recommendation and owner decision
 
-**Recommendation:** prefer PNG for the next artifact-format slice.
-Its space reduction is large, with modest measured decode cost and all
-required correctness checks passing. No third codec dependency is justified
-by this comparison. Independent reproduction confirms the result. The
-recommendation is evidence for the owner, not an automatic shipping decision.
+**Owner decision (2026-09-10): PNG selected.** Both independent runs support
+that choice: substantial space savings, modest isolated decode cost, and
+passing correctness checks. The experimental external checksum allowance
+remains separate from the future artifact-format contract.
 
-A 256 MiB total is a useful modest-budget candidate for ordinary expeditions,
-but the auxiliary partition needs a separate decision and measurement.
-Distant inspection benefits from more space; the owner should choose the
-intended experience before a quota is selected. These are proposed budgets,
-not runtime defaults. **Q-17 remains open.**
+**Owner requirement: all three camera patterns are critical.** The revised
+quota proposal is 3 GiB, evaluated separately against each pattern above.
+The owner has not yet selected the numerical quota or auxiliary-world
+accounting. **Q-17 remains open for those two decisions.** This issue records
+the eventual choices before final PR review; it does not install runtime defaults.

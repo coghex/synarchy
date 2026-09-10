@@ -66,7 +66,9 @@ class ArithmeticTests(unittest.TestCase):
         # A,B,A promotes A; C therefore evicts B. Final B misses.
         result = model.lru("ABACAB", {"A": 3, "B": 2, "C": 2}, 5)
         self.assertEqual(result, dict(requests=6, hits=2, misses=4,
-                                     hit_rate=1/3, peak_resident_bytes=5,
+                                     hit_rate=1/3, first_requests=3, repeat_requests=3,
+                                     repeat_misses=1, repeat_hit_rate=2/3,
+                                     unbounded_hit_rate=1/2, peak_resident_bytes=5,
                                      distinct_working_set_bytes=7, distinct_pages=3))
 
     def test_over_quota_set_evicts_instead_of_growing(self):
@@ -81,6 +83,19 @@ class ArithmeticTests(unittest.TestCase):
         self.assertEqual(result["peak_resident_bytes"], 2)
         self.assertEqual(model.lru("AA", {"A": 1}, 0)["hits"], 0)
         self.assertIsNone(model.lru([], {}, 0)["hit_rate"])
+
+    def test_repeat_metrics_separate_cold_and_capacity_misses(self):
+        for requests, sizes, quota, expected in (
+                ("ABCABC", dict(A=4, B=4, C=4), 8, (3, 3, 0)),
+                ("ABCABC", dict(A=4, B=4, C=4), 12, (3, 0, 1)),
+                ("AA", dict(A=1), 0, (1, 1, 0))):
+            result = model.lru(requests, sizes, quota)
+            self.assertEqual((result["first_requests"], result["repeat_misses"],
+                              result["repeat_hit_rate"]), expected)
+            self.assertEqual(result["misses"], result["first_requests"] + result["repeat_misses"])
+            self.assertLessEqual(result["hit_rate"], result["unbounded_hit_rate"])
+        self.assertIsNone(model.lru("ABC", dict(A=1, B=1, C=1), 3)["repeat_hit_rate"])
+        self.assertIsNone(model.lru([], {}, 0)["unbounded_hit_rate"])
 
     def test_real_differences_and_rejection_are_distinct(self):
         pristine = bytes(range(16))

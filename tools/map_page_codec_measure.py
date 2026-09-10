@@ -81,7 +81,7 @@ def measured_page(exe, directory, ident, codec):
             "corruption_detected": all(not c["external_integrity_ok"] for c in corruptions)}
 
 
-def quota_models(rows, inventories):
+def quota_models(rows, inventories, quotas=(16, 64, 256, 1024), codecs=model.CODECS):
     # Verify the Python address arithmetic against the actual WML-5
     # inventory before using it for any synthetic camera requests.
     for inv in inventories:
@@ -90,7 +90,7 @@ def quota_models(rows, inventories):
                 raise ValueError("Python trace geometry disagrees with WML-5")
     result = []
     aux = [(0, u, v) for _ in range(6) for v in range(9) for u in range(5)]
-    for codec in model.CODECS:
+    for codec in codecs:
         measured_sizes = [r["encoded_bytes"] for r in rows if r["codec"] == codec]
         for sizing in ("median", "maximum"):
             # Unmeasured pages are priced at a DECLARED assumption,
@@ -100,7 +100,7 @@ def quota_models(rows, inventories):
                 requests = model.camera_trace(kind)
                 sizes = dict.fromkeys(requests, assumed_bytes)
                 aux_sizes = dict.fromkeys(aux, assumed_bytes)
-                for mib in (16, 64, 256, 1024):
+                for mib in quotas:
                     total = mib * 1024 ** 2
                     aux_quota = total // 20
                     main = model.lru(requests, sizes, total - aux_quota)
@@ -150,13 +150,32 @@ def main(argv=None):
     parser.add_argument("--corpus-only", action="store_true")
     parser.add_argument("--output", type=Path, help="new empty output directory; default fresh system temp directory")
     parser.add_argument("--compare", type=Path, help="previous retained full run for direct-byte reproducibility")
+    parser.add_argument("--replay-cache", type=Path, help="derive expanded PNG quota models from retained results; no build or codec measurement")
     args = parser.parse_args(argv)
+    if args.replay_cache and (args.corpus_only or args.compare):
+        parser.error("--replay-cache cannot combine with --corpus-only or --compare")
     worlds = json.loads(CORPUS.read_text())
     model.validate_corpus(worlds)
     directory = args.output.resolve() if args.output else Path(tempfile.mkdtemp(prefix="map-codec-2303-"))
     if args.output:
         directory.mkdir(parents=True, exist_ok=False)
     print(f"Retained experiment: {directory}", flush=True)
+    if args.replay_cache:
+        source = json.loads(args.replay_cache.read_text())
+        if source["schema"] != "map-page-codec-measurement/v1" or not all(
+                c["passed"] for c in model.compare_checks(source["rows"]).values()):
+            raise ValueError("cache replay requires a passing codec measurement")
+        replay = {"schema": "map-page-cache-replay/v1",
+                  "source_sha256": digest(args.replay_cache),
+                  "command": sys.argv,
+                  "tool_source_sha256": {p.name: digest(p) for p in
+                      (Path(__file__), Path(model.__file__))},
+                  "interpretation": "All three traces are critical; no combined score selects a quota.",
+                  "quota_models": quota_models(source["rows"], source["inventories"],
+                      (16, 64, 256, 512, 1024, 2048, 3072, 4096), ("png",))}
+        (directory / "results.json").write_text(json.dumps(replay, indent=2) + "\n")
+        print(f"Derived cache replay: {directory / 'results.json'}", flush=True)
+        return 0
     exe = bridge.build()
     try:
         generation = bridge.run(exe, ["generate", CORPUS, directory], parse=False, capabilities=4)

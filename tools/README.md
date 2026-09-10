@@ -13,6 +13,9 @@ checks byte determinism and corruption behavior, and models bounded fine-cache
 quotas. It prints a fresh retained output directory; `--output <new-path>`
 selects one explicitly, and `--compare <previous-run>` adds direct-byte
 reproducibility checks against an earlier complete run.
+`--replay-cache <retained-results.json>` reuses measured page lengths for an
+expanded PNG quota comparison with first/repeat request metrics; it builds
+nothing and performs no new codec or terrain measurements.
 
 The command compiles a tool-only Haskell bridge against the existing library
 under the shared build lock. It uses no new dependency or production mode.

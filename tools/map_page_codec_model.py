@@ -117,7 +117,12 @@ def lru(requests, sizes, quota):
             cache[key] = sizes[key]
             used += sizes[key]
             peak = max(peak, used)
+    repeats = count - len(distinct)
     return {"requests": count, "hits": hits, "misses": count - hits,
+            "first_requests": len(distinct), "repeat_requests": repeats,
+            "repeat_misses": repeats - hits,
+            "repeat_hit_rate": hits / repeats if repeats else None,
+            "unbounded_hit_rate": repeats / count if count else None,
             "hit_rate": float(Fraction(hits, count)) if count else None,
             "peak_resident_bytes": peak,
             "distinct_working_set_bytes": sum(sizes[k] for k in distinct),
