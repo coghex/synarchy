@@ -28,6 +28,13 @@ import World.Render.ViewBounds (ViewBounds, isTileVisible)
 --   2. Water-to-dry drops (dry neighbor with terrain below water)
 --   In case 2, terrain cliff faces cover up to terrain level;
 --   water side faces cover terrain level to water surface.
+--
+--   __Freshwater side faces own EVERY positive drop (#2517).__ River and
+--   Lake tops are flat steps at their integer surface, so nothing else
+--   covers the gap to a lower neighbour: a neighbour one z below gets one
+--   quad, N below gets N, on the same terms multi-z drops already used.
+--   Lava is unchanged and keeps its two-or-more rule (DFL-1 is a
+--   freshwater presentation change; lava is explicitly out of its scope).
 waterSideFaceQuads ∷ QuadContext
                    → ChunkCoord
                    → V.Vector (Maybe FluidCell)  -- ^ this chunk's fluid map
@@ -47,23 +54,31 @@ waterSideFaceQuads ctx coord
     , Just fc ← [fluidMap V.! idx]
     , fcType fc ≢ Ocean
     , let mySurf = fcSurface fc
+          -- Smallest drop this fluid draws a side face for, in whole z.
+          --
+          -- River and Lake: 1 — their tops are flat steps (#2517), so
+          -- this generator is the only thing that can show a one-z drop.
+          -- Lava: 2 — unchanged. Its top has always used the flat face
+          -- map too, but its one-z omission predates this issue and DFL-1
+          -- scopes itself to freshwater, so changing it here would be an
+          -- unrequested visual change to a second fluid.
+          minDrop = case fcType fc of
+              Lava → 2
+              _    → 1
     -- Check each camera-visible cardinal neighbor. A neighbor can sit in
     -- the adjacent chunk (a waterfall/cliff right at a seam): resolve it
-    -- through the cross-chunk lookup exactly as waterSlopeAt does, so side
+    -- through the cross-chunk lookup (World.Render.ChunkLookup), so side
     -- faces don't vanish at chunk boundaries.
     , (nx, ny, isLeftFace) ← neighborDirs facing lx ly
     , Just (nFluid, nTerrZ) ← [neighborCell nx ny]
     , let -- Bottom of the side-face stack depends on neighbor type:
           --   Water neighbor: draw from neighbor water surface
           --   Dry neighbor: draw from neighbor terrain surface
-          -- A 1-z gap is handled by the sloped water surface tile
-          -- (freshwaterTileToQuad + waterSlopeAt), so we only draw
-          -- side faces for gaps ≥ 2 (real waterfalls).
           (bottomZ, shouldDraw) = case nFluid of
-              Just nfc | fcSurface nfc < mySurf - 1 → (fcSurface nfc, True)
-              Just _                                → (mySurf, False)
-              Nothing | nTerrZ < mySurf - 1         → (nTerrZ, True)
-              Nothing                               → (mySurf, False)
+              Just nfc | fcSurface nfc ≤ mySurf - minDrop → (fcSurface nfc, True)
+              Just _                                      → (mySurf, False)
+              Nothing | nTerrZ ≤ mySurf - minDrop         → (nTerrZ, True)
+              Nothing                                     → (mySurf, False)
     , shouldDraw
     -- One quad per z-level of gap
     , z ← [bottomZ .. mySurf - 1]
@@ -81,8 +96,8 @@ waterSideFaceQuads ctx coord
     -- Resolve a cardinal neighbor's (fluid cell, terrain surface z),
     -- following a step out of this chunk into the adjacent one. Returns
     -- Nothing only when that neighbor chunk isn't loaded — then the drop
-    -- is unknown, so we draw no side face (the same conservative default
-    -- waterSlopeAt uses at an unloaded seam).
+    -- is unknown, so we draw no side face (the conservative default at an
+    -- unloaded seam).
     --
     -- That "only" holds because the caller resolves the coord built here
     -- through World.Render.ChunkLookup (#1135): the step below is in THIS

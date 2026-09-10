@@ -98,6 +98,17 @@ PR #832's committed building-footprint expansion, #831's tile-Z UI-wiring regres
 
 ### [#1600] PRR-4. A freshwater tile above four lower neighbours is still forced back to a flat slope
 
+> **Superseded 2026-09-10 by #2517 (DFL-1).** The behaviour this finding
+> examines no longer exists. Freshwater tops now render flat at their integer
+> surface for every neighbour topology, `waterSlopeAt` and
+> `src/World/Render/WaterSlope.hs` are removed, and
+> `World.Render.SideDecoQuads.waterSideFaceQuads` draws a vertical edge for
+> every positive visible drop including one z — which is the "flat top plus
+> separate side faces" resolution the **Expected behavior** below asks for, now
+> with tests that prove those side faces supply the missing visual contract.
+> The record below is preserved as written; its file and line references
+> describe `master` before #2517.
+
 > **Captured note:** Give the all-four-lower case an explicit representable waterfall treatment instead of converting its computed slope mask to zero. PR #828 broadened every neighbour test to recognize multi-level drops, then deliberately erases all four results when they happen together.
 
 **Verification:** Verified as a direct behavior; product correctness is partially verified. `waterSlopeAt` sets all four directional pairs for lower neighbours, producing mask `15`, and immediately returns `0`. The focused test pins this flattening. Issue #816 says a river/lake tile slopes toward every loaded lower cardinal neighbour, but the implementation treats a four-way high point as “not a lip” without evidence that such generated cells are impossible or should visually become horizontal.

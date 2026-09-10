@@ -38,10 +38,10 @@ import World.Render.ChunkLookup (canonicalChunkLookup)
 import World.Render.QuadContext (QuadContext(..), WorldX(..), WorldY(..)
                                 , WorldZ(..), ZSlice(..), EffectiveDepth(..))
 import World.Render.SideDecoQuads (waterSideFaceQuads)
-import World.Render.WaterSlope (waterSlopeAt)
+import World.Render.FluidTopQuads (fluidTopQuads)
 import World.Render.TileQuads
-    ( tileToQuad, blankTileToQuad, oceanTileToQuad, iceTileToQuad
-    , lavaTileToQuad, freshwaterTileToQuad, vegToQuad, vegQuadWithTexture
+    ( tileToQuad, blankTileToQuad, iceTileToQuad
+    , vegToQuad, vegQuadWithTexture
     )
 
 -- * Render World Quads
@@ -131,15 +131,15 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
         -- Every cross-chunk probe in this pass goes through ONE
         -- canonicalising boundary (#1135). Chunks are stored under
         -- u-wrapped coords, but the callers below step one chunk outward
-        -- in their home chunk's RAW frame (waterSlopeAt, and
-        -- waterSideFaceQuads' neighborCell), which lands outside the
-        -- canonical range exactly at the cylindrical U seam — the
+        -- in their home chunk's RAW frame (waterSideFaceQuads'
+        -- neighborCell), which lands outside the canonical range
+        -- exactly at the cylindrical U seam — the
         -- neighbour is loaded, the key is just an alias. Away from the
         -- seam the wrap is the identity.
         chunkLookup = canonicalChunkLookup worldSize (wtdChunks tileData)
 
-        -- Lookup neighbor chunk fluid/terrain maps for cross-chunk water
-        -- slopes. Both are read at a LOCAL index, which the whole-chunk
+        -- Lookup neighbor chunk fluid/terrain maps for cross-chunk fluid
+        -- side faces. Both are read at a LOCAL index, which the whole-chunk
         -- wrap leaves untouched, so canonicalising the key is the whole
         -- fix here.
         fluidMapLookup cc = lcFluidMap ⊚ chunkLookup cc
@@ -309,11 +309,6 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                     , isTileVisible vb drawX drawY
                     ]
 
-                _mkFreshwaterQuad gx gy ft fc slopeId =
-                        freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
-                            gx gy (fcSurface fc) ft zSlice effectiveDepth
-                            zoomAlpha wrapOff slopeId
-
                 -- Ice surface quads: rendered above ocean/freshwater
                 !iceQuads =
                     [ iceTileToQuad lookupSlot lookupFmSlot textures facing
@@ -334,63 +329,7 @@ renderWorldQuadsScanned env worldState zoomAlpha snap = do
                     ]
 
                 (!oceanQuads, !lavaQuads, !freshwaterQuads) =
-                    V.ifoldl' (\(!oAcc, !lAcc, !fAcc) idx mFluid ->
-                        case mFluid of
-                            Nothing → (oAcc, lAcc, fAcc)
-                            Just fc ->
-                                if fcSurface fc > zSlice ∨ fcSurface fc < (zSlice - effectiveDepth)
-                                then (oAcc, lAcc, fAcc)
-                                else
-                                    let lx = idx `mod` chunkSize
-                                        ly = idx `div` chunkSize
-                                        (gx, gy) = chunkToGlobal coord lx ly
-                                        (rawX, rawY) = gridToScreen facing gx gy
-                                        relativeZ = fcSurface fc - zSlice
-                                        heightOffset = fromIntegral relativeZ * tileSideHeight
-                                        drawX = rawX + wrapX
-                                        drawY = rawY + wrapY - heightOffset
-                                        -- Skip ocean/lake rendering where ice covers the surface
-                                        hasIce = isJust (iceMap V.! idx)
-                                    in if not (isTileVisible vb drawX drawY)
-                                       then (oAcc, lAcc, fAcc)
-                                       else case fcType fc of
-                                            Ocean
-                                              | hasIce → (oAcc, lAcc, fAcc)
-                                              | otherwise ->
-                                                ( oceanTileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha wrapOff
-                                                  : oAcc
-                                                , lAcc
-                                                , fAcc
-                                                )
-                                            Lava  ->
-                                                ( oAcc
-                                                , lavaTileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy (fcSurface fc) zSlice effectiveDepth zoomAlpha wrapOff
-                                                  : lAcc
-                                                , fAcc
-                                                )
-                                            Lake
-                                              | hasIce → (oAcc, lAcc, fAcc)
-                                              | otherwise ->
-                                                let wSlope = waterSlopeAt fluidMap terrainSurfMap coord fluidMapLookup terrMapLookup lx ly (fcSurface fc)
-                                                in ( oAcc
-                                                , lAcc
-                                                , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy (fcSurface fc) Lake zSlice effectiveDepth
-                                                    zoomAlpha wrapOff wSlope
-                                                  : fAcc
-                                                )
-                                            River ->
-                                                let wSlope = waterSlopeAt fluidMap terrainSurfMap coord fluidMapLookup terrMapLookup lx ly (fcSurface fc)
-                                                in ( oAcc
-                                                , lAcc
-                                                , freshwaterTileToQuad lookupSlot lookupFmSlot textures facing
-                                                    gx gy (fcSurface fc) River zSlice effectiveDepth
-                                                    zoomAlpha wrapOff wSlope
-                                                  : fAcc
-                                                )
-                    ) ([], [], []) fluidMap
+                    fluidTopQuads ctx coord fluidMap iceMap vb
 
             in V.fromList (realQuads <> floraQuads <> waterSideQuads
                                      <> blankQuads <> iceQuads <> oceanQuads

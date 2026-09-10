@@ -282,16 +282,25 @@ lavaTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY fluidZ zSli
         , sqLayer    = worldLayer
         }
 
--- * Freshwater (River/Lake) Surface Tile Quad
+-- * Freshwater (River\/Lake) Surface Tile Quad
 
+-- | One flat River or Lake top at its integer surface height.
+--
+--   __The top is flat for every neighbour configuration (#2517).__ This
+--   constructor takes no slope id and consults no neighbour: it selects
+--   'wtIsoFaceMap', the flat face map, exactly as the Ocean and Lava tops
+--   already do. Before DFL-1 it took a ramp id derived from the four
+--   cardinal neighbours, which both interpolated a whole-z step and
+--   collapsed seven distinct neighbour topologies onto one mask (#1600).
+--   Every positive visible drop is now a vertical fluid edge drawn by
+--   'World.Render.SideDecoQuads.waterSideFaceQuads' instead.
 freshwaterTileToQuad ∷ (TextureHandle → Int) → (TextureHandle → Float)
                      → WorldTextures → CameraFacing
                      → Int → Int → Int → FluidType → Int → Int -- ^ worldX, worldY, fluidZ, fluidType, zSlice, effDepth
                      → Float → (Float, Float)                           -- ^ tileAlpha, wrap (x,y)
-                     → Word8                                   -- ^ waterSlopeId
                      → SortableQuad
 freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
-                     fluidZ fluidType zSlice _effDepth tileAlpha wrapOff waterSlopeId =
+                     fluidZ fluidType zSlice _effDepth tileAlpha wrapOff =
     let (rawX, rawY) = gridToScreen facing worldX worldY
         (fa, fb) = applyFacing facing worldX worldY
         relativeZ = fluidZ - zSlice
@@ -308,8 +317,8 @@ freshwaterTileToQuad lookupSlot lookupFmSlot textures facing worldX worldY
                            Nothing → wtNoTexture textures
                            Just h  → h
         actualSlot = lookupSlot texHandle
-        fmHandle = getTileFaceMapTexture textures 0 waterSlopeId
-        fmSlot = lookupFmSlot fmHandle
+        -- Flat, unconditionally (#2517): a fluid top never ramps.
+        fmSlot = lookupFmSlot (wtIsoFaceMap textures)
 
         finalAlpha = tileAlpha
 
