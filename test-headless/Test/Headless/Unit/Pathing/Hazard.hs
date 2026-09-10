@@ -14,6 +14,10 @@
 --       page's terrain" and "no terrain" are the same input; the
 --       PER-PAGE resolution that produces it is
 --       'Test.Headless.Unit.SimPageOwnership';
+--     * the RESIDUAL-TIME layer (#2473) — 'tickUnit' driven with
+--       controlled paths and elapsed schedules, proving that reaching a
+--       waypoint is charged its own distance and the rest of the tick
+--       continues from there;
 --     * the WIRING layer — source guards proving every shipped aimless
 --       mover (acolyte and technomule @wander@, @bear_wander@,
 --       @squirrel_wander@) selects the ONE shared mechanism, and that the
@@ -27,20 +31,24 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
-import World.Chunk.Types (ChunkCoord(..), LoadedChunk(..), chunkSize)
+import World.Chunk.Types
+    (ChunkCoord(..), LoadedChunk(..), ColumnTiles(..), chunkSize)
 import World.Tile.Types (WorldTileData(..))
 import World.Fluid.Types (emptyIceMap)
 import World.Flora.Types (emptyFloraChunkData)
 import World.Page.Types (WorldPageId(..))
 import Structure.Types (emptyChunkStructures)
-import World.Material (MaterialRegistry, emptyMaterialRegistry)
+import World.Material
+    (MaterialRegistry, MaterialProps(..), emptyMaterialRegistry
+    , defaultMaterialProps, registerMaterial)
 import Unit.Pathing.Cost
 import Unit.Pathing.AStar (localAStar, localAStarUnder, defaultMaxRadius)
 import Unit.Sim.Types
 import Unit.Thread.Movement.PathAdvance
     (tickUnit, moveWorldFor, TerrainSnapshots, MoveWorld(..)
-    , maxProtectedStep)
-import Unit.Thread.Movement.Types (UnitMoveStats(..), defaultMoveStats)
+    , maxProtectedStep, arrivalTolerance, maxWaypointContinuations)
+import Unit.Thread.Movement.Types
+    (UnitMoveStats(..), defaultMoveStats, vectorToDirection)
 
 -- ---------------------------------------------------------------------
 -- Terrain fixtures
@@ -107,6 +115,53 @@ cornerWorldVia via = worldWith $ zChunk $ \(lx, ly) →
 flatWorld ∷ WorldTileData
 flatWorld = worldWith (zChunk (const 10))
 
+-- | A one-chunk world at a uniform z = 5 whose columns carry REAL
+--   'ColumnTiles' (#2473).
+--
+--   'zChunk' above leaves @lcTiles@ empty, so 'materialFactor' reads
+--   1.0 and 'slopeGrade' reads 0 on every tile of it — which would make
+--   a "the continuation resampled the terrain" assertion vacuous. Here
+--   @column lx@ gives each column's (surface material id, slope bits) by
+--   local x, which is all these cases need to vary.
+tiledWorld ∷ (Int → (Word8, Word8)) → WorldTileData
+tiledWorld column =
+    let area = chunkSize * chunkSize
+        cols = V.generate area $ \i →
+            let (mid, slope) = column (i `mod` chunkSize)
+            in ColumnTiles { ctStartZ = 5
+                           , ctMats   = VU.singleton mid
+                           , ctSlopes = VU.singleton slope
+                           , ctVeg    = VU.singleton 0 }
+    in worldWith (zChunk (const 5)) { lcTiles = cols }
+
+-- | Material 1 is firm ground; material 2 is exactly twice as slow.
+--   Registered directly rather than through the YAML loader — these
+--   cases are about the mover, not the authoring domain (#1734 owns
+--   that boundary).
+twoMaterials ∷ MaterialRegistry
+twoMaterials =
+    registerMaterial 1 (defaultMaterialProps { mpMoveCost = 1.0 })
+        (registerMaterial 2 (defaultMaterialProps { mpMoveCost = 2.0 })
+            emptyMaterialRegistry)
+
+-- | Firm ground west of x = 2, the slow material from x = 2 on: a
+--   boundary a continuation STARTING at x = 2 must resample across.
+slowEastWorld ∷ WorldTileData
+slowEastWorld = tiledWorld (\lx → (if lx < 2 then 1 else 2, 0))
+
+-- | The same boundary at x = 1, which is where the reviewer's
+--   partition-dependence counterexample puts it.
+slowFromOneWorld ∷ WorldTileData
+slowFromOneWorld = tiledWorld (\lx → (if lx < 1 then 1 else 2, 0))
+
+-- | Slope bit 1 marks the EAST neighbour as one z below, so an
+--   east-bound unit standing on such a column is heading straight down
+--   its fall line (grade -1). Only local x = 1 carries it, so a segment
+--   starting there and a segment starting at x = 2 read different
+--   grades.
+slopeAtOneWorld ∷ WorldTileData
+slopeAtOneWorld = tiledWorld (\lx → (1, if lx ≡ 1 then 2 else 0))
+
 pc ∷ PathingConfig
 pc = defaultPathingConfig
 
@@ -143,6 +198,11 @@ moverAt (x, y) z mt = UnitSimState
 
 stats ∷ UnitMoveStats
 stats = defaultMoveStats
+
+-- | 'moverAt' already following a local path.
+moverOn ∷ (Float, Float) → Int → MoveTarget → [(Float, Float)]
+        → UnitSimState
+moverOn p z mt wps = (moverAt p z mt) { usLocalPath = wps }
 
 pageA, pageB ∷ WorldPageId
 pageA = WorldPageId "page-a"
@@ -338,10 +398,13 @@ spec = do
             usRealX (last states) `shouldSatisfy` (> 8.0)
 
         -- Review round 1: the arrival branch snaps x/y AND re-grounds z
-        -- without consulting the cost function, so a sub-goal within
-        -- `max step arrivalEpsilon` across a tile boundary used to be
-        -- crossed by the snap rather than by a step — a third route over
-        -- a damaging drop, past both the greedy stepper and A*.
+        -- without consulting the cost function, so a sub-goal the step
+        -- REACHES across a tile boundary used to be crossed by the snap
+        -- rather than by a step — a third route over a damaging drop,
+        -- past both the greedy stepper and A*. (Before #2473 the
+        -- arrival predicate was `dist ≤ max step 0.1`, so a sub-goal
+        -- within a tenth of a tile qualified even when the step fell
+        -- short of it; the case below is inside both.)
         let atEdge p = moverAt (7.95, 3.5) 10 (MoveTarget 8.04 3.5 1.0 p)
 
         it "never SNAPS a protected request across a damaging drop" $ do
@@ -523,6 +586,255 @@ spec = do
             body ← readScript "scripts/unit_ai_needs.lua"
             body `shouldSatisfy` T.isInfixOf "M.wanderExecute"
             body `shouldSatisfy` T.isInfixOf "M.ambientWanderExecute"
+
+  describe "Movement carries residual time across waypoints" $ do
+
+    -- No terrain at all, so the effective speed is constant and
+    -- requirement 1's partition independence applies in full.
+    let noWorld = MoveWorld Nothing False
+        flat    = ownPageWorld flatWorld
+        dropRidge  = ownPageWorld (ridgeWorld 10 6)
+        cliffRidge = ownPageWorld (ridgeWorld 6 10)
+        -- Run a whole elapsed schedule, one tick per entry, advancing
+        -- game time by each tick's own delta.
+        runSchedule mw dts us0 = go 0 us0 dts
+          where
+            go _ us []         = us
+            go t us (dt : rest) =
+                let t' = t + dt
+                in go t' (tickUnit pc reg t' dt mw stats us) rest
+
+    describe "the reproduction from the finding" $ do
+        -- Start at 0.4, speed 1 tile/s, waypoints at 0.5, 1.5 and 2.5,
+        -- target 2.5. One second of game time, three partitions of it.
+        let start = moverOn (0.4, 0.5) 0 (MoveTarget 2.5 0.5 1.0 FallPermitted)
+                            [(0.5, 0.5), (1.5, 0.5), (2.5, 0.5)]
+            endX dts = usRealX (runSchedule noWorld dts start)
+
+        it "ends the same second at the same place however it is split" $
+            -- Before this repair: 1.25, 1.4000002 and 1.4499997. The
+            -- coarse partition threw away the remainder of the tick that
+            -- reached the first waypoint; the fine one was HANDED 0.05
+            -- tiles by the old arrival slack.
+            mapM_ (\dts → abs (endX dts - 1.4)
+                              `shouldSatisfy` (< arrivalTolerance))
+                  [replicate 4 0.25, replicate 10 0.10, replicate 20 0.05]
+
+        it "gives a sub-tolerance step no distance its time did not buy" $ do
+            -- The 0.05-tile step used to snap a full 0.1 tiles at the
+            -- first waypoint, and 1.45 is what that bought.
+            endX (replicate 20 0.05) `shouldSatisfy` (< 1.41)
+            -- ...while the coarse partition no longer loses the 0.15
+            -- tiles the discarded remainder used to cost it.
+            endX (replicate 4 0.25) `shouldSatisfy` (> 1.39)
+
+    it "crosses several waypoints inside one tick and finishes the target" $ do
+        let us  = moverOn (0.5, 0.5) 0 (MoveTarget 3.5 0.5 10.0 FallPermitted)
+                          [(1.5, 0.5), (2.5, 0.5), (3.5, 0.5)]
+            us' = tickUnit pc reg 1.0 1.0 noWorld stats us
+        usRealX us'     `shouldBe` 3.5
+        usLocalPath us' `shouldBe` []
+        usTarget us'    `shouldBe` Nothing
+        usState us'     `shouldBe` Idle
+
+    describe "a last waypoint near, but distinct from, the target" $ do
+        -- `arriveAtSubGoal` used to clear the target on any waypoint
+        -- within 0.1 PER AXIS of it, which handed the unit the last
+        -- tenth of a tile for free and reported it arrived somewhere it
+        -- was not.
+        let short = moverOn (1.5, 0.5) 0 (MoveTarget 2.05 0.5 1.0 FallPermitted)
+                            [(2.0, 0.5)]
+
+        it "continues toward the real target instead of clearing it" $ do
+            let us' = tickUnit pc reg 1.0 1.0 noWorld stats short
+            usRealX us'  `shouldBe` 2.05
+            usTarget us' `shouldBe` Nothing
+            usState us'  `shouldBe` Idle
+
+        it "charges the last leg rather than snapping it" $ do
+            -- A budget that reaches the waypoint with only 0.02 tiles of
+            -- travel left over gets 0.02 tiles, not the whole 0.05.
+            let us' = tickUnit pc reg 0.52 0.52 noWorld stats short
+            usRealX us'  `shouldSatisfy` (\x → x > 2.0 ∧ x < 2.05)
+            usTarget us' `shouldSatisfy` isJust
+
+    it "resamples the material factor at the waypoint it continues from" $ do
+        -- Firm ground to x = 2, twice-as-slow ground beyond. The first
+        -- half-second buys the 0.5 tiles to the waypoint; the second
+        -- starts ON the slow tile and buys 0.25, not another 0.5.
+        let us  = moverOn (1.5, 0.5) 5 (MoveTarget 4.0 0.5 1.0 FallPermitted)
+                          [(2.0, 0.5), (4.0, 0.5)]
+            us' = tickUnit pc twoMaterials 1.0 1.0
+                           (ownPageWorld slowEastWorld) stats us
+        usRealX us' `shouldBe` 2.25
+
+    describe "usMoveGrade across a multi-segment tick" $ do
+        -- Only local x = 1 slopes, so the segment that starts there and
+        -- the segment that starts at x = 2 read different grades.
+        let slopeMw = ownPageWorld slopeAtOneWorld
+
+        it "names the last segment that consumed movement time" $ do
+            let us  = moverOn (1.5, 0.5) 5 (MoveTarget 4.0 0.5 1.0 FallPermitted)
+                              [(2.0, 0.5), (4.0, 0.5)]
+                us' = tickUnit pc reg 1.0 1.0 slopeMw stats us
+            -- The downhill first segment arrived; the flat continuation
+            -- spent the rest of the tick, so ITS grade is the one that
+            -- stands.
+            usMoveGrade us' `shouldBe` 0
+
+        it "is not overwritten by a trailing segment that spends nothing" $ do
+            -- A repeated waypoint costs no time, so the downhill
+            -- segment's grade survives it.
+            let us  = moverOn (1.5, 0.5) 5 (MoveTarget 2.0 0.5 1.0 FallPermitted)
+                              [(2.0, 0.5), (2.0, 0.5)]
+                us' = tickUnit pc reg 1.0 1.0 slopeMw stats us
+            usTarget us'    `shouldBe` Nothing
+            usMoveGrade us' `shouldBe` (-1)
+
+        it "is zero when no segment consumed movement time" $ do
+            let us  = moverOn (1.5, 0.5) 5
+                              (MoveTarget 4.0 0.5 (0 / 0) FallPermitted)
+                              [(2.0, 0.5), (4.0, 0.5)]
+                us' = tickUnit pc reg 1.0 1.0 slopeMw stats us
+            usMoveGrade us' `shouldBe` 0
+
+    it "bounds a protected tick's whole PATH LENGTH, turns included" $ do
+        -- Out to 5.9, back to 5.5, out again — 0.8 tiles of path for
+        -- zero net displacement. An endpoint-measured ceiling would
+        -- believe nothing had been spent; a ceiling reset at each
+        -- waypoint would believe the same. Either lets the tick finish
+        -- the route; the real one runs out 0.3 tiles short.
+        let us  = moverOn (5.5, 3.5) 10 (MoveTarget 5.9 3.5 10.0 FallProhibited)
+                          [(5.9, 3.5), (5.5, 3.5), (5.9, 3.5)]
+            us' = tickUnit pc reg 1.0 1.0 flat stats us
+            -- Collinear on x, so the path length is exactly this.
+            travelled = 0.4 + 0.4 + abs (usRealX us' - 5.5)
+        travelled       `shouldSatisfy` (≤ maxProtectedStep + arrivalTolerance)
+        usTarget us'    `shouldSatisfy` isJust
+        usRealX us'     `shouldSatisfy` (< 5.9)
+        usLocalPath us' `shouldBe` [(5.9, 3.5)]
+
+    it "terminates on repeated zero-length waypoints and keeps the route" $ do
+        -- 70 coincident waypoints: each costs no time, so only the
+        -- continuation bound can end the tick.
+        let us = moverOn (5.5, 3.5) 10 (MoveTarget 20.5 3.5 1.0 FallPermitted)
+                         (replicate 70 (5.5, 3.5) ⧺ [(6.5, 3.5)])
+            t1 = tickUnit pc reg 1.0 1.0 flat stats us
+        length (usLocalPath t1)
+            `shouldBe` (71 - (maxWaypointContinuations + 1))
+        usRealX t1   `shouldBe` 5.5
+        usTarget t1  `shouldSatisfy` isJust
+        -- The unspent second is DROPPED, not banked: the next tick moves
+        -- what its own second buys at 1 tile/s and no more.
+        let t2 = tickUnit pc reg 2.0 1.0 flat stats t1
+        abs (usRealX t2 - usRealX t1)
+            `shouldSatisfy` (≤ 1.0 + arrivalTolerance)
+
+    describe "an invalid effective step near a waypoint" $ do
+        -- 0.05 tiles short: inside the OLD 0.1 arrival slack, far
+        -- outside the floating-point tolerance. Every one of these used
+        -- to snap, pop and clear.
+        let near sp h = moverOn (5.5, 3.5) 10 (MoveTarget 5.55 3.5 sp h)
+                                [(5.55, 3.5)]
+            outcome sp h =
+                let us' = tickUnit pc reg 0.1 0.1 flat stats (near sp h)
+                in (usRealX us', usLocalPath us', isJust (usTarget us'))
+
+        it "does not move, snap, pop or clear" $
+            mapM_ (\(sp, h) → outcome sp h
+                      `shouldBe` (5.5, [(5.55, 3.5)], True))
+                  [ (0,      FallPermitted), (0,      FallProhibited)
+                  , (0 / 0,  FallPermitted), (0 / 0,  FallProhibited)
+                  , (1 / 0,  FallPermitted), (1 / 0,  FallProhibited)
+                  , (-1 / 0, FallPermitted), (-1 / 0, FallProhibited) ]
+
+        it "still completes an arrival the unit is already standing on" $ do
+            -- Zero speed is in-domain (an exhausted or fully encumbered
+            -- unit legitimately commands 0) and #2204's clock can hand a
+            -- tick dt = 0, so the refusal must not strand a unit ON its
+            -- own target.
+            let onTarget sp dt = tickUnit pc reg dt dt flat stats
+                    (moverAt (5.5, 3.5) 10 (MoveTarget 5.5 3.5 sp FallPermitted))
+            usTarget (onTarget 0 0.1)   `shouldBe` Nothing
+            usState  (onTarget 0 0.1)   `shouldBe` Idle
+            usTarget (onTarget 1.0 0)   `shouldBe` Nothing
+            usState  (onTarget 1.0 0)   `shouldBe` Idle
+
+        it "still validates a protected snap it is standing on" $ do
+            -- Free of time cost is not free of the hazard check: the
+            -- sub-goal is 2e-5 tiles away and over the ridge.
+            let us' = tickUnit pc reg 0.1 0.1 dropRidge stats
+                          (moverAt (7.99999, 3.5) 10
+                              (MoveTarget 8.00001 3.5 0 FallProhibited))
+            usRealX us'  `shouldSatisfy` (< 8.0)
+            usGridZ us'  `shouldBe` 10
+            usTarget us' `shouldBe` Nothing
+
+    describe "ordinary movement across a terrain boundary" $ do
+        -- #2473's explicit out-of-scope: a step that reaches no waypoint
+        -- still samples material once, at its start tile.
+        let straight = moverOn (0.75, 0.5) 5
+                               (MoveTarget 8.5 0.5 2.0 FallPermitted)
+                               [(8.5, 0.5)]
+            slowMw = ownPageWorld slowFromOneWorld
+            tickOf t dt = tickUnit pc twoMaterials t dt slowMw stats
+
+        it "produces exactly the state the pre-#2473 mover produced" $
+            -- Only the fields an ordinary step writes have moved — the
+            -- position and the facing it derives from the step — and
+            -- 0.25 s at 2 tiles/s on firm ground is 0.5 tiles, because
+            -- the boundary at x = 1 does not shorten it.
+            tickOf 0.25 0.25 straight
+                `shouldBe` straight { usRealX  = 1.25
+                                    , usFacing = vectorToDirection 1 0 }
+
+        it "stays partition-dependent there, deliberately" $
+            -- Halving the tick resamples at x = 1 and so travels less.
+            -- This is the case requirement 1 excludes, not a regression.
+            usRealX (tickOf 0.25 0.125 (tickOf 0.125 0.125 straight))
+                `shouldBe` 1.125
+
+    describe "a continued segment meeting a hazard" $ do
+        -- Arrive at 7.6 with budget to spare, then step at the ridge at
+        -- x = 8 with a waypoint still ahead, so the continuation reaches
+        -- the cliff/fall checks rather than the greedy cost threshold.
+        let crossing h z = moverOn (7.2, 3.5) z (MoveTarget 11.5 3.5 1.0 h)
+                                   [(7.6, 3.5), (11.5, 3.5)]
+
+        it "launches a fall when the request permits one" $ do
+            let us' = tickUnit pc reg 1.0 1.0 dropRidge stats
+                          (crossing FallPermitted 10)
+            usState us' `shouldBe` TransitioningTo Falling
+
+        it "enters the climb transition at a cliff" $ do
+            let us' = tickUnit pc reg 1.0 1.0 cliffRidge stats
+                          (crossing FallPermitted 6)
+            usState us' `shouldBe` TransitioningTo Climbing
+
+        it "replans a protected continuation as a fresh step would" $ do
+            let continued = tickUnit pc reg 1.0 1.0 dropRidge stats
+                                (crossing FallProhibited 10)
+                -- The same segment, run as a FRESH tick from the
+                -- waypoint on the budget the continuation had left.
+                fresh = tickUnit pc reg 1.0 (1 - 0.4 / 0.9) dropRidge stats
+                            (moverOn (7.6, 3.5) 10
+                                (MoveTarget 11.5 3.5 1.0 FallProhibited)
+                                [(11.5, 3.5)])
+            usTarget continued `shouldBe` Nothing
+            usTarget fresh     `shouldBe` Nothing
+            usState continued  `shouldBe` usState fresh
+            usRealX continued  `shouldBe` usRealX fresh
+            continued          `shouldSatisfy` (not . isFalling)
+
+    it "keeps the fall-permitted arrival bypass" $ do
+        -- The same case as `still snaps a fall-permitted arrival exactly
+        -- as it always did`, restated because the continuation loop now
+        -- runs the arrival branch several times in one tick.
+        let us' = tickUnit pc reg 0.1 0.1 dropRidge stats
+                      (moverAt (7.95, 3.5) 10
+                          (MoveTarget 8.04 3.5 1.0 FallPermitted))
+        usRealX us' `shouldSatisfy` (> 8.0)
+        usGridZ us' `shouldBe` 6
 
 last' ∷ [a] → Maybe a
 last' [] = Nothing

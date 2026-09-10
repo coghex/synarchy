@@ -10,6 +10,8 @@ module Unit.Thread.Movement.PathAdvance
     , MoveWorld(..)
     , moveWorldFor
     , maxProtectedStep
+    , arrivalTolerance
+    , maxWaypointContinuations
     , rawStepLength
     ) where
 
@@ -53,11 +55,39 @@ rawStepLength ∷ PathingConfig → Float → Float → Float → Double → Flo
 rawStepLength pc effSpeed grade matSlow dt =
     (effSpeed * slopeSpeedFactor pc grade / matSlow) * realToFrac dt
 
--- | Distance below which the unit is considered arrived at a
---   waypoint or target. Larger than one tick of motion (≈ 0.066) so
---   the unit can't tick past a sub-goal and start oscillating.
-arrivalEpsilon ∷ Float
-arrivalEpsilon = 0.1
+-- | Distance below which a sub-goal counts as REACHED without being
+--   charged any elapsed time (#2473): floating-point residue from the
+--   snap arithmetic, and nothing more.
+--
+--   It replaced a 0.1-tile @arrivalEpsilon@ sized to be "larger than one
+--   tick of motion" so a unit could not tick past a sub-goal and start
+--   oscillating. That job now belongs to the arrival rule itself — a
+--   step that REACHES the sub-goal is charged the sub-goal's exact
+--   distance and stops there, so there is no overshoot to absorb at any
+--   tick size — which frees the tolerance to be what its name says. At
+--   0.1 a 0.05-tile step snapped a full 0.1 tiles, handing the unit
+--   distance its elapsed time never paid for.
+--
+--   1e-4 sits above the Float resolution of a world coordinate anywhere
+--   in a shipped page (≈ 6e-5 at 512 tiles) and two orders of magnitude
+--   under the 1e-3-per-waypoint accuracy the residual-time contract
+--   promises.
+arrivalTolerance ∷ Float
+arrivalTolerance = 1e-4
+
+-- | Ceiling on how many sub-goals one tick may cross AFTER its first
+--   segment (#2473).
+--
+--   The continuation loop pops a waypoint and re-enters with the unspent
+--   budget, so a route carrying repeated ZERO-LENGTH waypoints — tile
+--   centres coincident with the mover's own position — would otherwise
+--   pop forever without consuming any time. This bounds the WORK rather
+--   than the time: on exhaustion the tick stops, the unconsumed route
+--   stays in @usLocalPath@, and the unused elapsed time is DROPPED
+--   rather than carried. No elapsed-time debt survives a tick, because
+--   nothing stores one.
+maxWaypointContinuations ∷ Int
+maxWaypointContinuations = 64
 
 -- | The terrain this movement batch paths against, keyed by the page it
 --   came from: one 'WorldTileData' per page some mover in the batch OWNS
@@ -150,11 +180,7 @@ tickUnit pc reg now dt mw stats us =
             Just mt
                 | mtHazard mt ≡ FallProhibited ∧ not (mwOwnPage mw) →
                     abandonTarget us2
-            Just mt →
-                let subGoal = case usLocalPath us2 of
-                        (p : _) → p
-                        []      → (mtTargetX mt, mtTargetY mt)
-                in stepTowardSubGoal pc reg now dt mw stats us2 mt subGoal
+            Just mt → advanceAlongPath pc reg now dt mw stats us2 mt
 
 -- | Drop the in-flight request entirely: no target, no local path,
 --   Idle. The terminal state of a 'FallProhibited' request that can make
@@ -165,9 +191,38 @@ tickUnit pc reg now dt mw stats us =
 abandonTarget ∷ UnitSimState → UnitSimState
 abandonTarget us = us { usTarget = Nothing, usLocalPath = [], usState = Idle }
 
--- | Try to advance toward `subGoal`. If we arrive, pop the waypoint
---   (or clear the final target). Otherwise, take one step.
-stepTowardSubGoal
+-- | Spend one tick's elapsed budget along the route (#2473).
+--
+--   A tick used to be ONE segment: it stepped toward the current
+--   sub-goal, and if it reached one it snapped there and returned,
+--   discarding whatever part of the budget the snap did not need. A unit
+--   crossing waypoints therefore lost motion in proportion to tick size
+--   — the same second of game time carried it 0.85 tiles in four 0.25 s
+--   ticks and 1.00 tiles in ten 0.10 s ticks — while the old 0.1-tile
+--   arrival slack handed SHORT ticks distance no elapsed time had paid
+--   for.
+--
+--   Now reaching a sub-goal is CHARGED its own distance, and the
+--   remainder continues along the next segment inside the same tick. So
+--   equal admitted elapsed time buys equal distance whatever the
+--   partition — as long as the effective speed itself does not change.
+--   An ordinary non-arriving step still samples material and slope once,
+--   at its start tile, so crossing a terrain boundary WITHOUT reaching a
+--   waypoint stays partition-dependent by design; boundary-based time
+--   integration for those steps is deliberately out of scope, and their
+--   resulting state is byte-identical to the pre-#2473 mover's.
+--
+--   Each continuation is a FRESH movement segment from the waypoint's
+--   exact position: material and slope are resampled THERE, and the
+--   same cost, snap-validation, replan, cliff and fall logic a fresh
+--   tick would apply is applied again. The one per-tick gate that does
+--   NOT re-run is `tickUnit`'s own protected-terrain check, because the
+--   'MoveWorld' is fixed for the tick and cannot change under it.
+--
+--   Three things end consumption early and deliberately drop the unused
+--   time: a transition or replan, the protected-travel ceiling, and the
+--   continuation bound.
+advanceAlongPath
     ∷ PathingConfig
     → MaterialRegistry
     → Double
@@ -176,9 +231,60 @@ stepTowardSubGoal
     → UnitMoveStats
     → UnitSimState
     → MoveTarget
-    → (Float, Float)
     → UnitSimState
-stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
+advanceAlongPath pc reg now dt mw stats us0 mt =
+    go maxWaypointContinuations True dt 0 us0
+  where
+    -- A protected request's ceiling bounds the tick's whole PATH LENGTH,
+    -- summed across every continued segment and every turn — not its
+    -- endpoint displacement, and not each segment separately. Resetting
+    -- it at a waypoint, or measuring only where the unit ended up, would
+    -- reopen the multi-tile span #1217 closed: a turn can travel far
+    -- while ending up close.
+    allowanceOf ∷ Float → Float
+    allowanceOf travelled = case mtHazard mt of
+        FallPermitted  → 1 / 0
+        FallProhibited → maxProtectedStep - travelled
+    go ∷ Int → Bool → Double → Float → UnitSimState → UnitSimState
+    go budget isFirst dtLeft travelled us
+        -- The request ended: a final arrival cleared the target, or a
+        -- replan abandoned it. Nothing left to spend the budget on.
+        | isNothing (usTarget us)  = us
+        -- Bounded continuation work, so a degenerate route can't spin.
+        | not isFirst ∧ budget ≤ 0 = us
+        | allowanceOf travelled ≤ 0 = us
+        | otherwise =
+            let subGoal = case usLocalPath us of
+                    (p : _) → p
+                    []      → (mtTargetX mt, mtTargetY mt)
+            in case advanceSegment pc reg now dtLeft mw stats us mt subGoal
+                                   isFirst (allowanceOf travelled) of
+                (us', Nothing)           → us'
+                (us', Just (dtLeft', d)) →
+                    go (if isFirst then budget else budget - 1)
+                       False dtLeft' (travelled + d) us'
+
+-- | One movement segment: advance toward @subGoal@ with the budget that
+--   is still unspent, and say whether the tick may continue past it.
+--
+--   'Nothing' ends the tick's consumption. @Just (dtLeft, travelled)@
+--   reports the budget still unspent and the path length this segment
+--   actually covered — the latter is what the caller accumulates against
+--   'maxProtectedStep'.
+advanceSegment
+    ∷ PathingConfig
+    → MaterialRegistry
+    → Double
+    → Double             -- ^ elapsed budget still unspent, in seconds
+    → MoveWorld
+    → UnitMoveStats
+    → UnitSimState
+    → MoveTarget
+    → (Float, Float)
+    → Bool               -- ^ is this the tick's FIRST segment?
+    → Float              -- ^ protected path length still allowed this tick
+    → (UnitSimState, Maybe (Double, Float))
+advanceSegment pc reg now dtLeft mw stats us mt (gx, gy) isFirst allowance =
     let mWtd = mwTiles mw
         dx   = gx - usRealX us
         dy   = gy - usRealY us
@@ -194,6 +300,10 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
         -- The greedy stepper reads stepCost only for its replan trigger,
         -- so the speed effect must be applied to the step length HERE
         -- (the same factor stepCost folds into the planned route cost).
+        --
+        -- Read from THIS segment's own start position, which after a
+        -- waypoint crossing is the waypoint rather than the tick's
+        -- original tile (#2473 requirement 2).
         matSlow = case mWtd of
             Just wtd → materialFactor reg wtd (floor (usRealX us)) (floor (usRealY us))
             Nothing  → 1.0
@@ -203,16 +313,21 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
         -- factor above — routing already charges pcRampFactor for the
         -- climb; this makes the traversal itself cost time. The grade is
         -- stamped onto the sim state so the Lua stamina drain can tax
-        -- sustained uphill travel (getInfo's moveGrade).
+        -- sustained uphill travel (getInfo's moveGrade). Resampled per
+        -- segment for the same reason the material factor is.
         grade = case mWtd of
             Just wtd | dist > 1e-6 →
                 slopeGrade wtd (floor (usRealX us)) (floor (usRealY us))
                            (usGridZ us) (dx / dist, dy / dist)
             _ → 0
-        rawStep = rawStepLength pc effSpeed grade matSlow dt
+        rawStep = rawStepLength pc effSpeed grade matSlow dtLeft
         -- A protected tick may not span more than one tile boundary —
         -- see `maxProtectedStep`. Fall-permitted movement keeps its exact
         -- uncapped speed.
+        --
+        -- `allowance` is what is LEFT of that ceiling after the segments
+        -- already run this tick, so the bound is cumulative rather than
+        -- per-segment (#2473 requirement 3).
         step = case mtHazard mt of
             FallPermitted  → rawStep
             -- Bound the MAGNITUDE, not just the upper end: a large
@@ -224,24 +339,19 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
             -- SPEED can produce one any more — but `rawStepLength`
             -- also multiplies by a grade and a material factor, so the
             -- bound stays two-sided rather than resting on a caller's
-            -- domain. A non-finite step refuses to move
-            -- at all, the fail-closed posture the rest of the policy
-            -- takes — with the isNaN test FIRST, because every comparison
-            -- against NaN is False and a bare clamp chain would launder it
-            -- straight through (the same reasoning as
-            -- `Unit.Pathing.Cost.clampStepCost`).
-            FallProhibited
-                | isNaN rawStep → 0
-                | otherwise     → max (negate maxProtectedStep)
-                                      (min maxProtectedStep rawStep)
+            -- domain. NaN and infinity no longer reach this clamp at
+            -- all: since #2473 they are refused outright below, for
+            -- both hazard policies, rather than being laundered into
+            -- 0 or into the ceiling.
+            FallProhibited → max (negate allowance) (min allowance rawStep)
         -- Arrival SNAPS x/y and re-grounds z at the sub-goal without
-        -- consulting the cost function at all, so a sub-goal within
-        -- `max step arrivalEpsilon` on the far side of a tile boundary
-        -- is crossed by the snap rather than by a step. For a protected
-        -- request that is a third way over a damaging drop, past both
-        -- the greedy stepper and A* (#1217, review round 1): a wander
-        -- target sampled just over a ledge is reached at 7.95 → 8.04 and
-        -- the unit lands at the bottom with no fall and no check.
+        -- consulting the cost function at all, so a sub-goal the step
+        -- REACHES on the far side of a tile boundary is crossed by the
+        -- snap rather than by a step. For a protected request that is a
+        -- third way over a damaging drop, past both the greedy stepper
+        -- and A* (#1217, review round 1): a wander target sampled just
+        -- over a ledge is reached at 7.95 → 8.04 and the unit lands at
+        -- the bottom with no fall and no check.
         --
         -- So the snap is validated by the SAME function every other
         -- crossing goes through — and ONLY when the request is
@@ -256,15 +366,72 @@ stepTowardSubGoal pc reg now dt mw stats us mt (gx, gy) =
                     ∧ isNothing (do wtd ← mWtd
                                     stepCostUnder FallProhibited pc reg wtd
                                                   srcTile goalTile)
-    in if dist ≤ max step arrivalEpsilon
+        -- `usMoveGrade` feeds the Lua stamina drain, so it must name the
+        -- grade the unit actually EXERTED against. A single-segment tick
+        -- keeps its pre-#2473 behavior exactly — the grade is stamped
+        -- before both the blocked-snap replan and `moveToward`, even when
+        -- neither ends up moving the unit — while a CONTINUED segment
+        -- that consumes no movement time leaves the previous segment's
+        -- grade standing rather than overwriting it with its own.
+        stamped = us { usMoveGrade = grade }
+        onStall = if isFirst then stamped else us
+        -- No safe way onto the sub-goal's tile. Replan from here; if A*
+        -- can't make safe progress either, it terminates the request (see
+        -- `replan`) so the ambient AI resamples. Either way the tick
+        -- stops consuming here.
+        blockedSnap = (replan pc reg onStall mt mw srcTile, Nothing)
+        arrived = arriveAtSubGoal stats us mt (gx, gy) mWtd
+        -- Hand the caller what is left, unless the arrival ENDED the
+        -- request (final target reached) — there is nothing further to
+        -- spend it on.
+        continueAfter us' dtSpent
+            | isNothing (usTarget us') = (us', Nothing)
+            | otherwise = (us', Just (max 0 (dtLeft - dtSpent), dist))
+    in if isNaN rawStep ∨ isInfinite rawStep
+       -- An invalid budget refuses movement outright, BEFORE any arrival
+       -- decision (#2473 requirement 4): it must not snap to a waypoint,
+       -- pop one, or clear the final target. `FallProhibited` used to map
+       -- NaN to 0 and clamp infinity into the ceiling; `FallPermitted`
+       -- passed both straight through.
+       then (us, Nothing)
+       else if dist ≤ arrivalTolerance ∧ dist ≤ allowance
+       -- Already there, to within floating-point residue. This arrival
+       -- costs no time, which is what keeps a ZERO effective step from
+       -- stranding a unit standing on its own sub-goal: zero speed is an
+       -- in-domain command (an exhausted or fully encumbered unit
+       -- legitimately commands 0), and #2204's `sanitiseElapsed` can hand
+       -- a tick dt = 0. It is still subject to `snapBlocked`, and a zero
+       -- step continues no further past it.
        then if snapBlocked
-            -- No safe way onto the sub-goal's tile. Replan from here;
-            -- if A* can't make safe progress either, it terminates the
-            -- request (see `replan`) so the ambient AI resamples.
-            then replan pc reg (us { usMoveGrade = grade }) mt mw srcTile
-            else arriveAtSubGoal stats us mt (gx, gy) mWtd
-       else moveToward pc reg now stats (us { usMoveGrade = grade })
-                       mt mw dx dy dist step
+            then blockedSnap
+            else if step ≡ 0
+                 then (arrived, Nothing)
+                 else continueAfter arrived 0
+       else if step ≡ 0
+       -- A finite zero step refuses all MOVEMENT: no snap, no pop, no
+       -- cleared target, and no distance the elapsed time did not buy.
+       then (us, Nothing)
+       else if step ≥ dist
+       -- The step REACHES the sub-goal, so charge it exactly the time
+       -- that distance costs at this segment's effective speed and carry
+       -- the rest on. `dist / step` is that fraction by construction:
+       -- `step` is the distance this segment's whole remaining budget
+       -- buys. A negative step never lands here — it moves AWAY from the
+       -- sub-goal — so the ratio is in (0, 1].
+       then if snapBlocked
+            then blockedSnap
+            else continueAfter (arrived { usMoveGrade = grade })
+                               (dtLeft * realToFrac (dist / step))
+       else
+       -- An ordinary step, which spends the whole remaining budget and
+       -- ends the tick. Terrain is sampled once, at this segment's start
+       -- tile, exactly as it always was.
+            let moved = moveToward pc reg now stats stamped mt mw dx dy dist step
+                held  = usRealX moved ≡ usRealX us ∧ usRealY moved ≡ usRealY us
+            in ( if isFirst ∨ not held
+                 then moved
+                 else moved { usMoveGrade = usMoveGrade us }
+               , Nothing )
 
 -- | Ceiling on a hazard-PROTECTED request's per-tick displacement, in
 --   tiles (#1217, review round 2).
@@ -299,8 +466,9 @@ crawlSpeed ∷ Float
 crawlSpeed = 0.7
 
 -- | Snap to the sub-goal. If we arrived at the final target (no more
---   waypoints, sub-goal is the target), clear the target. Otherwise
---   pop the first waypoint and continue next tick.
+--   waypoints, sub-goal is the target), clear the target. Otherwise pop
+--   the first waypoint; since #2473 the caller carries the tick's unspent
+--   budget straight into the next segment rather than waiting a tick.
 arriveAtSubGoal
     ∷ UnitMoveStats
     → UnitSimState
@@ -317,9 +485,16 @@ arriveAtSubGoal stats us mt (gx, gy) mWtd =
             -- Popped a waypoint. If there are more, continue along the
             -- path; otherwise resume greedy heading toward the final
             -- target (unless we're already there).
+            -- Popping the LAST waypoint only ends the request when it
+            -- really is the final target. The tolerance here is the
+            -- floating-point one, not the old 0.1-per-axis slack that
+            -- used to clear a target the unit was still a tenth of a
+            -- tile short of (#2473); a last waypoint near but distinct
+            -- from the target falls through to greedy mode, and the
+            -- continuation charges the remaining distance.
             let arrivedAtFinal =
-                    abs (gx - mtTargetX mt) < arrivalEpsilon
-                    ∧ abs (gy - mtTargetY mt) < arrivalEpsilon
+                    abs (gx - mtTargetX mt) < arrivalTolerance
+                    ∧ abs (gy - mtTargetY mt) < arrivalTolerance
             in if null rest ∧ arrivedAtFinal
                then us' { usLocalPath = []
                         , usTarget    = Nothing
