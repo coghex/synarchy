@@ -222,12 +222,46 @@ function M.takeGroundTarget(uid, job, info, params)
     return "taken"
 end
 
+-- Does this worker still hold the exact instance LOOSE in its own
+-- top-level inventory? (#2531)
+--
+-- That set -- what unit.getInventory reports -- is precisely the set
+-- unit.dropItemById can pop from (both read uiInventory alone), so it
+-- is the only predicate whose "yes" makes a pending ground return
+-- SATISFIABLE. Deliberately NOT the broader held-anywhere set
+-- repair.repairAt searches (loose inventory plus equipment plus
+-- accessories): an instance somebody has equipped is unreachable by any
+-- drop this job can issue, so counting it as owned would preserve the
+-- very unsatisfiable retry loop this predicate exists to end. Nothing
+-- is unequipped or extracted from a container to make it droppable
+-- either -- such a target simply is not loose-owned, and its job ends
+-- with the item left exactly where it now sits.
+--
+-- Page liveness does not affect the answer: unit.getInventory reads the
+-- unit manager and the item registry and never resolves an owning page.
+-- That is what separates "the page cannot resolve yet, so retry" from
+-- "the item has left this worker, so stop".
+function M.ownsLooseInstance(uid, instanceId)
+    if instanceId == nil then return false end
+    for _, it in ipairs(unit.getInventory(uid) or {}) do
+        if it.instanceId == instanceId then return true end
+    end
+    return false
+end
+
 -- Put a ground-sourced target back down on the worker's own tile,
 -- resolved on the worker's own page (#1208). Returns whether the drop
--- actually landed: a false here means the exact instance is STILL held,
--- and the caller must keep the job alive rather than release it, or the
--- target is stranded in an acolyte's inventory with nothing left that
--- knows it owes a drop.
+-- actually landed.
+--
+-- A false is NOT proof the instance is still held (#2531).
+-- unit.dropItemById answers false for two unrelated situations: a page
+-- that cannot resolve, where the exact instance is still loose here and
+-- the return obligation stands, and an instance that has left this
+-- worker's loose inventory entirely -- a player Store order, a transfer
+-- to another owner, an equip -- which no later drop can ever satisfy.
+-- Callers separate the two with ownsLooseInstance above before deciding
+-- whether to keep the job alive; treating every false as continued
+-- possession parks the job in an impossible retry forever.
 function M.returnGroundTarget(uid, job)
     return unit.dropItemById(uid, job.instanceId) == true
 end

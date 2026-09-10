@@ -20,10 +20,10 @@
 --
 -- A ground target is TAKEN with item.pickupGround, which preserves the
 -- exact instance, and RETURNED with unit.dropItemById on the worker's
--- own tile when the job ends for any reason — completed, aborted, or
--- dropped by the post-load reconcile. `fromGround` remembers that
--- obligation across a save (lua.unit_ai v7), which is why it is durable
--- rather than derived from the phase.
+-- own tile when the job ends while it still holds it — completed,
+-- aborted, or dropped by the post-load reconcile. `fromGround` remembers
+-- that obligation across a save (lua.unit_ai v7), which is why it is
+-- durable rather than derived from the phase.
 --
 -- State on s: repairJob = { instanceId, defName, axis, recipeId,
 -- consumable, consumableCount, groundWant, muleWant, groundDone,
@@ -137,12 +137,13 @@ end
 local function abortRepairJob(uid, s, info)
     local job = s.repairJob
     -- #1737: a ground-sourced target goes back to the GROUND, on this
-    -- worker's own tile and own page, never to a mule. A failed drop
-    -- (no live page) leaves it still held, so the job is parked in
-    -- "returning" and retried instead of released -- ending it here
-    -- would strand the instance in an inventory nothing now tracks.
+    -- worker's own tile and own page, never to a mule. #2531: a failed
+    -- drop earns the "returning" park only while the exact instance is
+    -- still loose HERE; once it has left this worker no later drop can
+    -- land, so the job ends -- see targets.ownsLooseInstance.
     if job and job.itemFetched and job.fromGround then
-        if not targets.returnGroundTarget(uid, job) then
+        if not targets.returnGroundTarget(uid, job)
+           and targets.ownsLooseInstance(uid, job.instanceId) then
             s.repairPhase = "returning"
             return
         end
@@ -298,13 +299,23 @@ function repairExecute(uid, s, params)
     end
 
     local job = s.repairJob
+    -- #2531: a fetched ground target that has left this worker's loose
+    -- inventory ends the job in EVERY phase, checked BEFORE the refresh
+    -- below -- a worker on its way out must not stamp its own uid over a
+    -- successor's entry, which releaseRepairJob's uid guard would delete.
+    if job.fromGround and job.itemFetched
+       and not targets.ownsLooseInstance(uid, job.instanceId) then
+        releaseRepairJob(s, uid)
+        return
+    end
+
     -- Keep the claim fresh while the job is held.
     repairClaims[job.instanceId] = { uid = uid, at = now }
 
     -- #1737: the job is over and only the ground-sourced target's drop
-    -- is left. Reached when abortRepairJob's drop failed (no live page),
-    -- and deliberately AHEAD of the station revalidation below, since
-    -- the usual reason we are here is that the station just went away.
+    -- is left. Reached when abortRepairJob's drop failed on a page that
+    -- could not resolve, and deliberately AHEAD of the station
+    -- revalidation below, since the station is the usual reason we are here.
     if s.repairPhase == "returning" then
         if unit.dropItemById(uid, job.instanceId) then
             releaseRepairJob(s, uid)
