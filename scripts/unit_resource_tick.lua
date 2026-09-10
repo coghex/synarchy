@@ -31,6 +31,13 @@ local ORGAN_FAILURE_DRAIN_PER_SEC = 0.5
 -- same way they scale all locomotion drain.
 local UPHILL_EXERTION_PER_GRADE = movementSpeed.UPHILL_EXERTION_PER_GRADE
 
+-- The one resource the COMBAT worker spends, on another thread, between
+-- this script's read and its write (#2470). Named once so the branch
+-- below and the engine verb it selects cannot drift onto different
+-- entries; unit.commitStamina works on the same "stamina" uiStats key
+-- Combat.Resolution.Wear debits.
+local STAMINA_RESOURCE = "stamina"
+
 -----------------------------------------------------------
 -- Per-resource tick. Returns nothing; side-effects on the unit.
 -----------------------------------------------------------
@@ -38,9 +45,28 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     local maxVal = stats.get(uid, params.max_from)
     if not maxVal or maxVal <= 0 then return end
 
+    -- Stamina takes the engine-committed path (#2470): its pool is the
+    -- one this script does not own outright, so the update AND the
+    -- exhaustion rules that follow it are resolved inside a single
+    -- unit-manager transaction rather than from script-side values.
+    -- The eligibility gate above still runs for it unchanged — an
+    -- undefined or non-positive max_stamina skips the tick here, before
+    -- any engine call, exactly as before.
+    local isStamina = (resourceName == STAMINA_RESOURCE)
+
     -- First-tick init: if the unit has no value yet, fill it.
+    --
+    -- Stamina does NOT take this path. A `nil` observed HERE proves
+    -- nothing about what storage holds by the time the update lands: a
+    -- strike that created or spent the pool in between would be
+    -- refunded in full by a refill to `maxVal`. Whether to initialise
+    -- is decided inside unit.commitStamina's own transaction, from
+    -- whether the pool is still absent AT COMMIT — so a nil read never
+    -- authorises a refill and never short-circuits the tick before the
+    -- delta is computed. Nothing in the rate calculation below reads
+    -- `current`, so leaving it nil until the commit is safe.
     local current = unit.getStat(uid, resourceName)
-    if current == nil then
+    if current == nil and not isStamina then
         unit.setStat(uid, resourceName, maxVal)
         return
     end
@@ -143,15 +169,51 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
 
     local drain = drainActivity + drainConstant + drainMetabolic + drainOrganFailure
 
-    local next = current + (regen - drain) * dt
+    -- The intended NET change, before any clamp. For stamina this is
+    -- the entire script-side result: the engine adds it to what storage
+    -- actually holds, resolves the bound from the committing unit
+    -- record and clamps there, so nothing computed above can republish
+    -- over a debit that landed while it was being computed.
+    local amount = (regen - drain) * dt
 
-    if next < 0     then next = 0     end
-    if next > maxVal then next = maxVal end
+    local next
+    if isStamina then
+        local res, reason = unit.commitStamina(uid, amount)
+        -- A refusal is a bug in this caller or a unit that vanished
+        -- under it, and `nil, reason` on its own is invisible: the
+        -- engine's callback isolation reports RAISED errors and
+        -- discards ordinary returns. Raise so the reason reaches the
+        -- Lua log with its file:line rather than silently skipping both
+        -- the update and the exhaustion checks forever.
+        if res == nil then
+            error("commitStamina refused for unit " .. tostring(uid)
+                  .. ": " .. tostring(reason))
+        end
+        -- Everything below now reads what the TRANSACTION saw — never
+        -- the pre-update snapshot, the script's own arithmetic, or a
+        -- maximum that may have moved during the rate calculation.
+        maxVal  = res.maximum
+        current = res.before
+        next    = res.after
+        -- First observation: the pool was still absent at commit and
+        -- has just been filled to the effective maximum. Skip this
+        -- pass's consequences, exactly as the old first-tick `return`
+        -- did.
+        if res.initialized then return end
+    else
+        next = current + amount
 
-    -- Only write if it actually changed by a meaningful amount.
-    -- Avoids hammering the unit manager IORef for sub-pixel updates.
-    if math.abs(next - current) > 1e-4 then
-        unit.setStat(uid, resourceName, next)
+        if next < 0     then next = 0     end
+        if next > maxVal then next = maxVal end
+
+        -- Only write if it actually changed by a meaningful amount.
+        -- Avoids hammering the unit manager IORef for sub-pixel
+        -- updates. Stamina's equivalent elision lives INSIDE the engine
+        -- transaction, where skipping the write cannot also skip the
+        -- threshold checks or hide a debit from them.
+        if math.abs(next - current) > 1e-4 then
+            unit.setStat(uid, resourceName, next)
+        end
     end
 
     -- Survival warnings (player events). Debounced per-unit with
@@ -173,6 +235,13 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     -- Without the current check, a debug-forced setStat(0) on stamina
     -- regenerates above zero on the same tick and never fires the kill
     -- — making the "force stamina to 0" playtest impossible.
+    --
+    -- For stamina both are the COMMITTED values the engine reported
+    -- (#2470), so a pool a strike drove to exactly zero inside this
+    -- tick's own window fires kill_on_zero even though the recovery in
+    -- the same commit left it fractionally above zero. Before, `current`
+    -- was the stale pre-strike reading and `next` the script's estimate,
+    -- and the universal exhaustion-death rule simply never fired.
     if pose ~= "dead" then
         if params.death_threshold and params.death_threshold > 0
            and (current / maxVal < params.death_threshold
