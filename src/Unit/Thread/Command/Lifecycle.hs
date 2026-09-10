@@ -112,7 +112,7 @@ handleUnitClearPageCommand env utsRef pageId cutoff = do
     -- a tick, so a world-thread write could simply be lost. Keeping
     -- every writer on this one thread costs nothing: the drain runs
     -- ahead of 'tickMovement' in the same tick, so no orphaned sim
-    -- state is ever stepped, and 'Unit.Thread.publishToRender' maps
+    -- state is ever stepped, and @Unit.Thread.publishToRender@ maps
     -- over the INSTANCES and would never visit one anyway.
     --
     -- Pruning by "has no instance" is exact rather than merely
