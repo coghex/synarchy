@@ -240,8 +240,8 @@ restoreIfPlayerIdle wsc expected act =
 -- | Run one PAGE\/ENTITY LIFECYCLE transition, or one entity
 --   ADMISSION, as a single critical section (#2476).
 --
---   The two callers hold it for opposite halves of the same boundary,
---   which is why they must be the same lock:
+--   The three callers hold it for different halves of the same
+--   boundary, which is why they must be the same lock:
 --
 --   * A __lifecycle transition__ (a single-page @world.destroy@; either
 --     init path REPLACING a registered page id) reads the live
@@ -253,17 +253,25 @@ restoreIfPlayerIdle wsc expected act =
 --     id) revalidates its target page and its page binding, allocates,
 --     reserves its footprint where it takes one, and enqueues its
 --     command — all inside one call.
+--   * A spawn __commit__ (@Unit.Thread.Command.Spawn@'s handler and
+--     @Building.Thread.Command.applyBuildingSpawn@, on the unit thread —
+--     and, through the shared body, #1602's bound placement on the world
+--     thread) re-reads the target page's incarnation epoch and inserts,
+--     inside one call. The epoch its command carries was checked at the
+--     top of a handler that does a great deal of work before writing, so
+--     only holding the lock across BOTH makes it a fence.
 --
---   Neither half can interleave with the other, so an id allocated
---   before a transition is provably below that transition's cutoff and
---   one allocated after is provably at or above it. Nothing else is
+--   None can interleave with another, so an id allocated before a
+--   transition is provably below that transition's cutoff and one
+--   allocated after is provably at or above it. Nothing else is
 --   needed to tell an old incarnation's rows from its replacement's:
 --   the queued clear retires only the rows below its cutoff, on its own
 --   page, and leaves the replacement's alone.
 --
 --   __Ordering rule.__ This is the OUTERMOST coordination boundary an
---   admission takes: no holder may acquire another page or entity lock
---   underneath it. What runs inside is 'Data.IORef.atomicModifyIORef''
+--   admission or commit takes: no holder may acquire another page or
+--   entity lock underneath it. What runs inside is
+--   'Data.IORef.atomicModifyIORef''
 --   transitions and non-blocking queue writes, neither of which can
 --   wait on a lock. It is also deliberately NOT held across world
 --   generation — the init handlers release it as soon as the

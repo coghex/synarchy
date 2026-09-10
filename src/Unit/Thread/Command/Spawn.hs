@@ -1,6 +1,9 @@
 {-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Spawn
     ( handleUnitSpawnCommand
+    , handleUnitSpawnCommandWith
+    , SpawnSeams(..)
+    , productionSpawnSeams
     , spawnModifierMap
     , spawnEffectiveCapacity
     , shedPlan
@@ -44,10 +47,35 @@ import World.Chunk.Admit (pageIncarnation)
 import Engine.Core.Capability.WorldSim (withPageLifecycle)
 import World.Chunk.Residency (ChunkGeneration)
 
+-- | #2476: the one point a test may interpose on, so the
+--   check-then-transition-then-insert schedule can be built
+--   deterministically instead of raced for.
+--
+--   Same shape as 'Unit.Thread.UnitTickSeams' and 'World.Thread.worldTickWith':
+--   the production entry point below supplies 'productionSpawnSeams',
+--   so what a test drives is this module's real body with one hook
+--   filled in, never a reimplementation of it.
+newtype SpawnSeams = SpawnSeams
+    { seamAfterEpochCheck ∷ IO ()
+      -- ^ Runs after the handler's FIRST epoch check and before its
+      --   commit. A test lands a same-id re-init here; production does
+      --   nothing, which is what makes the commit fence's revalidation
+      --   the only thing standing between the two.
+    }
+
+productionSpawnSeams ∷ SpawnSeams
+productionSpawnSeams = SpawnSeams { seamAfterEpochCheck = pure () }
+
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
                        → Float → Float → Int → Faction → WorldPageId
                        → ChunkGeneration → IO ()
-handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId epoch = do
+handleUnitSpawnCommand = handleUnitSpawnCommandWith productionSpawnSeams
+
+handleUnitSpawnCommandWith
+    ∷ SpawnSeams → EngineEnv → IORef UnitThreadState → UnitId → Text
+    → Float → Float → Int → Faction → WorldPageId → ChunkGeneration → IO ()
+handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
+                           pageId epoch = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     -- Drop the spawn if its world no longer exists. A spawn queued
     -- before a teardown would otherwise be drained after it and
@@ -72,6 +100,7 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId epoch = do
     replaced ← case mPage of
         Nothing → pure False
         Just ws → (≢ epoch) ⊚ pageIncarnation ws
+    seamAfterEpochCheck seams
     case HM.lookup defName (umDefs um) of
         _ | worldGone → do
             logger ← readIORef (loggerRef env)

@@ -69,7 +69,8 @@ import Data.List (sort)
 
 import Building.Schema
 import Building.Command.Types (BuildingCommand(..))
-import Building.Thread.Command (processAllBuildingCommands)
+import Building.Thread.Command
+    (applyBuildingSpawnWith, processAllBuildingCommands)
 import Building.Types
     ( BuildingDef(..), BuildingId(..), BuildingInstance(..)
     , BuildingManager(..), DestructionClip(..), DestructionEffect(..)
@@ -100,6 +101,10 @@ import Unit.Direction (Direction(..))
 import Unit.Faction (Faction(..))
 import Unit.Sim.Types (UnitThreadState(..))
 import Unit.Thread.Command (processAllUnitCommands)
+import Unit.Thread.Command.Spawn
+    (SpawnSeams(..), handleUnitSpawnCommandWith, productionSpawnSeams)
+import Building.Knowledge (knownContainerIds)
+import Building.Knowledge.Live (containerObserver, revealContainerWith)
 import Unit.Types
     ( BodyPart(..), UnitDef(..), UnitId(..), UnitInstance(..)
     , UnitManager(..), defaultNaturalResistance, emptyUnitManager )
@@ -750,6 +755,7 @@ spec = describe "Page incarnation entity teardown" $ aroundAll setup $ do
     bindingSpec
     cutoffSpec
     scopeSpec
+    interleavingSpec
     lockSpec
   where
     -- Isolation wraps the boot (#1357): engine init is itself a config
@@ -1224,6 +1230,114 @@ scopeSpec = describe "scoping and no-ops" $ do
                          (BuildingClearPage incPage (BuildingId bid))
             drainEntities env
             (rBuildings <$> rowsOn env incPage) `shouldReturn` [bid]
+
+-- | The interleavings the fences exist for, built rather than raced
+--   for. Every example here lands a page lifecycle transition at the ONE
+--   instant its target cannot see coming — between a check and the write
+--   it guards, or between a resolver's two reads — through the
+--   production body's own seam ('Unit.Thread.UnitTickSeams' is the
+--   precedent). Nothing is reimplemented: the seam is the only argument
+--   that differs from what the engine runs.
+interleavingSpec ∷ SpecWith (EngineEnv, LuaBackendState)
+interleavingSpec = describe "a transition landing mid-commit" $ do
+
+    forM_ paths $ \p →
+        it ("a unit spawn whose epoch check is outlived by " <> pathName p
+            <> " inserts nothing") $ \(env, ls) → do
+            resetScene env
+            _ ← spawnUnitOn ls incPage unitTile
+            held ← Q.flushQueue (unitQueue env)
+            -- The transition runs AFTER the handler has already accepted
+            -- the epoch and BEFORE it inserts — the schedule the initial
+            -- check cannot cover and the queued clear is behind. Only
+            -- the commit fence's revalidation refuses it.
+            let seams = productionSpawnSeams
+                    { seamAfterEpochCheck = pathRun p env }
+            forM_ held $ \cmd → case cmd of
+                UnitSpawn uid nm sx sy sz fac pg ep →
+                    handleUnitSpawnCommandWith seams env
+                        (ucUtsRef (toUnitCombatCapability env))
+                        uid nm sx sy sz fac pg ep
+                _ → pure ()
+            rUnits <$> rowsOn env incPage `shouldReturn` []
+            simStateIds env `shouldReturn` []
+
+    forM_ paths $ \p →
+        it ("a building spawn whose epoch check is outlived by "
+            <> pathName p <> " inserts nothing and leaks no claim")
+            $ \(env, ls) → do
+            resetScene env
+            _ ← spawnBuildingOn ls buildingDefName oldTile incPage Nothing
+            held ← Q.flushQueue (buildingQueue env)
+            logger ← readIORef (loggerRef env)
+            forM_ held $ \cmd → case cmd of
+                BuildingSpawn bid nm sx sy sz pg ep → do
+                    -- The seam runs the transition and then PUTS THE
+                    -- CLAIM BACK, matching this request exactly.
+                    --
+                    -- Without that, #2326's claim check is what refuses
+                    -- the commit — the transition retires a pre-cutoff
+                    -- reservation — and this example would pass with
+                    -- the epoch revalidation deleted. Restoring the
+                    -- claim leaves the epoch as the only thing standing
+                    -- between a departed incarnation's request and the
+                    -- replacement, which is what it is here to gate.
+                    let restoreClaim = atomicModifyIORef'
+                            (buildingManagerRef env) $ \bm →
+                            ( bm { bmReservations = HM.insert bid
+                                     FootprintReservation
+                                         { frPage = pg, frAnchorX = sx
+                                         , frAnchorY = sy, frTileW = 1
+                                         , frTileH = 1 }
+                                     (bmReservations bm) }, () )
+                    applyBuildingSpawnWith (pathRun p env ≫ restoreClaim)
+                        logger
+                        (toWorldSimCapability env)
+                        (toContentRegistriesViewCapability env)
+                        (toBuildingCapability env)
+                        bid nm sx sy sz pg ep
+                _ → pure ()
+            rows ← rowsOn env incPage
+            rBuildings rows `shouldBe` []
+            -- Refused on the epoch, and the claim retired with it.
+            rClaims rows    `shouldBe` []
+
+    forM_ paths $ \p →
+        it ("a container reveal whose resolution is straddled by "
+            <> pathName p <> " writes nothing to the replacement")
+            $ \(env, ls) → do
+            resetScene env
+            bid ← spawnBuildingOn ls buildingDefName oldTile incPage Nothing
+            drainEntities env
+            let co = containerObserver (toBuildingCapability env)
+                                       (toWorldSimCapability env)
+                                       (toContentRegistriesViewCapability env)
+            -- Revealed happily before the transition, so the refusal
+            -- below is the ordering's doing and not a missing building.
+            revealContainerWith (pure ()) co (BuildingId bid)
+                `shouldReturn` True
+            knowledgeOn env incPage `shouldReturn` [bid]
+
+            resetScene env
+            bid2 ← spawnBuildingOn ls buildingDefName oldTile incPage Nothing
+            drainEntities env
+            -- The transition lands BETWEEN the resolver's page read and
+            -- its building read. Entity-first ordering would pair the
+            -- departed building with the replacement's state and record
+            -- an observation the page clear never reaches; page-first
+            -- finds the building already retired and refuses.
+            revealContainerWith (pathRun p env) co (BuildingId bid2)
+                `shouldReturn` False
+            knowledgeOn env incPage `shouldReturn` []
+
+-- | The container-knowledge ids a page currently holds.
+knowledgeOn ∷ EngineEnv → WorldPageId → IO [Word32]
+knowledgeOn env page = do
+    wm ← readIORef (worldManagerRef env)
+    case lookup page (wmWorlds wm) of
+        Nothing → pure []
+        Just ws → sort . map unBuildingId . knownContainerIds
+                      <$> readIORef (wsContainerKnowledgeRef ws)
 
 -- | The lock itself. Nothing single-threaded can distinguish a locked
 --   transition from an unlocked one, so each example HOLDS the mutex on

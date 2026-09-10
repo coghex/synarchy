@@ -485,7 +485,7 @@ data EngineEnv = EngineEnv
     -- ^ #2476: the PROCESS-LIFETIME mutex that linearises a world
     --   page's entity lifecycle against every entity admission.
     --
-    --   Two kinds of transition take it. A LIFECYCLE transition —
+    --   Three kinds of holder take it. A LIFECYCLE transition —
     --   `world.destroy` on a single page, and either `world.init` /
     --   `world.initArena` that REPLACES a registered page id — holds it
     --   while it reads the live `umNextId`/`bmNextId`, enqueues the
@@ -496,7 +496,18 @@ data EngineEnv = EngineEnv
     --   that allocate a `UnitId` or a `BuildingId` — holds it from its
     --   final live-page and page-binding revalidation through the id
     --   allocation, the footprint reservation where it takes one, and
-    --   the queue insertion.
+    --   the queue insertion. A spawn COMMIT — the UNIT thread's
+    --   `handleUnitSpawnCommand` and `applyBuildingSpawn`, plus #1602's
+    --   bound route into the latter on the world thread — holds it
+    --   across the re-read of the target page's incarnation epoch and
+    --   the manager insertion itself.
+    --
+    --   That third holder is a FENCE, not a check: the epoch a spawn
+    --   command carries is verified at the top of a handler that then
+    --   rolls stats, sheds inventory and commits a footprint before it
+    --   writes, so a transition could otherwise outlive the check and
+    --   the handler would insert a departed incarnation's entity under
+    --   the replacement's reused name.
     --
     --   That is what makes the cutoffs mean anything: an admission
     --   completed before a teardown provably holds an id BELOW the

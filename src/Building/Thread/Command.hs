@@ -11,6 +11,7 @@
 module Building.Thread.Command
     ( processAllBuildingCommands
     , applyBuildingSpawn
+    , applyBuildingSpawnWith
     ) where
 
 import UPrelude
@@ -218,7 +219,21 @@ applyBuildingSpawn ∷ LoggerState → WorldSimCapability
                    → ContentRegistriesViewCapability → BuildingCapability
                    → BuildingId → Text → Int → Int → Int → WorldPageId
                    → ChunkGeneration → IO ()
-applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch = do
+applyBuildingSpawn = applyBuildingSpawnWith (pure ())
+
+-- | 'applyBuildingSpawn' with #2476's test seam: the action runs after
+--   this body's FIRST epoch check and before its commit, so a test can
+--   land a same-id re-init exactly there and prove that the fence
+--   around the revalidation and the insertion is what refuses the
+--   stale request. Production passes @pure ()@; the body is otherwise
+--   the one both spawn routes run, unchanged.
+applyBuildingSpawnWith
+    ∷ IO () → LoggerState → WorldSimCapability
+    → ContentRegistriesViewCapability → BuildingCapability
+    → BuildingId → Text → Int → Int → Int → WorldPageId
+    → ChunkGeneration → IO ()
+applyBuildingSpawnWith afterEpochCheck logger sim reg bld bid defName gx gy gz
+                       pageId epoch = do
     bm ← readIORef (bcBuildingManagerRef bld)
     -- Drop the spawn if its world is gone — a spawn queued before a
     -- teardown would otherwise re-insert an orphan building into the
@@ -243,6 +258,7 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch = do
     replaced ← case mPage of
         Nothing → pure False
         Just ws → (≢ epoch) ⊚ pageIncarnation ws
+    afterEpochCheck
     case HM.lookup defName (bmDefs bm) of
         -- #2326: every path that drops the spawn retires what that
         -- request left behind — its footprint claim, and any power node
@@ -310,7 +326,17 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch = do
                       Nothing → pure False
                       Just ws → (≡ epoch) ⊚ pageIncarnation ws
               if not stillOurs
-                then pure False
+                then do
+                    -- Retire the claim here too. Every other arm that
+                    -- refuses this request releases what its admission
+                    -- took (#2326), and a request the fence turns away
+                    -- is no more able to commit than one the def lookup
+                    -- or the world-gone guard turned away — leaving its
+                    -- tiles held would keep them from the replacement
+                    -- forever.
+                    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+                        (releaseReservation bid bm', ())
+                    pure False
                 else atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
                 let (retired, accepted) =
                         commitFootprint worldSize pageId bid gx gy

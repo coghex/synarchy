@@ -2412,13 +2412,21 @@ and therefore after the retirement, so a departed row is already gone.
 `unitOwningWorldState`, `unitOrderStore`, `containerPage` and
 `construction.payMaterials` all resolve this way.
 
+Both fences and the resolution order are gated by built interleavings
+rather than raced-for ones: each production body carries one seam (the
+shape `Unit.Thread.UnitTickSeams` and `World.Thread.worldTickWith`
+already use), and the examples land a transition through it at the one
+instant the code cannot see coming. Reverting either revalidation, or
+the resolver's read order, fails its own examples.
+
 What remains open is only a caller that reads an entity, is descheduled
 across the whole transition, and then performs a mutation it had already
 resolved everything for. That is the ordinary read-then-write straddle
 every entity verb already has against `UnitDestroy` /
 `BuildingDestroy` — not something a page teardown introduces — and
 closing it means holding the lifecycle lock across every verb's durable
-mutation, which is a separate change.
+mutation. That, and `construction.payMaterials`' pre-existing failure to
+check its supplier against the page it was handed, are #2474's PIN-3.
 
 **Not a session boundary.** Neither path joins #2291's
 `wmTeardownsPending` fence or enqueues `UnitEndSession` /

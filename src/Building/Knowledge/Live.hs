@@ -66,6 +66,8 @@
 module Building.Knowledge.Live
     ( ContainerObserver(..)
     , containerObserver
+    , containerPageWith
+    , revealContainerWith
     , revealContainer
     , revealContainerForUnit
     , seedBuiltContainer
@@ -91,7 +93,7 @@ import Building.Types
 import Item.Types (ItemInstance, ItemManager)
 import Unit.Faction (isPlayerCommandable)
 import Unit.Types (UnitId, UnitInstance(..), UnitManager(..))
-import World.Page.Resolve (resolveBuildingPage)
+import World.Page.Resolve (resolveBuildingPageWith)
 import World.State.Types (WorldManager(..), WorldState(..))
 
 -- | The live containers a container-knowledge reveal reads or writes,
@@ -133,7 +135,16 @@ containerObserver bld sim reg = ContainerObserver
 --   not the visible one's.
 containerPage
     ∷ ContainerObserver → BuildingId → IO (Maybe (WorldState, [ItemInstance]))
-containerPage co bid =
+containerPage = containerPageWith (pure ())
+
+-- | 'containerPage' with #2476's between-reads seam, so a test can land
+--   a same-id re-init between the page snapshot and the building read
+--   and prove no departed incarnation's observation reaches the
+--   replacement's record.
+containerPageWith
+    ∷ IO () → ContainerObserver → BuildingId
+    → IO (Maybe (WorldState, [ItemInstance]))
+containerPageWith betweenReads co bid =
     -- #2476: through the ORDERED resolver, page set first. Reading the
     -- building first and the page set second could straddle a page
     -- lifecycle transition and pair a departed incarnation's building
@@ -142,7 +153,8 @@ containerPage co bid =
     -- knowledge record, where the queued page clear will not reach it.
     -- See "World.Page.Resolve" for why the order settles it.
     fmap (\(_, ws, inst) → (ws, biStorage inst))
-        ⊚ resolveBuildingPage (coWorlds co) (coBuildings co) bid
+        ⊚ resolveBuildingPageWith betweenReads (coWorlds co) (coBuildings co)
+                                  bid
 
 -- | Take a fresh observation of @bid@'s storage and REPLACE its record.
 --   Returns 'False' only when the container (or its page) is gone.
@@ -151,8 +163,15 @@ containerPage co bid =
 --   has already committed, so what lands in the record is the FINAL
 --   post-commit contents rather than a value captured mid-move.
 revealContainer ∷ ContainerObserver → BuildingId → IO Bool
-revealContainer co bid = do
-    mPage ← containerPage co bid
+revealContainer = revealContainerWith (pure ())
+
+-- | 'revealContainer' with #2476's between-reads seam threaded down to
+--   'containerPageWith'. The write below is the durable one a straddled
+--   resolution would misdirect, so the seam has to reach this far for a
+--   test to gate it.
+revealContainerWith ∷ IO () → ContainerObserver → BuildingId → IO Bool
+revealContainerWith betweenReads co bid = do
+    mPage ← containerPageWith betweenReads co bid
     case mPage of
         Nothing → pure False
         Just (ws, storage) → do

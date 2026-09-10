@@ -47,6 +47,7 @@ module World.Page.Resolve
     ( snapshotWorlds
     , resolveUnitPage
     , resolveBuildingPage
+    , resolveBuildingPageWith
     ) where
 
 import UPrelude
@@ -84,8 +85,22 @@ resolveUnitPage worldsRef unitsRef uid = do
 --   guarantee.
 resolveBuildingPage ∷ IORef WorldManager → IORef BuildingManager → BuildingId
                     → IO (Maybe (WorldPageId, WorldState, BuildingInstance))
-resolveBuildingPage worldsRef buildingsRef bid = do
+resolveBuildingPage = resolveBuildingPageWith (pure ())
+
+-- | 'resolveBuildingPage' with a seam BETWEEN its two reads.
+--
+--   The ordering this module exists for is invisible from outside: both
+--   orders answer identically unless a page lifecycle transition lands
+--   between the reads. So a test lands one there, through this hook,
+--   and proves the resolution refuses rather than pairing a departed
+--   incarnation's building with the replacement's state. Production
+--   passes @pure ()@ and the two reads stay adjacent.
+resolveBuildingPageWith
+    ∷ IO () → IORef WorldManager → IORef BuildingManager → BuildingId
+    → IO (Maybe (WorldPageId, WorldState, BuildingInstance))
+resolveBuildingPageWith betweenReads worldsRef buildingsRef bid = do
     mgr ← snapshotWorlds worldsRef
+    betweenReads
     bm  ← readIORef buildingsRef
     pure $ do
         inst ← HM.lookup bid (bmInstances bm)
