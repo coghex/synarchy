@@ -21,7 +21,7 @@ concrete precondition
 - [x] WML-4. Establish the shared generated-world library lifecycle — [#2024]
 - [x] WML-5. Generate deterministic spatial pyramid pages — [#2298]
 - [x] WML-6. Measure map-page codecs and disk-cache budgets — [#2303]
-- [ ] WML-7. Define the versioned map-artifact format — [deferred]: #2303 must report and the owner must select Q-17's codec, disk quota, and multiworld cache accounting
+- [ ] WML-7. Define the versioned map-artifact format — [deferred]: Q-17 owner choices are resolved; #2303 measurement delivery remains pending
 - [ ] WML-8. Publish mandatory map artifacts during world generation
 - [ ] WML-9. Load and recover map artifacts transactionally
 - [ ] WML-10. Serve lazy fine pages through bounded caches
@@ -1190,15 +1190,19 @@ small-auxiliary-world capability. Full multiworld scaling is deferred.
 
 ### Q-17. Which page codec and disk-cache quota should ship?
 
-**Status: deliberately open behind D-12's tracked measurement gate.**
+**Resolved by owner decision (2026-09-10), supported by #2303 measurements.**
 
 The [2026-09-10 measurement](world_map_page_codec_measurement.md) now supplies
 two reproducible raw/PNG runs and bounded cache-model results. On 2026-09-10
 the owner selected PNG and required all three camera patterns to be critical.
 The owner subsequently approved the 3 GiB total optional fine-page disk quota.
-Only multiworld accounting remains open; the tested 95% main / 5% small
-auxiliary-world partition is proposed, not yet selected. No runtime defaults
-have changed.
+The owner separately approved a hard 95% main / 5% reserve for one small
+auxiliary world, within that same total and with no borrowing. Auxiliary bytes
+are floor(total / 20); the main partition receives the remainder. The quota
+counts encoded fine-page payloads plus the experimental 32-byte digest allowance;
+mandatory root/coarse pages, filesystem overhead, manifests and temporary writes
+are outside it. The artifact-format slice owns the final integrity representation.
+All three owner choices are recorded; no runtime defaults have changed.
 
 The measurement slice captures representative default terrain pages spanning
 ocean, varied land, ice, lava, transparency, and seams; compares raw
@@ -1450,17 +1454,18 @@ the exact commands appropriate to each one-PR slice:
   no runtime codec, quota, or eviction default changes in this slice.
 - **Out of scope:** Selecting a shipping codec or quota without owner approval,
   defining the artifact schema, or implementing a production cache.
-- **Open questions:** Q-17; this slice supplies the evidence and then stops.
+- **Owner gate:** Q-17 resolved on 2026-09-10; this slice records evidence and
+  choices without installing runtime defaults.
 
 ### WML-7. Define the versioned map-artifact format
 
-> **Deferred (2026-09-02).** Q-17 remains unresolved. #2303 (WML-6) now has
-> [reproducible measurements](world_map_page_codec_measurement.md). The
-> owner has selected PNG and a 3 GiB optional fine-page disk quota, but
-> multiworld cache accounting remains open. This slice's own scope begins
-> "After Q-17 is explicitly resolved", and Q-17 forbids any issue inferring a
-> codec or quota from delivery order. Processable once #2303 has reported its
-> measurements and the owner has explicitly selected all three values.
+> **Deferred (2026-09-02), updated 2026-09-10.** Q-17's owner decisions are
+> now resolved: PNG, 3 GiB optional fine-page disk quota, hard 95% main / 5%
+> small auxiliary-world partitions. #2303's
+> [reproducible measurements](world_map_page_codec_measurement.md) and owner
+> signoff are delivered together in PR #2595, pending final review/delivery.
+> Resume processing this slice after that prerequisite is delivered; do not
+> infer that the artifact schema or production cache has been implemented.
 
 - **Outcome:** Mandatory root/coarse pages and reproducible fine-cache pages
   have one versioned, integrity-checked, world-qualified storage contract.

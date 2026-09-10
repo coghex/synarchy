@@ -4,8 +4,8 @@ This manual experiment supplies evidence for WML-6 and the owner's Q-17
 decision. It does not install a codec, cache, quota, or eviction policy.
 Two complete runs agree byte-for-byte. On 2026-09-10 the owner selected PNG
 and required all three map-use patterns to be critical. The owner subsequently
-approved a 3 GiB total optional fine-page disk cache. Auxiliary-world accounting
-remains open; no runtime defaults have changed.
+approved a 3 GiB total optional fine-page disk cache and a hard 95% main / 5%
+small auxiliary-world allocation. Q-17 is resolved; no runtime defaults have changed.
 
 ## Reproduce
 
@@ -166,8 +166,9 @@ partition is reserved for one small auxiliary world and 95% for the main
 world. The auxiliary trace sweeps all 45 finest pages of size 136 six times;
 level 0 is finer than that world's mandatory-coarse cutoff. Both partitions
 and the request-weighted combined hit rate are reported. This assumption
-preserves the existing small-auxiliary-world capability; it is not a shipping
-partition or a claim to support many full-sized worlds.
+preserves the existing small-auxiliary-world capability. It began as an
+experiment assumption; the owner subsequently selected this partition at
+3 GiB, as recorded below. It does not claim to support many full-sized worlds.
 
 Trace pages not in the measured corpus are priced, separately per codec,
 at the median measured encoded-page size. Every result is repeated using
@@ -299,8 +300,8 @@ The 5% auxiliary partition exposes a policy assumption: 45 pages priced at
 327,340 bytes need 14,730,300 bytes (14.048 MiB), so the 12.8 MiB partition
 inside a 256 MiB total cannot retain a complete sweep. Its zero hit rate is
 LRU thrashing under that declared trace, not a missing-world or calculation
-failure. A different partition or a larger total must be evaluated before
-selecting this as a shipping policy.
+failure. The subsequently evaluated and owner-selected 3 GiB total retains
+the complete auxiliary sweep under the same partition.
 
 The full JSON includes both codecs, both pricing assumptions, every quota,
 main/auxiliary request, hit and total miss counts, peak resident bytes,
@@ -357,8 +358,8 @@ At 3 GiB the modeled partition is 2918.4 MiB main and 153.6 MiB auxiliary.
 The small-world trace needs only 14.048 MiB at maximum pricing. That leaves
 headroom in the auxiliary partition but withholds space from the main world;
 a smaller fixed reserve or shared pool would be a different policy requiring
-its own comparison. The 95/5 split remains an experiment assumption pending
-owner selection. These bytes exclude mandatory coarse/root artifacts,
+its own comparison. The owner selected the tested hard 95/5 split on
+2026-09-10. These bytes exclude mandatory coarse/root artifacts,
 filesystem allocation/metadata, manifests and temporary writes. This is a
 logical encoded-data-plus-digest budget, not a bound on total folder size.
 Neither the small corpus nor these finite synthetic traces prove universal
@@ -389,10 +390,10 @@ remains separate from the future artifact-format contract.
 **Owner requirement: all three camera patterns are critical.** On 2026-09-10
 the owner approved the proposed **3 GiB total optional fine-page disk quota**
 with “sure, that sounds good” in response to the explicit quota question.
-This selects the numerical budget; auxiliary-world allocation was explicitly
-left as the next decision and is not inferred from that approval.
+That response selected the numerical budget. The owner then separately
+approved the explicit 95/5 allocation question with “i think so yea, thats fine”.
 
-**Remaining proposal:** keep the tested hard 95% main / 5% auxiliary split,
+**Owner-selected accounting:** keep the tested hard 95% main / 5% auxiliary split,
 accounting for both partitions within the selected 3 GiB total. At that limit,
 153.6 MiB is reserved for one small auxiliary world, preventing main-world
 exploration from evicting its cached pages. Unused auxiliary capacity is not
@@ -403,6 +404,11 @@ partition also reaches zero repeat misses on all three declared traces.
 The tradeoff is withholding 5% from main-world use even when the auxiliary
 cache is empty.
 
-**Q-17 remains open only for auxiliary-world accounting.** The owner has not
-yet selected this partition. Record that decision before final PR review;
-this issue does not install runtime defaults.
+**Q-17 is resolved:** PNG; 3 GiB total optional fine-page disk quota; hard
+95% main / 5% one small auxiliary-world partitions with no borrowing. For
+integer-byte accounting, total = 3,221,225,472 bytes, auxiliary = floor(total / 20)
+= 161,061,273 bytes, and main = total - auxiliary = 3,060,164,199 bytes.
+The measured integrity allowance and quota exclusions are stated above;
+the later artifact-format slice owns its storage representation. All owner
+decisions are recorded in this PR before final review. This measurement issue
+does not install runtime defaults.
