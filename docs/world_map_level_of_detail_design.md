@@ -1195,8 +1195,10 @@ small-auxiliary-world capability. Full multiworld scaling is deferred.
 The [2026-09-10 measurement](world_map_page_codec_measurement.md) now supplies
 two reproducible raw/PNG runs and bounded cache-model results. On 2026-09-10
 the owner selected PNG and required all three camera patterns to be critical.
-The revised proposal is 3 GiB; owner selection of the total quota and
-multiworld accounting remains open. No runtime defaults have changed.
+The owner subsequently approved the 3 GiB total optional fine-page disk quota.
+Only multiworld accounting remains open; the tested 95% main / 5% small
+auxiliary-world partition is proposed, not yet selected. No runtime defaults
+have changed.
 
 The measurement slice captures representative default terrain pages spanning
 ocean, varied land, ice, lava, transparency, and seams; compares raw
@@ -1453,9 +1455,9 @@ the exact commands appropriate to each one-PR slice:
 ### WML-7. Define the versioned map-artifact format
 
 > **Deferred (2026-09-02).** Q-17 remains unresolved. #2303 (WML-6) now has
-> [reproducible measurements](world_map_page_codec_measurement.md), but the
-> owner has selected PNG but has not selected the fine-page disk quota or
-> multiworld cache accounting. This slice's own scope begins
+> [reproducible measurements](world_map_page_codec_measurement.md). The
+> owner has selected PNG and a 3 GiB optional fine-page disk quota, but
+> multiworld cache accounting remains open. This slice's own scope begins
 > "After Q-17 is explicitly resolved", and Q-17 forbids any issue inferring a
 > codec or quota from delivery order. Processable once #2303 has reported its
 > measurements and the owner has explicitly selected all three values.

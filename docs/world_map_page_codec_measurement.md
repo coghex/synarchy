@@ -3,8 +3,9 @@
 This manual experiment supplies evidence for WML-6 and the owner's Q-17
 decision. It does not install a codec, cache, quota, or eviction policy.
 Two complete runs agree byte-for-byte. On 2026-09-10 the owner selected PNG
-and required all three map-use patterns to be critical. The disk quota and
-auxiliary-world accounting remain open; no runtime defaults have changed.
+and required all three map-use patterns to be critical. The owner subsequently
+approved a 3 GiB total optional fine-page disk cache. Auxiliary-world accounting
+remains open; no runtime defaults have changed.
 
 ## Reproduce
 
@@ -345,7 +346,7 @@ At median pricing, distant repeat hit rates are 55.58%, 97.41% and 100% at
 256 MiB, 512 MiB and 1 GiB respectively. The large gap between these pricing
 cases is uncertainty in unseen page sizes, not measurement of player behavior.
 
-**Revised proposal: 3 GiB total optional fine-page disk cache.** It is the
+**Owner-selected quota: 3 GiB total optional fine-page disk cache.** It is the
 smallest tested quota that produces zero repeat misses across every trace
 under both pricing assumptions. This is a proposed retention target chosen
 for this comparison, not an owner-approved performance requirement. The
@@ -385,8 +386,23 @@ that choice: substantial space savings, modest isolated decode cost, and
 passing correctness checks. The experimental external checksum allowance
 remains separate from the future artifact-format contract.
 
-**Owner requirement: all three camera patterns are critical.** The revised
-quota proposal is 3 GiB, evaluated separately against each pattern above.
-The owner has not yet selected the numerical quota or auxiliary-world
-accounting. **Q-17 remains open for those two decisions.** This issue records
-the eventual choices before final PR review; it does not install runtime defaults.
+**Owner requirement: all three camera patterns are critical.** On 2026-09-10
+the owner approved the proposed **3 GiB total optional fine-page disk quota**
+with “sure, that sounds good” in response to the explicit quota question.
+This selects the numerical budget; auxiliary-world allocation was explicitly
+left as the next decision and is not inferred from that approval.
+
+**Remaining proposal:** keep the tested hard 95% main / 5% auxiliary split,
+accounting for both partitions within the selected 3 GiB total. At that limit,
+153.6 MiB is reserved for one small auxiliary world, preventing main-world
+exploration from evicting its cached pages. Unused auxiliary capacity is not
+borrowed by the main world. This is a cache allocation, not RAM, and not a
+promise to support arbitrary numbers of full-sized worlds. The modeled
+small-world working set fits with substantial headroom; the main-world
+partition also reaches zero repeat misses on all three declared traces.
+The tradeoff is withholding 5% from main-world use even when the auxiliary
+cache is empty.
+
+**Q-17 remains open only for auxiliary-world accounting.** The owner has not
+yet selected this partition. Record that decision before final PR review;
+this issue does not install runtime defaults.
