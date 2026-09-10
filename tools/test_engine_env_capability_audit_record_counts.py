@@ -746,7 +746,7 @@ def test_record_counts_real_table_uses_only_the_vocabulary():
     expect(audit_record_counts(sources, document) == [],
            "the real §2.1 table must satisfy the row vocabulary")
     live = ("`Engine.Core.Capability.WorldSim` \u2014 "
-            "`WorldSimCapability` (11 fields, the world/sim half)")
+            "`WorldSimCapability` (12 fields, the world/sim half)")
     hidden = document.replace(live, f'[](# "{live}")', 1)
     expect(hidden != document, "the fixture must change the real document")
     expect(any("a link, image or footnote" in v
@@ -1114,12 +1114,12 @@ def test_record_counts_against_the_real_repo():
     expect(size_violations == [],
            f"every live capability record's field list must be readable, "
            f"got: {size_violations}")
-    expect(len(sizes) == 14 and sum(sizes.values()) == 116,
-           f"the live tree should be the 14 records and 116 projected "
+    expect(len(sizes) == 14 and sum(sizes.values()) == 117,
+           f"the live tree should be the 14 records and 117 projected "
            f"fields the aggregate reports, got {len(sizes)} record(s) "
            f"totalling {sum(sizes.values())}")
 
-    stale = document.replace("`WorldSimCapability` (11 fields",
+    stale = document.replace("`WorldSimCapability` (12 fields",
                              "`WorldSimCapability` (9 fields", 1)
     expect(stale != document and audit_record_counts(sources, stale) != [],
            "restoring the stale WorldSim size issue #2269 removed must "

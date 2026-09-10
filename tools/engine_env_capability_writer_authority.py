@@ -375,6 +375,16 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Unit.Thread.Command.Spawn",
         "Unit.Thread.Movement",
         "World.Thread.ItemTemp",
+        # #2476: a single-page destroy, and either init path replacing
+        # a registered page id, retire that incarnation's rows here
+        # and now -- under the page/entity lifecycle lock, through
+        # the same pure body the queued page clear applies
+        # afterwards. Immediate because a page id is a reusable
+        # NAME: until the clear drains, an old entity would still
+        # resolve under the replacement's name for every verb that
+        # reads its page.
+        "World.Thread.Command.Basic",
+        "World.Thread.Command.Init",
     }),
     "unitQueue": frozenset(),
     "utsRef": frozenset(),
@@ -412,6 +422,16 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         # footprint claim `building.spawn` took for it.
         "World.Thread.Command.BoundSpawn",
         "World.Thread.ItemTemp",
+        # #2476: a single-page destroy, and either init path replacing
+        # a registered page id, retire that incarnation's rows here
+        # and now -- under the page/entity lifecycle lock, through
+        # the same pure body the queued page clear applies
+        # afterwards. Immediate because a page id is a reusable
+        # NAME: until the clear drains, an old entity would still
+        # resolve under the replacement's name for every verb that
+        # reads its page.
+        "World.Thread.Command.Basic",
+        "World.Thread.Command.Init",
     }),
     "texPaletteRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
     "texPaletteHandlesRef": frozenset({"Engine.Scripting.Lua.API.Structure"}),
@@ -434,6 +454,10 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "enginePausedRef": frozenset({"World.Pause"}),
     "playerIntentGenRef": frozenset(),
     "enginePauseGenRef": frozenset({"World.Pause"}),
+    # #2476. An `MVar ()` mutex, and this scan sees only DIRECT `IORef`
+    # mutation, so there is nothing here for it to attribute --
+    # `playerIntentGenRef` above is empty for the same reason.
+    "pageLifecycleLock": frozenset(),
     "gameTimeRef": frozenset({"Unit.Thread"}),
     "saveBarrierRef": frozenset(),
     "inputThreadActiveRef": frozenset({"Engine.Input.Thread"}),

@@ -30,6 +30,7 @@ import World.Construct.Receipt (ConstructPayment(..), mkMaterialReceipt)
 import World.Construct.Types
     (ConstructDesignation(..), ConstructTarget(..), StructurePiece(..))
 import World.Generate.Coordinates (canonicalTile)
+import World.Page.Resolve (snapshotWorlds)
 import World.Page.Types (WorldPageId(..))
 import World.Types
     (WorldManager(..), WorldState(..), pageWrapWorldSize
@@ -89,7 +90,13 @@ constructPayMaterialsFn env = do
             Lua.liftIO $ do
                 let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
                     uid = UnitId (fromIntegral uidN)
-                mgr ← readIORef (wsWorldManagerRef wsc)
+                -- #2476: as an ORDERING POINT, so the supplier read
+                -- inside 'payFrom' below cannot be observed to have
+                -- happened before this. The page set is resolved first
+                -- and the unit second, which is what keeps a departed
+                -- incarnation's unit from funding a designation on the
+                -- page that replaced it — see "World.Page.Resolve".
+                mgr ← snapshotWorlds (wsWorldManagerRef wsc)
                 case lookup pageId (wmWorlds mgr) of
                     Nothing → pure False
                     Just ws → do

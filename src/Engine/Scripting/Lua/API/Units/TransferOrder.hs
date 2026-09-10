@@ -86,7 +86,6 @@ module Engine.Scripting.Lua.API.Units.TransferOrder
 
 import UPrelude
 import qualified Data.Text.Encoding as TE
-import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
 import Data.IORef (readIORef, atomicModifyIORef')
 import Engine.Core.Capability.UnitCombat
@@ -95,11 +94,12 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv)
 import Building.Types (BuildingId(..))
-import Unit.Types (UnitId(..), UnitInstance(..), UnitManager(..))
+import Unit.Types (UnitId(..))
 import Unit.Transfer
 import Unit.Transfer.Orders
+import World.Page.Resolve (resolveUnitPage)
 import World.Page.Types (WorldPageId(..))
-import World.State.Types (WorldManager(..), WorldState(..))
+import World.State.Types (WorldState(..))
 import Engine.Scripting.Lua.API.Units.Transfer
     ( LiveState, commitOneLive, endpointView, pushArgError
     , pushBatchResult, pushRequestError, pushTextField, readLiveState
@@ -157,13 +157,16 @@ pushBool b = Lua.pushboolean b ≫ return 1
 --   is, so creation validates the endpoints against this value rather
 --   than only against each other.
 unitOrderStore ∷ EngineEnv → UnitId → IO (Maybe (WorldPageId, WorldState))
-unitOrderStore env uid = do
-    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-    case HM.lookup uid (umInstances um) of
-        Nothing → pure Nothing
-        Just u  → do
-            mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-            pure ((,) (uiPage u) ⊚ lookup (uiPage u) (wmWorlds mgr))
+unitOrderStore env uid =
+    -- #2476: through the ORDERED resolver, page set first. An order is
+    -- DURABLE and names its acting unit, so a resolution that straddled
+    -- a page lifecycle transition would store one in the replacement's
+    -- own book naming a carrier the teardown has already removed —
+    -- a dangling reference riding every later save. See
+    -- "World.Page.Resolve".
+    resolveUnitPage (wsWorldManagerRef (toWorldSimCapability env))
+                    (ucUnitManagerRef (toUnitCombatCapability env))
+                    uid
 
 -- | Run @f@ against the store of the page @uid@ is on, having resolved
 --   the order @oid@ names AND confirmed @uid@ is the one carrying it.

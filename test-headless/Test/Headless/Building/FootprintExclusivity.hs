@@ -89,6 +89,8 @@ import World.Thread.Command (handleWorldCommand)
 import World.Thread.Command.UI
     (handleWorldHideCommand, handleWorldShowCommand)
 import World.Tile.Types (WorldTileData(..))
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 
 -- * Fixture identity
 
@@ -502,18 +504,20 @@ commitSpec = describe "the commit verifies the claim" $ do
     it "inserts nothing for an unclaimed spawn on the queue drain" $
         \(env, _) → do
             resetScene env
+            epochA ← epochOf env pageA
             Q.writeQueue (buildingQueue env) $
                 BuildingSpawn (BuildingId 99) smallName
-                    (fst contestedTile) (snd contestedTile) 0 pageA
+                    (fst contestedTile) (snd contestedTile) 0 pageA epochA
             placed env `shouldReturn` []
 
     it "inserts nothing for an unclaimed spawn on the bound route" $
         \(env, _) → do
             resetScene env
             gen ← selectionGen env
+            epochA ← epochOf env pageA
             Q.writeQueue (worldQueue env) $
                 WorldSpawnBoundBuilding (BuildingId 99) smallName
-                    (fst contestedTile) (snd contestedTile) 0 pageA gen
+                    (fst contestedTile) (snd contestedTile) 0 pageA gen epochA
             placed env `shouldReturn` []
 
     it "inserts nothing when the claim names a DIFFERENT anchor" $
@@ -524,9 +528,10 @@ commitSpec = describe "the commit verifies the claim" $ do
             -- The claim exists, but for other tiles: replaying its id at
             -- the far tile must not ride in on it.
             _ ← drainBuildingQueue env
+            epochA ← epochOf env pageA
             Q.writeQueue (buildingQueue env) $
                 BuildingSpawn (BuildingId 1) smallName
-                    (fst farTile) (snd farTile) 0 pageA
+                    (fst farTile) (snd farTile) 0 pageA epochA
             placed env `shouldReturn` []
 
     it "inserts nothing when the claim names a DIFFERENT page" $
@@ -535,9 +540,10 @@ commitSpec = describe "the commit verifies the claim" $ do
             spawn ls smallName contestedTile pageA Nothing
                 `shouldReturn` q "id|1"
             _ ← drainBuildingQueue env
+            epochB ← epochOf env pageB
             Q.writeQueue (buildingQueue env) $
                 BuildingSpawn (BuildingId 1) smallName
-                    (fst contestedTile) (snd contestedTile) 0 pageB
+                    (fst contestedTile) (snd contestedTile) 0 pageB epochB
             placed env `shouldReturn` []
 
     it "cannot RESURRECT a demolished building by replaying its \
@@ -581,9 +587,10 @@ releaseSpec = describe "a dropped request releases its claim" $ do
         -- Reach the unknown-def arm with a claim outstanding: take one
         -- through the real admission, then rename the def out from
         -- under the queued command.
+        epochA ← epochOf env pageA
         Q.writeQueue (buildingQueue env) $
             BuildingSpawn (BuildingId 1) "no_such_def"
-                (fst contestedTile) (snd contestedTile) 0 pageA
+                (fst contestedTile) (snd contestedTile) 0 pageA epochA
         atomicModifyIORef' (buildingManagerRef env) $ \bm →
             ( bm { bmReservations = HM.singleton (BuildingId 1) $
                     reservationAt pageA contestedTile }, () )
@@ -631,9 +638,10 @@ releaseSpec = describe "a dropped request releases its claim" $ do
             real ← drainBuildingQueue env
             -- Replay that id at the WRONG anchor: refused, and it must
             -- not cancel the claim the real command still depends on.
+            epochA ← epochOf env pageA
             Q.writeQueue (buildingQueue env) $
                 BuildingSpawn (BuildingId 1) smallName
-                    (fst farTile) (snd farTile) 0 pageA
+                    (fst farTile) (snd farTile) 0 pageA epochA
             placed env `shouldReturn` []
             outstandingClaims env `shouldReturn` 1
             -- The real command still commits.
@@ -673,3 +681,16 @@ reservationAt ∷ WorldPageId → (Int, Int) → FootprintReservation
 reservationAt pid (gx, gy) = FootprintReservation
     { frPage = pid, frAnchorX = gx, frAnchorY = gy
     , frTileW = 1, frTileH = 1 }
+
+-- | The page's live INCARNATION epoch (#2476), which every spawn command
+--   now carries so its commit can tell "this page id still exists" from
+--   "the page this request was validated against still exists". Read
+--   from the live fixture rather than invented, so a hand-built command
+--   below reaches the check it is actually aimed at instead of being
+--   dropped as a departed incarnation's.
+epochOf ∷ EngineEnv → WorldPageId → IO ChunkGeneration
+epochOf env page = do
+    wm ← readIORef (worldManagerRef env)
+    case lookup page (wmWorlds wm) of
+        Just ws → pageIncarnation ws
+        Nothing → fail ("epochOf: no page " <> show page)

@@ -15,6 +15,7 @@ module Building.Types
     , BuildingManager(..)
     , emptyBuildingManager
     , nextBuildingId
+    , retirePageBuildings
     , currentActivity
     , materialsSatisfied
     , footprintDist
@@ -400,6 +401,48 @@ nextBuildingId ∷ BuildingManager → (BuildingId, BuildingManager)
 nextBuildingId bm =
     let bid = BuildingId (bmNextId bm)
     in (bid, bm { bmNextId = bmNextId bm + 1 })
+
+-- | #2476: retire one page incarnation's buildings — the building half
+--   of 'Unit.Types.Manager.retirePageUnits', with the same page +
+--   exclusive-cutoff pair, the same two callers (the lifecycle
+--   transition directly, and the queued
+--   'Building.Command.Types.BuildingClearPage' afterwards), and the
+--   same reason for being one shared body.
+--
+--   All four records move together so no observer sees a selected,
+--   effect-bearing or tile-holding row whose instance is already gone.
+--   Effects and claims are filtered on their OWN page fields rather
+--   than through the retired instance set: an effect outlives its
+--   instance by design (#2091) and a claim precedes one entirely
+--   (#2326), so neither is reachable through 'bmInstances'.
+--
+--   The reservations are the half that makes the cutoff load-bearing.
+--   A REPLACEMENT admitted after the transition holds a claim on the
+--   same page under the same name, and a bare page filter would delete
+--   it — after which 'Building.Reservation.commitFootprint' would
+--   refuse the very spawn it was taken for. Its id is at or above the
+--   cutoff, so it is left exactly as found, as is a bound placement
+--   that already committed on the world thread (#1602).
+--
+--   The allocator is untouched, for the same reason the unit half's is.
+retirePageBuildings ∷ WorldPageId → BuildingId → BuildingManager
+                    → BuildingManager
+retirePageBuildings pageId cutoff bm = bm
+    { bmInstances = HM.difference (bmInstances bm) retired
+    , bmDestructions = HM.filterWithKey
+          (\bid eff → not (dePage eff ≡ pageId ∧ bid < cutoff))
+          (bmDestructions bm)
+    , bmReservations = HM.filterWithKey
+          (\bid res → not (frPage res ≡ pageId ∧ bid < cutoff))
+          (bmReservations bm)
+    , bmSelected = case bmSelected bm of
+          Just sel | HM.member sel retired → Nothing
+          keep                             → keep
+    }
+  where
+    retired = HM.filterWithKey
+        (\bid inst → biPage inst ≡ pageId ∧ bid < cutoff)
+        (bmInstances bm)
 
 -- | Buildings belonging to one specific world page (active-world
 --   placement / occupancy scoping, #76).

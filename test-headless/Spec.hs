@@ -147,6 +147,7 @@ import qualified Test.Headless.Lua.PreviewGeneration as LuaPreviewGeneration
 import qualified Test.Headless.Lua.PauseGate as LuaPauseGate
 import qualified Test.Headless.World.PauseSpeed as PauseSpeed
 import qualified Test.Headless.World.SessionEpoch as SessionEpoch
+import qualified Test.Headless.World.PageIncarnation as PageIncarnation
 import qualified Test.Headless.World.TimeScaleDomain as TimeScaleDomain
 import qualified Test.Headless.World.GenConfigDomain as GenConfigDomain
 import qualified Test.Headless.Equipment.Reconcile as EquipmentReconcile
@@ -873,6 +874,7 @@ main = hspec $ do
     -- handler plus the real unit tick directly, so a world worker
     -- draining worldQueue beside it would buy nothing.
     SessionEpoch.spec
+    PageIncarnation.spec
     describe "Load.Status" LoadStatus.spec
     describe "Load.Terminalize" LoadTerminalize.spec
     describe "Save.Snapshot" SaveSnapshot.spec

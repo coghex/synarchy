@@ -57,6 +57,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Guaranteed significant contents and compound clearance (#917)](#guaranteed-significant-contents-and-compound-clearance-917)
 - [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
 - [Page incarnation: in-flight work across a reused page id (#2474)](#page-incarnation-in-flight-work-across-a-reused-page-id-2474)
+- [Entity teardown on destroy and same-id re-init (#2476)](#entity-teardown-on-destroy-and-same-id-re-init-2476)
 
 **Gameplay systems**
 
@@ -2271,6 +2272,176 @@ that reaches no teardown of its own. The sim queue is FIFO, so "drop, then seed
 the same id" is correct in queue order whatever the overlap. The drop also
 clears `swsActive`, which is right — the flag belonged to a page that no longer
 exists — and every caller shows a page after initialising it.
+
+### Entity teardown on destroy and same-id re-init (#2476)
+
+**A page's units and buildings belong to the incarnation that admitted
+them, and leave with it.**
+
+A page's `WorldState` is replaced or removed by `WorldDestroy` and by
+either init path. Its entities are not: they live in the PROCESS-global
+unit and building managers, keyed only by a page name the replacement
+reuses. Before #2476 neither path touched those managers at all, so the
+replacement inherited the old incarnation's unit instances, unit
+selection and sim states, building instances, building selection,
+destruction effects and outstanding footprint reservations.
+
+**One lifecycle boundary, shared by teardown and admission.** A page
+lifecycle transition and an entity admission take the same
+process-lifetime mutex, `EngineEnv.pageLifecycleLock`, projected as
+`WorldSimCapability.wsPageLifecycleLock` and reached only through
+`withPageLifecycle`:
+
+- A **lifecycle transition** — a single-page `WorldDestroy`, and either
+  `WorldInit` / `WorldInitArena` that REPLACES a registered page id —
+  holds it while it reads `umNextId` and `bmNextId`, enqueues
+  `UnitClearPage` / `BuildingClearPage` carrying those readings as
+  EXCLUSIVE cutoffs, and removes or replaces the page. An init that
+  registers an id no page held replaces no incarnation and enqueues no
+  clear. Both init paths release the lock as soon as the replacement is
+  registered — worldgen runs outside it.
+- An **admission** — `unit.spawn`, `building.spawn` and
+  `power.placeNode`, the only three sites that allocate a `UnitId` or a
+  `BuildingId` — holds it from its final live-page and page-binding
+  revalidation through the id allocation, the footprint reservation
+  where it takes one, and the queue insertion. It is the OUTERMOST
+  coordination boundary of an admission: no holder may acquire another
+  page or entity lock underneath it.
+
+**Old work is retired; replacement work survives.** Teardown stays
+queue-ordered (#58): each clear runs behind the spawns already on its
+queue. What the cutoff adds is the ability to tell those spawns apart
+from the replacement's, which reuse the same page name. An admission
+completed before a transition holds an id BELOW the cutoff that
+transition captured, so it is either inserted and then cleared, or
+dropped first by its handler's existing absent-page guard. An admission
+begun after the transition sees the replacement (or the absence), takes
+an id AT OR ABOVE the cutoff, and cannot be erased by the clear still
+queued behind it. `UnitClearPage` retires only matching-page instances
+below its cutoff, those ids from `umSelected`, and their
+`utsSimStates`; `BuildingClearPage` retires only matching-page
+instances, destruction effects and footprint reservations below its
+cutoff, plus `bmSelected` when it names one of them. Neither rewinds an
+allocator.
+
+The reservations are why a bare page filter is not enough. A claim is
+taken synchronously, ahead of the commit, and is keyed by page (#2326),
+so a page-only clear would delete a REPLACEMENT's claim before its own
+spawn could consume it and `commitFootprint` would then refuse the very
+placement it was taken for.
+
+**Page-bound placement is unchanged (#1602).** A bound commit stays on
+the world thread. A binding captured against the replaced visible
+incarnation is refused by the existing selection-generation check and
+releases its reservation; a bound admission naming a page that is not
+the visible head is refused for the same reason, because replacing a
+hidden page bumps no generation. A valid binding admitted against the
+replacement may commit ahead of the delayed building clear — its id is
+at or above the cutoff, so both its claim and its committed instance
+survive it.
+
+**A previous incarnation's entities stop being addressable at once.**
+The queued clears retire those rows eventually, and "eventually" is not
+enough on its own: a page id is a reusable NAME, so until a clear drains
+an old unit or building is still in the manager answering to a name that
+now belongs to the replacement. Every production verb that resolves an
+entity's page — an item drop, a transfer, a construction payment, a
+container reveal, a power placement — would keep finding it, and could
+spend it into durable state on the replacement that outlives the row the
+teardown removes.
+
+So the lifecycle transition applies the retirement DIRECTLY, in the same
+locked step, through the same pure bodies the queued clears use
+(`Unit.Types.Manager.retirePageUnits`,
+`Building.Types.retirePageBuildings`). A page teardown then behaves
+exactly as `UnitDestroy` / `BuildingDestroy` already do: the entity is
+gone from the manager and every resolver simply fails. One body, two
+callers, so the immediate removal and the queued mop-up cannot disagree
+about what belonged to the departed incarnation.
+
+This is not the direct clear #58 forbids. That one was unbounded, so a
+spawn already queued re-inserted an orphan after it with nothing left to
+remove them. These are bounded by the same exclusive cutoff, and the
+queued clears still run behind every such spawn. `utsSimStates` is the
+one exception: it belongs to the unit thread, which mutates it with a
+read-modify-write across a tick, so its removal stays in the queued
+handler — which runs ahead of that tick's movement, and
+`publishToRender` maps over the instances and would never visit an
+orphan anyway.
+
+The retirement precedes the `wmWorlds` write, and on the init paths that
+order is load-bearing: registering first would open an interval in which
+the replacement is reachable while the departed incarnation's rows are
+still in their managers, and every verb that resolves an entity's page
+reads those two in exactly that order.
+
+**A spawn already dequeued is refused at its own commit.** Neither half
+of the teardown can catch a spawn command that had already left its
+queue when the transition ran: the immediate retirement finds no
+instance to remove, and the queued clear is enqueued behind nothing. So
+`UnitSpawn`, `BuildingSpawn` and `WorldSpawnBoundBuilding` each carry
+the page's `ChunkGeneration` incarnation epoch (#2474's existing
+per-`WorldState` value, read by the admission from the page it resolved,
+inside the lifecycle lock). `handleUnitSpawnCommand` and the shared
+`applyBuildingSpawn` compare it against the page's current epoch and
+drop a mismatch exactly as they drop an absent page — retiring the
+footprint claim with it. "The page exists" and "the page this request
+was validated against exists" are different questions, and only the
+epoch answers the second.
+
+The epoch is verified again at the commit itself, inside the lifecycle
+lock, in the same critical section as the insertion. The first check
+happens early in each handler and a great deal of work follows it — stat
+rolls, a capacity shed, a footprint commit — so on its own it is a
+time-of-check that a transition can outlive. Holding the lock across
+revalidation and write is what makes it a fence.
+
+**Entity-to-page resolution reads the page set first.** The transition
+retires before it registers, so a resolver that reads the ENTITY first
+and the page second can straddle it — old entity, new page — and hand
+its caller a pair that lets a durable row (a ground item, a transfer
+order, a container observation, a construction receipt) outlive the
+entity naming it. `World.Page.Resolve` inverts the order and is the one
+way to go from an entity to its live `WorldState`: the page snapshot
+comes first, taken through `atomicModifyIORef'` so it is a real ordering
+point rather than a plain load two others could be reordered around.
+Either the snapshot holds the old page, and the pair is consistent
+because the write lands in the state that is leaving, or it holds the
+replacement, in which case the entity read happened after the publish
+and therefore after the retirement, so a departed row is already gone.
+`unitOwningWorldState`, `unitOrderStore`, `containerPage` and
+`construction.payMaterials` all resolve this way.
+
+Both fences and the resolution order are gated by built interleavings
+rather than raced-for ones: each production body carries one seam (the
+shape `Unit.Thread.UnitTickSeams` and `World.Thread.worldTickWith`
+already use), and the examples land a transition through it at the one
+instant the code cannot see coming. Reverting either revalidation, or
+the resolver's read order, fails its own examples.
+
+What remains open is only a caller that reads an entity, is descheduled
+across the whole transition, and then performs a mutation it had already
+resolved everything for. That is the ordinary read-then-write straddle
+every entity verb already has against `UnitDestroy` /
+`BuildingDestroy` — not something a page teardown introduces — and
+closing it means holding the lifecycle lock across every verb's durable
+mutation. That, and `construction.payMaterials`' pre-existing failure to
+check its supplier against the page it was handed, are #2474's PIN-3.
+
+**Not a session boundary.** Neither path joins #2291's
+`wmTeardownsPending` fence or enqueues `UnitEndSession` /
+`BuildingEndSession`: one page ending is not the session ending.
+Destroy-all's four-message sequence, load publication, hide, show and
+the world-thread placement path are untouched. Transfer orders, power
+nodes and container knowledge remain `WorldState` rows and leave with
+the replaced page; nothing can add more to the replacement because the
+entity that would have named them is already gone from its manager.
+
+Gate: `Page incarnation entity teardown` in
+`test-headless/Test/Headless/World/PageIncarnation.hs`, which drives
+every admission through its production Lua verb and every transition
+through its production handler, and holds the mutex directly to show
+each of the six sites blocking on it.
 
 ### Simulation writebacks (#2477)
 

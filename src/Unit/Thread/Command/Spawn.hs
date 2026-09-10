@@ -1,6 +1,9 @@
 {-# LANGUAGE Strict #-}
 module Unit.Thread.Command.Spawn
     ( handleUnitSpawnCommand
+    , handleUnitSpawnCommandWith
+    , SpawnSeams(..)
+    , productionSpawnSeams
     , spawnModifierMap
     , spawnEffectiveCapacity
     , shedPlan
@@ -40,21 +43,74 @@ import Item.Types (ItemDef(..), ItemInstance(..)
                   , itemTotalWeight)
 import World.Types (WorldManager(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Admit (pageIncarnation)
+import Engine.Core.Capability.WorldSim (withPageLifecycle)
+import World.Chunk.Residency (ChunkGeneration)
+
+-- | #2476: the one point a test may interpose on, so the
+--   check-then-transition-then-insert schedule can be built
+--   deterministically instead of raced for.
+--
+--   Same shape as 'Unit.Thread.UnitTickSeams' and 'World.Thread.worldTickWith':
+--   the production entry point below supplies 'productionSpawnSeams',
+--   so what a test drives is this module's real body with one hook
+--   filled in, never a reimplementation of it.
+newtype SpawnSeams = SpawnSeams
+    { seamAfterEpochCheck ∷ IO ()
+      -- ^ Runs after the handler's FIRST epoch check and before its
+      --   commit. A test lands a same-id re-init here; production does
+      --   nothing, which is what makes the commit fence's revalidation
+      --   the only thing standing between the two.
+    }
+
+productionSpawnSeams ∷ SpawnSeams
+productionSpawnSeams = SpawnSeams { seamAfterEpochCheck = pure () }
 
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
-                       → Float → Float → Int → Faction → WorldPageId → IO ()
-handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
+                       → Float → Float → Int → Faction → WorldPageId
+                       → ChunkGeneration → IO ()
+handleUnitSpawnCommand = handleUnitSpawnCommandWith productionSpawnSeams
+
+handleUnitSpawnCommandWith
+    ∷ SpawnSeams → EngineEnv → IORef UnitThreadState → UnitId → Text
+    → Float → Float → Int → Faction → WorldPageId → ChunkGeneration → IO ()
+handleUnitSpawnCommandWith seams env utsRef uid defName gx gy gz faction
+                           pageId epoch = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-    -- Drop the spawn if its world no longer exists. A spawn queued before
-    -- world.destroyAll (Exit to Menu) would otherwise be drained after
-    -- teardown and re-insert an orphan unit into the cleared manager (#58).
+    -- Drop the spawn if its world no longer exists. A spawn queued
+    -- before a teardown would otherwise be drained after it and
+    -- re-insert an orphan unit into the cleared manager (#58). Both
+    -- @world.destroyAll@ and (#2476) a single-page @world.destroy@ leave
+    -- the page absent, so both land here; a same-id re-init does not,
+    -- because its replacement holds the name and the queued
+    -- @UnitClearPage@ retires the pre-cutoff row afterwards.
     wmgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-    let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
+    let mPage     = lookup pageId (wmWorlds wmgr)
+        worldGone = isNothing mPage
+    -- #2476: the page id is a reusable NAME, so "the page exists" is not
+    -- "the page this request was admitted for exists". A same-id re-init
+    -- registers a DIFFERENT 'WorldState' under it, and this command may
+    -- already have been dequeued when that transition ran — in which
+    -- case the transition's immediate retirement saw nothing to remove
+    -- and its queued 'UnitClearPage' has not been reached yet, so the
+    -- insertion below would make an old incarnation's unit live under
+    -- the replacement's name. Comparing the page's INCARNATION epoch is
+    -- what settles it, and it is checked here rather than left to the
+    -- clear because between the two the unit is externally visible.
+    replaced ← case mPage of
+        Nothing → pure False
+        Just ws → (≢ epoch) ⊚ pageIncarnation ws
+    seamAfterEpochCheck seams
     case HM.lookup defName (umDefs um) of
         _ | worldGone → do
             logger ← readIORef (loggerRef env)
             logDebug logger CatThread
                 "UnitSpawn: dropping spawn for a destroyed world (teardown)"
+        _ | replaced → do
+            logger ← readIORef (loggerRef env)
+            logDebug logger CatThread $
+                "UnitSpawn: dropping spawn admitted for a previous \
+                \incarnation of page " <> unWorldPageId pageId
         Nothing → do
             logger ← readIORef (loggerRef env)
             logWarn logger CatThread $
@@ -199,9 +255,6 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                     , uiClimbDest   = Nothing
                     , uiTrailState  = Nothing
                     }
-            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
-                (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
-
             let ss = UnitSimState
                     { usRealX     = gx
                     , usRealY     = gy
@@ -230,8 +283,42 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
                     , usJumpApex         = Nothing
                     , usMoveGrade        = 0
                     }
-            atomicModifyIORef' utsRef $ \uts →
-                (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
+            -- #2476: the epoch read at the top of this handler is a
+            -- time-of-CHECK, and everything between it and here — the
+            -- def lookup, the stat and body rolls, the capacity shed —
+            -- is time in which a same-id re-init can land. So the
+            -- decision is taken AGAIN here, inside the lifecycle lock,
+            -- in the same critical section as the insertion itself.
+            -- That is what makes it a commit FENCE rather than another
+            -- check: the transition cannot interleave between the
+            -- revalidation and the two writes, so an instance for a
+            -- departed incarnation can never become externally visible
+            -- under the replacement's reused page name.
+            --
+            -- Taken with no page or entity lock held, and everything
+            -- inside is an 'atomicModifyIORef''. The world thread never
+            -- blocks on this thread while holding the same lock.
+            let unitCombat = toUnitCombatCapability env
+                worldSim   = toWorldSimCapability env
+            committed ← withPageLifecycle worldSim $ do
+                mgr ← readIORef (wsWorldManagerRef worldSim)
+                stillOurs ← case lookup pageId (wmWorlds mgr) of
+                    Nothing → pure False
+                    Just ws → (≡ epoch) ⊚ pageIncarnation ws
+                when stillOurs $ do
+                    atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um' →
+                        (um' { umInstances =
+                                   HM.insert uid inst (umInstances um') }, ())
+                    atomicModifyIORef' utsRef $ \uts →
+                        (uts { utsSimStates =
+                                   HM.insert uid ss (utsSimStates uts) }, ())
+                pure stillOurs
+            unless committed $ do
+                logger ← readIORef (loggerRef env)
+                logDebug logger CatThread $
+                    "UnitSpawn: page " <> unWorldPageId pageId
+                    <> " was replaced while this spawn was being built; \
+                       \dropping it"
 
 -- | Effective carrying capacity at spawn: the rolled base stat with
 --   the spawn modifier map applied — the same

@@ -821,7 +821,11 @@ worldWaitForInitFn env = do
                 waitLoop (n - 1)
 
 -- | world.destroy(pageId)
--- Removes the world from the world manager entirely, freeing its state.
+-- Removes the world from the world manager entirely, freeing its state —
+-- and, since #2476, retiring what that page incarnation owned in the
+-- global unit and building managers through a pair of queued,
+-- cutoff-bounded page clears. Only this page is touched; a hidden page
+-- destroyed beside a live one leaves the live one's entities alone.
 worldDestroyFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldDestroyFn env = do
     pageIdArg ← Lua.tostring 1

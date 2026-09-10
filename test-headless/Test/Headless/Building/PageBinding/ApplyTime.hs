@@ -35,6 +35,9 @@ import World.Thread.Command.Cursor.Construct
     (handleWorldDesignateConstructCommand)
 import World.Thread.Command.UI
     (handleWorldHideCommand, handleWorldShowCommand)
+import World.Page.Types (WorldPageId)
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 
 -- | Enqueuing is not committing. The Lua-side check answers the caller,
 --   but page selection belongs to the WORLD thread, so that is where a
@@ -55,9 +58,10 @@ applyTimeSpec =
         logger ← readIORef (loggerRef env)
         let wsc = toWorldSimCapability env
         bid ← admitPlacement env pageA portalName placeTile
+        epochA ← epochOf env pageA
         Q.writeQueue (worldQueue env) $
             WorldSpawnBoundBuilding bid portalName
-                (fst placeTile) (snd placeTile) terrainZA pageA gen
+                (fst placeTile) (snd placeTile) terrainZA pageA gen epochA
         -- Selection moves AFTER the command was enqueued — exactly the
         -- window a Lua-thread check cannot cover — and it moves through
         -- the REAL handlers, on the same thread that then drains the
@@ -82,9 +86,10 @@ applyTimeSpec =
         _ ← clearStubs ls
         gen ← selectionGen env
         bid ← admitPlacement env pageA portalName placeTile
+        epochA ← epochOf env pageA
         Q.writeQueue (worldQueue env) $
             WorldSpawnBoundBuilding bid portalName
-                (fst placeTile) (snd placeTile) terrainZA pageA gen
+                (fst placeTile) (snd placeTile) terrainZA pageA gen epochA
         runWorldQueue env
         -- Placed already, before any building-queue drain runs.
         placed ← placedBuildings env
@@ -104,9 +109,10 @@ applyTimeSpec =
             logger ← readIORef (loggerRef env)
             let wsc = toWorldSimCapability env
             bid ← admitPlacement env pageA portalName placeTile
+            epochA ← epochOf env pageA
             Q.writeQueue (worldQueue env) $
                 WorldSpawnBoundBuilding bid portalName
-                    (fst placeTile) (snd placeTile) terrainZA pageA gen
+                    (fst placeTile) (snd placeTile) terrainZA pageA gen epochA
             runWorldQueue env
             -- pageA stays REGISTERED, so the drain's own world-gone
             -- guard would not have caught this: only doing the insert
@@ -132,9 +138,10 @@ applyTimeSpec =
         -- building queue and keep landing on their explicit page
         -- however selection moves.
         bid ← admitPlacement env pageA portalName placeTile
+        epochA ← epochOf env pageA
         Q.writeQueue (buildingQueue env) $
             BuildingSpawn bid portalName
-                (fst placeTile) (snd placeTile) terrainZA pageA
+                (fst placeTile) (snd placeTile) terrainZA pageA epochA
         handleWorldHideCommand wsc logger pageA
         handleWorldShowCommand wsc logger pageB
         applyQueuedBuildings env
@@ -181,3 +188,16 @@ applyTimeSpec =
                 (fst placeTile) (snd placeTile)
                 (fst placeTile) (snd placeTile) (CtBuilding shedName) Nothing
             designationKeys wsA wsB `shouldReturn` ([placeTile], [])
+
+-- | The page's live INCARNATION epoch (#2476), which every spawn command
+--   now carries so its commit can tell "this page id still exists" from
+--   "the page this request was validated against still exists". Read
+--   from the live fixture rather than invented, so a hand-built command
+--   below reaches the check it is actually aimed at instead of being
+--   dropped as a departed incarnation's.
+epochOf ∷ EngineEnv → WorldPageId → IO ChunkGeneration
+epochOf env page = do
+    wm ← readIORef (worldManagerRef env)
+    case lookup page (wmWorlds wm) of
+        Just ws → pageIncarnation ws
+        Nothing → fail ("epochOf: no page " <> show page)

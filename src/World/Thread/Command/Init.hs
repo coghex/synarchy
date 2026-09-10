@@ -27,7 +27,16 @@ import Engine.Core.Capability.RenderHandoff
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, withPageLifecycle)
+import Engine.Core.Capability.Building
+    (BuildingCapability(..), toBuildingCapability)
+import Engine.Core.Capability.UnitCombat
+    (UnitCombatCapability(..), toUnitCombatCapability)
+import Building.Command.Types (BuildingCommand(..))
+import Building.Types
+    (BuildingId(..), BuildingManager(..), retirePageBuildings)
+import Unit.Command.Types (UnitCommand(..))
+import Unit.Types (UnitId(..), UnitManager(..), retirePageUnits)
 import Engine.Core.Log (logInfo, logDebug, logWarn, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Solar (maxSolarPages)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -117,38 +126,12 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- dump, the 4-argument world.init).
     writeIORef (wsIdentityRef worldState) identity
 
-    -- Re-initialising an existing page id replaces (and orphans) its old
-    -- WorldState; reclaim that old page's blood-texture GPU resources
-    -- (#788) before it drops out of wmWorlds below. No-op the common case
-    -- where no page yet exists under this id.
-    do preMgr ← readIORef (wsWorldManagerRef worldSim)
-       enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
-
-    -- …and DISCARD any simulation state standing under this id, before
-    -- the replacement is registered below and long before its first seed
-    -- is enqueued (#2477). Re-init is the one same-id replacement that
-    -- reaches no teardown of its own: 'WorldDestroy',
-    -- 'WorldDestroyAll' and 'World.Load.Publish' each drop the outgoing
-    -- page's sim state first, but this path used to leave the PREVIOUS
-    -- incarnation's chunks, dirty set and active flag in place under the
-    -- same key. The sim records a page's incarnation epoch from every
-    -- topology-bearing message, so the replacement's first seed would
-    -- otherwise re-label the old incarnation's retained chunks with the
-    -- NEW epoch — and writebacks derived from them would then pass the
-    -- very fence that exists to refuse them.
-    --
-    -- Unconditional and FIFO, exactly as
-    -- 'World.Load.Publish.publishStagedSession' does it: for an id no
-    -- page has held this is a no-op, and for one that exists "drop, then
-    -- seed the same id" is correct in queue order whatever the overlap.
-    -- It clears 'Sim.State.Types.swsActive' too, which is right — the
-    -- flag belonged to a page that no longer exists — and every caller
-    -- shows the page after initialising it, which is what re-activates
-    -- the incoming one.
-    Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
-
-    -- register early so lua can read the loading phase
-    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
+    -- #2476: register early so lua can read the loading phase — and do
+    -- it as ONE page/entity lifecycle transition, which also retires
+    -- whatever incarnation this id already held. See
+    -- 'registerPageIncarnation' for the whole contract; the page
+    -- replacement itself is unchanged and is the function below.
+    registerPageIncarnation env pageId $ \mgr →
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
@@ -161,11 +144,11 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
         -- visible-but-not-head one, or registering a new id invalidates
         -- nothing: a binding only ever names the head. The request is
         -- discharged either way.
-        ((if selectionHead (wmVisible mgr) ≡ Just pageId
+        (if selectionHead (wmVisible mgr) ≡ Just pageId
             then bumpSelectionGen else id)
             (completeSelectionChange mgr)
             { wmWorlds = (pageId, worldState)
-                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
+                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }
 
     -- Step 0.5: Populate the material registry from data/materials/*.yaml.
     -- The registry was initialized empty at engine startup; without this
@@ -645,48 +628,28 @@ resolvePageNamer logger identity = case wiLanguage =≪ identity of
 
 handleWorldInitArenaCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldInitArenaCommand env logger pageId = do
-    let worldSim = toWorldSimCapability env
-        handoff  = toRenderHandoffCapability env
     logInfo logger CatWorld $ "Initializing test arena: " <> unWorldPageId pageId
 
     worldState ← emptyWorldState
 
-    -- Replacing an existing page id orphans its old WorldState; reclaim
-    -- its blood-texture GPU resources (#788) before it drops out below.
-    do preMgr ← readIORef (wsWorldManagerRef worldSim)
-       enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
-
-    -- …and DISCARD any simulation state standing under this id, before
-    -- the replacement is registered below and long before its first seed
-    -- is enqueued (#2477). Re-init is the one same-id replacement that
-    -- reaches no teardown of its own: 'WorldDestroy',
-    -- 'WorldDestroyAll' and 'World.Load.Publish' each drop the outgoing
-    -- page's sim state first, but this path used to leave the PREVIOUS
-    -- incarnation's chunks, dirty set and active flag in place under the
-    -- same key. The sim records a page's incarnation epoch from every
-    -- topology-bearing message, so the replacement's first seed would
-    -- otherwise re-label the old incarnation's retained chunks with the
-    -- NEW epoch — and writebacks derived from them would then pass the
-    -- very fence that exists to refuse them.
-    --
-    -- Same rule as 'handleWorldInitCommand' above, for the same reason:
-    -- an arena replaces a page wholesale, which is one of the reuses the
-    -- incarnation epoch exists to distinguish.
-    Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
-
-    -- Register early so textures sent after this command are routed correctly
-    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
+    -- #2476: register early so textures sent after this command are
+    -- routed correctly — and, exactly as 'handleWorldInitCommand' does
+    -- it, as ONE page/entity lifecycle transition that also retires the
+    -- incarnation this id already held. An arena replaces a page
+    -- wholesale, which is precisely the reuse that boundary exists to
+    -- distinguish. See 'registerPageIncarnation'.
+    registerPageIncarnation env pageId $ \mgr →
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
         -- #1602: as in handleWorldInitCommand — replacing the visible
         -- HEAD is a selection change; the request is discharged either
         -- way.
-        ((if selectionHead (wmVisible mgr) ≡ Just pageId
+        (if selectionHead (wmVisible mgr) ≡ Just pageId
             then bumpSelectionGen else id)
             (completeSelectionChange mgr)
             { wmWorlds = (pageId, worldState)
-                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }, ())
+                       : filter ((≢ pageId) . fst) (wmWorlds mgr) }
 
     -- Minimal WorldGenParams so the render pipeline doesn't bail on
     -- Nothing. Built BEFORE the chunks (#1718) because the base is
@@ -783,3 +746,118 @@ handleWorldInitArenaDoneCommand env logger pageId = do
     -- Broadcast to Lua that the arena is ready to display
     let lteq = ivLuaQueue (toInputViewCapability env)
     Q.writeQueue lteq (LuaArenaReady (unWorldPageId pageId))
+
+-- | #2476: the registration half of an init, as ONE page\/entity
+--   lifecycle transition.
+--
+--   Both init paths reach the same situation from different sides:
+--   re-initialising a LIVE page id replaces its 'WorldState' while
+--   leaving everything that incarnation owned in the global unit and
+--   building managers, keyed only by a page name the replacement reuses.
+--   So the replacement inherited the previous incarnation's units,
+--   buildings, selections, sim states, destruction effects and
+--   footprint reservations.
+--
+--   Held across: the two allocator readings, the blood disposal and sim
+--   drop for the outgoing incarnation, the @wmWorlds@ replacement, and
+--   the two page-scoped clears carrying those readings as EXCLUSIVE
+--   cutoffs. Every entity admission takes the same lock around its own
+--   allocate-and-enqueue, so an id below a cutoff was admitted for the
+--   incarnation being replaced and an id at or above it for the
+--   replacement — including a bound placement that commits directly on
+--   this thread ahead of the queued clear (#1602), which survives it for
+--   exactly that reason.
+--
+--   __Released before generation.__ This is the whole locked region;
+--   material loading, worldgen and chunk seeding all happen after it
+--   returns. Holding it across a full @world.init@ would stall every
+--   Lua-side admission for the length of worldgen, and none of that work
+--   touches the boundary this lock exists to establish.
+--
+--   __No clear for a page that was not registered.__ Registering a
+--   fresh id replaces no incarnation, so there is nothing to retire and
+--   nothing is enqueued — the ordinary case, and the one where a
+--   needless clear could only ever be a no-op or a mistake.
+--
+--   Neither path joins #2291's 'wmTeardownsPending' session fence or
+--   enqueues a session marker: replacing one page is not the session
+--   ending.
+registerPageIncarnation
+    ∷ EngineEnv → WorldPageId → (WorldManager → WorldManager) → IO ()
+registerPageIncarnation env pageId register = do
+    let worldSim   = toWorldSimCapability env
+        handoff    = toRenderHandoffCapability env
+        unitCombat = toUnitCombatCapability env
+        building   = toBuildingCapability env
+    withPageLifecycle worldSim $ do
+        unitCutoff ← (UnitId . umNextId) ⊚ readIORef (ucUnitManagerRef unitCombat)
+        bldCutoff  ← (BuildingId . bmNextId)
+                     ⊚ readIORef (bcBuildingManagerRef building)
+
+        -- Re-initialising an existing page id replaces (and orphans) its
+        -- old WorldState; reclaim that old page's blood-texture GPU
+        -- resources (#788) before it drops out of wmWorlds below. No-op
+        -- the common case where no page yet exists under this id.
+        preMgr ← readIORef (wsWorldManagerRef worldSim)
+        enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) preMgr pageId
+        let replaced = isJust (lookup pageId (wmWorlds preMgr))
+
+        -- …and DISCARD any simulation state standing under this id,
+        -- before the replacement is registered below and long before its
+        -- first seed is enqueued (#2477). Re-init is the one same-id
+        -- replacement that reaches no teardown of its own:
+        -- 'WorldDestroy', 'WorldDestroyAll' and 'World.Load.Publish' each
+        -- drop the outgoing page's sim state first, but this path used to
+        -- leave the PREVIOUS incarnation's chunks, dirty set and active
+        -- flag in place under the same key. The sim records a page's
+        -- incarnation epoch from every topology-bearing message, so the
+        -- replacement's first seed would otherwise re-label the old
+        -- incarnation's retained chunks with the NEW epoch — and
+        -- writebacks derived from them would then pass the very fence
+        -- that exists to refuse them.
+        --
+        -- Unconditional and FIFO, exactly as
+        -- 'World.Load.Publish.publishStagedSession' does it: for an id no
+        -- page has held this is a no-op, and for one that exists "drop,
+        -- then seed the same id" is correct in queue order whatever the
+        -- overlap. It clears 'Sim.State.Types.swsActive' too, which is
+        -- right — the flag belonged to a page that no longer exists — and
+        -- every caller shows the page after initialising it, which is
+        -- what re-activates the incoming one.
+        Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
+
+        -- Retire the replaced incarnation's rows BEFORE the replacement
+        -- is registered, and immediately rather than only through the
+        -- queue — see
+        -- 'World.Thread.Command.Basic.handleWorldDestroyCommand' for
+        -- why "eventually" is not enough and why this is not the direct
+        -- clear #58 forbids.
+        --
+        -- The ORDER is the point here, and it is the opposite of the
+        -- destroy path's for the same reason. Registering first would
+        -- open an interval in which the replacement is reachable
+        -- through @wmWorlds@ while the departed incarnation's units and
+        -- buildings are still in their managers — and every verb that
+        -- resolves an entity's page reads those two in that order, so it
+        -- would pair an old entity with the new page and write durable
+        -- state that outlives the row. Retiring first closes it: at no
+        -- instant is an old row visible beside the replacement.
+        when replaced $ do
+            atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
+                (fst (retirePageUnits pageId unitCutoff um), ())
+            atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
+                (retirePageBuildings pageId bldCutoff bm, ())
+
+        atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
+            (register mgr, ())
+
+        -- The queued halves stay: the immediate retirement above cannot
+        -- see a spawn that is still on its queue, and the sim states
+        -- belong to the unit thread. A pre-cutoff spawn dequeued before
+        -- this transition ran is caught by neither — it is refused at
+        -- its own commit, by the page-incarnation epoch it carries.
+        when replaced $ do
+            Q.writeQueue (ucUnitQueue unitCombat)
+                         (UnitClearPage pageId unitCutoff)
+            Q.writeQueue (bcBuildingQueue building)
+                         (BuildingClearPage pageId bldCutoff)

@@ -21,6 +21,7 @@ import Unit.Thread.Command.Spawn (handleUnitSpawnCommand)
 import Unit.Thread.Command.Lifecycle
     ( handleUnitDestroyCommand
     , handleUnitClearAllCommand
+    , handleUnitClearPageCommand
     , handleUnitTeleportCommand
     , handleUnitReGroundCommand
     )
@@ -65,12 +66,16 @@ processAllUnitCommands env utsRef = do
         Nothing → return False
 
 handleUnitCommand ∷ EngineEnv → IORef UnitThreadState → UnitCommand → IO ()
-handleUnitCommand env utsRef (UnitSpawn uid defName gx gy gz factionId pageId)
+handleUnitCommand env utsRef
+                  (UnitSpawn uid defName gx gy gz factionId pageId epoch)
   = handleUnitSpawnCommand env utsRef uid defName gx gy gz factionId pageId
+                           epoch
 handleUnitCommand env utsRef (UnitDestroy uid)
   = handleUnitDestroyCommand env utsRef uid
 handleUnitCommand env utsRef UnitClearAll
   = handleUnitClearAllCommand env utsRef
+handleUnitCommand env utsRef (UnitClearPage pageId cutoff)
+  = handleUnitClearPageCommand env utsRef pageId cutoff
 handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz)
   = handleUnitTeleportCommand env utsRef uid gx gy mGz
 handleUnitCommand env utsRef (UnitReGround pageId gx gy)
