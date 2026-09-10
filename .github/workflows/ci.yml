@@ -1158,6 +1158,11 @@ jobs:
           python3 tools/test_check_texture_paths.py
           python3 tools/check_texture_paths.py
 
+      # #2303: only pure arithmetic/fixture checks belong in CI.
+      # Generating and measuring map pages remains manual-only.
+      - name: Map-page codec measurement self-test
+        run: python3 tools/test_map_page_codec_measure.py
+
       # Validate the probe-runner harness itself on every run (cheap, no
       # engine, no GPU). ci_probes/ci_expensive_gates cover the
       # path->probe mapping, which would otherwise only surface as a PR
