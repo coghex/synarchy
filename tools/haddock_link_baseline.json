@@ -370,14 +370,6 @@
       "link": "'World.Fluid.River.Identify.traceRivers'"
     },
     {
-      "path": "src/World/Fluid/Types.hs",
-      "link": "'Sim.Thread.emitWorldDirtyFluids'"
-    },
-    {
-      "path": "src/World/Generate/Chunk/Fluid.hs",
-      "link": "'Sim.Thread.emitWorldDirtyFluids'"
-    },
-    {
       "path": "src/World/Geology/Ore.hs",
       "link": "'World.Geology.Timeline.buildAge'"
     },

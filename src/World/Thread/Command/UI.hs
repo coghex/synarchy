@@ -14,7 +14,7 @@ import Engine.Core.Log (logInfo, logDebug, logWarn, LogCategory(..), LoggerState
 import Engine.Graphics.Solar (maxSolarPages)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
-import Sim.Topology (SimTopology(..))
+import World.Chunk.Admit (pageIncarnation)
 import World.Types
 import World.Render.Zoom.Types (ZoomMapMode(..))
 
@@ -86,9 +86,22 @@ handleWorldShowCommand wsc logger pageId = do
         -- sole writer of wsTilesRef) — so this is just a per-world "is
         -- active" signal, plus the page's seam topology: activation is what
         -- lets the world tick, so its neighbour frame is established in the
-        -- same message (#2044).
-        topo ← maybe (pure SimFlatTopology) pageSimTopology mWorldState
-        Q.writeQueue (wsSimQueue wsc) (SimActivateWorld pageId topo)
+        -- same message (#2044). Its incarnation epoch rides along for the
+        -- same reason (#2477), and both are read from the page's OWN state
+        -- — which is why the send is gated on having it. 'ShowApplied' is
+        -- decided from a wmWorlds lookup on this very thread, the only
+        -- writer of wmWorlds, so the absent case below is unreachable; a
+        -- page missing from wmWorlds has no chunks in the sim and no tiles
+        -- to write back to either, so activating it would be a no-op even
+        -- if it were reachable.
+        case mWorldState of
+          Nothing → logWarn logger CatWorld $
+            "Not activating sim for " <> unWorldPageId pageId
+            <> ": shown but absent from wmWorlds"
+          Just ws → do
+            topo ← pageSimTopology ws
+            epoch ← pageIncarnation ws
+            Q.writeQueue (wsSimQueue wsc) (SimActivateWorld pageId epoch topo)
 
 handleWorldHideCommand ∷ WorldSimCapability → LoggerState → WorldPageId → IO ()
 handleWorldHideCommand wsc logger pageId = do

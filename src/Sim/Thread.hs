@@ -11,6 +11,15 @@ module Sim.Thread
       -- nothing about the real one.
     , fastSettleWorld
     , settleNewChunks
+      -- * The command transition and the emit step, exported for tests
+      --
+      -- Same reason: a fixture proving that a topology-bearing command
+      -- records the page's incarnation epoch, or that an emitted batch
+      -- carries the one its 'Sim.State.Types.SimWorldState' holds
+      -- (#2477), has to drive the REAL handler and the REAL emit rather
+      -- than a re-implementation of either.
+    , handleSimCommand
+    , emitWorldDirtyFluids
     ) where
 
 import UPrelude
@@ -173,15 +182,17 @@ handleSimCommand ∷ EngineEnv → LoggerState → IORef SimState → SimCommand
 handleSimCommand env logger simStateRef cmd = do
     ss ← readIORef simStateRef
     case cmd of
-        SimActivateWorld pid topo → do
+        SimActivateWorld pid epoch topo → do
             -- Re-trigger settle so this world's existing chunks get
             -- simulated now that writeback is possible. Activation is
             -- what lets this world tick at all, so it is also where the
-            -- page's seam topology lands (#2044).
+            -- page's seam topology lands (#2044) — and, for the same
+            -- reason, its incarnation epoch (#2477).
             writeIORef simStateRef $
                 modifyWorld pid (\sws → sws
                     { swsActive = True
                     , swsTopology = topo
+                    , swsIncarnation = Just epoch
                     , swsChunks = HM.map (\scs → scs { scsSettleTicks = reactivateSettleTicks })
                                          (swsChunks sws)
                     }) ss
@@ -203,11 +214,12 @@ handleSimCommand env logger simStateRef cmd = do
                 ss { ssWorlds = HM.delete pid (ssWorlds ss) }
             logDebug logger CatWorld $ "Sim: world dropped " <> tshow pid
 
-        SimChunkLoaded pid topo coord fluidMap terrainMap → do
+        SimChunkLoaded pid epoch topo coord fluidMap terrainMap → do
             writeIORef simStateRef $
                 modifyWorld pid (\sws → sws
-                    { swsTopology = topo
-                    , swsChunks   = HM.insert coord
+                    { swsTopology    = topo
+                    , swsIncarnation = Just epoch
+                    , swsChunks      = HM.insert coord
                                         (loadedChunkState fluidMap terrainMap)
                                         (swsChunks sws)
                     }) ss
@@ -217,16 +229,18 @@ handleSimCommand env logger simStateRef cmd = do
                 modifyWorld pid (\sws →
                     sws { swsChunks = HM.delete coord (swsChunks sws) }) ss
 
-        SimChunkEdited pid topo coord editGen fluidMap terrainMap →
+        SimChunkEdited pid epoch topo coord editGen fluidMap terrainMap →
             -- Re-seed the edited chunk from the authoritative post-edit
             -- tiles and wake it plus its four physically adjacent
             -- neighbours. The topology travels with the message, so
             -- 'applyChunkEdit' resolves those neighbours through the
-            -- page's own seam frame (#2044).
+            -- page's own seam frame (#2044) — and the page's incarnation
+            -- epoch travels with it too (#2477).
             writeIORef simStateRef $
                 modifyWorld pid
                     (applyChunkEdit coord editGen fluidMap terrainMap
-                        . (\sws → sws { swsTopology = topo })) ss
+                        . (\sws → sws { swsTopology    = topo
+                                      , swsIncarnation = Just epoch })) ss
 
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }
@@ -380,7 +394,12 @@ settleNewChunks sws
 -- | Emit one world's dirty chunks' fluid results to the WORLD thread (the
 --   sole writer of 'wsTilesRef') as a 'WorldApplyFluids' batch tagged with
 --   the world's page id, so the world thread applies it ONLY to that world
---   (#59). The sim never touches 'wsTilesRef' itself. With 'Just' ack, the
+--   (#59), and with the INCARNATION epoch this page's sim state holds
+--   ('Sim.State.Types.swsIncarnation'), so the world thread applies it
+--   only to the incarnation it was computed against (#2477). The epoch is
+--   carried verbatim and never compared here — 'Nothing', meaning no
+--   topology-bearing message has reached this page, as honestly as a
+--   known one. The sim never touches 'wsTilesRef' itself. With 'Just' ack, the
 --   world reports the batch's outcome through it once it is done with it
 --   (the synchronous fast-settle waits on that).
 emitWorldDirtyFluids ∷ EngineEnv → WorldPageId → SimWorldState
@@ -407,7 +426,8 @@ emitWorldDirtyFluids env pid sws mAck = do
             ) (HS.toList dirty)
     when (not (null writebacks) ∨ isJust mAck) $
         Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
-            (WorldApplyFluids (FluidWritebackBatch pid writebacks mAck))
+            (WorldApplyFluids
+                (FluidWritebackBatch pid (swsIncarnation sws) writebacks mAck))
 
 deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)
 deriveFluidMap scs =

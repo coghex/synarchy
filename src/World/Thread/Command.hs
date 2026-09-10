@@ -3,6 +3,7 @@ module World.Thread.Command
     ( handleWorldCommand
     , handleApplyFluidsCommandWith
     , applyFluidWritebacks
+    , batchIsCurrentIncarnation
     ) where
 
 import UPrelude
@@ -13,8 +14,10 @@ import Control.Exception (SomeException, throwIO, try)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv, statRNGRef, unitQueue)
-import Engine.Core.Log (LoggerState)
+import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import World.Types
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
                                   , handleWorldDestroyCommand
@@ -274,7 +277,14 @@ handleWorldCommand env logger (WorldMarkLocationStamped pageId gx gy mWindow)
 --   'wsTilesRef'; the sim only produces these batches. Acks the batch's
 --   MVar (if any) after applying — the dump's fast-settle waits on it.
 --
---   Each writeback is applied only if it is FRESH: its 'fwEditGen' must
+--   A batch is refused outright unless it was computed against the
+--   incarnation of that page id the manager currently holds (#2477).
+--   That decision comes FIRST, because the per-chunk fence below cannot
+--   make it: a replacement page has issued no live-edit generations at
+--   all, so every chunk of it reads as generation zero — exactly where a
+--   batch computed against the previous incarnation was stamped.
+--
+--   Each surviving writeback is applied only if it is FRESH: its 'fwEditGen' must
 --   equal the page's own current live-edit generation for that chunk
 --   ('wsChunkEditGenRef'). A batch the sim computed before a live edit
 --   carries the pre-edit generation and is dropped, so it cannot
@@ -283,7 +293,8 @@ handleWorldCommand env logger (WorldMarkLocationStamped pageId gx gy mWindow)
 --   writeback from the same batch, and it is taken here rather than in
 --   'applyOneWriteback' so the tiles are read and written exactly once.
 --
---   The ack fires whatever the outcome — batch empty, page gone, every
+--   The ack fires whatever the outcome — batch empty, page gone, the
+--   whole batch refused as a previous incarnation's, every
 --   writeback dropped, or the application itself raising — or
 --   'SimFastSettleAll' and the @--dump@ fast-settle path would block
 --   forever waiting on it. Only the first three are
@@ -304,11 +315,12 @@ handleApplyFluidsCommand = handleApplyFluidsCommandWith applyFluidWritebacks
 --   The ack is delivered BEFORE the rethrow, so the waiter is released
 --   even though this call does not return normally.
 handleApplyFluidsCommandWith
-    ∷ (EngineEnv → LoggerState → WorldPageId → [FluidWriteback] → IO ())
+    ∷ (EngineEnv → LoggerState → WorldPageId → Maybe ChunkGeneration
+       → [FluidWriteback] → IO ())
     → EngineEnv → LoggerState → FluidWritebackBatch → IO ()
 handleApplyFluidsCommandWith apply env logger
-        (FluidWritebackBatch pageId writebacks mAck) = do
-    applied ← try (apply env logger pageId writebacks)
+        (FluidWritebackBatch pageId mEpoch writebacks mAck) = do
+    applied ← try (apply env logger pageId mEpoch writebacks)
     case applied of
         Right () → forM_ mAck (`putMVar` FluidAckApplied)
         Left (e ∷ SomeException) → do
@@ -318,32 +330,57 @@ handleApplyFluidsCommandWith apply env logger
 -- | The production application step behind 'handleApplyFluidsCommand':
 --   everything between dequeuing the batch and acknowledging it.
 applyFluidWritebacks ∷ EngineEnv → LoggerState → WorldPageId
-                     → [FluidWriteback] → IO ()
-applyFluidWritebacks env logger pageId writebacks = do
+                     → Maybe ChunkGeneration → [FluidWriteback] → IO ()
+applyFluidWritebacks env logger pageId mEpoch writebacks = do
     when (not (null writebacks)) $ do
         mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case lookup pageId (wmWorlds mgr) of
             Nothing → pure ()  -- world gone (destroyed/unloaded) — drop the batch
             Just ws → do
-                gens ← readIORef (wsChunkEditGenRef ws)
-                let fresh = filter (writebackIsFresh gens) writebacks
-                when (not (null fresh)) $ do
-                    atomicModifyIORef' (wsTilesRef ws) $ \wtd →
-                        (foldl' applyOneWriteback wtd fresh, ())
-                    bumpQuadCacheGen ws
-                    writeIORef (wsZoomQuadCacheRef ws) Nothing
-                    writeIORef (wsBgQuadCacheRef ws)   Nothing
-                    -- #1858: an accepted writeback replaces lcSurfaceMap
-                    -- without touching ctVeg, so it can move a designated
-                    -- tile's resolved surface off its tilled cell with no
-                    -- vegetation edit anywhere. Omitting this path would
-                    -- let admission and continuous validation disagree.
-                    _ ← revalidatePlantDesignations logger ws
-                    -- #1844: for the same reason, and scoped to the
-                    -- chunk the writeback replaced rather than the page.
-                    _ ← revalidateConstructDesignations env logger ws
-                            (ConstructChunks (map fwCoord fresh))
-                    pure ()
+                -- The incarnation fence (#2477), ahead of the per-chunk
+                -- one: a batch computed against a page this id no longer
+                -- names never reaches 'writebackIsFresh', which would
+                -- read every one of its writebacks as fresh.
+                live ← pageIncarnation ws
+                if not (batchIsCurrentIncarnation live mEpoch)
+                  then logDebug logger CatWorld $
+                    "Refusing a fluid writeback batch for "
+                    <> unWorldPageId pageId
+                    <> ": computed against incarnation " <> tshow mEpoch
+                    <> ", the live page is " <> tshow live
+                  else do
+                    gens ← readIORef (wsChunkEditGenRef ws)
+                    let fresh = filter (writebackIsFresh gens) writebacks
+                    when (not (null fresh)) $ do
+                        atomicModifyIORef' (wsTilesRef ws) $ \wtd →
+                            (foldl' applyOneWriteback wtd fresh, ())
+                        bumpQuadCacheGen ws
+                        writeIORef (wsZoomQuadCacheRef ws) Nothing
+                        writeIORef (wsBgQuadCacheRef ws)   Nothing
+                        -- #1858: an accepted writeback replaces lcSurfaceMap
+                        -- without touching ctVeg, so it can move a designated
+                        -- tile's resolved surface off its tilled cell with no
+                        -- vegetation edit anywhere. Omitting this path would
+                        -- let admission and continuous validation disagree.
+                        _ ← revalidatePlantDesignations logger ws
+                        -- #1844: for the same reason, and scoped to the
+                        -- chunk the writeback replaced rather than the page.
+                        _ ← revalidateConstructDesignations env logger ws
+                                (ConstructChunks (map fwCoord fresh))
+                        pure ()
+
+-- | Is this batch's stamped incarnation the one the live page IS?
+--
+--   Equality against the page's own epoch, and 'Nothing' — the sim held
+--   no epoch for this page, because no topology-bearing message had
+--   reached it — is refused rather than waved through: an unstamped
+--   batch makes no claim about which incarnation it was computed
+--   against, and that claim is the whole content of the fence.
+--
+--   Kept apart from the IO around it so the decision can be exercised
+--   directly, exactly as 'writebackIsFresh' is.
+batchIsCurrentIncarnation ∷ ChunkGeneration → Maybe ChunkGeneration → Bool
+batchIsCurrentIncarnation live = maybe False (≡ live)
 
 -- | Is this writeback derived from the chunk state the page currently
 --   holds? True exactly when the sim stamped it with the live-edit

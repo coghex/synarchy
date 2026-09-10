@@ -8,13 +8,14 @@ module Sim.Command.Types
 import UPrelude
 import Control.Concurrent.MVar (MVar)
 import qualified Data.Vector.Unboxed as VU
+import World.Chunk.Residency (ChunkGeneration)
 import World.Chunk.Types (ChunkCoord(..))
 import World.Page.Types (WorldPageId(..))
 import World.Fluid.Internal (FluidMap)
 import Sim.Topology (SimTopology)
 
 data SimCommand
-    = SimActivateWorld !WorldPageId !SimTopology
+    = SimActivateWorld !WorldPageId !ChunkGeneration !SimTopology
         -- ^ A world became visible (WorldShow): start simulating it. The
         --   sim no longer holds the tile ref — it emits 'WorldApplyFluids'
         --   (tagged with this page id) to the world thread, the sole writer
@@ -22,7 +23,11 @@ data SimCommand
         --
         --   Carries the page's seam topology (#2044): activation is what
         --   lets this world tick, so the topology its neighbour probes
-        --   need is established in the same message.
+        --   need is established in the same message. The
+        --   'World.Chunk.Residency.ChunkGeneration' beside it is the
+        --   sending page's INCARNATION epoch, read from that page's own
+        --   'World.State.Types.WorldState' and stored the same way
+        --   (#2477); see 'Sim.State.Types.swsIncarnation'.
     | SimDeactivateWorld !WorldPageId
         -- ^ A world was hidden: stop ticking it but KEEP its loaded chunks
         --   so a later WorldShow can resume simulating them. Dropping the
@@ -33,8 +38,9 @@ data SimCommand
         -- ^ A world was destroyed: discard its sim state entirely (chunks +
         --   active flag). Used on WorldDestroy / destroyAll, where the
         --   chunks are gone for good (#61).
-    | SimChunkLoaded !WorldPageId !SimTopology !ChunkCoord !FluidMap !(VU.Vector Int)
-        -- ^ Chunk loaded in a world: page id, seam topology, coord,
+    | SimChunkLoaded !WorldPageId !ChunkGeneration !SimTopology !ChunkCoord !FluidMap !(VU.Vector Int)
+        -- ^ Chunk loaded in a world: page id, the page's incarnation
+        --   epoch (#2477), seam topology, coord,
         --   initial fluid map, terrain surface map. This and
         --   'SimChunkEdited' are the only two ways a chunk enters sim
         --   state, so carrying the topology here is what guarantees a
@@ -43,8 +49,9 @@ data SimCommand
         --   regardless of activation — already knows its seam (#2044).
     | SimChunkUnloaded !WorldPageId !ChunkCoord
         -- ^ Chunk evicted from a world — stop simulating it
-    | SimChunkEdited !WorldPageId !SimTopology !ChunkCoord !Word64 !FluidMap !(VU.Vector Int)
+    | SimChunkEdited !WorldPageId !ChunkGeneration !SimTopology !ChunkCoord !Word64 !FluidMap !(VU.Vector Int)
         -- ^ A live terrain/fluid edit landed in a world's chunk: page id,
+        --   the page's incarnation epoch (#2477),
         --   seam topology, coord, the chunk's new LIVE-EDIT GENERATION,
         --   and the post-edit
         --   fluid map and terrain surface (read from the authoritative
@@ -111,15 +118,17 @@ data FastSettleOutcome
     deriving (Eq, Show)
 
 instance Show SimCommand where
-    show (SimActivateWorld p t)   = "SimActivateWorld " <> show p <> " " <> show t
+    show (SimActivateWorld p e t) =
+        "SimActivateWorld " <> show p <> " " <> show e <> " " <> show t
     show (SimDeactivateWorld p)   = "SimDeactivateWorld " <> show p
     show (SimDropWorld p)         = "SimDropWorld " <> show p
-    show (SimChunkLoaded p t cc _ _) =
-        "SimChunkLoaded " <> show p <> " " <> show t <> " " <> show cc
+    show (SimChunkLoaded p e t cc _ _) =
+        "SimChunkLoaded " <> show p <> " " <> show e <> " " <> show t
+                          <> " " <> show cc
     show (SimChunkUnloaded p cc)  = "SimChunkUnloaded " <> show p <> " " <> show cc
-    show (SimChunkEdited p t cc g _ _) =
-        "SimChunkEdited " <> show p <> " " <> show t <> " " <> show cc
-                          <> " gen=" <> show g
+    show (SimChunkEdited p e t cc g _ _) =
+        "SimChunkEdited " <> show p <> " " <> show e <> " " <> show t
+                          <> " " <> show cc <> " gen=" <> show g
     show (SimSetTickRate r) = "SimSetTickRate " <> show r
     show SimPause  = "SimPause"
     show SimResume = "SimResume"

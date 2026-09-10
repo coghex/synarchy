@@ -170,7 +170,19 @@ data WorldState = WorldState
       -- ^ This page's chunk-residency owner (#2001): for every canonical
       --   'World.Chunk.Residency.ChunkKey', whether it is absent,
       --   requested, in flight, or resident — plus the page's own
-      --   generation epoch, which every request it mints is tagged with.
+      --   INCARNATION epoch.
+      --
+      --   That epoch is the page's identity across reuse, not a
+      --   chunk-request detail. Every chunk request this owner mints is
+      --   tagged with it (#2001), and every fluid writeback batch the
+      --   simulation emits for this page is stamped with it too, by way
+      --   of 'Sim.State.Types.swsIncarnation', so the world thread can
+      --   refuse a batch computed against an incarnation this id no
+      --   longer names (#2477). One value, read through
+      --   'World.Chunk.Admit.pageIncarnation' for both: the residency
+      --   epoch and the incarnation epoch are the same number and cannot
+      --   advance independently, because nothing advances either — a new
+      --   one exists only where a new 'WorldState' does.
       --
       --   It sits beside 'wsTilesRef' and 'wsInitQueueRef' because it is
       --   the identity those two never had. 'wsTilesRef' is keyed by a

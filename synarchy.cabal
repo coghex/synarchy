@@ -1402,6 +1402,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Components.Integrity
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
+                   Test.Headless.World.FluidWritebackIncarnation
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.SessionEpoch
                    Test.Headless.World.TimeScaleDomain

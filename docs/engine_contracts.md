@@ -56,6 +56,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Location instances (#911)](#location-instances-911)
 - [Guaranteed significant contents and compound clearance (#917)](#guaranteed-significant-contents-and-compound-clearance-917)
 - [Location discovery, map icons, and per-unit knowledge (#780/#781/#915)](#location-discovery-map-icons-and-per-unit-knowledge-780781915)
+- [Page incarnation: in-flight work across a reused page id (#2474)](#page-incarnation-in-flight-work-across-a-reused-page-id-2474)
 
 **Gameplay systems**
 
@@ -2240,6 +2241,82 @@ lifecycle, so a unit arriving at an already-mapped ruin still learns it.
 at reconcile. Radio sharing/range deliberately deferred.
 
 ---
+
+## Page incarnation: in-flight work across a reused page id (#2474)
+
+A `WorldPageId` names a slot, not an object. `main_world` is re-initialised
+on every Exit to Menu, an arena replaces a page wholesale, and a
+transactional load republishes the whole session — and each of those builds
+a **fresh** `WorldState` under the id the old one had. So work computed
+against the page that used to be there can still be in flight when its
+replacement is live, and a page-id comparison cannot tell the two apart.
+
+**The epoch.** Every fresh `WorldState` mints one process-unique,
+monotonic `ChunkGeneration` (`src/World/Chunk/Residency.hs`) into its
+`wsChunkResidencyRef`, and that number IS the page's incarnation. There is
+exactly one per page: `World.Chunk.Admit.pageIncarnation` is how anything
+reads it, nothing advances it, and a new one exists only where a new
+`WorldState` does. It is never persisted — it is meaningless across a save.
+
+**Replacing a page id discards its simulation state first.** The epoch is
+recorded per page, so a replacement's first seed would otherwise re-label
+whatever the outgoing incarnation left under that key — and writebacks derived
+from those retained chunks would then carry the *live* epoch and pass the fence
+below. Every same-id replacement therefore enqueues `SimDropWorld` for the id
+before registering the replacement and long before its first seed:
+`WorldDestroy`, `WorldDestroyAll` and `World.Load.Publish` already did;
+`WorldInit` and `WorldInitArena` do too (#2477), which is the one replacement
+that reaches no teardown of its own. The sim queue is FIFO, so "drop, then seed
+the same id" is correct in queue order whatever the overlap. The drop also
+clears `swsActive`, which is right — the flag belonged to a page that no longer
+exists — and every caller shows a page after initialising it.
+
+### Simulation writebacks (#2477)
+
+**A fluid writeback batch is applied only to the incarnation it was
+computed against.**
+
+The simulation carries the epoch rather than deciding on it. Every sim
+message that carries a page's seam topology carries its epoch too —
+`SimActivateWorld`, `SimChunkLoaded`, `SimChunkEdited` — read from the
+sending page's own `WorldState` by all four senders (show, chunk
+admission, edit sync, load publication). The sim records it on the page's
+`SimWorldState` (`swsIncarnation`) on every one of those, exactly as it
+records the topology, and stamps it onto every `FluidWritebackBatch` it
+emits: per tick, and under `SimFastSettleAll`, for stored worlds as well
+as active ones. Activation alone would not be enough, because the fast
+settle emits for a page nothing has activated.
+
+The world thread — the sole writer of `wsTilesRef` — makes the decision, in
+`applyFluidWritebacks` (`src/World/Thread/Command.hs`):
+
+- a batch for a page absent from `wmWorlds` is dropped, as it always was;
+- a batch whose epoch is not the live page's own, **or is absent**, is
+  refused whole and logged at debug level naming the page and both epochs;
+- only a batch stamped with exactly the live epoch reaches the per-chunk
+  freshness fence (#1596).
+
+The order matters and is the whole point: the per-chunk fence compares
+`fwEditGen` against the page's own `wsChunkEditGenRef`, an absent entry
+reading as generation zero on both sides. A replacement page has issued no
+live-edit generations at all, so **every** chunk of it reads as zero —
+exactly where a batch computed against the previous incarnation was
+stamped. The per-chunk fence therefore reads such a batch as fresh, and
+cannot be the thing that stops it.
+
+**Refusal is not failure.** A refused batch acks exactly as a page-gone
+drop does — `FluidAckApplied` — because it is another of the
+nothing-to-do outcomes the handler has always completed normally. A raise
+still acks `FluidAckFailed` and rethrows (#2334). This is what keeps
+`--dump`'s fast settle bounded: a settle that refused a batch still
+completes and exits rather than blocking on an acknowledgement that never
+comes.
+
+Gates: `fluid writeback incarnation fence (#2477)` and `fluid writeback
+staleness (#1596)` in `test-headless/`, plus `dump fast-settle wait
+(#2334)`. `--dump` output is unaffected — the refusal only ever suppresses
+a write that would have been wrong — so `python3 tools/world_check.py
+--quick` passes with no rebaseline.
 
 ## Tile-coordinate seam frame (#1175/#1230)
 
