@@ -314,7 +314,12 @@ A spawn command that had already been DEQUEUED when the transition ran is
 caught by neither half, so each spawn command carries the page's
 `ChunkGeneration` incarnation epoch (D-3's value, read by the admission
 under the lock) and its commit drops a mismatch — the same arm that drops
-an absent page, claim retirement included. A clear retires only matching-page rows below its cutoff, so
+an absent page, claim retirement included. That epoch is revalidated inside the
+lifecycle lock, in the same critical section as the insertion, so the
+check cannot be outlived by a transition. And entity-to-page resolution
+goes through `World.Page.Resolve`, which reads the page set first — the
+order that makes "retire, then register" enough to keep a departed
+incarnation's entity from ever being paired with the replacement's state. A clear retires only matching-page rows below its cutoff, so
 old work is retired while every replacement admission survives — including an
 unbound building's reservation and a page-bound building the world thread
 commits ahead of the delayed clear. It is the OUTERMOST coordination boundary

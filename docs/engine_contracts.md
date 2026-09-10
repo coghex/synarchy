@@ -2389,12 +2389,36 @@ footprint claim with it. "The page exists" and "the page this request
 was validated against exists" are different questions, and only the
 epoch answers the second.
 
-What this does NOT close is a caller that reads an entity, is
-descheduled across the whole transition, and then resolves the page and
-writes. That is the ordinary read-then-write straddle every entity verb
-already has against `UnitDestroy` / `BuildingDestroy`, not something a
-page teardown introduces; closing it would mean holding the lifecycle
-lock across every verb's durable mutation, which is a separate change.
+The epoch is verified again at the commit itself, inside the lifecycle
+lock, in the same critical section as the insertion. The first check
+happens early in each handler and a great deal of work follows it — stat
+rolls, a capacity shed, a footprint commit — so on its own it is a
+time-of-check that a transition can outlive. Holding the lock across
+revalidation and write is what makes it a fence.
+
+**Entity-to-page resolution reads the page set first.** The transition
+retires before it registers, so a resolver that reads the ENTITY first
+and the page second can straddle it — old entity, new page — and hand
+its caller a pair that lets a durable row (a ground item, a transfer
+order, a container observation, a construction receipt) outlive the
+entity naming it. `World.Page.Resolve` inverts the order and is the one
+way to go from an entity to its live `WorldState`: the page snapshot
+comes first, taken through `atomicModifyIORef'` so it is a real ordering
+point rather than a plain load two others could be reordered around.
+Either the snapshot holds the old page, and the pair is consistent
+because the write lands in the state that is leaving, or it holds the
+replacement, in which case the entity read happened after the publish
+and therefore after the retirement, so a departed row is already gone.
+`unitOwningWorldState`, `unitOrderStore`, `containerPage` and
+`construction.payMaterials` all resolve this way.
+
+What remains open is only a caller that reads an entity, is descheduled
+across the whole transition, and then performs a mutation it had already
+resolved everything for. That is the ordinary read-then-write straddle
+every entity verb already has against `UnitDestroy` /
+`BuildingDestroy` — not something a page teardown introduces — and
+closing it means holding the lifecycle lock across every verb's durable
+mutation, which is a separate change.
 
 **Not a session boundary.** Neither path joins #2291's
 `wmTeardownsPending` fence or enqueues `UnitEndSession` /

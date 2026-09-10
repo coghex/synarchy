@@ -91,6 +91,7 @@ import Building.Types
 import Item.Types (ItemInstance, ItemManager)
 import Unit.Faction (isPlayerCommandable)
 import Unit.Types (UnitId, UnitInstance(..), UnitManager(..))
+import World.Page.Resolve (resolveBuildingPage)
 import World.State.Types (WorldManager(..), WorldState(..))
 
 -- | The live containers a container-knowledge reveal reads or writes,
@@ -132,15 +133,16 @@ containerObserver bld sim reg = ContainerObserver
 --   not the visible one's.
 containerPage
     ∷ ContainerObserver → BuildingId → IO (Maybe (WorldState, [ItemInstance]))
-containerPage co bid = do
-    bm ← readIORef (coBuildings co)
-    case HM.lookup bid (bmInstances bm) of
-        Nothing   → pure Nothing
-        Just inst → do
-            wm ← readIORef (coWorlds co)
-            pure $ do
-                ws ← lookup (biPage inst) (wmWorlds wm)
-                pure (ws, biStorage inst)
+containerPage co bid =
+    -- #2476: through the ORDERED resolver, page set first. Reading the
+    -- building first and the page set second could straddle a page
+    -- lifecycle transition and pair a departed incarnation's building
+    -- with the replacement's state — and 'revealContainer' below then
+    -- writes that obsolete building into the replacement's own
+    -- knowledge record, where the queued page clear will not reach it.
+    -- See "World.Page.Resolve" for why the order settles it.
+    fmap (\(_, ws, inst) → (ws, biStorage inst))
+        ⊚ resolveBuildingPage (coWorlds co) (coBuildings co) bid
 
 -- | Take a fresh observation of @bid@'s storage and REPLACE its record.
 --   Returns 'False' only when the container (or its page) is gone.

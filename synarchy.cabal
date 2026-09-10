@@ -926,6 +926,7 @@ library
                      World.Hydrology.Glacier.Spawn
                      World.Ocean.Types
                      World.Page.GeneratedId
+                     World.Page.Resolve
                      World.Page.Types
                      World.Plate
                      World.Plate.Types

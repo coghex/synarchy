@@ -16,7 +16,8 @@ module Building.Thread.Command
 import UPrelude
 import Engine.Core.Capability.Building (BuildingCapability(..))
 import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapability)
-import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), withPageLifecycle)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
@@ -289,7 +290,28 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch = do
             worldSize ← maybe (pure 0)
                 (\ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws))
                 mPage
-            committed ← atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+            -- #2476: the epoch checked above is a time-of-CHECK, and the
+            -- def lookup, clock read and world-size read since then are
+            -- time in which a same-id re-init can land. So the decision
+            -- is taken AGAIN inside the lifecycle lock, in the same
+            -- critical section as the commit transaction — a fence, not
+            -- another check, so no transition can interleave between
+            -- them and leave a departed incarnation's building visible
+            -- under the replacement's reused page name.
+            --
+            -- Both routes into this body take it: the unbound drain on
+            -- the unit thread, and #1602's bound commit on the world
+            -- thread, which holds no lifecycle lock of its own by the
+            -- time it reaches here.
+            committed ← withPageLifecycle sim $ do
+              stillOurs ← do
+                  mgr ← readIORef (wsWorldManagerRef sim)
+                  case lookup pageId (wmWorlds mgr) of
+                      Nothing → pure False
+                      Just ws → (≡ epoch) ⊚ pageIncarnation ws
+              if not stillOurs
+                then pure False
+                else atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
                 let (retired, accepted) =
                         commitFootprint worldSize pageId bid gx gy
                                         (bdTileW def) (bdTileH def) bm'

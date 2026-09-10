@@ -41,6 +41,7 @@ import Item.Types (ItemDef(..), ItemInstance(..)
 import World.Types (WorldManager(..))
 import World.Page.Types (WorldPageId(..))
 import World.Chunk.Admit (pageIncarnation)
+import Engine.Core.Capability.WorldSim (withPageLifecycle)
 import World.Chunk.Residency (ChunkGeneration)
 
 handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Text
@@ -225,9 +226,6 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId epoch = do
                     , uiClimbDest   = Nothing
                     , uiTrailState  = Nothing
                     }
-            atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um' →
-                (um' { umInstances = HM.insert uid inst (umInstances um') }, ())
-
             let ss = UnitSimState
                     { usRealX     = gx
                     , usRealY     = gy
@@ -256,8 +254,42 @@ handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId epoch = do
                     , usJumpApex         = Nothing
                     , usMoveGrade        = 0
                     }
-            atomicModifyIORef' utsRef $ \uts →
-                (uts { utsSimStates = HM.insert uid ss (utsSimStates uts) }, ())
+            -- #2476: the epoch read at the top of this handler is a
+            -- time-of-CHECK, and everything between it and here — the
+            -- def lookup, the stat and body rolls, the capacity shed —
+            -- is time in which a same-id re-init can land. So the
+            -- decision is taken AGAIN here, inside the lifecycle lock,
+            -- in the same critical section as the insertion itself.
+            -- That is what makes it a commit FENCE rather than another
+            -- check: the transition cannot interleave between the
+            -- revalidation and the two writes, so an instance for a
+            -- departed incarnation can never become externally visible
+            -- under the replacement's reused page name.
+            --
+            -- Taken with no page or entity lock held, and everything
+            -- inside is an 'atomicModifyIORef''. The world thread never
+            -- blocks on this thread while holding the same lock.
+            let unitCombat = toUnitCombatCapability env
+                worldSim   = toWorldSimCapability env
+            committed ← withPageLifecycle worldSim $ do
+                mgr ← readIORef (wsWorldManagerRef worldSim)
+                stillOurs ← case lookup pageId (wmWorlds mgr) of
+                    Nothing → pure False
+                    Just ws → (≡ epoch) ⊚ pageIncarnation ws
+                when stillOurs $ do
+                    atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um' →
+                        (um' { umInstances =
+                                   HM.insert uid inst (umInstances um') }, ())
+                    atomicModifyIORef' utsRef $ \uts →
+                        (uts { utsSimStates =
+                                   HM.insert uid ss (utsSimStates uts) }, ())
+                pure stillOurs
+            unless committed $ do
+                logger ← readIORef (loggerRef env)
+                logDebug logger CatThread $
+                    "UnitSpawn: page " <> unWorldPageId pageId
+                    <> " was replaced while this spawn was being built; \
+                       \dropping it"
 
 -- | Effective carrying capacity at spawn: the rolled base stat with
 --   the spawn modifier map applied — the same

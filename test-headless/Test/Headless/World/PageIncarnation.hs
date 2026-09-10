@@ -507,6 +507,18 @@ queuedEntityTags env = do
 -- | The REAL entity drains — the same two passes the unit thread runs
 --   in one tick, units first. Nothing here is reimplemented, so what a
 --   clear does is what the engine would do.
+-- | The unit drain alone, and the building drain alone. Each fence
+--   example drives only its own, so one cannot pass because the other
+--   half of 'drainEntities' happened to block.
+drainUnitsOnly ∷ EngineEnv → IO Bool
+drainUnitsOnly env =
+    processAllUnitCommands env (ucUtsRef (toUnitCombatCapability env))
+
+drainBuildingsOnly ∷ EngineEnv → IO ()
+drainBuildingsOnly env =
+    processAllBuildingCommands (loggerRef env) (toWorldSimCapability env)
+        (toContentRegistriesViewCapability env) (toBuildingCapability env)
+
 drainEntities ∷ EngineEnv → IO ()
 drainEntities env = do
     _ ← processAllUnitCommands env (ucUtsRef (toUnitCombatCapability env))
@@ -1219,6 +1231,29 @@ scopeSpec = describe "scoping and no-ops" $ do
 --   no progress until the mutex is released.
 lockSpec ∷ SpecWith (EngineEnv, LuaBackendState)
 lockSpec = describe "the lifecycle lock is actually taken" $ do
+
+    it "the unit spawn COMMIT blocks on it, so a transition cannot land \
+       \between the handler's revalidation and its insertion" $
+        \(env, ls) → do
+            resetScene env
+            _ ← spawnUnitOn ls incPage unitTile
+            -- Draining the spawn must take the lock: the epoch it
+            -- verifies is checked at the top of the handler and the
+            -- insertion happens after a great deal of work, so only a
+            -- fence around the revalidation AND the write can stop a
+            -- re-init landing in between and leaving a departed
+            -- incarnation's unit visible under the replacement.
+            --
+            -- The UNIT drain alone, so the building commit's own fence
+            -- cannot be what blocks and make this pass for the wrong
+            -- reason.
+            blockedUntilReleased env (void (drainUnitsOnly env))
+
+    it "the building spawn COMMIT blocks on it too, on the shared body \
+       \both routes use" $ \(env, ls) → do
+        resetScene env
+        _ ← spawnBuildingOn ls buildingDefName oldTile incPage Nothing
+        blockedUntilReleased env (drainBuildingsOnly env)
 
     it "unit.spawn blocks on it" $ \(env, _) → withOwnBackend env $ \ls → do
         resetScene env
