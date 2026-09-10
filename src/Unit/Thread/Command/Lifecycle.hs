@@ -2,6 +2,7 @@
 module Unit.Thread.Command.Lifecycle
     ( handleUnitDestroyCommand
     , handleUnitClearAllCommand
+    , handleUnitClearPageCommand
     , handleUnitTeleportCommand
     , handleUnitReGroundCommand
     , lookupSurfaceZ
@@ -55,6 +56,78 @@ handleUnitClearAllCommand env utsRef = do
         (um { umInstances = HM.empty, umSelected = HS.empty }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())
+
+-- | #2476: retire ONE page incarnation's units — the page-scoped,
+--   cutoff-bounded counterpart of 'handleUnitClearAllCommand'.
+--
+--   A row goes only when BOTH halves hold: its @uiPage@ is this page,
+--   and its 'UnitId' is strictly below @cutoff@. The cutoff is the
+--   @umNextId@ reading the lifecycle transition took while holding
+--   'Engine.Core.State.pageLifecycleLock', and every admission takes
+--   that same lock around its own allocation, so "below the cutoff"
+--   means exactly "admitted before this page was destroyed or
+--   replaced". A replacement's units reuse the page NAME — that is what
+--   made the old rows survive in the first place — but they cannot
+--   reuse an id, because the allocator is monotonic and no clear ever
+--   rewinds it.
+--
+--   The three affected records move together, as in
+--   'handleUnitDestroyCommand', so no observer sees a unit that is
+--   selected or simulated but no longer instantiated.
+--
+--   Deliberately NOT here: 'Unit.Transfer.Live.retireTransferOrdersEverywhere'.
+--   A transfer order is a @WorldState@ row, so an order this carrier
+--   made BEFORE the transition leaves with the page being retired
+--   rather than being orphaned by it — the same reason
+--   'handleUnitClearAllCommand' does not call it either.
+--
+--   The order it could otherwise make AFTER the transition, into the
+--   REPLACEMENT's store, is closed by the transition itself rather than
+--   here: it removes this page's pre-cutoff instances under the
+--   lifecycle lock, so by the time anything could ask for the carrier's
+--   page there is no carrier to resolve. Retiring from this handler
+--   could not close that window anyway — the clear runs on this thread
+--   while the order is created on the Lua thread, so a read that began
+--   before the retire could still write after it.
+handleUnitClearPageCommand
+    ∷ EngineEnv → IORef UnitThreadState → WorldPageId → UnitId → IO ()
+handleUnitClearPageCommand env utsRef pageId cutoff = do
+    -- The instance/selection half is 'retirePageUnits', the SAME pure
+    -- body the lifecycle transition already applied directly. Almost
+    -- always a no-op by the time this runs, and that is the design: the
+    -- transition removed everything it could see, and what is left for
+    -- this message is whatever a spawn queued ahead of it re-inserted
+    -- afterwards (#58).
+    live ← atomicModifyIORef'
+        (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+            let (um', _) = retirePageUnits pageId cutoff um
+            in (um', HM.keysSet (umInstances um'))
+    -- The sim states are ONLY removed here, and they are identified by
+    -- what the manager no longer holds rather than by the ids this
+    -- message just retired — because by now it has usually retired
+    -- none, the transition having removed the instances already.
+    --
+    -- 'utsSimStates' belongs to the unit thread, and
+    -- "Unit.Thread.Movement" mutates it with a read-modify-write across
+    -- a tick, so a world-thread write could simply be lost. Keeping
+    -- every writer on this one thread costs nothing: the drain runs
+    -- ahead of 'tickMovement' in the same tick, so no orphaned sim
+    -- state is ever stepped, and @Unit.Thread.publishToRender@ maps
+    -- over the INSTANCES and would never visit one anyway.
+    --
+    -- Pruning by "has no instance" is exact rather than merely
+    -- convenient: 'handleUnitSpawnCommand' inserts an instance and its
+    -- sim state together on this same thread, and every removal path
+    -- takes both, so a sim state without an instance is an orphan by
+    -- construction and can only have come from a teardown.
+    atomicModifyIORef' utsRef $ \uts →
+        let orphaned = HM.filterWithKey (\uid _ → not (HS.member uid live))
+                                        (utsSimStates uts)
+        in if HM.null orphaned
+           then (uts, ())
+           else ( uts { utsSimStates =
+                            HM.difference (utsSimStates uts) orphaned }
+                , () )
 
 -- | Snap a unit to (gx, gy), grounding it at @mGz@ or at the surface.
 --

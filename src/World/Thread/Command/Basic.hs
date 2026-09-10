@@ -16,12 +16,15 @@ import Engine.Core.Capability.RenderHandoff
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, withPageLifecycle)
 import Engine.Scene.Types (emptyLayeredQuads)
 import Engine.Scene.Stats (clearSceneStats)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
+import Unit.Types (UnitId(..), UnitManager(..), retirePageUnits)
+import Building.Types
+    (BuildingId(..), BuildingManager(..), retirePageBuildings)
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
@@ -47,36 +50,120 @@ handleWorldSetCameraCommand env logger pageId x y = do
 
 handleWorldDestroyCommand ∷ EngineEnv → LoggerState → WorldPageId → IO ()
 handleWorldDestroyCommand env logger pageId = do
-    let worldSim = toWorldSimCapability env
-        handoff  = toRenderHandoffCapability env
+    let worldSim   = toWorldSimCapability env
+        handoff    = toRenderHandoffCapability env
+        unitCombat = toUnitCombatCapability env
+        building   = toBuildingCapability env
     logInfo logger CatWorld $ "Destroying world: " <> unWorldPageId pageId
 
-    -- Tear down this world's simulation state too — destroy used to drop
-    -- the page from wmWorlds/wmVisible while leaving its sim chunks behind
-    -- forever (#61). SimDropWorld discards them (unlike hide, which keeps
-    -- them for a later re-show); only this world's sim is touched.
-    Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
+    -- #2476: everything from here to the end of this block is ONE
+    -- lifecycle transition, and the entity admissions on the Lua thread
+    -- take the same lock around their own allocate-and-enqueue. That is
+    -- what makes the two cutoffs captured below mean "admitted before
+    -- this page died": nothing can allocate an id between the readings
+    -- and the page's removal, and nothing that allocates afterwards can
+    -- have seen the page still present.
+    --
+    -- The lock is taken WITHOUT any page or entity lock held (there is
+    -- none on this path), and everything inside it is an 'IORef'
+    -- transition or a non-blocking queue write.
+    withPageLifecycle worldSim $ do
+      -- Read BEFORE the page goes: both allocators are monotonic and no
+      -- clear rewinds them, so these two readings partition every id
+      -- that will ever exist into "this incarnation's or older" and
+      -- "the next one's".
+      unitCutoff ← (UnitId . umNextId) ⊚ readIORef (ucUnitManagerRef unitCombat)
+      bldCutoff  ← (BuildingId . bmNextId)
+                     ⊚ readIORef (bcBuildingManagerRef building)
 
-    -- Reclaim this page's blood-texture GPU resources (#788): hand its
-    -- live handle map to the render thread BEFORE the page drops out of
-    -- wmWorlds and becomes unreachable to uploadBloodTextures.
-    mgr ← readIORef (wsWorldManagerRef worldSim)
-    enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
+      -- Tear down this world's simulation state too — destroy used to drop
+      -- the page from wmWorlds/wmVisible while leaving its sim chunks behind
+      -- forever (#61). SimDropWorld discards them (unlike hide, which keeps
+      -- them for a later re-show); only this world's sim is touched.
+      Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
 
-    -- Remove from visible list
-    atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
+      -- Reclaim this page's blood-texture GPU resources (#788): hand its
+      -- live handle map to the render thread BEFORE the page drops out of
+      -- wmWorlds and becomes unreachable to uploadBloodTextures.
+      mgr ← readIORef (wsWorldManagerRef worldSim)
+      enqueueBloodDisposalForPage (rhBloodDisposeQueue handoff) mgr pageId
+
+      -- Remove from visible list
+      atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr'' →
         -- #1602: destroying the visible HEAD changes what
         -- resolveActiveWorld answers with, so it invalidates live
         -- placement bindings. Destroying a hidden, absent, or
         -- visible-but-not-head page does not: a binding only ever names
         -- the head, so nothing it depends on moved. The pending request
         -- is discharged either way.
-        let mgr' = completeSelectionChange mgr''
+        let mgr'    = completeSelectionChange mgr''
             wasHead = selectionHead (wmVisible mgr') ≡ Just pageId
         in ((if wasHead then bumpSelectionGen else id)
-            (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
-                  , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
-                  }), ())
+              (mgr' { wmVisible = filter (≢ pageId) (wmVisible mgr')
+                    , wmWorlds  = filter ((≢ pageId) . fst) (wmWorlds mgr')
+                    }), ())
+
+      -- #2476: retire what this incarnation owned in the GLOBAL entity
+      -- managers, which the page removal above does not reach — its
+      -- units, their selection and sim state, its buildings, their
+      -- selection, destruction effects and outstanding footprint
+      -- claims. Through the queues rather than directly, for exactly
+      -- the reason destroy-all uses them (#58): the unit thread keeps
+      -- draining across this transition, so a clear applied here would
+      -- race the spawns already queued ahead of it and let them
+      -- re-insert orphans afterwards. Queued, each clear runs after
+      -- them — and a spawn whose page is now absent is dropped by its
+      -- handler's own world-gone guard before that.
+      --
+      -- Enqueued unconditionally: destroying a page that was never
+      -- registered leaves no matching pre-cutoff row for either clear
+      -- to find, which is a no-op, and so is a clear that arrives after
+      -- destroy-all has already emptied the managers.
+      --
+      -- Neither message is a session boundary. This path does NOT join
+      -- #2291's 'wmTeardownsPending' fence and enqueues no
+      -- @UnitEndSession@/@BuildingEndSession@ marker: one page ending
+      -- is not the session ending, and the process-global state that
+      -- fence protects (the event ring, the game clock) is untouched
+      -- here.
+      -- #2476: retire what this incarnation owned in the entity
+      -- managers RIGHT HERE, in the same locked transition, and not
+      -- only through the queued clears below.
+      --
+      -- The queue alone retires those rows eventually, but "eventually"
+      -- is the whole problem: a page id is a reusable NAME, so until
+      -- the clear drains an old unit or building is still in the
+      -- manager answering to a name that now belongs to the
+      -- replacement (or to nothing at all). Every production verb that
+      -- resolves an entity's page — an item drop, a transfer, a
+      -- construction payment, a container reveal, a power placement —
+      -- would keep finding it, and could spend it into durable state on
+      -- the replacement that outlives the row this teardown removes.
+      -- Removing it now makes a page teardown behave exactly as
+      -- @UnitDestroy@/@BuildingDestroy@ already do: the entity is gone
+      -- from the manager, and every resolver simply fails.
+      --
+      -- This is NOT the direct clear #58 forbids. That one was
+      -- unbounded, so a spawn already queued re-inserted an orphan
+      -- after it with nothing left to remove them. These are bounded by
+      -- the same exclusive cutoff the queued clears carry, and those
+      -- clears still run — behind every such spawn — applying the
+      -- IDENTICAL pure body ('retirePageUnits'/'retirePageBuildings').
+      -- So a re-inserted pre-cutoff row is still retired, and a
+      -- replacement's row is still untouched on both passes.
+      --
+      -- 'utsSimStates' is deliberately absent: it belongs to the unit
+      -- thread, which mutates it with a read-modify-write across a
+      -- tick, so a write from here could be lost. Its removal stays in
+      -- the queued handler, which runs ahead of that tick's movement.
+      atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
+          (fst (retirePageUnits pageId unitCutoff um), ())
+      atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
+          (retirePageBuildings pageId bldCutoff bm, ())
+
+      Q.writeQueue (ucUnitQueue unitCombat) (UnitClearPage pageId unitCutoff)
+      Q.writeQueue (bcBuildingQueue building)
+                   (BuildingClearPage pageId bldCutoff)
 
     -- Clear world quads so renderer stops drawing the old world, and
     -- the scene-assembly telemetry measured while building them (#1921)

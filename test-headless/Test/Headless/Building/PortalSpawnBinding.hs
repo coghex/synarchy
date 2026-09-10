@@ -278,7 +278,7 @@ spawnedUnits ∷ EngineEnv
 spawnedUnits env = do
     cmds ← drainUnitQueue env
     pure [ (n, realToFrac gx, realToFrac gy, gz, f, p)
-         | UnitSpawn _ n gx gy gz f p ← cmds ]
+         | UnitSpawn _ n gx gy gz f p _ ← cmds ]
 
 -- | The portal's remaining roster count, read straight off the manager
 --   the Lua verbs mutate.

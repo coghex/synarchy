@@ -31,11 +31,10 @@ import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import qualified Data.HashMap.Strict as HM
-import Data.IORef (readIORef)
 import Engine.Core.State (EngineEnv)
-import Unit.Types (UnitId, UnitInstance(..), UnitManager(..))
-import World.Types (WorldManager(..), WorldState, wmWorlds)
+import Unit.Types (UnitId)
+import World.Page.Resolve (resolveUnitPage)
+import World.Types (WorldState)
 
 -- | The live 'WorldState' of the page a unit is ON, or 'Nothing' when
 --   the unit does not exist or its page has no live world.
@@ -45,10 +44,13 @@ import World.Types (WorldManager(..), WorldState, wmWorlds)
 --   asynchronous state that has nothing to do with where this unit
 --   stands.
 unitOwningWorldState ∷ EngineEnv → UnitId → IO (Maybe WorldState)
-unitOwningWorldState env uid = do
-    um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-    case HM.lookup uid (umInstances um) of
-        Nothing   → pure Nothing
-        Just inst → do
-            wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-            pure $ lookup (uiPage inst) (wmWorlds wm)
+unitOwningWorldState env uid =
+    -- #2476: through the ORDERED resolver, page set first, so a
+    -- departed incarnation's unit can never be paired with the state of
+    -- the page that replaced it — which is what would let a ground
+    -- drop, a craft bill or an inventory move leave a durable row on
+    -- the replacement naming a unit its teardown has already removed.
+    -- See "World.Page.Resolve".
+    fmap snd ⊚ resolveUnitPage (wsWorldManagerRef (toWorldSimCapability env))
+                               (ucUnitManagerRef (toUnitCombatCapability env))
+                               uid

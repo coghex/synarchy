@@ -229,9 +229,15 @@ releaseReservation ∷ BuildingId → BuildingManager → BuildingManager
 releaseReservation bid bm =
     bm { bmReservations = HM.delete bid (bmReservations bm) }
 
--- | Drop every outstanding reservation — the teardown case. Runs with
---   @BuildingClearAll@, which is enqueued behind every pending spawn
---   (#58) precisely so nothing admitted before a teardown can still be
---   holding tiles in the session that replaces it.
+-- | Drop every outstanding reservation — the WHOLE-SESSION teardown
+--   case. Runs with @BuildingClearAll@, which is enqueued behind every
+--   pending spawn (#58) precisely so nothing admitted before a teardown
+--   can still be holding tiles in the session that replaces it.
+--
+--   #2476's single-page @BuildingClearPage@ deliberately does NOT use
+--   this: a page teardown leaves the OTHER pages' claims alone, and even
+--   on its own page it must leave a claim admitted for the REPLACEMENT
+--   (an id at or above its cutoff) untouched, or 'commitFootprint' would
+--   refuse the spawn that claim was taken for.
 clearReservations ∷ BuildingManager → BuildingManager
 clearReservations bm = bm { bmReservations = HM.empty }

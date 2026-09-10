@@ -927,6 +927,7 @@ library
                      World.Hydrology.Glacier.Spawn
                      World.Ocean.Types
                      World.Page.GeneratedId
+                     World.Page.Resolve
                      World.Page.Types
                      World.Plate
                      World.Plate.Types
@@ -1407,6 +1408,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.FluidWritebackIncarnation
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.SessionEpoch
+                   Test.Headless.World.PageIncarnation
                    Test.Headless.World.TimeScaleDomain
                    Test.Headless.World.GenConfigDomain
                    Test.Headless.World.Save.Compat

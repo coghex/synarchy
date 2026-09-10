@@ -6,9 +6,11 @@ module Building.Command.Types
 import UPrelude
 import Building.Types (BuildingId(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Residency (ChunkGeneration)
 
 data BuildingCommand
     = BuildingSpawn !BuildingId !Text !Int !Int !Int !WorldPageId
+                    !ChunkGeneration
         -- ^ pre-allocated id, defName, anchor gx, gy, gz, owning world
         --   page (stamped from the active world so the building is
         --   world-scoped, #76).
@@ -24,11 +26,42 @@ data BuildingCommand
         --   same 'Building.Thread.Command.applyBuildingSpawn' body, so
         --   this queue stays the route for every UNBOUND spawn without
         --   the two ever diverging.
+        --
+        --   The 'World.Chunk.Residency.ChunkGeneration' is the page
+        --   INCARNATION this request was admitted against (#2476), read
+        --   from the target page's own state inside the lifecycle lock
+        --   the admission holds. A page id is a reusable NAME, so the
+        --   page field alone cannot tell the handler whether the page
+        --   standing under that name is still the one this request was
+        --   validated for: a same-id re-init between admission and drain
+        --   registers a DIFFERENT 'World.State.Types.WorldState' under
+        --   it. Comparing epochs at the commit is what makes a request
+        --   admitted for a departed incarnation drop instead of
+        --   materialising on its replacement — the case a queued
+        --   page clear cannot catch, because the command may already
+        --   have been dequeued when that clear was enqueued.
     | BuildingDestroy !BuildingId
     | BuildingClearAll
         -- ^ Drop every building instance + selection. Enqueued by
         --   world.destroyAll so the clear is ordered AFTER any in-flight
         --   BuildingSpawns on this queue (#58).
+    | BuildingClearPage !WorldPageId !BuildingId
+        -- ^ #2476: the building half of 'Unit.Command.Types.UnitClearPage',
+        --   with the same page + EXCLUSIVE-CUTOFF pair and the same
+        --   producers (a single-page @world.destroy@; either init path
+        --   replacing a registered page id). Retires only rows whose
+        --   page matches and whose 'BuildingId' is strictly below the
+        --   cutoff: instances, destruction effects, outstanding
+        --   footprint reservations, and the selection when it names one
+        --   of the removed instances.
+        --
+        --   Reservations are in that list on purpose (#2326): a claim
+        --   admitted for the OLD incarnation would otherwise keep tiles
+        --   held against the replacement forever, since the request
+        --   holding it can no longer commit. A claim at or above the
+        --   cutoff belongs to the replacement and is left alone —
+        --   including one whose bound spawn already committed on the
+        --   world thread ahead of this clear (#1602).
     | BuildingEndSession
         -- ^ The building half of the same Exit-to-Menu boundary
         --   'Unit.Command.Types.UnitEndSession' marks (#2291), and the

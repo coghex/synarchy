@@ -33,6 +33,7 @@ import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Engine.Core.State (EngineEnv)
+import World.Chunk.Residency (ChunkGeneration)
 import World.Types
 
 -- | Discharge a bound placement's page binding and, if it still holds,
@@ -61,9 +62,9 @@ import World.Types
 --   the next placement the player makes.
 handleWorldSpawnBoundBuildingCommand
     ∷ EngineEnv → LoggerState → BuildingId → Text
-    → Int → Int → Int → WorldPageId → Word64 → IO ()
+    → Int → Int → Int → WorldPageId → Word64 → ChunkGeneration → IO ()
 handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
-                                     pageId bindGen = do
+                                     pageId bindGen epoch = do
     mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     if wmSelectionGen mgr ≢ bindGen
     then do
@@ -81,4 +82,4 @@ handleWorldSpawnBoundBuildingCommand env logger bid defName gx gy gz
             (toWorldSimCapability env)
             (toContentRegistriesViewCapability env)
             (toBuildingCapability env)
-            bid defName gx gy gz pageId
+            bid defName gx gy gz pageId epoch

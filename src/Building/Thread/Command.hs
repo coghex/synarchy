@@ -11,12 +11,14 @@
 module Building.Thread.Command
     ( processAllBuildingCommands
     , applyBuildingSpawn
+    , applyBuildingSpawnWith
     ) where
 
 import UPrelude
 import Engine.Core.Capability.Building (BuildingCapability(..))
 import Engine.Core.Capability.ContentRegistriesView (ContentRegistriesViewCapability)
-import Engine.Core.Capability.WorldSim (WorldSimCapability(..))
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), withPageLifecycle)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (IORef, readIORef, atomicModifyIORef')
 import Engine.Core.Log (LoggerState, logDebug, logWarn, LogCategory(..))
@@ -24,6 +26,8 @@ import qualified Engine.Core.Queue as Q
 import World.Generate.Types (WorldGenParams(..))
 import World.State.Types (WorldManager(..), WorldState(..))
 import World.Page.Types (WorldPageId(..))
+import World.Chunk.Admit (pageIncarnation)
+import World.Chunk.Residency (ChunkGeneration)
 import Building.Types
 import Building.Destruction
     ( captureDestructionEffect, destructionExpired
@@ -96,9 +100,9 @@ handleBuildingCommand ∷ IORef LoggerState → WorldSimCapability
                       → ContentRegistriesViewCapability → BuildingCapability
                       → BuildingCommand → IO ()
 handleBuildingCommand logRef sim reg bld
-                      (BuildingSpawn bid defName gx gy gz pageId) = do
+                      (BuildingSpawn bid defName gx gy gz pageId epoch) = do
     logger ← readIORef logRef
-    applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId
+    applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId epoch
 
 handleBuildingCommand logRef sim _ bld (BuildingDestroy bid) = do
     -- #2091: the destruction presentation's frame zero. Same clock as
@@ -165,6 +169,40 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
         , () )
     forgetAllContainers (wsWorldManagerRef sim)
 
+-- | #2476: retire ONE page incarnation's buildings — the page-scoped,
+-- cutoff-bounded counterpart of @BuildingClearAll@ above.
+--
+-- A row goes only when BOTH halves hold: it belongs to this page, and
+-- its 'BuildingId' is strictly below @cutoff@ (the @bmNextId@ reading
+-- the lifecycle transition took under
+-- 'Engine.Core.State.pageLifecycleLock', which every admission also
+-- takes around its own allocation). All four records are filtered in
+-- ONE transition so no observer sees a selected, effect-bearing or
+-- tile-holding row whose instance is already gone.
+--
+-- The reservations are the half that makes the cutoff load-bearing
+-- rather than cosmetic (#2326): a REPLACEMENT admitted after the
+-- transition but before this clear drains is holding a claim on the
+-- same page, under the same name, and a bare page filter would delete
+-- it — after which 'Building.Reservation.commitFootprint' would refuse
+-- the very spawn it was taken for. Its id is at or above the cutoff, so
+-- it is left exactly as found, as is a bound placement that already
+-- committed on the world thread ahead of this clear (#1602).
+--
+-- Deliberately NOT here: 'Building.Knowledge.Live.forgetAllContainers'
+-- and any power-node retirement. Both are @WorldState@ rows, so they
+-- leave with the page this clear is retiring rather than being orphaned
+-- by it.
+handleBuildingCommand _ _ _ bld (BuildingClearPage pageId cutoff) =
+    -- 'retirePageBuildings' is the SAME pure body the lifecycle
+    -- transition already applied directly, so the immediate removal and
+    -- this queued mop-up cannot disagree about what belonged to the
+    -- departed incarnation. Almost always a no-op by the time it runs:
+    -- what is left for it is whatever a spawn queued ahead of it
+    -- re-inserted afterwards (#58).
+    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+        (retirePageBuildings pageId cutoff bm, ())
+
 -- The session boundary (#2291) is a queue POSITION, not work: 'drain'
 -- takes it off the queue and stops there, so it never reaches this
 -- dispatch. Matched anyway, and only to keep the dispatch total.
@@ -180,20 +218,57 @@ handleBuildingCommand _ _ _ _ BuildingEndSession = return ()
 applyBuildingSpawn ∷ LoggerState → WorldSimCapability
                    → ContentRegistriesViewCapability → BuildingCapability
                    → BuildingId → Text → Int → Int → Int → WorldPageId
-                   → IO ()
-applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
+                   → ChunkGeneration → IO ()
+applyBuildingSpawn = applyBuildingSpawnWith (pure ())
+
+-- | 'applyBuildingSpawn' with #2476's test seam: the action runs after
+--   this body's FIRST epoch check and before its commit, so a test can
+--   land a same-id re-init exactly there and prove that the fence
+--   around the revalidation and the insertion is what refuses the
+--   stale request. Production passes @pure ()@; the body is otherwise
+--   the one both spawn routes run, unchanged.
+applyBuildingSpawnWith
+    ∷ IO () → LoggerState → WorldSimCapability
+    → ContentRegistriesViewCapability → BuildingCapability
+    → BuildingId → Text → Int → Int → Int → WorldPageId
+    → ChunkGeneration → IO ()
+applyBuildingSpawnWith afterEpochCheck logger sim reg bld bid defName gx gy gz
+                       pageId epoch = do
     bm ← readIORef (bcBuildingManagerRef bld)
-    -- Drop the spawn if its world is gone — a spawn queued before
-    -- world.destroyAll would otherwise re-insert an orphan building into
-    -- the cleared manager after teardown (#58).
+    -- Drop the spawn if its world is gone — a spawn queued before a
+    -- teardown would otherwise re-insert an orphan building into the
+    -- cleared manager afterwards (#58). Two teardowns reach this:
+    -- @world.destroyAll@, and (#2476) a single-page @world.destroy@,
+    -- whose page-scoped clear is queued behind this very spawn. The
+    -- same-id init paths do NOT — their replacement holds the name, so
+    -- a pre-cutoff spawn inserts here and is retired by the clear
+    -- behind it instead.
     wmgr ← readIORef (wsWorldManagerRef sim)
     let mPage     = lookup pageId (wmWorlds wmgr)
         worldGone = isNothing mPage
+    -- #2476: "the page exists" is not "the page this request was
+    -- admitted for exists" — the id is a reusable NAME, and a same-id
+    -- re-init registers a different 'WorldState' under it. This command
+    -- may already have been dequeued when that transition ran, so
+    -- neither the transition's immediate retirement nor its queued
+    -- clear can be relied on to catch it; between the insertion and the
+    -- clear the building would be externally visible on the
+    -- replacement. Shared by BOTH routes, so a page-bound placement is
+    -- held to it too.
+    replaced ← case mPage of
+        Nothing → pure False
+        Just ws → (≢ epoch) ⊚ pageIncarnation ws
+    afterEpochCheck
     case HM.lookup defName (bmDefs bm) of
         -- #2326: every path that drops the spawn retires what that
         -- request left behind — its footprint claim, and any power node
         -- already allocated against the id it was promised.
         _ | worldGone → dropRequest
+        _ | replaced → do
+            dropRequest
+            logDebug logger CatThread $
+                "BuildingSpawn: dropping spawn admitted for a previous \
+                \incarnation of page " <> unWorldPageId pageId
         Nothing → do
             dropRequest
             logWarn logger CatThread $
@@ -231,7 +306,38 @@ applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
             worldSize ← maybe (pure 0)
                 (\ws → maybe 0 wgpWorldSize <$> readIORef (wsGenParamsRef ws))
                 mPage
-            committed ← atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+            -- #2476: the epoch checked above is a time-of-CHECK, and the
+            -- def lookup, clock read and world-size read since then are
+            -- time in which a same-id re-init can land. So the decision
+            -- is taken AGAIN inside the lifecycle lock, in the same
+            -- critical section as the commit transaction — a fence, not
+            -- another check, so no transition can interleave between
+            -- them and leave a departed incarnation's building visible
+            -- under the replacement's reused page name.
+            --
+            -- Both routes into this body take it: the unbound drain on
+            -- the unit thread, and #1602's bound commit on the world
+            -- thread, which holds no lifecycle lock of its own by the
+            -- time it reaches here.
+            committed ← withPageLifecycle sim $ do
+              stillOurs ← do
+                  mgr ← readIORef (wsWorldManagerRef sim)
+                  case lookup pageId (wmWorlds mgr) of
+                      Nothing → pure False
+                      Just ws → (≡ epoch) ⊚ pageIncarnation ws
+              if not stillOurs
+                then do
+                    -- Retire the claim here too. Every other arm that
+                    -- refuses this request releases what its admission
+                    -- took (#2326), and a request the fence turns away
+                    -- is no more able to commit than one the def lookup
+                    -- or the world-gone guard turned away — leaving its
+                    -- tiles held would keep them from the replacement
+                    -- forever.
+                    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
+                        (releaseReservation bid bm', ())
+                    pure False
+                else atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm' →
                 let (retired, accepted) =
                         commitFootprint worldSize pageId bid gx gy
                                         (bdTileW def) (bdTileH def) bm'

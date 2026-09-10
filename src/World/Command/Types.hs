@@ -568,11 +568,16 @@ data WorldCommand
         --   a backward or same-state request is silently refused, so
         --   the one-way discovery guarantee holds no matter who asks.
     | WorldSpawnBoundBuilding !BuildingId !Text !Int !Int !Int !WorldPageId
-                              !Word64
+                              !Word64 !ChunkGeneration
         -- ^ A PAGE-BOUND building placement (#1602): pre-allocated id,
         --   defName, canonical anchor gx/gy, floor z, target page, and
         --   the page-SELECTION generation the click that produced it was
-        --   hit-tested under.
+        --   hit-tested under, and (#2476) the page INCARNATION epoch the
+        --   admission read from that page's own state. The selection
+        --   generation answers "has the visible head moved"; the epoch
+        --   answers "is the page under this name still the same one",
+        --   and 'Building.Thread.Command.applyBuildingSpawn' — shared
+        --   with the unbound route — checks the second for both.
         --
         --   It lands HERE rather than straight on the building queue for
         --   one reason: this thread is the sole mutator of 'wmVisible'

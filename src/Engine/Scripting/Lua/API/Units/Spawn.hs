@@ -24,7 +24,7 @@ import UPrelude
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, withPageLifecycle)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -48,6 +48,7 @@ import Engine.Scripting.Lua.API.PageBinding
 import Engine.Scripting.Lua.API.Units.MotionArgs
     (defaultingSpeed, readMotionArg, requiredCoordinate, requiredSpeed)
 import Engine.Scripting.Lua.API.Units.Yaml (surfaceZInWorld)
+import World.Chunk.Admit (pageIncarnation)
 
 
 -- | Spawn a unit. If gridZ is omitted, looks up surface elevation.
@@ -149,7 +150,22 @@ unitSpawnFn env = do
                     Just fbs → Just (TE.decodeUtf8Lenient fbs)
                     Nothing  → TE.decodeUtf8Lenient <$> factionArg4
 
-            result ← Lua.liftIO $ do
+            -- #2476: the whole admission — the manager reads, the page
+            -- and page-binding decision, the 'UnitId' allocation and
+            -- the queue insertion — is ONE locked transition against
+            -- the page lifecycle. Without it a spawn could resolve a
+            -- live page, be preempted by that page's destroy or
+            -- same-id re-init, and then allocate an id BELOW the
+            -- cutoff that transition captured, so the clear queued
+            -- behind it would retire a unit admitted for the
+            -- replacement. Inside the lock the id is provably on one
+            -- side of the boundary or the other.
+            --
+            -- No other page or entity lock is held here or taken
+            -- inside: what runs under it is 'atomicModifyIORef''
+            -- transitions, a non-blocking queue write, and logging.
+            result ← Lua.liftIO $
+              withPageLifecycle (toWorldSimCapability env) $ do
                 -- Check def exists
                 um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
                 -- ONE manager read serves the binding check AND the
@@ -219,10 +235,21 @@ unitSpawnFn env = do
                             let (uid', um'') = nextUnitId um'
                             in (um'', uid')
 
+                        -- #2476: the page's INCARNATION, read from the
+                        -- very state this admission resolved and inside
+                        -- the lifecycle lock, so a same-id re-init
+                        -- cannot slip between the two. The handler
+                        -- compares it before inserting; without it the
+                        -- page NAME alone would let a request admitted
+                        -- for a departed incarnation materialise on its
+                        -- replacement whenever the command was dequeued
+                        -- before that page's clear was even enqueued.
+                        epoch ← pageIncarnation ws
+
                         -- Enqueue spawn command, stamped with the active
                         -- world so the unit is world-scoped (#78).
                         Q.writeQueue (ucUnitQueue (toUnitCombatCapability env)) $
-                            UnitSpawn uid name gx gy gz faction pageId
+                            UnitSpawn uid name gx gy gz faction pageId epoch
 
                         return (Right (fromIntegral (unUnitId uid) ∷ Int))
 
