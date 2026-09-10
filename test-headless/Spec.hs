@@ -277,6 +277,7 @@ import qualified Test.Headless.Structure.ConstructionPacks as StructureConstruct
 import qualified Test.Headless.World.Render.SideFace as RenderSideFace
 import qualified Test.Headless.World.Render.ZTrackSeam as ZTrackSeam
 import qualified Test.Headless.World.Render.SlopeBit as RenderSlopeBit
+import qualified Test.Headless.World.Render.FluidLevelMasks as FluidLevelMasks
 import qualified Test.Headless.World.Render.WaterSlope as RenderWaterSlope
 import qualified Test.Headless.World.Render.ZoomBakeUV as ZoomBakeUV
 import qualified Test.Headless.Render.ViewportGuard as ViewportGuard
@@ -1092,6 +1093,7 @@ main = hspec $ do
     describe "World.Render.ZTrackSeam" ZTrackSeam.spec
     describe "World.Render.SideFace" RenderSideFace.spec
     describe "World.Slope.slopeBit" RenderSlopeBit.spec
+    describe "World.Slope.FaceMaps" FluidLevelMasks.spec
     describe "World.Render.WaterSlope" RenderWaterSlope.spec
     describe "World.Render.Zoom.zoomQuadWorldUVs" ZoomBakeUV.spec
     describe "Render.ViewportGuard" ViewportGuard.spec

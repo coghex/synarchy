@@ -52,8 +52,66 @@ Parameter findings (tested):
 | Buildings | `assets/textures/buildings/<name>/default.png` | 96×96 | `create_map_object` high top-down |
 | Units | `assets/textures/units/<name>/animations/...` | 48×48 humanoid / 92×92 large quadruped | `create_character` + states + animations |
 
-`assets/textures/world/facemap/` is UV/slope masks (green top, blue/red sides), **not** material art.
+`assets/textures/facemap/` is UV/slope masks (green top, blue/red sides), **not** material art.
 Engine handles arbitrary sprite sizes; trimming margins is only a memory optimization.
+
+## Fluid level masks (#2525)
+
+`assets/textures/facemap/isoface_level_1.png` through
+`isoface_level_8.png` represent fill levels 1/8 through 8/8 of one z.
+Each is 96×64 RGBA8. Green is the unchanged top diamond; red and blue
+are the right and left sides relative to the south-facing camera.
+Alpha is binary and transparent pixels are black. The four fixed
+side-coloured corner pixels at x=0/95, y=23/24 belong to the footprint.
+Each level adds two extrusion pixels per column below that footprint;
+level 8 matches every decoded RGBA byte of the existing `isoface.png`.
+
+`World.Slope.FaceMaps.generateFluidLevelFaceMap` is the geometric authority.
+It accepts levels 1..8 and rejects other levels with `Nothing`.
+The exporter under `tools/fluid_masks/` executes that compiled library;
+Python only encodes its raw pixels. To regenerate with the pinned encoder:
+
+```bash
+python3 -m venv dist-newstyle/fluid-masks-venv
+dist-newstyle/fluid-masks-venv/bin/python -m pip install Pillow==11.3.0
+dist-newstyle/fluid-masks-venv/bin/python tools/fluid_level_masks.py --generate
+dist-newstyle/fluid-masks-venv/bin/python tools/fluid_level_masks.py --check-generated
+```
+
+Generation freshness-builds the library and exporter under the repository's
+exclusive `cabal-build` hold, reporting the holder every 60 seconds while
+waiting, up to 30 minutes. `--check-generated` compares all eight Haskell
+outputs with both decoded pixels and regenerated PNG file bytes. An ordinary
+validation needs Pillow but not its pinned version or a Haskell build:
+
+```bash
+python3 tools/fluid_level_masks.py
+python3 tools/fluid_level_masks.py --self-test
+cabal build synarchy-test-headless
+cabal test synarchy-test-headless --test-options='--match "World.Slope.FaceMaps"'
+python3 tools/fluid_level_contact_sheet.py --self-test
+python3 tools/fluid_level_contact_sheet.py --out /tmp/fluid_levels_contact.png
+```
+
+The contact sheet shows all eight levels for River, Lake, Ocean, and Lava,
+beside dry sand and basalt at all four camera facings, with local sun phases
+0.125 (day) and 0.75 (night), brightness 1.0 and tile alpha 1.0. It applies
+the production material textures, fluid-specific tints, face swizzle,
+camera-dependent sun direction, ambient/direct face lighting, and multiplied
+material/mask alpha. These are CPU shader swatches, not rendered gameplay
+evidence. Low tops move down by `16 - 2*level` pixels to share a common bed.
+`--panels <directory>` also writes eight larger individual review panels.
+The [retained review sheet](art/fluid_levels/contact_sheet.png) and
+[approval record](art/fluid_levels/README.md) belong to the same asset PR.
+
+These masks are not registered or selected in production until #2529.
+`facemap` remains an unexposed preview category. For an explicitly requested
+live inspection, copy these exact PNGs into a temporary, uncommitted
+`assets/textures/flora/fluid_level_review/` directory, finish `cabal build all`,
+then launch `cabal run exe:synarchy -- --preview flora/fluid_level_review`.
+This uses the existing static browser without YAML or CLI changes. Remove
+that temporary directory before committing; record the owner's decision on
+all eight masks, including the material comparison sheet, before merge.
 
 ## Flora pipeline (validated)
 

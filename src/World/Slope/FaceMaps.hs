@@ -5,6 +5,7 @@ module World.Slope.FaceMaps
       -- * Procedural Face Map Generation
     , SlopeFaceMaps(..)
     , generateSlopeFaceMaps
+    , generateFluidLevelFaceMap
       -- * Side Face Maps (left/right only, no top face)
     , generateSideFaceMapLeft
     , generateSideFaceMapRight
@@ -48,30 +49,33 @@ generateSlopeFaceMaps = SlopeFaceMaps
 
 data RampDirection = RampNorth | RampEast | RampSouth | RampWest
 
+-- | The shipped flat tile is exactly the full eighth-level mask.
 generateFlatFaceMap ∷ VS.Vector Word8
-generateFlatFaceMap = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ \i →
-    let px  = i `div` 4
+generateFlatFaceMap = fluidFaceMapPixels 8
+
+-- | A non-empty eighth level (1..8), on the unchanged 96×64 canvas.
+--   The fixed diamond footprint includes four side-coloured corner pixels
+--   at x=0/95, y=23/24. Each level adds two pixels BELOW that footprint
+--   in every column. Invalid levels are rejected, never silently clamped.
+generateFluidLevelFaceMap ∷ Int → Maybe (VS.Vector Word8)
+generateFluidLevelFaceMap level
+    | level < 1 ∨ level > 8 = Nothing
+    | otherwise = Just (fluidFaceMapPixels level)
+
+fluidFaceMapPixels ∷ Int → VS.Vector Word8
+fluidFaceMapPixels level = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ \i →
+    let px = i `div` 4
         col = px `mod` tilePixelWidth
         row = px `div` tilePixelWidth
         chan = i `mod` 4
-    in if row < diamondRows
-       then case chan of
-                0 → 0
-                1 → 255
-                2 → 0
-                _ → 255
-       else let halfW = tilePixelWidth `div` 2
-            in if col < halfW
-               then case chan of
-                   0 → 0
-                   1 → 0
-                   2 → 255
-                   _ → 255
-               else case chan of
-                   0 → 255
-                   1 → 0
-                   2 → 0
-                   _ → 255
+        edgeDistance = min col (tilePixelWidth - 1 - col)
+        inset = edgeDistance `div` 2
+        topStart = 23 - inset
+        footprintEnd = 24 + inset
+        opaque = row ≥ topStart ∧ row ≤ footprintEnd + 2 * level
+        top = edgeDistance > 0 ∧ row ≤ footprintEnd
+        faceChannel = if top then 1 else if col < tilePixelWidth `div` 2 then 2 else 0
+    in if opaque ∧ (chan ≡ 3 ∨ chan ≡ faceChannel) then 255 else 0
 
 generateRampFaceMap ∷ RampDirection → VS.Vector Word8
 generateRampFaceMap dir = VS.generate (tilePixelWidth * tilePixelHeight * 4) $ \i →
