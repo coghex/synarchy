@@ -2340,13 +2340,38 @@ replacement may commit ahead of the delayed building clear — its id is
 at or above the cutoff, so both its claim and its committed instance
 survive it.
 
+**A previous incarnation's unit may not create durable state on the
+replacement.** Teardown is queue-ordered, so between a re-init and the
+moment its clear drains a doomed unit is still in `umInstances`
+answering to a page name that now belongs to the replacement. Every
+fresh `WorldState` therefore carries `wsUnitFloorRef`: the exclusive
+lower bound on the `UnitId`s belonging to THIS incarnation, written from
+the same `umNextId` reading the transition gives its queued clear, and
+written before the state is reachable through `wmWorlds`. `UnitId 0` —
+the value `emptyWorldState` installs — means no incarnation preceded
+this one, which is the honest answer for a page that was never replaced
+and for every page a load publishes.
+
+The two verbs that turn a unit into durable page-scoped state consult
+it. `power.placeNode` refuses a supplier below the floor inside the same
+transaction that would have popped its item, so an old incarnation's
+item cannot become a building and a power node that outlive it. And
+`unit.createTransferOrder` resolves its store through the carrier's
+page, so the floor check sits in that resolution: whichever side of a
+concurrent transition the call lands on is the side it is measured
+against, and no order can be written into the replacement's store naming
+a carrier the clear is about to remove. Retiring such an order from the
+clear instead would not close the window — the clear runs on the unit
+thread while the order is created on the Lua thread.
+
 **Not a session boundary.** Neither path joins #2291's
 `wmTeardownsPending` fence or enqueues `UnitEndSession` /
 `BuildingEndSession`: one page ending is not the session ending.
 Destroy-all's four-message sequence, load publication, hide, show and
 the world-thread placement path are untouched. Transfer orders, power
-nodes and container knowledge remain `WorldState` rows and leave with
-the replaced page, so no clear retires them.
+nodes and container knowledge remain `WorldState` rows: those made
+before a transition leave with the replaced page, and the floor above is
+what keeps a doomed unit from adding more to the replacement.
 
 Gate: `Page incarnation entity teardown` in
 `test-headless/Test/Headless/World/PageIncarnation.hs`, which drives

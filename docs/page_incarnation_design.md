@@ -295,7 +295,17 @@ and reached only via `withPageLifecycle`), is held by:
 
 Because the two cannot interleave, an id allocated before a transition is
 provably below that transition's cutoff and one allocated after is provably
-at or above it. A clear retires only matching-page rows below its cutoff, so
+at or above it.
+
+The same reading is also stamped onto the incoming `WorldState` as
+`wsUnitFloorRef`, before it is reachable through `wmWorlds`. Ids classify
+entities, not just admissions: between a re-init and the moment its clear
+drains, a doomed unit still answers to the page name the replacement now
+holds, so the two verbs that turn a unit into durable page-scoped state —
+`power.placeNode`'s supplier, the store `unit.createTransferOrder` writes
+into — compare against that floor and refuse. Without it an old
+incarnation's unit could commit a building, a power node or a transfer order
+onto the replacement that outlives the unit the clear then removes. A clear retires only matching-page rows below its cutoff, so
 old work is retired while every replacement admission survives — including an
 unbound building's reservation and a page-bound building the world thread
 commits ahead of the delayed clear. It is the OUTERMOST coordination boundary

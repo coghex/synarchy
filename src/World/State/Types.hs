@@ -57,6 +57,7 @@ import World.Till.Types (TillDesignations)
 import World.Plant.Types (PlantDesignations)
 import Craft.Bills (CraftBills, emptyCraftBills)
 import Unit.Transfer.Orders (TransferOrders, emptyTransferOrders)
+import Unit.Types.Manager (UnitId(..))
 import Building.Types (BuildingId)
 import Building.Knowledge (ContainerKnowledge, emptyContainerKnowledge)
 import Power.Types (PowerNodes, emptyPowerNodes)
@@ -517,6 +518,37 @@ data WorldState = WorldState
       --   v9) and copied into the @"metadata"@ component at v3 so a
       --   @listSaves@-depth read can obtain it without decoding any
       --   gameplay component.
+    , wsUnitFloorRef ∷ IORef UnitId
+      -- ^ #2476: the EXCLUSIVE lower bound on the 'UnitId's that belong
+      --   to THIS incarnation of the page — a unit whose id is below it
+      --   was admitted for an incarnation this one replaced.
+      --
+      --   Written once, inside the page/entity lifecycle transition that
+      --   registers this state and BEFORE it becomes visible in
+      --   @wmWorlds@, from the same @umNextId@ reading the transition
+      --   captures for its queued 'Unit.Command.Types.UnitClearPage'
+      --   cutoff ('World.Thread.Command.Init.registerPageIncarnation').
+      --   So the two agree by construction: exactly the units this
+      --   page's clear will retire are the ones below this bound.
+      --
+      --   It exists because a page id is a reusable NAME and teardown is
+      --   queue-ordered. Between a re-init and the moment its clear
+      --   drains, a doomed unit is still in @umInstances@ carrying this
+      --   page's name, so a verb that turns a unit into DURABLE
+      --   page-scoped state — @power.placeNode@'s supplier, the store
+      --   @unit.createTransferOrder@ writes into — would otherwise let a
+      --   previous incarnation's unit commit rows onto the replacement
+      --   that outlive the unit itself. Those verbs compare against this
+      --   bound and refuse. Reading the page's name alone cannot answer
+      --   the question; the id can.
+      --
+      --   'UnitId' @0@ — the value 'emptyWorldState' installs, below
+      --   every allocated id — means "no incarnation preceded this
+      --   one", which is the honest answer for a page that was never
+      --   replaced and for every page a LOAD publishes (staging builds
+      --   its states through 'emptyWorldState', and a save's own unit
+      --   ids must never be measured against a departed session's
+      --   allocator). Runtime-only, never persisted.
     }
 
 emptyWorldState ∷ IO WorldState
@@ -583,6 +615,10 @@ emptyWorldState = do
     -- Staging replaces it when the save carries one.
     freshGeneratedId ← newGeneratedWorldId
     wsGeneratedIdRef ← newIORef freshGeneratedId
+    -- #2476: "no incarnation preceded this one" until a lifecycle
+    -- transition says otherwise. Below every allocated 'UnitId', which
+    -- start at 1.
+    wsUnitFloorRef ← newIORef (UnitId 0)
     return $ WorldState tilesRef cameraRef texturesRef genParamsRef
                         timeRef dateRef timeScaleRef resumeScaleRef
                         zoomCacheRef
@@ -611,6 +647,7 @@ emptyWorldState = do
                         wsCropPlotsRef wsPlantDesignationsRef
                         wsBloodStoreRef wsBloodTextureHandlesRef
                         wsIdentityRef wsGeneratedIdRef
+                        wsUnitFloorRef
 
 -- | The world size (in chunks) that decides this page's u-wrap — the
 --   single input every canonical-tile-frame helper needs (#1175).

@@ -76,9 +76,19 @@ handleUnitClearAllCommand env utsRef = do
 --   selected or simulated but no longer instantiated.
 --
 --   Deliberately NOT here: 'Unit.Transfer.Live.retireTransferOrdersEverywhere'.
---   A transfer order is a @WorldState@ row, so it leaves with the page
---   this clear is retiring rather than being orphaned by it — the same
---   reason 'handleUnitClearAllCommand' does not call it either.
+--   A transfer order is a @WorldState@ row, so an order this carrier
+--   made BEFORE the transition leaves with the page being retired
+--   rather than being orphaned by it — the same reason
+--   'handleUnitClearAllCommand' does not call it either.
+--
+--   The order it could otherwise make AFTER the transition, into the
+--   REPLACEMENT's store, is closed at the source instead of here:
+--   'World.State.Types.wsUnitFloorRef' carries this same cutoff on the
+--   incoming state, and 'Engine.Scripting.Lua.API.Units.TransferOrder'
+--   refuses to resolve that store for a unit below it. Retiring from
+--   this handler could not close it — the clear runs on this thread
+--   while the order is created on the Lua thread, so a read that began
+--   before the retire could still write after it.
 handleUnitClearPageCommand
     ∷ EngineEnv → IORef UnitThreadState → WorldPageId → UnitId → IO ()
 handleUnitClearPageCommand env utsRef pageId cutoff = do

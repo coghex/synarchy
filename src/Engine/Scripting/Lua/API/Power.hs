@@ -192,12 +192,30 @@ powerPlaceNodeFn env = do
 placeNodeOn ∷ EngineEnv → WorldState → WorldPageId → Text → UnitId → Int → Int
             → PowerRole → Float → IO (Either Text (PowerNodeId, BuildingId))
 placeNodeOn env ws pid defName uid gx gy role param = do
+    -- #2476: this page's incarnation floor, read from the SAME state
+    -- the node will be registered into and inside the lifecycle lock
+    -- this admission already holds, so no transition can move it
+    -- between the read and the transaction below.
+    floorId ← readIORef (wsUnitFloorRef ws)
     ePopped ← atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
             Nothing → (um, Left ("unit has no " <> defName))
             Just u
                 | uiPage u ≢ pid →
                     (um, Left ("unit is not on page " <> pidText))
+                -- #2476: the page NAME is reused across incarnations, so
+                -- the check above passes for a unit admitted before this
+                -- page was re-initialised and still awaiting its queued
+                -- 'UnitClearPage'. Its id settles it: below the floor is
+                -- a previous incarnation's unit, and letting one supply
+                -- a node would commit a building AND a power node onto
+                -- the replacement — both above the cutoff, so both
+                -- outliving the supplier the clear then removes. Refused
+                -- in the SAME transition that would have popped the
+                -- item, so nothing is consumed.
+                | uid < floorId →
+                    (um, Left ("unit belongs to a previous incarnation of \
+                               \page " <> pidText))
                 | otherwise → case popItemByName defName (uiInventory u) of
                     Nothing → (um, Left ("unit has no " <> defName))
                     Just (item, ix, newInv) →

@@ -467,6 +467,13 @@ selectionsRaw env = do
     pure ( sort (map unUnitId (HS.toList (umSelected um)))
          , unBuildingId <$> bmSelected bm )
 
+-- | How many item instances a unit is carrying — zero for a unit the
+--   manager no longer holds.
+unitInventorySize ∷ EngineEnv → UnitId → IO Int
+unitInventorySize env uid = do
+    um ← readIORef (unitManagerRef env)
+    pure (maybe 0 (length . uiInventory) (HM.lookup uid (umInstances um)))
+
 allocators ∷ EngineEnv → IO (Word32, Word32)
 allocators env = do
     um ← readIORef (unitManagerRef env)
@@ -627,6 +634,9 @@ formatterLua = T.concat
     , "_G.__pn = function(a, b) "
     , "  if a == nil then return 'nil|' .. tostring(b) end; "
     , "  return 'id|' .. tostring(b); end; "
+    , "_G.__to = function(a, b) "
+    , "  if a == nil then return 'nil|' .. tostring(b) end; "
+    , "  return 'ok|' .. tostring(#a); end; "
     , "return 'ok'" ]
 
 q ∷ Text → Text
@@ -673,11 +683,33 @@ tryBuildingSpawn ls defName (gx, gy) (WorldPageId pg) mGen =
         , "))" ]
 
 -- | @power.placeNode@, answering the folded string.
-placeNodeOnPage ∷ LuaBackendState → WorldPageId → (Int, Int) → IO Text
-placeNodeOnPage ls (WorldPageId pg) (gx, gy) =
+placeNodeOnPage ∷ LuaBackendState → Word32 → WorldPageId → (Int, Int) → IO Text
+placeNodeOnPage ls supplier (WorldPageId pg) (gx, gy) =
     executeDebugLua (lbsLuaState ls) $ T.concat
-        [ "return _G.__pn(power.placeNode(1, '", panelDefName, "', "
+        [ "return _G.__pn(power.placeNode(", tshow supplier, ", '"
+        , panelDefName, "', "
         , tshow gx, ", ", tshow gy, ", '", pg, "'))" ]
+
+-- | @unit.getTransferOrders(uid)@ — the READ side of the one store
+--   resolution `unit.createTransferOrder` writes through
+--   ('unitOrderStore'), folded to @ok|<count>@ or @nil|reason@. Reading
+--   is enough to gate the resolution itself, which is what decides
+--   whose page store a unit's durable orders may reach.
+getOrders ∷ LuaBackendState → Word32 → IO Text
+getOrders ls uid = executeDebugLua (lbsLuaState ls) $ T.concat
+    [ "return _G.__to(unit.getTransferOrders(", tshow uid, "))" ]
+
+-- | Give a unit the power items `power.placeNode` consumes. Fixture
+--   state, not the thing under test: `unit.spawn` grants no inventory,
+--   and a supplier admitted AFTER a transition is exactly what these
+--   examples need to hand the verb.
+givePanels ∷ EngineEnv → UnitId → IO ()
+givePanels env uid = atomicModifyIORef' (unitManagerRef env) $ \um →
+    case HM.lookup uid (umInstances um) of
+        Nothing → (um, ())
+        Just u  →
+            let u' = u { uiInventory = [panelItem 11, panelItem 12] }
+            in (um { umInstances = HM.insert uid u' (umInstances um) }, ())
 
 unquote ∷ Text → Text
 unquote t = case T.stripPrefix "\"" t of
@@ -802,24 +834,79 @@ survivalSpec = describe "the replacement's admissions survive" $ do
             (rUnits <$> rowsOn env incPage) `shouldReturn` [uid]
             simStateIds env `shouldReturn` [uid]
 
-    it "a power node placed after a re-init commits its building and \
-       \registers into the page that replaced it" $ \(env, ls) → do
-        resetScene env
-        seedIncarnation env ls incPage
-        initArenaPage env incPage
-        answer ← placeNodeOnPage ls incPage powerTile
-        answer `shouldSatisfy` T.isPrefixOf "\"id|"
-        drainEntities env
-        rows ← rowsOn env incPage
-        length (rBuildings rows) `shouldBe` 1
-        -- The node landed in the REPLACEMENT's own registry, which is
-        -- the state 'placeNodeOn' resolved under the lock.
-        wm ← readIORef (worldManagerRef env)
-        case lookup incPage (wmWorlds wm) of
-            Nothing → expectationFailure "the replacement page vanished"
-            Just ws → do
+    it "a power node placed by a REPLACEMENT-incarnation supplier commits \
+       \its building and registers into the page that replaced it" $
+        \(env, ls) → do
+            resetScene env
+            seedIncarnation env ls incPage
+            initArenaPage env incPage
+            -- Admitted AFTER the transition, so at or above the floor.
+            supplier ← spawnUnitOn ls incPage unitTile
+            drainEntities env
+            givePanels env (UnitId supplier)
+            answer ← placeNodeOnPage ls supplier incPage powerTile
+            answer `shouldSatisfy` T.isPrefixOf "\"id|"
+            drainEntities env
+            rows ← rowsOn env incPage
+            length (rBuildings rows) `shouldBe` 1
+            -- The node landed in the REPLACEMENT's own registry, which
+            -- is the state 'placeNodeOn' resolved under the lock.
+            wm ← readIORef (worldManagerRef env)
+            case lookup incPage (wmWorlds wm) of
+                Nothing → expectationFailure "the replacement page vanished"
+                Just ws → do
+                    nodes ← readIORef (wsPowerNodesRef ws)
+                    HM.size (pnsNodes nodes) `shouldBe` 1
+
+    forM_ paths $ \p →
+        it ("a supplier from the incarnation " <> pathName p
+            <> " replaced cannot place a node onto the replacement")
+            $ \(env, ls) → do
+            resetScene env
+            seedIncarnation env ls incPage
+            -- The fixture supplier is installed by 'resetScene', so it
+            -- is a PRE-cutoff unit — and it is still in @umInstances@
+            -- carrying this page's reused name until the queued
+            -- 'UnitClearPage' drains. That window is the whole point:
+            -- without the incarnation floor its item would become a
+            -- building AND a power node on the replacement, both at or
+            -- above the cutoff, so both outliving the supplier itself.
+            pathRun p env
+            answer ← placeNodeOnPage ls (unUnitId supplierUid) incPage
+                                     powerTile
+            answer `shouldBe` q "nil|unit belongs to a previous \
+                                \incarnation of page inc_page"
+            -- Refused inside the transaction that would have popped:
+            -- no item consumed, no id spent, nothing enqueued.
+            inv ← unitInventorySize env supplierUid
+            inv `shouldBe` length (uiInventory supplierUnit)
+            drainEntities env
+            rBuildings <$> rowsOn env incPage `shouldReturn` []
+            wm ← readIORef (worldManagerRef env)
+            forM_ (lookup incPage (wmWorlds wm)) $ \ws → do
                 nodes ← readIORef (wsPowerNodesRef ws)
-                HM.size (pnsNodes nodes) `shouldBe` 1
+                HM.size (pnsNodes nodes) `shouldBe` 0
+
+    forM_ paths $ \p →
+        it ("a carrier from the incarnation " <> pathName p
+            <> " replaced cannot reach the replacement's transfer-order \
+               \store, and a replacement's carrier can") $ \(env, ls) → do
+            resetScene env
+            seedIncarnation env ls incPage
+            -- Resolvable before the transition: the refusal below is
+            -- the floor's doing and not a missing unit.
+            getOrders ls (unUnitId supplierUid) `shouldReturn` q "ok|0"
+            pathRun p env
+            -- A durable order stored here would name a carrier the
+            -- queued clear is about to remove, and nothing would ever
+            -- retire it: it would ride every later save as a dangling
+            -- acting-unit reference.
+            getOrders ls (unUnitId supplierUid)
+                `shouldReturn` q "nil|unit.getTransferOrders: no such \
+                                 \unit, or its world page is not loaded"
+            replacement ← spawnUnitOn ls incPage lateTile
+            drainEntities env
+            getOrders ls replacement `shouldReturn` q "ok|0"
 
     it "a spawn admitted before a destroy and drained after it is \
        \dropped by the absent-page guard, leaking no claim" $
@@ -1061,7 +1148,9 @@ lockSpec = describe "the lifecycle lock is actually taken" $ do
     it "power.placeNode blocks on it" $ \(env, _) →
         withOwnBackend env $ \ls → do
             resetScene env
-            blockedUntilReleased env (void (placeNodeOnPage ls incPage powerTile))
+            blockedUntilReleased env
+                (void (placeNodeOnPage ls (unUnitId supplierUid) incPage
+                                       powerTile))
 
     it "single-page destroy blocks on it" $ \(env, _) → do
         resetScene env
