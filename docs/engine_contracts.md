@@ -2340,38 +2340,43 @@ replacement may commit ahead of the delayed building clear — its id is
 at or above the cutoff, so both its claim and its committed instance
 survive it.
 
-**A previous incarnation's unit may not create durable state on the
-replacement.** Teardown is queue-ordered, so between a re-init and the
-moment its clear drains a doomed unit is still in `umInstances`
-answering to a page name that now belongs to the replacement. Every
-fresh `WorldState` therefore carries `wsUnitFloorRef`: the exclusive
-lower bound on the `UnitId`s belonging to THIS incarnation, written from
-the same `umNextId` reading the transition gives its queued clear, and
-written before the state is reachable through `wmWorlds`. `UnitId 0` —
-the value `emptyWorldState` installs — means no incarnation preceded
-this one, which is the honest answer for a page that was never replaced
-and for every page a load publishes.
+**A previous incarnation's entities stop being addressable at once.**
+The queued clears retire those rows eventually, and "eventually" is not
+enough on its own: a page id is a reusable NAME, so until a clear drains
+an old unit or building is still in the manager answering to a name that
+now belongs to the replacement. Every production verb that resolves an
+entity's page — an item drop, a transfer, a construction payment, a
+container reveal, a power placement — would keep finding it, and could
+spend it into durable state on the replacement that outlives the row the
+teardown removes.
 
-The two verbs that turn a unit into durable page-scoped state consult
-it. `power.placeNode` refuses a supplier below the floor inside the same
-transaction that would have popped its item, so an old incarnation's
-item cannot become a building and a power node that outlive it. And
-`unit.createTransferOrder` resolves its store through the carrier's
-page, so the floor check sits in that resolution: whichever side of a
-concurrent transition the call lands on is the side it is measured
-against, and no order can be written into the replacement's store naming
-a carrier the clear is about to remove. Retiring such an order from the
-clear instead would not close the window — the clear runs on the unit
-thread while the order is created on the Lua thread.
+So the lifecycle transition applies the retirement DIRECTLY, in the same
+locked step, through the same pure bodies the queued clears use
+(`Unit.Types.Manager.retirePageUnits`,
+`Building.Types.retirePageBuildings`). A page teardown then behaves
+exactly as `UnitDestroy` / `BuildingDestroy` already do: the entity is
+gone from the manager and every resolver simply fails. One body, two
+callers, so the immediate removal and the queued mop-up cannot disagree
+about what belonged to the departed incarnation.
+
+This is not the direct clear #58 forbids. That one was unbounded, so a
+spawn already queued re-inserted an orphan after it with nothing left to
+remove them. These are bounded by the same exclusive cutoff, and the
+queued clears still run behind every such spawn. `utsSimStates` is the
+one exception: it belongs to the unit thread, which mutates it with a
+read-modify-write across a tick, so its removal stays in the queued
+handler — which runs ahead of that tick's movement, and
+`publishToRender` maps over the instances and would never visit an
+orphan anyway.
 
 **Not a session boundary.** Neither path joins #2291's
 `wmTeardownsPending` fence or enqueues `UnitEndSession` /
 `BuildingEndSession`: one page ending is not the session ending.
 Destroy-all's four-message sequence, load publication, hide, show and
 the world-thread placement path are untouched. Transfer orders, power
-nodes and container knowledge remain `WorldState` rows: those made
-before a transition leave with the replaced page, and the floor above is
-what keeps a doomed unit from adding more to the replacement.
+nodes and container knowledge remain `WorldState` rows and leave with
+the replaced page; nothing can add more to the replacement because the
+entity that would have named them is already gone from its manager.
 
 Gate: `Page incarnation entity teardown` in
 `test-headless/Test/Headless/World/PageIncarnation.hs`, which drives

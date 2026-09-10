@@ -33,9 +33,10 @@ import Engine.Core.Capability.Building
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Building.Command.Types (BuildingCommand(..))
-import Building.Types (BuildingId(..), BuildingManager(..))
+import Building.Types
+    (BuildingId(..), BuildingManager(..), retirePageBuildings)
 import Unit.Command.Types (UnitCommand(..))
-import Unit.Types (UnitId(..), UnitManager(..))
+import Unit.Types (UnitId(..), UnitManager(..), retirePageUnits)
 import Engine.Core.Log (logInfo, logDebug, logWarn, logError, LogCategory(..), LoggerState)
 import Engine.Graphics.Solar (maxSolarPages)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -130,7 +131,7 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
     -- whatever incarnation this id already held. See
     -- 'registerPageIncarnation' for the whole contract; the page
     -- replacement itself is unchanged and is the function below.
-    registerPageIncarnation env pageId worldState $ \mgr →
+    registerPageIncarnation env pageId $ \mgr →
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
@@ -637,7 +638,7 @@ handleWorldInitArenaCommand env logger pageId = do
     -- incarnation this id already held. An arena replaces a page
     -- wholesale, which is precisely the reuse that boundary exists to
     -- distinguish. See 'registerPageIncarnation'.
-    registerPageIncarnation env pageId worldState $ \mgr →
+    registerPageIncarnation env pageId $ \mgr →
         -- Dedup by page id: re-initialising an existing page (the common
         -- "main_world" reuse after Exit to Menu) must REPLACE its entry,
         -- not stack a second one in wmWorlds (#58).
@@ -782,9 +783,8 @@ handleWorldInitArenaDoneCommand env logger pageId = do
 --   enqueues a session marker: replacing one page is not the session
 --   ending.
 registerPageIncarnation
-    ∷ EngineEnv → WorldPageId → WorldState → (WorldManager → WorldManager)
-    → IO ()
-registerPageIncarnation env pageId worldState register = do
+    ∷ EngineEnv → WorldPageId → (WorldManager → WorldManager) → IO ()
+registerPageIncarnation env pageId register = do
     let worldSim   = toWorldSimCapability env
         handoff    = toRenderHandoffCapability env
         unitCombat = toUnitCombatCapability env
@@ -826,18 +826,6 @@ registerPageIncarnation env pageId worldState register = do
         -- what re-activates the incoming one.
         Q.writeQueue (wsSimQueue worldSim) (SimDropWorld pageId)
 
-        -- #2476: stamp the incoming state with the SAME reading the
-        -- queued unit clear will carry, BEFORE the state is reachable
-        -- through @wmWorlds@ below. A page id is a reusable name, so
-        -- between this transition and the moment that clear drains a
-        -- doomed unit is still in @umInstances@ answering to it; the
-        -- verbs that turn a unit into durable page-scoped state compare
-        -- against this bound and refuse, which a page-name comparison
-        -- cannot do. Written unconditionally: for an id no page held
-        -- there is nothing below the bound to refuse, and recording it
-        -- keeps "this page's floor" a total function of its own
-        -- registration rather than something only some pages have.
-        writeIORef (wsUnitFloorRef worldState) unitCutoff
 
         atomicModifyIORef' (wsWorldManagerRef worldSim) $ \mgr →
             (register mgr, ())
@@ -849,6 +837,15 @@ registerPageIncarnation env pageId worldState register = do
         -- spawn still inserts (its page IS registered — the replacement
         -- holds the name) and is then retired by the clear behind it.
         when replaced $ do
+            -- Retire the replaced incarnation's rows immediately as
+            -- well as through the queue — see
+            -- 'World.Thread.Command.Basic.handleWorldDestroyCommand'
+            -- for why "eventually" is not enough and why this is not
+            -- the direct clear #58 forbids.
+            atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
+                (fst (retirePageUnits pageId unitCutoff um), ())
+            atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
+                (retirePageBuildings pageId bldCutoff bm, ())
             Q.writeQueue (ucUnitQueue unitCombat)
                          (UnitClearPage pageId unitCutoff)
             Q.writeQueue (bcBuildingQueue building)

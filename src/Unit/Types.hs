@@ -36,6 +36,7 @@ module Unit.Types
     , emptyTrailState
     , emptyUnitManager
     , nextUnitId
+    , retirePageUnits
     , unitsOnPages
     , unitsOnPage
     ) where

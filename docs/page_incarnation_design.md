@@ -297,15 +297,16 @@ Because the two cannot interleave, an id allocated before a transition is
 provably below that transition's cutoff and one allocated after is provably
 at or above it.
 
-The same reading is also stamped onto the incoming `WorldState` as
-`wsUnitFloorRef`, before it is reachable through `wmWorlds`. Ids classify
-entities, not just admissions: between a re-init and the moment its clear
-drains, a doomed unit still answers to the page name the replacement now
-holds, so the two verbs that turn a unit into durable page-scoped state —
-`power.placeNode`'s supplier, the store `unit.createTransferOrder` writes
-into — compare against that floor and refuse. Without it an old
-incarnation's unit could commit a building, a power node or a transfer order
-onto the replacement that outlives the unit the clear then removes. A clear retires only matching-page rows below its cutoff, so
+The transition also applies the retirement DIRECTLY, under the same lock,
+through the same pure bodies the queued clears use. Ids classify entities,
+not just admissions: until a clear drains, a doomed unit or building still
+answers to the page name the replacement now holds, and every verb that
+resolves an entity's page would keep finding it — an item drop, a transfer,
+a construction payment, a container reveal, a power placement — and could
+spend it into durable state on the replacement that outlives it. Removing
+it immediately makes a page teardown behave as `UnitDestroy` /
+`BuildingDestroy` already do, so no per-verb validation is needed at all.
+The queued clears remain the #58 mop-up for spawns already in flight. A clear retires only matching-page rows below its cutoff, so
 old work is retired while every replacement admission survives — including an
 unbound building's reservation and a page-bound building the world thread
 commits ahead of the delayed clear. It is the OUTERMOST coordination boundary

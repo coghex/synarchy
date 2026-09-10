@@ -690,6 +690,19 @@ placeNodeOnPage ls supplier (WorldPageId pg) (gx, gy) =
         , panelDefName, "', "
         , tshow gx, ", ", tshow gy, ", '", pg, "'))" ]
 
+-- | @unit.exists(uid)@ / @building.getInfo(bid)@ through the registered
+--   production API, folded to a plain @true@\/@false@. Between them
+--   they answer the question every one of the five surfaces round 2
+--   named depends on: can a verb still RESOLVE an old incarnation's
+--   entity under the replacement's reused page name?
+unitExists ∷ LuaBackendState → Word32 → IO Text
+unitExists ls uid = executeDebugLua (lbsLuaState ls) $ T.concat
+    [ "return unit.exists(", tshow uid, ") and true or false" ]
+
+buildingResolves ∷ LuaBackendState → Word32 → IO Text
+buildingResolves ls bid = executeDebugLua (lbsLuaState ls) $ T.concat
+    [ "return building.getInfo(", tshow bid, ") ~= nil" ]
+
 -- | @unit.getTransferOrders(uid)@ — the READ side of the one store
 --   resolution `unit.createTransferOrder` writes through
 --   ('unitOrderStore'), folded to @ok|<count>@ or @nil|reason@. Reading
@@ -757,12 +770,25 @@ teardownSpec = describe "the old incarnation's rows are retired" $ do
         it ("retires every row after " <> pathName p) $ \(env, ls) → do
             resetScene env
             seedIncarnation env ls incPage
-            before ← rowsOn env incPage
             (u0, b0) ← allocators env
             pathRun p env
-            -- The handlers only ENQUEUE: nothing has changed yet, which
-            -- is the whole premise of the ordering argument.
-            rowsOn env incPage `shouldReturn` before
+            -- #2476 round 2: the transition retires the manager rows
+            -- ITSELF, before it returns and before anything drains.
+            -- That is what stops every verb that resolves an entity's
+            -- page from finding an old row under the replacement's
+            -- reused name and spending it into durable state that
+            -- outlives the row — an item drop, a transfer, a
+            -- construction payment, a container reveal, a power
+            -- placement. Asserting it here, on the manager state
+            -- immediately after the handler returns, gates the whole
+            -- class at its one structural cause rather than verb by
+            -- verb.
+            rowsOn env incPage `shouldReturn` noRows
+            selectionsRaw env  `shouldReturn` ([], Nothing)
+            -- The sim states, though, ARE still queued: they belong to
+            -- the unit thread, so only its own drain may remove them.
+            simsStillQueued ← simStateIds env
+            simsStillQueued `shouldNotBe` []
             drainEntities env
             rowsOn env incPage `shouldReturn` noRows
             simStateIds env    `shouldReturn` []
@@ -874,12 +900,14 @@ survivalSpec = describe "the replacement's admissions survive" $ do
             pathRun p env
             answer ← placeNodeOnPage ls (unUnitId supplierUid) incPage
                                      powerTile
-            answer `shouldBe` q "nil|unit belongs to a previous \
-                                \incarnation of page inc_page"
-            -- Refused inside the transaction that would have popped:
-            -- no item consumed, no id spent, nothing enqueued.
+            -- The supplier is not "on the wrong page" — it is GONE, the
+            -- same answer the verb gives for a demolished or destroyed
+            -- unit, because the transition retired it in the same
+            -- locked step that replaced the page.
+            answer `shouldBe` q ("nil|unit has no " <> panelDefName)
+            -- Nothing was popped, no id spent, nothing enqueued.
             inv ← unitInventorySize env supplierUid
-            inv `shouldBe` length (uiInventory supplierUnit)
+            inv `shouldBe` 0
             drainEntities env
             rBuildings <$> rowsOn env incPage `shouldReturn` []
             wm ← readIORef (worldManagerRef env)
@@ -893,20 +921,43 @@ survivalSpec = describe "the replacement's admissions survive" $ do
                \store, and a replacement's carrier can") $ \(env, ls) → do
             resetScene env
             seedIncarnation env ls incPage
-            -- Resolvable before the transition: the refusal below is
-            -- the floor's doing and not a missing unit.
+            -- Resolvable before the transition, so the refusal below
+            -- is the teardown's doing and not a fixture accident.
             getOrders ls (unUnitId supplierUid) `shouldReturn` q "ok|0"
             pathRun p env
             -- A durable order stored here would name a carrier the
-            -- queued clear is about to remove, and nothing would ever
-            -- retire it: it would ride every later save as a dangling
-            -- acting-unit reference.
+            -- teardown removes, and nothing would ever retire it: it
+            -- would ride every later save as a dangling acting-unit
+            -- reference. The carrier is already gone, so the store it
+            -- would have been written into cannot even be resolved.
             getOrders ls (unUnitId supplierUid)
                 `shouldReturn` q "nil|unit.getTransferOrders: no such \
                                  \unit, or its world page is not loaded"
             replacement ← spawnUnitOn ls incPage lateTile
             drainEntities env
             getOrders ls replacement `shouldReturn` q "ok|0"
+
+    forM_ paths $ \p →
+        it ("no production verb can resolve an old entity once "
+            <> pathName p <> " has returned") $ \(env, ls) → do
+            resetScene env
+            (uid, bid) ← admitIncarnation ls incPage
+            drainEntities env
+            -- Both resolve BEFORE the transition, so the answers after
+            -- it are the teardown's doing and not a fixture accident.
+            unitExists ls uid       `shouldReturn` "true"
+            buildingResolves ls bid `shouldReturn` "true"
+            pathRun p env
+            -- …and neither afterwards, WITHOUT any drain. This is the
+            -- premise every one of round 2's five surfaces rests on: an
+            -- item drop, a strict or lax transfer, a construction
+            -- payment and a container reveal all begin by resolving an
+            -- entity's page, and none of them can reach one that is no
+            -- longer in its manager. Gating the cause rather than each
+            -- verb is what keeps the guarantee from depending on an
+            -- enumeration of callers that can grow.
+            unitExists ls uid       `shouldReturn` "false"
+            buildingResolves ls bid `shouldReturn` "false"
 
     it "a spawn admitted before a destroy and drained after it is \
        \dropped by the absent-page guard, leaking no claim" $
@@ -962,14 +1013,16 @@ bindingSpec = describe "page-bound placement across the boundary" $ do
             resetScene env
             seedIncarnation env ls incPage
             gen ← selectionGen env
-            claimsBefore ← rClaims <$> rowsOn env incPage
             (_, b0) ← allocators env
             pathRun p env
             tryBuildingSpawn ls buildingDefName boundTile incPage (Just gen)
                 `shouldReturn` q "nil|page binding stale"
             -- Refused ahead of the reservation transaction: no claim
-            -- taken, no id consumed.
-            (rClaims <$> rowsOn env incPage) `shouldReturn` claimsBefore
+            -- taken, no id consumed. The page carries no claim at all
+            -- by now — the transition retired the old incarnation's —
+            -- so the untouched id counter is what proves the refusal
+            -- was free rather than merely tidy.
+            (rClaims <$> rowsOn env incPage) `shouldReturn` []
             (_, b1) ← allocators env
             b1 `shouldBe` b0
 

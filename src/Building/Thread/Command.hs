@@ -190,28 +190,14 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
 -- leave with the page this clear is retiring rather than being orphaned
 -- by it.
 handleBuildingCommand _ _ _ bld (BuildingClearPage pageId cutoff) =
+    -- 'retirePageBuildings' is the SAME pure body the lifecycle
+    -- transition already applied directly, so the immediate removal and
+    -- this queued mop-up cannot disagree about what belonged to the
+    -- departed incarnation. Almost always a no-op by the time it runs:
+    -- what is left for it is whatever a spawn queued ahead of it
+    -- re-inserted afterwards (#58).
     atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
-        let doomed bid inst = biPage inst ≡ pageId ∧ bid < cutoff
-            retired = HM.filterWithKey doomed (bmInstances bm)
-        in ( bm { bmInstances = HM.difference (bmInstances bm) retired
-                -- Effects and claims are filtered on their OWN page
-                -- fields, not on the retired instance set: an effect
-                -- outlives its instance by design (#2091) and a claim
-                -- precedes one entirely (#2326), so neither is
-                -- reachable through 'bmInstances'.
-                , bmDestructions = HM.filterWithKey
-                      (\bid eff → not (dePage eff ≡ pageId ∧ bid < cutoff))
-                      (bmDestructions bm)
-                , bmReservations = HM.filterWithKey
-                      (\bid res → not (frPage res ≡ pageId ∧ bid < cutoff))
-                      (bmReservations bm)
-                -- The allocator is untouched on purpose: rewinding it
-                -- would let the replacement reissue an id this very
-                -- clear is retiring.
-                , bmSelected = case bmSelected bm of
-                      Just sel | HM.member sel retired → Nothing
-                      keep                             → keep
-                }, () )
+        (retirePageBuildings pageId cutoff bm, ())
 
 -- The session boundary (#2291) is a queue POSITION, not work: 'drain'
 -- takes it off the queue and stops there, so it never reaches this

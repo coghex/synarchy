@@ -22,8 +22,9 @@ import Engine.Scene.Stats (clearSceneStats)
 import qualified Engine.Core.Queue as Q
 import Sim.Command.Types (SimCommand(..))
 import Unit.Command.Types (UnitCommand(..))
-import Unit.Types (UnitId(..), UnitManager(..))
-import Building.Types (BuildingId(..), BuildingManager(..))
+import Unit.Types (UnitId(..), UnitManager(..), retirePageUnits)
+import Building.Types
+    (BuildingId(..), BuildingManager(..), retirePageBuildings)
 import Building.Command.Types (BuildingCommand(..))
 import Engine.Core.Log (logInfo, logDebug, LogCategory(..), LoggerState)
 import World.Types
@@ -125,6 +126,41 @@ handleWorldDestroyCommand env logger pageId = do
       -- is not the session ending, and the process-global state that
       -- fence protects (the event ring, the game clock) is untouched
       -- here.
+      -- #2476: retire what this incarnation owned in the entity
+      -- managers RIGHT HERE, in the same locked transition, and not
+      -- only through the queued clears below.
+      --
+      -- The queue alone retires those rows eventually, but "eventually"
+      -- is the whole problem: a page id is a reusable NAME, so until
+      -- the clear drains an old unit or building is still in the
+      -- manager answering to a name that now belongs to the
+      -- replacement (or to nothing at all). Every production verb that
+      -- resolves an entity's page — an item drop, a transfer, a
+      -- construction payment, a container reveal, a power placement —
+      -- would keep finding it, and could spend it into durable state on
+      -- the replacement that outlives the row this teardown removes.
+      -- Removing it now makes a page teardown behave exactly as
+      -- @UnitDestroy@/@BuildingDestroy@ already do: the entity is gone
+      -- from the manager, and every resolver simply fails.
+      --
+      -- This is NOT the direct clear #58 forbids. That one was
+      -- unbounded, so a spawn already queued re-inserted an orphan
+      -- after it with nothing left to remove them. These are bounded by
+      -- the same exclusive cutoff the queued clears carry, and those
+      -- clears still run — behind every such spawn — applying the
+      -- IDENTICAL pure body ('retirePageUnits'/'retirePageBuildings').
+      -- So a re-inserted pre-cutoff row is still retired, and a
+      -- replacement's row is still untouched on both passes.
+      --
+      -- 'utsSimStates' is deliberately absent: it belongs to the unit
+      -- thread, which mutates it with a read-modify-write across a
+      -- tick, so a write from here could be lost. Its removal stays in
+      -- the queued handler, which runs ahead of that tick's movement.
+      atomicModifyIORef' (ucUnitManagerRef unitCombat) $ \um →
+          (fst (retirePageUnits pageId unitCutoff um), ())
+      atomicModifyIORef' (bcBuildingManagerRef building) $ \bm →
+          (retirePageBuildings pageId bldCutoff bm, ())
+
       Q.writeQueue (ucUnitQueue unitCombat) (UnitClearPage pageId unitCutoff)
       Q.writeQueue (bcBuildingQueue building)
                    (BuildingClearPage pageId bldCutoff)

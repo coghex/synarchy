@@ -163,33 +163,7 @@ unitOrderStore env uid = do
         Nothing → pure Nothing
         Just u  → do
             mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
-            case lookup (uiPage u) (wmWorlds mgr) of
-                Nothing → pure Nothing
-                Just ws → do
-                    -- #2476: a page id is a reusable NAME, and entity
-                    -- teardown is queue-ordered, so between a re-init
-                    -- and the moment its 'UnitClearPage' drains this
-                    -- unit may still be in @umInstances@ answering to a
-                    -- page name that now belongs to the REPLACEMENT.
-                    -- Resolving the store for it would put a durable
-                    -- order into the replacement's own
-                    -- @wsTransferOrdersRef@, and the clear would then
-                    -- remove the carrier without retiring the order —
-                    -- a dangling acting-unit reference that rides every
-                    -- later save (#1253's shape, on the one path
-                    -- 'retireTransferOrdersEverywhere' does not cover).
-                    --
-                    -- The floor is read from the state that was
-                    -- RESOLVED, so whichever side of a concurrent
-                    -- transition this call lands on is the side it is
-                    -- measured against: the outgoing state (floor
-                    -- unmoved, and its whole store leaves with it) or
-                    -- the replacement (floor set before it became
-                    -- reachable here).
-                    floorId ← readIORef (wsUnitFloorRef ws)
-                    pure $ if uid < floorId
-                           then Nothing
-                           else Just (uiPage u, ws)
+            pure ((,) (uiPage u) ⊚ lookup (uiPage u) (wmWorlds mgr))
 
 -- | Run @f@ against the store of the page @uid@ is on, having resolved
 --   the order @oid@ names AND confirmed @uid@ is the one carrying it.
