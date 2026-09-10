@@ -1,0 +1,22 @@
+{
+  "issue": 2525,
+  "base": "c847a9f078a741d9497fff8ce6cebc6d16520ac9",
+  "encoder": {
+    "Pillow": "11.3.0",
+    "Python": "3.14.6",
+    "zlib": "1.2.12"
+  },
+  "sha256": {
+    "assets/textures/facemap/isoface.png": "60fe5a0584255d8088eebdfbc20e39aa5ba18af7564f99a91a02dcf02ebfc5fe",
+    "assets/textures/facemap/isoface_level_1.png": "826ff75831ad953c788ee5b2dd78b1b11057b0926e3075abd95d49a9c527eefa",
+    "assets/textures/facemap/isoface_level_2.png": "ca982142cc51c4651db9f8b3d1a7e6ade88df67155278a5df3b10b448372410c",
+    "assets/textures/facemap/isoface_level_3.png": "365e26e6b5abbbe5cb4e3a1157153055f6bfdcf9f7c4113b52a168bc677095cf",
+    "assets/textures/facemap/isoface_level_4.png": "866f83d4f121c0e2b64b963edb0c759f6e15b31120aa203a79274f8b761a7ad0",
+    "assets/textures/facemap/isoface_level_5.png": "0ddfc3dae283cbe9adfcb39a047d9e998ca6ba2cac03bdc398b820bcc012f2fd",
+    "assets/textures/facemap/isoface_level_6.png": "4dbc2bd994f659edf866f3cbc06be4bc6f3f01ecca729d554126ee5d03275d88",
+    "assets/textures/facemap/isoface_level_7.png": "707811e0579222ac6046ee5359af32bd3ff9681f7d5aa7338eee0e7250baae8d",
+    "assets/textures/facemap/isoface_level_8.png": "4a9b901cd30f65c91ecc9eabdff2bd37ee3e4cf15d0c08e340c9a0a8e0e97999",
+    "docs/art/fluid_levels/contact_sheet.png": "88450471712be36b881f0ea12abee850d6f8c4452c56f47a2d1384118a056500",
+    "docs/art/fluid_levels/preview_browser.png": "1c66dfc45d11027a23607453fa52825cc57d671815c5b4fd0352791c714e3a42"
+  }
+}
