@@ -47,6 +47,7 @@ module Engine.Core.Capability.WorldSim
   , withPlayerIntent
   , withPlayerIntentHeld
   , restoreIfPlayerIdle
+  , withPageLifecycle
   ) where
 
 import UPrelude
@@ -62,7 +63,7 @@ import Engine.Core.State
   ( EngineEnv
   , worldManagerRef, worldQueue, sunAngleRef, floraCatalogRef
   , materialRegistryRef, worldGenConfigRef, gameTimeRef, enginePausedRef
-  , playerIntentGenRef, enginePauseGenRef, simQueue
+  , playerIntentGenRef, enginePauseGenRef, pageLifecycleLock, simQueue
   )
 
 -- | The world\/sim\/time slice of @world-sim-render-handoff@: the world
@@ -149,6 +150,21 @@ data WorldSimCapability = WorldSimCapability
     --   Deliberately NOT bumped by the save's own pause or by the
     --   player's, so a declined restore can name its real reason. See
     --   'Engine.Core.State's field haddock.
+  , wsPageLifecycleLock   ∷ MVar ()
+    -- ^ #2476's page\/entity lifecycle mutex, sitting here because the
+    --   transitions that TAKE it are exactly this record's own page
+    --   set: a single-page @world.destroy@ and either @world.init@ \/
+    --   @world.initArena@ that replaces a registered id, each holding
+    --   it while it captures the entity allocators' current readings,
+    --   enqueues the page-scoped clears carrying them as exclusive
+    --   cutoffs, and rewrites 'wsWorldManagerRef'. Taken by
+    --   @WorldThread@ (those three handlers) and @LuaThread@ (the three
+    --   entity-admission verbs), through 'withPageLifecycle' and
+    --   nothing else. Process-lifetime: unlike every other field here
+    --   it survives a session boundary and a load untouched, because it
+    --   is a critical section rather than state. See 'EngineEnv's field
+    --   haddock for why the id ordering it establishes is the whole
+    --   incarnation boundary.
   , wsSimQueue            ∷ Q.Queue SimCommand
     -- ^ Drained by @SimThread@ only; produced by @WorldThread@ (chunk
     --   loading, basic\/sync\/UI commands, and the load publish's stale
@@ -169,6 +185,7 @@ toWorldSimCapability env = WorldSimCapability
   , wsEnginePausedRef     = enginePausedRef env
   , wsPlayerIntentGenRef  = playerIntentGenRef env
   , wsEnginePauseGenRef   = enginePauseGenRef env
+  , wsPageLifecycleLock   = pageLifecycleLock env
   , wsSimQueue            = simQueue env
   }
 
@@ -219,3 +236,38 @@ restoreIfPlayerIdle wsc expected act =
     if g ≢ expected
       then pure (g, Nothing)
       else (\r → (g, Just r)) ⊚ act
+
+-- | Run one PAGE\/ENTITY LIFECYCLE transition, or one entity
+--   ADMISSION, as a single critical section (#2476).
+--
+--   The two callers hold it for opposite halves of the same boundary,
+--   which is why they must be the same lock:
+--
+--   * A __lifecycle transition__ (a single-page @world.destroy@; either
+--     init path REPLACING a registered page id) reads the live
+--     @umNextId@\/@bmNextId@, enqueues @UnitClearPage@\/
+--     @BuildingClearPage@ carrying those readings as EXCLUSIVE cutoffs,
+--     and removes or replaces the page — all inside one call.
+--   * An __admission__ (@unit.spawn@, @building.spawn@,
+--     @power.placeNode@ — the only three sites that allocate an entity
+--     id) revalidates its target page and its page binding, allocates,
+--     reserves its footprint where it takes one, and enqueues its
+--     command — all inside one call.
+--
+--   Neither half can interleave with the other, so an id allocated
+--   before a transition is provably below that transition's cutoff and
+--   one allocated after is provably at or above it. Nothing else is
+--   needed to tell an old incarnation's rows from its replacement's:
+--   the queued clear retires only the rows below its cutoff, on its own
+--   page, and leaves the replacement's alone.
+--
+--   __Ordering rule.__ This is the OUTERMOST coordination boundary an
+--   admission takes: no holder may acquire another page or entity lock
+--   underneath it. What runs inside is 'Data.IORef.atomicModifyIORef''
+--   transitions and non-blocking queue writes, neither of which can
+--   wait on a lock. It is also deliberately NOT held across world
+--   generation — the init handlers release it as soon as the
+--   replacement is registered, so a full @world.init@ does not stall
+--   every Lua admission for the length of its worldgen.
+withPageLifecycle ∷ WorldSimCapability → IO α → IO α
+withPageLifecycle wsc act = withMVar (wsPageLifecycleLock wsc) (const act)

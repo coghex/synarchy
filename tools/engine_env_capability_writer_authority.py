@@ -434,6 +434,10 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "enginePausedRef": frozenset({"World.Pause"}),
     "playerIntentGenRef": frozenset(),
     "enginePauseGenRef": frozenset({"World.Pause"}),
+    # #2476. An `MVar ()` mutex, and this scan sees only DIRECT `IORef`
+    # mutation, so there is nothing here for it to attribute --
+    # `playerIntentGenRef` above is empty for the same reason.
+    "pageLifecycleLock": frozenset(),
     "gameTimeRef": frozenset({"Unit.Thread"}),
     "saveBarrierRef": frozenset(),
     "inputThreadActiveRef": frozenset({"Engine.Input.Thread"}),

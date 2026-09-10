@@ -481,6 +481,42 @@ data EngineEnv = EngineEnv
     --   `restoreAfterAutosave`). One mutex over both counters is what
     --   makes the restore decision linearizable against a pause landing
     --   beside it. Runtime-only, never part of `SaveData`.
+  , pageLifecycleLock  ∷ MVar ()
+    -- ^ #2476: the PROCESS-LIFETIME mutex that linearises a world
+    --   page's entity lifecycle against every entity admission.
+    --
+    --   Two kinds of transition take it. A LIFECYCLE transition —
+    --   `world.destroy` on a single page, and either `world.init` /
+    --   `world.initArena` that REPLACES a registered page id — holds it
+    --   while it reads the live `umNextId`/`bmNextId`, enqueues the
+    --   page-scoped `UnitClearPage`/`BuildingClearPage` carrying those
+    --   readings as EXCLUSIVE cutoffs, and removes or replaces the page
+    --   in `worldManagerRef`. An ADMISSION — `unit.spawn`,
+    --   `building.spawn` and `power.placeNode`, the only three sites
+    --   that allocate a `UnitId` or a `BuildingId` — holds it from its
+    --   final live-page and page-binding revalidation through the id
+    --   allocation, the footprint reservation where it takes one, and
+    --   the queue insertion.
+    --
+    --   That is what makes the cutoffs mean anything: an admission
+    --   completed before a teardown provably holds an id BELOW the
+    --   cutoff the teardown then captured, and one that begins after
+    --   the transition provably sees the replacement (or the absence)
+    --   and receives an id AT OR ABOVE it. Entity rows carry no
+    --   incarnation field and none is needed — the id ordering IS the
+    --   incarnation boundary. Teardown itself stays queue-ordered, so
+    --   a spawn already queued still runs (or is dropped by its
+    --   handler's absent-page guard) before the clear behind it.
+    --
+    --   An `MVar ()` rather than a counter: nothing here has a value to
+    --   compare, only a critical section to hold. It is deliberately
+    --   the OUTERMOST coordination boundary of an admission — no holder
+    --   may acquire another page or entity lock underneath it — and it
+    --   is NOT held across world generation: the init handlers release
+    --   it the moment the replacement is registered. Process-lifetime,
+    --   never replaced by a session boundary or a load, and never part
+    --   of `SaveData`. See
+    --   `Engine.Core.Capability.WorldSim.withPageLifecycle`.
   , gameTimeRef        ∷ IORef Double
     -- ^ Monotonic game-clock in seconds. Advances by real-tick dt
     --   only when `enginePausedRef` is False. All gameplay timestamps

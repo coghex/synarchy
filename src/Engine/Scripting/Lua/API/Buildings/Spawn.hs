@@ -12,7 +12,7 @@ import UPrelude
 import Engine.Core.Capability.Building
     (BuildingCapability(..), toBuildingCapability)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, withPageLifecycle)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
 import qualified HsLua as Lua
@@ -88,7 +88,25 @@ buildingSpawnFn env = do
             let defName = TE.decodeUtf8Lenient nameBS
                 gx      = fromIntegral x
                 gy      = fromIntegral y
-            result ← Lua.liftIO $ do
+            -- #2476: the whole admission — the manager reads, the page
+            -- and page-binding decision, the footprint reservation,
+            -- the 'BuildingId' allocation and the queue insertion — is
+            -- ONE locked transition against the page lifecycle.
+            --
+            -- The reservation is why this matters more here than for a
+            -- unit: it is taken SYNCHRONOUSLY, ahead of the commit, and
+            -- is keyed by page (#2326). A replacement's claim admitted
+            -- while the page's clear was still queued would be erased
+            -- by a bare page filter, and 'commitFootprint' would then
+            -- refuse the very spawn it was taken for. Under this lock
+            -- the id is provably at or above the cutoff, so the claim
+            -- and its spawn both survive.
+            --
+            -- No other page or entity lock is held here or taken
+            -- inside: 'atomicModifyIORef'' transitions and a
+            -- non-blocking queue write.
+            result ← Lua.liftIO $
+              withPageLifecycle (toWorldSimCapability env) $ do
                 bm ← readIORef (bcBuildingManagerRef (toBuildingCapability env))
                 -- ONE manager read serves both the binding check and the
                 -- target resolution (#1602): re-reading for the second
@@ -99,7 +117,24 @@ buildingSpawnFn env = do
                             let pid = WorldPageId (TE.decodeUtf8Lenient pidBS)
                             in (\ws → (pid, ws)) <$> lookup pid (wmWorlds wm)
                         Nothing → resolveActiveWorld wm
-                case (bindingStale bindArg wm, HM.lookup defName (bmDefs bm), mTarget) of
+                    -- #2476: a BOUND placement must name the visible
+                    -- HEAD, which is the page #1602's binding contract
+                    -- is written about — 'bindingStale' only moves
+                    -- when 'wmVisible' does, so on its own it accepts
+                    -- a caller that supplies an explicit NON-head page
+                    -- id together with a currently fresh generation.
+                    -- Replacing that hidden page bumps no generation,
+                    -- so the world-thread commit would then admit a
+                    -- pre-cutoff bound building onto a replaced page
+                    -- and the delayed clear would retire it after the
+                    -- fact. This is the identical test
+                    -- 'building.canPlaceAt' already applies through
+                    -- 'boundPageMoved'; refusing here keeps the two
+                    -- surfaces answering the same question.
+                    boundOffHead = isJust bindArg
+                                 ∧ boundPageMoved (fst <$> mTarget) wm
+                case ( bindingStale bindArg wm ∨ boundOffHead
+                     , HM.lookup defName (bmDefs bm), mTarget) of
                     (True, _, _) → pure (Left pageBindingStaleReason)
                     (_, Just def, Just (pid, ws)) → do
                         wtd ← readIORef (wsTilesRef ws)

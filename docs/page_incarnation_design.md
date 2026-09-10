@@ -189,17 +189,27 @@ destroy-all Exit-to-Menu path's process-global state and is separate.
 The defect has two halves with different mechanisms, and they land as two
 slices:
 
-1. **Entities are torn down in queue order.** The world thread cannot mutate
-   the unit or building managers directly: those threads keep draining their
-   queues through a teardown, and a direct clear would race an in-flight spawn
-   (#58). Destroy-all therefore enqueues `UnitClearAll` and
-   `BuildingClearAll`. D-1 lands a page-scoped sibling of each —
-   `UnitClearPage pid` and `BuildingClearPage pid` — enqueued from
-   single-page destroy and from both same-id init paths at the point the page
-   leaves or is replaced in `wmWorlds`. Queue order then guarantees: spawns
-   queued before the teardown insert and are cleared; spawns issued after
-   re-init are for the replacement and survive. No entity record needs an
-   incarnation token for this half.
+1. **Entities are torn down in queue order, behind a shared admission
+   boundary.** The world thread cannot mutate the unit or building managers
+   directly: those threads keep draining their queues through a teardown, and
+   a direct clear would race an in-flight spawn (#58). Destroy-all therefore
+   enqueues `UnitClearAll` and `BuildingClearAll`. D-1 lands a page-scoped
+   sibling of each — `UnitClearPage pid cutoff` and
+   `BuildingClearPage pid cutoff` — enqueued from single-page destroy and
+   from either same-id init path at the point the page leaves or is replaced
+   in `wmWorlds`.
+
+   Queue order alone does NOT finish the argument, which is what D-1's
+   revision on 2026-09-07 corrects: a clear drains after admissions made
+   against the REPLACEMENT, and those reuse the same page name. Each clear
+   therefore carries the allocator reading its transition took as an
+   exclusive cutoff, and one shared process-lifetime mutex
+   (`EngineEnv.pageLifecycleLock`) makes that reading meaningful by
+   linearising every entity admission against every lifecycle transition.
+   Spawns admitted before the transition hold ids below the cutoff and are
+   cleared (or dropped first by the absent-page guard); spawns admitted after
+   it hold ids at or above the cutoff and survive. No entity record needs an
+   incarnation token for this half — the id ordering IS the boundary.
 
 2. **In-flight simulation is fenced by an epoch.** The sim produces batches
    asynchronously, so no ordering between the two queues exists to lean on.
@@ -219,7 +229,10 @@ slices:
   epoch at writeback time.
 - The unit and building threads own their managers and apply page-scoped
   clears exactly as they apply the whole-manager clears, filtering by
-  `uiPage`/`biPage` and `UnitId` membership for `utsSimStates`.
+  `uiPage`/`biPage` AND by the message's exclusive id cutoff, with
+  `utsSimStates` following the ids the unit filter retired and
+  `bmDestructions`/`bmReservations` filtered on their own `dePage`/`frPage`.
+  Neither clear rewinds an allocator.
 - The sim thread stores the epoch it was activated with and stamps batches;
   it never compares epochs.
 - Blood textures, world quads, scene stats, and the selection generation
@@ -227,17 +240,29 @@ slices:
 
 ### Failure handling
 
-- A `UnitClearPage` for a page that has no units is a no-op.
+- A `UnitClearPage` for a page that has no matching pre-cutoff rows is a
+  no-op.
 - A page-scoped clear arriving after destroy-all's whole-manager clear is a
   no-op.
+- A replacement's footprint reservation, admitted while its page's clear is
+  still queued, is at or above the cutoff and survives until its own spawn
+  consumes it. So does a page-bound placement the world thread commits ahead
+  of that clear (#1602).
 - A batch for an absent page is dropped as today; a batch with a stale epoch
   is dropped with a debug log naming the page and both epochs.
 
 ### Rejected alternatives
 
 - **Incarnation token on every `UnitInstance` and `BuildingInstance`.** It
-  would change two runtime records and every query that resolves a page, for
-  a guarantee queue ordering already provides. Rejected by D-1.
+  would change two runtime records, every query that resolves a page, and
+  their persistence representation, to distinguish incarnations the
+  monotonic id allocators already distinguish once a shared lock makes an
+  allocator reading a boundary. Rejected by D-1 (revised).
+- **Bare page-filtered clears, ordered only by the queue.** D-1's original
+  form, and insufficient: a replacement's reservation may be admitted before
+  the delayed clear drains, and a valid replacement-bound building may commit
+  directly on the world thread before it. Either would then be erased as
+  though it belonged to the old incarnation. Superseded 2026-09-07.
 - **Clearing the managers directly from the world thread.** Rejected by #58:
   it races in-flight spawns.
 - **Making single-page destroy call `UnitClearAll`.** Wrong for a hidden
@@ -245,27 +270,67 @@ slices:
 
 ## Decisions
 
-### D-1. Entities are fenced by queue-ordered per-page clear verbs, not by a token
+### D-1. Entities are fenced by queue-ordered per-page clear verbs carrying an allocator cutoff, not by a token
 
-`UnitClearPage pid` and `BuildingClearPage pid` are enqueued on the unit and
-building queues, mirroring destroy-all's #58 pattern. Entity records keep
-`uiPage`/`biPage` as they are and no resolver compares an incarnation value.
-The ordering rule that makes this sufficient: the world thread enqueues both
-clears in the same step that removes the page from `wmWorlds` (destroy) or
-replaces it there (re-init), and before the replacement is registered. A
-spawn for a page absent from `wmWorlds` is already dropped by the spawn
-handlers, so every spawn either precedes the clear and is cleared or follows
-it and survives. Rationale: it is the mechanism destroy-all already proves
-correct, it touches no record or resolver, and no consumer outside placement
-(fenced by #1602) captures an id before teardown and acts on it afterwards.
-Consequence: if such a consumer ever appears, a token becomes its own later
-slice rather than a change to PIN-1. Signed off 2026-09-02 (Q-1). Affects
-PIN-1.
+**Revised 2026-09-07; the original form below is superseded.**
+
+`UnitClearPage pid unitCutoff` and `BuildingClearPage pid buildingCutoff`
+are enqueued on the unit and building queues, mirroring destroy-all's #58
+pattern. Entity records keep `uiPage`/`biPage` as they are, gain no
+incarnation field, and no resolver compares an incarnation value; the save
+format does not change.
+
+What makes this sufficient is NOT queue order alone. One process-lifetime
+mutex, `EngineEnv.pageLifecycleLock` (projected through `WorldSimCapability`
+and reached only via `withPageLifecycle`), is held by:
+
+- a lifecycle transition — single-page destroy, and either init path
+  REPLACING a registered id — across the `umNextId`/`bmNextId` readings, the
+  two clear enqueues carrying them as EXCLUSIVE cutoffs, and the `wmWorlds`
+  removal or replacement; and
+- an entity admission — `unit.spawn`, `building.spawn`, `power.placeNode`,
+  the only three sites that allocate an entity id — across its final
+  live-page and page-binding revalidation, its id allocation, its footprint
+  reservation where it takes one, and its queue insertion.
+
+Because the two cannot interleave, an id allocated before a transition is
+provably below that transition's cutoff and one allocated after is provably
+at or above it. A clear retires only matching-page rows below its cutoff, so
+old work is retired while every replacement admission survives — including an
+unbound building's reservation and a page-bound building the world thread
+commits ahead of the delayed clear. It is the OUTERMOST coordination boundary
+of an admission (no other page or entity lock may be taken under it), and it
+is not held across worldgen: both init paths release it once the replacement
+is registered.
+
+**Why the original form was superseded.** D-1 first proposed bare
+page-filtered clears, resting on queue order alone: "every spawn either
+precedes the clear and is cleared or follows it and survives." Canonical
+review demonstrated two counterexamples that ordering cannot answer, both of
+which concern the REPLACEMENT rather than the old incarnation. A replacement's
+footprint reservation is created synchronously at admission and keyed by page
+(#2326), so a page-only clear draining afterwards deletes it and
+`commitFootprint` then refuses the spawn it was taken for. And a valid
+replacement-bound placement commits directly on the world thread (#1602),
+bypassing the building queue entirely, so a page-only clear can erase an
+instance that was never ordered against it at all. The cutoff plus the shared
+lock answers both without touching a record.
+
+Rationale for the revised form: it keeps destroy-all's proven queue-ordered
+mechanism, touches no entity record, resolver or save component, and adds
+exactly one `EngineEnv` field. Consequence: every future entity-allocating
+site must take the same lock, which the capability inventory records and the
+`Page incarnation entity teardown` gate holds each existing site to.
+Originally signed off 2026-09-02 (Q-1); revised form signed off by the owner
+2026-09-07 and recorded on [#2476]. Affects PIN-1.
 
 ### D-2. Re-initialising a live page id stays supported and tears down the incarnation it replaces
 
 Both `handleWorldInitCommand` and the arena init enqueue the D-1 clears for
-the page they replace. Replacement remains the #58 contract; `world.init` and
+the page they replace, from the shared `registerPageIncarnation` step and
+inside the same lifecycle-lock hold that registers the replacement. An init
+that registers an id no page held replaces no incarnation and enqueues no
+clear. Replacement remains the #58 contract; `world.init` and
 `world.initArena` on a registered id are not refused. Rationale: it is one
 enqueue per path, keeps the #1602 replacement-is-a-selection-change logic
 live, and leaves the page-binding specs that re-init live pages intact.
@@ -325,14 +390,24 @@ haddock. Affects PIN-2. Resolved by D-3.
 
 ## Verification strategy
 
-- **PIN-1:** an hspec in the headless harness that inits a page, spawns a unit
-  and places a building on it, destroys the page, re-inits the same id, and
-  asserts the replacement has no units, no buildings, no selection, and no
-  unit sim states while a spawn issued after re-init is present. A second
-  example re-inits without destroying. A third destroys a hidden page beside
-  a visible one and asserts the visible page's entities are untouched.
-  Existing fixtures: `test-headless/Test/Headless/WorldGen.hs` ("can destroy
-  a world") and `test-headless/Test/Headless/Building/PageBinding.hs`.
+- **PIN-1:** the `Page incarnation entity teardown` group in
+  `test-headless/Test/Headless/World/PageIncarnation.hs`. It seeds every
+  category of row a page incarnation owns — units, unit selection and sim
+  states, buildings, building selection, a destruction effect, an outstanding
+  footprint reservation — and drives all three lifecycle paths
+  (destroy/recreate, `WorldInit`, `WorldInitArena`) through their production
+  handlers, asserting that every old row is retired and every replacement
+  admission survives. Because D-1 was revised, it also covers what bare
+  ordering could not: an unbound replacement building keeps its claim until
+  its own spawn consumes it; a valid replacement-bound placement committed on
+  the world thread ahead of the delayed clear survives it; a binding captured
+  against the replaced incarnation, or naming a page that is not the visible
+  head, is refused and leaks no claim; and interleaved admissions land on the
+  expected side of the cutoff. Every admission goes through its production
+  Lua verb, and the lock itself is proven taken by holding it and showing
+  each of the six sites block. Existing fixtures it sits beside:
+  `test-headless/Test/Headless/Building/PageBinding.hs` (#1602) and
+  `test-headless/Test/Headless/Building/FootprintExclusivity.hs` (#2326).
   `movement_probe.py` and `wander_hazard_probe.py` exercise the arena reset
   path and must keep passing.
 - **PIN-2:** a pure hspec over `handleApplyFluidsCommand`'s freshness decision
@@ -345,29 +420,41 @@ haddock. Affects PIN-2. Resolved by D-3.
   `test-headless/Test/Headless/WorldSim.hs` cover the page-scoped sim
   protocol this slice extends. The `--dump` fast-settle path must keep
   passing, including the ack on a dropped batch.
-- **Contracts:** `docs/engine_contracts.md` gains the incarnation rule; the
-  `docs/engineenv_capability_inventory.md` and persistence inventory audits
-  are unaffected unless a new `EngineEnv` or `WorldState` field is added (the
-  proposal adds none).
+- **Contracts:** `docs/engine_contracts.md` gains the incarnation rule. D-1's
+  revision adds one `EngineEnv` field, `pageLifecycleLock`, so PIN-1 also
+  classifies it in `docs/engineenv_capability_inventory.md` §5 and
+  `docs/persistence_state_inventory.md`, bumps the §1 field total and §2.1's
+  `WorldSimCapability` size, adds its writer-map entry, and moves the two
+  audit self-test ratchets. PIN-2 adds no field.
 
 ## Delivery plan
 
 ### PIN-1. Tear down page-owned units and buildings on single-page destroy and same-id re-init
 
-- **Outcome:** Single-page destroy and both same-id init paths enqueue a
-  page-scoped clear on the unit and building queues, so the replacement
-  incarnation inherits no unit, building, selection, unit sim state, or
-  destruction effect.
-- **Scope:** `UnitClearPage`/`BuildingClearPage` command constructors and
-  handlers; enqueueing from `handleWorldDestroyCommand`,
-  `handleWorldInitCommand`, and the arena init; the three hspec examples
-  above; the contracts entry.
+- **Outcome:** Single-page destroy and either same-id init path enqueue a
+  page-scoped, cutoff-bounded clear on the unit and building queues, so the
+  replacement incarnation inherits no unit, building, selection, unit sim
+  state, destruction effect or footprint reservation — and loses none of its
+  own.
+- **Scope:** the `pageLifecycleLock` `EngineEnv` field and its
+  `WorldSimCapability` projection with `withPageLifecycle`;
+  `UnitClearPage`/`BuildingClearPage` command constructors and handlers;
+  taking the lock and enqueueing from `handleWorldDestroyCommand` and from
+  `registerPageIncarnation` (shared by `handleWorldInitCommand` and the arena
+  init); taking it at all three admission sites (`unit.spawn`,
+  `building.spawn`, `power.placeNode`), with the bound-admission
+  visible-head refusal; the `Page incarnation entity teardown` group; the two
+  inventories, the writer map and the two ratchets; the contracts entry.
 - **Phase:** 1
 - **Depends on:** `none`
 - **Ordering:** `can land first`
 - **Relevant decisions:** D-1, D-2
-- **Acceptance signals:** the three examples pass; `movement_probe.py` and
-  `wander_hazard_probe.py` pass; destroy-all and load behaviour unchanged.
+- **Acceptance signals:** the `Page incarnation entity teardown` group
+  passes, along with `Exit to Menu session epoch`, `Build placement page
+  binding`, `Building footprint exclusivity` and `World Generation`;
+  `persistence_inventory_audit.py`, `engine_env_capability_audit.py` and both
+  of their self-tests pass; `movement_probe.py` and `wander_hazard_probe.py`
+  pass; destroy-all and load behaviour unchanged.
 - **Out of scope:** simulation writebacks (PIN-2); Lua-side bookkeeping;
   Exit-to-Menu process-global state (HPA-36); refusing re-init of a live id.
 - **Open questions:** `None`

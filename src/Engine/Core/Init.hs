@@ -448,6 +448,10 @@ initializeEngineWith logBackend = do
   -- #1730: the same shape for pause assertions the engine makes on its
   -- own behalf, read only under the mutex above.
   enginePauseGenRef ← newIORef (0 ∷ Word64)
+  -- #2476: the page/entity lifecycle mutex. Process-lifetime — created
+  -- once here and never replaced by a session boundary or a load — and
+  -- unheld at boot, which is the only state it can start in.
+  pageLifecycleLock ← newMVar ()
   -- #2291: the fresh-session epoch, shared with the Exit-to-Menu
   -- reset in "Unit.Thread" so a world created after a session
   -- teardown starts from the same reading the first one did.
@@ -565,6 +569,7 @@ initializeEngineWith logBackend = do
         , enginePausedRef   = enginePausedRef
         , playerIntentGenRef = playerIntentGenRef
         , enginePauseGenRef  = enginePauseGenRef
+        , pageLifecycleLock  = pageLifecycleLock
         , gameTimeRef       = gameTimeRef
         , saveBarrierRef    = saveBarrierRef
         , inputThreadActiveRef = inputThreadActiveRef

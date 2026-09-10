@@ -45,9 +45,13 @@ handleUnitSpawnCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → Te
                        → Float → Float → Int → Faction → WorldPageId → IO ()
 handleUnitSpawnCommand env utsRef uid defName gx gy gz faction pageId = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-    -- Drop the spawn if its world no longer exists. A spawn queued before
-    -- world.destroyAll (Exit to Menu) would otherwise be drained after
-    -- teardown and re-insert an orphan unit into the cleared manager (#58).
+    -- Drop the spawn if its world no longer exists. A spawn queued
+    -- before a teardown would otherwise be drained after it and
+    -- re-insert an orphan unit into the cleared manager (#58). Both
+    -- @world.destroyAll@ and (#2476) a single-page @world.destroy@ leave
+    -- the page absent, so both land here; a same-id re-init does not,
+    -- because its replacement holds the name and the queued
+    -- @UnitClearPage@ retires the pre-cutoff row afterwards.
     wmgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
     let worldGone = pageId `notElem` map fst (wmWorlds wmgr)
     case HM.lookup defName (umDefs um) of

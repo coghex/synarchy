@@ -165,6 +165,54 @@ handleBuildingCommand _ sim _ bld BuildingClearAll = do
         , () )
     forgetAllContainers (wsWorldManagerRef sim)
 
+-- | #2476: retire ONE page incarnation's buildings — the page-scoped,
+-- cutoff-bounded counterpart of @BuildingClearAll@ above.
+--
+-- A row goes only when BOTH halves hold: it belongs to this page, and
+-- its 'BuildingId' is strictly below @cutoff@ (the @bmNextId@ reading
+-- the lifecycle transition took under
+-- 'Engine.Core.State.pageLifecycleLock', which every admission also
+-- takes around its own allocation). All four records are filtered in
+-- ONE transition so no observer sees a selected, effect-bearing or
+-- tile-holding row whose instance is already gone.
+--
+-- The reservations are the half that makes the cutoff load-bearing
+-- rather than cosmetic (#2326): a REPLACEMENT admitted after the
+-- transition but before this clear drains is holding a claim on the
+-- same page, under the same name, and a bare page filter would delete
+-- it — after which 'Building.Reservation.commitFootprint' would refuse
+-- the very spawn it was taken for. Its id is at or above the cutoff, so
+-- it is left exactly as found, as is a bound placement that already
+-- committed on the world thread ahead of this clear (#1602).
+--
+-- Deliberately NOT here: 'Building.Knowledge.Live.forgetAllContainers'
+-- and any power-node retirement. Both are @WorldState@ rows, so they
+-- leave with the page this clear is retiring rather than being orphaned
+-- by it.
+handleBuildingCommand _ _ _ bld (BuildingClearPage pageId cutoff) =
+    atomicModifyIORef' (bcBuildingManagerRef bld) $ \bm →
+        let doomed bid inst = biPage inst ≡ pageId ∧ bid < cutoff
+            retired = HM.filterWithKey doomed (bmInstances bm)
+        in ( bm { bmInstances = HM.difference (bmInstances bm) retired
+                -- Effects and claims are filtered on their OWN page
+                -- fields, not on the retired instance set: an effect
+                -- outlives its instance by design (#2091) and a claim
+                -- precedes one entirely (#2326), so neither is
+                -- reachable through 'bmInstances'.
+                , bmDestructions = HM.filterWithKey
+                      (\bid eff → not (dePage eff ≡ pageId ∧ bid < cutoff))
+                      (bmDestructions bm)
+                , bmReservations = HM.filterWithKey
+                      (\bid res → not (frPage res ≡ pageId ∧ bid < cutoff))
+                      (bmReservations bm)
+                -- The allocator is untouched on purpose: rewinding it
+                -- would let the replacement reissue an id this very
+                -- clear is retiring.
+                , bmSelected = case bmSelected bm of
+                      Just sel | HM.member sel retired → Nothing
+                      keep                             → keep
+                }, () )
+
 -- The session boundary (#2291) is a queue POSITION, not work: 'drain'
 -- takes it off the queue and stops there, so it never reaches this
 -- dispatch. Matched anyway, and only to keep the dispatch total.
@@ -183,9 +231,14 @@ applyBuildingSpawn ∷ LoggerState → WorldSimCapability
                    → IO ()
 applyBuildingSpawn logger sim reg bld bid defName gx gy gz pageId = do
     bm ← readIORef (bcBuildingManagerRef bld)
-    -- Drop the spawn if its world is gone — a spawn queued before
-    -- world.destroyAll would otherwise re-insert an orphan building into
-    -- the cleared manager after teardown (#58).
+    -- Drop the spawn if its world is gone — a spawn queued before a
+    -- teardown would otherwise re-insert an orphan building into the
+    -- cleared manager afterwards (#58). Two teardowns reach this:
+    -- @world.destroyAll@, and (#2476) a single-page @world.destroy@,
+    -- whose page-scoped clear is queued behind this very spawn. The
+    -- same-id init paths do NOT — their replacement holds the name, so
+    -- a pre-cutoff spawn inserts here and is retired by the clear
+    -- behind it instead.
     wmgr ← readIORef (wsWorldManagerRef sim)
     let mPage     = lookup pageId (wmWorlds wmgr)
         worldGone = isNothing mPage

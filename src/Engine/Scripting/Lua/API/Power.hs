@@ -36,7 +36,7 @@ import Engine.Core.Capability.ContentRegistriesView
 import Engine.Core.Capability.UnitCombat
     (UnitCombatCapability(..), toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
-    (WorldSimCapability(..), toWorldSimCapability)
+    (WorldSimCapability(..), toWorldSimCapability, withPageLifecycle)
 import Data.List (find)
 import qualified Data.Text.Encoding as TE
 import qualified Data.HashMap.Strict as HM
@@ -124,7 +124,21 @@ powerPlaceNodeFn env = do
                 readIORef (bcBuildingManagerRef (toBuildingCapability env))
             result ← case buildingPowerSpec bm0 defName of
                 Nothing → pure (Left "not a placeable power item")
-                Just spec → Lua.liftIO $ do
+                -- #2476: this is the THIRD entity-admission site — it
+                -- allocates a 'BuildingId' and takes a footprint
+                -- reservation exactly as @building.spawn@ does — so it
+                -- takes the same page-lifecycle lock, and the page
+                -- RESOLUTION happens inside it. That is the locked
+                -- revalidation the node registration needs: 'placeNodeOn'
+                -- registers into the 'wsPowerNodesRef' of the very
+                -- 'WorldState' resolved here, and a re-init between a
+                -- resolution outside the lock and the work inside would
+                -- leave a stale-validated building committing onto the
+                -- replacement while its node landed in the orphaned
+                -- state. Resolving under the lock makes the two the same
+                -- incarnation by construction.
+                Just spec → Lua.liftIO $
+                  withPageLifecycle (toWorldSimCapability env) $ do
                     let role  = powerNodeRole spec
                         param = powerNodeSpecRating spec
                     mTarget ← case pageArg of

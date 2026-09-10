@@ -2,6 +2,7 @@
 module Unit.Thread.Command.Lifecycle
     ( handleUnitDestroyCommand
     , handleUnitClearAllCommand
+    , handleUnitClearPageCommand
     , handleUnitTeleportCommand
     , handleUnitReGroundCommand
     , lookupSurfaceZ
@@ -55,6 +56,56 @@ handleUnitClearAllCommand env utsRef = do
         (um { umInstances = HM.empty, umSelected = HS.empty }, ())
     atomicModifyIORef' utsRef $ \uts →
         (uts { utsSimStates = HM.empty }, ())
+
+-- | #2476: retire ONE page incarnation's units — the page-scoped,
+--   cutoff-bounded counterpart of 'handleUnitClearAllCommand'.
+--
+--   A row goes only when BOTH halves hold: its @uiPage@ is this page,
+--   and its 'UnitId' is strictly below @cutoff@. The cutoff is the
+--   @umNextId@ reading the lifecycle transition took while holding
+--   'Engine.Core.State.pageLifecycleLock', and every admission takes
+--   that same lock around its own allocation, so "below the cutoff"
+--   means exactly "admitted before this page was destroyed or
+--   replaced". A replacement's units reuse the page NAME — that is what
+--   made the old rows survive in the first place — but they cannot
+--   reuse an id, because the allocator is monotonic and no clear ever
+--   rewinds it.
+--
+--   The three affected records move together, as in
+--   'handleUnitDestroyCommand', so no observer sees a unit that is
+--   selected or simulated but no longer instantiated.
+--
+--   Deliberately NOT here: 'Unit.Transfer.Live.retireTransferOrdersEverywhere'.
+--   A transfer order is a @WorldState@ row, so it leaves with the page
+--   this clear is retiring rather than being orphaned by it — the same
+--   reason 'handleUnitClearAllCommand' does not call it either.
+handleUnitClearPageCommand
+    ∷ EngineEnv → IORef UnitThreadState → WorldPageId → UnitId → IO ()
+handleUnitClearPageCommand env utsRef pageId cutoff = do
+    -- The ids are decided in the SAME transition that removes them, so
+    -- a concurrent insertion cannot be measured by one read and missed
+    -- by the other, and the returned set is what the sim-state removal
+    -- below is driven by rather than a second, independently computed
+    -- one.
+    retired ← atomicModifyIORef'
+        (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
+        let doomed = HM.keysSet
+                (HM.filterWithKey (\uid inst → uiPage inst ≡ pageId
+                                             ∧ uid < cutoff)
+                                  (umInstances um))
+        in ( um { umInstances = HM.filterWithKey
+                                    (\uid _ → not (HS.member uid doomed))
+                                    (umInstances um)
+                -- The allocator is untouched on purpose: rewinding it
+                -- would let the replacement reissue an id this very
+                -- clear is retiring.
+                , umSelected  = HS.difference (umSelected um) doomed
+                }, doomed )
+    unless (HS.null retired) $
+        atomicModifyIORef' utsRef $ \uts →
+            (uts { utsSimStates = HM.filterWithKey
+                       (\uid _ → not (HS.member uid retired))
+                       (utsSimStates uts) }, ())
 
 -- | Snap a unit to (gx, gy), grounding it at @mGz@ or at the surface.
 --

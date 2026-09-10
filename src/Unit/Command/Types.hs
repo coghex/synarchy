@@ -110,6 +110,23 @@ data UnitCommand
         --   any in-flight UnitSpawns already on this queue — clearing the
         --   manager from the world thread instead would race those spawns,
         --   which would re-insert orphans right after teardown (#58).
+    | UnitClearPage !WorldPageId !UnitId
+        -- ^ #2476: drop the rows one page's PREVIOUS incarnation owns —
+        --   its instances, those ids' selection entries, and their sim
+        --   states — and nothing else. Enqueued by a single-page
+        --   @world.destroy@ and by either init path that REPLACES a
+        --   registered page id, so (like 'UnitClearAll') it is ordered
+        --   after any @UnitSpawn@ already on this queue.
+        --
+        --   The 'UnitId' is an EXCLUSIVE CUTOFF, read from @umNextId@
+        --   inside the lifecycle transition that enqueues this: a row
+        --   is retired only when its page matches AND its id is
+        --   strictly below it. That is what keeps a REPLACEMENT's
+        --   admissions — which reuse the same page name and are
+        --   allocated after the transition, hence at or above the
+        --   cutoff — out of a clear that is still queued behind them.
+        --   The allocator itself is never rewound; see
+        --   'Engine.Core.State.pageLifecycleLock'.
     | UnitEndSession
         -- ^ The Exit-to-Menu session boundary (#2291). Carries no
         --   payload: it is a POSITION in this queue, not work. Enqueued
