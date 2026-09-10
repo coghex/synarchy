@@ -359,6 +359,14 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Engine.Scripting.Lua.API.Units.Medical",
         "Engine.Scripting.Lua.API.Units.Selection",
         "Engine.Scripting.Lua.API.Units.Spawn",
+        # #2470: the stamina commit is the same shape as the stance
+        # credit below -- a SIGNED relative adjustment resolved,
+        # clamped and published inside one `atomicModifyIORef'` against
+        # the reference Combat.Resolution.Wear debits -- and it
+        # additionally reports the committed before/after/maximum the
+        # physiology tick's exhaustion rules read. Its own owner for
+        # the same reason.
+        "Engine.Scripting.Lua.API.Units.Stamina",
         # #2468: stance recovery is a RELATIVE credit committed inside
         # one `atomicModifyIORef'` against the same reference
         # Combat.Resolution.Admission debits, which is the whole point
