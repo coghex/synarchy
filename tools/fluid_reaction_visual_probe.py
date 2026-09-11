@@ -438,6 +438,18 @@ def screen_box_for(port: int, tile, vp: dict, step: int = 4, reach: int = 160):
     captures are in; ``world.pickTile`` speaks window coordinates and the
     two differ on a HiDPI display).
 
+    At MAP zoom this is the tile's own atlas pixels, not a re-derived
+    guess at them. `World.Render.Zoom.Bake.bakeEntriesAtlas` draws a
+    chunk's block over the axis-aligned box of its diamond, computed from
+    `gridToWorld` of the same tiles the hit test resolves through — so
+    with the z-slice pinned (which is what removes the detail view's
+    `(z - zSlice)` offset, the one thing that makes the two disagree) the
+    pixels that resolve to a tile are the pixels its texels are drawn on.
+    Re-implementing the inverse-isometric transform here instead was
+    tried and is worse: it also needs the block's screen rectangle, which
+    can only come from this same mapping, and it lands on whatever error
+    that rectangle carries.
+
     Seeded by a coarse scan outward from the screen centre rather than
     by the centre pixel alone: the target is chosen from what the camera
     is already looking at, but it is the first FLAT DRY pair found
@@ -611,20 +623,24 @@ def main() -> int:
                    f"the measured column is not already a reaction product "
                    f"(got {before_material!r})")
 
-            # The warm-up reaction. Its own refresh is what establishes
-            # the zoom baseline: after it, the atlas already shows both
-            # sites' raised columns and their water.
+            # Both sites' water reaches equilibrium BEFORE the warm-up
+            # reacts. Ordinary fluid writebacks never touch the atlas, so
+            # the image is only ever refreshed by a reaction — settling
+            # AFTERWARDS would leave the baseline showing mid-flow fluid
+            # while the measured refresh read the settled state, and that
+            # difference would land in the measured delta.
             set_paused(port, False)
+            time.sleep(SETTLE_SECONDS)
+
+            # The warm-up reaction, against fluid already at rest. Its
+            # own refresh is what establishes the zoom baseline: after
+            # it, the atlas shows both sites' raised columns and their
+            # settled water. From here to the measured refresh the only
+            # unpaused time is the measured contact itself.
             warm_top = react(chk, port, warm_lava, warm_water, warm_base)
             chk.ok(warm_top is not None,
-                   "the warm-up contact solidified, folding both sites' "
-                   "setup edits into the atlas")
-            # Let the warm-up's own ocean reach equilibrium BEFORE the
-            # baseline captures. Fluid that is still flowing would move
-            # on its own between the two measured frames, and the edited
-            # cells it sits on are exactly the ones the refresh reads
-            # live.
-            time.sleep(SETTLE_SECONDS)
+                   "the warm-up contact solidified against settled fluid, "
+                   "folding both sites' setup edits into the atlas")
             set_paused(port, True)
             time.sleep(3.0)
             if warm_top is None:
