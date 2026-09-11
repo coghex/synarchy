@@ -37,6 +37,7 @@ config/keybinds.legacy-neutral.local.yaml
 # pre-#786 tracked path and is deliberately absent from
 # migrateLegacyConfig — there is no legacy source to migrate from.
 config/save.local.yaml
+config/audio.local.yaml
 saves/
 /cache/zoom/
 .claude/
