@@ -4826,7 +4826,11 @@ read the product through; `tools/fluid_reaction_visual_probe.py`
 (offscreen, needs a GPU) is the two-presentation evidence. It reacts
 TWICE in one chunk: the first contact's refresh folds every setup edit
 into the atlas, so what the measured one adds is attributable to its own
-stone. It then locates the solidified tile's own ATLAS pixels through
+stone. Both sites are ICE-FREE, checked through `world.getIceAt`: the
+zoom map draws an iced tile as snow whatever material lies under it, so
+a solidification there correctly changes no zoom pixel, and a probe
+grading such a tile could only ever pass by the very defect the snow-veg
+rule above closes. It then locates the solidified tile's own ATLAS pixels through
 `world.zoomTileRect`, which runs the map's own projection forwards — the
 chunk rectangle the atlas bakes over, the wrap offset the quads apply,
 and the inverse-isometric texel transform the pass colours through. The

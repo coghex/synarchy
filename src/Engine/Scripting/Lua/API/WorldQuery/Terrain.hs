@@ -1,12 +1,13 @@
 {-# LANGUAGE Strict #-}
 -- | Per-tile terrain/slope/vegetation/material surface queries:
 --   world.getTerrainAt, world.getSlopeAt, world.getVegAt,
---   world.getMaterialAt, world.isPlantable.
+--   world.getMaterialAt, world.getIceAt, world.isPlantable.
 module Engine.Scripting.Lua.API.WorldQuery.Terrain
     ( worldGetTerrainAtFn
     , worldGetSlopeAtFn
     , worldGetVegAtFn
     , worldGetMaterialAtFn
+    , worldGetIceAtFn
     , worldIsPlantableFn
     ) where
 
@@ -221,5 +222,56 @@ worldGetMaterialAtFn wsc = do
                                                 (MaterialId matId)
                                 Lua.pushinteger (fromIntegral matId)
                                 Lua.pushstring (TE.encodeUtf8 (mpName props))
+                                return 2
+        _ → Lua.pushnil ≫ return 1
+
+-- | world.getIceAt(gx, gy [, pageId]) → surfaceZ, mode | nil
+--
+--   The ice cell covering a column, or nil where there is none. @mode@
+--   is @"basin"@ or @"drape"@, matching the dump's own spelling.
+--
+--   Read-only, and the only way a script or probe can ask whether a tile
+--   is FROZEN: ice is not terrain, not fluid and not vegetation, so
+--   'worldGetTerrainAtFn', @world.getFluidAt@ and 'worldGetVegAtFn' all
+--   answer about a tile without mentioning it. Added for #2485, whose
+--   visual probe has to pick an ice-FREE tile to grade the zoom map on:
+--   an iced tile is coloured through snow vegetation
+--   ('World.ZoomMap.Cache.ChunkPass.snowVegFor') whatever material lies
+--   beneath it, so a solidification under ice correctly changes nothing
+--   there and the probe would otherwise be measuring an invisible edit.
+--
+--   The optional page argument mirrors 'worldGetTerrainAtFn' exactly and
+--   for the same reason (#89 multiworld).
+worldGetIceAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetIceAtFn wsc = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    mPage ← Lua.tostring 3
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            mWs ← Lua.liftIO $ targetWorldState wsc
+                (TE.decodeUtf8Lenient <$> mPage)
+            case mWs of
+                Nothing → Lua.pushnil ≫ return 1
+                Just ws → do
+                    -- Canonicalized before the lookup, exactly as
+                    -- 'worldGetMaterialAtFn' is and for the same reason
+                    -- (CLAUDE.md §Tile coordinates).
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    td ← Lua.liftIO $ readIORef (wsTilesRef ws)
+                    let (coord, (lx, ly), _) =
+                            canonicalTileFrame worldSize
+                                (fromIntegral gx') (fromIntegral gy')
+                        idx = ly * chunkSize + lx
+                    case lookupChunk coord td of
+                        Nothing → Lua.pushnil ≫ return 1
+                        Just lc → case lcIceMap lc V.! idx of
+                            Nothing → Lua.pushnil ≫ return 1
+                            Just ic → do
+                                Lua.pushinteger
+                                    (fromIntegral (icSurface ic))
+                                Lua.pushstring $ case icMode ic of
+                                    BasinIce → "basin"
+                                    DrapeIce → "drape"
                                 return 2
         _ → Lua.pushnil ≫ return 1

@@ -210,8 +210,10 @@ data EngineEnv = EngineEnv
   --   matching 'World.Command.Types.WorldLoadPublish'. Keyed by request
   --   id purely as a defensive cross-check — only one load is ever in
   --   flight at a time (enforced by 'loadStatusRef'). Mirrors the
-  --   existing single-slot staging handoff pattern 'zoomAtlasDataRef' /
-  --   'worldPreviewRef' already use for the render thread.
+  --   existing single-slot staging handoff pattern 'worldPreviewRef'
+  --   already uses for the render thread ('zoomAtlasDataRef' followed it
+  --   too until #2485 made it a list; the SHAPE differs now, the
+  --   write-once-read-once-then-clear discipline does not).
   , pendingLoadRef      ∷ IORef (Maybe (Int, StagedSession))
   , worldQueue          ∷ Q.Queue WorldCommand
   , sunAngleRef         ∷ IORef SolarBase

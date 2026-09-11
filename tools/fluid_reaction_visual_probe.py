@@ -148,6 +148,25 @@ def material_at(port: int, gx: int, gy: int) -> str:
     return raw.strip().strip('"')
 
 
+def iced_at(port: int, gx: int, gy: int) -> bool:
+    """Is this tile under ice?
+
+    It matters for what the ZOOM map can show. An iced tile is coloured
+    through snow VEGETATION there (`ChunkPass.snowVegFor`) whatever
+    material lies beneath it, so a solidification under ice correctly
+    leaves its zoom pixels alone — the map goes on drawing snow, exactly
+    as it did before, and the two presentations still agree. Grading the
+    map on such a tile would measure an edit the map is right not to
+    show, and the only way it could ever "pass" is the bug #2485's round
+    9 review caught: forwarding the fresh stone's raw vegetation 0 and
+    repainting the icy tile as bare rock.
+    """
+    raw = send(port,
+               f"local z, m = world.getIceAt({gx}, {gy}, '{PAGE}'); "
+               f"if m == nil then return 0 else return 1 end")
+    return as_int(raw) == 1
+
+
 def active_id(port: int) -> str:
     return send(port, "return world.getActiveWorldId()").strip().strip('"')
 
@@ -408,9 +427,10 @@ def find_contact_pairs(port: int, around, wanted: int):
     attributable to its own stone. One chunk, because one refresh covers
     one chunk's block.
 
-    Each site is a dry, above-sea-level pair of horizontally adjacent
-    land tiles; the one-z step the contact needs is built afterwards (see
-    'raise_lava_side').
+    Each site is a dry, above-sea-level, ICE-FREE pair of horizontally
+    adjacent land tiles; the one-z step the contact needs is built
+    afterwards (see 'raise_lava_side'). Ice-free because the zoom map
+    draws an iced tile as snow whatever is under it — see 'iced_at'.
     """
     cx, cy = around
     chunk_of = lambda t: (t[0] // CHUNK_SIZE, t[1] // CHUNK_SIZE)
@@ -442,6 +462,12 @@ def find_contact_pairs(port: int, around, wanted: int):
                 if surface_at(port, *lava) != ta:
                     continue
                 if surface_at(port, *water) != tb:
+                    continue
+                # Both halves ice-free: the stone's own tile because the
+                # zoom map cannot show a material change under ice (see
+                # 'iced_at'), and the water's because the contact's
+                # product lands on whichever of the two the rule picks.
+                if iced_at(port, *lava) or iced_at(port, *water):
                     continue
                 home = chunk_of(lava)
                 used |= {lava, water}

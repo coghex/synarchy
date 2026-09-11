@@ -18,6 +18,7 @@
 module Engine.Scripting.Lua.API.WorldQuery
     ( worldGetTerrainAtFn
     , worldGetMaterialAtFn
+    , worldGetIceAtFn
     , worldGetSlopeAtFn
     , worldGetVegAtFn
     , worldIsPlantableFn
