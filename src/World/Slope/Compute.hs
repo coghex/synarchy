@@ -169,8 +169,12 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
             else rockJaggedSlope seed coord lx ly hardness z maxDrop rawSlope
                                  neighN neighE neighS neighW wetN wetE wetS wetW
 
--- | The per-side slope decision: should this tile's surface tip toward
---   the cardinal neighbour whose surface z is @neighborZ@?
+-- | The per-side slope decision: should this tile's TERRAIN surface tip
+--   toward the cardinal neighbour whose surface z is @neighborZ@?
+--
+--   Terrain throughout, for a wet tile as much as a dry one: this feeds
+--   @ctSlopes@, the bed and bank geometry. A fluid TOP is a flat whole-z
+--   step and never consults this (#2517).
 --
 --   @neighborHasFluid@ is the caller's already-resolved answer to whether
 --   that neighbour is a WET tile — 'neighborHasFluidAt' in 'computeTileSlope',
@@ -187,8 +191,8 @@ slopeBit myHasFluid myZ neighborZ neighborHasFluid =
 
         -- An absent neighbour (not-yet-loaded chunk, or beyond the world
         -- edge) reads back as the 'minBound' sentinel from 'neighborElev'.
-        -- It must never count as a drop: water would otherwise slope
-        -- toward nothing. When the neighbour's chunk loads OR evicts, the
+        -- It must never count as a drop: the wet tile's BED would
+        -- otherwise tip toward nothing. When the neighbour's chunk loads OR evicts, the
         -- cross-chunk recompute path ('World.Slope.Recompute.recomputeNeighborSlopes')
         -- re-runs this border strip, so the slope always reflects the
         -- currently loaded set — not the load order. Cross-SEAM neighbours

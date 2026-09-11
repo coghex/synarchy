@@ -65,8 +65,9 @@ fluidMapWith cells =
 home ∷ ChunkCoord
 home = ChunkCoord 0 0
 
--- | Evaluate one side. @myZ@/@neighZ@ are surface z's (use 'minBound' for
---   @neighZ@ to model an absent neighbour); the neighbour cell @(nlx,nly)@
+-- | Evaluate one side. @myZ@/@neighZ@ are TERRAIN surface z's (use
+--   'minBound' for @neighZ@ to model an absent neighbour); the neighbour
+--   cell @(nlx,nly)@
 --   is read from @fluidMap@ to decide if it is wet — the same in-chunk
 --   read 'World.Slope.Compute.neighborHasFluidAt' performs at the
 --   production call site.
