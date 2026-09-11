@@ -367,6 +367,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (Reason(NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),),
+    "fluid_reaction_visual": (Reason(NEEDS_GPU, "offscreen boot: captures the detailed tile "
+                                     "render and the zoom-map atlas either side of a real "
+                                     "solidification, both of which need a real Vulkan "
+                                     "device — no GPU on the CI runner (#2485)"),),
     "blood_gpu_lifecycle": (Reason(NEEDS_GPU, "offscreen boot: uploadBloodTextures needs a real Vulkan "
                                               "device to upload/dispose blood textures (#788) — no GPU on the CI runner"),),
     "preview": (Reason(NEEDS_GPU, "real preview boot creates a GLFW window and calls "
@@ -459,6 +463,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                              "mixed tillable/fluid box and a real tree for the chop "
                              "partial path (#646)"),),
     "flora_growth": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),),
+    "fluid_reaction": (Reason(SLOW_WORLDGEN, "generates a real world page and boots two "
+                              "engines (react+save, fresh-process load) to prove the "
+                              "reaction product survives leaving the process (#2485)"),),
     "multiworld_save": (Reason(SLOW_WORLDGEN, "generates two real world pages"),),
     "persistence_integrity": (Reason(SLOW_WORLDGEN, "generates a real world page and boots "
                                      "three engines (build+save, dangling-reference load, "

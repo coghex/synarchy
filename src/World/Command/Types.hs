@@ -37,6 +37,7 @@ import World.Save.Payload (LuaComponentSpec, LuaRefEdge)
 import World.Save.Types (SaveData(..), AutosaveRequest(..))
 import World.Texture.Types (WorldTextureType(..))
 import World.Fluid.Types (FluidType(..), FluidCell(..))
+import Sim.Fluid.Reaction (ReactionResult(..))
 
 -- | One chunk's simulated fluid result, produced by the sim thread and
 --   applied to 'wsTilesRef' by the WORLD thread (the sole writer). The
@@ -80,9 +81,10 @@ data FluidAckOutcome
       --   releases the waiter rather than swallowing the error.
     deriving (Eq, Show)
 
--- | A batch of fluid writebacks for ONE INCARNATION of one world, plus
---   an optional ack 'MVar', signalled once the world thread has
---   finished with the batch — with 'FluidAckApplied' when it applied,
+-- | One world incarnation's fluid OUTPUT delivery: the per-chunk
+--   writebacks, the coherent reaction results drained alongside them
+--   (#2485), and an optional ack 'MVar', signalled once the world thread
+--   has finished with the batch — with 'FluidAckApplied' when it applied,
 --   'FluidAckFailed' when it raised. Runtime ticks pass 'Nothing'
 --   (fire-and-forget); the dump's synchronous fast-settle passes 'Just'
 --   and waits on it so the write lands before it reads.
@@ -103,15 +105,25 @@ data FluidAckOutcome
 --   'Nothing' means the sim never held an epoch for this page — no
 --   topology-bearing message has reached it — and is refused for the
 --   same reason: nothing establishes which incarnation it computed
---   against.
+--   against. The refusal covers the 'ReactionResult's too: they were
+--   computed from the same chunks, so a delivery the fence rejects
+--   carries no admissible half.
+--
+--   The reaction results ride HERE rather than on a message of their
+--   own precisely because they are the same tick's output. A reaction's
+--   surviving water is in the writeback for its chunk, and its stone is
+--   an edit that advances that chunk's generation; delivering the two
+--   separately would let the generation the stone mints drop the fluid
+--   half of its own reaction (#2485 requirement 6).
 data FluidWritebackBatch =
     FluidWritebackBatch !WorldPageId !(Maybe ChunkGeneration)
                         ![FluidWriteback]
+                        ![ReactionResult]
                         !(Maybe (MVar FluidAckOutcome))
 instance Show FluidWritebackBatch where
-    show (FluidWritebackBatch pid mGen ws _) =
+    show (FluidWritebackBatch pid mGen ws rs _) =
         "FluidWritebackBatch(" <> show pid <> ", " <> show mGen <> ", "
-        <> show (length ws) <> ")"
+        <> show (length ws) <> ", " <> show (length rs) <> ")"
 
 data WorldCommand
     = WorldInit WorldPageId Word64 Int Int (Maybe WorldIdentity)

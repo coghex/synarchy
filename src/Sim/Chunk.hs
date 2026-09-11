@@ -13,6 +13,7 @@ module Sim.Chunk
     , activateChunk
     , loadedChunkState
     , applyChunkEdit
+    , applyReactionCommit
     ) where
 
 import UPrelude
@@ -22,7 +23,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Internal (FluidMap)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
-import Sim.Fluid.Types (fluidCellToActive)
+import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, volumePerLevel)
 import Sim.Topology (simCardinalNeighbors)
 
 -- | Settle-tick countdown for a freshly generated/loaded chunk. Newly
@@ -115,5 +116,89 @@ applyChunkEdit coord editGen fluidMap terrainMap sws =
     -- HM.adjust is a no-op for an unloaded neighbour; activateChunk is
     -- idempotent for an already-active one.
     withSelf = HM.insert coord activated (swsChunks sws)
+    withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m) withSelf
+                      (simCardinalNeighbors (swsTopology sws) coord)
+
+-- | Adopt one participating chunk of a COMMITTED reaction result
+--   (#2485): the authoritative post-edit terrain and generation, with
+--   the chunk's EXACT live active volumes kept rather than rebuilt.
+--
+--   This is the whole reason the commit does not reuse 'applyChunkEdit'.
+--   That path re-seeds the active grid from the passive
+--   'World.Fluid.Internal.FluidMap' through 'fluidCellToActive', whose
+--   @depth * volumePerLevel@ rounding turns the 1 unit a reaction left
+--   in the contacting water cell into 7 — volume the reaction destroyed,
+--   handed straight back. So an ACTIVE chunk keeps the grid it already
+--   holds and only empties the cells that became stone; the exact
+--   remainder survives because it is never converted at all.
+--
+--   An INACTIVE or absent chunk has no exact volumes to keep — its
+--   grid is empty and its truth is the passive map — so it re-seeds
+--   from @fluidMap@ exactly as 'applyChunkEdit' does, and is NOT
+--   displaced on top of that: @fluidMap@ is the POST-edit map, so
+--   'World.Edit.Apply' has already taken the level the new stone fills.
+--   Displacing again would charge a deep cell twice, which is reachable
+--   in ordinary play — a synchronous fast settle drains reaction results
+--   only after settling its chunks inactive. Both branches adopt
+--   @editGen@ and wake the chunk and its physically cardinal
+--   neighbours, resolved through the page's own seam frame (#2044), so
+--   the surviving fluid flows around the new stone.
+--
+--   The solidified cells of an ACTIVE chunk are DISPLACED, not emptied.
+--   The terrain under them rose by exactly one z, so exactly one level's
+--   worth of volume no longer fits; whatever stood above that still
+--   does. Blanket-clearing would contradict both halves of the contract
+--   around it: 'World.Edit.Apply' keeps fluid whose surface remains above
+--   the raised terrain, and a cell emptied by annihilation is an ordinary
+--   empty destination that the SAME tick may refill (#2481), so the cell
+--   named by an event is not necessarily empty by the time the commit
+--   lands. Clearing it would then delete water the world's own tiles
+--   still record — and a later, generation-correct writeback would carry
+--   that deletion back into them.
+applyReactionCommit ∷ ChunkCoord → Word64 → FluidMap → VU.Vector Int
+                    → [Int] → SimWorldState → SimWorldState
+applyReactionCommit coord editGen fluidMap terrainMap solidified sws =
+    sws { swsChunks = withNbrs }
+  where
+    existing = HM.lookup coord (swsChunks sws)
+
+    committed = case existing of
+        Just scs | scsActive scs → scs
+            { scsFluid       = fluidMap
+            , scsTerrain     = terrainMap
+            , scsActiveFluid = emptySolidified (scsActiveFluid scs)
+            , scsSettleTicks = reactivateSettleTicks
+            , scsEquilTicks  = 0
+            , scsEditGen     = editGen
+            }
+        _ →
+            let base = case existing of
+                    Just scs → scs { scsFluid       = fluidMap
+                                   , scsTerrain     = terrainMap
+                                   , scsSettleTicks = reactivateSettleTicks
+                                   , scsEditGen     = editGen
+                                   }
+                    Nothing  → (loadedChunkState fluidMap terrainMap)
+                                   { scsSettleTicks = reactivateSettleTicks
+                                   , scsEditGen     = editGen
+                                   }
+                -- Force a fresh activation so the volume grid is rebuilt
+                -- from the NEW fluid, same reason as 'applyChunkEdit'.
+            in activateChunk (base { scsActive = False })
+
+    -- The same rule 'World.Edit.Apply' applies to the passive cell,
+    -- in volume terms: a cell whose fluid reached no higher than the
+    -- newly filled level is displaced entirely, and a deeper one keeps
+    -- its surface and loses exactly that level's worth of volume.
+    emptySolidified grid = grid V.// [ (i, displace (grid V.! i))
+                                     | i ← solidified
+                                     , i ≥ 0, i < V.length grid ]
+    displace Nothing = Nothing
+    displace (Just afc)
+        | afcVolume afc ≤ fromIntegral volumePerLevel = Nothing
+        | otherwise = Just afc
+            { afcVolume = afcVolume afc - fromIntegral volumePerLevel }
+
+    withSelf = HM.insert coord committed (swsChunks sws)
     withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m) withSelf
                       (simCardinalNeighbors (swsTopology sws) coord)

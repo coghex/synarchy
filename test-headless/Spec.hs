@@ -126,6 +126,7 @@ import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.FluidWritebackStaleness as FluidWritebackStaleness
+import qualified Test.Headless.World.Solidification as Solidification
 import qualified Test.Headless.World.FluidWritebackIncarnation as FluidWritebackIncarnation
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
@@ -576,6 +577,11 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         FluidWritebackStaleness.spec
         describe "persistence contract" FluidWritebackStaleness.saveSpec
+    -- Own engine (#2485): each example generates its own private w8
+    -- page, hand-delivers reaction results to the live world thread, and
+    -- reads the commit's sim handoff off an UNDRAINED sim queue -- none
+    -- of which the shared-worlds engine may see.
+    aroundAll withHeadlessEngine Solidification.spec
     -- Own engine (#2477): DESTROYS and re-creates a page under the same
     -- id, and drives the sim's own command handler and emit step by
     -- hand against the live world thread -- none of which the
@@ -937,6 +943,7 @@ main = hspec $ do
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Sim.Fluid.Conservation" SimConservation.spec
     describe "unlike-fluid reaction" SimReaction.spec
+    Solidification.pureSpec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec

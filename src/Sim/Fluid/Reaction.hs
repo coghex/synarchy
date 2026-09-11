@@ -39,22 +39,31 @@
 --     undelivered unit stays at the source; no addition or subtraction
 --     wraps.
 --
---   Events are pure data here. This slice adds no consumer: see
---   'Sim.State.Types.swsSolidEvents' for where they accumulate and
---   @docs\/engine_contracts.md@ §Fluid reaction for the drain contract.
+--   Events are pure data here, and so is the grouping that turns a
+--   delivery of them into coherent 'ReactionResult's. The CONSUMER is
+--   the world thread (#2485, 'World.Thread.Command.Reaction'): it is the
+--   sole writer of the tiles and the sole minter of live-edit
+--   generations, so admitting a result and committing its stone belong
+--   there, not here. See 'Sim.State.Types.swsSolidEvents' for where
+--   events accumulate and @docs\/engine_contracts.md@ §Fluid reaction
+--   for the drain contract.
 module Sim.Fluid.Reaction
     ( SolidProduct(..)
     , SolidificationEvent(..)
+    , ReactionResult(..)
     , CellSite(..)
     , TransferOutcome(..)
     , unlikeContact
     , solidProductFor
     , applyTransfer
     , dedupeEvents
+    , groupReactionResults
     ) where
 
 import UPrelude
+import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
+import qualified Data.List as L
 import qualified Data.Vector.Mutable as MV
 import Control.Monad.ST (ST)
 import World.Chunk.Types (ChunkCoord)
@@ -82,6 +91,24 @@ data SolidificationEvent = SolidificationEvent
       --   out, which at a seam may be either side.
     , sevIndex        ∷ !Int
       -- ^ Local cell index within that chunk, @ly * chunkSize + lx@.
+    , sevWaterChunks  ∷ ![ChunkCoord]
+      -- ^ The CANONICAL stored chunk keys of every WATER cell that fed
+      --   this coordinate's stone THIS TICK, in contact order and
+      --   without repeats. One entry for an ordinary contact — equal to
+      --   'sevChunk' when it was in-chunk, different for a seam one,
+      --   including across the cylindrical u wrap.
+      --
+      --   A LIST rather than one key because a coordinate can react more
+      --   than once in a tick: exhausted against an in-chunk neighbour,
+      --   refilled with lava by a later phase, then exhausted again
+      --   across the seam. 'dedupeEvents' keeps ONE stone for that
+      --   coordinate, but every chunk that lost fluid to it is still a
+      --   participant — FR-2 (#2485) commits the stone and the surviving
+      --   water together, so all their live-edit generations have to be
+      --   admitted together or half the result lands against a world the
+      --   other half no longer describes. Dropping a later contact's
+      --   chunk here would leave its consumed-fluid writeback outside
+      --   the result's own admission.
     , sevWaterType    ∷ !FluidType
       -- ^ The contacting water side's type ('Ocean', 'Lake' or 'River').
     , sevConsumed     ∷ !Word16
@@ -210,6 +237,7 @@ eventAt lavaSite waterType consumed waterSite waterVol' =
     in SolidificationEvent
         { sevChunk        = csChunk lavaSite
         , sevIndex        = csIndex lavaSite
+        , sevWaterChunks  = [csChunk waterSite]
         , sevWaterType    = waterType
         , sevConsumed     = consumed
         , sevStoneTop     = stoneTop
@@ -246,17 +274,102 @@ moveInto mSrc srcSite s mDst dstSite mdst requested = do
                                       }
         pure TransferOutcome { toMoved = actual, toConsumed = 0, toEvent = Nothing }
 
--- | At most ONE event per canonical coordinate per tick (requirement 4).
---   Keeps the first event at each coordinate, in emission order: a cell
---   refilled after annihilating keeps the event it already produced and
---   neither cancels nor duplicates it. A LATER tick may emit another
---   event at that coordinate once new lava has arrived and been
---   exhausted again, which is why this is per-tick and not cumulative.
+-- | At most ONE event per canonical coordinate per tick (requirement 4),
+--   carrying the UNION of every contact that fed it.
+--
+--   Keeps the first event at each coordinate, in emission order, and
+--   therefore its product and its water TYPE: a cell refilled after
+--   annihilating keeps the stone it already produced and neither cancels
+--   nor duplicates it. A LATER tick may emit another event at that
+--   coordinate once new lava has arrived and been exhausted again, which
+--   is why this is per-tick and not cumulative.
+--
+--   What it does NOT drop is the later contacts' participating chunks.
+--   A coordinate exhausted against an in-chunk neighbour, refilled by a
+--   later phase and exhausted again across the seam has taken fluid from
+--   two chunks, and both of their consumed-fluid writebacks ride the same
+--   delivery as this one stone. Keeping only the first contact's chunk
+--   would leave the second one outside the result's own admission, so an
+--   intervening edit there could stale its writeback while the stone
+--   committed anyway (#2485).
 dedupeEvents ∷ [SolidificationEvent] → [SolidificationEvent]
-dedupeEvents = go HS.empty
+dedupeEvents events = map merge (foldl' note [] events)
   where
-    go _ [] = []
-    go seen (e:es)
-        | HS.member key seen = go seen es
-        | otherwise          = e : go (HS.insert key seen) es
-      where key = (sevChunk e, sevIndex e)
+    key e = (sevChunk e, sevIndex e)
+
+    -- (first event at this coordinate, water chunks in contact order)
+    note acc e = case break ((≡ key e) . key . fst) acc of
+        (before, (kept, waters) : after) →
+            before ⧺ (kept, waters ⧺ [ w | w ← sevWaterChunks e
+                                         , w `notElem` waters ]) : after
+        (before, []) → before ⧺ [(e, sevWaterChunks e)]
+
+    merge (e, waters) = e { sevWaterChunks = waters }
+
+-- | One COHERENT reaction result: every chunk the contacts in it
+--   touched, the live-edit generation each of those chunks' half was
+--   computed from, and the events to commit as one unit (#2485).
+--
+--   The world thread admits a result whole or rejects it whole. That is
+--   what a two-chunk contact needs — the stone goes in the lava chunk
+--   while the surviving water stays in the other, so admitting one side
+--   against a generation the other no longer sits at would land half a
+--   reaction. It is equally what SIBLING events need: committing one
+--   event's 'World.Edit.Types.WeAddTile' advances its chunk's
+--   generation, so an event judged afterwards against that advanced
+--   number would read as stale purely because its own sibling landed
+--   first (requirement 5).
+data ReactionResult = ReactionResult
+    { rrParticipants ∷ ![(ChunkCoord, Word64)]
+      -- ^ Participating chunks in canonical-key order, each with the
+      --   'Sim.State.Types.scsEditGen' this result's half for that chunk
+      --   was computed from. Every one must still match the page's own
+      --   generation for the result to be admitted.
+    , rrEvents       ∷ ![SolidificationEvent]
+      -- ^ The events, in emission order.
+    } deriving (Show, Eq)
+
+-- | Partition a delivery's events into coherent results: two events
+--   share a result exactly when they share a participating chunk,
+--   transitively.
+--
+--   Transitively, because admission is per chunk and the commit advances
+--   every participating chunk's generation at once. Events A and B
+--   sharing chunk X, and B and C sharing chunk Y, all have to be judged
+--   from the same pre-commit generations or C would be measured against
+--   the number A's commit moved. Genuinely disjoint contacts share no
+--   chunk and therefore stay independently eligible: one stale pair does
+--   not veto an unrelated fresh one (requirement 4).
+--
+--   Results come out in first-emission order and each result's events in
+--   emission order, so a delivery is reproducible rather than dependent
+--   on hash iteration.
+groupReactionResults ∷ (ChunkCoord → Word64)
+                       -- ^ The generation each chunk's half was computed
+                       --   from ('Sim.State.Types.scsEditGen').
+                     → [SolidificationEvent]
+                     → [ReactionResult]
+groupReactionResults genOf events =
+    map build (foldl' absorb [] (zip [0 ..] events))
+  where
+    byIndex = HM.fromList (zip [0 ∷ Int ..] events)
+
+    chunksOf e = HS.fromList (sevChunk e : sevWaterChunks e)
+
+    -- A component is (first event index, its chunks, its event indices).
+    absorb comps (i, e) =
+        let ks       = chunksOf e
+            touching = filter (\(_, keys, _) → overlaps ks keys) comps
+            rest     = filter (\(_, keys, _) → not (overlaps ks keys)) comps
+            keys'    = foldl' (\acc (_, keys, _) → HS.union acc keys) ks touching
+            idxs'    = L.sort (i : concatMap (\(_, _, is) → is) touching)
+            first'   = minimum (i : map (\(f, _, _) → f) touching)
+        in L.insertBy (\(a, _, _) (b, _, _) → compare a b)
+                      (first', keys', idxs') rest
+
+    overlaps ks keys = not (HS.null (HS.intersection ks keys))
+
+    build (_, keys, idxs) = ReactionResult
+        { rrParticipants = [ (cc, genOf cc) | cc ← L.sort (HS.toList keys) ]
+        , rrEvents       = [ e | i ← idxs, Just e ← [HM.lookup i byIndex] ]
+        }

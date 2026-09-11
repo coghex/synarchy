@@ -125,6 +125,13 @@ PROBES = [
      "derived flora growth/age/phase under the advancing calendar (#332)"),
     ("follow_command_priority", "follow_command_priority_probe.py",
      "follow-command priority against other AI goals (#306)"),
+    ("fluid_reaction", "fluid_reaction_probe.py",
+     "lava-water solidification is DURABLE: the product stone survives a "
+     "save, a process exit and a fresh-process load (#2485)"),
+    ("fluid_reaction_visual", "fluid_reaction_visual_probe.py",
+     "an accepted solidification appears in BOTH live presentations — the "
+     "detailed tile render and the zoom map — with no page reload (#2485; "
+     "offscreen, needs a GPU)"),
     ("foraging", "foraging_probe.py",
      "foraging AI + harvestable-flora gating (#94)"),
     ("infection", "infection_probe.py",

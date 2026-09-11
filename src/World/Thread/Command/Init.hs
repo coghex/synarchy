@@ -74,6 +74,8 @@ import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.Artifact (buildZoomArtifactKey, publishZoomArtifact)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
+import Engine.Core.State (ZoomAtlasUpload(..), queueZoomAtlasUpload)
 import World.Map.ImagePlan (mapImageRefusalText)
 import Engine.Map.ImageAdmission (admitWorldZoomAtlas)
 import World.Weather (initEarlyClimate, formatWeather)
@@ -450,15 +452,46 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             logError logger CatWorld msg
             sendGenLog env msg
             writeIORef (wsZoomAtlasRef worldState) Nothing
+            -- …and the CACHE goes with it (#2485), exactly as the
+            -- admission refusal above does it. A page that keeps its
+            -- cache without an atlas renders the zoom map one texture
+            -- per chunk, which cannot show a single changed tile at all
+            -- — so a live terrain edit would be permanently invisible
+            -- there. No zoom map is the honest state; "a zoom map that
+            -- silently stops tracking the world" is not.
+            writeIORef (wsZoomCacheRef worldState) V.empty
           Right atlas → do
             _ ← evaluate (force atlas)
             -- Issue #763: pair the atlas with the EXACT
             -- WorldState it belongs to (this init's own page), mirroring
             -- World.Load.Publish's identical fix -- see
             -- EngineEnv.zoomAtlasDataRef.
-            writeIORef (rhZoomAtlasDataRef handoff) $
-                Just ( zadWidth atlas, zadHeight atlas
-                     , zadPixelData atlas, [worldState] )
+            -- Supersedes only THIS page's own pending payload, and
+            -- leaves every other page's alone (#2485's queue): an init
+            -- rebuilds one page, so a live atlas refresh queued for a
+            -- different page is not obsolete and must not be discarded
+            -- with it. Keyed by the PAGE ID, because this init has just
+            -- built a fresh 'WorldState' — a same-id reinitialization's
+            -- previous incarnation has different refs, and keying on
+            -- those would leave its image queued for a page that no
+            -- longer exists.
+            atomicModifyIORef' (rhZoomAtlasDataRef handoff) $ \queued →
+                ( queueZoomAtlasUpload
+                    (ZoomAtlasUpload (zadWidth atlas) (zadHeight atlas)
+                                     (zadPixelData atlas) pageId [worldState])
+                    queued
+                , () )
+            -- #2485: keep the pixels this page is about to show, so an
+            -- accepted terrain edit can regenerate one chunk's tile and
+            -- republish the image rather than leaving the zoom map
+            -- showing generation-time terrain forever.
+            writeIORef (wsZoomLiveRef worldState) $ Just ZoomLiveAtlas
+                { zlaPalette      = palette
+                , zlaWidth        = zadWidth atlas
+                , zlaHeight       = zadHeight atlas
+                , zlaChunksPerRow = zadChunksPerRow atlas
+                , zlaPixels       = zadPixelData atlas
+                }
             -- Store atlas metadata (chunksPerRow) for UV computation
             -- during baking
             writeIORef (wsZoomAtlasRef worldState) Nothing  -- filled after GPU upload

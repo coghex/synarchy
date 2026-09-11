@@ -413,7 +413,7 @@ initializeEngineWith logBackend = do
   sunAngleRef ← newIORef (publishedSolar 0.25)
   worldPreviewRef ← newIORef Nothing
   worldPreviewGenerationRef ← newIORef 0
-  zoomAtlasDataRef ← newIORef Nothing
+  zoomAtlasDataRef ← newIORef []
   worldQuadsRef ← newIORef emptyLayeredQuads
   -- Scene-assembly telemetry (#1921): unavailable until the first
   -- completed 'updateWorldTiles' pass publishes into it.

@@ -18,7 +18,7 @@ concrete precondition
 - [x] FR-1. Detect unlike-fluid contact and resolve it with the reaction rule in every transfer path — [#2481]
 - [x] FR-2. Solidify the reaction product into durable stone terrain through the world edit log — [#2485]
 - [x] FR-3. Resolve units and items caught at a solidifying cell — [#2490]
-- [x] FR-4. Present the reaction: contact effects and map refresh — [no-issue]: visually silent (D-7); refresh evidence folded into #2485
+- [x] FR-4. Present the reaction: contact effects and map refresh — [no-issue]: visually silent (D-7); the zoom refresh and its evidence are implemented in #2485
 
 ## Epic contract
 
@@ -243,11 +243,35 @@ side-deco marker, effect, or notification accompanies a solidification.
 A steam or sizzle marker would need a new `SideDecoType`, four new decal
 textures (an art issue with owner signoff; no steam, smoke, or bubble asset
 exists), a render hookup, and a lifetime rule, none of which the arc needs
-to deliver its outcome. The refresh half of FR-4 is already provided by the
-add-tile path FR-2 reuses, which invalidates the live quad cache and both
-zoom-map quad caches. Rejected: a side-deco steam/sizzle marker; a
-per-solidification event-log entry (not adopted; a later finding may
-revisit it).
+to deliver its outcome.
+
+**Corrected 2026-09-08 (#2485).** This decision originally recorded that
+the refresh half of FR-4 was already provided by the add-tile path FR-2
+reuses, "which invalidates the live quad cache and both zoom-map quad
+caches". That is true of the invalidation and FALSE of the conclusion for
+the zoom map. `handleWorldAddTileCommand` clears `wsZoomQuadCacheRef` and
+`wsBgQuadCacheRef`, but `World.Render.Zoom.Quads.renderFromBaked` samples
+`wsZoomCacheRef` and `wsZoomAtlasRef`, and
+`World.Render.Zoom.Bake.ensureBakedAtlas` only re-derives QUADS from
+them — the terrain pixels themselves are produced once, at page
+initialization, by `World.ZoomMap.Cache.buildZoomCacheWithPixels`. No
+number of dropped quad caches changes one pixel of the zoom map, and
+clearing `wsZoomAtlasRef` to fall back to per-material baking does not
+either: that path colours a whole chunk by its majority material, in
+which a single new stone tile cannot appear.
+
+So #2485 performs an ACTUAL zoom terrain-data refresh: it regenerates the
+affected chunk's `zoomTileSize`-square block from the live post-edit
+chunk, patches it into the atlas the page retains (`wsZoomLiveRef`), and
+republishes the whole image through the same `zoomAtlasDataRef` handoff a
+fresh init and a load publish use. The detailed tile render is unaffected
+by this correction — it really does need nothing beyond the quad-cache
+invalidation, because it rebuilds from the chunk the edit replaced. See
+`docs/engine_contracts.md` §Fluid reaction for the rule and
+`tools/fluid_reaction_visual_probe.py` for the evidence.
+
+Rejected: a side-deco steam/sizzle marker; a per-solidification
+event-log entry (not adopted; a later finding may revisit it).
 
 ## Open questions
 
@@ -323,18 +347,22 @@ Resolved by D-7.
 - **Outcome:** Solidification events become stone terrain — obsidian or
   basalt per D-2's predicate — that survives chunk eviction and a
   fresh-process save/load, fenced correctly against concurrent live edits.
-- **Scope:** Sim→world event transport, product-material selection,
-  edit-log append, edit-generation bump + sim re-seed, persistence coverage.
+- **Scope:** Sim→world event transport, coherent multi-chunk admission,
+  product-material selection, edit-log append, one edit-generation bump per
+  commit + an exact-active-volume sim handoff, both live presentations,
+  persistence coverage.
 - **Phase:** 2
 - **Depends on:** FR-1
 - **Ordering:** critical path
-- **Relevant decisions:** D-1, D-2, D-3, D-5
+- **Relevant decisions:** D-1, D-2, D-3, D-5, D-7
 - **Acceptance signals:** edit-fence spec passes; stone present after
   save→load in a fresh process; a stale in-flight writeback cannot erase
   new stone; submerged and subaerial contacts yield their respective
-  materials per D-5.
-- **Out of scope:** entity handling; visuals beyond what edit replay
-  already renders.
+  materials per D-5; a water remainder that is not a multiple of
+  `volumePerLevel` survives the commit handoff; both live presentations
+  show the stone without a reload (FR-4's evidence, folded in here per
+  D-7's 2026-09-08 correction).
+- **Out of scope:** entity handling; contact effects and side-deco markers.
 - **Open questions:** None.
 
 ### FR-3. Resolve units and items caught at a solidifying cell
@@ -358,6 +386,13 @@ Resolved by D-7.
 
 > Disposition 2026-09-07: `[no-issue]` — the contact is visually silent
 > (D-7); the refresh evidence is requested on #2485.
+>
+> Amended 2026-09-08: D-7's original claim that the add-tile path's cache
+> invalidation already refreshes the ZOOM map was wrong, so the refresh is
+> not a no-op #2485 merely evidences — #2485 implements an actual zoom
+> terrain-pixel regeneration and atlas republication. The disposition
+> stands: no separate issue, and the evidence is
+> `tools/fluid_reaction_visual_probe.py`.
 
 - **Outcome:** The contact site reads as a reaction to the player (per Q-4's
   answer), and live render + zoom map reflect the new stone promptly.
@@ -368,7 +403,8 @@ Resolved by D-7.
 - **Ordering:** not on the critical path
 - **Relevant decisions:** D-1
 - **Acceptance signals:** per Q-4's resolution; zoom/live render show stone
-  without a reload.
+  without a reload — delivered by #2485's own zoom terrain refresh, not by
+  quad-cache invalidation alone (D-7, corrected).
 - **Open questions:** None (D-7).
 
 ## Source notes
