@@ -59,8 +59,8 @@ syn_audio_result syn_audio_device_init(syn_audio_core* core, uint32_t sink)
     core->status.backend = core->context.backend;
     core->status.sample_rate = core->device.sampleRate;
     core->status.period_frames = core->device.playback.internalPeriodSizeInFrames;
-    snprintf(core->status.device_name, sizeof(core->status.device_name), "%s",
-             core->device.playback.name);
+    snprintf(core->status.device_name, sizeof(core->status.device_name), "%.*s",
+             (int)sizeof(core->status.device_name) - 1, core->device.playback.name);
     atomic_store_explicit(&core->device_event, 0, memory_order_relaxed);
     return SYN_AUDIO_OK;
 }
