@@ -4,7 +4,8 @@ Analyze the river mouth gap: dry tiles between flowing river
 water and a body of water (ocean/lake).
 
 The visual pattern:
-  - River water flows downhill, its surface slopes toward the coast
+  - River water flows downhill, its surface descending toward the coast
+    in whole-z steps (each drop is a vertical fluid edge, #2517)
   - A 1-tile strip of dry terrain (grass) separates river from body
   - The body of water sits on the other side
 

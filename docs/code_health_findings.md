@@ -2421,6 +2421,13 @@ Fix: have `World.Render` import `World.Render.Zoom.*` directly and let
 `World.ZoomMap` cover only the cache.
 
 ### [#1135] CH-94. Cross-chunk render lookups don't wrap at the world seam, but the chunk map is keyed wrapped
+> **Partly superseded 2026-09-10 by #2517 (DFL-1).** One of the two call sites
+> below is gone: `waterSlopeAt` and `src/World/Render/WaterSlope.hs` were
+> removed along with freshwater ramp rendering, so only
+> `SideDecoQuads.neighborCell` remains — and it, like every other cross-chunk
+> probe in that pass, goes through `World.Render.ChunkLookup`. The record below
+> is preserved as written; its file and line references describe `master`
+> before #1135's fix and #2517.
 > **Note:** Verified 2026-08-06 — every code claim confirmed, and the seam confirmation
 > this entry asked for is now SUPPLIED, arithmetically rather than visually: replicating
 > `wrapChunkCoordU` (`Chunk/Types.hs:45-56`) over a 64-chunk world (canonical u range
@@ -2459,7 +2466,7 @@ cc@(ChunkCoord ccx ccy) = wrapChunkCoordU worldSize ccRaw
 
 So at the u-axis wrap seam the neighbour lookup misses, both call sites take
 their documented "neighbour chunk isn't loaded" conservative branch, and water
-side faces and water slope tiles are silently not drawn along the seam. Both
+side faces and freshwater ramp tiles are silently not drawn along the seam. Both
 comments describe that branch as covering an *unloaded* neighbour, which is not
 the case here.
 

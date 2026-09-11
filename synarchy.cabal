@@ -790,7 +790,7 @@ library
                      World.Render.QuadContext
                      World.Render.Quads
                      World.Render.Solar
-                     World.Render.WaterSlope
+                     World.Render.FluidTopQuads
                      World.Render.CursorQuads
                      World.Render.StructureGhost
                      World.Render.TileQuads
@@ -1620,7 +1620,6 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Render.ZTrackSeam
                    Test.Headless.World.Render.SlopeBit
                    Test.Headless.World.Render.FluidLevelMasks
-                   Test.Headless.World.Render.WaterSlope
                    Test.Headless.World.Render.ZoomBakeUV
                    Test.Headless.Render.ViewportGuard
                    Test.Headless.Render.QuadVertices
