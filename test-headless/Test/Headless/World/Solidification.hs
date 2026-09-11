@@ -47,7 +47,7 @@ import Engine.Core.State
     , replaceZoomAtlasTextures, retireZoomAtlasTextures, zoomAtlasDataRef )
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Graphics.Camera (Camera2D(..))
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
 import World.Grid (gridToWorld)
 import World.Chunk.Admit (pageIncarnation)
 import qualified Engine.Core.Queue as Q
@@ -72,9 +72,10 @@ import World.Material
     (MaterialId(..), emptyMaterialRegistry, materialIdByName, matLoam)
 import World.Reaction.Stone (stoneMaterialFor, stoneMaterialName)
 import World.Thread.Command.Reaction
-    ( ReactionAdmission(..), admitReaction, reactionChunks
-    , reactionEventTile, reactionIsFresh )
+    ( ReactionAdmission(..), ReactionRefusal(..), admitReaction
+    , reactionChunks, reactionEventTile, reactionIsFresh )
 import World.Thread.Command.Reaction.Zoom (atlasTileIndexFor)
+import World.Render.Zoom.Project (zoomTexelExtent, zoomTileScreenRect)
 import World.ZoomMap.Live
     (ZoomTileOverride(..), liveChunkZoom, liveTileOverrides, patchAtlasTile)
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
@@ -473,6 +474,52 @@ pureSpec = describe "solidification (#2485)" $ do
         it "retires nothing while every page is still live" $
             retireZoomAtlasTextures [a, b] [(a, "texA"), (b, "texB")]
                 `shouldBe` ([(a, "texA"), (b, "texB")], [] ∷ [String])
+
+    describe "projecting a tile onto the zoom map" $ do
+        let facing = FaceSouth
+            rect gx gy = zoomTileScreenRect facing 2.0 0 0 1024 768
+                                            1024 768 8 gx gy
+
+        it "gives every tile of a chunk a texel box inside the block" $
+            -- The block is a square holding a diamond, so a LOCAL
+            -- coordinate the diamond does not reach has no texels — and
+            -- says so rather than returning a plausible empty rectangle.
+            forM_ [ (lx, ly) | ly ← [0 .. chunkSize - 1]
+                             , lx ← [0 .. chunkSize - 1] ] $ \(lx, ly) →
+                case zoomTexelExtent lx ly of
+                    Nothing → expectationFailure
+                        ("no atlas texels for local tile " ⧺ show (lx, ly))
+                    Just (x0, y0, x1, y1) → do
+                        (x0, y0) `shouldSatisfy` \(a, b) → a ≥ 0 ∧ b ≥ 0
+                        (x1, y1) `shouldSatisfy` \(a, b) →
+                            a < zoomTileSize ∧ b < zoomTileSize
+                        (x0 ≤ x1 ∧ y0 ≤ y1) `shouldBe` True
+
+        it "answers nothing for a local coordinate outside the chunk" $ do
+            zoomTexelExtent (-1) 0 `shouldBe` Nothing
+            zoomTexelExtent 0 chunkSize `shouldBe` Nothing
+
+        it "places a tile's rectangle INSIDE its own chunk's block" $ do
+            -- The projection is the map's, not the detail view's: it
+            -- never consults terrain height, so a tile's rectangle is
+            -- where its texels are drawn rather than where its column
+            -- would be picked.
+            let block = (,) <$> rect 0 0 <*> rect (chunkSize - 1) (chunkSize - 1)
+            block `shouldSatisfy` isJust
+
+        it "separates two tiles of the same chunk" $ do
+            -- Adjacent tiles must not project onto the same pixels, or
+            -- a per-tile assertion could be satisfied by its neighbour.
+            let a = rect 0 0
+                b = rect 4 4
+            (a ≢ b) `shouldBe` True
+            a `shouldSatisfy` isJust
+            b `shouldSatisfy` isJust
+
+        it "refuses a degenerate viewport rather than unprojecting to \
+           \a garbage rectangle" $
+            zoomTileScreenRect facing 2.0 0 0 0 0 0 0 8 0 0
+                `shouldBe` Nothing
 
     -- * Requirement 9: the atlas patch itself.
     describe "patching one chunk's tile into the zoom atlas" $ do
@@ -1053,7 +1100,9 @@ spec = describe "solidification (#2485)" $ do
         case admitReaction registry gens td rr of
             ReactionAdmitted _ → expectationFailure
                 "an absent participant was admitted"
-            ReactionRefused why →
+            ReactionRefused (RefusedFaulty why) → expectationFailure
+                ("an eviction is a lost race, not a fault: " ⧺ T.unpack why)
+            ReactionRefused (RefusedStale why) →
                 T.unpack why `shouldContain` "no longer loaded"
 
         -- …and the delivery behaves accordingly: no stone, and the
@@ -1384,6 +1433,24 @@ spec = describe "solidification (#2485)" $ do
                     [liveEvent (lpLava lp) (4, 4) (lpLava lp) SolidBasalt]
         real ← readIORef registryRef
         before ← chunkAt (lpState lp) (lpLava lp)
+        gens ← readIORef (wsChunkEditGenRef (lpState lp))
+        td ← readIORef (wsTilesRef (lpState lp))
+        -- The refusal is a FAULT, not a lost race, and that distinction
+        -- is what decides whether anyone hears about it: world debug
+        -- logging is off by default, so a product material the registry
+        -- cannot name would otherwise be refused in silence while the
+        -- delivery reported success.
+        case admitReaction emptyMaterialRegistry gens td rr of
+            ReactionRefused (RefusedFaulty why) →
+                T.unpack why `shouldContain` "material registry"
+            other → expectationFailure
+                ("an unresolvable product material is a fault: " ⧺ show other)
+        -- …while a participant that has merely moved on is the ordinary
+        -- outcome of the race the fence exists for.
+        case admitReaction real (HM.insert (lpLava lp) 99 gens) td rr of
+            ReactionRefused (RefusedStale _) → pure ()
+            other → expectationFailure
+                ("a moved-on participant is a lost race: " ⧺ show other)
         (`finally` writeIORef registryRef real) $ do
             -- The commit must CONSULT the registry; a hardcoded id would
             -- survive the pure resolution test above and fail here.

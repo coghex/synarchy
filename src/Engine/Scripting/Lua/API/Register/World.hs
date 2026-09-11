@@ -121,6 +121,7 @@ registerWorldAPI callStats env backendState = do
   registerLuaFunction callStats "world" "getHoverTile" (worldGetHoverTileFn env)
   registerLuaFunction callStats "world" "getHoverPos"  (worldGetHoverPosFn env)
   registerLuaFunction callStats "world" "pickTile"     (worldPickTileFn env)
+  registerLuaFunction callStats "world" "zoomTileRect" (worldZoomTileRectFn env)
   registerLuaFunction callStats "world" "pickPos"      (worldPickPosFn env)
   registerLuaFunction callStats "world" "pickChunk"    (worldPickChunkFn env)
   registerLuaFunction callStats "world" "localizeTile" (worldLocalizeTileFn env)

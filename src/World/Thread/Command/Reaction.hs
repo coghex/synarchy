@@ -44,6 +44,7 @@
 --     enforce.
 module World.Thread.Command.Reaction
     ( ReactionAdmission(..)
+    , ReactionRefusal(..)
     , admitReaction
     , reactionIsFresh
     , reactionChunks
@@ -114,9 +115,27 @@ data ReactionAdmission
       -- ^ Every event, with its product material already resolved, in
       --   the order they are to be applied. Resolving here rather than
       --   at each edit is what makes the commit unable to fail halfway.
-    | ReactionRefused !Text
+    | ReactionRefused !ReactionRefusal
       -- ^ …and why. The caller quarantines this result's writebacks and
-      --   converges its chunks.
+      --   converges its chunks either way; the KIND decides how loudly
+      --   it says so.
+    deriving (Show, Eq)
+
+-- | Why a result was refused, and whether that is news.
+data ReactionRefusal
+    = RefusedStale !Text
+      -- ^ A participant has moved on, or the page no longer holds it.
+      --   The ORDINARY outcome of the race this fence exists for: the
+      --   world simply won a tick, the sim converges, and nothing is
+      --   wrong. Debug-level.
+    | RefusedFaulty !Text
+      -- ^ The product material does not resolve, or an event's own edit
+      --   cannot apply. Neither is a race — the first is a content or
+      --   configuration fault and the second a logic one — and both mean
+      --   lava was consumed with no stone to account for it. These are
+      --   the cases the contract calls "fails loudly", so they are
+      --   reported at error level rather than left to a debug channel
+      --   that is off by default.
     deriving (Show, Eq)
 
 -- | Decide one result, against the tiles and generations as they stand
@@ -145,11 +164,12 @@ admitReaction ∷ MaterialRegistry → HM.HashMap ChunkCoord Word64
               → WorldTileData → ReactionResult → ReactionAdmission
 admitReaction registry gens td rr
     | not (reactionIsFresh gens rr) =
-        ReactionRefused "a participant has moved on from the generation \
-                        \its half was computed from"
+        ReactionRefused (RefusedStale
+            "a participant has moved on from the generation its half was \
+            \computed from")
     | (missing : _) ← absentParticipants =
-        ReactionRefused ("participant chunk " <> tshow missing
-                         <> " is no longer loaded")
+        ReactionRefused (RefusedStale
+            ("participant chunk " <> tshow missing <> " is no longer loaded"))
     | otherwise = go HM.empty [] (rrEvents rr)
   where
     absentParticipants =
@@ -158,16 +178,18 @@ admitReaction registry gens td rr
     go _ acc [] = ReactionAdmitted (reverse acc)
     go overlay acc (ev : rest) =
         case stoneMaterialFor registry (sevProduct ev) of
-            Left why → ReactionRefused why
+            Left why → ReactionRefused (RefusedFaulty why)
             Right mat →
                 case HM.lookup (sevChunk ev) overlay
                          <|> lookupChunk (sevChunk ev) td of
-                    Nothing → ReactionRefused
-                        ("chunk " <> tshow (sevChunk ev) <> " is not loaded")
+                    Nothing → ReactionRefused (RefusedStale
+                        ("chunk " <> tshow (sevChunk ev) <> " is not loaded"))
                     Just lc
-                        | outOfColumnRange lc (sevIndex ev) → ReactionRefused
-                            ("the column at " <> tshow (reactionEventTile ev)
-                             <> " is out of range")
+                        | outOfColumnRange lc (sevIndex ev) →
+                            ReactionRefused (RefusedFaulty
+                                ("the column at "
+                                 <> tshow (reactionEventTile ev)
+                                 <> " is out of range"))
                         | otherwise →
                             let (gx, gy) = reactionEventTile ev
                                 lc' = applyEdit (WeAddTile gx gy mat) lc

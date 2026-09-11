@@ -262,6 +262,41 @@ def png_diff_bbox(path_a: str, path_b: str):
         return diff.convert("L").point(lambda v: 255 if v else 0).getbbox()
 
 
+def zoom_tile_box(port: int, tile, vp: dict, pad: int = 1):
+    """Where the ZOOM MAP draws one tile, from the engine's own map
+    projection (`world.zoomTileRect`).
+
+    Not `world.pickTile`: that is the full-detail hit test, which walks
+    terrain z and unprojects through
+    `(z - zSlice) * tileSideHeight - tileHeight / 2`, while the zoom map
+    maps its atlas UVs over an elevation-free `gridToWorld` rectangle.
+    The two differ by a half tile and by the target's own height, so a
+    padded hit-test box takes in the tile's neighbours — and changed
+    fluid next door could then satisfy a test meant to be about the
+    stone. This query runs the map's own projection forwards instead: the
+    same chunk rectangle the atlas bakes over, the same wrap offset, and
+    the same inverse-isometric texel transform the pass colours through.
+
+    Returned in FRAMEBUFFER pixels, which is what the captures are in.
+    """
+    got = send_json(port,
+                    f"local x, y, w, h = world.zoomTileRect({tile[0]}, "
+                    f"{tile[1]}); if x == nil then return nil end; "
+                    f"return {{x = x, y = y, w = w, h = h}}",
+                    timeout=10.0)
+    if not isinstance(got, dict):
+        return None
+    try:
+        x, y = float(got["x"]), float(got["y"])
+        w, h = float(got["w"]), float(got["h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    x0, y0 = win_to_fb(vp, x, y)
+    x1, y1 = win_to_fb(vp, x + w, y + h)
+    return (max(0, int(x0) - pad), max(0, int(y0) - pad),
+            max(1, int(x1 - x0) + 2 * pad), max(1, int(y1 - y0) + 2 * pad))
+
+
 def union_box(a, b):
     """The smallest box covering both, or whichever one exists."""
     if a is None:
@@ -685,11 +720,13 @@ def main() -> int:
                    f"the detailed frame is a real rendered scene, not a blank "
                    f"or near-uniform image (got {stats})")
             set_view(port, lava_tile, MAP_ZOOM, stone_z)
-            map_box = screen_box_for(port, lava_tile, vp)
+            map_box = zoom_tile_box(port, lava_tile, vp)
             chk.ok(map_box is not None,
-                   f"the solidified tile's own zoom pixels are locatable "
-                   f"at {map_box} — the atlas gives one tile about a 2x2 "
-                   f"block, so this is a small region by design")
+                   f"the solidified tile's own ATLAS pixels are at "
+                   f"{map_box}, from the map's own projection "
+                   f"(world.zoomTileRect) rather than the detail hit "
+                   f"test — one tile is about a 2x2 patch of a 32-square "
+                   f"block, so this is small by design")
             map_before, map_noise = capture_pair(port, chk, shots,
                                                  "map_before", map_box)
             chk.ok(png_differs(detail_before, map_before),

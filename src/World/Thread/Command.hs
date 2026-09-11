@@ -15,14 +15,14 @@ import Control.Exception (SomeException, throwIO, try)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv, statRNGRef, unitQueue)
-import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, logError, LogCategory(..), LoggerState)
 import World.Types
 import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Residency (ChunkGeneration)
 import Sim.Fluid.Reaction (ReactionResult(..))
 import World.Thread.Command.Reaction
-    (ReactionAdmission(..), admitReaction, commitReactions
-    , convergeRejectedReactions, reactionChunks)
+    (ReactionAdmission(..), ReactionRefusal(..), admitReaction
+    , commitReactions, convergeRejectedReactions, reactionChunks)
 import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
                                   , handleWorldDestroyCommand
@@ -387,9 +387,25 @@ applyFluidWritebacks env logger pageId mEpoch writebacks reactions = do
                         fresh = [ w | w ← writebacks
                                     , writebackIsFresh gens w
                                     , not (HS.member (fwCoord w) quarantined) ]
-                    forM_ rejected $ \(_, why) → logDebug logger CatWorld $
-                        "Refusing a reaction result for "
-                        <> unWorldPageId pageId <> ": " <> why
+                    -- A stale refusal is the ordinary outcome of the
+                    -- race this fence exists for; a FAULTY one means
+                    -- lava was consumed with no stone to account for it,
+                    -- because the product material did not resolve or an
+                    -- event's own edit could not apply. The contract
+                    -- calls those "fails loudly", and world debug
+                    -- logging is off by default — so they go to the
+                    -- error channel rather than a silent one.
+                    forM_ rejected $ \(_, why) → case why of
+                        RefusedStale reason → logDebug logger CatWorld $
+                            "Refusing a stale reaction result for "
+                            <> unWorldPageId pageId <> ": " <> reason
+                        RefusedFaulty reason → logError logger CatWorld $
+                            "Reaction result REFUSED for "
+                            <> unWorldPageId pageId <> ": " <> reason
+                            <> ". Its consumed fluid is discarded with it, \
+                               \so nothing is destroyed — but no stone \
+                               \formed, and this is a fault rather than \
+                               \a lost race"
                     when (not (null fresh)) $ do
                         atomicModifyIORef' (wsTilesRef ws) $ \wtd →
                             (foldl' applyOneWriteback wtd fresh, ())

@@ -4647,6 +4647,16 @@ writebacks. Two events share a result exactly when they share a
 participating chunk, transitively, so genuinely disjoint contacts in one
 delivery stay independently eligible.
 
+A refusal says which KIND it is. A participant that has moved on, or a
+chunk the page no longer holds, is the ordinary outcome of the race this
+fence exists for and is reported at debug level. A product material the
+registry cannot name, or an event whose own edit cannot apply, is a fault
+— lava was consumed with no stone to account for it — and is reported at
+ERROR level, because world debug logging is off by default and "fails
+loudly" cannot mean a channel nobody is listening to. Either way the
+delivery still acknowledges `FluidAckApplied`: a refusal is a completed
+decision, and neither the fluid nor the stone commits.
+
 Deciding all four up front is what makes the delivery all-or-nothing.
 The writebacks are applied on the strength of that decision, so a commit
 that could still drop an event — for a material it could not name, or a
@@ -4803,11 +4813,17 @@ read the product through; `tools/fluid_reaction_visual_probe.py`
 (offscreen, needs a GPU) is the two-presentation evidence. It reacts
 TWICE in one chunk: the first contact's refresh folds every setup edit
 into the atlas, so what the measured one adds is attributable to its own
-stone. It then locates the solidified tile's own zoom pixels through the
-engine's screen-to-tile mapping — with the z-slice pinned, without which
-that mapping does not agree with where the map draws a tile — and
-asserts the pixels that changed there read as the product the reaction
-chose rather than as the material the column was made of. The neighbouring groups `Sim.Fluid.Seam`,
+stone. It then locates the solidified tile's own ATLAS pixels through
+`world.zoomTileRect`, which runs the map's own projection forwards — the
+chunk rectangle the atlas bakes over, the wrap offset the quads apply,
+and the inverse-isometric texel transform the pass colours through. The
+detail hit test cannot answer that question: it walks terrain z and
+unprojects through `(z - zSlice) * tileSideHeight - tileHeight / 2`,
+while the zoom map maps its UVs over an elevation-free `gridToWorld`
+rectangle, so a padded hit-test box takes in the tile's neighbours. The
+probe then asserts the pixels that changed in that region read as the
+product the reaction chose rather than as the material the column was
+made of. The neighbouring groups `Sim.Fluid.Seam`,
 `Sim.Fluid.Conservation` and `fluid writeback staleness` must stay green
 unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
 the reaction never fires in it and a change there is a regression in

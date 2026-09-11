@@ -810,6 +810,7 @@ library
                      World.Render.Zoom.ViewBounds
                      World.Render.Zoom.Climate
                      World.Render.Zoom.Textures
+                     World.Render.Zoom.Project
                      World.Render.Zoom.Quads
                      World.Render.Zoom.Cursor
                      World.Render.Zoom.Icons

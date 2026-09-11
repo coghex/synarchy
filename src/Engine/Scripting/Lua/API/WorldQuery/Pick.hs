@@ -12,6 +12,7 @@ module Engine.Scripting.Lua.API.WorldQuery.Pick
     , worldPickChunkFn
     , worldLocalizeTileFn
     , worldGetWrapWidthFn
+    , worldZoomTileRectFn
     ) where
 
 import UPrelude
@@ -28,6 +29,7 @@ import Engine.Graphics.Camera (Camera2D(..))
 import World.Render.HitTest (pickWorldTile)
 import World.Render.ViewBounds (computeViewBounds)
 import World.Render.Zoom.Cursor (pixelToChunkOrigin)
+import World.Render.Zoom.Project (zoomTileScreenRect)
 import World.Generate (viewDepth)
 import World.Generate.Coordinates (localizeTileToAnchor)
 import World.Plate.Wrap (worldWidthTiles)
@@ -346,3 +348,48 @@ worldPickPosFn env = do
         _ → do
             Lua.pushnil
             return 1
+
+-- | world.zoomTileRect(gx, gy) → x, y, w, h | nil
+--
+--   Where the ZOOM MAP draws one tile, in window pixels — its atlas
+--   footprint, not its terrain footprint.
+--
+--   'worldPickTileFn' beside it cannot answer this. It walks terrain z
+--   and unprojects through @(z - zSlice) * tileSideHeight -
+--   tileHeight / 2@, while the zoom map maps its UVs over an
+--   elevation-free 'World.Grid.gridToWorld' rectangle; the two differ by
+--   a half tile and by the target's own height, so a caller grading the
+--   map — the #2485 offscreen probe does — would otherwise measure a
+--   padded terrain box that includes its neighbours.
+--
+--   Read-only, against the VISIBLE page for the same reason
+--   'worldPickTileFn' is: rendering operates on @wmVisible@, and a
+--   hidden page can sit at the @wmWorlds@ head.
+worldZoomTileRectFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
+worldZoomTileRectFn env = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            manager ← Lua.liftIO $
+                readIORef (wsWorldManagerRef (toWorldSimCapability env))
+            case visiblePage manager of
+                Nothing → Lua.pushnil ≫ return 1
+                Just (_, ws) → do
+                    let rv = toRenderViewCapability env
+                    camera ← Lua.liftIO $ readIORef (rvCameraRef rv)
+                    (winW, winH) ← Lua.liftIO $ readIORef (rvWindowSizeRef rv)
+                    (fbW, fbH) ← Lua.liftIO $ readIORef (rvFramebufferSizeRef rv)
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    let (camX, camY) = camPosition camera
+                        rect = zoomTileScreenRect (camFacing camera)
+                                   (camZoom camera) camX camY
+                                   fbW fbH winW winH worldSize
+                                   (fromIntegral gx') (fromIntegral gy')
+                    case rect of
+                        Nothing → Lua.pushnil ≫ return 1
+                        Just (x, y, w, h) → do
+                            mapM_ (Lua.pushnumber . Lua.Number . realToFrac)
+                                  [x, y, w, h]
+                            return 4
+        _ → Lua.pushnil ≫ return 1

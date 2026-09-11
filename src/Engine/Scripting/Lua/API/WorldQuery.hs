@@ -31,6 +31,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetHoverTileFn
     , worldGetHoverPosFn
     , worldPickTileFn
+    , worldZoomTileRectFn
     , worldPickPosFn
     , worldPickChunkFn
     , worldLocalizeTileFn
