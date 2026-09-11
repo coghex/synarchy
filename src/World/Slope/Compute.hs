@@ -93,11 +93,18 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
 
         -- If THIS tile is a wet tile (river / lake / ocean / lava), it's
         -- a river bed or basin floor and should slope toward lower-by-1
-        -- neighbors even if those neighbors are wet too. Without this,
-        -- a river that descends a z-level renders as a sloped water
-        -- surface over a stepped terrain top — the upstream block's
-        -- corner pokes through the water. Sloping the bed matches the
-        -- water surface and hides the corner.
+        -- neighbors even if those neighbors are wet too.
+        --
+        -- This is TERRAIN geometry, and #2517 left it exactly as it was.
+        -- Its ORIGINAL justification no longer holds: the rule existed to
+        -- keep a descending river's bed under a fluid top that ramped
+        -- between z-levels, so the upstream block's corner could not poke
+        -- through. Fluid tops are now flat whole-z steps and every drop
+        -- is a vertical fluid edge ('World.Render.SideDecoQuads'), so
+        -- there is no ramped surface for the bed to match. The rule is
+        -- kept because it still shapes the visible bed and banks, and
+        -- changing worldgen output was outside DFL-1's scope — not
+        -- because the fluid top follows it.
         --
         -- Dry tiles still keep the bank rule: they don't slope into wet
         -- neighbors, which would otherwise look like land dipping into
@@ -145,8 +152,9 @@ computeTileSlope seed coord lx ly z registry surfMap fluidMap tiles
         maxDrop = if null drops then 0 else maximum drops
     in if myHasFluid
        -- Wet tiles (river bed / basin floor) keep the existing rule
-       -- unchanged: the bed slopes to match the water surface, gated the
-       -- same way it always was. Jaggedness is a DRY-rock feature only.
+       -- unchanged, gated the same way it always was. This shapes the
+       -- BED only; the fluid top above it is flat (#2517). Jaggedness is
+       -- a DRY-rock feature only.
        then if not passesHardness ∨ rawSlope ≡ 0 ∨ rawSlope ≡ 15
             then 0
             else applyRoughness seed coord lx ly hardness rawSlope
@@ -188,14 +196,16 @@ slopeBit myHasFluid myZ neighborZ neighborHasFluid =
         neighborLoaded = neighborZ ≢ minBound
 
         -- Dry land keeps the strict single-step terrace rule (a neighbour
-        -- exactly one lower). A WET tile additionally slopes toward any
-        -- EXPOSED-AIR edge — a present neighbour whose surface drops by
-        -- one OR MORE levels. That is the waterfall-lip / water-cliff
+        -- exactly one lower). A WET tile's BED additionally slopes toward
+        -- any EXPOSED-AIR edge — a present neighbour whose surface drops
+        -- by one OR MORE levels. That is the waterfall-lip / water-cliff
         -- case (issue #222): the source water tile at the top of a fall
         -- borders a multi-level drop, so 'diff > 1' there; the old
-        -- 'diff ≡ 1' rule left it flat. Tipping the surface toward the
-        -- drop makes the water visibly pour over the lip. Water enclosed
-        -- by equal/higher surfaces (diff ≤ 0) stays flat.
+        -- 'diff ≡ 1' rule left that bed flat. #2517 did not change this
+        -- rule — what it changed is the fluid TOP above the bed, which
+        -- no longer tips with it: a fall is now drawn as a flat top plus
+        -- vertical fluid edges. A bed enclosed by equal/higher surfaces
+        -- (diff ≤ 0) stays flat.
         validDiff
             | myHasFluid = neighborLoaded ∧ diff ≥ 1
             | otherwise  = diff ≡ 1
