@@ -230,6 +230,7 @@ Section names above refer to engine contracts. Additional required reading:
 | Rivers, lakes, oceans, ice, water tables | [hydrology_pipeline.md](docs/hydrology_pipeline.md) |
 | Player transfers, gesture eligibility, executor/teardown behavior | [unified_item_transfers.md](docs/unified_item_transfers.md) and engine contracts §Player transfers |
 | Expedition loop or its integrated probe | [expedition_gameplay_loop.md](docs/expedition_gameplay_loop.md) and engine contracts §The expedition loop |
+| Flora visual state, mortality art, texture fallback | [flora_visual_state_contract.md](docs/flora_visual_state_contract.md) and engine contracts §Flora visual state and fallback |
 
 ## AI asset generation
 
