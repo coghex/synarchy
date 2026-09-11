@@ -300,30 +300,130 @@ def test_a_helper_that_cannot_be_run_is_not_a_verdict_about_the_saves() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_a_mismatch_verdict_survives_an_unreadable_report() -> None:
-    print("\n-- the marker decides the outcome; a missing report only costs "
-          "the diagnostic refinement")
+def test_a_marker_inside_a_fixture_path_is_not_read_as_an_outcome() -> None:
+    print("\n-- a save whose own NAME contains a marker cannot forge a "
+          "verdict")
     reference, divergent = _two_distinct_fixtures()
-    tmp = Path(tempfile.mkdtemp(prefix="compare_noreport_"))
+    tmp = Path(tempfile.mkdtemp(prefix="compare_forged_"))
+    try:
+        paths = _generations(tmp, reference, divergent, divergent_index=9)
+        # An ordinary path for a probe to hand this -- and one that puts
+        # the literal text `COMPARE_OK` inside the helper's own
+        # `DECODE_FAILED: [("...",...)]` line. A substring scan over the
+        # combined output reads that as success and lets
+        # `compare_session_files` pass on saves it never compared.
+        forged = tmp / "gen2-COMPARE_OK.synworld"
+        paths[1].rename(forged)
+        forged.write_bytes(b"not an envelope at all")
+        paths[1] = forged
+        outcome, report, detail = codec.compare_session_snapshots(paths)
+        expect("COMPARE_OK" in detail,
+               f"the helper's line really does carry the marker text "
+               f"(got {detail!r})")
+        expect(outcome == codec.COMPARE_DECODE_FAILED,
+               f"and the outcome is still the decode failure it really is "
+               f"(got {outcome!r})")
+        expect((report or {}).get("outcome") == codec.COMPARE_DECODE_FAILED,
+               f"corroborated by the report (got {report!r})")
+        ok, probe_detail = persistence_snapshot.compare_session_files(paths)
+        expect(not ok,
+               f"so the probe-facing wrapper FAILS rather than passing on "
+               f"saves it never compared (got {ok}, {probe_detail!r})")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_an_answer_this_bridge_cannot_corroborate_is_an_error() -> None:
+    print("\n-- marker, exit status and report must agree, or the outcome "
+          "is COMPARE_ERROR")
+    reference, divergent = _two_distinct_fixtures()
+    tmp = Path(tempfile.mkdtemp(prefix="compare_incoherent_"))
     try:
         paths = _generations(tmp, reference, divergent, divergent_index=2)
-        # Prints the marker, writes nothing to --output, exits 1 -- the
-        # shape of a helper that decided and then failed to record it.
-        loud = _fake_helper(
-            tmp, 'echo "COMPARE_MISMATCH: snapshot-differs=[] '
-                 'lua-component-differs=[]"\nexit 1')
-        with _with_helper(loud):
-            outcome, report, detail = codec.compare_session_snapshots(paths)
-        expect(outcome == codec.COMPARE_MISMATCH,
-               f"the verdict is still a mismatch (got {outcome!r})")
-        expect(report is None,
-               f"with no usable report (got {report!r})")
-        expect("COMPARE_MISMATCH" in detail,
-               f"and the helper's own line retained (got {detail!r})")
-        expect(persistence_snapshot.diff_pair(paths, report) == paths[:2],
-               f"the diagnostic falls back to the first two paths, which is "
-               f"what it always did (got "
-               f"{persistence_snapshot.diff_pair(paths, report)})")
+        ok_line = "COMPARE_OK"
+        mismatch_line = ('COMPARE_MISMATCH: snapshot-differs=[] '
+                         'lua-component-differs=[]')
+        # argv is `compare --output <report> <gen1> ...`, so the report
+        # path the fake helper must write to is $3.
+        report_arg = '"$3"'
+        for label, body, needle in (
+            # Marker without a report at all: the verdict cannot be
+            # corroborated, so it is not believed.
+            ("a marker with no report",
+             f'echo "{mismatch_line}"\nexit 1', "no readable report"),
+            # Marker contradicted by the exit status, in both directions.
+            ("a success marker with a failing status",
+             f'echo "{ok_line}"\n'
+             f'printf \'{{"outcome":"ok"}}\' > {report_arg}\nexit 1',
+             "contradicts it"),
+            ("a mismatch marker with a zero status",
+             f'echo "{mismatch_line}"\n'
+             f'printf \'{{"outcome":"mismatch"}}\' > {report_arg}\nexit 0',
+             "contradicts it"),
+            # Marker contradicted by the report's own outcome field.
+            ("a marker the report disagrees with",
+             f'echo "{mismatch_line}"\n'
+             f'printf \'{{"outcome":"ok"}}\' > {report_arg}\nexit 1',
+             "report names outcome"),
+            # Two protocol lines in one run: which one is the answer?
+            ("two conflicting protocol lines",
+             f'echo "{ok_line}"\necho "{mismatch_line}"\n'
+             f'printf \'{{"outcome":"ok"}}\' > {report_arg}\nexit 1',
+             "conflicting outcomes"),
+            # A report that is not the promised object.
+            ("a report that is not an object",
+             f'echo "{mismatch_line}"\n'
+             f'printf \'[1,2,3]\' > {report_arg}\nexit 1',
+             "not the object the protocol promises"),
+        ):
+            helper = _fake_helper(tmp, body)
+            with _with_helper(helper):
+                outcome, report, detail = codec.compare_session_snapshots(
+                    paths)
+            expect(outcome == codec.COMPARE_ERROR,
+                   f"{label} is an error about the toolchain, not a verdict "
+                   f"about the saves (got {outcome!r}: {detail!r})")
+            expect(report is None,
+                   f"{label} yields no report to act on (got {report!r})")
+            expect(needle in detail,
+                   f"{label} says WHICH signal disagreed (wanted {needle!r}, "
+                   f"got {detail!r})")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_diagnostic_pair_falls_back_without_a_usable_report() -> None:
+    print("\n-- diff_pair degrades to the first two paths rather than "
+          "raising")
+    tmp = Path(tempfile.mkdtemp(prefix="compare_pair_"))
+    try:
+        paths = [tmp / f"gen{i}.synworld" for i in range(1, 5)]
+        for path in paths:
+            path.write_bytes(b"")
+        # A pure unit of the consumer's own selection, so the fallback is
+        # exercised without asking the helper to malfunction: `None`, a
+        # non-object, a report naming nothing divergent, and one naming a
+        # path that is not in this run at all.
+        for label, report in (("no report", None),
+                              ("a non-object report", ["nope"]),
+                              ("nothing divergent",
+                               {"reference": str(paths[0]),
+                                "snapshotDiffers": [],
+                                "luaComponentDiffers": []}),
+                              ("a foreign path",
+                               {"reference": str(paths[0]),
+                                "snapshotDiffers": ["/elsewhere/gen9"],
+                                "luaComponentDiffers": []})):
+            expect(persistence_snapshot.diff_pair(paths, report) == paths[:2],
+                   f"{label} falls back to the first two paths (got "
+                   f"{persistence_snapshot.diff_pair(paths, report)})")
+        expect(persistence_snapshot.diff_pair(
+                   paths, {"reference": str(paths[0]),
+                           "snapshotDiffers": [str(paths[3])],
+                           "luaComponentDiffers": [str(paths[2])]})
+               == [paths[0], paths[2]],
+               "and the EARLIER of two divergent paths wins, whichever half "
+               "names it")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -461,7 +561,9 @@ TESTS = [
     test_a_gen4_divergence_is_reported_too,
     test_an_undecodable_generation_is_a_decode_failure_not_a_mismatch,
     test_a_helper_that_cannot_be_run_is_not_a_verdict_about_the_saves,
-    test_a_mismatch_verdict_survives_an_unreadable_report,
+    test_a_marker_inside_a_fixture_path_is_not_read_as_an_outcome,
+    test_an_answer_this_bridge_cannot_corroborate_is_an_error,
+    test_the_diagnostic_pair_falls_back_without_a_usable_report,
     test_fewer_than_two_paths_never_reaches_the_helper,
     test_the_report_is_json_the_consumer_can_actually_read,
     test_the_two_halves_of_the_comparison_are_reported_separately,

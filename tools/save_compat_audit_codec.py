@@ -419,15 +419,58 @@ COMPARE_MISMATCH = "mismatch"
 COMPARE_DECODE_FAILED = "decode_failed"
 COMPARE_ERROR = "error"
 
-#: The stdout marker `app-save-codec/Main.hs`'s `compare` prints for each
-#: of the three fixture-describing outcomes. The marker is authoritative,
-#: not the exit status: a mismatch and a decode failure both exit 1, and
-#: so does a helper that died before deciding anything.
-_COMPARE_MARKERS = (
-    ("COMPARE_OK", COMPARE_OK),
-    ("COMPARE_MISMATCH", COMPARE_MISMATCH),
-    ("DECODE_FAILED", COMPARE_DECODE_FAILED),
+#: The `compare` protocol: for each fixture-describing outcome, the
+#: stdout marker that names it and the exit status that must accompany
+#: it.
+#:
+#: THREE independent signals have to agree before an outcome is
+#: believed -- the marker, the exit status, and the report's own
+#: `outcome` field -- and none of them alone is the answer.
+#:
+#: The reason is that the marker travels beside attacker-shaped data.
+#: `DECODE_FAILED`'s line carries the offending PATH, and a save file
+#: whose own name contains `COMPARE_OK` is a perfectly ordinary path for
+#: a probe to hand this: a substring scan over the combined output would
+#: then read a decode failure as success and let
+#: `compare_session_files` pass on saves it never compared. The marker
+#: is therefore matched as a whole LINE (a `show`-escaped Haskell string
+#: can never contain a real newline, so no path can forge one), and the
+#: exit status and the report are cross-checked against it, so forging
+#: an outcome would take three simultaneous lies rather than one
+#: filename.
+_COMPARE_PROTOCOL = (
+    ("COMPARE_OK", COMPARE_OK, 0),
+    ("COMPARE_MISMATCH", COMPARE_MISMATCH, 1),
+    ("DECODE_FAILED", COMPARE_DECODE_FAILED, 1),
 )
+
+
+def _compare_protocol_lines(output: str) -> list[tuple[str, str, int, str]]:
+    """Every `compare` protocol LINE in `output`, in order.
+
+    A protocol line is one whose first field -- the text before the
+    first `:`, stripped -- EQUALS one of the three markers. Two
+    properties follow, and both are load-bearing:
+
+      * a marker appearing anywhere else on the line is not a marker.
+        `DECODE_FAILED`'s line carries the offending fixture path, and a
+        save named `gen2-COMPARE_OK.synworld` is an ordinary thing for a
+        probe to hand this;
+      * a marker-SHAPED token is not one either, because the head is
+        compared for equality rather than by prefix, so
+        `NOT_COMPARE_OK` and `COMPARE_OKAY` both fail to match.
+
+    A Haskell `show`-escaped string can never contain a real newline, so
+    no fixture path can split itself across lines to forge a head.
+    """
+    found = []
+    for line in output.splitlines():
+        head = line.split(":", 1)[0].strip()
+        for marker, outcome, status in _COMPARE_PROTOCOL:
+            if head == marker:
+                found.append((marker, outcome, status, line.strip()))
+                break
+    return found
 
 
 def compare_session_snapshots(
@@ -453,8 +496,11 @@ def compare_session_snapshots(
         `report`'s `decodeErrors` pairs each path with the production
         codec's own error text.
       * `COMPARE_ERROR` -- the helper could not be resolved, could not be
-        run, overran its allowance, or exited without printing any of the
-        three markers. `report` is None and `diagnostic` says so. This is
+        run, overran its allowance, or answered in a way this bridge
+        will not believe: no protocol line, more than one, an exit
+        status that contradicts the line, or a report that is missing,
+        unreadable, or names a different outcome. `report` is None and
+        `diagnostic` says which. This is
         a statement about the toolchain, never about the saves.
 
     Fewer than two paths is `COMPARE_OK` with no subprocess at all: a
@@ -462,7 +508,8 @@ def compare_session_snapshots(
     call as a usage error rather than answering it.
     """
     if len(paths) < 2:
-        return COMPARE_OK, {"reference": str(paths[0]) if paths else None,
+        return COMPARE_OK, {"outcome": COMPARE_OK,
+                            "reference": str(paths[0]) if paths else None,
                             "snapshotDiffers": [],
                             "luaComponentDiffers": []}, ""
     with tempfile.NamedTemporaryFile(
@@ -474,30 +521,52 @@ def compare_session_snapshots(
             + [str(p) for p in paths])
         if returncode is None:
             return COMPARE_ERROR, None, why
-        outcome = next((name for marker, name in _COMPARE_MARKERS
-                        if marker in output), None)
-        if outcome is None:
+        tail = "\n".join(output.splitlines()[-60:])
+        markers = ", ".join(m for m, _, _ in _COMPARE_PROTOCOL)
+
+        lines = _compare_protocol_lines(output)
+        if not lines:
             return COMPARE_ERROR, None, (
                 f"the codec helper's `compare` exited {returncode} without "
-                f"reporting any of "
-                f"{', '.join(marker for marker, _ in _COMPARE_MARKERS)}:\n"
-                + "\n".join(output.splitlines()[-60:]))
+                f"a protocol line reporting any of {markers}:\n{tail}")
+        outcomes = {outcome for _marker, outcome, _status, _line in lines}
+        if len(outcomes) > 1:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported "
+                f"{len(outcomes)} conflicting outcomes "
+                f"({', '.join(sorted(outcomes))}) in one run:\n{tail}")
+        _marker, outcome, expected_status, line = lines[0]
+        # An OK line with a failing status, or a mismatch line with a
+        # zero one, is a helper this bridge does not understand -- not a
+        # verdict to round off in either direction.
+        if (returncode == 0) != (expected_status == 0):
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but "
+                f"exited {returncode}, which contradicts it:\n{tail}")
+
         # ABSENCE is not the test, for the reason `dump_fixture_descriptors`
         # states: `NamedTemporaryFile(delete=False)` already created the
-        # path, so a helper that wrote nothing leaves an EMPTY file. The
-        # report is a DIAGNOSTIC refinement, though, not the answer -- the
-        # marker already decided the outcome -- so an unreadable one
-        # degrades to `None` beside a real verdict rather than discarding
-        # it and reporting a toolchain error the saves did not cause.
+        # path, so a helper that wrote nothing leaves an EMPTY file -- the
+        # condition to judge is whether it parses as the object the
+        # protocol promises. The report is REQUIRED, not a refinement: it
+        # is the third of the three signals that have to agree, and a
+        # verdict this bridge cannot corroborate is a toolchain problem to
+        # report as one rather than a claim about the saves to pass on.
         try:
             report = json.loads(report_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            report = None
+        except (OSError, json.JSONDecodeError) as error:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but wrote "
+                f"no readable report at {report_path}: {error}\n{tail}")
         if not isinstance(report, dict):
-            report = None
-        detail = "\n".join(
-            line for line in output.splitlines()
-            if any(marker in line for marker, _ in _COMPARE_MARKERS[1:]))
-        return outcome, report, ("" if outcome == COMPARE_OK else detail)
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but wrote "
+                f"{type(report).__name__}, not the object the protocol "
+                f"promises:\n{tail}")
+        if report.get("outcome") != outcome:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but its "
+                f"report names outcome {report.get('outcome')!r}:\n{tail}")
+        return outcome, report, ("" if outcome == COMPARE_OK else line)
     finally:
         report_path.unlink(missing_ok=True)

@@ -619,8 +619,55 @@ def _parallel_gate_wiring_self_test() -> list[str]:
          _PARALLEL_GATE_WORKFLOW_GOOD.replace(
              "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
              "        run: echo skipped\n"),
-         "expected exactly one `cabal build`"),
+         "must run exactly one command"),
+        # An EXTRA target no blacklist would have thought of. The exact
+        # set is what catches it: `lib:synarchy` is not a suite, is not
+        # `all`, and costs build time the job does not need.
+        ("an extra target outside the pinned set",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec "
+             "lib:synarchy\n"),
+         "builds 'lib:synarchy', which no probe execs"),
+        ("a target nobody has invented yet",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec "
+             "exe:some-future-helper\n"),
+         "builds 'exe:some-future-helper', which no probe execs"),
+        # A SECOND Cabal command beside a correct build: the build line
+        # still reads exactly right, and the suite is compiled anyway.
+        ("a cabal test beside the correct build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: |\n"
+             "          cabal build exe:synarchy exe:synarchy-save-codec\n"
+             "          cabal test synarchy-test-headless\n"),
+         "must run exactly one command"),
+        ("a second cabal build beside the first",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: |\n"
+             "          cabal build exe:synarchy exe:synarchy-save-codec\n"
+             "          cabal build synarchy-test-headless\n"),
+         "must run exactly one command"),
+        ("a non-Cabal command beside the build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: |\n"
+             "          cabal build exe:synarchy exe:synarchy-save-codec\n"
+             "          python3 tools/pack_atlas.py --validate-only\n"),
+         "must run exactly one command"),
+        # The one shape that must NOT fail: the same two targets in the
+        # other order. `cabal build` is indifferent, so pinning order
+        # would be diff churn rather than a cost rule.
     )
+    reordered = _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+        "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+        "        run: cabal build exe:synarchy-save-codec exe:synarchy\n")
+    _expect(failures, problems(reordered) == [],
+            "the pinned targets in the other order should still pass, got "
+            f"{problems(reordered)}")
     for label, mutated, needle in mutations:
         got = problems(mutated)
         _expect(failures, any(needle in problem for problem in got),
