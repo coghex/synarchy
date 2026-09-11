@@ -775,6 +775,7 @@ library
                      World.Thread.Command.Edit.Sync
                      World.Thread.Command.Reaction
                      World.Thread.Command.Reaction.Zoom
+                     World.Thread.Command.Reaction.Zoom.Live
                      World.Thread.Command.Edit.Terrain
                      World.Thread.Command.Edit.Structure
                      World.Thread.Command.Edit.Vegetation
@@ -1073,7 +1074,6 @@ library
                      World.ZoomMap.Cache.Pixels
                      World.ZoomMap.Artifact
                      World.ZoomMap.ChunkTexture
-                     World.ZoomMap.Live
                      World.ZoomMap.Live.Types
                      World.ZoomMap.ColorPalette
                      World.ZoomMap.Pyramid

@@ -7,7 +7,7 @@
 --   invalidation every terrain edit already does: it rebuilds its quads
 --   from the chunk in 'World.State.Types.wsTilesRef', which the edit has
 --   already replaced. The ZOOM map does not. Its renderer
---   ('World.Render.Zoom.Quads.renderFromBaked') samples a precomputed
+--   (@World.Render.Zoom.Quads.renderFromBaked@) samples a precomputed
 --   atlas texture, and 'World.Render.Zoom.Bake.ensureBakedAtlas' only
 --   re-derives quads from it — the terrain pixels themselves were
 --   produced once at page initialization and nothing regenerates them.
@@ -43,7 +43,8 @@ import Engine.Core.State
     (EngineEnv, ZoomAtlasUpload(..), queueZoomAtlasUpload, zoomAtlasDataRef)
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Types
-import World.ZoomMap.Live (liveChunkZoom, patchAtlasTile)
+import World.Thread.Command.Reaction.Zoom.Live
+    (liveChunkZoom, patchAtlasTile)
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 
 -- | Regenerate and republish the zoom-map terrain of every chunk in
@@ -53,7 +54,7 @@ import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 --   SUMMARY entry in 'wsZoomCacheRef' is refreshed unconditionally: a
 --   page with no atlas of its own bakes one texture per chunk from that
 --   entry's majority material and elevation
---   ('World.Render.Zoom.Bake.bakeEntries'), so a refresh that updated
+--   (@World.Render.Zoom.Bake.bakeEntries@), so a refresh that updated
 --   only the atlas would leave such a page reading generation-time data
 --   forever. The atlas BLOCK is regenerated and republished on top of
 --   that, for the page that has one.

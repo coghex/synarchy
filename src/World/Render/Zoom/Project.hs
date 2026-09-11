@@ -12,8 +12,8 @@
 --   a padded terrain footprint instead.
 --
 --   This is that projection, run forwards: the same chunk rectangle
---   'World.Render.Zoom.Bake.bakeEntriesAtlas' bakes, the same wrap
---   offset 'World.Render.Zoom.Quads.makeMapQuads' applies, the same
+--   @World.Render.Zoom.Bake.bakeEntriesAtlas@ bakes, the same wrap
+--   offset @World.Render.Zoom.Quads.makeMapQuads@ applies, the same
 --   texel transform 'World.ZoomMap.Types.zoomTexelTile' colours through,
 --   and the inverse of the pixel-to-world unprojection the hit test
 --   shares with the camera.

@@ -20,7 +20,19 @@
 --   chunk instead would mean re-deriving the climate, ice and
 --   vegetation rules a second time, and any drift between the two
 --   derivations would show as a seam around every refreshed chunk.
-module World.ZoomMap.Live
+--
+--   CONSUMER SIDE, deliberately, and that is why this does not sit under
+--   @src\/World\/ZoomMap@ beside the passes it calls. #2298's D-1 gives
+--   that tree one direction: the map producer derives its own data and
+--   never reaches a live chunk, a renderer, or the chunk residency
+--   surface — a rule the map-pyramid spec enforces by scanning every
+--   source under it for exactly those dependencies. This module's whole
+--   job is to take a 'World.Chunk.Types.LoadedChunk', so it belongs on
+--   the side that HAS one: beside "World.Thread.Command.Reaction.Zoom",
+--   its only production caller, where a live edit is already in hand.
+--   The direction is unchanged — this imports the producer, never the
+--   other way round.
+module World.Thread.Command.Reaction.Zoom.Live
     ( ZoomTileOverride(..)
     , liveChunkZoom
     , liveTileOverrides

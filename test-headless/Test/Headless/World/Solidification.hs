@@ -77,7 +77,7 @@ import World.Thread.Command.Reaction
 import World.Thread.Command.Reaction.Zoom (atlasTileIndexFor)
 import World.Render.Zoom.Project (zoomTexelExtent, zoomTileScreenRect)
 import World.ZoomMap.Cache.ChunkPass (snowVegFor)
-import World.ZoomMap.Live
+import World.Thread.Command.Reaction.Zoom.Live
     (ZoomTileOverride(..), liveChunkZoom, liveTileOverrides, patchAtlasTile)
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Types

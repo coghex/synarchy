@@ -197,7 +197,7 @@ clearDirty sws = sws { swsDirtyChunks = HS.empty }
 --
 --   A chunk the sim no longer holds reads as generation 0, the same
 --   baseline 'Sim.Chunk.loadedChunkState' gives a freshly (re)loaded
---   chunk and the same value 'World.Thread.Command.writebackIsFresh'
+--   chunk and the same value @World.Thread.Command.writebackIsFresh@
 --   reads for a page entry that eviction retired. So a result whose
 --   chunk was evicted between emission and delivery is judged by exactly
 --   the rule everything else is, rather than by a special case.

@@ -3,7 +3,8 @@
 -- | What a page has to RETAIN to refresh one chunk of its zoom map
 --   while the page is live (#2485).
 --
---   A leaf on purpose. The generator that uses this ("World.ZoomMap.Live")
+--   A leaf on purpose. The generator that uses this
+--   ("World.Thread.Command.Reaction.Zoom.Live")
 --   reaches the worldgen pipeline, which reaches "World.Types" and
 --   therefore "World.State.Types" — so the record the page HOLDS cannot
 --   live beside the generator without a cycle. Only the palette and the
@@ -23,7 +24,7 @@ import World.ZoomMap.ColorPalette (ZoomColorPalette)
 --
 --   Retaining the bytes is the cost of live zoom-map correctness. The
 --   renderer samples ONE atlas texture
---   ('World.Render.Zoom.Bake.bakeEntriesAtlas'); there is no per-chunk
+--   (@World.Render.Zoom.Bake.bakeEntriesAtlas@); there is no per-chunk
 --   texture to replace and no partial-upload path, so a changed tile
 --   can only reach the screen as a whole re-uploaded image, and the
 --   only way to assemble that image without regenerating every chunk

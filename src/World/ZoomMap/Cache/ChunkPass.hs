@@ -233,7 +233,7 @@ zoomChunkPass params registry mBorderedCache coord@(ChunkCoord ccx ccy) =
 --   its own — its @hasIce@ flag only suppresses the fluid tint — so ice
 --   reaches the pixels ONLY as this vegetation id. Anything that
 --   rebuilds a tile's tuple therefore has to reproduce it, or an iced
---   cell comes out as bare material: 'World.ZoomMap.Live' does exactly
+--   cell comes out as bare material: "World.Thread.Command.Reaction.Zoom.Live" does exactly
 --   that for every cell a live edit overrode, which is why this is
 --   shared rather than inlined.
 snowVegFor ∷ Word64 → Int → Int → Word8

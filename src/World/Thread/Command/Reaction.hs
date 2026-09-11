@@ -12,7 +12,7 @@
 --   'World.State.Types.wsChunkEditGenRef' (the generation mint).
 --
 --   Durability is why the stone is an EDIT and not a writeback.
---   'World.Thread.Command.applyOneWriteback' replaces a chunk's sim-owned
+--   @World.Thread.Command.applyOneWriteback@ replaces a chunk's sim-owned
 --   fields in memory and appends nothing, so terrain written only that
 --   way would vanish the moment the chunk was evicted or the save
 --   reloaded. A @'World.Edit.Types.WeAddTile'@ appended to
@@ -87,7 +87,7 @@ import World.Types
 -- | Is every chunk this result touched still at the generation its half
 --   was computed from?
 --
---   The same equality 'World.Thread.Command.writebackIsFresh' applies to
+--   The same equality @World.Thread.Command.writebackIsFresh@ applies to
 --   one chunk, over all of them at once: an absent entry reads as
 --   generation 0, the baseline a never-edited — or evicted and reloaded
 --   — chunk sits at on both sides. Equality, not @>=@, for the same
