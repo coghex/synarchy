@@ -54,6 +54,10 @@ ALL_KEYS = {p[0] for p in PROBES}
 # their subsystem.
 # --------------------------------------------------------------------------
 CI_ELIGIBLE = {
+    # One empty-arena boot, generated resident fixtures, no AI decisions,
+    # worldgen, GPU or physical device. Polls monotonic callback/admission/reset
+    # facts; numerical DSP and injected failure cases have separate native gates.
+    "audio_null",
     # #1220: the only automated proof that the two water AI actions mutate
     # the canteen instance they selected. Deterministic by construction —
     # the unit_ai tick is neutralised and the sim is PAUSED, so the two
@@ -167,6 +171,9 @@ class Reason:
 # branch must not add a `flaky` reason opportunistically -- and never from
 # an old mention or one unrelated failing run.
 MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
+    "audio_manual": (Reason(NEEDS_GPU, "renders the actual Settings screen through Vulkan"),
+                     Reason(TARGETED, "direct invocation requires --interactive for owner listening/device recovery "
+                            "or --offscreen-check for null output; never opens speakers from CI")),
     # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
     # Linux CI runner destabilizes run-to-run;
     # within-run retry can't fix run-to-run flakiness. ---
@@ -617,6 +624,10 @@ CORE_GLOBS = [
 # Empty sets are intentional for subsystems whose behavior probes are now
 # manual-only because they are scenario-heavy or too narrowly targeted.
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
+    (["src/Engine/Audio/*", "cbits/audio/*", "cbits/vendor/miniaudio/*",
+      "data/audio/*", "config/audio*.yaml", "tools/audio_null_probe.py",
+      "src/Engine/Scripting/Lua/API/Audio*", "src/Engine/Scripting/Lua/API/Register/Audio.hs",
+      "scripts/settings/audio_tab.lua"], {"audio_null"}),
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua"],
      # medic_coord gates the bestMedicFor/medicAvailable distance-discounted

@@ -124,6 +124,7 @@ runDump layers gen region = do
         , ewWorld  = Just worldThreadState
         , ewInput  = Nothing
         , ewLua    = Just luaThreadState
+        , ewAudio  = Nothing
         }
 
   let engineAction ∷ EngineM' ()

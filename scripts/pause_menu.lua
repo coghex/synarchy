@@ -57,6 +57,7 @@ function pauseMenu.buildMenuItems()
 
     table.insert(items, {
         name = "settings",
+        activationSound = "menu_selected",
         label = "Settings",
         onClick = function() pauseMenu.onSettings() end,
     })
@@ -230,7 +231,10 @@ function pauseMenu.createUI()
         -- drawn edge activates the item.
         UI.setInteractiveOverflow(boxH, true)
 
-        pauseMenu.clickHandlers[boxH] = item.onClick
+        pauseMenu.clickHandlers[boxH] = function()
+            if item.activationSound then audio.play(item.activationSound) end
+            item.onClick()
+        end
 
         local textH = UI.newText(
             item.name .. "_pause_label",

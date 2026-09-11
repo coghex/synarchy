@@ -42,6 +42,7 @@ data EngineWorkers = EngineWorkers
   , ewWorld  ∷ Maybe ThreadState
   , ewInput  ∷ Maybe ThreadState
   , ewLua    ∷ Maybe ThreadState
+  , ewAudio  ∷ Maybe ThreadState
   }
 
 -- | One worker in teardown order: the name shutdown announces it under,
@@ -72,18 +73,20 @@ postRenderWorkers ∷ EngineWorkers → [WorkerSlot]
 postRenderWorkers w = [ ("unit",  ewUnit w)
                       , ("world", ewWorld w)
                       , ("input", ewInput w)
-                      , ("Lua",   ewLua w) ]
+                      , ("Lua",   ewLua w)
+                      , ("audio", ewAudio w) ]
 
 -- | Every worker, in the single teardown order: combat → sim → unit →
---   world → input → Lua. Composed from the two phases above so the
+--   world → input → Lua → audio. All audio producers stop before audio.
+--   Composed from the two phases above so the
 --   order cannot be stated twice.
 allWorkers ∷ EngineWorkers → [WorkerSlot]
 allWorkers w = preRenderWorkers w ⧺ postRenderWorkers w
 
 -- | Stop one phase's workers in list order, announcing each by name
 --   first, and calling 'shutdownThread' for every slot that started
---   one. It is production's one caller of 'shutdownThread' outside
---   'Engine.Core.Thread' itself:
+--   one. It owns shared shutdown phases; the optional audio worker also
+--   joins its own child if its startup caller is cancelled:
 --   'Engine.Loop.Shutdown.shutdownEngineWith' calls it once per phase,
 --   'shutdownEngineWorkers' calls it once for @allWorkers@ with a
 --   no-op announce, and @App.Boot.luaThreadOrAbort@ calls it with the

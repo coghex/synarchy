@@ -75,6 +75,7 @@ local list = require("scripts.ui.list")
 local unitAnimationView = require("scripts.ui.unit_animation_view")
 local buildingAssetView = require("scripts.ui.building_asset_view")
 local previewZoom = require("scripts.ui.preview_zoom")
+local previewAudio = require("scripts.ui.preview_audio")
 
 -- #886: self-register into the require cache (the same convention
 -- scripts/unit_ai.lua and scripts/debug.lua use) so the debug console
@@ -847,6 +848,8 @@ function previewManager.onAssetLoaded(assetType, handle, path)
             buildUnitUI(browse.unit, fbW, fbH, nil, nil, nil)
         elseif browse and browse.mode == "building" then
             buildBuildingUI(browse.building, fbW, fbH, nil, nil)
+        elseif browse and browse.mode == "audio" then
+            mode, readyState = "audio", "ready"
         else
             -- #888 Requirement 4: the Phase 1 (#632) placeholder-label
             -- boot is GONE. Every canonical --preview target now
@@ -857,6 +860,7 @@ function previewManager.onAssetLoaded(assetType, handle, path)
         end
 
         UI.showPage(page)
+        previewAudio.init(labelFont, page, browse)
     elseif assetType == "texture" and handle == pendingHandle then
         local resolvedPath = pendingPath
         pendingHandle = nil
@@ -943,6 +947,8 @@ end
 -- smoothness, never which frame is correct. Read that clock lazily so an
 -- idle list/item update keeps its existing engine-state-free contract.
 function previewManager.update(dt)
+    previewAudio.update()
+    if previewAudio.isOpen() then return end
     local now = nil
 
     -- One repeat at most per rendered update. Resetting from `now` avoids a
@@ -992,6 +998,7 @@ function previewManager.update(dt)
 end
 
 function previewManager.shutdown()
+    previewAudio.shutdown()
     if browserId then
         assetBrowser.destroy(browserId)
         browserId = nil
@@ -1054,6 +1061,12 @@ function previewManager.onListItemClick(elemHandle)
     return assetBrowser.handleCallback("onListItemClick", elemHandle)
 end
 
+function previewManager.onPreviewAudioClick(elemHandle)
+    local handled = previewAudio.click(elemHandle)
+    if handled then repeatKey, repeatNextAt = nil, nil end
+    return handled
+end
+
 function previewManager.onScrollUp(elemHandle)
     if not browserId then return false end
     return assetBrowser.handleCallback("onScrollUp", elemHandle)
@@ -1100,6 +1113,7 @@ end
 -- update() supplies the fast held-key cadence above because the engine
 -- deliberately withholds platform-specific Repeating transitions from Lua.
 function previewManager.onKeyDown(key)
+    if previewAudio.isOpen() then return previewAudio.key(key) end
     if key == "Escape" then
         repeatKey = nil
         repeatNextAt = nil
@@ -1171,6 +1185,7 @@ end
 -- receives (Engine.Scripting.Lua.Thread.Dispatch's
 -- LuaFramebufferResize -> "onFramebufferResize").
 function previewManager.onFramebufferResize(width, height)
+    previewAudio.resize(width, height)
     if not page then return end
     if mode == "list" then
         local prevPath = browserId and assetBrowser.getSelectedPath(browserId)
@@ -1262,6 +1277,7 @@ function previewManager.dump()
         state = readyState,
         loadedPaths = loadedPaths,
         zoom = zoomDump(),
+        audio = previewAudio.dump(),
     }
     if mode == "list" then
         -- The FULL discovered entry list, not just entryCount + the

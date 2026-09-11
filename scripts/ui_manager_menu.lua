@@ -127,6 +127,7 @@ end
 
 function uiManager.onSaveBrowserBack(elemHandle)
     widgets.handleNonTextBoxClick()
+    audio.play("menu_back")
     if saveBrowser.onBackCallback then
         saveBrowser.onBackCallback()
         return true

@@ -5,6 +5,7 @@ module App.Graphical
   ) where
 
 import UPrelude
+import Engine.Audio.Native (Sink(..))
 import Data.IORef (readIORef)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Defaults (defaultWindowConfig)
@@ -27,7 +28,7 @@ import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import App.Boot (FatalStream(..), bootConfig, handleBootResult
-                , luaThreadOrAbort)
+                , luaThreadOrAbort, withBootAudio)
 import App.Exception (guardNativeExceptions)
 
 -- | Run engine with full graphics (GLFW window + Vulkan)
@@ -38,45 +39,48 @@ runGraphical bootProfile mPort = do
 
   let env' = bootConfig ModeGraphical bootProfile mPort env
 
-  inputThreadState ← startInputThread env'
-  -- Graphical keeps its long-standing tolerance of a failed listener
-  -- (it has a window and a keyboard), so this can only ever take the
-  -- Right branch -- every mode routes through the one tail so a future
-  -- policy change cannot be missed here (#1190).
-  luaThreadState   ← startLuaThread env'
-      ⌦ luaThreadOrAbort env' [("input", Just inputThreadState)]
-  worldThreadState ← startWorldThread env'
-  unitThreadState  ← startUnitThread env'
-  simThreadState   ← startSimThread env'
-  combatThreadState ← startCombatThread env'
+  withBootAudio env' RealWithNullFallback $ \audioThreadState → do
 
-  let workers = EngineWorkers
-        { ewCombat = Just combatThreadState
-        , ewSim    = Just simThreadState
-        , ewUnit   = Just unitThreadState
-        , ewWorld  = Just worldThreadState
-        , ewInput  = Just inputThreadState
-        , ewLua    = Just luaThreadState
-        }
+    inputThreadState ← startInputThread env'
+    -- Graphical keeps its long-standing tolerance of a failed listener
+    -- (it has a window and a keyboard), so this can only ever take the
+    -- Right branch -- every mode routes through the one tail so a future
+    -- policy change cannot be missed here (#1190).
+    luaThreadState   ← startLuaThread env'
+        ⌦ luaThreadOrAbort env' [("input", Just inputThreadState), ("audio", audioThreadState)]
+    worldThreadState ← startWorldThread env'
+    unitThreadState  ← startUnitThread env'
+    simThreadState   ← startSimThread env'
+    combatThreadState ← startCombatThread env'
 
-  videoConfig ← readIORef (videoConfigRef env')
+    let workers = EngineWorkers
+          { ewCombat = Just combatThreadState
+          , ewSim    = Just simThreadState
+          , ewUnit   = Just unitThreadState
+          , ewWorld  = Just worldThreadState
+          , ewInput  = Just inputThreadState
+          , ewLua    = Just luaThreadState
+          , ewAudio  = audioThreadState
+          }
 
-  let engineAction ∷ EngineM' ()
-      engineAction = do
-        logInfoM CatSystem "Starting engine..."
-        window ← GLFW.createWindow $ defaultWindowConfig videoConfig
-        modifyGraphicsState $ \gs → gs {
-                            glfwWindow = Just window }
+    videoConfig ← readIORef (videoConfigRef env')
 
-        let Window glfwWin = window
-        liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')
+    let engineAction ∷ EngineM' ()
+        engineAction = do
+          logInfoM CatSystem "Starting engine..."
+          window ← GLFW.createWindow $ defaultWindowConfig videoConfig
+          modifyGraphicsState $ \gs → gs {
+                              glfwWindow = Just window }
 
-        _ ← initializeVulkan window
-        mainLoop
+          let Window glfwWin = window
+          liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')
 
-        shutdownEngine ShutdownTargets { stWindow  = Just window
-                                       , stWorkers = workers }
-        logDebugM CatSystem "Engine shutdown complete."
+          _ ← initializeVulkan window
+          mainLoop
 
-  result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  handleBootResult FatalToStdout env' workers result
+          shutdownEngine ShutdownTargets { stWindow  = Just window
+                                         , stWorkers = workers }
+          logDebugM CatSystem "Engine shutdown complete."
+
+    result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
+    handleBootResult FatalToStdout env' workers result

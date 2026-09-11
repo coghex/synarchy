@@ -108,7 +108,7 @@ LOG = "/tmp/preview_cli_probe_engine.log"
 
 UNEXPOSED_CATEGORIES = ["equipment", "hud", "facemap", "utility", "vegetation"]
 GROUPED_CATEGORIES = ["units", "flora", "buildings", "structures"]
-CANONICAL_LIST_TEXT = "icons, items, ui, world, units, flora, buildings, structures"
+CANONICAL_LIST_TEXT = "icons, items, ui, world, units, flora, buildings, structures, audio"
 
 
 def check(name: str, ok: bool, detail: str = "") -> bool:
@@ -622,6 +622,19 @@ def check_dump_layer_selection() -> bool:
                                           else f"{len(tiles)} tiles"))
 
 
+def check_audio_targets() -> bool:
+    results = []
+    for target, expected in [
+        ("audio/unknown", "audio preview categories"),
+        ("audio/../synth", "audio preview categories"),
+        ("/tmp/synarchy-no-such-audio-file.wav", "audio file does not exist"),
+    ]:
+        result = run_cli("--preview", target)
+        results.append(check(f"audio target {target!r} rejects before boot",
+            result.returncode == 1 and "READY" not in result.stdout and expected in result.stderr))
+    return all(results)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     # Every registered probe accepts --port (#723) so tools/run_probes.py
@@ -638,6 +651,7 @@ def main() -> int:
     print("3. grouped categories, no item: exit 0, guidance printed")
     results += [check_grouped_no_item(c) for c in GROUPED_CATEGORIES]
 
+    results.append(check_audio_targets())
     results.append(check_nonexistent_simple_item())
     results.append(check_path_containment())
     results.append(check_directory_as_item())

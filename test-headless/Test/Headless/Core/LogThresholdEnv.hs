@@ -179,6 +179,7 @@ documentedEnvVars =
   , ("ENGINE_LOG_GENERAL", CatGeneral)
   , ("ENGINE_LOG_TEST", CatTest)
   , ("ENGINE_LOG_EVENT", CatEvent)
+  , ("ENGINE_LOG_AUDIO", CatAudio)
   ]
 
 -- | The category's displayed name — its constructor without the @Cat@

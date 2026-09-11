@@ -6,6 +6,10 @@ module Engine.Loop.Headless
 import UPrelude
 import Control.Concurrent (threadDelay)
 import Engine.Core.Monad
+import Engine.Audio.Listener (publishCameraListener)
+import Engine.Core.Capability.Audio (toAudioCapability)
+import Engine.Core.Capability.RenderView (toRenderViewCapability)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Engine.Loop.Mode (LoopMode(..), runLoopMode, frameBudgetMicros)
 
 -- | Headless main loop: processes messages without rendering. Lua
@@ -32,7 +36,12 @@ headlessMode = LoopMode
   , lmCleaningUpLog = "Headless engine cleaning up"
   , lmStoppedLog    = "Headless engine stopped"
   , lmPollEvents    = pure ()
-  , lmCameraUpdates = pure ()
+  -- Console camera/page changes still define the spatial listener. Publishing
+  -- reads that state without integrating input or requiring a renderer.
+  , lmCameraUpdates = do
+      env ← ask
+      liftIO $ publishCameraListener (toAudioCapability env)
+        (toRenderViewCapability env) (toWorldSimCapability env)
   , lmExitRequested = pure False
   , lmEndOfTick     = liftIO $ threadDelay frameBudgetMicros
   }

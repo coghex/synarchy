@@ -523,6 +523,12 @@ jobs:
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: cabal build all -v0
 
+      - name: Native audio and shared-header build boundary
+        if: steps.docs-fast-path.outputs.docs_only != 'true'
+        run: |
+          python3 tools/test_audio_native.py --sanitize
+          python3 tools/test_audio_build_dependencies.py
+
       - name: Build test suites
         if: steps.docs-fast-path.outputs.docs_only != 'true'
         run: |

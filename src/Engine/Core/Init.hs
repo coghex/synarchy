@@ -25,6 +25,10 @@ import Control.Exception (SomeException, try, displayException)
 import qualified System.Random as Random
 import qualified Combat.Types
 import Engine.ActionOutcome (emptyActionOutcomeQueue)
+import Engine.Audio.Config.Player (loadSavedVolumes)
+import Engine.Audio.Config.Runtime (loadRuntimeConfig)
+import Engine.Audio.Status (newAudioStatusRef)
+import Engine.Audio.Transport (newAudioTransport)
 import Engine.Asset.Types (defaultAssetPool)
 import Engine.Asset.YamlNotifications (loadNotificationCfg, OverridesFile)
 import Engine.PlayerEvent (emptyEventStore)
@@ -344,6 +348,11 @@ initializeEngineWith logBackend = do
  
   logger ← initLogger defaultLogConfig { lcBackend = logBackend }
   loggerRef ← newIORef logger
+  (audioRuntime, audioWarnings) ← loadRuntimeConfig
+  mapM_ (logWarn logger CatAudio) audioWarnings
+  audioVolumes ← loadSavedVolumes
+  audioTransport ← newAudioTransport audioRuntime audioVolumes
+  audioStatusRef ← newAudioStatusRef audioVolumes
   
   assetPool ← defaultAssetPool
   assetPoolRef ← newIORef assetPool
@@ -512,6 +521,8 @@ initializeEngineWith logBackend = do
         , loggerRef          = loggerRef
         , luaToEngineQueue   = luaToEngineQueue
         , luaQueue           = engineToLuaQueue
+        , audioTransport     = audioTransport
+        , audioStatusRef     = audioStatusRef
         , lifecycleRef       = lifecycleRef
         , assetPoolRef       = assetPoolRef
         , textureNameRegistryRef = texNameRegRef

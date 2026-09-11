@@ -38,6 +38,11 @@ PARALLEL_PORT_BASE = 9400
 # probe accepts --port (#723); each script's own default is its historical
 # fixed port, so a bare invocation behaves exactly as before.
 PROBES = [
+    ("audio_manual", "audio_manual_probe.py",
+     "manual listening/device diagnostics and rendered Audio settings; direct --interactive or --offscreen-check required"),
+    ("audio_null", "audio_null_probe.py",
+     "forced-null audio: real worker/callback, sampled+synth loops, spatial listener, "
+     "pause, volumes, diagnostics, session reset and shutdown in an isolated resource root"),
     ("action_outcome", "action_outcome_probe.py",
      "F4 action-outcome oracle: recordOutcome/drainActionOutcomes public "
      "contract, destructive drain, till/chop mixed-sweep partial paths (#646)"),
@@ -545,6 +550,7 @@ def timeout_plan(chosen, explicit: float | None = None) -> str:
 # measured on PR run 33666483367 (2026-09-02), listed longest first, which
 # is the order dispatch will consider them in.
 PROBE_EXPECTED_SECONDS: dict[str, float] = {
+    "audio_null": 8.0,
     "persistence_contract": 206.0,
     "craft": 97.0,
     "repair_item": 88.0,
@@ -664,4 +670,3 @@ def unknown_exact_keys(only: str | None) -> list[str]:
         return []
     known = {p[0] for p in PROBES}
     return [n for n in _only_tokens(only) if n not in known]
-

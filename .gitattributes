@@ -1,0 +1,2 @@
+# Keep the pinned upstream header byte-identical, including its trailing spaces.
+cbits/vendor/miniaudio/miniaudio.h whitespace=-blank-at-eol linguist-vendored

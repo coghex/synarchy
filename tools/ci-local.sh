@@ -129,6 +129,10 @@ printf 'package synarchy\n  ghc-options: -fforce-recomp\n' > "$LOCAL"
 step "build (library + executable, -Werror)"
 cabal build all -v0
 
+step "native audio and shared-header build boundary"
+python3 tools/test_audio_native.py --sanitize
+python3 tools/test_audio_build_dependencies.py
+
 step "build test suites"
 cabal build synarchy-test-headless -v0
 cabal build synarchy-test-graphical -v0

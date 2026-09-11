@@ -82,6 +82,11 @@ extra-doc-files:    CHANGELOG.md
 -- catalogue at all.
 extra-source-files: cabal.project
                     cbits/*.h
+                    BuildSupport/AudioDependencies.hs
+                    cbits/audio/*.h
+                    cbits/vendor/miniaudio/miniaudio.h
+                    cbits/vendor/miniaudio/LICENSE
+                    cbits/vendor/miniaudio/provenance.json
                     data/**/*.yaml
                     data/language/concept_id_baseline.json
                     assets/**/*.png
@@ -91,6 +96,17 @@ extra-source-files: cabal.project
                     test-headless/data/**/*.bin
                     test-headless/data/**/*.json
                     test-headless/data/**/*.txt
+                    test-headless/data/audio/*.wav
+                    test-headless/data/audio/*.flac
+                    test-headless/data/audio/*.mp3
+                    test-headless/data/audio/README.md
+                    test-headless/cbits/*.c
+                    test-headless/cbits/*.h
+                    tools/test_audio_native.py
+                    tools/test_audio_build_dependencies.py
+                    tools/generate_audio_fixtures.py
+                    docs/audio_authoring.md
+                    docs/audio_runtime.md
                     docs/save_compat/*.json
                     tools/playtest/critic_click.py
                     config/keybinds_default.yaml
@@ -98,17 +114,20 @@ extra-source-files: cabal.project
                     config/save_default.yaml
                     config/video_default.yaml
                     config/world_gen_default.yaml
+                    config/audio_default.yaml
+                    config/audio_runtime.yaml
 
 source-repository head
     type:     git
     location: https://github.com/coghex/synarchy.git
 
--- Setup.hs only clears the macOS quarantine xattr from freshly built
--- artifacts after each build; everything else is stock Cabal.
+-- Setup.hs tracks shared audio-header dependencies before building and clears
+-- the macOS quarantine xattr from freshly built artifacts afterwards.
 custom-setup
     setup-depends: base >=4.17 && <5
                  , Cabal >=3.16 && <3.17
                  , directory >=1.3 && <1.4
+                 , filepath >=1.4 && <1.6
                  , process >=1.6 && <1.7
 
 flag dev
@@ -219,6 +238,34 @@ library
     exposed-modules: UPrelude
                      Math
                      Engine.ActionOutcome
+                     Engine.Audio.Native
+                     Engine.Audio.Types
+                     Engine.Audio.Transport
+                     Engine.Audio.Spatial
+                     Engine.Audio.Health
+                     Engine.Audio.Status
+                     Engine.Audio.Preview.Types
+                     Engine.Audio.Preview.Discovery
+                     Engine.Audio.Preview.Catalog
+                     Engine.Audio.Runtime
+                     Engine.Audio.Thread
+                     Engine.Audio.API
+                     Engine.Audio.Listener
+                     Engine.Scripting.Lua.API.Audio
+                     Engine.Scripting.Lua.API.Audio.Args
+                     Engine.Scripting.Lua.API.Audio.Preview
+                     Engine.Scripting.Lua.API.Register.Audio
+                     Engine.Core.Capability.Audio
+                     Engine.Audio.Native.CatalogPOD
+                     Engine.Audio.Native.Command
+                     Engine.Audio.Config.Parse
+                     Engine.Audio.Config.Runtime
+                     Engine.Audio.Config.Player
+                     Engine.Audio.Catalog.Types
+                     Engine.Audio.Catalog.Schema
+                     Engine.Audio.Catalog.Yaml
+                     Engine.Audio.Catalog.Resolve
+                     Engine.Audio.Catalog.Upload
                      Engine.Asset.Base
                      Engine.Asset.TextureCache
                      Engine.Asset.Types
@@ -1124,8 +1171,25 @@ library
     c-sources:
         cbits/font_stb.c
         cbits/lua_debug.c
+        cbits/vendor/miniaudio/miniaudio.c
+        cbits/audio/syn_audio_core.c
+        cbits/audio/syn_audio_device.c
+        cbits/audio/syn_audio_ring.c
+        cbits/audio/syn_audio_catalog.c
+        cbits/audio/syn_audio_commands.c
+        cbits/audio/syn_audio_synth.c
+        cbits/audio/syn_audio_mixer.c
     include-dirs:
         cbits
+        cbits/vendor/miniaudio
+    cc-options: -std=c11 -DMA_NO_ENGINE -DMA_NO_RESOURCE_MANAGER -DMA_NO_NODE_GRAPH
+    if os(darwin)
+      frameworks: CoreFoundation CoreAudio AudioToolbox
+      -- The layout helper uses only libc. Strip unused pkg-config dylibs so it
+      -- does not need Vulkan's runtime rpath merely to print C sizes/offsets.
+      hsc2hs-options: --lflag=-Wl,-dead_strip_dylibs
+    else
+      extra-libraries: pthread m dl
 
 executable synarchy
     import: warnings, lang, build-policy
@@ -1296,6 +1360,21 @@ test-suite synarchy-test-headless
                    App.Preview.Config
                    App.ResourceRoot
                    Test.Headless.UPrelude
+                   Test.Headless.Audio.Native
+                   Test.Headless.Audio.Upload
+                   Test.Headless.Audio.Transport
+                   Test.Headless.Audio.Spatial
+                   Test.Headless.Audio.Runtime
+                   Test.Headless.Audio.Integration
+                   Test.Headless.Audio.Health
+                   Test.Headless.Audio.Thread
+                   Test.Headless.Audio.Preview
+                   Test.Headless.Audio.PreviewUI
+                   Test.Headless.Audio.Lua
+                   Test.Headless.Audio.Settings
+                   Test.Headless.Capability.Audio
+                   Test.Headless.Audio.Config
+                   Test.Headless.Audio.Catalog
                    Test.Headless.Harness
                    Test.Headless.Harness.GeneratedIds
                    Test.Headless.Harness.Isolation

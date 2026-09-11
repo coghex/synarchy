@@ -1,0 +1,14 @@
+{
+  "synth.png": {
+    "sha256": "4a5de885e9d391a372d4da5796cb2a03c6af779a9fe86689b3a0be1c1b77cba2",
+    "source": "/tmp/synarchy-preview-audio-9194-synth.png"
+  },
+  "file.png": {
+    "sha256": "07d8ac78691c25a3c4c6bd1ea0b5b2becc86aa7afba9a878510d338e6e489891",
+    "source": "/tmp/synarchy-preview-audio-9194-file.png"
+  },
+  "footer.png": {
+    "sha256": "23a0708697bdfa5f84e6a5535754a88ddad31c7ab81269c2b195d5e6f7284b46",
+    "source": "/tmp/synarchy-preview-audio-9194-footer.png"
+  }
+}

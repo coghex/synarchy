@@ -21,10 +21,17 @@ module App.Boot
   , handleBootResult
     -- * Required-debug-console boot failure (#1190)
   , luaThreadOrAbort
+  , withBootAudio
+  , withBootPreviewAudio
   ) where
 
 import UPrelude
-import Control.Exception (displayException)
+import Control.Exception (displayException, bracketOnError)
+import Engine.Audio.Native (Sink)
+import Engine.Audio.Thread (startAudioThread, startAudioPreviewThread)
+import Engine.Audio.Preview.Types (PreviewAudioConfig)
+import Engine.Core.Capability.Audio (toAudioCapability)
+import Engine.Core.Capability.Core (toCoreCapability)
 import Data.IORef (readIORef)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -37,6 +44,18 @@ import Engine.Core.Workers (EngineWorkers, WorkerSlot, shutdownEngineWorkers
 import Engine.Core.Types (EngineConfig(..), BootProfile(..), BootMode(..)
                          , PreviewBrowse)
 import Engine.Scripting.Lua.DebugServer (DebugListenerFailure, reportBootCleanup)
+
+-- | Audio starts before producers and is joined on any partial-boot exception.
+-- Ordinary teardown owns its final slot in EngineWorkers.
+withBootAudio ∷ EngineEnv → Sink → (Maybe ThreadState → IO α) → IO α
+withBootAudio env sink = bracketOnError
+  (startAudioThread (toCoreCapability env) (toAudioCapability env) sink)
+  (\thread → stopWorkers (\_ → pure ()) [("audio", thread)])
+
+withBootPreviewAudio ∷ EngineEnv → PreviewAudioConfig → Sink → (Maybe ThreadState → IO α) → IO α
+withBootPreviewAudio env options sink = bracketOnError
+  (startAudioPreviewThread options (toCoreCapability env) (toAudioCapability env) sink)
+  (\thread → stopWorkers (\_ → pure ()) [("audio", thread)])
 
 -- | The config patch every non-preview boot mode applies: record which
 --   boot mode argv selected and the profile it boots with, and take the

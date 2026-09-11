@@ -135,6 +135,14 @@ Autosave is **off** in this development build. Turn it on in
 waits and how many autosaves it keeps; they appear in the load list
 labelled `Autosave`, newest first. Until then, save before you exit.
 
+## Sound
+
+**Settings → Audio** has Master, World and Interface volume sliders from 0 to
+100; 0 mutes. Changes preview immediately. **Apply** keeps them for this session;
+**Save** remembers them. **Back** restores the last saved values, and **Defaults**
+previews defaults until you save. Zooming out to the map silences World sounds;
+Interface sounds remain available.
+
 ## Scope note
 
 This manual deliberately covers only what the screen cannot show: the
@@ -144,3 +152,13 @@ part of the game, and (for playtesting) part of the test. Please don't
 expand it into a full reference: playtesting uses it as the baseline
 for what a new player was told versus what they could figure out, so
 it must stay a one-page quickstart.
+
+### Audio preview
+
+For sound authoring, run `--preview audio` or select the bottom-left **Audio**
+button in a visual preview. **Synth** includes the two menu sounds; **Files**
+shows audio files under `assets/audio`. You can also run
+`--preview "/path/to/sound.wav"` to hear a local file. Click a sound to play it,
+then use Play, Stop and Reload while editing. Reload rereads changed sounds;
+Master and UI volume controls affect this preview session. See the
+[audio authoring guide](audio_authoring.md#audition-in-preview) for details.

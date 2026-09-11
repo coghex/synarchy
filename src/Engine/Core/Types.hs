@@ -331,6 +331,7 @@ data PreviewBrowse
   | PreviewItem !PreviewEntry
   | PreviewUnitAnims !PreviewUnit
   | PreviewBuildingAssets !PreviewBuilding
+  | PreviewAudio !Text !(Maybe FilePath)
   deriving (Eq, Show)
 
 data EngineConfig = EngineConfig

@@ -1,0 +1,8 @@
+schema_version: 1
+sounds:
+  - id: menu_selected
+    type: ui_effect
+    source: {synth: {instrument: menu_selected}}
+  - id: menu_back
+    type: ui_effect
+    source: {synth: {instrument: menu_back}}

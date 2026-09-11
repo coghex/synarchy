@@ -27,6 +27,8 @@ module World.Load.Publish
 
 import Engine.Graphics.Solar (maxSolarPages)
 import UPrelude
+import Engine.Audio.Transport (resetAudioSession)
+import Engine.Core.Capability.Audio (AudioCapability(..), toAudioCapability)
 import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
@@ -409,6 +411,7 @@ dedupPageIds = go HS.empty
 --   detect a "switch" regardless of whether the page id matches.
 resetTransientState ∷ EngineEnv → IO ()
 resetTransientState env = do
+    atomically $ resetAudioSession (acTransport $ toAudioCapability env)
     writeIORef (buildingGhostRef env) Nothing
     writeIORef (inputStateRef env) defaultInputState
     writeIORef (hudActivePageRef env) Nothing

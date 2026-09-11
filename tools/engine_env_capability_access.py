@@ -168,6 +168,8 @@ TEMPORARY_CEILING: dict[str, frozenset[str]] = {
     # -- the per-tick `captureLocked`/`acknowledgeCurrent` sites -- and
     # narrowed `World.Thread` onto it.
     "save-load-coordination": frozenset(),
+    # Approved by audio_system_design.md D-25; no temporary full access.
+    "audio-transport": frozenset(),
 }
 
 

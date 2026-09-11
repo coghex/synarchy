@@ -1,0 +1,42 @@
+schema_version: 1
+audio_runtime:
+  mix:
+    sample_rate_hz: 48000
+    render_chunk_frames: 256
+    target_fill_frames: 1024
+    ring_capacity_frames: 4096
+    max_voices: 128
+    command_batch_limit: 256
+    worker_idle_wait_us: 1000
+  transport:
+    event_capacity: 2048
+    control_backlog_warn: 64
+  device:
+    period_frames: 256
+    periods: 2
+    retry_initial_ms: 1000
+    retry_max_ms: 30000
+  smoothing:
+    bus_gain_ms: 20.0
+    instance_gain_ms: 10.0
+    pause_out_ms: 5.0
+    pause_in_ms: 10.0
+  spatial:
+    close_range_scale: 0.85
+    far_range_scale: 1.50
+    close_gain_db: 1.5
+    far_gain_db: -2.0
+  limiter:
+    knee: 0.95
+  assets:
+    max_encoded_mib: 16
+    max_asset_seconds: 15.0
+    max_total_seconds: 120.0
+    max_decoded_mib: 64
+  player_curve:
+    exponent: 2.0
+  telemetry:
+    publish_hz: 10
+    underruns_per_minute_warn: 3
+    service_budget_fraction_warn: 0.50
+    rate_limit_seconds: 10

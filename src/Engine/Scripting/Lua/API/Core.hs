@@ -18,6 +18,8 @@ module Engine.Scripting.Lua.API.Core
   ) where
 
 import UPrelude
+import Engine.Audio.Transport (setAudioPlayerPaused)
+import Engine.Core.Capability.Audio (AudioCapability(..), toAudioCapability)
 import Engine.Scripting.Lua.Types
 import Engine.Scripting.Lua.Script (callModuleFunction, loadModuleRef)
 import Engine.Scripting.Lua.Util (isValidRef, nowSeconds)
@@ -123,9 +125,10 @@ setPausedFn env = do
             -- The @…Held@ variants: 'withPlayerIntent' already holds
             -- the MVar that is also the epoch mutex ("World.Pause"), and
             -- re-entering it would deadlock.
-            withPlayerIntent (toWorldSimCapability env) $
+            withPlayerIntent (toWorldSimCapability env) $ do
                 if b then imposePauseHeld (toWorldSimCapability env)
                      else releasePauseHeld (toWorldSimCapability env)
+                atomically $ setAudioPlayerPaused (acTransport $ toAudioCapability env) b
             pure True
   Lua.pushboolean applied
   return 1
@@ -227,6 +230,12 @@ getPreviewBrowseFn env = do
       Lua.setfield (-2) "mode"
       pushPreviewBuilding building
       Lua.setfield (-2) "building"
+    Just (PreviewAudio category file) → do
+      Lua.newtable
+      Lua.pushstring "audio"
+      Lua.setfield (-2) "mode"
+      pushTextField "category" category
+      forM_ file (pushTextField "file" ∘ T.pack)
   return 1
   where
     pushPreviewEntry entry = do

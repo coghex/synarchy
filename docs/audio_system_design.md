@@ -52,6 +52,19 @@ concrete precondition
   physical-device failure.
 - **Arc label:** None proposed
 
+## Foreground scope amendment: preview audio, 2026-09-10
+
+The owner explicitly requested an audio player in `--preview` before the bear
+sound pilot. This supersedes this design's original exclusions of audio from
+preview (D-18 and AUD-2), while retaining dump's no-worker policy. Ordinary
+preview now uses real output with null fallback; hidden preview probes force
+null. The player exposes Synth/Files, both shipped menu cues, one selected local
+file, and reload in place. It adds no gameplay workers or persistent world
+state. The original planning evidence below is historical; the current contract
+is in [audio_runtime.md](audio_runtime.md#preview-authoring-boundary) and the
+workflow is in [audio_authoring.md](audio_authoring.md#audition-in-preview).
+This amendment does not disposition any issue-processing checklist.
+
 ## Current state and evidence
 
 Synarchy has no audio implementation today. `synarchy.cabal` compiles only
