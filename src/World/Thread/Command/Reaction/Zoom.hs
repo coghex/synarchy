@@ -99,8 +99,17 @@ refreshZoomTerrain env logger ws touched
                 -- The summary half, for every renderer — and NOT gated on
                 -- the palette: the page that has no palette is exactly
                 -- the page whose renderer reads nothing else.
-                forM_ regenerated $ \(cc, (entry, _)) →
-                    refreshCacheEntry logger ws cache cc entry
+                --
+                -- ONE vector threaded through every chunk, not one write
+                -- per chunk from the same starting vector: a delivery
+                -- that touches two chunks would otherwise have the
+                -- second write store the first chunk's ORIGINAL entry
+                -- beside the second chunk's new one, losing the first
+                -- refresh entirely.
+                refreshed ← foldM (refreshCacheEntry logger)
+                                  cache
+                                  [ (cc, entry) | (cc, (entry, _)) ← regenerated ]
+                writeIORef (wsZoomCacheRef ws) refreshed
                 -- …and the atlas half, for the page that has one.
                 forM_ mLive $ \live → do
                     patched ← foldM (patchOne logger cache) live
@@ -126,14 +135,16 @@ refreshZoomTerrain env logger ws touched
 --   ('World.ZoomMap.ChunkTexture.buildZoomAtlas' lays the blocks out by
 --   index), so anything that reordered or resized it would repoint every
 --   baked quad.
-refreshCacheEntry ∷ LoggerState → WorldState → V.Vector ZoomChunkEntry
-                  → ChunkCoord → ZoomChunkEntry → IO ()
-refreshCacheEntry logger ws cache coord entry =
+refreshCacheEntry ∷ LoggerState → V.Vector ZoomChunkEntry
+                  → (ChunkCoord, ZoomChunkEntry) → IO (V.Vector ZoomChunkEntry)
+refreshCacheEntry logger cache (coord, entry) =
     case atlasTileIndexFor cache coord of
-        Nothing → logWarn logger CatWorld $
-            "Zoom refresh skipped: chunk " <> tshow coord
-            <> " is not in this page's zoom cache"
-        Just idx → writeIORef (wsZoomCacheRef ws) (cache V.// [(idx, entry)])
+        Nothing → do
+            logWarn logger CatWorld $
+                "Zoom refresh skipped: chunk " <> tshow coord
+                <> " is not in this page's zoom cache"
+            pure cache
+        Just idx → pure (cache V.// [(idx, entry)])
 
 -- | Hand the patched image to the render thread's upload, targeted at
 --   the exact page that accepted the edit and nothing else (#763,

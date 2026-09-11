@@ -18,6 +18,7 @@ import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logErrorM)
 import Engine.Core.Monad
 import Engine.Core.State (EngineState(..), TransientTexture(..)
+  , replaceZoomAtlasTextures
   , GraphicsState(..), luaQueue, worldPreviewRef, zoomAtlasDataRef )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
@@ -43,7 +44,7 @@ import Engine.Map.ImageAdmission (withValidatedZoomAtlasUpload)
 import Engine.Scripting.Lua.Types
 import World.ZoomMap.Types (zoomTileSize)
 import World.Render.Zoom.Types (ZoomAtlasInfo(..))
-import World.State.Types (wsZoomAtlasRef)
+import World.State.Types (wsTilesRef, wsZoomAtlasRef)
 import Vulkan.Core10
 import Vulkan.Zero (zero)
 
@@ -325,13 +326,25 @@ handleZoomAtlasUpload = do
                           let rc = toRenderCapability env
                           liftIO $ writeIORef (rcTextureSystemRef rc) (Just newBindless)
 
-                          -- Dispose the previous atlas generation (slot
-                          -- recycled, GPU objects destroyed) and record this
-                          -- one. View before image: the view references it.
-                          forM_ (zoomAtlasTexture gs) (disposeTransientTexture dev)
-                          modifyGraphicsState $ \gs' → gs'
-                                  { zoomAtlasTexture =
-                                      Just (TransientTexture texHandle cleanupAll) }
+                          -- Dispose the previous atlas generation OF
+                          -- THESE TARGETS ONLY (slot recycled, GPU
+                          -- objects destroyed) and record this one for
+                          -- them. View before image: the view references
+                          -- it.
+                          --
+                          -- Per target since #2485: more than one page
+                          -- can hold a live atlas, and disposing "the"
+                          -- previous one would destroy a texture another
+                          -- page's 'wsZoomAtlasRef' still names, leaving
+                          -- that page sampling a dead handle.
+                          let (installed, retired) =
+                                  replaceZoomAtlasTextures
+                                      (map wsTilesRef targetStates)
+                                      (TransientTexture texHandle cleanupAll)
+                                      (zoomAtlasTextures gs)
+                          forM_ retired (disposeTransientTexture dev)
+                          modifyGraphicsState $ \gs' →
+                              gs' { zoomAtlasTextures = installed }
 
                           let chunksPerRow = w `div` zoomTileSize
                               atlasInfo = ZoomAtlasInfo

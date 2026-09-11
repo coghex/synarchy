@@ -4668,10 +4668,19 @@ chunk's active grid from the passive `FluidMap` through
 `fluidCellToActive`, whose `depth * volumePerLevel` rounding turns the 1
 unit a reaction left in the contacting water cell into 7.
 `SimReactionCommitted` therefore does NOT re-seed an active chunk: it
-adopts the post-edit terrain and generation and KEEPS the live grid,
-emptying only the cells that became stone (`Sim.Chunk.applyReactionCommit`).
-An inactive or absent chunk has no exact volumes to keep and re-seeds from
-the passive map as before. This applies while the chunk is active; it
+adopts the post-edit terrain and generation and KEEPS the live grid
+(`Sim.Chunk.applyReactionCommit`). An inactive or absent chunk has no
+exact volumes to keep and re-seeds from the passive map as before.
+
+A solidified cell is DISPLACED, not emptied. One z of terrain arrived
+under it, so exactly one level's worth of volume no longer fits and
+whatever stood above that still does — the same rule `World.Edit.Apply`
+applies to the passive cell, in volume terms. Clearing it outright would
+contradict the refill policy above: a cell emptied by annihilation is an
+ordinary empty destination for the rest of that tick, so the cell an
+event names may be holding water again by the time the commit lands, and
+deleting it would then be carried into the tiles by the next
+generation-correct writeback. This applies while the chunk is active; it
 changes neither the serialized nor the passive representation.
 
 **The acknowledgement still means applied.** Reaction commits run inside
@@ -4693,10 +4702,9 @@ new stone tile cannot appear. An accepted commit therefore refreshes
 BOTH of the zoom map's own inputs:
 
 * the per-chunk SUMMARY entry in `wsZoomCacheRef`, recomputed from the
-  live chunk — unconditionally, because a page with no atlas of its own
-  bakes one texture per chunk from that entry's majority material and
-  elevation, so gating it on the atlas would leave exactly those pages
-  reading generation-time data forever; and
+  live chunk — unconditionally, and threaded through ONE vector so a
+  delivery touching two chunks does not have the second write restore
+  the first chunk's original entry; and
 * the atlas BLOCK, regenerated from the live post-edit chunk and patched
   into the image the page retains (`wsZoomLiveRef`), then republished
   through the same `zoomAtlasDataRef` handoff a fresh init and a load
@@ -4711,14 +4719,30 @@ generated would carry them too but is not the same thing — a loaded chunk
 and `generateZoomTerrain` disagree on far more tiles than any edit
 touched, and following that would repaint the whole block.
 
-`zoomAtlasDataRef` is a QUEUE for the same reason this path exists at
-all: two pages can commit between render frames, and a single slot would
-drop one image while its page kept retained pixels its displayed texture
-no longer matched. A second refresh of one page replaces that page's own
-pending entry, so a busy page cannot queue without bound. The new texture
-handle is what makes `ensureBakedAtlas` drop the entries baked against
-the old one; a page with no atlas has no handle to change, so its baked
-entries are dropped directly.
+**Every page that can react retains its own atlas.** `World.Load.Stage`
+assembles and retains one for EVERY staged page, not only the session's
+atlas owner: a non-owner page can still be shown, simulate and accept a
+live terrain edit, and the per-material fallback it would otherwise
+render through colours a whole chunk by one material, in which a single
+solidified tile cannot appear at all. Only the owner's image is handed to
+the GPU at load; a non-owner's first refresh publishes its own. #1670 is
+unchanged by this — a page still only ever renders through an atlas its
+OWN cache produced.
+
+**The handoff is a queue, and GPU ownership is per page.**
+`zoomAtlasDataRef` holds one pending image per page: two pages can commit
+between render frames, and a single slot would drop one while its page
+kept retained pixels its displayed texture no longer matched. A second
+refresh of one page replaces that page's own pending entry, so a busy
+page cannot queue without bound; a world init or a load publish
+supersedes only the payloads for the page (or session) it rebuilds.
+`GraphicsState`'s `zoomAtlasTextures` is keyed the same way
+(`Engine.Core.State.replaceZoomAtlasTextures`), because with one slot an
+upload for page B disposed the texture page A's `wsZoomAtlasRef` still
+named and left A sampling a dead handle. The new texture handle is what
+makes `ensureBakedAtlas` drop the entries baked against the old one; a
+page with no atlas at all has no handle to change, so its baked entries
+are dropped directly.
 
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch

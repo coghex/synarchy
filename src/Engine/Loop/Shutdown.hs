@@ -99,7 +99,7 @@ shutdownEngineWith releaseAtlases targets = do
     -- ours to free — after the waitIdle above, before the device goes.
     logDebugM CatSystem "Destroying transient textures..."
     forM_ (previewTexture state)   $ \tt → liftIO (ttCleanup tt)
-    forM_ (zoomAtlasTexture state) $ \tt → liftIO (ttCleanup tt)
+    forM_ (zoomAtlasTextures state) $ \(_, tt) → liftIO (ttCleanup tt)
 
     -- Release every atlas loaded from disk (#1691). These are the
     -- OTHER explicitly-cleaned GPU images: unlike the transient pair

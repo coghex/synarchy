@@ -74,7 +74,7 @@ import Tutorial.Types (TutorialRegistry)
 import World.Types (WorldCommand, WorldManager, FloraCatalog
                    , WorldState, WorldPageId, wmWorlds, wmVisible
                    , wmProjectedVisible, wmSelectionPending
-                   , BloodTextureHandles)
+                   , BloodTextureHandles, WorldTileData)
 import World.Material (MaterialRegistry)
 import World.Generate.Config (WorldGenConfig)
 import Unit.Pathing.Config (PathingConfig)
@@ -726,6 +726,27 @@ data TransientTexture = TransientTexture
   , ttCleanup ∷ IO ()
   }
 
+-- | Install one zoom-atlas upload for the pages it targets, and say
+--   which previous uploads that retires (#2485).
+--
+--   Pure, and separate from the Vulkan around it, because the only part
+--   that can be wrong on its own is the BOOKKEEPING: retiring "the"
+--   previous atlas rather than these targets' own is what destroys a
+--   texture another page's 'World.State.Types.wsZoomAtlasRef' still
+--   names, and no amount of correct image upload prevents it.
+--
+--   Returns the new table and the entries to dispose, which are exactly
+--   the ones these targets held before.
+--   Polymorphic in both the page key and the texture so the rule can be
+--   exercised without a Vulkan device or a live page: production calls
+--   it at @'IORef' 'WorldTileData'@ and 'TransientTexture', neither of
+--   which the decision looks inside.
+replaceZoomAtlasTextures ∷ Eq κ ⇒ [κ] → τ → [(κ, τ)] → ([(κ, τ)], [τ])
+replaceZoomAtlasTextures targets texture existing =
+    ( [ e | e@(k, _) ← existing, k `notElem` targets ]
+      ⧺ [ (k, texture) | k ← targets ]
+    , [ t | (k, t) ← existing, k `elem` targets ] )
+
 data GraphicsState = GraphicsState
   { glfwWindow         ∷ Maybe Window
   , vulkanInstance     ∷ Maybe Vk.Instance
@@ -789,8 +810,18 @@ data GraphicsState = GraphicsState
     -- ^ Per frame in flight, same discipline as dynamicVertexBuffers.
   , previewTexture         ∷ Maybe TransientTexture
     -- ^ Current world-preview upload; replaced per world init/load.
-  , zoomAtlasTexture       ∷ Maybe TransientTexture
-    -- ^ Current zoom-atlas upload; replaced per world init/load.
+  , zoomAtlasTextures      ∷ [(IORef WorldTileData, TransientTexture)]
+    -- ^ The live zoom-atlas upload OF EACH PAGE that has one, keyed by
+    --   that page's own tile ref — which is its identity, the same way
+    --   'zoomAtlasDataRef' captures it.
+    --
+    --   A list since #2485, not one slot. Every page that can accept a
+    --   live terrain edit needs a per-tile refreshable atlas of its own
+    --   (#1670 already forbids a page rendering through another page's),
+    --   so more than one can be resident at a time — and with a single
+    --   slot, uploading page B's atlas disposed page A's texture while
+    --   A's 'World.State.Types.wsZoomAtlasRef' still named it. An upload
+    --   disposes only the entry for its OWN targets and replaces it.
   }
 
 -- | Cached windowed-mode geometry so we can restore position\/size after

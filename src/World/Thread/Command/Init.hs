@@ -457,12 +457,17 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             -- WorldState it belongs to (this init's own page), mirroring
             -- World.Load.Publish's identical fix -- see
             -- EngineEnv.zoomAtlasDataRef.
-            -- Replaces the queue rather than appending: this init
-            -- rebuilds the page, so any image still pending for it is
-            -- superseded (#2485's queue).
-            writeIORef (rhZoomAtlasDataRef handoff)
-                [ ( zadWidth atlas, zadHeight atlas
-                  , zadPixelData atlas, [worldState] ) ]
+            -- Supersedes only THIS page's own pending payloads, and
+            -- leaves every other page's alone (#2485's queue): an init
+            -- rebuilds one page, so a live atlas refresh queued for a
+            -- different page is not obsolete and must not be discarded
+            -- with it.
+            atomicModifyIORef' (rhZoomAtlasDataRef handoff) $ \queued →
+                ( [ q | q@(_, _, _, targets) ← queued
+                      , wsTilesRef worldState `notElem` map wsTilesRef targets ]
+                  ⧺ [ ( zadWidth atlas, zadHeight atlas
+                      , zadPixelData atlas, [worldState] ) ]
+                , () )
             -- #2485: keep the pixels this page is about to show, so an
             -- accepted terrain edit can regenerate one chunk's tile and
             -- republish the image rather than leaving the zoom map

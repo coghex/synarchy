@@ -23,7 +23,7 @@ import qualified Data.Vector.Unboxed as VU
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
 import World.Fluid.Internal (FluidMap)
 import Sim.State.Types (SimWorldState(..), SimChunkState(..))
-import Sim.Fluid.Types (fluidCellToActive)
+import Sim.Fluid.Types (ActiveFluidCell(..), fluidCellToActive, volumePerLevel)
 import Sim.Topology (simCardinalNeighbors)
 
 -- | Settle-tick countdown for a freshly generated/loaded chunk. Newly
@@ -139,11 +139,17 @@ applyChunkEdit coord editGen fluidMap terrainMap sws =
 --   neighbours, resolved through the page's own seam frame (#2044), so
 --   the surviving fluid flows around the new stone.
 --
---   The solidified cells are emptied in BOTH branches. 'World.Edit.Apply'
---   already displaces fluid the fill reaches, so the passive map agrees;
---   clearing here anyway keeps "a solidified column contains no lava" a
---   property of this handoff rather than a consequence of another
---   module's rule.
+--   The solidified cells are DISPLACED in both branches, not emptied.
+--   The terrain under them rose by exactly one z, so exactly one level's
+--   worth of volume no longer fits; whatever stood above that still
+--   does. Blanket-clearing would contradict both halves of the contract
+--   around it: 'World.Edit.Apply' keeps fluid whose surface remains above
+--   the raised terrain, and a cell emptied by annihilation is an ordinary
+--   empty destination that the SAME tick may refill (#2481), so the cell
+--   named by an event is not necessarily empty by the time the commit
+--   lands. Clearing it would then delete water the world's own tiles
+--   still record — and a later, generation-correct writeback would carry
+--   that deletion back into them.
 applyReactionCommit ∷ ChunkCoord → Word64 → FluidMap → VU.Vector Int
                     → [Int] → SimWorldState → SimWorldState
 applyReactionCommit coord editGen fluidMap terrainMap solidified sws =
@@ -177,9 +183,18 @@ applyReactionCommit coord editGen fluidMap terrainMap solidified sws =
             in activated
                 { scsActiveFluid = emptySolidified (scsActiveFluid activated) }
 
-    emptySolidified grid = grid V.// [ (i, Nothing)
+    -- The same rule 'World.Edit.Apply' applies to the passive cell,
+    -- in volume terms: a cell whose fluid reached no higher than the
+    -- newly filled level is displaced entirely, and a deeper one keeps
+    -- its surface and loses exactly that level's worth of volume.
+    emptySolidified grid = grid V.// [ (i, displace (grid V.! i))
                                      | i ← solidified
                                      , i ≥ 0, i < V.length grid ]
+    displace Nothing = Nothing
+    displace (Just afc)
+        | afcVolume afc ≤ fromIntegral volumePerLevel = Nothing
+        | otherwise = Just afc
+            { afcVolume = afcVolume afc - fromIntegral volumePerLevel }
 
     withSelf = HM.insert coord committed (swsChunks sws)
     withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m) withSelf

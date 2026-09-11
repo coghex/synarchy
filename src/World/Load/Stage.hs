@@ -903,45 +903,69 @@ stagePage logger registry palette catalog buildingDefs unitDefs
           _ ← evaluate (force zoomCache)
           writeIORef (wsZoomCacheRef worldState) zoomCache
           writeIORef (wsZoomAtlasRef worldState) Nothing
-          (mZoomAtlasVal, mPreviewVal, mAtlasErr) ← if isActive
-            then do
-              _ ← evaluate (force chunkPixels)
-              -- #2020: the SAME pure admission 'stageSession' already ran
-              -- for this page, re-derived from the same worldSize through
-              -- the same function — it cannot disagree, and it is what
-              -- makes the plan (not this module) the allocation
-              -- authority. 'buildZoomAtlas' then verifies the cache
-              -- count, the block count and every block's size against it
-              -- before allocating or copying.
-              let eAtlas = do
-                      plan ← admitMapImage mapCeiling MapImageRGBA8
-                                 (ZoomAtlasSource worldSize)
-                      buildZoomAtlas plan (V.length zoomCache) chunkPixels
-              case eAtlas of
-                Left refusal → do
-                  let msg = "cannot stage page " <> unWorldPageId pid
-                            <> ": " <> mapImageRefusalText refusal
-                  logError logger CatWorld ("Save load: " <> msg)
-                  pure (Nothing, Nothing, Just (StageError msg))
-                Right atlas → do
-                  _ ← evaluate (force atlas)
-                  let preview = buildPreviewFromPixels params zoomCache chunkPixels
-                  _ ← evaluate (force preview)
-                  -- #2485: this page is the one whose own cache produced
-                  -- these pixels (#1670), so it is the one that keeps
-                  -- them — a live terrain edit regenerates one chunk's
-                  -- tile from here and republishes the image.
-                  writeIORef (wsZoomLiveRef worldState) $ Just ZoomLiveAtlas
-                      { zlaPalette      = palette
-                      , zlaWidth        = zadWidth atlas
-                      , zlaHeight       = zadHeight atlas
-                      , zlaChunksPerRow = zadChunksPerRow atlas
-                      , zlaPixels       = zadPixelData atlas
-                      }
-                  pure ( Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
-                       , Just (piWidth preview, piHeight preview, piData preview)
-                       , Nothing )
-            else pure (Nothing, Nothing, Nothing)
+          -- #2485: EVERY staged page assembles and retains its own
+          -- atlas pixels, not only the session's atlas owner. A
+          -- non-owner page can still be shown, simulate, and accept a
+          -- live terrain edit, and the per-material fallback it would
+          -- otherwise render through colours a whole chunk by one
+          -- material — in which a single solidified tile cannot appear
+          -- at all. Retaining the pixels is what gives it a per-tile
+          -- refreshable presentation; only the OWNER's are handed to the
+          -- GPU here, and a non-owner's first refresh publishes its own.
+          (mZoomAtlasVal, mPreviewVal, mAtlasErr) ← do
+            _ ← evaluate (force chunkPixels)
+            -- #2020: the SAME pure admission 'stageSession' already ran
+            -- for this page, re-derived from the same worldSize through
+            -- the same function — it cannot disagree, and it is what
+            -- makes the plan (not this module) the allocation
+            -- authority. 'buildZoomAtlas' then verifies the cache
+            -- count, the block count and every block's size against it
+            -- before allocating or copying.
+            let eAtlas = do
+                    plan ← admitMapImage mapCeiling MapImageRGBA8
+                               (ZoomAtlasSource worldSize)
+                    buildZoomAtlas plan (V.length zoomCache) chunkPixels
+            case eAtlas of
+              Left refusal
+                | isActive → do
+                    let msg = "cannot stage page " <> unWorldPageId pid
+                              <> ": " <> mapImageRefusalText refusal
+                    logError logger CatWorld ("Save load: " <> msg)
+                    pure (Nothing, Nothing, Just (StageError msg))
+                | otherwise → do
+                    -- A non-owner page refused an atlas is not a failed
+                    -- load: it renders per material exactly as it did
+                    -- before, and says so.
+                    logWarn logger CatWorld $
+                        "Save load: page " <> unWorldPageId pid
+                        <> " retains no zoom atlas ("
+                        <> mapImageRefusalText refusal
+                        <> "); its zoom map cannot show a single changed tile"
+                    pure (Nothing, Nothing, Nothing)
+              Right atlas → do
+                _ ← evaluate (force atlas)
+                -- This page is the one whose own cache produced these
+                -- pixels (#1670), so it is the one that keeps them — a
+                -- live terrain edit regenerates one chunk's tile from
+                -- here and republishes the image.
+                writeIORef (wsZoomLiveRef worldState) $ Just ZoomLiveAtlas
+                    { zlaPalette      = palette
+                    , zlaWidth        = zadWidth atlas
+                    , zlaHeight       = zadHeight atlas
+                    , zlaChunksPerRow = zadChunksPerRow atlas
+                    , zlaPixels       = zadPixelData atlas
+                    }
+                if not isActive
+                  then pure (Nothing, Nothing, Nothing)
+                  else do
+                    let preview = buildPreviewFromPixels params zoomCache
+                                                         chunkPixels
+                    _ ← evaluate (force preview)
+                    pure ( Just (zadWidth atlas, zadHeight atlas,
+                                 zadPixelData atlas)
+                         , Just (piWidth preview, piHeight preview,
+                                 piData preview)
+                         , Nothing )
 
           when isActive $ writeIORef phaseRef (LoadPhase1 3 totalSteps)
           -- The saved camera chunk, canonicalised. 'cameraChunkCoord'

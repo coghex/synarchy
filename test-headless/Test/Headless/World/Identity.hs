@@ -41,6 +41,7 @@ import Engine.Core.Log.Types (LogConfig(..), LogEntry(..), defaultLogConfig)
 import Location.Instance
     (LocationInstance(..), instancesToList)
 import World.River.Naming (RiverName(..), riverNamesToList)
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Types
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..)
@@ -672,12 +673,26 @@ spec = do
                     map (isSamePage ownerState) targets `shouldBe` [True]
                     map (isSamePage otherState) targets `shouldBe` [False]
 
-            -- Requirement 2: the excluded page renders through the
-            -- existing Maybe-Nothing per-material fallback rather than
-            -- another page's atlas. (Nothing ever uploads it here --
-            -- headless runs no handleZoomAtlasUpload -- so this is the
-            -- state the render path would actually see.)
+            -- Requirement 2: the excluded page is not handed another
+            -- page's atlas. (Nothing ever uploads one here -- headless
+            -- runs no handleZoomAtlasUpload -- so this is the state the
+            -- render path would actually see.)
             readIORef (wsZoomAtlasRef otherState) `shouldReturn` Nothing
+
+            -- …but since #2485 it RETAINS its own atlas pixels, built
+            -- from its own zoom cache. A non-owner page can still be
+            -- shown, simulate and accept a live terrain edit, and the
+            -- per-material fallback it would otherwise render through
+            -- colours a whole chunk by one material — in which a single
+            -- solidified tile cannot appear at all. Retaining the pixels
+            -- is what gives it a per-tile refreshable presentation; its
+            -- first refresh is what publishes them.
+            ownerLive ← readIORef (wsZoomLiveRef ownerState)
+            otherLive ← readIORef (wsZoomLiveRef otherState)
+            fmap zlaWidth ownerLive `shouldSatisfy` isJust
+            fmap zlaWidth otherLive `shouldSatisfy` isJust
+            -- Each page's pixels are its OWN, not a shared image.
+            fmap zlaPixels ownerLive `shouldNotBe` fmap zlaPixels otherLive
 
 -- | Whether two 'WorldState' handles are the same page. 'WorldState'
 --   derives neither 'Eq' nor 'Show', but each page's own private

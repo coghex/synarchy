@@ -25,6 +25,7 @@ module Test.Headless.World.Solidification (spec, pureSpec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar)
 import Control.Exception (finally)
 import Control.Monad.ST (runST)
@@ -41,11 +42,13 @@ import System.Timeout (timeout)
 
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.State (EngineEnv(..), zoomAtlasDataRef)
-import Engine.Graphics.Camera (CameraFacing(..))
-import World.Generate (generateLoadedChunk)
-import World.Generate.Constants (chunkLoadRadius)
-import World.Chunk.Admit (pageIncarnation, releaseEvictedChunks)
+import Engine.Core.State
+    (EngineEnv(..), replaceZoomAtlasTextures, zoomAtlasDataRef)
+import Engine.Core.Capability.RenderView
+    (RenderViewCapability(..), toRenderViewCapability)
+import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import World.Grid (gridToWorld)
+import World.Chunk.Admit (pageIncarnation)
 import qualified Engine.Core.Queue as Q
 import Sim.Chunk (applyChunkEdit, applyReactionCommit)
 import Sim.Command.Types (SimCommand(..), ReactionChunkSync(..))
@@ -332,6 +335,36 @@ pureSpec = describe "solidification (#2485)" $ do
             scsEditGen (swsChunks after HM.! chunkA) `shouldBe` 4
             scsTerrain (swsChunks after HM.! chunkA) `shouldBe` terrain
 
+        it "DISPLACES one level from a solidified cell that was refilled \
+           \in the same tick, rather than emptying it" $ do
+            -- A cell emptied by annihilation is an ordinary empty
+            -- destination for the rest of that tick (#2481), so the cell
+            -- an event names can be holding water again by the time the
+            -- commit lands — and 'World.Edit.Apply' keeps fluid whose
+            -- surface stays above the raised terrain. Clearing it would
+            -- delete water the page's own tiles still record.
+            let deep = ActiveFluidCell Lake 20 0
+                refilled = simWorldWith
+                    [ (chunkA, activeChunk 3 [ (stoneIdx, Just deep) ]) ]
+                committed = applyReactionCommit chunkA 4 passive terrain
+                                                [stoneIdx] refilled
+                grid = scsActiveFluid (swsChunks committed HM.! chunkA)
+            -- One z of terrain arrived under it, so exactly one level's
+            -- worth of volume no longer fits.
+            grid V.! stoneIdx `shouldBe` Just deep { afcVolume = 20 - 7 }
+
+        it "empties a solidified cell whose fluid the new stone reaches" $ do
+            -- …and the other side of the same rule: a cell no deeper
+            -- than the level just filled is displaced entirely, which is
+            -- what 'World.Edit.Apply' does to the passive cell.
+            let shallow = ActiveFluidCell Lake 7 0
+                refilled = simWorldWith
+                    [ (chunkA, activeChunk 3 [ (stoneIdx, Just shallow) ]) ]
+                committed = applyReactionCommit chunkA 4 passive terrain
+                                                [stoneIdx] refilled
+            scsActiveFluid (swsChunks committed HM.! chunkA) V.! stoneIdx
+                `shouldBe` Nothing
+
         it "re-seeds an INACTIVE chunk from the passive map instead, \
            \which is the only truth it has" $ do
             let inactive = simWorldWith
@@ -341,6 +374,33 @@ pureSpec = describe "solidification (#2485)" $ do
                 grid = scsActiveFluid (swsChunks committed HM.! chunkA)
             fmap afcVolume (grid V.! waterIdx) `shouldBe` Just 7
             grid V.! stoneIdx `shouldBe` Nothing
+
+    describe "installing a page's zoom atlas upload" $ do
+        let a = 0 ∷ Int
+            b = 1 ∷ Int
+
+        it "retires only the entries the upload's OWN targets held" $ do
+            -- A single slot disposed "the" previous atlas, so uploading
+            -- page B's image destroyed the texture page A's
+            -- 'wsZoomAtlasRef' still named and left A sampling a dead
+            -- handle.
+            let (installed, retired) =
+                    replaceZoomAtlasTextures [b] ("texB" ∷ String) [(a, "texA")]
+            installed `shouldBe` [(a, "texA"), (b, "texB")]
+            retired `shouldBe` []
+
+        it "retires the previous texture when the SAME page uploads again" $ do
+            let (installed, retired) =
+                    replaceZoomAtlasTextures [a] "texA2"
+                        [(a, "texA1"), (b, "texB")]
+            installed `shouldBe` [(b, "texB"), (a, "texA2")]
+            retired `shouldBe` ["texA1"]
+
+        it "installs one entry per target page" $ do
+            let (installed, retired) =
+                    replaceZoomAtlasTextures [a, b] "shared" []
+            installed `shouldBe` [(a, "shared"), (b, "shared")]
+            retired `shouldBe` []
 
     -- * Requirement 9: the atlas patch itself.
     describe "patching one chunk's tile into the zoom atlas" $ do
@@ -385,7 +445,8 @@ pureSpec = describe "solidification (#2485)" $ do
 commitPageId, siblingPageId, stalePageId, mixedPageId ∷ WorldPageId
 crossPageId, ackPageId, missingMatPageId, zoomPageId ∷ WorldPageId
 coherentPageId, evictedPageId, cumulativePageId, bareZoomPageId ∷ WorldPageId
-regenPageId, queueAPageId, queueBPageId ∷ WorldPageId
+regenPageId, queueAPageId, queueBPageId, initPageId ∷ WorldPageId
+multiChunkPageId, initOtherPageId ∷ WorldPageId
 commitPageId     = WorldPageId "solid_commit_w8"
 siblingPageId    = WorldPageId "solid_sibling_w8"
 stalePageId      = WorldPageId "solid_stale_w8"
@@ -401,6 +462,9 @@ bareZoomPageId   = WorldPageId "solid_barezoom_w8"
 regenPageId      = WorldPageId "solid_regen_w8"
 queueAPageId     = WorldPageId "solid_queue_a_w8"
 queueBPageId     = WorldPageId "solid_queue_b_w8"
+initPageId       = WorldPageId "solid_init_w8"
+initOtherPageId  = WorldPageId "solid_init_other_w8"
+multiChunkPageId = WorldPageId "solid_multichunk_w8"
 
 ackTimeoutMicros ∷ Int
 ackTimeoutMicros = 30 * 1000 * 1000
@@ -589,35 +653,65 @@ spec = describe "solidification (#2485)" $ do
                 ("expected exactly one SimReactionCommitted, got "
                  ⧺ show (length other))
 
-    it "commits a cross-chunk contact whole: the stone lands in the lava \
-       \chunk and the sim handoff accounts for the water chunk too" $
-      \env → do
+    it "commits a cross-chunk contact whole: both sides' fluid and the \
+       \stone land in ONE delivery, and the handoff keeps the water \
+       \chunk's exact remainder" $ \env → do
         lp ← livePage env crossPageId
         basalt ← materialFor env SolidBasalt
+        waterBefore ← chunkAt (lpState lp) (lpWater lp)
         let idx = columnIndex 4 4
-            -- The lava cell is in one chunk and the water cell it reacted
-            -- with is in another, which is what a seam or boundary
-            -- contact looks like by the time it reaches the world thread.
+            waterIdx = columnIndex 7 7
+            -- The lava cell is in one chunk and the water cell it
+            -- reacted with is in another, which is what a seam or
+            -- boundary contact looks like by the time it reaches the
+            -- world thread.
             ev = (liveEvent (lpLava lp) (4, 4) (lpWater lp) SolidBasalt)
                      { sevWaterType = Ocean }
             rr = ReactionResult [(lpLava lp, 0), (lpWater lp, 0)] [ev]
+            -- One unit of water is left on the far side — deliberately
+            -- not a multiple of 'volumePerLevel'.
+            remainder = ActiveFluidCell Ocean 1 0
+            lavaWb = FluidWriteback
+                { fwCoord    = lpLava lp
+                , fwEditGen  = 0
+                , fwFluid    = V.replicate cellsPerChunk Nothing
+                , fwTerrain  = lcTerrainSurfaceMap (lpBefore lp)
+                , fwSurf     = lcSurfaceMap (lpBefore lp)
+                , fwSideDeco = VU.replicate cellsPerChunk 0x2A
+                }
+            waterWb = FluidWriteback
+                { fwCoord    = lpWater lp
+                , fwEditGen  = 0
+                , fwFluid    = V.replicate cellsPerChunk Nothing
+                    V.// [(waterIdx, activeToFluidCell 0 remainder)]
+                , fwTerrain  = lcTerrainSurfaceMap waterBefore
+                , fwSurf     = lcSurfaceMap waterBefore
+                , fwSideDeco = VU.replicate cellsPerChunk 0x2B
+                }
         _ ← simCommands env
-        deliver env (lpState lp) crossPageId [] [rr]
+        deliver env (lpState lp) crossPageId [lavaWb, waterWb] [rr]
 
         after ← chunkAt (lpState lp) (lpLava lp)
+        waterAfter ← chunkAt (lpState lp) (lpWater lp)
+        -- The stone on one side…
         lcTerrainSurfaceMap after VU.! idx
             `shouldBe` lcTerrainSurfaceMap (lpBefore lp) VU.! idx + 1
         topMaterialAt after idx `shouldBe` unMaterialId basalt
+        -- …and BOTH sides' fluid outcomes, in the same delivery.
+        lcSideDeco after `shouldBe` fwSideDeco lavaWb
+        lcSideDeco waterAfter `shouldBe` fwSideDeco waterWb
+        fmap fcType (lcFluidMap waterAfter V.! waterIdx) `shouldBe` Just Ocean
 
         -- Requirement 6: a result spanning two chunks cannot partially
         -- commit one side, so the handoff names BOTH — the lava chunk
         -- with its new generation and its solidified cell, and the water
         -- chunk with the generation it still has and no stone.
         cmds ← simCommands env
+        logger ← readIORef (loggerRef env)
         gens ← readIORef (wsChunkEditGenRef (lpState lp))
-        case [ syncs | SimReactionCommitted p _ _ syncs ← cmds
-                     , p ≡ crossPageId ] of
-            [syncs] → do
+        case [ c | c@(SimReactionCommitted p _ _ _) ← cmds
+                 , p ≡ crossPageId ] of
+            [cmd@(SimReactionCommitted _ _ _ syncs)] → do
                 sort (map rcsCoord syncs)
                     `shouldBe` sort [lpLava lp, lpWater lp]
                 case find ((≡ lpLava lp) . rcsCoord) syncs of
@@ -634,6 +728,20 @@ spec = describe "solidification (#2485)" $ do
                         rcsEditGen sync
                             `shouldBe` HM.lookupDefault 0 (lpWater lp) gens
                         rcsSolidified sync `shouldBe` []
+                -- …and applying that handoff through the REAL command
+                -- handler leaves the far side's one unit at one.
+                ref ← newIORef emptySimState
+                    { ssWorlds = HM.singleton crossPageId
+                        (simWorldWith
+                            [ (lpLava lp, activeChunk 0 [(idx, Nothing)])
+                            , (lpWater lp, activeChunk 0
+                                [(waterIdx, Just remainder)]) ]) }
+                handleSimCommand env logger ref cmd
+                ss ← readIORef ref
+                let gridOf cc = scsActiveFluid
+                        (swsChunks (ssWorlds ss HM.! crossPageId) HM.! cc)
+                gridOf (lpWater lp) V.! waterIdx `shouldBe` Just remainder
+                gridOf (lpLava lp) V.! idx `shouldBe` Nothing
             other → expectationFailure
                 ("expected exactly one SimReactionCommitted, got "
                  ⧺ show (length other))
@@ -971,66 +1079,59 @@ spec = describe "solidification (#2485)" $ do
         V.null baked `shouldBe` True
 
     it "keeps the stone through a REAL eviction and regeneration of its \
-       \chunk, through the production eviction and reload path" $ \env → do
+       \chunk, driven by the world thread's own chunk loader" $ \env → do
         lp ← livePage env regenPageId
         basalt ← materialFor env SolidBasalt
+        -- The chunk loader only considers VISIBLE pages, so this example
+        -- shows its page: the eviction and the reload below are that
+        -- loop's own work, including its edit replay.
+        sendWorldCommand env (WorldShow regenPageId)
+        barrier env regenPageId
         let idx = columnIndex 4 4
             ev  = liveEvent (lpLava lp) (4, 4) (lpLava lp) SolidBasalt
             rr  = ReactionResult [(lpLava lp, 0)] [ev]
+            (gx, gy) = reactionEventTile ev
         deliver env (lpState lp) regenPageId [] [rr]
         committed ← chunkAt (lpState lp) (lpLava lp)
         let stoneTop = lcTerrainSurfaceMap committed VU.! idx
         stoneTop `shouldBe` lcTerrainSurfaceMap (lpBefore lp) VU.! idx + 1
 
-        params ← readIORef (wsGenParamsRef (lpState lp)) ⌦ maybe
-            (expectationFailure "page has no gen params" ≫ error "unreachable")
-            pure
-        registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
-        catalog  ← readIORef (wsFloraCatalogRef (toWorldSimCapability env))
-
-        -- The eviction the chunk loader performs, driven directly rather
-        -- than by parking the camera: a w8 page is only eight chunks
-        -- around in u, so the camera's own five-chunk keep window wraps
-        -- back onto itself and nothing can ever fall outside it. These
-        -- are the loader's OWN steps in its own order — evict, release
-        -- the page's residency claim, retire the chunk's live-edit
-        -- generation — not a re-implementation of them.
-        -- Eviction is BUDGET-driven as well as distance-driven: it is a
-        -- no-op while a page holds no more chunks than 'wtdMaxChunks',
-        -- and a small page never does. The budget is lowered here so the
-        -- production rule has something to do; the rule itself, and the
-        -- camera chunk it measures against, are untouched.
-        let away = ChunkCoord 400 400
-        evictedCoords ← atomicModifyIORef' (wsTilesRef (lpState lp)) $ \td →
-            let (td', gone) = evictDistantChunksWithReport away
-                                  chunkLoadRadius (td { wtdMaxChunks = 0 })
-            in (td' { wtdMaxChunks = wtdMaxChunks td }, gone)
-        evictedCoords `shouldSatisfy` elem (lpLava lp)
-        releaseEvictedChunks (lpState lp) regenPageId params evictedCoords
-        atomicModifyIORef' (wsChunkEditGenRef (lpState lp)) $ \gens →
-            (foldl' (flip HM.delete) gens evictedCoords, ())
-        td1 ← readIORef (wsTilesRef (lpState lp))
-        lookupChunk (lpLava lp) td1 `shouldSatisfy` isNothing
-
-        -- …and the reload: generate the chunk afresh and replay the edit
-        -- log over it, exactly as 'World.Thread.ChunkLoading' does when
-        -- an evicted chunk comes back. Nothing of the in-memory chunk
-        -- that held the stone survives this.
-        edits ← readIORef (wsEditsRef (lpState lp))
-        let fresh = replayEdits edits
-                (generateLoadedChunk registry catalog regenPageId params
-                                     (lpLava lp))
-        -- Requirement 10: the raised height AND the product material,
-        -- from the recorded WeAddTile alone.
-        lcTerrainSurfaceMap fresh VU.! idx `shouldBe` stoneTop
-        topMaterialAt fresh idx `shouldBe` unMaterialId basalt
-        -- …and the chunk generation alone does NOT have them, so the
-        -- replay is what carried them rather than the generator.
-        let bare = generateLoadedChunk registry catalog regenPageId params
-                                       (lpLava lp)
-        lcTerrainSurfaceMap bare VU.! idx `shouldBe` stoneTop - 1
+        -- Eviction is BUDGET-driven as well as distance-driven, and a
+        -- small page never exceeds 'wtdMaxChunks' — so the loader's
+        -- eviction branch is unreachable on one until the budget is
+        -- lowered. Lowering it is the only thing this example arranges;
+        -- which chunks go, when, and what comes back are all the
+        -- loader's own decisions.
         atomicModifyIORef' (wsTilesRef (lpState lp)) $ \td →
-            (insertChunk fresh td, ())
+            (td { wtdMaxChunks = 1 }, ())
+
+        cam0 ← readIORef (rvCameraRef (toRenderViewCapability env))
+        let facing = camFacing cam0
+            lookAt tx ty = writeIORef (rvCameraRef (toRenderViewCapability env))
+                cam0 { camPosition = gridToWorld facing tx ty
+                     , camZoom = 0.5 }
+            ChunkCoord lcx lcy = lpLava lp
+            -- Along the LONGITUDE axis, which wraps, so the camera stays
+            -- inside the world diamond and the loader has chunks to
+            -- generate there — its eviction rides the same pass.
+            (ax, ay) = chunkToGlobal (ChunkCoord (lcx + 3) (lcy - 3))
+                                     (chunkSize `div` 2) (chunkSize `div` 2)
+        lookAt ax ay
+        evicted ← waitForChunk (lpState lp) (lpLava lp) False
+        evicted `shouldBe` True
+
+        lookAt gx gy
+        reloaded ← waitForChunk (lpState lp) (lpLava lp) True
+        reloaded `shouldBe` True
+        writeIORef (rvCameraRef (toRenderViewCapability env)) cam0
+
+        -- Requirement 10: the chunk the loader brought back has the
+        -- raised height AND the product material, from the recorded
+        -- WeAddTile alone — nothing of the in-memory chunk that held
+        -- them survived.
+        regenerated ← chunkAt (lpState lp) (lpLava lp)
+        lcTerrainSurfaceMap regenerated VU.! idx `shouldBe` stoneTop
+        topMaterialAt regenerated idx `shouldBe` unMaterialId basalt
 
     it "queues one pending atlas per page, so two pages committing \
        \between render frames cannot overwrite each other" $ \env → do
@@ -1057,6 +1158,53 @@ spec = describe "solidification (#2485)" $ do
         length requeued `shouldBe` 2
         map (targetsOf [lpState lpA, lpState lpB]) requeued
             `shouldBe` [[1 ∷ Int], [0]]
+
+    it "supersedes only its OWN page's pending atlas when a world is \
+       \initialized, leaving another page's live refresh queued" $
+      \env → do
+        lpA ← livePage env initOtherPageId
+        writeIORef (zoomAtlasDataRef env) []
+        deliver env (lpState lpA) initOtherPageId []
+            [ ReactionResult [(lpLava lpA, 0)]
+                [liveEvent (lpLava lpA) (8, 8) (lpLava lpA) SolidBasalt] ]
+        queuedBefore ← readIORef (zoomAtlasDataRef env)
+        length queuedBefore `shouldBe` 1
+
+        -- A DIFFERENT page comes up while that refresh is still pending.
+        -- Its own init supersedes nothing of A's: A's page was not
+        -- rebuilt, and its image is still the one A is showing.
+        lpB ← livePage env initPageId
+        queuedAfter ← readIORef (zoomAtlasDataRef env)
+        map (targetsOf [lpState lpA, lpState lpB]) queuedAfter
+            `shouldBe` [[0 ∷ Int], [1]]
+
+    it "refreshes the summary entry of EVERY chunk a delivery edits, not \
+       \just the last one" $ \env → do
+        lp ← livePage env multiChunkPageId
+        basalt ← materialFor env SolidBasalt
+        cache0 ← readIORef (wsZoomCacheRef (lpState lp))
+        idxA ← maybe (expectationFailure "lava chunk not in the cache"
+                      ≫ error "unreachable") pure
+                     (atlasTileIndexFor cache0 (lpLava lp))
+        idxB ← maybe (expectationFailure "water chunk not in the cache"
+                      ≫ error "unreachable") pure
+                     (atlasTileIndexFor cache0 (lpWater lp))
+        -- Two chunks in one delivery, each made entirely of basalt so
+        -- each one's majority material moves. Writing every refreshed
+        -- entry from the SAME starting vector would have the second
+        -- chunk's write restore the first chunk's original entry.
+        let whole cc = [ ReactionResult [(cc, 0)]
+                            [liveEvent cc local cc SolidBasalt]
+                       | local ← [ (lx, ly) | ly ← [0 .. chunkSize - 1]
+                                            , lx ← [0 .. chunkSize - 1] ] ]
+        deliver env (lpState lp) multiChunkPageId []
+            (whole (lpLava lp) ⧺ whole (lpWater lp))
+
+        cache1 ← readIORef (wsZoomCacheRef (lpState lp))
+        zceTexIndex (cache1 V.! idxA) `shouldBe` unMaterialId basalt
+        zceTexIndex (cache1 V.! idxB) `shouldBe` unMaterialId basalt
+        zceTexIndex (cache0 V.! idxA) `shouldNotBe` unMaterialId basalt
+        zceTexIndex (cache0 V.! idxB) `shouldNotBe` unMaterialId basalt
 
     it "acknowledges the delivery only after the stone is already in the \
        \tiles, so a fast settle never reads a half-applied commit" $
@@ -1185,6 +1333,18 @@ changedTiles atlasW chunksPerRow old new =
             off = ((row * zoomTileSize + ty) * atlasW + col * zoomTileSize) * 4
             len = zoomTileSize * 4
         in BS.take len (BS.drop off old) ≢ BS.take len (BS.drop off new)
+
+-- | Poll until a chunk is (or is no longer) loaded, giving the world
+--   thread's own chunk-loading pass time to run.
+waitForChunk ∷ WorldState → ChunkCoord → Bool → IO Bool
+waitForChunk ws coord want = go (300 ∷ Int)
+  where
+    go 0 = pure False
+    go n = do
+        td ← readIORef (wsTilesRef ws)
+        if isJust (lookupChunk coord td) ≡ want
+            then pure True
+            else threadDelay 100000 ≫ go (n - 1)
 
 -- | Which of the known pages a queued atlas entry targets, by index.
 --
