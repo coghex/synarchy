@@ -8,7 +8,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, tryPutMVar)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, SomeAsyncException, try, throwIO,
   fromException, mask, finally, onException, uninterruptibleMask_)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, readIORef)
 import qualified Data.Text as Text
 import GHC.Clock (getMonotonicTimeNSec)
 import Engine.Audio.Catalog.Resolve (loadCatalog)
@@ -119,15 +119,11 @@ requireNative = either (ioError ∘ userError ∘ Text.unpack) pure
 
 -- Every publication, including startup/failure/stop, has one monotonic sequence.
 publishSnapshot ∷ AudioCapability → AudioStatus → IO ()
-publishSnapshot capability status = do
-  previous ← readIORef (acStatusRef capability)
-  now ← getMonotonicTimeNSec
-  writeIORef (acStatusRef capability) status
-    { audioSnapshotSequence = audioSnapshotSequence previous + 1, audioPublishedNs = now }
+publishSnapshot capability = publishAudioStatus (acStatusRef capability)
 
 data WorkerHealth = WorkerHealth
-  { workerPublishAt ∷ Word64, workerTransitions ∷ Word64
-  , workerHealth ∷ Health, workerLimiter ∷ DiagnosticLimiter, workerWarningCount ∷ Word64 }
+  { workerPublishAt ∷ !Word64, workerTransitions ∷ !Word64
+  , workerHealth ∷ !Health, workerLimiter ∷ !DiagnosticLimiter, workerWarningCount ∷ !Word64 }
 
 workerLoop ∷ Bool → IORef ThreadControl → AudioCapability → IORef LoggerState → Native
   → AudioRuntime → [Stamped] → WorkerHealth → IO Bool

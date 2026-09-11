@@ -36,11 +36,11 @@ data Stamped = Stamped
   deriving (Eq, Show)
 
 data TransportStats = TransportStats
-  { transportQueued ∷ Word64, transportQueueDrops ∷ Word64, transportDisabledDrops ∷ Word64
-  , transportInvalidDrops ∷ Word64, transportStaleDrops ∷ Word64
-  , transportListenerCoalesced ∷ Word64, transportVolumesCoalesced ∷ Word64
-  , transportLoopCoalesced ∷ Word64, transportEventDepth ∷ Int, transportControlDepth ∷ Int
-  , transportEventPeak ∷ Int, transportControlPeak ∷ Int
+  { transportQueued ∷ !Word64, transportQueueDrops ∷ !Word64, transportDisabledDrops ∷ !Word64
+  , transportInvalidDrops ∷ !Word64, transportStaleDrops ∷ !Word64
+  , transportListenerCoalesced ∷ !Word64, transportVolumesCoalesced ∷ !Word64
+  , transportLoopCoalesced ∷ !Word64, transportEventDepth ∷ !Int, transportControlDepth ∷ !Int
+  , transportEventPeak ∷ !Int, transportControlPeak ∷ !Int
   } deriving (Eq, Show)
 
 emptyTransportStats ∷ TransportStats

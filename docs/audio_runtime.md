@@ -128,6 +128,9 @@ Ordinary status publication is limited to `publish_hz`, including the disabled
 worker. Startup, device transitions and shutdown publish immediately. Volumes in
 the Lua query are read live so dragging a slider need not wait for publication.
 Queue depths exclude the bounded batch already removed for worker processing.
+The worker forces each published snapshot and its sequence before completing the
+write. Transport and health counters are strict too: leaving Settings and the
+preview pane closed does not retain an accumulating history of old telemetry.
 
 Health warns for three underruns in the trailing minute, control depth above 64,
 or service time over half the audio represented by the frames that call rendered.

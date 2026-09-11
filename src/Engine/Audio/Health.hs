@@ -13,14 +13,14 @@ import Engine.Audio.Native
 import Engine.Audio.Transport
 
 data AudioHealth = AudioHealth
-  { healthDegraded ∷ Bool, healthRecentUnderruns ∷ Word64
-  , healthServiceFrames ∷ Word64, healthBudgetViolations ∷ Word64
-  , healthBudgetExceeded ∷ Bool, healthControlBacklog ∷ Bool
+  { healthDegraded ∷ !Bool, healthRecentUnderruns ∷ !Word64
+  , healthServiceFrames ∷ !Word64, healthBudgetViolations ∷ !Word64
+  , healthBudgetExceeded ∷ !Bool, healthControlBacklog ∷ !Bool
   } deriving (Eq, Show)
 
 data Health = Health
-  { hUnderruns ∷ Word64, hFrames ∷ Word64
-  , hBuckets ∷ Map.Map Word64 Word64, hSnapshot ∷ AudioHealth }
+  { hUnderruns ∷ !Word64, hFrames ∷ !Word64
+  , hBuckets ∷ !(Map.Map Word64 Word64), hSnapshot ∷ !AudioHealth }
 
 newHealth ∷ NativeStatus → Health
 newHealth native = Health (nsUnderruns native) (nsRenderedFrames native) Map.empty
@@ -55,7 +55,7 @@ healthWarnings config status = ["control backlog" | healthControlBacklog status]
   <> ["output underruns" | healthRecentUnderruns status ≥ fromIntegral (rcUnderrunsPerMinuteWarn config)]
 
 data Diagnostic = Diagnostic
-  { diagnosticEmittedAt ∷ Word64, diagnosticSeenAt ∷ Word64, diagnosticSuppressed ∷ Word64 }
+  { diagnosticEmittedAt ∷ !Word64, diagnosticSeenAt ∷ !Word64, diagnosticSuppressed ∷ !Word64 }
 newtype DiagnosticLimiter = DiagnosticLimiter (Map.Map (Text, Text) Diagnostic)
 
 newDiagnosticLimiter ∷ DiagnosticLimiter

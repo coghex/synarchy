@@ -4,6 +4,9 @@ import UPrelude
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM (atomically)
+import Control.Exception (evaluate)
+import System.Mem (performMajorGC)
+import System.Mem.Weak (Weak, mkWeakPtr, deRefWeak)
 import Data.List (sort)
 import Engine.Audio.Config.Player
 import Engine.Audio.Config.Runtime
@@ -28,8 +31,31 @@ listener x = ListenerSnapshot (WorldPageId "world") x 0 0 FaceSouth 0.5 256 0 0.
 requests ∷ AudioBatch → [AudioRequest]
 requests = map stampedRequest ∘ batchRequests
 
+{-# NOINLINE watchedTransport #-}
+watchedTransport ∷ IO (AudioTransport, Weak TransportStats)
+watchedTransport = do
+  transport ← fixture 8
+  -- The enqueue creates a fresh stats record rather than watching the shared
+  -- emptyTransportStats constant. Its counters will not be read until after GC.
+  void $ atomically $ enqueuePlay transport "cue" defaultTriggerOptions
+  previous ← atomically (readTransportStats transport) ⌦ evaluate
+  weak ← mkWeakPtr previous Nothing
+  pure (transport, weak)
+
 spec ∷ Spec
 spec = describe "Audio.Transport" $ do
+  it "releases unread transport history while draining idle batches" $ do
+    (transport, weak) ← watchedTransport
+    replicateM_ 10000 $ void $ atomically $ readAudioBatch transport 8
+    performMajorGC
+    isNothing <$> deRefWeak weak `shouldReturn` True
+    final ← atomically $ readTransportStats transport
+    transportQueued final `shouldBe` 1
+    transportStaleDrops final `shouldBe` 0
+    transportLoopCoalesced final `shouldBe` 0
+    transportEventDepth final `shouldBe` 0
+
+
   it "rejects a camera snapshot assembled before a session replacement" $ do
     transport ← newAudioTransport defaultRuntimeConfig defaultVolumes
     epoch ← atomically $ readAudioEpoch transport
