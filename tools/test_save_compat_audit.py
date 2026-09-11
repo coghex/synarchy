@@ -42,6 +42,13 @@ Owner modules (issue #2073)
       parity against the tracked corpus, its failure diagnostics, and
       how it resolves the binary -- the pre-resolved handoff, and the
       build-then-locate freshness order behind it.
+  test_save_compat_audit_compare.py            10 members
+      The bridge's fourth operation (issue #2274): structural session
+      comparison, its three fixture-describing outcomes against the
+      toolchain error beside them, and the one consumer that turns the
+      answer into a probe's failure text -- including the divergence
+      that first appears in the third or fourth generation, which the
+      pre-#2274 diagnostic could not describe.
   test_save_compat_audit_discovery.py          16 members
       `componentCodec` discovery, `csOlderVersions` parsing, component
       source paths, Lua persistence-module discovery.
@@ -49,13 +56,14 @@ Owner modules (issue #2073)
       Component/version coverage, modern-baseline completeness, B1
       migration policy, orphans, and the real-manifest guards.
 
-Eighty-five members in total. The issue's own table says 69 across
+Ninety-five members in total. The issue's own table says 69 across
 15/12/11/1/14/16 owners; #2098 added
 `test_haskell_component_source_paths_is_the_whole_directory` and
 `test_dropping_one_owner_from_discovery_changes_the_fingerprint` to the
 discovery owner after that table was written, and #2273 added the
 codec-bridge owner's twelve plus two rollback cases in the registration
-owner, which together are the whole of the
+owner, and #2274 added the comparison owner's ten, which together are
+the whole of the
 difference and are why requirement 11's baseline is the tree as it stands
 after #1922 and #2049, not as it stood at filing.
 
@@ -153,6 +161,7 @@ from pathlib import Path
 # rely on that ordering accident.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_save_compat_audit_codec as codec_tests  # noqa: E402
+import test_save_compat_audit_compare as compare_tests  # noqa: E402
 import test_save_compat_audit_coverage as coverage_tests  # noqa: E402
 import test_save_compat_audit_discovery as discovery_tests  # noqa: E402
 import test_save_compat_audit_envelope as envelope_tests  # noqa: E402
@@ -180,13 +189,15 @@ REPRODUCIBILITY_TESTS = list(reproducibility_tests.TESTS)
 #: ordered owner registries reproduces the pre-split order exactly
 #: (issue #2073 requirement 12), because each owner's members were
 #: already contiguous in it; issue #2273's codec owner is appended after
-#: the reproducibility member, next to the operations it covers.
+#: the reproducibility member, next to the operations it covers, and
+#: #2274's comparison owner directly after it, next to the fourth.
 ALL_TESTS = [
     *manifest_tests.TESTS,
     *envelope_tests.TESTS,
     *register_tests.TESTS,
     *reproducibility_tests.TESTS,
     *codec_tests.TESTS,
+    *compare_tests.TESTS,
     *discovery_tests.TESTS,
     *coverage_tests.TESTS,
 ]

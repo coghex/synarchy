@@ -162,7 +162,7 @@ Every implementation body lives with its owner:
                                     metadata version discovery
   save_compat_audit_codec.py        the real-codec bridge: execs the
                                     compiled exe:synarchy-save-codec
-                                    (#2273, formerly a `cabal repl`)
+                                    (#2273/#2274, formerly `cabal repl`)
   save_compat_audit_manifest.py     the blocking manifest audit
   save_compat_audit_register.py     --add-baseline registration
   save_compat_audit_generate.py     --generate-session generation
@@ -173,14 +173,16 @@ those; registration consumes the audit; generation consumes the codec
 bridge and delegates to registration; this façade imports each command
 owner for dispatch only.
 
-Since issue #2273 no path through this tool starts GHCi. Every
+Since issue #2273 no path through this tool starts GHCi, and since
+#2274 no path through any save tooling in this repository does. Every
 real-codec operation the codec bridge owns execs
 `exe:synarchy-save-codec`, which `cabal build all` produces beside the
 engine, so `cabal build all` is this tool's one build prerequisite --
 CI and `tools/ci-local.sh` both already run it before invoking this.
 
-`REPO_ROOT` and `dump_canonical_summary` are deliberately RE-EXPORTED
-here. Four sibling tools import them from this module by name --
+`REPO_ROOT`, `dump_canonical_summary` and (since #2274)
+`compare_session_snapshots` are deliberately RE-EXPORTED here. Four
+sibling tools import them from this module by name --
 tools/persistence_snapshot.py, tools/persistence_contract_sweep.py,
 tools/persistence_contract_probe.py and
 tools/save_compat_migration_probe.py -- and the split must not break a
@@ -195,7 +197,10 @@ import sys
 import save_compat_audit_generate as generate
 import save_compat_audit_manifest as manifest_audit
 import save_compat_audit_register as register
-from save_compat_audit_codec import dump_canonical_summary  # noqa: F401
+from save_compat_audit_codec import (  # noqa: F401
+    COMPARE_DECODE_FAILED, COMPARE_ERROR, COMPARE_MISMATCH, COMPARE_OK,
+    compare_session_snapshots, dump_canonical_summary,
+)
 from save_compat_audit_common import REPO_ROOT  # noqa: F401
 
 #: Re-exported for the four sibling tools that import them from this

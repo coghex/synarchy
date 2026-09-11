@@ -9,10 +9,11 @@ hold in one namespace -- with a fake `cabal` on `PATH` -- observing that
 a would-be child preparation is excluded rather than assuming it.
 
 These are the only cases that ASSIGN
-`probe_runner_resources.ENGINE_EXECUTABLE` themselves, and they do it
+`probe_runner_resources.ENGINE_EXECUTABLE` and `CODEC_EXECUTABLE`
+themselves, and they do it
 under the shared `saved_runner_executable` -- the same helper `run`
-uses to give back what `deflake` installs -- so the one writable
-production module global this gate touches has one save/restore. The
+uses to give back what `deflake` installs -- so the writable
+production module globals this gate touches have one save/restore. The
 `PATH` save/restore is the real-preparation case's alone.
 
 Not a gate of its own. Run through the aggregate:
@@ -35,7 +36,8 @@ import probe_engine  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
 import probe_runner_resources  # type: ignore  # noqa: E402
 from deflake_selftest_support import (  # noqa: E402
-    PREPARED_ENGINE, FakeClaim, Preparer, Recorder, Scratch, expect,
+    PREPARED_CODEC, PREPARED_ENGINE, FakeClaim, Preparer, Recorder,
+    Scratch, expect, no_handoff_environment,
     held_resources, measurement, run, saved_runner_executable)
 
 
@@ -64,19 +66,21 @@ step = sys.argv[1] if len(sys.argv) > 1 else ""
 if step == "build":
     sys.exit(0)
 if step == "list-bin":
-    print(config["engine"])
+    print(config["engine" if sys.argv[2] == "exe:synarchy" else "codec"])
     sys.exit(0)
 sys.exit(9)
 """
 
 
 def test_the_engine_is_prepared_before_the_resource_hold() -> None:
-    print("\n-- the engine is prepared before the measurement takes its hold")
+    print("\n-- both binaries are prepared before the measurement takes "
+          "its hold")
     scratch = Scratch()
     order: list[str] = []
     try:
         with saved_runner_executable():
             probe_runner_resources.ENGINE_EXECUTABLE = None
+            probe_runner_resources.CODEC_EXECUTABLE = None
             prepare = Preparer(observe=lambda: order.append("prepare"))
 
             def take(probe, *, namespace=None, repo_root=None):
@@ -88,10 +92,11 @@ def test_the_engine_is_prepared_before_the_resource_hold() -> None:
                 def __call__(self, *args, **kwargs):
                     order.append("measure")
                     self.seen_executable = probe_runner_resources.ENGINE_EXECUTABLE
+                    self.seen_codec = probe_runner_resources.CODEC_EXECUTABLE
                     return super().__call__(*args, **kwargs)
 
             measure = Watching(measurement(scratch))
-            result = run(scratch, prepare_engine=prepare, acquire_resources=take,
+            result = run(scratch, prepare_binaries=prepare, acquire_resources=take,
                          measure=measure,
                          record_result=probe_census.record_result_installed)
             expect(result.outcome == deflake.OUTCOME_RECORDED,
@@ -109,6 +114,12 @@ def test_the_engine_is_prepared_before_the_resource_hold() -> None:
                    f"runner's executable when the runs start, so no child "
                    f"prepares its own (got "
                    f"{getattr(measure, 'seen_executable', None)!r})")
+            # #2274: `persistence_contract` holds `cabal-build` only
+            # SHARED now, so a child left to resolve the save codec
+            # itself would build inside this measurement's hold.
+            expect(getattr(measure, "seen_codec", None) == PREPARED_CODEC,
+                   f"and so is the compiled save codec, for the same "
+                   f"reason (got {getattr(measure, 'seen_codec', None)!r})")
     finally:
         scratch.cleanup()
 
@@ -127,7 +138,7 @@ def test_preparation_and_the_hold_resolve_one_namespace() -> None:
                 seen.append(namespace)
                 return held_resources(probe, namespace=namespace)
 
-            run(scratch, prepare_engine=prepare, acquire_resources=take,
+            run(scratch, prepare_binaries=prepare, acquire_resources=take,
                 namespace=namespace, measure=Recorder(measurement(scratch)),
                 record_result=probe_census.record_result_installed)
             expect(prepare.calls
@@ -154,7 +165,7 @@ def test_a_preparation_failure_runs_nothing_and_gives_the_claim_back() -> None:
             measure = Recorder(measurement(scratch))
             held: list = []
             result = run(scratch, acquire_claim=lambda probe, **kw: claim,
-                         prepare_engine=Preparer(raises=(
+                         prepare_binaries=Preparer(raises=(
                              probe_engine.EnginePreparationError(
                                  "the engine executable could not be "
                                  "prepared: `cabal build exe:synarchy` "
@@ -184,9 +195,13 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
     engine = scratch.root / "fake-synarchy"
     engine.write_text("#!/bin/sh\nexit 0\n")
     engine.chmod(0o755)
+    codec = scratch.root / "fake-synarchy-save-codec"
+    codec.write_text("#!/bin/sh\nexit 0\n")
+    codec.chmod(0o755)
     calls = scratch.root / "cabal-calls.txt"
     (scratch.root / "cabal.json").write_text(
-        json.dumps({"calls": str(calls), "engine": str(engine)}))
+        json.dumps({"calls": str(calls), "engine": str(engine),
+                    "codec": str(codec)}))
     cabal = scratch.root / "cabal"
     cabal.write_text(FAKE_CABAL_SRC)
     cabal.chmod(0o755)
@@ -194,7 +209,13 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
     conflicts: list = []
     try:
         os.environ["PATH"] = f"{scratch.root}{os.pathsep}{saved_path}"
-        with saved_runner_executable():
+        # The REAL `prepare_executable` returns an EXPORTED handoff path
+        # verbatim rather than building, so an operator's own
+        # `SYNARCHY_PROBE_ENGINE_EXE`/`SYNARCHY_SAVE_CODEC_EXE` would
+        # leave the fake `cabal` below never invoked and this case
+        # failing on an empty call log. Scrubbed for the block, restored
+        # on every exit.
+        with no_handoff_environment(), saved_runner_executable():
             probe_runner_resources.ENGINE_EXECUTABLE = None
 
             class Watching(Recorder):
@@ -217,7 +238,7 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
             measure = Watching(measurement(scratch))
             started = time.monotonic()
             result = run(scratch, acquire_resources=deflake._acquire_probe_resources,
-                         prepare_engine=deflake._prepare_probe_engine,
+                         prepare_binaries=deflake._prepare_probe_binaries,
                          namespace=namespace, measure=measure,
                          record_result=probe_census.record_result_installed)
             elapsed = time.monotonic() - started
@@ -230,8 +251,12 @@ def test_the_real_preparation_runs_outside_the_real_hold() -> None:
             recorded = [line for line in
                         (calls.read_text().splitlines() if calls.exists()
                          else []) if line]
-            expect(recorded == ["build exe:synarchy", "list-bin exe:synarchy"],
-                   f"having really built, exactly once, through the real "
+            expect(recorded == ["build exe:synarchy",
+                                "list-bin exe:synarchy",
+                                "build exe:synarchy-save-codec",
+                                "list-bin exe:synarchy-save-codec"],
+                   f"having really built BOTH binaries a probe may exec "
+                   f"(#2274), each exactly once, through the real "
                    f"preparation (got {recorded})")
             expect(conflicts == [probe_engine.BUILD_RESOURCE],
                    f"and the hold covering the runs really does exclude a "

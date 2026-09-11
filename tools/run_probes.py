@@ -36,19 +36,23 @@ The build directory is one of those resources (#1570). Probes used to
 launch their engine as `cabal run exe:synarchy`, so a `--jobs N` sweep put
 N concurrent Cabal processes on one `dist-newstyle` and an otherwise
 healthy probe died on the inplace package database before its engine
-started. This runner therefore resolves the executable ONCE — one
-freshness build plus one `cabal list-bin`, in
-`probe_runner_resources.engine_preflight`, after selection is validated
-and before any probe is spawned — and hands every probe that absolute path
-through the environment, so no probe process invokes Cabal while another
-is running. That preflight is itself
+started. This runner therefore resolves every binary a probe execs ONCE —
+one freshness build plus one `cabal list-bin` per target, in
+`probe_runner_resources.engine_preflight` and (since #2274)
+`codec_preflight`, after selection is validated and before any probe is
+spawned — and hands every probe those absolute paths through the
+environment, so no probe process invokes Cabal while another is running.
+The two targets are `exe:synarchy`, which every probe boots, and
+`exe:synarchy-save-codec`, which the persistence probes decode saves
+through. Each preflight is itself
 a Cabal writer, so it runs inside an EXCLUSIVE `cabal-build` hold: two
 aggregate runs cannot build at once, and neither can a build and another
-runner's Cabal-driving probe. The few probes that legitimately still
-drive Cabal (a `cabal repl` behind `persistence_snapshot`, and the codec
-helper's own freshness build behind `save_compat_audit` since #2273)
-declare `cabal-build` EXCLUSIVELY instead, which is the same scheduling
-mechanism keeping them off everyone else's toes. Since #1436 the SAME two tables are also
+runner's Cabal-driving probe. The probes that legitimately still drive
+Cabal on their DIRECT path (`save_compat_migration`'s codec freshness
+build, and `persistence_contract_sweep`, which nests a runner that
+selects it) declare `cabal-build` EXCLUSIVELY instead, which is the same
+scheduling mechanism keeping them off everyone else's toes. Since #1436
+the SAME two tables are also
 enforced ACROSS processes, through `tools/probe_resource_lock.py`, so a
 `/deflake` measurement or a second runner cannot overlap what this one is
 holding either. A full sequential run is low tens of
@@ -73,7 +77,7 @@ the probe's port; see `probe_runner_lifecycle.reap_group`.
 
 Exit 0 = all selected probes passed. 1 = at least one failed. 2 = the run
 never started — a bad invocation (e.g. --only matched nothing), an
-unusable cross-process resource namespace, or an engine executable the
+unusable cross-process resource namespace, or an executable the
 preflight could not resolve. 130 = interrupted with Ctrl-C, after
 terminating every probe still running and the engine it booted.
 
@@ -88,7 +92,7 @@ lives in five owners beside it, each of which is importable on its own:
                               (#1982) record protocols
   `probe_runner_resources`    the reader/writer conflict model, the
                               cross-process holds, the inherited ancestor
-                              holds, and the engine preflight
+                              holds, and the engine/codec preflights
   `probe_runner_lifecycle`    launching one probe and reaping its whole
                               process group (#1323)
   `probe_runner_scheduler`    sequential and `--jobs` orchestration,
@@ -244,31 +248,47 @@ def main() -> int:
         print(f"\n    waiting for {busy.resource!r} ({busy.interest}) held "
               f"outside this runner ... ", end="", flush=True)
 
-    # The whole Cabal contact this run makes (#1570): one freshness build
-    # plus one `cabal list-bin`, HERE — after `--list` and after every
+    # The whole Cabal contact this run makes (#1570, #2274): one
+    # freshness build plus one `cabal list-bin` per target, HERE — after
+    # `--list` and after every
     # selection and port refusal above, so a rejected or empty selection
     # stays build-free, and before a single probe process exists, so the
-    # concurrent-`cabal run` race cannot happen at all. The build itself
+    # concurrent-`cabal run` race cannot happen at all. Each build
     # runs inside an EXCLUSIVE `cabal-build` hold, because a preflight is
     # a Cabal writer like any other and a second runner's preflight (or
     # another runner's Cabal-driving probe) must not be in the build
     # directory beside it. A failure is this runner's own nonzero exit,
-    # never a retry and never a probe's assertion failure. The resolved
-    # path is stored on its OWNER, which is the cell
+    # never a retry and never a probe's assertion failure. Each resolved
+    # path is stored on its OWNER, which holds the cells
     # `probe_runner_lifecycle.run_one` reads when it hands a child its
-    # engine (#2074) — this file keeps no copy of it.
+    # binaries (#2074) — this file keeps no copy of them.
+    #
+    # The codec is resolved SECOND and unconditionally. Second because a
+    # broken engine is the failure an operator is far likelier to be
+    # looking at, and reporting it first keeps the diagnostic pointed at
+    # the thing they changed; unconditionally because the alternative is
+    # a hand-kept list of which probes decode a save, and a probe that
+    # gained a decode without joining it would quietly build the helper
+    # itself inside a parallel sweep.
+    #
+    # One `try` covers both: every diagnostic either owner raises already
+    # names the Cabal target it was resolving, so splitting this into two
+    # blocks would add a label the message already carries.
     try:
         resources.ENGINE_EXECUTABLE = resources.engine_preflight(
             namespace, announce=waiting)
+        resources.CODEC_EXECUTABLE = resources.codec_preflight(
+            namespace, announce=waiting)
     except probe_engine.EngineExecutableError as error:
-        print(f"cannot resolve the engine the probes launch: {error}",
+        print(f"cannot resolve a binary the probes need: {error}",
               file=sys.stderr)
         return 2
     except probe_resource_lock.ResourceLockError as error:
-        print(f"cannot coordinate the engine build across processes: {error}",
-              file=sys.stderr)
+        print(f"cannot coordinate a preflight build across processes: "
+              f"{error}", file=sys.stderr)
         return 2
     print(f"engine: {resources.ENGINE_EXECUTABLE}")
+    print(f"save codec: {resources.CODEC_EXECUTABLE}")
 
     wall_start = time.time()
     # #1768: the runner's own half of the shared progress convention. Its

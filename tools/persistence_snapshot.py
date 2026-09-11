@@ -26,75 +26,97 @@ the two facts that already make the REAL types comparable for free:
 e.g. an original save and a resave taken after a fresh-process load
 published it) through the real `World.Save.Envelope.decodeSessionEnvelope`
 and asserts every one is pairwise equal on both halves. This needs no
-engine, no GPU, and no window -- it runs as a `cabal repl` subprocess
-against raw files on disk. That repl is this module's own, and it is the
-last one in this family: issue #2273 converted `save_compat_audit.py`'s
-three codec operations to the compiled `exe:synarchy-save-codec`, and
-converting this structural comparison is its declared follow-up. So the
-two paths no longer share a subprocess pattern, and the pass/fail gate
-and the diagnostic below reach the codec by different means.
+engine, no GPU, and no window.
 
-On a mismatch it additionally calls
+Issue #2274: the last GHCi consumer in this family
+--------------------------------------------------
+That comparison was a `cabal repl test:synarchy-test-headless` program
+of this module's own until #2274 -- the one remaining GHCi path after
+#2273 converted `save_compat_audit.py`'s three codec operations to the
+compiled `exe:synarchy-save-codec`. It cost far more than the decode it
+performed:
+
+  - a `cabal repl` recompiles into the shared inplace package database,
+    so `persistence_contract` and `persistence_contract_sweep` had to
+    hold `cabal-build` EXCLUSIVELY and the compact probe ran ALONE,
+    after every other probe in a `--jobs 2` sweep had finished;
+  - and it was the only reason the `behavior-probes` CI job built
+    `synarchy-test-headless` at all, which on the 2026-09-02 runs
+    recompiled 211 of 348 modules for a handful of library functions.
+
+Both halves of the comparison are now `app-save-codec/Main.hs`'s
+`compare` operation, reached through
+`save_compat_audit.compare_session_snapshots`. It is the SAME program
+against the SAME library function, compiled -- not a second decoder --
+so the three outcomes below are unchanged.
+
+On a mismatch this additionally calls
 `save_compat_audit.dump_canonical_summary` (already covers
-metadata/allocators/camera/every page's entities) on each file to give a
-human-readable diagnostic of WHERE the two diverge -- that call execs the
-compiled helper. The strict Eq/byte check here is the pass/fail gate; the
-summary dump is only for debugging a failure.
+metadata/allocators/camera/every page's entities) on two files to give a
+human-readable diagnostic of WHERE they diverge. The strict Eq/byte
+check is the pass/fail gate; the summary dump is only for debugging a
+failure. WHICH two files is taken from the comparison's own report
+rather than assumed to be the first two: a run comparing four
+generations can first diverge at `gen3`, and diffing `gen1` against
+`gen2` would then report no difference at all beside a genuine mismatch.
+
+Where the decoder comes from
+----------------------------
+`prepare_decoder` below is this surface's half of the two-binary
+contract `tools/probe_engine.py` describes. Under `tools/run_probes.py`
+the runner's preflight has already resolved the helper and exported
+`SYNARCHY_SAVE_CODEC_EXE`, so it is a no-op -- which it must be, because
+`persistence_contract` holds `cabal-build` only SHARED since #2274 and a
+build under a shared hold is #1570's defect. Run BY HAND there is no
+such export, so it performs the same preparation `probe_engine` performs
+for the engine (#1913): one build and one `cabal list-bin` inside an
+EXCLUSIVE hold, before any timed work starts.
 
 Usage (as a library):
-    from persistence_snapshot import compare_session_files
+    from persistence_snapshot import compare_session_files, prepare_decoder
+    prepare_decoder()          # once, before any timed work
     ok, detail = compare_session_files([path_a, path_b, path_c])
 """
 from __future__ import annotations
 
-import subprocess
+import os
 from pathlib import Path
 
-from save_compat_audit import (  # noqa: E402 -- sibling module, tools/ on sys.path
-    REPO_ROOT, dump_canonical_summary,
+import probe_engine  # noqa: E402 -- sibling module, tools/ on sys.path
+import save_compat_audit_codec as codec  # noqa: E402
+from save_compat_audit import (  # noqa: E402
+    COMPARE_MISMATCH, COMPARE_OK, REPO_ROOT, compare_session_snapshots,
+    dump_canonical_summary,
 )
 
-# A permanent GHCi program (run via `cabal repl`) that decodes every
-# listed file and asserts every decoded
-# `SessionSnapshot` -- and every `lua.<module>` component's raw payload
-# bytes -- is pairwise structurally equal. `{paths_literal}` is a
-# Haskell list-of-Strings literal built by `compare_session_files`.
-_GHCI_COMPARE_TEMPLATE = r"""
-:set -XOverloadedStrings -XTypeApplications -XScopedTypeVariables
-import qualified Data.ByteString as BS
-import qualified Data.HashSet as HS
-import qualified Data.HashMap.Strict as HM
-import World.Save.Envelope (decodeSessionEnvelope, LuaComponentSpec(..))
+__all__ = ["REPO_ROOT", "compare_session_files", "prepare_decoder"]
 
-let paths = {paths_literal}
-let luaNames = HS.fromList ["unit_ai", "building_spawn"]
 
-:{{
-decodedList <- mapM (\p -> do
-    bytes <- BS.readFile p
-    return (p, decodeSessionEnvelope luaNames luaNames bytes)) paths
-:}}
+def prepare_decoder(announce=print) -> str:
+    """Resolve the compiled save decoder BEFORE any timed probe work.
 
-:{{
-case sequence [ either (const Nothing) Just d | (_, d) <- decodedList ] of
-  Nothing ->
-    putStrLn ("DECODE_FAILED: " ++ show
-      [ (p, err) | (p, Left err) <- decodedList ])
-  Just decoded -> do
-    let snaps = [ (p, snap) | ((p, _), (_, snap, _, _)) <- zip decodedList decoded ]
-        luaPayloads = [ (p, HM.fromList [ (lcsId c, lcsPayload c) | c <- comps ])
-                      | ((p, _), (_, _, comps, _)) <- zip decodedList decoded ]
-    case (snaps, luaPayloads) of
-      ((_, firstSnap) : snapRest, (_, firstLua) : luaRest) -> do
-        let snapMismatches = [ p | (p, s) <- snapRest, s /= firstSnap ]
-            luaMismatches = [ p | (p, m) <- luaRest, m /= firstLua ]
-        if null snapMismatches && null luaMismatches
-          then putStrLn "COMPARE_OK"
-          else putStrLn ("COMPARE_MISMATCH: snapshot-differs=" ++ show snapMismatches
-                          ++ " lua-component-differs=" ++ show luaMismatches)
-      _ -> putStrLn "COMPARE_EMPTY: fewer than one path decoded"
-:}}
-"""
+    Returns its absolute path. A value already exported in
+    `SYNARCHY_SAVE_CODEC_EXE` is taken verbatim and nothing is built --
+    that is the aggregate runner's handoff, and the whole reason a probe
+    the runner launched makes no Cabal contact. Otherwise this builds and
+    locates the helper under an EXCLUSIVE `cabal-build` hold and exports
+    the result into this process's environment, which is what also hands
+    it down to a nested runner's own children.
+
+    Raises `probe_engine.EnginePreparationError` when the helper cannot
+    be prepared, the same refusal the engine's preparation raises: a
+    probe that cannot decode its saves has nothing to assert, and
+    discovering that after three engine boots is strictly worse than
+    discovering it before the first.
+    """
+    exported = os.environ.get(codec.ENV_CODEC_EXE, "").strip()
+    if exported:
+        return exported
+    resolved = probe_engine.prepare_executable(
+        REPO_ROOT, announce=announce, target=codec.CODEC_TARGET,
+        env_var=codec.ENV_CODEC_EXE)
+    os.environ[codec.ENV_CODEC_EXE] = resolved
+    return resolved
 
 
 def _first_diff(actual, expected, path: str = "") -> str:
@@ -143,9 +165,62 @@ def _canonicalize_for_diff(d: dict) -> dict:
     return {k: v for k, v in d.items() if k not in _DIAGNOSTIC_EXCLUDED_KEYS}
 
 
-def _haskell_string_list_literal(paths: list[Path]) -> str:
-    escaped = [str(p).replace("\\", "\\\\").replace('"', '\\"') for p in paths]
-    return "[" + ", ".join(f'"{p}"' for p in escaped) + "]"
+def diff_pair(paths: list[Path], report: dict | None) -> list[Path]:
+    """The two files the canonical-summary diagnostic should compare.
+
+    The comparison's reference (its first path) and the file that FIRST
+    diverged from it, taken from the helper's own report. Both difference
+    lists are consulted and the earlier entry in `paths` wins, so a run
+    whose snapshots match while a `lua.<module>` payload does not still
+    diffs the file that actually differs.
+
+    Falls back to the first two paths when there is no usable report --
+    which is what this always did before #2274, and is still the right
+    answer for a decode failure, where nothing "first diverged".
+    """
+    if len(paths) < 2:
+        return list(paths)
+    fallback = list(paths[:2])
+    if not isinstance(report, dict):
+        return fallback
+    reference = report.get("reference")
+    differs = set()
+    for key in ("snapshotDiffers", "luaComponentDiffers"):
+        value = report.get(key)
+        if isinstance(value, list):
+            differs.update(str(entry) for entry in value)
+    if not differs:
+        return fallback
+    first_divergent = next((p for p in paths if str(p) in differs), None)
+    if first_divergent is None:
+        return fallback
+    anchor = next((p for p in paths if str(p) == str(reference)), paths[0])
+    if str(anchor) == str(first_divergent):
+        return fallback
+    return [anchor, first_divergent]
+
+
+def _summary_diff(paths: list[Path]) -> str:
+    """A human-readable first structural difference between two saves.
+
+    Best-effort and diagnostic-only: every failure here -- a helper that
+    will not run, a summary that will not parse -- leaves the verdict and
+    its marker line exactly as they were, because the pass/fail gate has
+    already been decided by the real comparison.
+    """
+    import json
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        summaries = []
+        for p in paths:
+            out = Path(td) / f"{p.stem}.summary.json"
+            ok, _tail = dump_canonical_summary(p, out)
+            summaries.append(out.read_text(encoding="utf-8") if ok else None)
+        if not all(summaries) or len(summaries) < 2:
+            return ""
+        a = _canonicalize_for_diff(json.loads(summaries[0]))
+        b = _canonicalize_for_diff(json.loads(summaries[1]))
+        return _first_diff(a, b)
 
 
 def compare_session_files(paths: list[Path]) -> tuple[bool, str]:
@@ -157,41 +232,15 @@ def compare_session_files(paths: list[Path]) -> tuple[bool, str]:
     diff where available) on failure/decode error."""
     if len(paths) < 2:
         return True, ""
-    script = _GHCI_COMPARE_TEMPLATE.format(
-        paths_literal=_haskell_string_list_literal(paths))
-    try:
-        proc = subprocess.run(
-            ["cabal", "repl", "test:synarchy-test-headless"],
-            input=script, cwd=REPO_ROOT, capture_output=True, text=True,
-            timeout=1800)
-    except FileNotFoundError:
-        return False, "'cabal' was not found on PATH"
-    output = (proc.stdout or "") + (proc.stderr or "")
-    if "COMPARE_OK" in output:
+    outcome, report, detail = compare_session_snapshots(paths)
+    if outcome == COMPARE_OK:
         return True, ""
-    if "COMPARE_MISMATCH" in output or "DECODE_FAILED" in output:
-        detail_lines = [ln for ln in output.splitlines()
-                         if "COMPARE_MISMATCH" in ln or "DECODE_FAILED" in ln]
-        detail = "\n".join(detail_lines)
-        # Best-effort human-readable diff between the first two files, via
-        # the SAME canonical-summary dump save_compat_audit.py already
-        # establishes -- only for debugging, never the pass/fail gate.
+    if outcome == COMPARE_MISMATCH:
         try:
-            import tempfile
-            with tempfile.TemporaryDirectory() as td:
-                summaries = []
-                for p in paths[:2]:
-                    out = Path(td) / f"{p.stem}.summary.json"
-                    ok, _tail = dump_canonical_summary(p, out)
-                    summaries.append(out.read_text(encoding="utf-8") if ok else None)
-                if all(summaries):
-                    import json
-                    a = _canonicalize_for_diff(json.loads(summaries[0]))
-                    b = _canonicalize_for_diff(json.loads(summaries[1]))
-                    diff = _first_diff(a, b)
-                    if diff:
-                        detail += f"\nfirst structural difference (via canonical summary): {diff}"
+            diff = _summary_diff(diff_pair(paths, report))
         except Exception:  # noqa: BLE001 -- diagnostic-only, never fatal
-            pass
-        return False, detail
-    return False, "\n".join(output.splitlines()[-60:])
+            diff = ""
+        if diff:
+            detail += (f"\nfirst structural difference (via canonical "
+                       f"summary): {diff}")
+    return False, detail

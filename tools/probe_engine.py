@@ -45,6 +45,24 @@ and nothing else. #1570's requirement 3 is untouched — a probe run by
 hand from a clean checkout still needs no prior build step; the build
 simply happens somewhere the clock is not already running.
 
+Two binaries, one contract (#2274)
+-----------------------------------
+
+`exe:synarchy` is no longer the only thing a probe execs. The compiled
+save codec `exe:synarchy-save-codec` (#2273) is how the persistence
+probes decode a save since #2274, and it travels the SAME way: resolved
+once by the runner's preflight, handed down through the environment,
+prepared under an exclusive `cabal-build` hold when a probe was run by
+hand. So `resolve_executable`, `prepare_executable` and
+`runner_executable` take the target and the handoff variable as
+parameters rather than being duplicated per binary.
+
+The NAMES stay with their owners — `ENGINE_TARGET`/`ENV_ENGINE_EXE`
+here, `CODEC_TARGET`/`ENV_CODEC_EXE` in
+`tools/save_compat_audit_codec.py`, which is also the module the
+non-probe save tooling reaches the codec through. This module therefore
+does not import that one; callers that want the codec pass its pair in.
+
 The module imports exactly one other `tools/` module,
 `probe_resource_lock`, which imports nothing from `tools/` at all:
 `probe_runner_resources` imports this one for the preflight, `probelib.py`
@@ -167,7 +185,7 @@ def validate_executable(path: str, *, source: str) -> str:
     return path
 
 
-def runner_executable(environ=None) -> str | None:
+def runner_executable(environ=None, env_var: str = ENV_ENGINE_EXE) -> str | None:
     """The validated executable the aggregate runner resolved, or None.
 
     None means "nobody handed us one" — a probe invoked directly from the
@@ -177,11 +195,18 @@ def runner_executable(environ=None) -> str | None:
     an error rather than a silent fallback either way: falling back would
     put a Cabal process back inside a parallel sweep, which is the whole
     defect.
+
+    `env_var` names which handoff to read, because the engine is no
+    longer the only binary the runner resolves once and hands down: since
+    #2274 the compiled save codec
+    (`save_compat_audit_codec.ENV_CODEC_EXE`) travels the same way, under
+    the same contract. Its owner keeps the NAME; this function keeps the
+    validation, so there is one place a handed-down path is judged.
     """
-    raw = (os.environ if environ is None else environ).get(ENV_ENGINE_EXE)
+    raw = (os.environ if environ is None else environ).get(env_var)
     if raw is None or not raw.strip():
         return None
-    return validate_executable(raw.strip(), source=f"${ENV_ENGINE_EXE}")
+    return validate_executable(raw.strip(), source=f"${env_var}")
 
 
 def engine_command(args, environ=None) -> list[str]:
@@ -209,30 +234,38 @@ def _last_line(text: str) -> str:
     return lines[-1] if lines else ""
 
 
-def resolve_executable(repo_root, *, run=None) -> str:
-    """Build `exe:synarchy` if stale, then return its absolute path.
+def resolve_executable(repo_root, *, run=None,
+                      target: str = ENGINE_TARGET) -> str:
+    """Build `target` if stale, then return its absolute path.
 
-    ONE freshness build plus ONE read-only path query — the whole Cabal
-    contact an aggregate run is allowed, and it happens before any probe
-    process exists. The build is unconditional on purpose: `cabal
-    list-bin` answers with a path whether or not that file is current, so
-    "build only when the file is missing" (which is all
-    `resource_root_probe.locate_binary` ever did) would happily hand a
-    sweep a stale engine.
+    ONE freshness build plus ONE read-only path query per target — the
+    whole Cabal contact an aggregate run is allowed, and it happens
+    before any probe process exists. The build is unconditional on
+    purpose: `cabal list-bin` answers with a path whether or not that
+    file is current, so "build only when the file is missing" (which is
+    all `resource_root_probe.locate_binary` ever did) would happily hand
+    a sweep a stale engine.
+
+    `target` defaults to the engine and is otherwise
+    `save_compat_audit_codec.CODEC_TARGET`, the compiled save codec the
+    persistence probes decode through since #2274. One function for both
+    because the freshness argument above is a property of `cabal
+    list-bin`, not of which executable is being located.
 
     `run` is the subprocess entry point, injectable so
     `tools/test_run_probes.py` can prove the preflight's shape — one
-    build, one query, before any probe spawns — without a toolchain.
+    build, one query per target, before any probe spawns — without a
+    toolchain.
     """
     runner = subprocess.run if run is None else run
-    for step, argv in (("build", ["cabal", "build", ENGINE_TARGET]),
-                       ("locate", ["cabal", "list-bin", ENGINE_TARGET])):
+    for step, argv in (("build", ["cabal", "build", target]),
+                       ("locate", ["cabal", "list-bin", target])):
         try:
             done = runner(argv, cwd=str(repo_root), capture_output=True,
                           text=True)
         except FileNotFoundError:
             raise EngineExecutableError(
-                f"'cabal' was not found on PATH, so {ENGINE_TARGET} cannot "
+                f"'cabal' was not found on PATH, so {target} cannot "
                 f"be resolved for the probes") from None
         except OSError as error:
             raise EngineExecutableError(
@@ -243,11 +276,11 @@ def resolve_executable(repo_root, *, run=None) -> str:
                 f"`{' '.join(argv)}` failed with exit status "
                 f"{done.returncode}"
                 + (f": {tail}" if tail else "")
-                + f"; the probes need a buildable {ENGINE_TARGET}")
+                + f"; the probes need a buildable {target}")
         if step == "locate":
             return validate_executable(
                 _last_line(done.stdout),
-                source=f"`cabal list-bin {ENGINE_TARGET}`")
+                source=f"`cabal list-bin {target}`")
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -324,7 +357,8 @@ def _prepare_failure(message: str, log_path: str) -> "EnginePreparationError":
 
 
 def _run_prepare_step(argv, *, cwd, deadline, allowance, log_file, log_path,
-                      capture: bool, what: str) -> str:
+                      capture: bool, what: str,
+                      target: str = ENGINE_TARGET) -> str:
     """Run one preparation subprocess, owning its whole process group.
 
     `capture` selects where the child's stdout goes: the log file for
@@ -347,7 +381,7 @@ def _run_prepare_step(argv, *, cwd, deadline, allowance, log_file, log_path,
             text=True, start_new_session=True)
     except FileNotFoundError:
         raise EnginePreparationError(
-            f"'cabal' was not found on PATH, so {ENGINE_TARGET} cannot be "
+            f"'cabal' was not found on PATH, so {target} cannot be "
             f"prepared for this probe") from None
     except OSError as error:
         raise EnginePreparationError(
@@ -384,7 +418,8 @@ def _run_prepare_step(argv, *, cwd, deadline, allowance, log_file, log_path,
 
 
 @contextlib.contextmanager
-def _build_state_hold(namespace, *, deadline, announce, lock_root):
+def _build_state_hold(namespace, *, deadline, announce, lock_root,
+                      target: str = ENGINE_TARGET):
     """Hold `cabal-build` EXCLUSIVELY for the duration of a preparation.
 
     Preparation is a Cabal WRITER, so it takes the same exclusive
@@ -420,7 +455,7 @@ def _build_state_hold(namespace, *, deadline, announce, lock_root):
                     f"lock exists to prevent") from None
             if announce is not None and not announced:
                 announce(f"waiting for {BUILD_RESOURCE!r}, held outside this "
-                         f"probe, before preparing {ENGINE_TARGET} ...")
+                         f"probe, before preparing {target} ...")
                 announced = True
             time.sleep(max(0.0, min(PREPARE_LOCK_POLL,
                                     deadline - time.monotonic())))
@@ -444,8 +479,10 @@ def default_prepare_log(tag) -> str:
 def prepare_executable(repo_root=None, *, environ=None, namespace=None,
                        timeout: float = DEFAULT_PREPARE_TIMEOUT,
                        log_path: str | None = None, announce=None,
-                       lock_root=None) -> str:
-    """The absolute engine executable, BUILT first if nobody supplied one.
+                       lock_root=None, target: str = ENGINE_TARGET,
+                       env_var: str = ENV_ENGINE_EXE) -> str:
+    """The absolute executable for `target`, BUILT first if nobody
+    supplied one.
 
     Aggregate mode is the early return: an executable handed over
     through `$SYNARCHY_PROBE_ENGINE_EXE` is validated and returned with
@@ -470,8 +507,15 @@ def prepare_executable(repo_root=None, *, environ=None, namespace=None,
     unchanged and only their POSITION — outside the caller's clock —
     is new. On a warm tree the second is a freshness check that finds
     nothing to do.
+
+    `target`/`env_var` default to the engine and its handoff. The
+    persistence probes pass `save_compat_audit_codec`'s pair to prepare
+    the compiled save codec the same way (#2274): a hand-run probe must
+    not build it inside its own timed work, and — now that
+    `persistence_contract` holds `cabal-build` only SHARED — must not
+    build it outside an exclusive hold either.
     """
-    inherited = runner_executable(environ)
+    inherited = runner_executable(environ, env_var)
     if inherited is not None:
         return inherited
     root = REPO_ROOT if repo_root is None else str(repo_root)
@@ -492,7 +536,7 @@ def prepare_executable(repo_root=None, *, environ=None, namespace=None,
             f"{BUILD_RESOURCE!r} interest has no namespace to be taken in "
             f"({error})") from None
     if announce is not None:
-        announce(f"preparing {ENGINE_TARGET} before the engine is launched; "
+        announce(f"preparing {target} before the engine is launched; "
                  f"build output: {path}")
     deadline = time.monotonic() + timeout
     try:
@@ -503,26 +547,26 @@ def prepare_executable(repo_root=None, *, environ=None, namespace=None,
             f"{path} could not be opened ({error})") from None
     try:
         with _build_state_hold(token, deadline=deadline, announce=announce,
-                               lock_root=lock_root):
+                               lock_root=lock_root, target=target):
             # One freshness build, then one read-only query: the same two
             # steps, in the same order, for the same reason as
             # `resolve_executable` — `cabal list-bin` answers with a path
             # whether or not that file is current.
             _run_prepare_step(
-                ["cabal", "build", ENGINE_TARGET], cwd=root,
+                ["cabal", "build", target], cwd=root,
                 deadline=deadline, allowance=timeout, log_file=log_file,
-                log_path=path, capture=False,
-                what=f"`cabal build {ENGINE_TARGET}`")
+                log_path=path, capture=False, target=target,
+                what=f"`cabal build {target}`")
             located = _run_prepare_step(
-                ["cabal", "list-bin", ENGINE_TARGET], cwd=root,
+                ["cabal", "list-bin", target], cwd=root,
                 deadline=deadline, allowance=timeout, log_file=log_file,
-                log_path=path, capture=True,
-                what=f"`cabal list-bin {ENGINE_TARGET}`")
+                log_path=path, capture=True, target=target,
+                what=f"`cabal list-bin {target}`")
     finally:
         log_file.close()
     try:
         return validate_executable(
-            _last_line(located), source=f"`cabal list-bin {ENGINE_TARGET}`")
+            _last_line(located), source=f"`cabal list-bin {target}`")
     except EngineExecutableError as error:
         raise _prepare_failure(
             f"the engine executable could not be prepared: {error}",

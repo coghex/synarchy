@@ -190,7 +190,10 @@ concrete precondition
   Parallel Python processes and distinct debug ports do not isolate Cabal's
   inplace package database. `persistence_contract` additionally launches
   `cabal repl test:synarchy-test-headless` through
-  `tools/persistence_snapshot.py`.
+  `tools/persistence_snapshot.py`. That last clause describes the tree as
+  surveyed; issue #2274 replaced that repl with `compare` in the compiled
+  `exe:synarchy-save-codec`, which the runner's preflight resolves and hands
+  down, so `persistence_contract` no longer holds `cabal-build` exclusively.
 - This is a measured failure, not only a source-level risk. In
   [PR run 32491150012](https://github.com/coghex/synarchy/actions/runs/32491150012),
   `cargo_capacity` and `persistence_contract` failed in the parallel batch and
@@ -357,11 +360,15 @@ it per probe would preserve the wrong abstraction at much higher I/O cost. The
 handoff unit is a tested executable (and, where needed, a dedicated helper
 executable), not Cabal's internal build database.
 
-`persistence_contract` is the current exception because its structural save
-comparison launches GHCi. Initially it must run without any concurrent Cabal
-consumer. The stronger follow-up is a small prebuilt codec-helper executable
-or equivalent binary interface so this probe also becomes a pure artifact
-consumer. Retrying a Cabal race alone is not accepted isolation: an
+`persistence_contract` was the exception at design time because its structural
+save comparison launched GHCi, and initially it ran without any concurrent
+Cabal consumer. The stronger follow-up this paragraph names — a small prebuilt
+codec-helper executable so the probe becomes a pure artifact consumer — is
+what issues #2273 and #2274 delivered: `exe:synarchy-save-codec`, whose
+`compare` operation the probe execs, resolved once by the runner's preflight
+beside the engine. The probe is a build-state reader now, declares nothing
+exclusively, and runs beside the rest of a `--jobs 2` sweep. Retrying a Cabal
+race alone was never accepted isolation: an
 infrastructure failure must not be converted into five minutes of hidden
 latency and a green result.
 
@@ -909,6 +916,12 @@ stops for a new decision.
 - **Scope:** An explicit executable override for probe boot, ephemeral worker
   worktree/resource-root lifecycle, unique per-worker ports and outputs, and an
   exclusive boundary for the remaining persistence-contract GHCi consumer.
+  That last item was the interim answer. Issue #2274 removed the consumer
+  instead: the structural comparison became `compare` in the compiled
+  `exe:synarchy-save-codec` (#2273), the preflight resolves that binary
+  beside the engine and hands both down, `persistence_contract` dropped its
+  exclusive `cabal-build` declaration, and the `behavior-probes` job stopped
+  building `synarchy-test-headless`.
 - **Phase:** 1 — remove infrastructure contention
 - **Depends on:** `none`
 - **Ordering:** `critical path`

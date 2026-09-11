@@ -63,6 +63,30 @@ PROBE_REQUIRED_COMMANDS = frozenset({
      "--exact --retries 1 --jobs 2"),
 })
 
+#: The behavior-probe job's prerequisite build, pinned exactly
+#: (#2274 requirement 4).
+#:
+#: The gate-set comparison above cannot see this at all -- it collects
+#: `python3 tools/*.py` invocations and deliberately ignores every other
+#: command -- and inspecting one CI log proves only what that run did.
+#: So the two halves are declared here and checked against the step's own
+#: `run:` body:
+#:
+#:   * PROBE_PREREQUISITE_TARGETS is what the step MUST build, which is
+#:     exactly what a probe execs: the engine every probe boots, and the
+#:     compiled save codec the persistence probes decode through.
+#:   * PROBE_FORBIDDEN_PREREQUISITES is what it must NOT. Building
+#:     `synarchy-test-headless` here is the five-to-eight minutes #2274
+#:     removed, and it re-enters the job the moment somebody "restores"
+#:     a target they assume a probe needs. Nothing else in this workflow
+#:     would object.
+PROBE_PREREQUISITE_STEP = "Build behavior probe prerequisites"
+PROBE_PREREQUISITE_TARGETS = ("exe:synarchy", "exe:synarchy-save-codec")
+PROBE_FORBIDDEN_PREREQUISITES = ("synarchy-test-headless",
+                                 "test:synarchy-test-headless",
+                                 "synarchy-test-graphical",
+                                 "all")
+
 def workflow_label(job: str) -> str:
     """How a diagnostic names one workflow job."""
     return ".github/workflows/ci.yml (job: %s)" % job

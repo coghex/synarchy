@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""The executable preflight and the cross-process resource model (#2130).
+"""The executable preflights and the cross-process resource model (#2130).
 
-Twenty groups over `probe_runner_resources`:
+Twenty-three groups over `probe_runner_resources`:
 
-  the engine executable is resolved ONCE, before any probe (#1570) --
+  the binaries a probe execs are resolved ONCE, before any probe (#1570,
+  #2274) --
   the preflight precedes every parallel and every sequential probe, a
   failed preflight spawns nothing, an unusable resolved path is refused
   rather than ignored, the `--list` and refusal paths stay build-free,
-  and the resolved path reaches every attempt including a solo retry;
+  and each resolved path reaches every attempt including a solo retry;
+  the compiled save codec travels the same way under its own variable,
+  its own unusable path is refused before dispatch, and a probe handed
+  one never falls back to building it;
   a nested runner adopts that executable without rebuilding, an
   ancestor's exclusive hold is not waited on, and a nested preflight does
   not deadlock against its ancestor;
@@ -25,6 +29,7 @@ the source scan behind the Cabal-launch audit.
 from __future__ import annotations
 
 import ast
+import os
 import shutil
 import subprocess
 import sys
@@ -51,6 +56,7 @@ import probe_engine  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_runner_registry  # noqa: E402
 import probe_runner_resources  # noqa: E402
+import save_compat_audit_codec  # noqa: E402
 from selftestlib import expect  # noqa: E402
 
 
@@ -72,6 +78,19 @@ def first_start(tree: Tree, name: str) -> float | None:
     return windows[0][0] if windows else None
 
 
+#: The preflight's complete Cabal contact, in order: one freshness build
+#: and one read-only query for the engine, then the same pair for the
+#: compiled save codec (#2274). Written once here because four cases
+#: assert against it and a copy per case is four places for a real
+#: regression to be "fixed" by editing the expectation.
+PREFLIGHT_ARGVS = [
+    ["cabal", "build", "exe:synarchy"],
+    ["cabal", "list-bin", "exe:synarchy"],
+    ["cabal", "build", "exe:synarchy-save-codec"],
+    ["cabal", "list-bin", "exe:synarchy-save-codec"],
+]
+
+
 def test_one_preflight_precedes_every_parallel_probe() -> None:
     print("\n-- a --jobs sweep makes ONE Cabal contact, before any probe starts")
     tree = Tree()
@@ -83,10 +102,9 @@ def test_one_preflight_precedes_every_parallel_probe() -> None:
             rc, out = main_with_open(
                 tree, ["--only", "alpha,beta,gamma", "--exact", "--jobs", "3"])
         expect(rc == 0, f"every probe still passes (got {rc})\n{out}")
-        expect(preflight_argvs(recorder) == [
-                   ["cabal", "build", "exe:synarchy"],
-                   ["cabal", "list-bin", "exe:synarchy"]],
-               f"exactly one freshness build and one read-only query, in that "
+        expect(preflight_argvs(recorder) == PREFLIGHT_ARGVS,
+               f"exactly one freshness build and one read-only query per "
+               f"target, in that "
                f"order (got {preflight_argvs(recorder)})")
         starts = [first_start(tree, name) for name in ("alpha", "beta", "gamma")]
         expect(all(when is not None for when in starts),
@@ -109,7 +127,7 @@ def test_one_preflight_precedes_every_sequential_probe() -> None:
         with patched(tree, preflight=recorder):
             rc, out = main_with_open(tree, ["--only", "alpha,beta", "--exact"])
         expect(rc == 0, f"both probes still pass (got {rc})\n{out}")
-        expect(len(recorder.calls) == 2,
+        expect(preflight_argvs(recorder) == PREFLIGHT_ARGVS,
                f"the sequential path preflights once too, not per probe "
                f"(calls: {preflight_argvs(recorder)})")
         starts = [first_start(tree, name) for name in ("alpha", "beta")]
@@ -223,7 +241,7 @@ def test_the_resolved_executable_reaches_every_attempt() -> None:
         expect(tree.engine_exes("flaky") == [want, want],
                f"and so did BOTH the parallel attempt and its solo retry "
                f"(got {tree.engine_exes('flaky')})\n{out}")
-        expect(len(recorder.calls) == 2,
+        expect(preflight_argvs(recorder) == PREFLIGHT_ARGVS,
                f"the retry built nothing further "
                f"(calls: {preflight_argvs(recorder)})")
     finally:
@@ -240,9 +258,101 @@ def test_the_resolved_executable_reaches_every_attempt() -> None:
         expect(tree.engine_exes("solo") == [want, want, want],
                f"the sequential path's inline retries got it too "
                f"(got {tree.engine_exes('solo')})")
-        expect(len(recorder.calls) == 2,
+        expect(preflight_argvs(recorder) == PREFLIGHT_ARGVS,
                f"still one preflight (calls: {preflight_argvs(recorder)})")
     finally:
+        tree.cleanup()
+
+
+def test_the_resolved_codec_reaches_every_attempt() -> None:
+    print("\n-- every probe process is handed the resolved save codec too")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        tree.add("flaky", exit_code=1)
+        recorder = PreflightRecorder(tree.executable, tree.codec)
+        with patched(tree, preflight=recorder):
+            _rc, out = main_with_open(
+                tree, ["--only", "alpha,flaky", "--exact", "--jobs", "2",
+                       "--retries", "1"])
+        want = str(tree.codec)
+        expect(want != str(tree.executable),
+               "the fixture's two binaries are distinct, so a crossed "
+               "handoff cannot pass this")
+        expect(tree.codec_exes("alpha") == [want],
+               f"the parallel attempt got it (got {tree.codec_exes('alpha')})")
+        expect(tree.codec_exes("flaky") == [want, want],
+               f"and so did BOTH the parallel attempt and its solo retry "
+               f"(got {tree.codec_exes('flaky')})\n{out}")
+        expect(tree.engine_exes("alpha") == [str(tree.executable)],
+               f"each binary under its OWN variable "
+               f"(got {tree.engine_exes('alpha')})")
+        expect(preflight_argvs(recorder) == PREFLIGHT_ARGVS,
+               f"and the retry built nothing further "
+               f"(calls: {preflight_argvs(recorder)})")
+    finally:
+        tree.cleanup()
+
+
+def test_an_unusable_resolved_codec_is_refused_not_ignored() -> None:
+    print("\n-- a save codec that cannot be run is a refusal, not a fallback")
+    tree = Tree()
+    try:
+        tree.add("alpha", exit_code=0)
+        missing = tree.root / "codec-not-built-yet"
+        recorder = PreflightRecorder(tree.executable, missing)
+        with patched(tree, preflight=recorder):
+            rc, out = main_with_open(tree, ["--only", "alpha", "--exact"])
+        expect(rc == 2,
+               f"a codec list-bin answer naming no file exits 2 (got {rc})")
+        expect(str(missing) in out,
+               f"and names the path it could not use (got {out!r})")
+        expect(not tree.started("alpha"),
+               "and no probe was spawned -- a probe that cannot decode its "
+               "saves has nothing to assert, and finding that out after "
+               "three engine boots is strictly worse")
+    finally:
+        tree.cleanup()
+
+
+def test_a_probe_never_falls_back_to_building_the_codec() -> None:
+    print("\n-- in aggregate mode the codec bridge resolves from the "
+          "handoff, never through Cabal")
+    tree = Tree()
+    saved = os.environ.get(save_compat_audit_codec.ENV_CODEC_EXE)
+    saved_cache = save_compat_audit_codec._CACHED_CODEC_EXE
+    try:
+        # The environment `run_one` really builds for a child, from the
+        # cell the preflight really fills in -- not a hand-written dict.
+        with patched(tree):
+            probe_runner_resources.CODEC_EXECUTABLE = str(tree.codec)
+            child_env = {
+                k: v for k, v in os.environ.items()
+                if k not in probe_runner_resources.RUNNER_ENV_VARS}
+            child_env[save_compat_audit_codec.ENV_CODEC_EXE] = str(tree.codec)
+            expect(child_env.get(save_compat_audit_codec.ENV_CODEC_EXE)
+                   == str(tree.codec),
+                   "the runner-owned variable survives the scrub-then-set "
+                   "that `run_one` performs")
+
+            # Now resolve the way a probe process would, with that
+            # environment in place and a Cabal that would be a hard
+            # failure if it were reached at all.
+            os.environ[save_compat_audit_codec.ENV_CODEC_EXE] = str(tree.codec)
+            save_compat_audit_codec._CACHED_CODEC_EXE = None
+            resolved, why = save_compat_audit_codec.resolve_codec_exe()
+        expect(resolved == str(tree.codec),
+               f"the child resolves the handed-down helper verbatim "
+               f"(got {resolved!r}, {why!r})")
+        expect(save_compat_audit_codec._CACHED_CODEC_EXE is None,
+               "through the environment branch, which caches nothing and "
+               "therefore never reached `cabal build`")
+    finally:
+        save_compat_audit_codec._CACHED_CODEC_EXE = saved_cache
+        if saved is None:
+            os.environ.pop(save_compat_audit_codec.ENV_CODEC_EXE, None)
+        else:
+            os.environ[save_compat_audit_codec.ENV_CODEC_EXE] = saved
         tree.cleanup()
 
 
@@ -250,22 +360,30 @@ def test_a_nested_runner_adopts_the_executable_without_rebuilding() -> None:
     print("\n-- a nested runner reuses what its ancestor already resolved")
     tree = Tree()
     try:
-        recorder = PreflightRecorder(tree.executable)
+        recorder = PreflightRecorder(tree.executable, tree.codec)
         with patched(tree, preflight=recorder):
             adopted = probe_runner_resources.engine_preflight(
                 environ={probe_engine.ENV_ENGINE_EXE: str(tree.executable)})
+            adopted_codec = probe_runner_resources.codec_preflight(
+                environ={save_compat_audit_codec.ENV_CODEC_EXE:
+                         str(tree.codec)})
         expect(adopted == str(tree.executable),
                f"the inherited executable is adopted verbatim (got {adopted})")
+        expect(adopted_codec == str(tree.codec),
+               f"and so is the inherited save codec (got {adopted_codec})")
         expect(not recorder.calls,
                f"with no second build (calls: {preflight_argvs(recorder)})")
 
-        recorder = PreflightRecorder(tree.executable)
+        recorder = PreflightRecorder(tree.executable, tree.codec)
         with patched(tree, preflight=recorder):
             resolved = probe_runner_resources.engine_preflight(environ={})
+            resolved_codec = probe_runner_resources.codec_preflight(environ={})
         expect(resolved == str(tree.executable),
                "and with nothing inherited it resolves one itself")
-        expect(len(recorder.calls) == 2,
-               f"through exactly one build and one query "
+        expect(resolved_codec == str(tree.codec),
+               f"each from its OWN Cabal target (got {resolved_codec})")
+        expect(preflight_argvs(recorder) == PREFLIGHT_ARGVS,
+               f"through exactly one build and one query per target "
                f"(calls: {preflight_argvs(recorder)})")
     finally:
         tree.cleanup()
@@ -502,7 +620,7 @@ def test_a_probe_is_handed_its_runners_exclusive_holds() -> None:
         lines = tree.env_lines("config_state")
         expect(len(lines) == 1, f"it ran once (got {lines})")
         if lines:
-            _exe, held, held_ns = lines[0]
+            _exe, _codec, held, held_ns = lines[0]
             expect(held == "repo-config",
                    f"and was told what its runner holds for it (got {held!r})")
             expect(held_ns == fixture.namespace,
@@ -868,6 +986,9 @@ TESTS_PREFLIGHT = (
     test_list_and_rejected_selections_stay_build_free,
     test_gui_port_refusal_still_precedes_the_build,
     test_the_resolved_executable_reaches_every_attempt,
+    test_the_resolved_codec_reaches_every_attempt,
+    test_an_unusable_resolved_codec_is_refused_not_ignored,
+    test_a_probe_never_falls_back_to_building_the_codec,
 )
 
 #: Propagation of the resolved executable, inherited holds, and the
