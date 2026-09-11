@@ -4189,10 +4189,40 @@ stage.** An exact selector wins; a cultivated request tries the same
 WILD semantic state before discarding any other axis; a dead request
 exhausts every dead candidate before showing living art; and
 phase-appropriate generic-dead art beats an adult-shaped cause asset
-that would misrepresent a juvenile. Overlapping wildcard declarations
-are resolved by that ladder and never by file, alphabetical or
-`HashMap` order, so resolution is deterministic and independently
-testable.
+that would misrepresent a juvenile.
+
+**The decided ten-step ladder is the TRACE of a total order, not an
+enumeration.** Candidates are ranked by descending lexicographic order
+of which semantic axes a matching declaration NAMES, in that same
+death/phase/cause/stage priority, with context explicitness as the
+final tiebreak. Descending order over those keys reproduces the ten
+steps exactly, and it also ranks every legal mask the trace does not
+name — `{stage, condition: dead, cause}` sorts between steps 5 and 6
+rather than falling off the ladder. Two candidates can only tie by
+naming the same axes with the same values, which the duplicate rule
+already rejects, so the winner is a function of the selector and the
+declared set alone — never of file, alphabetical or `HashMap` order.
+Living requests carry no cause and run their own eight keys; they do
+not enter the dead trace at all.
+
+**Legacy LIVING entries keep their own precedence and are NOT ranked by
+that key.** `phases`, `annualCycle` and `cycleOverrides` resolve as one
+fixed step after every declared variant, exactly as
+`resolveSpeciesTexture` does today — annual stage ABOVE life phase,
+which is the opposite of the variant key's order. Ranking them by the
+key would silently change what every shipped species draws. The legacy
+`dead` phase and its `phase: dead` overrides are the exception: they DO
+enter the dead order, at the generic-dead and stage-specific-generic-dead
+keys, which is where today's rendering already puts them.
+
+**Harvest depletion is a sixth state, outside the five axes, and death
+supersedes it.** `World.Render.FloraDraws` draws `fhHarvestedTexture`
+for any instance in the harvest map and never calls
+`resolveFloraTexture` at all. That stays true while the occurrence is
+ALIVE. Once it is dead, condition wins and the dead order runs — a
+deliberate, narrow change from today, where a plant inside its regrowth
+window at its lifespan keeps drawing harvested stubble. Invariant 4
+requires it, and EFM-7 owns and gates it.
 
 **Two fallbacks, not one.** The final SEMANTIC fallback is the
 species' own base texture — the first `phases` entry's texture, or
@@ -4243,8 +4273,11 @@ declarations, including the duplicate-selector, unknown-vocabulary and
 legacy-collision refusals and the extension of the texture-subset audit
 to declared variants; EFM-3 owes table-driven resolver tests covering
 all ten ladder steps and both fallbacks; EFM-4 through EFM-6 owe
-occurrence-identity, render-context and persistence gates; EFM-10 owes
-retention and successor behaviour; and EFM-9 owes the pilot's
+occurrence-identity, render-context and persistence gates; EFM-7 owes
+the depletion-versus-death gate above (a depleted harvestable species,
+killed, renders its dead candidate; alive and depleted, it still
+renders `harvested_texture`); EFM-10 owes retention and successor
+behaviour; and EFM-9 owes the pilot's
 end-to-end headless and preview evidence.
 
 ---

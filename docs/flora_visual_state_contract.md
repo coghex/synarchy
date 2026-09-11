@@ -55,17 +55,35 @@ authors it under `phases`, and `World.Flora.Growth` pins the age to that entry
 for its dead window. Under the selector model that entry is **not** a life
 phase, and `PhaseDead` is never used as a selector's phase:
 
-- a legacy `phases` entry tagged `dead` normalizes to a declaration with
-  `condition: dead` and every other axis wildcard — the species' Tier 1 generic
-  dead art (§5);
-- its `cycleOverrides` entries whose `phase` is `dead` normalize to
+- a legacy `phases` entry tagged `dead` **enters the variant order** as a
+  declaration with `condition: dead` and every other axis wildcard — key
+  `(1,0,0,0)`, the species' Tier 1 generic dead art (§5);
+- its `cycleOverrides` entries whose `phase` is `dead` enter it as
   stage-specific generic-dead declarations (`condition: dead` plus that
-  `stage`), not to living art;
-- every other legacy `phases`, `annualCycle`, and `cycleOverrides` entry
-  normalizes to `context: wild`, `condition: alive`;
+  `stage`) — key `(1,0,0,1)` — not as living art. Because `(1,0,0,1)` outranks
+  `(1,0,0,0)`, a species with both shows its stage-specific dead art, which is
+  what it shows today;
 - a natural-lifespan death requests `condition: dead`, `cause: natural`, and the
-  **last living** phase and stage frozen at death (§7.4), which resolves to the
-  same `dead.png` the species shows today.
+  **last living** phase and stage frozen at death (§7.4), and resolves through
+  those two entries to the same `dead.png` the species shows today.
+
+**Legacy LIVING entries are a different matter, and they are deliberately not
+ranked in the variant order.** Every other `phases`, `annualCycle`, and
+`cycleOverrides` entry describes a `wild` + `alive` state, but it keeps its own
+existing precedence and is resolved as one unit at §3.3, after every
+`textureVariants` candidate and before the base texture.
+
+That is a compatibility requirement, not a simplification. Today's living
+precedence puts the annual stage **above** the life phase: `resolveSpeciesTexture`
+uses the active `annualCycle` stage's texture whenever the species has a cycle,
+and falls back to the phase texture only when it has none. Ranking those
+entries by the §3.2.1 key would invert that — phase outranks stage there — and
+silently change what every shipped species draws. §3.3 preserves the existing
+order exactly.
+
+The two orders do not conflict, because they never compete: an author adding a
+`textureVariants` entry is deliberately overriding the legacy result, and every
+variant candidate is exhausted before §3.3 is consulted.
 
 `PhaseDead` therefore remains in `LifePhaseTag` for decoding legacy YAML and
 existing saves only. Natural death and hazard death share one fallback path.
@@ -165,8 +183,8 @@ block above:
 
 | Request | Winner | Why |
 |---|---|---|
-| cultivated, matured, flowering, alive | `cultivated_matured_flowering.png` | exact declared selector (step 1) |
-| wild, matured, flowering, alive | the existing `annualCycle`/`cycleOverrides` result | no dead or cultivated entry matches; step 9 |
+| cultivated, matured, flowering, alive | `cultivated_matured_flowering.png` | exact declared selector: the first living key `(1,1,0,1)`, §3.2.2 |
+| wild, matured, flowering, alive | the existing `annualCycle`/`cycleOverrides` result | the only living entry names `context: cultivated`, so no variant matches; §3.3 |
 | wild, sprout, dormant, dead, fire | `sprout_dead.png` | phase-preserving generic dead (step 5) outranks generic `charred.png` (step 6) |
 | wild, matured, flowering, dead, fire | `matured_flowering_charred.png` | exact (step 1) |
 | wild, matured, dormant, dead, fire | `charred.png` | the exact entry names `stage: flowering`, so it cannot match; no dead entry names `phase: matured` without a stage, so steps 4 and 5 are empty and step 6 wins |
@@ -231,37 +249,94 @@ art; with no dead-sprout art either it may use generic charred art, then generic
 dead art, and ultimately the base texture. It never stays visibly alive merely
 to preserve the fire cause or the season.
 
-A living request skips steps 1 through 8 — they are all dead candidates — and
-enters at step 9 after its own exact and context-dropping attempts.
+A living request never reaches steps 1 through 8: they are all dead
+candidates. Its own order is §3.2.2.
 
-**What "matches at step N" means.** Each step preserves some axes and drops
-others. A declaration satisfies a step when all three hold:
+### 3.2.1 The total order behind the ladder
 
-1. it **matches** the selector in the §2.1 sense;
-2. it **names every axis the step preserves** — so a declaration omitting
-   `stage` cannot satisfy a stage-preserving step, which is what keeps step 5
-   distinct from step 4;
-3. it **names no axis the step drops** — so a cause-specific declaration cannot
-   satisfy a cause-dropping step, which is what keeps step 5 distinct from
-   step 3.
+Those ten steps are the **trace** of one general rule for one example request,
+not an enumeration of every case. The rule itself is total: it orders every
+declaration §2 permits, for every request.
 
-**Context is the one exception**, by D-4: cultivated art overrides wild art
-rather than defining a parallel lifecycle. Every step is attempted cultivated
-first and then wild, and a declaration that omits `context` is a legitimate
-candidate in both attempts — it is the shared default. When an explicit
-`context: cultivated` declaration and a context-less one both match the
-cultivated attempt, the explicit one wins by the explicitness rule in §2.1. No
-other axis behaves this way.
+For each declaration that **matches** the selector (§2.1), record which of the
+four semantic axes it **names**:
 
-Together these make the winner a function of the selector and the declared set
-alone. Two declarations can only tie if they name the same axes with the same
-values, which rule 2 already rejects.
+```
+key(d) = ( names condition, names phase, names cause, names stage )
+```
+
+Candidates are tried in **descending lexicographic order of that key**, and
+within one key, cultivated-explicit before context-less before wild-explicit
+for a cultivated request, and wild-explicit before context-less for a wild one.
+The axis order inside the key is exactly D-11's priority — death, then phase,
+then cause, then annual stage — which is what makes invariants 4 through 7 hold
+by construction.
+
+Each numbered step in §3.2 is one value of that key. For the worked
+fire-killed cultivated flowering sprout:
+
+| Step | key | Reading |
+|---|---|---|
+| 1, 2 | `(1,1,1,1)` | exact: condition, phase, cause, stage |
+| 3 | `(1,1,1,0)` | stage dropped |
+| 4 | `(1,1,0,1)` | cause dropped, stage kept |
+| 5 | `(1,1,0,0)` | phase-preserving generic dead |
+| 6 | `(1,0,1,0)` | generic cause-specific dead |
+| 7 | `(1,0,0,1)` | stage-specific generic dead |
+| 8 | `(1,0,0,0)` | generic dead |
+| 9 | — | the best corresponding living state (§3.3) |
+| 10 | — | the species base texture |
+
+Descending lexicographic order on those keys reproduces steps 1 through 8 in
+exactly the decided sequence, so the ladder and the rule never disagree.
+
+**Every permitted mask has a place.** The keys above are the ones the example
+happens to declare; the order is defined over all sixteen, so a legal mask the
+ten-step trace does not name is still ranked. A declaration reading
+`{stage: flowering, condition: dead, cause: fire}`, for instance, has key
+`(1,0,1,1)` and is tried after step 5 `(1,1,0,0)` and before step 6 `(1,0,1,0)`.
+It is reachable and deterministic; rule 7 does not reject it.
+
+Ties are impossible: two matching declarations with the same key and the same
+context explicitness name the same axes with the same values, which rule 2
+already rejects. The winner is therefore a function of the selector and the
+declared set alone — never of file, alphabetical, or `HashMap` order.
+
+**Context is the one axis outside the key**, by D-4: cultivated art overrides
+wild art rather than defining a parallel lifecycle, so a declaration omitting
+`context` is a legitimate candidate in both contexts and is the shared default.
+It is the final tiebreak, never a reason to weaken a semantic axis — which is
+invariant 3.
+
+### 3.2.2 Living requests
+
+A living request carries `condition: alive` and no cause, so by rule 4 no
+matching declaration can name a cause: its key is always `(c, p, 0, s)`. The
+same descending order applies, giving eight candidate keys before §3.3:
+
+`(1,1,0,1)` → `(1,1,0,0)` → `(1,0,0,1)` → `(1,0,0,0)` →
+`(0,1,0,1)` → `(0,1,0,0)` → `(0,0,0,1)` → `(0,0,0,0)`
+
+then the best corresponding living state (§3.3), then the base texture.
+
+So for a living cultivated flowering sprout, `{phase: sprout, condition: alive}`
+— key `(1,1,0,0)` — beats `{stage: flowering, condition: alive}` — key
+`(1,0,0,1)`. Phase outranks annual stage for the living axes exactly as it does
+for the dead ones (D-11, invariant 7).
+
+**Numbering.** The step numbers in §3.2 name positions in the dead trace only.
+A living request does not "enter at step 9": it runs its own eight keys above
+and only then reaches §3.3 and the base texture, which are the two steps both
+traces share.
 
 ### 3.3 "The best corresponding living state"
 
-Step 9 is not a new mechanism. It is exactly today's living resolution in
-`World.Flora.Render.resolveSpeciesTexture`, driven by the selector's frozen
-phase and stage rather than by the current age and day of year:
+This is not a new mechanism, and it is not ranked by the §3.2.1 key. It is one
+fixed step, reached by dead and living requests alike once every
+`textureVariants` candidate is exhausted, and it is exactly today's living
+resolution in `World.Flora.Render.resolveSpeciesTexture` — including its
+stage-above-phase precedence (§1.1) — driven by the selector's frozen phase and
+stage rather than by the current age and day of year:
 
 1. the `cycleOverrides` entry for that exact `(phase, stage)` pair, if declared;
 2. otherwise that `annualCycle` stage's texture, if the species has a cycle;
@@ -404,6 +479,15 @@ corpsePolicy:
   does not override the structural default.
 - **Duplicate override selectors are rejected**, the same way duplicate texture
   selectors are.
+- **Unreachable overrides are rejected**, by exactly the rules §2.1 applies to
+  `textureVariants`, so EFM-2 has one validation to implement rather than two:
+  a `phase` absent from the species' own `phases` is refused, and `phase: dead`
+  is refused outright, because §1.1 makes `PhaseDead` a legacy authoring token
+  that no runtime selector ever carries. A `cause` outside the §1 vocabulary is
+  refused like any other unknown token. A corpse policy is selected by the
+  frozen phase and the recorded cause (§7.4), which are the same values a
+  texture selector carries, so an override no selector can carry is the same
+  silent authoring dead end `requireDeclared` has refused since #2315.
 
 The `cause: fire` entry above illustrates the schema; **no shipped species
 declares a cause override today**, and D-12 deliberately keeps cause from
@@ -448,12 +532,51 @@ content keeps loading.
 
 ---
 
-## 8. Compatibility promises
+## 8. Harvest depletion is a sixth state, and death supersedes it
 
-1. **Existing declarations keep loading and rendering unchanged.** `phases`,
-   `annualCycle`, `cycleOverrides`, and `harvestable.harvested_texture` are
-   untouched by this contract, and their normalization (§1.1) reproduces
-   today's texture for today's requests.
+`harvestable.harvested_texture` is **not** one of the five axes, and this
+contract does not fold it into them. Depletion is an orthogonal presentation
+state driven by a regrowth timer, not by the occurrence's semantic condition.
+
+Today it is a hard override that bypasses selection entirely:
+`World.Render.FloraDraws` draws `fhHarvestedTexture` for any instance in the
+harvest map and **never calls `resolveFloraTexture` at all**. Two rules keep
+that from contradicting invariant 4:
+
+1. **While the occurrence is alive, depletion still wins.** A harvested living
+   plant draws its `harvested_texture` ahead of every living `textureVariants`
+   candidate, exactly as it does today. Nothing about the common path changes.
+2. **Once the occurrence is dead, condition supersedes depletion.** The dead
+   candidate order in §3.2 runs, and `harvested_texture` is not consulted.
+
+Rule 2 is a **deliberate, narrow behaviour change**, called out here rather than
+left for a later child to discover. Today a plant that is inside its regrowth
+window when it reaches its lifespan keeps drawing harvested stubble instead of
+its `dead.png`; under this contract it looks dead. That is the change invariant
+4 requires — a plant killed by fire while depleted must not draw the art of a
+living, recently-picked plant — and it is also the behaviour a player expects,
+since a dead plant does not regrow.
+
+Scope: no producer can create a non-natural death until a later arc, so the only
+occurrences this reaches today are harvestable species dying at their natural
+lifespan. **EFM-7 owns this change** — it is the child that moves rendering onto
+the condition seam — and owes the gate: a harvestable species inside its
+regrowth window, killed, renders its dead candidate rather than
+`harvested_texture`, and the same species alive and depleted still renders
+`harvested_texture`.
+
+---
+
+## 9. Compatibility promises
+
+1. **Existing declarations keep loading and rendering unchanged, with one
+   stated exception.** `phases`, `annualCycle`, `cycleOverrides`, and
+   `harvestable.harvested_texture` are untouched as SCHEMA, their living
+   precedence is preserved exactly (§1.1, §3.3), and a species that declares no
+   `textureVariants` and no `corpsePolicy` renders as it does today. The one
+   exception is §8 rule 2: a depleted plant that dies now draws dead art rather
+   than harvested art. It is deliberate, scoped to harvestable species dying at
+   their natural lifespan, and gated by EFM-7.
 2. **Undeclared cultivated variants change no visual** (§6).
 3. **Persisted state records semantic tags only** — context, condition, cause,
    phase, stage, the retention outcome and its expiry — and **never a texture
@@ -464,7 +587,7 @@ content keeps loading.
 
 ---
 
-## 9. Scope of this document
+## 10. Scope of this document
 
 This contract is documentation. It introduces no loader, resolver, persistence,
 or retention behaviour. Its implementers are EFM-2 (loading and auditing
