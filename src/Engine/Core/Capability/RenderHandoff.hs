@@ -76,9 +76,9 @@ import Engine.Scene.Stats (SceneStats)
 import Structure.Palette (TexPalette)
 import Structure.WallCatalog (StructureWallCatalog)
 import Structure.ArtCatalog (StructureArtCatalog)
-import World.Types (WorldState, BloodTextureHandles)
+import World.Types (BloodTextureHandles)
 import Engine.Core.State
-  ( EngineEnv
+  ( EngineEnv, ZoomAtlasUpload
   , worldPreviewRef, worldPreviewGenerationRef, zoomAtlasDataRef
   , worldQuadsRef, sceneStatsRef, bloodDisposeQueue, texPaletteRef
   , texPaletteHandlesRef
@@ -107,7 +107,7 @@ data RenderHandoffCapability = RenderHandoffCapability
     --   CURRENT value to suppress a stale in-flight upload. Monotonic —
     --   it has no clearing contract at all, and giving it one would
     --   break that comparison.
-  , rhZoomAtlasDataRef          ∷ IORef [(Int, Int, BS.ByteString, [WorldState])]
+  , rhZoomAtlasDataRef          ∷ IORef [ZoomAtlasUpload]
     -- ^ Transient-handoff. Pending zoom-atlas pixels for GPU upload,
     --   paired with the EXACT 'WorldState's they belong to, captured at
     --   enqueue time so a load publish swapping @worldManagerRef@

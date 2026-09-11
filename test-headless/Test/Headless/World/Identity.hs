@@ -41,6 +41,7 @@ import Engine.Core.Log.Types (LogConfig(..), LogEntry(..), defaultLogConfig)
 import Location.Instance
     (LocationInstance(..), instancesToList)
 import World.River.Naming (RiverName(..), riverNamesToList)
+import Engine.Core.State (ZoomAtlasUpload(..))
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Types
 import Language.Generated.Types
@@ -665,10 +666,12 @@ spec = do
                 (_ : _ : _) → expectationFailure
                     "publish left more than one pending atlas; a whole-\
                     \session publish replaces the queue"
-                [(_, _, _, targets)] → do
+                [upload] → do
+                    let targets = zauTargets upload
                     -- WorldState has neither Eq nor Show; a page's own
                     -- private IORef IS its identity, and IORef's Eq is
                     -- pointer equality, so compare through that.
+                    zauPage upload `shouldBe` WorldPageId "id_atlas_owner_w8"
                     length targets `shouldBe` 1
                     map (isSamePage ownerState) targets `shouldBe` [True]
                     map (isSamePage otherState) targets `shouldBe` [False]

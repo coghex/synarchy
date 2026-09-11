@@ -75,6 +75,7 @@ import World.ZoomMap.Artifact (buildZoomArtifactKey, publishZoomArtifact)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
+import Engine.Core.State (ZoomAtlasUpload(..), queueZoomAtlasUpload)
 import World.Map.ImagePlan (mapImageRefusalText)
 import Engine.Map.ImageAdmission (admitWorldZoomAtlas)
 import World.Weather (initEarlyClimate, formatWeather)
@@ -457,16 +458,20 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             -- WorldState it belongs to (this init's own page), mirroring
             -- World.Load.Publish's identical fix -- see
             -- EngineEnv.zoomAtlasDataRef.
-            -- Supersedes only THIS page's own pending payloads, and
+            -- Supersedes only THIS page's own pending payload, and
             -- leaves every other page's alone (#2485's queue): an init
             -- rebuilds one page, so a live atlas refresh queued for a
             -- different page is not obsolete and must not be discarded
-            -- with it.
+            -- with it. Keyed by the PAGE ID, because this init has just
+            -- built a fresh 'WorldState' — a same-id reinitialization's
+            -- previous incarnation has different refs, and keying on
+            -- those would leave its image queued for a page that no
+            -- longer exists.
             atomicModifyIORef' (rhZoomAtlasDataRef handoff) $ \queued →
-                ( [ q | q@(_, _, _, targets) ← queued
-                      , wsTilesRef worldState `notElem` map wsTilesRef targets ]
-                  ⧺ [ ( zadWidth atlas, zadHeight atlas
-                      , zadPixelData atlas, [worldState] ) ]
+                ( queueZoomAtlasUpload
+                    (ZoomAtlasUpload (zadWidth atlas) (zadHeight atlas)
+                                     (zadPixelData atlas) pageId [worldState])
+                    queued
                 , () )
             -- #2485: keep the pixels this page is about to show, so an
             -- accepted terrain edit can regenerate one chunk's tile and

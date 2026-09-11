@@ -33,7 +33,7 @@ import qualified Data.HashSet as HS
 import qualified Data.Sequence as Seq
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.STM (atomically, modifyTVar')
-import Engine.Core.State (EngineEnv(..))
+import Engine.Core.State (EngineEnv(..), ZoomAtlasUpload(..))
 import Engine.PlayerEvent (clearEventStoreRows)
 import Engine.Core.Log (logInfo, logWarn, LogCategory(..), LoggerState)
 import qualified Engine.Core.Queue as Q
@@ -167,7 +167,8 @@ publishStagedSession env logger requestId staged = do
         -- Replaces the queue rather than appending: this publish is a
         -- whole-session replacement, so any image still pending belongs
         -- to pages that no longer exist (#2485's queue).
-        writeIORef (zoomAtlasDataRef env) [(w, h, bytes, atlasOwners)]
+        writeIORef (zoomAtlasDataRef env)
+            [ZoomAtlasUpload w h bytes ownerPid atlasOwners]
     -- Bump the preview generation on EVERY publish,
     -- unconditionally — never only inside the 'Just' branch below. A
     -- page staged via the arena-reconstruction path

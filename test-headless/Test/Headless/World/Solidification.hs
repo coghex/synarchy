@@ -43,7 +43,8 @@ import System.Timeout (timeout)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State
-    (EngineEnv(..), replaceZoomAtlasTextures, zoomAtlasDataRef)
+    ( EngineEnv(..), ZoomAtlasUpload(..), queueZoomAtlasUpload
+    , replaceZoomAtlasTextures, retireZoomAtlasTextures, zoomAtlasDataRef )
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
@@ -56,7 +57,8 @@ import Sim.Fluid.Reaction
     ( CellSite(..), ReactionResult(..), SolidProduct(..)
     , SolidificationEvent(..), TransferOutcome(..)
     , applyTransfer, groupReactionResults, solidProductFor )
-import Sim.Fluid.Types (ActiveFluidCell(..), activeToFluidCell)
+import Sim.Fluid.Types
+    (ActiveFluidCell(..), activeToFluidCell, fluidCellToActive)
 import Sim.State.Types
     (SimChunkState(..), SimState(..), SimWorldState(..)
     , emptySimState, emptySimWorldState)
@@ -365,6 +367,29 @@ pureSpec = describe "solidification (#2485)" $ do
             scsActiveFluid (swsChunks committed HM.! chunkA) V.! stoneIdx
                 `shouldBe` Nothing
 
+        it "does NOT displace an INACTIVE chunk a second time: its \
+           \passive map is already post-edit" $ do
+            -- Reached in ordinary play, not only in a fixture: a
+            -- synchronous fast settle drains reaction results only after
+            -- settling its chunks inactive. 'rcsFluid' is read AFTER the
+            -- WeAddTile, so 'World.Edit.Apply' has already taken the
+            -- level the new stone fills; taking another here would
+            -- charge a deep cell twice.
+            let deep = ActiveFluidCell Lake 20 0
+                -- What the post-edit tiles say at the solidified cell:
+                -- the stone's terrain top with the surviving fluid above
+                -- it. Its surface is what 'applyEdit' left.
+                postEdit = V.replicate cellsPerChunk Nothing
+                    V.// [(stoneIdx, activeToFluidCell 1 deep)]
+                inactive = simWorldWith
+                    [ (chunkA, (activeChunk 3 []) { scsActive = False }) ]
+                committed = applyReactionCommit chunkA 4 postEdit terrain
+                                                [stoneIdx] inactive
+                grid = scsActiveFluid (swsChunks committed HM.! chunkA)
+            grid V.! stoneIdx
+                `shouldBe` (fluidCellToActive 1
+                                =≪ (postEdit V.! stoneIdx))
+
         it "re-seeds an INACTIVE chunk from the passive map instead, \
            \which is the only truth it has" $ do
             let inactive = simWorldWith
@@ -374,6 +399,27 @@ pureSpec = describe "solidification (#2485)" $ do
                 grid = scsActiveFluid (swsChunks committed HM.! chunkA)
             fmap afcVolume (grid V.! waterIdx) `shouldBe` Just 7
             grid V.! stoneIdx `shouldBe` Nothing
+
+    describe "queueing a page's zoom atlas upload" $ do
+        let pageA = WorldPageId "a"
+            pageB = WorldPageId "b"
+            upload pid n = ZoomAtlasUpload n n (BS.singleton 1) pid []
+
+        it "supersedes that PAGE's own pending image and leaves others" $
+            map zauPage (queueZoomAtlasUpload (upload pageA 2)
+                            [upload pageA 1, upload pageB 1])
+                `shouldBe` [pageB, pageA]
+
+        it "keys supersession by the page id, not by the target states, \
+           \so a same-id reinitialization replaces the previous \
+           \incarnation's image rather than queueing beside it" $ do
+            -- A reinit builds a fresh WorldState with fresh refs, so a
+            -- rule keyed on those would leave the old incarnation's
+            -- image queued for a page that no longer exists.
+            let reinit = ZoomAtlasUpload 3 3 (BS.singleton 2) pageA []
+                queued = queueZoomAtlasUpload reinit [upload pageA 1]
+            map zauPage queued `shouldBe` [pageA]
+            map zauWidth queued `shouldBe` [3]
 
     describe "installing a page's zoom atlas upload" $ do
         let a = 0 ∷ Int
@@ -401,6 +447,20 @@ pureSpec = describe "solidification (#2485)" $ do
                     replaceZoomAtlasTextures [a, b] "shared" []
             installed `shouldBe` [(a, "shared"), (b, "shared")]
             retired `shouldBe` []
+
+        it "retires the entry of a page that no longer exists" $ do
+            -- Nothing uploads for a destroyed, reinitialized or replaced
+            -- page, so without this its entry keeps a GPU image, view,
+            -- sampler and bindless slot alive until shutdown and every
+            -- load leaks one atlas.
+            let (kept, retired) =
+                    retireZoomAtlasTextures [a] [(a, "texA"), (b, "texB")]
+            kept `shouldBe` [(a, "texA")]
+            retired `shouldBe` ["texB"]
+
+        it "retires nothing while every page is still live" $
+            retireZoomAtlasTextures [a, b] [(a, "texA"), (b, "texB")]
+                `shouldBe` ([(a, "texA"), (b, "texB")], [] ∷ [String])
 
     -- * Requirement 9: the atlas patch itself.
     describe "patching one chunk's tile into the zoom atlas" $ do
@@ -1292,11 +1352,12 @@ spec = describe "solidification (#2485)" $ do
                 "the commit published no zoom atlas for upload"
             (_ : _ : _) → expectationFailure
                 "one commit queued more than one atlas for this page"
-            [(w, h, bytes, targets)] → do
-                w `shouldBe` zlaWidth patched
-                h `shouldBe` zlaHeight patched
-                bytes `shouldBe` zlaPixels patched
-                length targets `shouldBe` 1
+            [upload] → do
+                zauWidth upload `shouldBe` zlaWidth patched
+                zauHeight upload `shouldBe` zlaHeight patched
+                zauPixels upload `shouldBe` zlaPixels patched
+                zauPage upload `shouldBe` zoomPageId
+                length (zauTargets upload) `shouldBe` 1
 
         -- The overrides the refresh feeds the generator are derived by
         -- DIFFING the live chunk against what generation would produce,
@@ -1351,9 +1412,9 @@ waitForChunk ws coord want = go (300 ∷ Int)
 --   'WorldState' has neither 'Eq' nor 'Show'; a page's own private
 --   'IORef' IS its identity, and 'IORef''s 'Eq' is pointer equality, so
 --   the comparison goes through that and the RESULT is printable.
-targetsOf ∷ [WorldState] → (Int, Int, BS.ByteString, [WorldState]) → [Int]
-targetsOf known (_, _, _, targets) =
-    [ i | t ← targets
+targetsOf ∷ [WorldState] → ZoomAtlasUpload → [Int]
+targetsOf known upload =
+    [ i | t ← zauTargets upload
         , (i, k) ← zip [0 ..] known
         , wsTilesRef k ≡ wsTilesRef t ]
 

@@ -307,7 +307,7 @@ publishCommit env logger pageId ws results touched = do
     writeIORef (wsZoomQuadCacheRef ws) Nothing
     writeIORef (wsBgQuadCacheRef ws)   Nothing
     -- The zoom map does NOT: its renderer samples precomputed pixels.
-    refreshZoomTerrain env logger ws editedChunks
+    refreshZoomTerrain env logger pageId ws editedChunks
 
     -- #1858 / #1844, scoped to the tiles whose inputs moved, exactly as
     -- the live add-tile handler scopes them.

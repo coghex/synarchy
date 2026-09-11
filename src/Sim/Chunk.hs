@@ -134,12 +134,17 @@ applyChunkEdit coord editGen fluidMap terrainMap sws =
 --
 --   An INACTIVE or absent chunk has no exact volumes to keep — its
 --   grid is empty and its truth is the passive map — so it re-seeds
---   from @fluidMap@ exactly as 'applyChunkEdit' does. Both branches
---   adopt @editGen@ and wake the chunk and its physically cardinal
+--   from @fluidMap@ exactly as 'applyChunkEdit' does, and is NOT
+--   displaced on top of that: @fluidMap@ is the POST-edit map, so
+--   'World.Edit.Apply' has already taken the level the new stone fills.
+--   Displacing again would charge a deep cell twice, which is reachable
+--   in ordinary play — a synchronous fast settle drains reaction results
+--   only after settling its chunks inactive. Both branches adopt
+--   @editGen@ and wake the chunk and its physically cardinal
 --   neighbours, resolved through the page's own seam frame (#2044), so
 --   the surviving fluid flows around the new stone.
 --
---   The solidified cells are DISPLACED in both branches, not emptied.
+--   The solidified cells of an ACTIVE chunk are DISPLACED, not emptied.
 --   The terrain under them rose by exactly one z, so exactly one level's
 --   worth of volume no longer fits; whatever stood above that still
 --   does. Blanket-clearing would contradict both halves of the contract
@@ -179,9 +184,7 @@ applyReactionCommit coord editGen fluidMap terrainMap solidified sws =
                                    }
                 -- Force a fresh activation so the volume grid is rebuilt
                 -- from the NEW fluid, same reason as 'applyChunkEdit'.
-                activated = activateChunk (base { scsActive = False })
-            in activated
-                { scsActiveFluid = emptySolidified (scsActiveFluid activated) }
+            in activateChunk (base { scsActive = False })
 
     -- The same rule 'World.Edit.Apply' applies to the passive cell,
     -- in volume terms: a cell whose fluid reached no higher than the

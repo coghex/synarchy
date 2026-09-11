@@ -234,7 +234,7 @@ data EngineEnv = EngineEnv
     --   itself — no live-ref re-read of 'worldPreviewRef' itself is
     --   needed, since the counter only ever increases and a plain read
     --   of it is never torn.
-  , zoomAtlasDataRef    ∷ IORef [(Int, Int, BS.ByteString, [WorldState])]
+  , zoomAtlasDataRef    ∷ IORef [ZoomAtlasUpload]
     -- ^ Pending zoom atlas pixel data for GPU upload, plus the EXACT
     --   'WorldState's each image belongs to, captured at the moment it
     --   was enqueued (issue #763): the upload can take
@@ -244,7 +244,7 @@ data EngineEnv = EngineEnv
     --   narrowing it, since nothing needs to be re-read from a live
     --   ref at write time at all.
     --
-    --   A LIST, not a single slot, since #2485: an accepted
+    --   A LIST of 'ZoomAtlasUpload', not a single slot, since #2485: an accepted
     --   solidification republishes its page's atlas at runtime, and two
     --   pages committing before the render thread next drains this
     --   would have left one image silently overwritten — the losing
@@ -725,6 +725,49 @@ data TransientTexture = TransientTexture
   { ttHandle  ∷ TextureHandle
   , ttCleanup ∷ IO ()
   }
+
+-- | One zoom-atlas image waiting for the render thread (#2485).
+data ZoomAtlasUpload = ZoomAtlasUpload
+  { zauWidth   ∷ !Int
+  , zauHeight  ∷ !Int
+  , zauPixels  ∷ !BS.ByteString
+  , zauPage    ∷ !WorldPageId
+    -- ^ WHOSE image this is, for supersession. A page id outlives the
+    --   'WorldState's below, which a reinitialization replaces.
+  , zauTargets ∷ ![WorldState]
+    -- ^ …and the EXACT states that receive it, captured when it was
+    --   enqueued (#763, #1670). The upload can take several frames, so
+    --   re-reading the world manager when it finishes would race a load
+    --   publish; nothing here needs a live ref at write time.
+  }
+
+-- | Queue an upload, superseding whatever that PAGE already had pending.
+--
+--   Pure, so the supersession rule can be exercised without a page or a
+--   device: the whole content of it is which entries a new image
+--   replaces, and keying that on the target states rather than the page
+--   is exactly the bug a same-id reinitialization hits.
+queueZoomAtlasUpload ∷ ZoomAtlasUpload → [ZoomAtlasUpload] → [ZoomAtlasUpload]
+queueZoomAtlasUpload upload queued =
+    [ q | q ← queued, zauPage q ≢ zauPage upload ] ⧺ [upload]
+
+-- | Keep the zoom-atlas entries of pages that still EXIST, and say
+--   which the rest are (#2485).
+--
+--   Nothing uploads for a page that is being destroyed, reinitialized
+--   under the same id, or replaced by a load, so without this its entry
+--   — and the GPU image, view, sampler and bindless slot behind it —
+--   would sit in the table until shutdown. Repeated loads and new games
+--   would then leak one atlas each.
+--
+--   Absence from the live set is the right test and not an
+--   over-approximation: a page is removed from the world manager when it
+--   really is gone, and one that comes back under the same id comes back
+--   as a different 'World.State.Types.WorldState' with different refs.
+retireZoomAtlasTextures ∷ Eq κ ⇒ [κ] → [(κ, τ)] → ([(κ, τ)], [τ])
+retireZoomAtlasTextures live table =
+    ( [ e | e@(k, _) ← table, k `elem` live ]
+    , [ t | (k, t) ← table, k `notElem` live ] )
 
 -- | Install one zoom-atlas upload for the pages it targets, and say
 --   which previous uploads that retires (#2485).

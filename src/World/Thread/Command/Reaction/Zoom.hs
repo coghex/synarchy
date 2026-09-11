@@ -39,7 +39,8 @@ import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
-import Engine.Core.State (EngineEnv, zoomAtlasDataRef)
+import Engine.Core.State
+    (EngineEnv, ZoomAtlasUpload(..), queueZoomAtlasUpload, zoomAtlasDataRef)
 import Engine.Graphics.Camera (CameraFacing(..))
 import World.Types
 import World.ZoomMap.Live (liveChunkZoom, patchAtlasTile)
@@ -64,9 +65,9 @@ import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 --   failed for it: the stone is already durable in the edit log by this
 --   point, and refusing to draw it is not a reason to fail a transaction
 --   that has already succeeded.
-refreshZoomTerrain ∷ EngineEnv → LoggerState → WorldState
+refreshZoomTerrain ∷ EngineEnv → LoggerState → WorldPageId → WorldState
                    → [ChunkCoord] → IO ()
-refreshZoomTerrain env logger ws touched
+refreshZoomTerrain env logger pageId ws touched
     | null touched = pure ()
     | otherwise = do
         mParams ← readIORef (wsGenParamsRef ws)
@@ -116,7 +117,7 @@ refreshZoomTerrain env logger ws touched
                                     [ (cc, block)
                                     | (cc, (_, Just block)) ← regenerated ]
                     writeIORef (wsZoomLiveRef ws) (Just patched)
-                    publishAtlas env ws patched
+                    publishAtlas env pageId ws patched
                     logDebug logger CatWorld $
                         "Zoom refresh: republished atlas for "
                         <> tshow (length regenerated) <> " chunk(s)"
@@ -149,21 +150,20 @@ refreshCacheEntry logger cache (coord, entry) =
 -- | Hand the patched image to the render thread's upload, targeted at
 --   the exact page that accepted the edit and nothing else (#763,
 --   #1670).
-publishAtlas ∷ EngineEnv → WorldState → ZoomLiveAtlas → IO ()
-publishAtlas env ws patched =
-    -- Appended, never written over a slot: two pages can commit between
+publishAtlas ∷ EngineEnv → WorldPageId → WorldState → ZoomLiveAtlas
+             → IO ()
+publishAtlas env pageId ws patched =
+    -- Queued, never written over a slot: two pages can commit between
     -- render frames, and overwriting would leave the loser's retained
     -- pixels disagreeing with the texture on screen. A SECOND refresh of
     -- this same page before the render thread drains replaces its own
     -- pending entry, so a busy page cannot queue without bound.
     atomicModifyIORef' (zoomAtlasDataRef env) $ \queued →
-        ( [ q | q@(_, _, _, targets) ← queued, not (samePage targets) ]
-          ⧺ [ (zlaWidth patched, zlaHeight patched, zlaPixels patched, [ws]) ]
+        ( queueZoomAtlasUpload
+            (ZoomAtlasUpload (zlaWidth patched) (zlaHeight patched)
+                             (zlaPixels patched) pageId [ws])
+            queued
         , () )
-  where
-    -- 'WorldState' has no Eq; its tile ref is its identity, and two
-    -- states never share one.
-    samePage targets = map wsTilesRef targets ≡ [wsTilesRef ws]
 
 -- | Patch one chunk's regenerated block into the atlas, or leave the
 --   atlas untouched and say why.

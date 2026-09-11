@@ -17,8 +17,9 @@ import Engine.Asset.Manager (generateTextureHandle)
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logInfoM, logWarnM, logErrorM)
 import Engine.Core.Monad
-import Engine.Core.State (EngineState(..), TransientTexture(..)
-  , replaceZoomAtlasTextures
+import Engine.Core.State (EngineEnv, EngineState(..), TransientTexture(..)
+  , ZoomAtlasUpload(..)
+  , replaceZoomAtlasTextures, retireZoomAtlasTextures
   , GraphicsState(..), luaQueue, worldPreviewRef, zoomAtlasDataRef )
 import Engine.Core.Capability.Render
   (RenderCapability(..), toRenderCapability)
@@ -44,7 +45,9 @@ import Engine.Map.ImageAdmission (withValidatedZoomAtlasUpload)
 import Engine.Scripting.Lua.Types
 import World.ZoomMap.Types (zoomTileSize)
 import World.Render.Zoom.Types (ZoomAtlasInfo(..))
-import World.State.Types (wsTilesRef, wsZoomAtlasRef)
+import Engine.Core.Capability.WorldSim
+    (WorldSimCapability(..), toWorldSimCapability)
+import World.State.Types (wmWorlds, wsTilesRef, wsZoomAtlasRef)
 import Vulkan.Core10
 import Vulkan.Zero (zero)
 
@@ -216,12 +219,13 @@ handleWorldPreview = do
 handleZoomAtlasUpload ∷ EngineM σ ()
 handleZoomAtlasUpload = do
     env ← ask
+    retireDeadZoomAtlases env
     pending ← liftIO $ atomicModifyIORef' (zoomAtlasDataRef env) $ \v → ([], v)
     -- Drains the WHOLE queue (#2485): a runtime atlas republication from
     -- one page must not be dropped because another page queued one in
     -- the same frame. Uploads are independent — each gets its own
     -- texture and is assigned to its own captured pages.
-    forM_ pending $ \(w, h, rgbaData, targetStates) → do
+    forM_ pending $ \(ZoomAtlasUpload w h rgbaData _ targetStates) → do
             logInfoM CatWorld $ "Uploading zoom atlas texture: "
                 <> tshow w <> "×" <> tshow h
 
@@ -380,3 +384,32 @@ handleZoomAtlasUpload = do
 
                 _ → logWarnM CatWorld
                         "Cannot upload zoom atlas: Vulkan not ready"
+
+-- | Dispose the zoom-atlas texture of every page that no longer exists
+--   (#2485).
+--
+--   Nothing uploads for a destroyed, reinitialized or replaced page, so
+--   without this its entry keeps a GPU image, view, sampler and bindless
+--   slot alive until shutdown and every load leaks one atlas.
+--
+--   Re-reading the world manager here is safe in a way it is NOT for
+--   ASSIGNMENT (#763): the question is "does this page still exist",
+--   which the manager answers authoritatively, rather than "which pages
+--   should receive this image", which it cannot answer once an upload
+--   has been in flight across a publish.
+retireDeadZoomAtlases ∷ EngineEnv → EngineM σ ()
+retireDeadZoomAtlases env = do
+    gs ← gets graphicsState
+    case (vulkanDevice gs, zoomAtlasTextures gs) of
+        (Just dev, table@(_ : _)) → do
+            mgr ← liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
+            let live = map (wsTilesRef . snd) (wmWorlds mgr)
+                (kept, retired) = retireZoomAtlasTextures live table
+            unless (null retired) $ do
+                forM_ retired (disposeTransientTexture dev)
+                modifyGraphicsState $ \gs' →
+                    gs' { zoomAtlasTextures = kept }
+                logInfoM CatWorld $ "Zoom atlas: retired "
+                    <> tshow (length retired)
+                    <> " texture(s) whose page is gone"
+        _ → pure ()

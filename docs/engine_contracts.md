@@ -4672,15 +4672,21 @@ adopts the post-edit terrain and generation and KEEPS the live grid
 (`Sim.Chunk.applyReactionCommit`). An inactive or absent chunk has no
 exact volumes to keep and re-seeds from the passive map as before.
 
-A solidified cell is DISPLACED, not emptied. One z of terrain arrived
-under it, so exactly one level's worth of volume no longer fits and
-whatever stood above that still does — the same rule `World.Edit.Apply`
-applies to the passive cell, in volume terms. Clearing it outright would
-contradict the refill policy above: a cell emptied by annihilation is an
-ordinary empty destination for the rest of that tick, so the cell an
-event names may be holding water again by the time the commit lands, and
-deleting it would then be carried into the tiles by the next
-generation-correct writeback. This applies while the chunk is active; it
+An ACTIVE chunk's solidified cell is DISPLACED, not emptied. One z of
+terrain arrived under it, so exactly one level's worth of volume no
+longer fits and whatever stood above that still does — the same rule
+`World.Edit.Apply` applies to the passive cell, in volume terms. Clearing
+it outright would contradict the refill policy above: a cell emptied by
+annihilation is an ordinary empty destination for the rest of that tick,
+so the cell an event names may be holding water again by the time the
+commit lands, and deleting it would then be carried into the tiles by the
+next generation-correct writeback.
+
+The INACTIVE branch is not displaced at all. It rebuilds from the
+post-edit passive map, which `World.Edit.Apply` has already taken that
+level out of, so displacing again would charge a deep cell twice — and
+that branch is reached in ordinary play, because a synchronous fast
+settle drains reaction results only after settling its chunks inactive. This applies while the chunk is active; it
 changes neither the serialized nor the passive representation.
 
 **The acknowledgement still means applied.** Reaction commits run inside
@@ -4736,10 +4742,17 @@ kept retained pixels its displayed texture no longer matched. A second
 refresh of one page replaces that page's own pending entry, so a busy
 page cannot queue without bound; a world init or a load publish
 supersedes only the payloads for the page (or session) it rebuilds.
-`GraphicsState`'s `zoomAtlasTextures` is keyed the same way
-(`Engine.Core.State.replaceZoomAtlasTextures`), because with one slot an
-upload for page B disposed the texture page A's `wsZoomAtlasRef` still
-named and left A sampling a dead handle. The new texture handle is what
+Supersession is keyed by the PAGE ID
+(`Engine.Core.State.queueZoomAtlasUpload`) and never by the target
+`WorldState`s: a same-id reinitialization builds fresh refs, so keying on
+those would leave the previous incarnation's image queued for a page that
+no longer exists. `GraphicsState`'s `zoomAtlasTextures` is keyed per page
+too (`replaceZoomAtlasTextures`), because with one slot an upload for
+page B disposed the texture page A's `wsZoomAtlasRef` still named and
+left A sampling a dead handle — and entries whose page is gone are
+retired every frame (`retireZoomAtlasTextures`), since nothing uploads
+for a destroyed, reinitialized or replaced page and its GPU image, view,
+sampler and bindless slot would otherwise live until shutdown. The new texture handle is what
 makes `ensureBakedAtlas` drop the entries baked against the old one; a
 page with no atlas at all has no handle to change, so its baked entries
 are dropped directly.
