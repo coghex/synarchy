@@ -377,10 +377,11 @@ pureSpec = describe "solidification (#2485)" $ do
 --   page and hand-deliver batches to it, so sharing one would let an
 --   earlier example's generation decide a later one's admission.
 commitPageId, siblingPageId, stalePageId, mixedPageId ∷ WorldPageId
-ackPageId, missingMatPageId, zoomPageId ∷ WorldPageId
+crossPageId, ackPageId, missingMatPageId, zoomPageId ∷ WorldPageId
 commitPageId     = WorldPageId "solid_commit_w8"
 siblingPageId    = WorldPageId "solid_sibling_w8"
 stalePageId      = WorldPageId "solid_stale_w8"
+crossPageId      = WorldPageId "solid_cross_w8"
 mixedPageId      = WorldPageId "solid_mixed_w8"
 ackPageId        = WorldPageId "solid_ack_w8"
 missingMatPageId = WorldPageId "solid_nomat_w8"
@@ -554,6 +555,55 @@ spec = describe "solidification (#2485)" $ do
                 Just sync → do
                     rcsEditGen sync `shouldBe` 1
                     sort (rcsSolidified sync) `shouldBe` sort [idxA, idxB]
+            other → expectationFailure
+                ("expected exactly one SimReactionCommitted, got "
+                 ⧺ show (length other))
+
+    it "commits a cross-chunk contact whole: the stone lands in the lava \
+       \chunk and the sim handoff accounts for the water chunk too" $
+      \env → do
+        lp ← livePage env crossPageId
+        basalt ← materialFor env SolidBasalt
+        let idx = columnIndex 4 4
+            -- The lava cell is in one chunk and the water cell it reacted
+            -- with is in another, which is what a seam or boundary
+            -- contact looks like by the time it reaches the world thread.
+            ev = (liveEvent (lpLava lp) (4, 4) (lpWater lp) SolidBasalt)
+                     { sevWaterType = Ocean }
+            rr = ReactionResult [(lpLava lp, 0), (lpWater lp, 0)] [ev]
+        _ ← simCommands env
+        deliver env (lpState lp) crossPageId [] [rr]
+
+        after ← chunkAt (lpState lp) (lpLava lp)
+        lcTerrainSurfaceMap after VU.! idx
+            `shouldBe` lcTerrainSurfaceMap (lpBefore lp) VU.! idx + 1
+        topMaterialAt after idx `shouldBe` unMaterialId basalt
+
+        -- Requirement 6: a result spanning two chunks cannot partially
+        -- commit one side, so the handoff names BOTH — the lava chunk
+        -- with its new generation and its solidified cell, and the water
+        -- chunk with the generation it still has and no stone.
+        cmds ← simCommands env
+        gens ← readIORef (wsChunkEditGenRef (lpState lp))
+        case [ syncs | SimReactionCommitted p _ _ syncs ← cmds
+                     , p ≡ crossPageId ] of
+            [syncs] → do
+                sort (map rcsCoord syncs)
+                    `shouldBe` sort [lpLava lp, lpWater lp]
+                case find ((≡ lpLava lp) . rcsCoord) syncs of
+                    Nothing → expectationFailure "no sync for the lava chunk"
+                    Just sync → do
+                        rcsEditGen sync `shouldBe` 1
+                        rcsSolidified sync `shouldBe` [idx]
+                case find ((≡ lpWater lp) . rcsCoord) syncs of
+                    Nothing → expectationFailure "no sync for the water chunk"
+                    Just sync → do
+                        -- Nothing about it changed, so its generation is
+                        -- untouched: bumping it would fence out its own
+                        -- in-flight writebacks for no reason.
+                        rcsEditGen sync
+                            `shouldBe` HM.lookupDefault 0 (lpWater lp) gens
+                        rcsSolidified sync `shouldBe` []
             other → expectationFailure
                 ("expected exactly one SimReactionCommitted, got "
                  ⧺ show (length other))
