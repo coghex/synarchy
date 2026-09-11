@@ -91,15 +91,24 @@ data SolidificationEvent = SolidificationEvent
       --   out, which at a seam may be either side.
     , sevIndex        ∷ !Int
       -- ^ Local cell index within that chunk, @ly * chunkSize + lx@.
-    , sevWaterChunk   ∷ !ChunkCoord
-      -- ^ The CANONICAL stored chunk key of the contacting WATER cell.
-      --   Equal to 'sevChunk' for an in-chunk contact and different for
-      --   a seam one, including across the cylindrical u wrap. It is a
-      --   participant of the reaction in its own right: FR-2 (#2485)
-      --   commits the stone and the surviving water together, so both
-      --   chunks' live-edit generations have to be admitted together or
-      --   half the result would land against a world the other half no
-      --   longer describes.
+    , sevWaterChunks  ∷ ![ChunkCoord]
+      -- ^ The CANONICAL stored chunk keys of every WATER cell that fed
+      --   this coordinate's stone THIS TICK, in contact order and
+      --   without repeats. One entry for an ordinary contact — equal to
+      --   'sevChunk' when it was in-chunk, different for a seam one,
+      --   including across the cylindrical u wrap.
+      --
+      --   A LIST rather than one key because a coordinate can react more
+      --   than once in a tick: exhausted against an in-chunk neighbour,
+      --   refilled with lava by a later phase, then exhausted again
+      --   across the seam. 'dedupeEvents' keeps ONE stone for that
+      --   coordinate, but every chunk that lost fluid to it is still a
+      --   participant — FR-2 (#2485) commits the stone and the surviving
+      --   water together, so all their live-edit generations have to be
+      --   admitted together or half the result lands against a world the
+      --   other half no longer describes. Dropping a later contact's
+      --   chunk here would leave its consumed-fluid writeback outside
+      --   the result's own admission.
     , sevWaterType    ∷ !FluidType
       -- ^ The contacting water side's type ('Ocean', 'Lake' or 'River').
     , sevConsumed     ∷ !Word16
@@ -228,7 +237,7 @@ eventAt lavaSite waterType consumed waterSite waterVol' =
     in SolidificationEvent
         { sevChunk        = csChunk lavaSite
         , sevIndex        = csIndex lavaSite
-        , sevWaterChunk   = csChunk waterSite
+        , sevWaterChunks  = [csChunk waterSite]
         , sevWaterType    = waterType
         , sevConsumed     = consumed
         , sevStoneTop     = stoneTop
@@ -265,20 +274,37 @@ moveInto mSrc srcSite s mDst dstSite mdst requested = do
                                       }
         pure TransferOutcome { toMoved = actual, toConsumed = 0, toEvent = Nothing }
 
--- | At most ONE event per canonical coordinate per tick (requirement 4).
---   Keeps the first event at each coordinate, in emission order: a cell
---   refilled after annihilating keeps the event it already produced and
---   neither cancels nor duplicates it. A LATER tick may emit another
---   event at that coordinate once new lava has arrived and been
---   exhausted again, which is why this is per-tick and not cumulative.
+-- | At most ONE event per canonical coordinate per tick (requirement 4),
+--   carrying the UNION of every contact that fed it.
+--
+--   Keeps the first event at each coordinate, in emission order, and
+--   therefore its product and its water TYPE: a cell refilled after
+--   annihilating keeps the stone it already produced and neither cancels
+--   nor duplicates it. A LATER tick may emit another event at that
+--   coordinate once new lava has arrived and been exhausted again, which
+--   is why this is per-tick and not cumulative.
+--
+--   What it does NOT drop is the later contacts' participating chunks.
+--   A coordinate exhausted against an in-chunk neighbour, refilled by a
+--   later phase and exhausted again across the seam has taken fluid from
+--   two chunks, and both of their consumed-fluid writebacks ride the same
+--   delivery as this one stone. Keeping only the first contact's chunk
+--   would leave the second one outside the result's own admission, so an
+--   intervening edit there could stale its writeback while the stone
+--   committed anyway (#2485).
 dedupeEvents ∷ [SolidificationEvent] → [SolidificationEvent]
-dedupeEvents = go HS.empty
+dedupeEvents events = map merge (foldl' note [] events)
   where
-    go _ [] = []
-    go seen (e:es)
-        | HS.member key seen = go seen es
-        | otherwise          = e : go (HS.insert key seen) es
-      where key = (sevChunk e, sevIndex e)
+    key e = (sevChunk e, sevIndex e)
+
+    -- (first event at this coordinate, water chunks in contact order)
+    note acc e = case break ((≡ key e) . key . fst) acc of
+        (before, (kept, waters) : after) →
+            before ⧺ (kept, waters ⧺ [ w | w ← sevWaterChunks e
+                                         , w `notElem` waters ]) : after
+        (before, []) → before ⧺ [(e, sevWaterChunks e)]
+
+    merge (e, waters) = e { sevWaterChunks = waters }
 
 -- | One COHERENT reaction result: every chunk the contacts in it
 --   touched, the live-edit generation each of those chunks' half was
@@ -328,7 +354,7 @@ groupReactionResults genOf events =
   where
     byIndex = HM.fromList (zip [0 ∷ Int ..] events)
 
-    chunksOf e = HS.fromList [sevChunk e, sevWaterChunk e]
+    chunksOf e = HS.fromList (sevChunk e : sevWaterChunks e)
 
     -- A component is (first event index, its chunks, its event indices).
     absorb comps (i, e) =

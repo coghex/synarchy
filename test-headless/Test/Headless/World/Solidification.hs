@@ -117,7 +117,7 @@ eventAt ∷ ChunkCoord → Int → ChunkCoord → SolidProduct → Solidificatio
 eventAt lavaChunk idx waterChunk product' = SolidificationEvent
     { sevChunk        = lavaChunk
     , sevIndex        = idx
-    , sevWaterChunk   = waterChunk
+    , sevWaterChunks  = [waterChunk]
     , sevWaterType    = Lake
     , sevConsumed     = 3
     , sevStoneTop     = 1
@@ -194,8 +194,8 @@ pureSpec = describe "solidification (#2485)" $ do
                 -- own and the water cell's as the other participant.
                 fmap sevChunk      lavaSrc `shouldBe` Just chunkA
                 fmap sevChunk      lavaDst `shouldBe` Just chunkA
-                fmap sevWaterChunk lavaSrc `shouldBe` Just chunkB
-                fmap sevWaterChunk lavaDst `shouldBe` Just chunkB
+                fmap sevWaterChunks lavaSrc `shouldBe` Just [chunkB]
+                fmap sevWaterChunks lavaDst `shouldBe` Just [chunkB]
 
     describe "resolving the product material" $ do
         it "names the two authored igneous materials" $ do
@@ -225,6 +225,18 @@ pureSpec = describe "solidification (#2485)" $ do
                 rrs = groupReactionResults gens evs
             map rrParticipants rrs `shouldBe` [[(chunkA, 7)]]
             map (map sevIndex . rrEvents) rrs `shouldBe` [[10, 11]]
+
+        it "names every chunk a twice-reacting coordinate took fluid \
+           \from, not just the first" $ do
+            -- One stone, two contacts: exhausted against an in-chunk
+            -- neighbour, refilled with lava, exhausted again across the
+            -- seam. Both chunks' consumed-fluid writebacks ride the same
+            -- delivery, so both have to be inside this result's own
+            -- admission.
+            let ev = (eventAt chunkA 10 chunkA SolidBasalt)
+                         { sevWaterChunks = [chunkA, chunkB] }
+            map rrParticipants (groupReactionResults gens [ev])
+                `shouldBe` [[(chunkA, 7), (chunkB, 9)]]
 
         it "names BOTH chunks of a cross-chunk contact, each with its \
            \own generation" $ do
@@ -507,6 +519,7 @@ crossPageId, ackPageId, missingMatPageId, zoomPageId ∷ WorldPageId
 coherentPageId, evictedPageId, cumulativePageId, bareZoomPageId ∷ WorldPageId
 regenPageId, queueAPageId, queueBPageId, initPageId ∷ WorldPageId
 multiChunkPageId, initOtherPageId, noMapPageId ∷ WorldPageId
+twiceReactedPageId ∷ WorldPageId
 commitPageId     = WorldPageId "solid_commit_w8"
 siblingPageId    = WorldPageId "solid_sibling_w8"
 stalePageId      = WorldPageId "solid_stale_w8"
@@ -525,6 +538,7 @@ queueBPageId     = WorldPageId "solid_queue_b_w8"
 initPageId       = WorldPageId "solid_init_w8"
 initOtherPageId  = WorldPageId "solid_init_other_w8"
 noMapPageId      = WorldPageId "solid_nomap_w8"
+twiceReactedPageId = WorldPageId "solid_twice_w8"
 multiChunkPageId = WorldPageId "solid_multichunk_w8"
 
 ackTimeoutMicros ∷ Int
@@ -869,6 +883,41 @@ spec = describe "solidification (#2485)" $ do
             lpLava lp `elem` cs ∧ lpWater lp `elem` cs
         [ () | SimReactionCommitted p _ _ _ ← cmds, p ≡ stalePageId ]
             `shouldBe` []
+
+    it "refuses a twice-reacting coordinate's result when the SECOND \
+       \chunk it took fluid from was edited in the meantime" $ \env → do
+        lp ← livePage env twiceReactedPageId
+        let idx = columnIndex 4 4
+            (wgx, wgy) = chunkToGlobal (lpWater lp) 9 9
+        -- The first contact was in-chunk and the second across the seam,
+        -- so the lava chunk alone reads fresh. Only carrying the second
+        -- chunk as a participant makes this result refusable at all.
+        sendWorldCommand env (WorldAddTile twiceReactedPageId wgx wgy matLoam)
+        barrier env twiceReactedPageId
+        before ← chunkAt (lpState lp) (lpLava lp)
+        _ ← simCommands env
+
+        let ev = (liveEvent (lpLava lp) (4, 4) (lpLava lp) SolidBasalt)
+                     { sevWaterChunks = [lpLava lp, lpWater lp] }
+            rr = ReactionResult [(lpLava lp, 0), (lpWater lp, 0)] [ev]
+            annihilated = FluidWriteback
+                { fwCoord    = lpLava lp
+                , fwEditGen  = 0
+                , fwFluid    = V.replicate cellsPerChunk Nothing
+                , fwTerrain  = lcTerrainSurfaceMap before
+                , fwSurf     = lcSurfaceMap before
+                , fwSideDeco = VU.replicate cellsPerChunk 0x6D
+                }
+        deliver env (lpState lp) twiceReactedPageId [annihilated] [rr]
+
+        after ← chunkAt (lpState lp) (lpLava lp)
+        lcTerrainSurfaceMap after VU.! idx
+            `shouldBe` lcTerrainSurfaceMap before VU.! idx
+        addTilesFor (lpState lp) (lpLava lp) ⌦ (`shouldBe` [])
+        -- …and the second chunk's own consumed-fluid writeback went with
+        -- it, rather than recording an annihilation with no stone.
+        lcSideDeco after `shouldBe` lcSideDeco before
+        lcFluidMap after `shouldBe` lcFluidMap before
 
     it "commits an unrelated fresh result in the same delivery, and \
        \refuses the writeback a later pre-commit output carries" $

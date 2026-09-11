@@ -44,8 +44,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from probelib import (boot, quit_engine, poll_until, send, send_json,
-                      viewport, win_to_fb)
+from probelib import (boot, camera_state, quit_engine, poll_until, send,
+                      send_json, viewport, win_to_fb)
 from offscreen_probe import (find_widget, png_differs, png_region_changed_pixels,
                              png_stats, screenshot)
 
@@ -127,6 +127,25 @@ def material_at(port: int, gx: int, gy: int) -> str:
 
 def active_id(port: int) -> str:
     return send(port, "return world.getActiveWorldId()").strip().strip('"')
+
+
+def set_view(port: int, tile, zoom: float, slice_z: int) -> None:
+    """Point at `tile`, set the zoom, and pin the z-slice — in that
+    order, every time.
+
+    Every camera verb that moves the view re-enables z tracking, and the
+    render loop then rewrites the slice to @surfaceElev + surfaceHeadroom@
+    on the next frame, so a slice pinned once and a zoom changed
+    afterwards is not the camera the next capture is taken with (#1286).
+    Re-centring is part of it because pinning the slice SHIFTS the view:
+    the detail render offsets everything by
+    @(z - zSlice) * tileSideHeight@, so a camera framing the target under
+    tracking no longer frames it once the slice is fixed.
+    """
+    send(port, f"camera.goToTile({tile[0]}, {tile[1]}); "
+               f"camera.setZoom({zoom}); camera.setZTracking(false); "
+               f"camera.setZSlice({slice_z}); return 'ok'")
+    time.sleep(0.8)
 
 
 def set_paused(port: int, on: bool) -> None:
@@ -218,6 +237,19 @@ def png_diff_bbox(path_a: str, path_b: str):
             return None
         diff = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
         return diff.convert("L").point(lambda v: 255 if v else 0).getbbox()
+
+
+def union_box(a, b):
+    """The smallest box covering both, or whichever one exists."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    x0, y0 = min(ax, bx), min(ay, by)
+    x1, y1 = max(ax + aw, bx + bw), max(ay + ah, by + bh)
+    return (x0, y0, x1 - x0, y1 - y0)
 
 
 def colour_distance(a, b) -> float:
@@ -485,6 +517,9 @@ def main() -> int:
             # there: a fixed world coordinate is not necessarily anywhere
             # the camera can see.
             vp = viewport(port, fallback=FRAME)
+            # Ordinary tracking here: the target has not been chosen yet,
+            # so there is no slice to pin to. The run's one pinned camera
+            # is established below, once the stone's z is known.
             send(port, f"camera.setZoom({DETAIL_ZOOM}); return 'ok'")
             time.sleep(1.0)
             centre = pick_tile(port, int(vp["win_w"] // 2), int(vp["win_h"] // 2))
@@ -511,12 +546,35 @@ def main() -> int:
             # tiles off centre when it was tried here. Leaving the camera
             # exactly where the before-capture will be taken is also what
             # makes before and after comparable at all.
-            box = screen_box_for(port, lava_tile, vp)
-            chk.ok(box is not None,
-                   f"the target tile {lava_tile} is on screen at {box} "
-                   f"(centre pixel resolves to "
+            # ONE camera state for every capture in this run, pinned
+            # before the first of them. Two things make this load-bearing:
+            #
+            #   * the detailed view CLIPS above the z-slice, and the stone
+            #     ends one z ABOVE the ground it replaced — so a slice at
+            #     the old terrain top would cut the product out of the
+            #     after-frame and the region could "change" purely because
+            #     the view did; and
+            #   * the detail view offsets everything by
+            #     @(z - zSlice) * tileSideHeight@ while the zoom map does
+            #     not, so 'world.pickTile' only agrees with where the map
+            #     DRAWS a tile once that offset is fixed.
+            #
+            # Tracking is off for the whole run, so before and after are
+            # the same camera and the boxes computed here stay valid.
+            stone_z = baseline + 1
+            set_view(port, lava_tile, DETAIL_ZOOM, stone_z)
+            cam = camera_state(port)
+            chk.ok(cam.get("zTracking") is False
+                   and cam.get("zSlice") == stone_z,
+                   f"the camera is pinned for every capture "
+                   f"(zTracking={cam.get('zTracking')}, "
+                   f"zSlice={cam.get('zSlice')}, expected {stone_z})")
+            box_before = screen_box_for(port, lava_tile, vp)
+            chk.ok(box_before is not None,
+                   f"the target tile {lava_tile} is on screen at "
+                   f"{box_before} (centre pixel resolves to "
                    f"{pick_tile(port, int(vp['win_w'] // 2), int(vp['win_h'] // 2))})")
-            if box is None:
+            if box_before is None:
                 return 1
 
             # -- the water side goes down FIRST, so it is in both the
@@ -527,22 +585,12 @@ def main() -> int:
             # -- before: detailed tiles, then the zoom map.
             set_paused(port, True)
             detail_before, detail_noise = capture_pair(
-                port, chk, shots, "detail_before", box)
+                port, chk, shots, "detail_before", box_before)
             stats = png_stats(detail_before)
             chk.ok(stats is not None and stats[2] > 16,
                    f"the detailed frame is a real rendered scene, not a blank "
                    f"or near-uniform image (got {stats})")
-            # The detail view offsets everything by
-            # @(z - zSlice) * tileSideHeight@ and the zoom map does not,
-            # so 'world.pickTile' only agrees with where the map DRAWS a
-            # tile once that offset is zero. Pinning the slice to the
-            # target's own z is what makes the tile's zoom pixels
-            # locatable at all (#1286's mechanism, used here for
-            # measurement rather than framing).
-            send(port, f"camera.setZTracking(false); "
-                       f"camera.setZSlice({baseline}); return 'ok'")
-            send(port, f"camera.setZoom({MAP_ZOOM}); return 'ok'")
-            time.sleep(1.0)
+            set_view(port, lava_tile, MAP_ZOOM, stone_z)
             map_box = screen_box_for(port, lava_tile, vp)
             chk.ok(map_box is not None,
                    f"the solidified tile's own zoom pixels are locatable "
@@ -555,8 +603,7 @@ def main() -> int:
                    "one, so the map captures are really of the map")
 
             # -- the reaction itself, with the sim running.
-            send(port, f"camera.setZoom({DETAIL_ZOOM}); return 'ok'")
-            time.sleep(0.5)
+            set_view(port, lava_tile, DETAIL_ZOOM, stone_z)
             set_paused(port, False)
             print(f"  [note] active world before the reaction: "
                   f"{active_id(port)!r}")
@@ -575,6 +622,17 @@ def main() -> int:
             time.sleep(3.0)
 
             # -- after: the same two views, same camera, same process.
+            # The tile's DRAWN height rose by one z, so its screen
+            # position moved with it: the region graded below is the
+            # union of where it was and where it now is, both located
+            # through the engine's own mapping at the same pinned camera.
+            box_after = screen_box_for(port, lava_tile, vp)
+            box = union_box(box_before, box_after)
+            camAfter = camera_state(port)
+            chk.ok(camAfter.get("zSlice") == stone_z
+                   and camAfter.get("zTracking") is False,
+                   f"the detail camera is the one the before-capture used "
+                   f"(zSlice={camAfter.get('zSlice')}, expected {stone_z})")
             detail_after, detail_noise_after = capture_pair(
                 port, chk, shots, "detail_after", box)
             changed = png_region_changed_pixels(detail_before, detail_after, box)
@@ -583,10 +641,7 @@ def main() -> int:
                    f"the detailed tile render changed INSIDE the solidified "
                    f"tile's own screen box {box}: {changed} px against a "
                    f"{floor} px noise floor")
-            send(port, f"camera.setZTracking(false); "
-                       f"camera.setZSlice({baseline}); return 'ok'")
-            send(port, f"camera.setZoom({MAP_ZOOM}); return 'ok'")
-            time.sleep(1.0)
+            set_view(port, lava_tile, MAP_ZOOM, stone_z)
             map_after, map_noise_after = capture_pair(
                 port, chk, shots, "map_after", map_box)
             map_changed = whole_frame_changed(map_before, map_after)

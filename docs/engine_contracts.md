@@ -4545,7 +4545,8 @@ snapshot-empty destination that an earlier source filled live in the same
 phase, and `phaseWaterfall`. All five route through ONE applier,
 `Sim.Fluid.Reaction.applyTransfer` — do not re-derive the rule at a call
 site. A wrapped cylindrical-seam event names the exhausted lava cell's own
-CANONICAL stored chunk key (#2044), whichever side of the seam it is on.
+CANONICAL stored chunk key (#2044), whichever side of the seam it is on,
+and names the contacting water cell's canonical key the same way.
 
 **Snapshot plans are paid from live cells.** The three in-chunk phases
 plan requests from a frozen snapshot and mutate a live grid, and a
@@ -4565,8 +4566,18 @@ keeps its own.
 destination for later phases and requests in the same tick, and may be
 refilled with any fluid. Refill neither cancels nor duplicates the event
 that coordinate already emitted. At most one event is emitted per
-canonical coordinate PER TICK; a later tick may emit another there once
-new lava has arrived and been exhausted again.
+canonical coordinate PER TICK — keeping the FIRST contact's product and
+water type — and a later tick may emit another there once new lava has
+arrived and been exhausted again.
+
+What the dedupe does NOT drop is the later contacts' participating
+chunks. A coordinate exhausted against an in-chunk neighbour, refilled
+with lava by a later phase and exhausted again across the seam has taken
+fluid from two chunks, so `sevWaterChunks` carries the UNION in contact
+order. Both of those chunks' consumed-fluid writebacks ride the same
+delivery as the one stone, and keeping only the first would leave the
+second outside the result's own admission — an intervening edit there
+could then stale its writeback while the stone committed anyway (#2485).
 
 **Event accumulation.** Events land in `SimWorldState`'s `swsSolidEvents`
 (`src/Sim/State/Types.hs`), in emission order. The collection is transient
