@@ -24,6 +24,25 @@ measurement stays manual. See [the measurement protocol and results](../docs/wor
 for timing boundaries, terrain checks, memory baselines, quota assumptions,
 and the owner's shipping decision.
 
+## Manual flat-step fluid scene (`flat_fluid_scene.py`, #2517)
+
+`python3 tools/flat_fluid_scene.py --engine "$(cabal list-bin exe:synarchy)"
+--out <path.png>` boots the engine with `--offscreen`, scripts an arena scene
+that generated terrain does not reliably contain — a lake plateau stepping
+down by exactly one z, then two, then three, and a river lane with a further
+one-z step landing on a chunk seam — and captures one screenshot of it. Boot
+and console use follow `offscreen_probe.py`; `--zoom` and `--size` frame it,
+and the run prints the built profile's terrain and fluid z per column so the
+capture is not the only evidence the steps are there.
+
+It needs a real Vulkan device, asserts nothing, and is not a probe: it is
+manual evidence for a human visual decision, never a CI gate. Run it once per
+side, each against that side's own engine binary, and read the two images
+side by side. They cannot be byte-compared — the arena re-randomises per-tile
+ground scatter on every chunk re-mesh, so two runs of the SAME build already
+disagree by a few thousand pixels; always capture a same-build control and
+report it beside the across-build number.
+
 ## Pre-push gate: `ci-local.sh`
 
 `make ci` (repo root) runs `tools/ci-local.sh`, which runs the complete local

@@ -3,12 +3,17 @@
 --   and 'World.Slope.wrapChunkCoordU' (the seam wrap used by the
 --   cross-chunk slope recompute).
 --
---   Regression under test (issue #222): a water tile at the top of a
---   waterfall sits beside an open-air drop of MORE than one z-level, so
---   the old @diff ≡ 1@ rule never sloped it and the surface ended flat.
---   The fix lets a WET tile slope toward any present neighbour that is
---   one or more levels lower (the exposed-air edge). Dry land keeps the
---   strict single-step terrace rule.
+--   Regression under test (issue #222): the TERRAIN BED under a water
+--   tile at the top of a waterfall sits beside an open-air drop of MORE
+--   than one z-level, so the old @diff ≡ 1@ rule never sloped that bed
+--   and it ended flat. The fix lets a WET tile's bed slope toward any
+--   present neighbour that is one or more levels lower (the exposed-air
+--   edge). Dry land keeps the strict single-step terrace rule.
+--
+--   This is bed geometry throughout. The fluid TOP above it is a flat
+--   whole-z step and never follows the bed's slope (#2517); every drop
+--   between fluid surfaces is drawn as a vertical fluid edge instead,
+--   which 'World.Render.SideFace' covers.
 --
 --   An ABSENT neighbour (unloaded chunk / world edge) arrives as the
 --   'minBound' sentinel and must never count as a drop; the cross-chunk
@@ -60,8 +65,9 @@ fluidMapWith cells =
 home ∷ ChunkCoord
 home = ChunkCoord 0 0
 
--- | Evaluate one side. @myZ@/@neighZ@ are surface z's (use 'minBound' for
---   @neighZ@ to model an absent neighbour); the neighbour cell @(nlx,nly)@
+-- | Evaluate one side. @myZ@/@neighZ@ are TERRAIN surface z's (use
+--   'minBound' for @neighZ@ to model an absent neighbour); the neighbour
+--   cell @(nlx,nly)@
 --   is read from @fluidMap@ to decide if it is wet — the same in-chunk
 --   read 'World.Slope.Compute.neighborHasFluidAt' performs at the
 --   production call site.
