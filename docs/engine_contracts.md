@@ -4150,9 +4150,11 @@ recapture is owed.
 
 ## Flora visual state and fallback (#2526)
 
-A flora occurrence's appearance is chosen from FIVE semantic axes, and
-from nothing else: context (`wild`/`cultivated`), life phase, annual
-stage, condition (`alive`/`dead`) and cause of death. The complete
+A flora occurrence's SEMANTIC appearance is resolved from five axes,
+and from nothing else: context (`wild`/`cultivated`), life phase, annual
+stage, condition (`alive`/`dead`) and cause of death. One documented
+state sits OUTSIDE that resolver — harvest depletion, an outer override
+for living occurrences, below — and it is the only one. The complete
 vocabulary, the `textureVariants` and `corpsePolicy` schemas, the
 worked matching examples and the ten-step fallback ladder live in
 [`docs/flora_visual_state_contract.md`](flora_visual_state_contract.md).
@@ -4205,6 +4207,17 @@ declared set alone — never of file, alphabetical or `HashMap` order.
 Living requests carry no cause and run their own eight keys; they do
 not enter the dead trace at all.
 
+**Context is an ATTEMPT loop, not a matched axis.** A declaration
+matches on the four semantic axes; context eligibility is separate. A
+wild request makes one attempt (`wild`); a cultivated request makes two,
+`cultivated` then `wild`, BOTH at each key before the key weakens — which
+is invariant 3, and is what makes an explicit `context: wild` asset
+reachable from a cultivated request (step 2). A context-less
+declaration is eligible in every attempt and is the shared default; an
+explicit context beats it within one attempt. A `cultivated`
+declaration is never reachable from a wild request, which is what makes
+cultivated art an override rather than a parallel lifecycle.
+
 **Legacy LIVING entries keep their own precedence and are NOT ranked by
 that key.** `phases`, `annualCycle` and `cycleOverrides` resolve as one
 fixed step after every declared variant, exactly as
@@ -4215,7 +4228,7 @@ key would silently change what every shipped species draws. The legacy
 enter the dead order, at the generic-dead and stage-specific-generic-dead
 keys, which is where today's rendering already puts them.
 
-**Harvest depletion is a sixth state, outside the five axes, and death
+**Harvest depletion is the one state outside the five axes, and death
 supersedes it.** `World.Render.FloraDraws` draws `fhHarvestedTexture`
 for any instance in the harvest map and never calls
 `resolveFloraTexture` at all. That stays true while the occurrence is
@@ -4223,6 +4236,16 @@ ALIVE. Once it is dead, condition wins and the dead order runs — a
 deliberate, narrow change from today, where a plant inside its regrowth
 window at its lifespan keeps drawing harvested stubble. Invariant 4
 requires it, and EFM-7 owns and gates it.
+
+**Two behaviour changes, both deliberate.** The depletion change above
+is one. The other is cultivated expiry: `floraGrowth` derives a
+generation arithmetically today, with no occurrence state and no notion
+of context, so EVERY occurrence wraps to a fresh sprout. D-13 stops
+cultivated occurrences doing that — they become empty and await
+replanting — under an explicit policy AND under the omitted legacy one,
+since the two are the same code path. An omitted `corpsePolicy`
+therefore supplies today's 60-day window and today's WILD successor,
+not an exemption from D-13. EFM-10 owes the gate on both sides.
 
 **Two fallbacks, not one.** The final SEMANTIC fallback is the
 species' own base texture — the first `phases` entry's texture, or
@@ -4277,7 +4300,7 @@ occurrence-identity, render-context and persistence gates; EFM-7 owes
 the depletion-versus-death gate above (a depleted harvestable species,
 killed, renders its dead candidate; alive and depleted, it still
 renders `harvested_texture`); EFM-10 owes retention and successor
-behaviour; and EFM-9 owes the pilot's
+behaviour, including the wild-reseeds/cultivated-empties pair above; and EFM-9 owes the pilot's
 end-to-end headless and preview evidence.
 
 ---

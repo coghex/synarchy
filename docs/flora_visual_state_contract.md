@@ -142,11 +142,34 @@ twelve files render nothing until a declaration names them.
 
 ### 2.1 Matching, overlap, and determinism
 
-A declaration **matches** a selector when, for each of the five axes, the
-declaration either omits the axis or names exactly the selector's value.
+Matching is defined in two halves, because context does not behave like the
+other four axes.
 
-- **An axis the declaration names cannot match a selector that lacks a value
-  for it**, and a declaration no selector can ever reach is **rejected**. This
+**Semantic match.** A declaration semantically matches a selector when, for each
+of the four SEMANTIC axes — phase, stage, condition, cause — it either omits the
+axis or names exactly the selector's value.
+
+**Context attempt.** Context is not matched against the request directly.
+Resolution runs a sequence of **context attempts**, and a declaration is
+eligible in an attempt when it either omits `context` or names exactly that
+attempt's context:
+
+- a `wild` request has one attempt: `wild`;
+- a `cultivated` request has two, **`cultivated` then `wild`**, and by
+  invariant 3 both are made at each semantic key before moving to the next one
+  (§3.2.1).
+
+So an explicit `context: wild` declaration IS reachable from a cultivated
+request — it is what the second attempt finds, which is exactly step 2 of the
+ladder — while a `cultivated` declaration is never reachable from a wild
+request, which is what makes cultivated art an override rather than a parallel
+lifecycle (D-4).
+
+A declaration **matches** a request in a given attempt when it both
+semantically matches and is eligible in that attempt.
+
+- **A SEMANTIC axis the declaration names cannot match a request that lacks a
+  value for it**, and a declaration no request can ever reach is **rejected**. This
   follows the rule `cycleOverrides` already enforces (`requireDeclared`, #2315):
   a well-spelled override naming a phase the species never declares registers a
   texture no plant can select, which is a silent authoring dead end and is
@@ -157,21 +180,22 @@ declaration either omits the axis or names exactly the selector's value.
   legacy `phases[].tag` and `cycleOverrides[].phase` token (§1.1), never a
   phase at death, so a variant entry naming it is rejected. Death is declared
   with `condition: dead`.
-- **Omitted context is not the same as `context: wild`.** An omitted context
-  matches both contexts; `context: wild` matches wild requests only. The two are
-  distinct selectors and therefore not duplicates under rule 2, even when every
-  other axis agrees.
-- **Overlap is normal and is resolved by the ladder, not by declaration order.**
-  Several declarations may match one selector. The winner is decided solely by
-  the ten-step order in §3 — the first step at which any declaration matches
-  wins. File order, alphabetical order, and `HashMap` traversal order never
-  affect the result.
-- **Within one ladder step, an explicitly-declared axis beats a wildcard.** If
-  both `{context: cultivated, condition: dead}` and `{condition: dead}` are
-  declared and a cultivated dead plant is drawn, the cultivated one wins: it is
-  the exact selector invariant 2 names. This is a total rule because two
-  declarations that tie on explicitness at the same step are duplicates, which
-  rule 2 already rejects.
+- **Omitted context is not the same as `context: wild`.** An omitted context is
+  eligible in every attempt; `context: wild` is eligible only in the `wild`
+  attempt. The two are distinct selectors and therefore not duplicates under
+  rule 2, even when every other axis agrees. A cultivated request reaches both,
+  the omitted one at its first attempt and the explicit wild one at its second.
+- **Overlap is normal and is resolved by the order, not by declaration order.**
+  Several declarations may match one request. The winner is decided solely by
+  the candidate order in §3.2.1 — the first (key, attempt) pair at which any
+  declaration matches wins. File order, alphabetical order, and `HashMap`
+  traversal order never affect the result.
+- **Within one (key, attempt) pair, an explicit `context:` beats a context-less
+  declaration.** If both `{context: cultivated, condition: dead}` and
+  `{condition: dead}` are declared and a cultivated dead plant is drawn, the
+  cultivated one wins at the first attempt: it is the exact selector invariant 2
+  names. This is a total rule because two declarations tying there are
+  duplicates, which rule 2 already rejects.
 - **Normalized legacy declarations participate in rule 2.** A species that
   authors `phases: [{tag: dead, …}]` *and* a `textureVariants` entry reading
   `condition: dead` with no other axis has declared the same selector twice, and
@@ -265,12 +289,20 @@ four semantic axes it **names**:
 key(d) = ( names condition, names phase, names cause, names stage )
 ```
 
-Candidates are tried in **descending lexicographic order of that key**, and
-within one key, cultivated-explicit before context-less before wild-explicit
-for a cultivated request, and wild-explicit before context-less for a wild one.
-The axis order inside the key is exactly D-11's priority — death, then phase,
-then cause, then annual stage — which is what makes invariants 4 through 7 hold
-by construction.
+Candidates are tried in **descending lexicographic order of that key**. The
+axis order inside the key is exactly D-11's priority — death, then phase, then
+cause, then annual stage — which is what makes invariants 4 through 7 hold by
+construction.
+
+**Each key is fully attempted in every context before the next key is
+considered.** That interleave is invariant 3: a cultivated request tries
+`cultivated` and then `wild` at one key, and only then weakens the key. Two full
+passes would be wrong — they would let cultivated generic-dead art beat exact
+wild art.
+
+Within one (key, attempt) pair, an **explicit `context:` beats a context-less
+declaration**, because a declaration omitting context is eligible in every
+attempt and is the shared default (D-4).
 
 Each numbered step in §3.2 is one value of that key. For the worked
 fire-killed cultivated flowering sprout:
@@ -297,16 +329,14 @@ ten-step trace does not name is still ranked. A declaration reading
 `(1,0,1,1)` and is tried after step 5 `(1,1,0,0)` and before step 6 `(1,0,1,0)`.
 It is reachable and deterministic; rule 7 does not reject it.
 
-Ties are impossible: two matching declarations with the same key and the same
-context explicitness name the same axes with the same values, which rule 2
-already rejects. The winner is therefore a function of the selector and the
+Ties are impossible: two declarations matching in the same attempt at the same
+key with the same context explicitness name the same axes with the same values,
+which rule 2 already rejects. The winner is therefore a function of the selector and the
 declared set alone — never of file, alphabetical, or `HashMap` order.
 
-**Context is the one axis outside the key**, by D-4: cultivated art overrides
-wild art rather than defining a parallel lifecycle, so a declaration omitting
-`context` is a legitimate candidate in both contexts and is the shared default.
-It is the final tiebreak, never a reason to weaken a semantic axis — which is
-invariant 3.
+**Context is outside the key on purpose.** It is the attempt loop of §2.1, run
+inside each key, never a reason to weaken a semantic axis — which is what
+invariant 3 says.
 
 ### 3.2.2 Living requests
 
@@ -523,10 +553,12 @@ override and keeps `lifecycle: perennial`. D-20 adds no `lifecycle:` token.
 
 ### 7.6 The legacy default
 
-A species with **no `corpsePolicy` keeps today's behaviour**: `transient`
+A species with **no `corpsePolicy` takes today's values**: `transient`
 visibility for 60 days with the wild successor `reseed`, matching
 `World.Flora.Growth.deadWindowDays`. A cultivated occurrence under that legacy
-default still becomes empty and awaits replanting per §7.2. Repository-owned
+default still becomes empty and awaits replanting per §7.2 — the legacy default
+supplies today's window and today's WILD successor, not an exemption from D-13.
+That is compatibility change (b) in §9, and it is deliberate. Repository-owned
 species declare their policy explicitly; the omitted form exists so older
 content keeps loading.
 
@@ -569,14 +601,31 @@ regrowth window, killed, renders its dead candidate rather than
 
 ## 9. Compatibility promises
 
-1. **Existing declarations keep loading and rendering unchanged, with one
-   stated exception.** `phases`, `annualCycle`, `cycleOverrides`, and
-   `harvestable.harvested_texture` are untouched as SCHEMA, their living
-   precedence is preserved exactly (§1.1, §3.3), and a species that declares no
-   `textureVariants` and no `corpsePolicy` renders as it does today. The one
-   exception is §8 rule 2: a depleted plant that dies now draws dead art rather
-   than harvested art. It is deliberate, scoped to harvestable species dying at
-   their natural lifespan, and gated by EFM-7.
+1. **Existing declarations keep loading unchanged.** `phases`, `annualCycle`,
+   `cycleOverrides`, `harvestable.harvested_texture`, and `lifecycle` are
+   untouched as SCHEMA. Nothing an existing file authors is rejected, and the
+   living precedence those entries resolve by is preserved exactly (§1.1, §3.3).
+   A species that declares no `textureVariants` renders identically for every
+   LIVING request.
+
+   **Two deliberate behaviour changes are accepted, both listed here rather
+   than left for a child to discover:**
+
+   | # | Change | Scope today | Owner |
+   |---|---|---|---|
+   | a | A depleted plant that dies draws dead art rather than `harvested_texture` (§8 rule 2) | harvestable species reaching their natural lifespan | EFM-7 |
+   | b | A **cultivated** occurrence whose corpse window expires becomes empty and awaits replanting instead of reseeding (§7.2) | row crops and groundcover `CropPlot`s, under both an explicit and an omitted `corpsePolicy` | EFM-10 |
+
+   Change (b) is unavoidable, not incidental: `World.Flora.Growth.floraGrowth`
+   today derives a generation arithmetically — `gen = floor(total / (lifespan +
+   deadWindowDays))` — with no occurrence state and no notion of context, so
+   every occurrence wraps to a fresh sprout. D-13 requires cultivated
+   occurrences to stop doing that. §7.6's "keeps today's behaviour" therefore
+   means the legacy default supplies today's 60-day window and today's WILD
+   successor; it cannot preserve wild reseeding for a cultivated occurrence,
+   because the two are the same code path today. EFM-10 owes the gate on both
+   sides: a wild occurrence still reseeds at expiry, and a cultivated one
+   becomes empty.
 2. **Undeclared cultivated variants change no visual** (§6).
 3. **Persisted state records semantic tags only** — context, condition, cause,
    phase, stage, the retention outcome and its expiry — and **never a texture
