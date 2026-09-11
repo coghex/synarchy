@@ -27,83 +27,144 @@
 --   the old one.
 module World.Thread.Command.Reaction.Zoom
     ( refreshZoomTerrain
-    , zoomTileOverrideFor
     , atlasTileIndexFor
     ) where
 
 import UPrelude
+import qualified Data.ByteString as BS
+import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as VU
 import Control.Monad (foldM)
-import Data.IORef (readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logDebug, logWarn, LogCategory(..), LoggerState)
 import Engine.Core.State (EngineEnv, zoomAtlasDataRef)
-import World.Material (MaterialRegistry)
+import Engine.Graphics.Camera (CameraFacing(..))
 import World.Types
-import World.ZoomMap.Live
-    (ZoomTileOverride(..), liveChunkPixels, patchAtlasTile)
+import World.ZoomMap.Live (liveChunkZoom, patchAtlasTile)
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 
--- | Regenerate and republish the zoom-map tiles of every chunk in
---   @touched@, each with the local cell indices the commit changed.
+-- | Regenerate and republish the zoom-map terrain of every chunk in
+--   @touched@.
 --
---   Best effort and loud: a page with no atlas of its own to patch, or a
---   chunk the page's zoom cache does not name, is reported and skipped
---   rather than aborting the commit — the stone is already durable in
---   the edit log at this point, and refusing to draw it is not a reason
---   to fail a transaction that has already succeeded.
+--   Two products, because the zoom map has two renderers. The per-chunk
+--   SUMMARY entry in 'wsZoomCacheRef' is refreshed unconditionally: a
+--   page with no atlas of its own bakes one texture per chunk from that
+--   entry's majority material and elevation
+--   ('World.Render.Zoom.Bake.bakeEntries'), so a refresh that updated
+--   only the atlas would leave such a page reading generation-time data
+--   forever. The atlas BLOCK is regenerated and republished on top of
+--   that, for the page that has one.
+--
+--   Loud where it cannot do the second half. A page whose zoom map
+--   renders per material cannot show one changed tile at all — that path
+--   colours a whole chunk by one material — so the skip is reported with
+--   what it means rather than filed as a debug line. The commit is not
+--   failed for it: the stone is already durable in the edit log by this
+--   point, and refusing to draw it is not a reason to fail a transaction
+--   that has already succeeded.
 refreshZoomTerrain ∷ EngineEnv → LoggerState → WorldState
-                   → [(ChunkCoord, [Int])] → IO ()
+                   → [ChunkCoord] → IO ()
 refreshZoomTerrain env logger ws touched
     | null touched = pure ()
     | otherwise = do
-        mLive ← readIORef (wsZoomLiveRef ws)
         mParams ← readIORef (wsGenParamsRef ws)
-        case (mLive, mParams) of
-            (Nothing, _) → logDebug logger CatWorld
-                "Zoom refresh skipped: this page publishes no atlas of \
-                \its own, so its zoom map renders per material"
-            (_, Nothing) → logWarn logger CatWorld
+        case mParams of
+            Nothing → logWarn logger CatWorld
                 "Zoom refresh skipped: page has no generation parameters"
-            (Just live, Just params) → do
+            Just params → do
                 registry ← readIORef
                     (wsMaterialRegistryRef (toWorldSimCapability env))
-                cache ← readIORef (wsZoomCacheRef ws)
+                mLive ← readIORef (wsZoomLiveRef ws)
+                when (isNothing mLive) $ logWarn logger CatWorld
+                    "Zoom refresh: this page retains no zoom atlas of its \
+                    \own, so its zoom map renders one texture per chunk \
+                    \from the summary entry and cannot show a single \
+                    \changed tile. Refreshing the summary entries only"
                 td ← readIORef (wsTilesRef ws)
-                patched ← foldM (patchOne logger params registry cache td)
-                                live touched
-                writeIORef (wsZoomLiveRef ws) (Just patched)
-                -- Target the page that accepted the edit and nothing
-                -- else: this is the same per-PAGE association #1670
-                -- established, and re-reading the world manager when the
-                -- upload finally runs would race a load publish.
-                writeIORef (zoomAtlasDataRef env) $
-                    Just ( zlaWidth patched, zlaHeight patched
-                         , zlaPixels patched, [ws] )
-                logDebug logger CatWorld $
-                    "Zoom refresh: republished atlas for "
-                    <> tshow (length touched) <> " chunk(s)"
+                cache ← readIORef (wsZoomCacheRef ws)
+                -- The chunk's whole edit log, not this delivery's cells:
+                -- the block is regenerated from generation-time data, so
+                -- an override set scoped to one commit would repaint
+                -- every earlier edit in the chunk back to its generated
+                -- appearance.
+                edits ← readIORef (wsEditsRef ws)
+                let regenerated =
+                        [ (cc, liveChunkZoom params registry
+                                   (zlaPalette <$> mLive) cc lc
+                                   (HM.lookupDefault [] cc edits))
+                        | cc ← touched
+                        , Just lc ← [lookupChunk cc td] ]
+                -- The summary half, for every renderer — and NOT gated on
+                -- the palette: the page that has no palette is exactly
+                -- the page whose renderer reads nothing else.
+                forM_ regenerated $ \(cc, (entry, _)) →
+                    refreshCacheEntry logger ws cache cc entry
+                -- …and the atlas half, for the page that has one.
+                forM_ mLive $ \live → do
+                    patched ← foldM (patchOne logger cache) live
+                                    [ (cc, block)
+                                    | (cc, (_, Just block)) ← regenerated ]
+                    writeIORef (wsZoomLiveRef ws) (Just patched)
+                    publishAtlas env ws patched
+                    logDebug logger CatWorld $
+                        "Zoom refresh: republished atlas for "
+                        <> tshow (length regenerated) <> " chunk(s)"
+                -- The baked entries are derived from the cache vector and
+                -- nothing else notices it changed, so drop them: an atlas
+                -- republication is noticed through its new texture handle,
+                -- but a per-material page has no handle to change.
+                writeIORef (wsBakedZoomRef ws)
+                    (V.empty, defaultWorldTextures, FaceSouth)
 
--- | Patch one chunk's tile into the atlas, or leave the atlas untouched
---   and say why.
-patchOne ∷ LoggerState → WorldGenParams → MaterialRegistry
-         → V.Vector ZoomChunkEntry → WorldTileData
-         → ZoomLiveAtlas → (ChunkCoord, [Int]) → IO ZoomLiveAtlas
-patchOne logger params registry cache td live (coord, indices) =
-    case (atlasTileIndexFor cache coord, lookupChunk coord td) of
-        (Nothing, _) → skip $
+-- | Write one chunk's refreshed summary entry back into the page's zoom
+--   cache, IN PLACE.
+--
+--   In place because the vector's ORDER is the atlas layout: the tile a
+--   chunk's pixels occupy is its index here
+--   ('World.ZoomMap.ChunkTexture.buildZoomAtlas' lays the blocks out by
+--   index), so anything that reordered or resized it would repoint every
+--   baked quad.
+refreshCacheEntry ∷ LoggerState → WorldState → V.Vector ZoomChunkEntry
+                  → ChunkCoord → ZoomChunkEntry → IO ()
+refreshCacheEntry logger ws cache coord entry =
+    case atlasTileIndexFor cache coord of
+        Nothing → logWarn logger CatWorld $
+            "Zoom refresh skipped: chunk " <> tshow coord
+            <> " is not in this page's zoom cache"
+        Just idx → writeIORef (wsZoomCacheRef ws) (cache V.// [(idx, entry)])
+
+-- | Hand the patched image to the render thread's upload, targeted at
+--   the exact page that accepted the edit and nothing else (#763,
+--   #1670).
+publishAtlas ∷ EngineEnv → WorldState → ZoomLiveAtlas → IO ()
+publishAtlas env ws patched =
+    -- Appended, never written over a slot: two pages can commit between
+    -- render frames, and overwriting would leave the loser's retained
+    -- pixels disagreeing with the texture on screen. A SECOND refresh of
+    -- this same page before the render thread drains replaces its own
+    -- pending entry, so a busy page cannot queue without bound.
+    atomicModifyIORef' (zoomAtlasDataRef env) $ \queued →
+        ( [ q | q@(_, _, _, targets) ← queued, not (samePage targets) ]
+          ⧺ [ (zlaWidth patched, zlaHeight patched, zlaPixels patched, [ws]) ]
+        , () )
+  where
+    -- 'WorldState' has no Eq; its tile ref is its identity, and two
+    -- states never share one.
+    samePage targets = map wsTilesRef targets ≡ [wsTilesRef ws]
+
+-- | Patch one chunk's regenerated block into the atlas, or leave the
+--   atlas untouched and say why.
+patchOne ∷ LoggerState → V.Vector ZoomChunkEntry → ZoomLiveAtlas
+         → (ChunkCoord, BS.ByteString) → IO ZoomLiveAtlas
+patchOne logger cache live (coord, block) =
+    case atlasTileIndexFor cache coord of
+        Nothing → skip $
             "chunk " <> tshow coord <> " is not in this page's zoom cache"
-        (_, Nothing) → skip $
-            "chunk " <> tshow coord <> " is no longer loaded"
-        (Just idx, Just lc) → do
-            let overrides = [ o | i ← indices
-                                , Just o ← [zoomTileOverrideFor lc i] ]
-                tile = liveChunkPixels params registry (zlaPalette live)
-                                       coord overrides
+        Just idx →
             case patchAtlasTile (zlaWidth live) (zlaChunksPerRow live)
-                                idx tile (zlaPixels live) of
+                                idx block (zlaPixels live) of
                 Left why → skip why
                 Right pixels → pure live { zlaPixels = pixels }
   where
@@ -123,22 +184,3 @@ patchOne logger params registry cache td live (coord, indices) =
 atlasTileIndexFor ∷ V.Vector ZoomChunkEntry → ChunkCoord → Maybe Int
 atlasTileIndexFor cache (ChunkCoord ccx ccy) =
     V.findIndex (\e → zceChunkX e ≡ ccx ∧ zceChunkY e ≡ ccy) cache
-
--- | What the LIVE chunk holds at one local cell, as a zoom-tile
---   override. 'Nothing' when the index or the column is out of range,
---   which a refresh reports rather than painting a guess.
-zoomTileOverrideFor ∷ LoadedChunk → Int → Maybe ZoomTileOverride
-zoomTileOverrideFor lc idx
-    | idx < 0 ∨ idx ≥ VU.length (lcTerrainSurfaceMap lc) = Nothing
-    | relZ < 0 ∨ relZ ≥ VU.length (ctMats col)           = Nothing
-    | otherwise = Just ZoomTileOverride
-        { ztoIndex    = idx
-        , ztoElev     = topZ
-        , ztoMaterial = ctMats col VU.! relZ
-        , ztoVeg      = ctVeg  col VU.! relZ
-        , ztoFluid    = lcFluidMap lc V.! idx
-        }
-  where
-    topZ = lcTerrainSurfaceMap lc VU.! idx
-    col  = lcTiles lc V.! idx
-    relZ = topZ - ctStartZ col

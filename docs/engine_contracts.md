@@ -4609,16 +4609,39 @@ at all. Which of the two is chosen was decided at the reaction by
 `solidProductFor` above, from the contact's own reading, so queue timing
 cannot change it and both contact orderings agree.
 
-**A result is admitted whole or rejected whole.** A delivered
-`Sim.Fluid.Reaction.ReactionResult` names every participating chunk — the
-lava chunk and the water chunk, including across the cylindrical seam —
-and the live-edit generation each half was computed from. Freshness is
-the same equality `writebackIsFresh` applies per chunk, over all of them
-at once, with an absent entry reading as generation 0. The page-incarnation
-fence (#2477) comes first, exactly as it does for writebacks. Two events
-share a result exactly when they share a participating chunk,
-transitively, so genuinely disjoint contacts in one delivery stay
-independently eligible.
+**A result is admitted whole or rejected whole, BEFORE anything is
+applied.** A delivered `Sim.Fluid.Reaction.ReactionResult` names every
+participating chunk — the lava chunk and the water chunk, including
+across the cylindrical seam — and the live-edit generation each half was
+computed from. `World.Thread.Command.Reaction.admitReaction` decides it
+against the tiles as they stood before the delivery, and it decides four
+things, not one:
+
+1. every participant is still at the generation its half was computed
+   from — the same equality `writebackIsFresh` applies per chunk, over
+   all of them at once, with an absent entry reading as generation 0;
+2. every participant is still LOADED. Eviction retires a chunk's
+   generation entry, so a result computed at generation 0 and delivered
+   after one participant was evicted passes (1) on the number alone, and
+   would then have its events, its writeback and its sync entry all
+   skipped for that chunk — a partial commit by omission;
+3. every event's product material resolves through the registry; and
+4. every event's edit actually applies, rehearsed in order against a
+   private overlay, so a sibling that only becomes applicable after an
+   earlier one has grown its column is judged on what it will really
+   meet.
+
+The page-incarnation fence (#2477) comes first, exactly as it does for
+writebacks. Two events share a result exactly when they share a
+participating chunk, transitively, so genuinely disjoint contacts in one
+delivery stay independently eligible.
+
+Deciding all four up front is what makes the delivery all-or-nothing.
+The writebacks are applied on the strength of that decision, so a commit
+that could still drop an event — for a material it could not name, or a
+column it could not raise — would leave the annihilation recorded with
+no stone. The commit is therefore total by construction, and an
+impossible state raises rather than skipping.
 
 **Generations advance once, after every admitted event has landed.** The
 stone edits themselves bump the generations admission compares against,
@@ -4666,13 +4689,36 @@ renderer samples a precomputed atlas
 terrain pixels are produced once at page initialization. Clearing
 `wsZoomAtlasRef` to force per-material baking is not a repair either —
 that path colours a whole chunk by its majority material, in which one
-new stone tile cannot appear. An accepted commit therefore REGENERATES
-the affected chunk's block from the live post-edit chunk and patches it
-into the atlas the page retains (`wsZoomLiveRef`), republishing the whole
-image through the same `zoomAtlasDataRef` handoff a fresh init and a load
-publish use, targeted at the exact `WorldState` that accepted the edit
-(#763/#1670). The new texture handle is what makes `ensureBakedAtlas`
-drop the entries baked against the old one.
+new stone tile cannot appear. An accepted commit therefore refreshes
+BOTH of the zoom map's own inputs:
+
+* the per-chunk SUMMARY entry in `wsZoomCacheRef`, recomputed from the
+  live chunk — unconditionally, because a page with no atlas of its own
+  bakes one texture per chunk from that entry's majority material and
+  elevation, so gating it on the atlas would leave exactly those pages
+  reading generation-time data forever; and
+* the atlas BLOCK, regenerated from the live post-edit chunk and patched
+  into the image the page retains (`wsZoomLiveRef`), then republished
+  through the same `zoomAtlasDataRef` handoff a fresh init and a load
+  publish use, targeted at the exact `WorldState` that accepted the edit
+  (#763/#1670).
+
+The regeneration's override set comes from the CHUNK'S OWN EDIT LOG, not
+from the delivery: the block is rebuilt from generation-time data, so
+overriding only the cells one commit touched would repaint every earlier
+edit in that chunk back to its generated appearance. Diffing live against
+generated would carry them too but is not the same thing — a loaded chunk
+and `generateZoomTerrain` disagree on far more tiles than any edit
+touched, and following that would repaint the whole block.
+
+`zoomAtlasDataRef` is a QUEUE for the same reason this path exists at
+all: two pages can commit between render frames, and a single slot would
+drop one image while its page kept retained pixels its displayed texture
+no longer matched. A second refresh of one page replaces that page's own
+pending entry, so a busy page cannot queue without bound. The new texture
+handle is what makes `ensureBakedAtlas` drop the entries baked against
+the old one; a page with no atlas has no handle to change, so its baked
+entries are dropped directly.
 
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch
@@ -4682,13 +4728,19 @@ event-accumulation cases. hspec `--match "solidification"`
 predicate clause by clause in both contact orderings, the grouping and
 admission rules, the exact-volume handoff, the atlas patch, and
 world-thread integration against the real
-`World.Thread.Command.applyFluidWritebacks` for the durable commit,
-sibling events at one generation, stale cross-chunk rejection with
-convergence, a refused pre-commit writeback, acknowledgement ordering,
-a missing product material, and the zoom republication.
-`tools/fluid_reaction_probe.py` is the fresh-process durability case;
-`tools/fluid_reaction_visual_probe.py` (offscreen, needs a GPU) is the
-two-presentation evidence. The neighbouring groups `Sim.Fluid.Seam`,
+`World.Thread.Command.applyFluidWritebacks` for the durable commit, a
+delivery carrying the reaction's own writeback beside its stone,
+sibling events at one generation, accepted and rejected cross-chunk
+results, an evicted participant, convergence, a refused pre-commit
+writeback, acknowledgement ordering, a missing product material, a real
+eviction and regeneration, the cumulative same-chunk zoom refresh, a
+page with no atlas to patch, and the per-page publication queue.
+`tools/fluid_reaction_probe.py` is the fresh-process durability case,
+and also the alias check for the `world.getMaterialAt` query both probes
+read the product through; `tools/fluid_reaction_visual_probe.py`
+(offscreen, needs a GPU) is the two-presentation evidence — it locates
+the zoom change's own region and asserts it reads as the product the
+reaction chose, rather than accepting a whole-frame delta. The neighbouring groups `Sim.Fluid.Seam`,
 `Sim.Fluid.Conservation` and `fluid writeback staleness` must stay green
 unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
 the reaction never fires in it and a change there is a regression in

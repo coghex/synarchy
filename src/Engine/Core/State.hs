@@ -234,15 +234,27 @@ data EngineEnv = EngineEnv
     --   itself — no live-ref re-read of 'worldPreviewRef' itself is
     --   needed, since the counter only ever increases and a plain read
     --   of it is never torn.
-  , zoomAtlasDataRef    ∷ IORef (Maybe (Int, Int, BS.ByteString, [WorldState]))
+  , zoomAtlasDataRef    ∷ IORef [(Int, Int, BS.ByteString, [WorldState])]
     -- ^ Pending zoom atlas pixel data for GPU upload, plus the EXACT
-    --   'WorldState's it belongs to, captured at the moment it was
-    --   enqueued (issue #763): the upload can take
+    --   'WorldState's each image belongs to, captured at the moment it
+    --   was enqueued (issue #763): the upload can take
     --   multiple frames, and re-reading 'worldManagerRef' only once
     --   the upload finishes would race a load publish that swaps it
     --   in between — this closes that gap completely rather than
     --   narrowing it, since nothing needs to be re-read from a live
     --   ref at write time at all.
+    --
+    --   A LIST, not a single slot, since #2485: an accepted
+    --   solidification republishes its page's atlas at runtime, and two
+    --   pages committing before the render thread next drains this
+    --   would have left one image silently overwritten — the losing
+    --   page keeping retained pixels its displayed texture no longer
+    --   matches. A live refresh REPLACES any pending entry for its own
+    --   targets and appends otherwise, so a page cannot queue without
+    --   bound either. A world init or a load publish still REPLACES the
+    --   whole queue: both rebuild the page (or the entire session) the
+    --   pending images belonged to, so anything already queued is
+    --   superseded rather than merely older.
   , screenshotRequestQueue ∷ Q.Queue ScreenshotRequest
     -- ^ Pending debug.captureScreenshot requests (#643). The Lua
     --   thread enqueues; the render thread drains one per frame in

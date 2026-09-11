@@ -648,17 +648,23 @@ spec = do
             ownerState ← stagedState staged "id_atlas_owner_w8"
             otherState ← stagedState staged "id_atlas_other_w8"
 
-            -- Clear the handoff slot first: a WorldInit above already
-            -- wrote an atlas into it, so reading a Just afterwards would
-            -- prove nothing about THIS publish.
-            writeIORef (zoomAtlasDataRef env) Nothing
+            -- Clear the handoff queue first: a WorldInit above already
+            -- wrote an atlas into it, so reading one afterwards would
+            -- prove nothing about THIS publish. Since #2485 the handoff
+            -- is a QUEUE (a runtime atlas republication must not be able
+            -- to overwrite another page's pending image), and a publish
+            -- still replaces it whole, so exactly one entry is expected.
+            writeIORef (zoomAtlasDataRef env) []
             publishStagedSession env logger 999998 staged
 
             enqueued ← readIORef (zoomAtlasDataRef env)
             case enqueued of
-                Nothing → expectationFailure
+                [] → expectationFailure
                     "publish enqueued no zoom atlas payload at all"
-                Just (_, _, _, targets) → do
+                (_ : _ : _) → expectationFailure
+                    "publish left more than one pending atlas; a whole-\
+                    \session publish replaces the queue"
+                [(_, _, _, targets)] → do
                     -- WorldState has neither Eq nor Show; a page's own
                     -- private IORef IS its identity, and IORef's Eq is
                     -- pointer equality, so compare through that.

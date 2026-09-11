@@ -164,7 +164,10 @@ publishStagedSession env logger requestId staged = do
             <> ", which is not among this session's staged pages -- \
                \publishing it with no target rather than attaching it \
                \to a page whose cache did not produce it"
-        writeIORef (zoomAtlasDataRef env) (Just (w, h, bytes, atlasOwners))
+        -- Replaces the queue rather than appending: this publish is a
+        -- whole-session replacement, so any image still pending belongs
+        -- to pages that no longer exist (#2485's queue).
+        writeIORef (zoomAtlasDataRef env) [(w, h, bytes, atlasOwners)]
     -- Bump the preview generation on EVERY publish,
     -- unconditionally — never only inside the 'Just' branch below. A
     -- page staged via the arena-reconstruction path

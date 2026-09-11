@@ -78,7 +78,7 @@ the affected fields as unclassified.
 | `sunAngleRef` | global | Rebuild | visible head page's world time | `SolarBase`, derived via `worldTimeToSunAngle` (#1869 added the `world.setSunAngle` override flag beside the angle; both are within-session render state) | none yet |
 | `worldPreviewRef` | global | Exclude | — | pending GPU upload payload | none yet |
 | `worldPreviewGenerationRef` | global | Exclude | — | runtime-only monotonic generation token used to suppress stale world-preview upload announcements; never serialized | `Test.Headless.Lua.PreviewGeneration` |
-| `zoomAtlasDataRef` | global | Exclude | — | pending GPU upload payload | none yet |
+| `zoomAtlasDataRef` | global | Exclude | — | pending GPU upload payloads, one per image still waiting for the render thread. A QUEUE since #2485 rather than a single slot: an accepted solidification republishes its page's atlas at runtime, so two pages committing between render frames would otherwise have left one image silently overwritten. A world init or a load publish still replaces it whole, because both rebuild the page (or the session) the pending images belonged to | hspec `--match "solidification"`, `--match "generated page identity"` |
 | `screenshotRequestQueue` | global | Exclude | — | debug-only transport queue; see contract §3 | none yet |
 | `worldQuadsRef` | global | Rebuild | loaded chunk data | render cache | none yet |
 | `sceneStatsRef` | global | Exclude | — | transient scene-assembly telemetry (#1921): per-category scanned/emitted/elapsed measurements for the last completed `updateWorldTiles` pass, cleared by world teardown and rebuilt by the next pass | none yet |

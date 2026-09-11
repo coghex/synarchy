@@ -215,10 +215,12 @@ handleWorldPreview = do
 handleZoomAtlasUpload ∷ EngineM σ ()
 handleZoomAtlasUpload = do
     env ← ask
-    mAtlas ← liftIO $ atomicModifyIORef' (zoomAtlasDataRef env) $ \v → (Nothing, v)
-    case mAtlas of
-        Nothing → pure ()
-        Just (w, h, rgbaData, targetStates) → do
+    pending ← liftIO $ atomicModifyIORef' (zoomAtlasDataRef env) $ \v → ([], v)
+    -- Drains the WHOLE queue (#2485): a runtime atlas republication from
+    -- one page must not be dropped because another page queued one in
+    -- the same frame. Uploads are independent — each gets its own
+    -- texture and is assigned to its own captured pages.
+    forM_ pending $ \(w, h, rgbaData, targetStates) → do
             logInfoM CatWorld $ "Uploading zoom atlas texture: "
                 <> tshow w <> "×" <> tshow h
 

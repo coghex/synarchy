@@ -60,12 +60,24 @@ PLATE_COUNT = 3
 # view opened.
 PAGE = "main_world"
 PRODUCTS = ("basalt", "obsidian")
+# The zoom pass colours a tile from the material's palette entry, which
+# `World.ZoomMap.ColorPalette.buildColorPalette` derives from the
+# material's own `zoom:` chunk texture — so the probe derives its
+# expectation from the same file rather than from a hardcoded colour.
+PRODUCT_ZOOM_TEXTURE = {
+    "basalt":   "assets/textures/world/zoommap/basalt_chunk.png",
+    "obsidian": "assets/textures/world/zoommap/obsidian_chunk.png",
+}
 FRAME = (1024, 768)
 # Detailed tiles are drawn below World.Grid.zoomFadeStart (1.2) and the
 # zoom map is fully opaque at or above zoomFadeEnd (1.6).
 DETAIL_ZOOM = 0.5
 MAP_ZOOM = 2.0
 REACTION_TIMEOUT = 90.0
+# One chunk's zoom quad is a small part of a whole-world map. Generous
+# enough that the camera's zoom step does not have to be pinned to the
+# pixel, tight enough that a repaint of the map fails it.
+MAP_REGION_FRACTION = 0.05
 
 
 class Checks:
@@ -153,6 +165,63 @@ def capture_pair(port: int, chk: Checks, shots: str, name: str, box=None):
     print(f"  [note] {name} noise floor: {noise} px"
           + ("" if box is None else f" inside {box}"))
     return a, noise
+
+
+def mean_colour(path: str, box) -> tuple[float, float, float] | None:
+    """Mean RGB inside box=(x, y, w, h), ignoring fully transparent
+    pixels."""
+    from PIL import Image
+    x, y, w, h = box
+    try:
+        with Image.open(path) as im:
+            px = list(im.convert("RGBA").crop((x, y, x + w, y + h)).getdata())
+    except Exception:
+        return None
+    opaque = [p for p in px if p[3] > 0]
+    if not opaque:
+        return None
+    n = len(opaque)
+    return (sum(p[0] for p in opaque) / n,
+            sum(p[1] for p in opaque) / n,
+            sum(p[2] for p in opaque) / n)
+
+
+def texture_mean_colour(path: str):
+    """The mean opaque colour of a material's zoom chunk texture — the
+    same image the engine's palette entry for that material is built
+    from."""
+    from PIL import Image
+    with Image.open(path) as im:
+        px = list(im.convert("RGBA").getdata())
+    opaque = [p for p in px if p[3] > 0]
+    if not opaque:
+        return None
+    n = len(opaque)
+    return (sum(p[0] for p in opaque) / n,
+            sum(p[1] for p in opaque) / n,
+            sum(p[2] for p in opaque) / n)
+
+
+def png_diff_bbox(path_a: str, path_b: str):
+    """Bounding box (x, y, w, h) of every pixel that differs between two
+    frames, or None when nothing differs.
+
+    The zoom map draws the world through its own atlas layout rather than
+    the tile hit-test's transform, so ``world.pickTile`` does not say
+    where a tile's zoom pixels are. What the map DOES give is a change
+    confined to the affected chunk's own quad, and that is what this
+    measures: where the difference is, and how big it is.
+    """
+    from PIL import Image, ImageChops
+    with Image.open(path_a) as a, Image.open(path_b) as b:
+        if a.size != b.size:
+            return None
+        diff = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
+        return diff.convert("L").point(lambda v: 255 if v else 0).getbbox()
+
+
+def colour_distance(a, b) -> float:
+    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
 
 
 def whole_frame_changed(path_a: str, path_b: str) -> int:
@@ -492,6 +561,43 @@ def main() -> int:
                    f"{map_floor} px noise floor — which only a regenerated "
                    f"terrain pixel block and a republished atlas can do, "
                    f"since its renderer never reads the edited chunk")
+
+            # …and the change is CONFINED to the affected chunk's own
+            # quad and reads as the product the reaction actually chose.
+            # A whole-frame delta alone would also pass for a change
+            # anywhere else in the map, or for one the wrong colour.
+            bbox = png_diff_bbox(map_before, map_after)
+            chk.ok(bbox is not None, f"the zoom change has a locatable "
+                                     f"region (bbox {bbox})")
+            if bbox is not None:
+                x0, y0, x1, y1 = bbox
+                region = (x0, y0, x1 - x0, y1 - y0)
+                area = (x1 - x0) * (y1 - y0)
+                frame_area = FRAME[0] * FRAME[1]
+                chk.ok(area <= frame_area * MAP_REGION_FRACTION,
+                       f"…and it is confined to {region}, "
+                       f"{100.0 * area / frame_area:.2f}% of the frame — one "
+                       f"chunk's quad, not a repaint of the map")
+                chose = texture_mean_colour(PRODUCT_ZOOM_TEXTURE[material])
+                other = texture_mean_colour(PRODUCT_ZOOM_TEXTURE[
+                    "obsidian" if material == "basalt" else "basalt"])
+                was = mean_colour(map_before, region)
+                now = mean_colour(map_after, region)
+                if None in (chose, other, was, now):
+                    chk.ok(False, "could not sample the zoom region's colour")
+                else:
+                    chk.ok(colour_distance(now, chose)
+                           < colour_distance(was, chose),
+                           f"that region moved TOWARD the chosen product's "
+                           f"own zoom colour ({material}): "
+                           f"{colour_distance(was, chose):.1f} -> "
+                           f"{colour_distance(now, chose):.1f}")
+                    chk.ok(colour_distance(now, chose)
+                           < colour_distance(now, other),
+                           f"…and now reads closer to {material} than to "
+                           f"the other product "
+                           f"({colour_distance(now, chose):.1f} vs "
+                           f"{colour_distance(now, other):.1f})")
 
             # -- and none of it was a reload.
             generated_after = send(port, f"return world.getIdentity('{PAGE}')")

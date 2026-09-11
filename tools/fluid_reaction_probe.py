@@ -105,18 +105,38 @@ def terrain_at(port: int, gx: int, gy: int):
     """The column's TERRAIN top (not the rendered surface, which folds
     in fluid). ``nil`` for an unloaded chunk."""
     return as_int(send(
-        port, f"local s, t = world.getTerrainAt({gx}, {gy}); return t"))
+        port,
+        f"local s, t = world.getTerrainAt({gx}, {gy}, '{PAGE}'); return t"))
 
 
 def surface_at(port: int, gx: int, gy: int):
     return as_int(send(
-        port, f"local s, t = world.getTerrainAt({gx}, {gy}); return s"))
+        port,
+        f"local s, t = world.getTerrainAt({gx}, {gy}, '{PAGE}'); return s"))
 
 
 def material_at(port: int, gx: int, gy: int) -> str:
     """The material name at the column's terrain top."""
-    raw = send(port, f"local i, n = world.getMaterialAt({gx}, {gy}); return n")
+    raw = send(port,
+               f"local i, n = world.getMaterialAt({gx}, {gy}, '{PAGE}'); "
+               f"return n")
     return raw.strip().strip('"')
+
+
+def alias_step(port: int):
+    """How far a u-alias of a tile coordinate sits from its canonical
+    image, in tiles.
+
+    Derived from the engine's OWN reported wrap width rather than
+    recomputed here, so a change to that convention fails this probe
+    instead of quietly leaving it testing a coordinate that is not an
+    alias at all. One whole world in u is `worldWidthTiles`, and the
+    alias preserves v = gx + gy, so each axis moves by half of it.
+    """
+    width = as_int(send(port, f"return world.getWrapWidth('{PAGE}')"))
+    if width is None or width <= 0 or width % 2 != 0:
+        return None
+    return width // 2
 
 
 def find_contact_pair(port: int):
@@ -241,6 +261,23 @@ def build_and_react(chk: Checks, port: int):
     chk.ok(material == "basalt",
            f"an OCEAN contact chose basalt, as D-5's first clause says "
            f"(got {material!r})")
+
+    # The query is a POINT query, so it accepts a seam ALIAS and answers
+    # about the tile the page actually stores (CLAUDE.md
+    # SSTile coordinates). Without canonicalization an alias resolves to
+    # a chunk key nothing is stored under and reports nil about a tile
+    # that is right there.
+    step = alias_step(port)
+    chk.ok(step is not None,
+           f"the page reports a usable u-wrap width (alias step {step})")
+    if step is not None:
+        aliased = material_at(port, lava_tile[0] + step, lava_tile[1] - step)
+        chk.ok(aliased == material,
+               f"a u-ALIAS of the stone's coordinate answers with the same "
+               f"material (got {aliased!r}, expected {material!r})")
+        # Only the material query is asserted through the alias:
+        # `world.getTerrainAt` beside it has never canonicalized, and
+        # changing that is not this slice's to make.
     return lava_tile, height, material
 
 

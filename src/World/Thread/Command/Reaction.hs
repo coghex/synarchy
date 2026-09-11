@@ -35,8 +35,17 @@
 --     are quarantined by the caller and its chunks are re-seeded from the
 --     authoritative tiles, so the lava the discarded reaction consumed
 --     comes back instead of vanishing with no stone to show for it.
+--   * __Admission is decided BEFORE any of it is applied.__ 'admitReaction'
+--     resolves every event's material and rehearses every event's edit
+--     against a private overlay of the live tiles. Deciding later — while
+--     committing — would have let a result whose material or column
+--     failed halfway keep the writeback that recorded its annihilation,
+--     which is precisely the all-or-nothing rule it is supposed to
+--     enforce.
 module World.Thread.Command.Reaction
-    ( reactionIsFresh
+    ( ReactionAdmission(..)
+    , admitReaction
+    , reactionIsFresh
     , reactionChunks
     , commitReactions
     , convergeRejectedReactions
@@ -50,13 +59,14 @@ import qualified Data.Vector.Unboxed as VU
 import Control.Monad (foldM)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Data.List (nub)
+import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
-import Engine.Core.Log
-    (logDebug, logError, logWarn, LogCategory(..), LoggerState)
+import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Engine.Core.State (EngineEnv, unitQueue)
 import Sim.Command.Types (SimCommand(..), ReactionChunkSync(..))
+import Control.Applicative ((<|>))
 import Sim.Fluid.Reaction (ReactionResult(..), SolidificationEvent(..))
 import Unit.Command.Types (UnitCommand(..))
 import World.Chunk.Admit (pageIncarnation)
@@ -66,7 +76,7 @@ import World.Edit.Apply (applyEdit)
 import World.Edit.Types (WorldEdit(..), appendEdit)
 import World.Flora.Designation (replaceChunkForgettingFlora)
 import World.Generate.Coordinates (chunkToGlobal)
-import World.Material (MaterialRegistry)
+import World.Material (MaterialId(..), MaterialRegistry)
 import World.Plant.Validate (revalidatePlantDesignations)
 import World.Reaction.Stone (stoneMaterialFor)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
@@ -89,9 +99,91 @@ import World.Types
 --   stone goes in the lava chunk and the surviving water stays in the
 --   other; admitting one against a world the other no longer describes
 --   is exactly the partial commit requirement 6 forbids.
+--
+--   NOT sufficient on its own. A generation of 0 also reads fresh for a
+--   participant the page no longer HOLDS, because eviction retires the
+--   entry — so 'admitReaction' pairs this with a presence check rather
+--   than trusting the number alone.
 reactionIsFresh ∷ HM.HashMap ChunkCoord Word64 → ReactionResult → Bool
 reactionIsFresh gens rr =
     all (\(cc, g) → g ≡ HM.lookupDefault 0 cc gens) (rrParticipants rr)
+
+-- | What the world thread decided about one delivered result.
+data ReactionAdmission
+    = ReactionAdmitted ![(SolidificationEvent, MaterialId)]
+      -- ^ Every event, with its product material already resolved, in
+      --   the order they are to be applied. Resolving here rather than
+      --   at each edit is what makes the commit unable to fail halfway.
+    | ReactionRefused !Text
+      -- ^ …and why. The caller quarantines this result's writebacks and
+      --   converges its chunks.
+    deriving (Show, Eq)
+
+-- | Decide one result, against the tiles and generations as they stand
+--   BEFORE anything from this delivery has been applied.
+--
+--   Four things have to hold, and every one of them is a way a commit
+--   could otherwise have landed half a reaction:
+--
+--   1. every participant is still at the generation its half was
+--      computed from ('reactionIsFresh');
+--   2. every participant is still LOADED. Eviction retires a chunk's
+--      generation entry, so a result computed at generation 0 and
+--      delivered after one participant was evicted passes (1) — and then
+--      its events, its writebacks and its sync entry are all silently
+--      skipped for that chunk, which is a partial commit by omission;
+--   3. every event's product material resolves through the registry; and
+--      a name the registry does not know is a refusal, not an absent
+--      stone, because the lava it would have accounted for is already
+--      gone;
+--   4. every event's edit actually applies — the chunk is loaded and the
+--      column is in range — REHEARSED in order against a private overlay,
+--      so a sibling that only becomes applicable (or inapplicable) after
+--      an earlier one has grown its column is judged on what it will
+--      really meet.
+admitReaction ∷ MaterialRegistry → HM.HashMap ChunkCoord Word64
+              → WorldTileData → ReactionResult → ReactionAdmission
+admitReaction registry gens td rr
+    | not (reactionIsFresh gens rr) =
+        ReactionRefused "a participant has moved on from the generation \
+                        \its half was computed from"
+    | (missing : _) ← absentParticipants =
+        ReactionRefused ("participant chunk " <> tshow missing
+                         <> " is no longer loaded")
+    | otherwise = go HM.empty [] (rrEvents rr)
+  where
+    absentParticipants =
+        [ cc | cc ← reactionChunks rr, isNothing (lookupChunk cc td) ]
+
+    go _ acc [] = ReactionAdmitted (reverse acc)
+    go overlay acc (ev : rest) =
+        case stoneMaterialFor registry (sevProduct ev) of
+            Left why → ReactionRefused why
+            Right mat →
+                case HM.lookup (sevChunk ev) overlay
+                         <|> lookupChunk (sevChunk ev) td of
+                    Nothing → ReactionRefused
+                        ("chunk " <> tshow (sevChunk ev) <> " is not loaded")
+                    Just lc
+                        | outOfColumnRange lc (sevIndex ev) → ReactionRefused
+                            ("the column at " <> tshow (reactionEventTile ev)
+                             <> " is out of range")
+                        | otherwise →
+                            let (gx, gy) = reactionEventTile ev
+                                lc' = applyEdit (WeAddTile gx gy mat) lc
+                            in go (HM.insert (sevChunk ev) lc' overlay)
+                                  ((ev, mat) : acc) rest
+
+-- | The live add-tile handler's own pre-check: replay is silent on an
+--   out-of-range column, a live commit is not.
+outOfColumnRange ∷ LoadedChunk → Int → Bool
+outOfColumnRange lc idx
+    | idx < 0 ∨ idx ≥ VU.length (lcTerrainSurfaceMap lc) = True
+    | otherwise =
+        let oldTopZ = lcTerrainSurfaceMap lc VU.! idx
+            col     = lcTiles lc V.! idx
+            i       = oldTopZ + 1 - ctStartZ col
+        in i < 0 ∨ i > VU.length (ctMats col)
 
 -- | Every chunk a result touched, whether or not it receives stone.
 reactionChunks ∷ ReactionResult → [ChunkCoord]
@@ -110,81 +202,71 @@ type Solidified = HM.HashMap ChunkCoord [Int]
 -- | Commit every admitted result: the stone, the durable edits, the one
 --   generation advance, the sim handoff, and both live presentations.
 --
+--   Takes results ALREADY admitted by 'admitReaction', with each event's
+--   material resolved, so nothing here can decide to skip an event: the
+--   caller has applied this delivery's writebacks on the strength of that
+--   decision, and an event dropped now would leave the annihilation
+--   recorded with no stone.
+--
 --   Runs inside 'World.Thread.Command.handleApplyFluidsCommandWith's
 --   @try@, so a raise here acknowledges the delivery as a FAILURE before
 --   the exception leaves the handler (#2334) — the fast-settle waiter is
 --   released either way, and success is only ever reported once every
 --   edit below has landed (requirement 8).
 commitReactions ∷ EngineEnv → LoggerState → WorldPageId → WorldState
-                → [ReactionResult] → IO ()
-commitReactions env logger pageId ws results
-    | null results = pure ()
+                → [(ReactionResult, [(SolidificationEvent, MaterialId)])]
+                → IO ()
+commitReactions env logger pageId ws admitted
+    | null admitted = pure ()
     | otherwise = do
-        registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
-        solidified ← foldM (commitOne logger ws registry) HM.empty results
+        solidified ← foldM (commitEvent logger ws) HM.empty
+                           (concatMap snd admitted)
         let touched = [ (cc, reverse is) | (cc, is) ← HM.toList solidified ]
         when (not (null touched)) $
-            publishCommit env logger pageId ws results touched
+            publishCommit env logger pageId ws (map fst admitted) touched
 
--- | Apply one result's events. Every event is applied against the chunk
+-- | Apply one admitted event. Every event is applied against the chunk
 --   as its siblings have left it — the tiles are re-read per event — so
 --   two events in one chunk both land.
-commitOne ∷ LoggerState → WorldState → MaterialRegistry
-          → Solidified → ReactionResult → IO Solidified
-commitOne logger ws registry acc rr =
-    foldM (commitEvent logger ws registry) acc (rrEvents rr)
-
-commitEvent ∷ LoggerState → WorldState → MaterialRegistry
-            → Solidified → SolidificationEvent → IO Solidified
-commitEvent logger ws registry acc ev =
-    case stoneMaterialFor registry (sevProduct ev) of
-        -- Loud, and nothing is committed for this event: a stone the
-        -- registry cannot name would leave the consumed lava with no
-        -- product at all, which is worse than a visible failure.
-        Left why → do
-            logError logger CatWorld $
-                "Solidification dropped at " <> tshow (gx, gy) <> ": " <> why
-            pure acc
-        Right mat → do
-            td ← readIORef (wsTilesRef ws)
-            case lookupChunk (sevChunk ev) td of
-                Nothing → skip "chunk not loaded"
-                Just lc
-                    | outOfColumnRange lc → skip "out of column range"
-                    | otherwise → do
-                        -- The same terrain-edit semantics as
-                        -- 'World.Thread.Command.Edit.Terrain.handleWorldAddTileCommand':
-                        -- one 'applyEdit', the flora forget that goes
-                        -- with it (#1854), and the append to the durable
-                        -- log. What is NOT here is that handler's
-                        -- per-edit 'syncEditToSim' — the generation
-                        -- advance and the sim handoff are deferred to
-                        -- 'publishCommit' so a sibling event cannot be
-                        -- staled by this one (requirement 5).
-                        let lc' = applyEdit (WeAddTile gx gy mat) lc
-                        replaceChunkForgettingFlora ws lc lc'
-                        atomicModifyIORef' (wsEditsRef ws) $ \es →
-                            (appendEdit (sevChunk ev) (WeAddTile gx gy mat) es, ())
-                        logDebug logger CatWorld $
-                            "Solidified " <> tshow (gx, gy) <> " to "
-                            <> tshow (sevProduct ev) <> " (mat=" <> tshow mat
-                            <> ", water=" <> tshow (sevWaterType ev) <> ")"
-                        pure $ HM.insertWith (⧺) (sevChunk ev) [sevIndex ev] acc
+commitEvent ∷ LoggerState → WorldState → Solidified
+            → (SolidificationEvent, MaterialId) → IO Solidified
+commitEvent logger ws acc (ev, mat) = do
+    td ← readIORef (wsTilesRef ws)
+    case lookupChunk (sevChunk ev) td of
+        -- Unreachable: 'admitReaction' rehearsed this exact edit against
+        -- an overlay of these tiles, and the world thread is the only
+        -- writer, so nothing can have removed the chunk in between.
+        -- Raising rather than skipping is the point — a skip here is the
+        -- partial commit admission exists to prevent, and the delivery's
+        -- own writebacks have already landed.
+        Nothing → error (T.unpack (unreachable "chunk vanished"))
+        Just lc
+            | outOfColumnRange lc (sevIndex ev) →
+                error (T.unpack (unreachable "column went out of range"))
+            | otherwise → do
+                -- The same terrain-edit semantics as
+                -- 'World.Thread.Command.Edit.Terrain.handleWorldAddTileCommand':
+                -- one 'applyEdit', the flora forget that goes with it
+                -- (#1854), and the append to the durable log. What is NOT
+                -- here is that handler's per-edit 'syncEditToSim' — the
+                -- generation advance and the sim handoff are deferred to
+                -- 'publishCommit' so a sibling event cannot be staled by
+                -- this one (requirement 5).
+                let lc' = applyEdit (WeAddTile gx gy mat) lc
+                replaceChunkForgettingFlora ws lc lc'
+                atomicModifyIORef' (wsEditsRef ws) $ \es →
+                    (appendEdit (sevChunk ev) (WeAddTile gx gy mat) es, ())
+                logDebug logger CatWorld $
+                    "Solidified " <> tshow (gx, gy) <> " to "
+                    <> tshow (sevProduct ev) <> " (mat=" <> tshow mat
+                    <> ", water=" <> tshow (sevWaterType ev) <> ")"
+                pure $ HM.insertWith (⧺) (sevChunk ev) [sevIndex ev] acc
   where
     (gx, gy) = reactionEventTile ev
-    idx = sevIndex ev
-    -- Mirrors the live add-tile handler's pre-check: replay is silent on
-    -- an out-of-range column, a live commit says so.
-    outOfColumnRange lc =
-        let oldTopZ = lcTerrainSurfaceMap lc VU.! idx
-            col     = lcTiles lc V.! idx
-            i       = oldTopZ + 1 - ctStartZ col
-        in idx < 0 ∨ idx ≥ VU.length (lcTerrainSurfaceMap lc)
-           ∨ i < 0 ∨ i > VU.length (ctMats col)
-    skip why = do
-        logWarn logger CatWorld $
-            "Solidification skipped at " <> tshow (gx, gy) <> ": " <> why
-        pure acc
+    unreachable why =
+        "solidification commit reached an impossible state at "
+        <> tshow (gx, gy) <> ": " <> why
+        <> " between admission and application"
 
 -- | Everything that happens ONCE, after every admitted event has been
 --   applied: the generation advance, the sim handoff that keeps the
@@ -225,7 +307,7 @@ publishCommit env logger pageId ws results touched = do
     writeIORef (wsZoomQuadCacheRef ws) Nothing
     writeIORef (wsBgQuadCacheRef ws)   Nothing
     -- The zoom map does NOT: its renderer samples precomputed pixels.
-    refreshZoomTerrain env logger ws touched
+    refreshZoomTerrain env logger ws editedChunks
 
     -- #1858 / #1844, scoped to the tiles whose inputs moved, exactly as
     -- the live add-tile handler scopes them.

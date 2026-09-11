@@ -9,7 +9,6 @@ module World.Thread.Command
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
-import Data.List (partition)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.MVar (putMVar)
 import Control.Exception (SomeException, throwIO, try)
@@ -22,8 +21,8 @@ import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Residency (ChunkGeneration)
 import Sim.Fluid.Reaction (ReactionResult(..))
 import World.Thread.Command.Reaction
-    (commitReactions, convergeRejectedReactions, reactionChunks
-    , reactionIsFresh)
+    (ReactionAdmission(..), admitReaction, commitReactions
+    , convergeRejectedReactions, reactionChunks)
 import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
                                   , handleWorldDestroyCommand
@@ -360,8 +359,21 @@ applyFluidWritebacks env logger pageId mEpoch writebacks reactions = do
                     <> ", the live page is " <> tshow live
                   else do
                     gens ← readIORef (wsChunkEditGenRef ws)
-                    let (admitted, rejected) =
-                            partition (reactionIsFresh gens) reactions
+                    registry ← readIORef
+                        (wsMaterialRegistryRef (toWorldSimCapability env))
+                    td0 ← readIORef (wsTilesRef ws)
+                    -- Every result is DECIDED before any of this
+                    -- delivery is applied (#2485): freshness, presence,
+                    -- material resolution and each event's own edit are
+                    -- all settled against the pre-delivery tiles, so a
+                    -- result whose stone cannot land never gets its
+                    -- writeback applied either.
+                    let decided = [ (rr, admitReaction registry gens td0 rr)
+                                  | rr ← reactions ]
+                        admitted = [ (rr, evs)
+                                   | (rr, ReactionAdmitted evs) ← decided ]
+                        rejected = [ (rr, why)
+                                   | (rr, ReactionRefused why) ← decided ]
                         -- A rejected result's fluid outcome goes with
                         -- it (#2485 requirement 6). Its writeback is
                         -- the OTHER half of the same reaction — the
@@ -371,10 +383,13 @@ applyFluidWritebacks env logger pageId mEpoch writebacks reactions = do
                         -- then be the state the convergence re-seed
                         -- reads back as authoritative.
                         quarantined = HS.fromList
-                            (concatMap reactionChunks rejected)
+                            (concatMap (reactionChunks . fst) rejected)
                         fresh = [ w | w ← writebacks
                                     , writebackIsFresh gens w
                                     , not (HS.member (fwCoord w) quarantined) ]
+                    forM_ rejected $ \(_, why) → logDebug logger CatWorld $
+                        "Refusing a reaction result for "
+                        <> unWorldPageId pageId <> ": " <> why
                     when (not (null fresh)) $ do
                         atomicModifyIORef' (wsTilesRef ws) $ \wtd →
                             (foldl' applyOneWriteback wtd fresh, ())
@@ -398,7 +413,8 @@ applyFluidWritebacks env logger pageId mEpoch writebacks reactions = do
                     -- is not dropped by the generation its own stone
                     -- mints.
                     commitReactions env logger pageId ws admitted
-                    convergeRejectedReactions env logger pageId ws rejected
+                    convergeRejectedReactions env logger pageId ws
+                        (map fst rejected)
 
 -- | Is this batch's stamped incarnation the one the live page IS?
 --

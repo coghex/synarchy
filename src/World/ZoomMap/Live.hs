@@ -22,7 +22,9 @@
 --   derivations would show as a seam around every refreshed chunk.
 module World.ZoomMap.Live
     ( ZoomTileOverride(..)
-    , liveChunkPixels
+    , liveChunkZoom
+    , liveTileOverrides
+    , zoomVisibleEditTile
     , patchAtlasTile
     ) where
 
@@ -33,15 +35,19 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Foreign.Marshal.Utils (copyBytes)
-import World.Chunk.Types (ChunkCoord(..))
+import World.Chunk.Types
+    (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Fluid.Types (FluidCell(..))
+import World.Edit.Types (WorldEdit(..))
+import World.Generate.Coordinates (globalToChunk)
 import World.Generate.Types (WorldGenParams(..))
 import World.Material (MaterialRegistry)
+import World.ZoomMap.Cache.Classify (majorityMaterial)
 import World.ZoomMap.Cache.ChunkPass
     (ZoomChunkPass(..), zoomChunkPass, zoomChunkPixels
     , zoomChunkHaloNeighbours)
 import World.ZoomMap.ColorPalette (ZoomColorPalette)
-import World.ZoomMap.Types (zoomTileSize)
+import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
 
 -- | One tile of a regenerated chunk, replaced with what the LIVE chunk
 --   holds there rather than what generation would produce.
@@ -62,23 +68,120 @@ data ZoomTileOverride = ZoomTileOverride
       --   pass-one map would still show the lava the contact consumed.
     } deriving (Show, Eq)
 
--- | Regenerate one chunk's @zoomTileSize × zoomTileSize@ RGBA block with
---   the given tiles overridden.
+-- | The tile a recorded edit changes ON THE ZOOM MAP, if it changes one.
+--
+--   Total over every constructor with no catch-all, so a new kind of
+--   edit is a compile error here rather than a tile that silently keeps
+--   its generation-time pixels. The zoom pass colours a tile from its
+--   elevation, its top material, its vegetation and its fluid, so those
+--   are the edits that answer 'Just'; structure and flora edits change
+--   neither, and answer 'Nothing' deliberately.
+zoomVisibleEditTile ∷ WorldEdit → Maybe (Int, Int)
+zoomVisibleEditTile e = case e of
+    WeDeleteTile gx gy             → Just (gx, gy)
+    WeSetFluidTile gx gy _         → Just (gx, gy)
+    WeAddTile gx gy _              → Just (gx, gy)
+    WeSetSlope{}                   → Nothing
+    WeSetCell gx gy _ _            → Just (gx, gy)
+    WeSetStructure{}               → Nothing
+    WeClearStructure{}             → Nothing
+    WeSetVeg gx gy _ _             → Just (gx, gy)
+    WePlaceFlora{}                 → Nothing
+    WeSetFluidSnapshot gx gy _ _   → Just (gx, gy)
+    WeClearFluidSnapshot gx gy     → Just (gx, gy)
+    WePlaceFloraWithId{}           → Nothing
+    WePlaceFloraRef{}              → Nothing
+
+-- | What the LIVE chunk holds at each of the given local cells, as zoom
+--   tile overrides.
+--
+--   The caller supplies the cells from the chunk's own EDIT LOG rather
+--   than from one delivery, and that is the whole point: the pixels are
+--   regenerated from generation-time data, so overriding only the cells
+--   one commit touched would repaint every EARLIER edit in the chunk
+--   back to its generated appearance. The log carries them all,
+--   cumulatively, however many commits and player edits have landed
+--   since the page came up.
+--
+--   Diffing live against generated across the whole chunk would carry
+--   them too, but it is not the same thing: a loaded chunk and
+--   'World.Generate.Chunk.generateZoomTerrain' disagree on far more
+--   tiles than any edit touched, so that would repaint the entire block
+--   and leave the refreshed chunk looking unlike every chunk beside it.
+--
+--   A cell whose column cannot answer — an index out of range, or a
+--   terrain top outside its column — is left to the generated pass
+--   rather than guessed at.
+liveTileOverrides ∷ LoadedChunk → [Int] → [ZoomTileOverride]
+liveTileOverrides lc indices =
+    [ ZoomTileOverride { ztoIndex    = i
+                       , ztoElev     = liveElev
+                       , ztoMaterial = ctMats col VU.! relZ
+                       , ztoVeg      = ctVeg  col VU.! relZ
+                       , ztoFluid    = lcFluidMap lc V.! i
+                       }
+    | i ← indices
+    , i ≥ 0, i < VU.length (lcTerrainSurfaceMap lc)
+    , let liveElev = lcTerrainSurfaceMap lc VU.! i
+    , let col  = lcTiles lc V.! i
+    , let relZ = liveElev - ctStartZ col
+    , relZ ≥ 0, relZ < VU.length (ctMats col)
+    ]
+
+-- | The local cells of @coord@ that this page's edit log has changed on
+--   the zoom map.
+editedZoomCells ∷ ChunkCoord → [WorldEdit] → [Int]
+editedZoomCells coord edits =
+    [ ly * chunkSize + lx
+    | e ← edits
+    , Just (gx, gy) ← [zoomVisibleEditTile e]
+    , let (cc, (lx, ly)) = globalToChunk gx gy
+    , cc ≡ coord
+    ]
+
+-- | Regenerate one chunk's @zoomTileSize × zoomTileSize@ RGBA block from
+--   the LIVE chunk, and the summary entry that goes with it.
+--
+--   The entry matters as much as the pixels, and is produced WITHOUT a
+--   palette for exactly that reason: a page with no atlas of its own has
+--   no palette to regenerate pixels with, and renders the zoom map per
+--   material from 'World.ZoomMap.Types.zceTexIndex' and 'zceElev'. Gating
+--   the entry on the palette would leave precisely those pages reading
+--   generation-time data forever, which is the case this split exists to
+--   serve.
 --
 --   The halo pass-two extension ('World.ZoomMap.Cache.OceanFill') reads
 --   the four cardinal neighbours' pass-one fluid, so those are generated
 --   too. They are NOT overridden: an edit in this chunk cannot change
 --   what its neighbour composed, and a neighbour that was itself edited
 --   gets its own refresh.
-liveChunkPixels ∷ WorldGenParams → MaterialRegistry → ZoomColorPalette
-                → ChunkCoord → [ZoomTileOverride] → BS.ByteString
-liveChunkPixels params registry palette coord overrides =
-    zoomChunkPixels palette worldSize haloFluid coord overridden
+liveChunkZoom ∷ WorldGenParams → MaterialRegistry → Maybe ZoomColorPalette
+              → ChunkCoord → LoadedChunk → [WorldEdit]
+              → (ZoomChunkEntry, Maybe BS.ByteString)
+liveChunkZoom params registry mPalette coord lc edits =
+    ( entry
+    , (\palette → zoomChunkPixels palette worldSize haloFluid coord overridden)
+      <$> mPalette )
   where
     worldSize = wgpWorldSize params
 
-    overridden = foldl' overrideOne (zoomChunkPass params registry Nothing coord)
-                                    overrides
+    generated = zoomChunkPass params registry Nothing coord
+    overridden = foldl' overrideOne generated
+        (liveTileOverrides lc (editedZoomCells coord edits))
+
+    -- The same summary rule 'World.ZoomMap.Cache.ChunkPass' applies,
+    -- re-run over the overridden tiles: beyond-glacier cells are left
+    -- out so they cannot drag the average or contaminate the material.
+    liveMats = [ (e, m) | (e, m, _, _, _) ← V.toList (zcpTiles overridden)
+                        , e > minBound ]
+    entry = (zcpEntry generated)
+        { zceTexIndex = if null liveMats
+                        then zceTexIndex (zcpEntry generated)
+                        else majorityMaterial liveMats
+        , zceElev     = if null liveMats
+                        then zceElev (zcpEntry generated)
+                        else sum (map fst liveMats) `div` length liveMats
+        }
 
     haloHere = Map.fromList
         [ (nc, zcpRawFluid (zoomChunkPass params registry Nothing nc))

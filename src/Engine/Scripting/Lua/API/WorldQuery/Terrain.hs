@@ -21,9 +21,9 @@ import Data.IORef (readIORef)
 import World.Material (MaterialId(..), MaterialProps(..), getMaterialProps)
 import World.Types
 import World.Vegetation (isTilledSoil)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame, globalToChunk)
 import Engine.Scripting.Lua.API.WorldQuery.Lookup
-    (getWorldTileData, worldStateByPage)
+    (getWorldTileData, targetWorldState, worldStateByPage)
 
 -- | world.getTerrainAt(gx, gy [, pageId]) → surfaceZ, terrainSurfaceZ or nil
 --   Returns the surface elevation and terrain-only surface elevation. With
@@ -188,30 +188,38 @@ worldGetMaterialAtFn wsc = do
     mPage ← Lua.tostring 3
     case (mGx, mGy) of
         (Just gx', Just gy') → do
-            let gx = fromIntegral gx'
-                gy = fromIntegral gy'
-                (coord, (lx, ly)) = globalToChunk gx gy
-                idx = ly * chunkSize + lx
-            mTd ← Lua.liftIO $ case mPage of
-                Just pidBS → do
-                    mWs ← worldStateByPage wsc (TE.decodeUtf8Lenient pidBS)
-                    case mWs of
-                        Just ws → Just <$> readIORef (wsTilesRef ws)
-                        Nothing → pure Nothing
-                Nothing → getWorldTileData wsc
-            registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef wsc)
-            case mTd ⌦ lookupChunk coord of
+            let rawGX = fromIntegral gx'
+                rawGY = fromIntegral gy'
+            mWs ← Lua.liftIO $ targetWorldState wsc
+                (TE.decodeUtf8Lenient <$> mPage)
+            case mWs of
                 Nothing → Lua.pushnil ≫ return 1
-                Just lc → do
-                    let col = lcTiles lc V.! idx
-                        z   = lcTerrainSurfaceMap lc VU.! idx
-                        i   = z - ctStartZ col
-                    if i < 0 ∨ i ≥ VU.length (ctMats col)
-                      then Lua.pushnil ≫ return 1
-                      else do
-                        let matId = ctMats col VU.! i
-                            props = getMaterialProps registry (MaterialId matId)
-                        Lua.pushinteger (fromIntegral matId)
-                        Lua.pushstring (TE.encodeUtf8 (mpName props))
-                        return 2
+                Just ws → do
+                    -- Canonicalize FIRST: a point query accepts a seam
+                    -- alias and answers about the tile the page actually
+                    -- stores (CLAUDE.md §Tile coordinates). A bare
+                    -- 'globalToChunk' would resolve an alias to a chunk
+                    -- key nothing is stored under and answer nil about a
+                    -- tile that is right there.
+                    worldSize ← Lua.liftIO $ pageWrapWorldSize ws
+                    td ← Lua.liftIO $ readIORef (wsTilesRef ws)
+                    registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef wsc)
+                    let (coord, (lx, ly), _) =
+                            canonicalTileFrame worldSize rawGX rawGY
+                        idx = ly * chunkSize + lx
+                    case lookupChunk coord td of
+                        Nothing → Lua.pushnil ≫ return 1
+                        Just lc → do
+                            let col = lcTiles lc V.! idx
+                                z   = lcTerrainSurfaceMap lc VU.! idx
+                                i   = z - ctStartZ col
+                            if i < 0 ∨ i ≥ VU.length (ctMats col)
+                              then Lua.pushnil ≫ return 1
+                              else do
+                                let matId = ctMats col VU.! i
+                                    props = getMaterialProps registry
+                                                (MaterialId matId)
+                                Lua.pushinteger (fromIntegral matId)
+                                Lua.pushstring (TE.encodeUtf8 (mpName props))
+                                return 2
         _ → Lua.pushnil ≫ return 1
