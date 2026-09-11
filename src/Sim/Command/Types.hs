@@ -1,6 +1,7 @@
 {-# LANGUAGE Strict #-}
 module Sim.Command.Types
     ( SimCommand(..)
+    , ReactionChunkSync(..)
     , FastSettleRequest(..)
     , FastSettleOutcome(..)
     ) where
@@ -70,6 +71,39 @@ data SimCommand
         --   tell a writeback derived from the POST-edit chunk from one
         --   computed before the edit. See
         --   'World.State.Types.wsChunkEditGenRef' for the full protocol.
+    | SimReactionCommitted !WorldPageId !ChunkGeneration !SimTopology
+                           ![ReactionChunkSync]
+        -- ^ A coherent reaction result was ADMITTED and committed by the
+        --   world thread (#2485): page id, the page's incarnation epoch,
+        --   seam topology, and one entry per participating chunk.
+        --
+        --   This is the post-commit half of 'SimChunkEdited' and exists
+        --   because that message cannot express it. 'SimChunkEdited'
+        --   re-seeds a chunk's whole active grid from the passive
+        --   'World.Fluid.Internal.FluidMap' through
+        --   'Sim.Fluid.Types.fluidCellToActive', which rounds a volume up
+        --   to whole surface levels: the 1 unit of water a reaction left
+        --   behind would come back as 7. So this message carries the
+        --   authoritative post-edit TERRAIN and the new generation, and
+        --   the sim keeps the exact active volumes it already holds,
+        --   emptying only the cells that became stone. The result is a
+        --   sim chunk holding BOTH halves of the commit — the reaction's
+        --   own fluid outcome and the terrain edit — rather than one
+        --   rebuilt from a snapshot that predates either.
+        --
+        --   An INACTIVE or absent chunk has no exact volumes to keep, so
+        --   it re-seeds from 'rcsFluid' exactly as 'SimChunkEdited'
+        --   would. Both cases adopt 'rcsEditGen', which is what makes
+        --   the writebacks this chunk produces from here on acceptable
+        --   to the world thread again (#1596), and wake the chunk and
+        --   its physical cardinal neighbours so the surviving fluid
+        --   keeps flowing around the new stone.
+        --
+        --   A REJECTED (stale) result sends no such message: the world
+        --   thread converges those chunks with an ordinary
+        --   'World.Thread.Command.Edit.Sync.syncEditToSim' re-seed from
+        --   the authoritative tiles instead, which is what restores the
+        --   lava the discarded reaction had consumed.
     | SimSetTickRate !Int
         -- ^ Tick rate in microseconds (default 100000 = 10Hz). Global.
     | SimPause
@@ -82,6 +116,26 @@ data SimCommand
         --   ssPaused, and publishes the 'FastSettleOutcome'. Used by dump
         --   mode to get a stable simulation state without waiting for the
         --   live sim loop.
+
+-- | One participating chunk of a committed reaction result (#2485).
+data ReactionChunkSync = ReactionChunkSync
+    { rcsCoord      ∷ !ChunkCoord
+    , rcsEditGen    ∷ !Word64
+      -- ^ The chunk's live-edit generation AFTER the commit: one bump
+      --   for the whole result, not one per event, so sibling events
+      --   admitted from the same pre-commit generation all land.
+    , rcsFluid      ∷ !FluidMap
+      -- ^ The authoritative post-edit passive fluid map, read from the
+      --   page's own tiles. Used verbatim for an inactive or absent
+      --   chunk; for an active one it is the passive mirror and the
+      --   exact active volumes the sim already holds are what survive.
+    , rcsTerrain    ∷ !(VU.Vector Int)
+      -- ^ The authoritative post-edit terrain surface map.
+    , rcsSolidified ∷ ![Int]
+      -- ^ Local cell indices in this chunk that became stone. Their
+      --   active fluid is emptied: the lava that was there is what the
+      --   contact consumed, and the terrain now stands one z higher.
+    } deriving (Show, Eq)
 
 -- | One 'SimFastSettleAll': where the outcome is published, and the ONE
 --   deadline every wait inside the settle shares (#2334).
@@ -129,6 +183,9 @@ instance Show SimCommand where
     show (SimChunkEdited p e t cc g _ _) =
         "SimChunkEdited " <> show p <> " " <> show e <> " " <> show t
                           <> " " <> show cc <> " gen=" <> show g
+    show (SimReactionCommitted p e t syncs) =
+        "SimReactionCommitted " <> show p <> " " <> show e <> " " <> show t
+                                <> " " <> show (map rcsCoord syncs)
     show (SimSetTickRate r) = "SimSetTickRate " <> show r
     show SimPause  = "SimPause"
     show SimResume = "SimResume"

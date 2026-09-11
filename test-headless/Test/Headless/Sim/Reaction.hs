@@ -270,6 +270,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 8 8
+                        , sevWaterChunk   = homeChunk
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 2
@@ -295,6 +296,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 9 8
+                        , sevWaterChunk   = homeChunk
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 1
@@ -351,6 +353,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 9 8
+                        , sevWaterChunk   = homeChunk
                         , sevWaterType    = River
                         , sevConsumed     = 2
                         , sevStoneTop     = 1
@@ -433,6 +436,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 10 8
+                        , sevWaterChunk   = homeChunk
                         , sevWaterType    = Lake
                         , sevConsumed     = 8
                         , sevStoneTop     = 1
@@ -473,6 +477,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 8 8
+                        , sevWaterChunk   = homeChunk
                         , sevWaterType    = Lake
                         , sevConsumed     = 1
                         , sevStoneTop     = 4
@@ -521,6 +526,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = a
                         , sevIndex        = seamIdxA
+                        , sevWaterChunk   = b
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 2
@@ -549,6 +555,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = b
                         , sevIndex        = seamIdxB
+                        , sevWaterChunk   = a
                         , sevWaterType    = Ocean
                         , sevConsumed     = 3
                         , sevStoneTop     = 1
@@ -565,6 +572,12 @@ spec = do
                         (seamWorld cylTopo
                             wrapXA 1 (cell Lava 3) wrapXB 0 (cell Lake 5))
                 eventCoords after `shouldBe` [(wrapXA, seamIdxA)]
+                -- …and names the far side's own canonical key as the
+                -- WATER participant (#2485 requirement 3): FR-2 admits
+                -- both halves of a seam contact together, so a wrapped
+                -- contact that named an unwrapped water key would be
+                -- judged against a chunk the page stores nothing under.
+                map sevWaterChunk (events after) `shouldBe` [wrapXB]
                 cellAt wrapXA seamIdxA after `shouldBe` Nothing
                 cellAt wrapXB seamIdxB after `shouldBe` cell Lake 2
 
@@ -573,6 +586,7 @@ spec = do
                         (seamWorld cylTopo
                             wrapXA 0 (cell Ocean 20) wrapXB 0 (cell Lava 3))
                 eventCoords after `shouldBe` [(wrapXB, seamIdxB)]
+                map sevWaterChunk (events after) `shouldBe` [wrapXA]
                 cellAt wrapXA seamIdxA after `shouldBe` cell Ocean 17
                 cellAt wrapXB seamIdxB after `shouldBe` Nothing
 
@@ -630,6 +644,7 @@ spec = do
                 [ SolidificationEvent
                     { sevChunk        = homeChunk
                     , sevIndex        = idxOf 8 8
+                    , sevWaterChunk   = homeChunk
                     , sevWaterType    = Lake
                     , sevConsumed     = 1
                     , sevStoneTop     = 1

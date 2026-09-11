@@ -74,6 +74,7 @@ import World.ZoomMap.Cache (buildZoomCacheWithPixels)
 import World.ZoomMap.Artifact (buildZoomArtifactKey, publishZoomArtifact)
 import World.ZoomMap.ColorPalette (buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Map.ImagePlan (mapImageRefusalText)
 import Engine.Map.ImageAdmission (admitWorldZoomAtlas)
 import World.Weather (initEarlyClimate, formatWeather)
@@ -459,6 +460,17 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             writeIORef (rhZoomAtlasDataRef handoff) $
                 Just ( zadWidth atlas, zadHeight atlas
                      , zadPixelData atlas, [worldState] )
+            -- #2485: keep the pixels this page is about to show, so an
+            -- accepted terrain edit can regenerate one chunk's tile and
+            -- republish the image rather than leaving the zoom map
+            -- showing generation-time terrain forever.
+            writeIORef (wsZoomLiveRef worldState) $ Just ZoomLiveAtlas
+                { zlaPalette      = palette
+                , zlaWidth        = zadWidth atlas
+                , zlaHeight       = zadHeight atlas
+                , zlaChunksPerRow = zadChunksPerRow atlas
+                , zlaPixels       = zadPixelData atlas
+                }
             -- Store atlas metadata (chunksPerRow) for UV computation
             -- during baking
             writeIORef (wsZoomAtlasRef worldState) Nothing  -- filled after GPU upload

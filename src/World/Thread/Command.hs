@@ -8,6 +8,8 @@ module World.Thread.Command
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HS
+import Data.List (partition)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Control.Concurrent.MVar (putMVar)
 import Control.Exception (SomeException, throwIO, try)
@@ -18,6 +20,10 @@ import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import World.Types
 import World.Chunk.Admit (pageIncarnation)
 import World.Chunk.Residency (ChunkGeneration)
+import Sim.Fluid.Reaction (ReactionResult(..))
+import World.Thread.Command.Reaction
+    (commitReactions, convergeRejectedReactions, reactionChunks
+    , reactionIsFresh)
 import World.Thread.Command.Basic (handleWorldTickCommand
                                   , handleWorldSetCameraCommand
                                   , handleWorldDestroyCommand
@@ -316,11 +322,11 @@ handleApplyFluidsCommand = handleApplyFluidsCommandWith applyFluidWritebacks
 --   even though this call does not return normally.
 handleApplyFluidsCommandWith
     ∷ (EngineEnv → LoggerState → WorldPageId → Maybe ChunkGeneration
-       → [FluidWriteback] → IO ())
+       → [FluidWriteback] → [ReactionResult] → IO ())
     → EngineEnv → LoggerState → FluidWritebackBatch → IO ()
 handleApplyFluidsCommandWith apply env logger
-        (FluidWritebackBatch pageId mEpoch writebacks mAck) = do
-    applied ← try (apply env logger pageId mEpoch writebacks)
+        (FluidWritebackBatch pageId mEpoch writebacks reactions mAck) = do
+    applied ← try (apply env logger pageId mEpoch writebacks reactions)
     case applied of
         Right () → forM_ mAck (`putMVar` FluidAckApplied)
         Left (e ∷ SomeException) → do
@@ -330,9 +336,10 @@ handleApplyFluidsCommandWith apply env logger
 -- | The production application step behind 'handleApplyFluidsCommand':
 --   everything between dequeuing the batch and acknowledging it.
 applyFluidWritebacks ∷ EngineEnv → LoggerState → WorldPageId
-                     → Maybe ChunkGeneration → [FluidWriteback] → IO ()
-applyFluidWritebacks env logger pageId mEpoch writebacks = do
-    when (not (null writebacks)) $ do
+                     → Maybe ChunkGeneration → [FluidWriteback]
+                     → [ReactionResult] → IO ()
+applyFluidWritebacks env logger pageId mEpoch writebacks reactions = do
+    when (not (null writebacks) ∨ not (null reactions)) $ do
         mgr ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
         case lookup pageId (wmWorlds mgr) of
             Nothing → pure ()  -- world gone (destroyed/unloaded) — drop the batch
@@ -340,7 +347,10 @@ applyFluidWritebacks env logger pageId mEpoch writebacks = do
                 -- The incarnation fence (#2477), ahead of the per-chunk
                 -- one: a batch computed against a page this id no longer
                 -- names never reaches 'writebackIsFresh', which would
-                -- read every one of its writebacks as fresh.
+                -- read every one of its writebacks as fresh. It covers
+                -- the reaction results too (#2485) — they were computed
+                -- from the same chunks, so a delivery this refuses has
+                -- no admissible half at all.
                 live ← pageIncarnation ws
                 if not (batchIsCurrentIncarnation live mEpoch)
                   then logDebug logger CatWorld $
@@ -350,7 +360,21 @@ applyFluidWritebacks env logger pageId mEpoch writebacks = do
                     <> ", the live page is " <> tshow live
                   else do
                     gens ← readIORef (wsChunkEditGenRef ws)
-                    let fresh = filter (writebackIsFresh gens) writebacks
+                    let (admitted, rejected) =
+                            partition (reactionIsFresh gens) reactions
+                        -- A rejected result's fluid outcome goes with
+                        -- it (#2485 requirement 6). Its writeback is
+                        -- the OTHER half of the same reaction — the
+                        -- annihilated lava and the debited water — and
+                        -- landing that without the stone would destroy
+                        -- volume with no product to account for it, and
+                        -- then be the state the convergence re-seed
+                        -- reads back as authoritative.
+                        quarantined = HS.fromList
+                            (concatMap reactionChunks rejected)
+                        fresh = [ w | w ← writebacks
+                                    , writebackIsFresh gens w
+                                    , not (HS.member (fwCoord w) quarantined) ]
                     when (not (null fresh)) $ do
                         atomicModifyIORef' (wsTilesRef ws) $ \wtd →
                             (foldl' applyOneWriteback wtd fresh, ())
@@ -368,6 +392,13 @@ applyFluidWritebacks env logger pageId mEpoch writebacks = do
                         _ ← revalidateConstructDesignations env logger ws
                                 (ConstructChunks (map fwCoord fresh))
                         pure ()
+                    -- The stone goes on TOP of this delivery's own fluid
+                    -- result, in the same handler and before any
+                    -- generation moves, so the reaction's surviving water
+                    -- is not dropped by the generation its own stone
+                    -- mints.
+                    commitReactions env logger pageId ws admitted
+                    convergeRejectedReactions env logger pageId ws rejected
 
 -- | Is this batch's stamped incarnation the one the live page IS?
 --

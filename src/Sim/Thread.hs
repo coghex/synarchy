@@ -20,13 +20,21 @@ module Sim.Thread
       -- than a re-implementation of either.
     , handleSimCommand
     , emitWorldDirtyFluids
+      -- * The reaction drain, exported for tests
+      --
+      -- #2485: what a delivery actually carries out of a world's
+      -- accumulated events, and what that world is left holding, is the
+      -- contract FR-2's exactly-once commit rests on.
+    , drainReactionResults
     ) where
 
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.HashSet as HS
 import qualified Data.Vector as V
+import qualified Data.Sequence as Seq
 import qualified Data.Vector.Unboxed as VU
+import Data.Foldable (toList)
 import Data.IORef (IORef, readIORef, writeIORef, newIORef)
 import Data.Maybe (mapMaybe)
 import Control.Concurrent (threadDelay)
@@ -49,13 +57,16 @@ import World.Fluid.Types (FluidCell(..), renderedSurfaceZ)
 import World.Command.Types (WorldCommand(..), FluidWriteback(..)
                            , FluidWritebackBatch(..)
                            , FluidAckOutcome(..))
-import Sim.Command.Types (SimCommand(..), FastSettleRequest(..)
+import Sim.Command.Types (SimCommand(..), ReactionChunkSync(..)
+                         , FastSettleRequest(..)
                          , FastSettleOutcome(..))
 import Sim.State.Types (SimState(..), SimWorldState(..), SimChunkState(..)
                        , emptySimState, emptySimWorldState)
 import Sim.Fluid.Types (activeToFluidCell)
 import Sim.Fluid.Active (simulateActiveTick)
-import Sim.Chunk (applyChunkEdit, loadedChunkState, reactivateSettleTicks)
+import Sim.Fluid.Reaction (ReactionResult(..), groupReactionResults)
+import Sim.Chunk (applyChunkEdit, applyReactionCommit, loadedChunkState
+                 , reactivateSettleTicks)
 
 -- | Hard cap on synchronous settle iterations for 'SimFastSettleAll'
 --   (the dump path) — a safety net against runaway settling, not
@@ -140,14 +151,25 @@ simTick env simStateRef = do
             pure (Just simStateRef)
         else do
             -- Tick every active world independently, emit each
-            -- world's dirty fluids tagged with its page id, then
-            -- clear the per-world dirty sets.
+            -- world's dirty fluids AND its accumulated reaction results
+            -- tagged with its page id, then clear the per-world dirty
+            -- sets.
+            --
+            -- The events are DRAINED into the delivery (#2485): a world
+            -- that emits carries none of them forward, which is what
+            -- makes "committed exactly once" a property of this loop and
+            -- not of the world thread's own bookkeeping. An INACTIVE
+            -- world emits nothing and therefore drains nothing — its
+            -- history is output it has not delivered yet, not scratch.
             let ticked = HM.map tickWorld (ssWorlds ss)
-            forM_ (HM.toList ticked) $ \(pid, sws) →
-                when (swsActive sws) $
-                    emitWorldDirtyFluids env pid sws Nothing
-            let cleared = HM.map clearDirty ticked
-            writeIORef simStateRef ss { ssWorlds = cleared }
+            emitted ← forM (HM.toList ticked) $ \(pid, sws) →
+                if swsActive sws
+                  then do
+                      let (drained, results) = drainReactionResults sws
+                      emitWorldDirtyFluids env pid drained results Nothing
+                      pure (pid, clearDirty drained)
+                  else pure (pid, clearDirty sws)
+            writeIORef simStateRef ss { ssWorlds = HM.fromList emitted }
 
             acknowledgeCurrent (saveBarrierRef env) SaveSimulation
             threadDelay (ssTickRate ss)
@@ -161,6 +183,30 @@ tickWorld sws
 
 clearDirty ∷ SimWorldState → SimWorldState
 clearDirty sws = sws { swsDirtyChunks = HS.empty }
+
+-- | Take a world's accumulated solidification events for ONE delivery,
+--   grouped into coherent results, and return the world state that must
+--   not deliver them again (#2485).
+--
+--   The drain and the grouping are one step on purpose. Each result
+--   records the live-edit generation of every chunk it touches, read
+--   from THIS state's own 'Sim.State.Types.scsEditGen' — the number the
+--   world thread's admission compares against — so the provenance is
+--   captured at the same instant the events leave, not reconstructed
+--   later from a sim that has since ticked.
+--
+--   A chunk the sim no longer holds reads as generation 0, the same
+--   baseline 'Sim.Chunk.loadedChunkState' gives a freshly (re)loaded
+--   chunk and the same value 'World.Thread.Command.writebackIsFresh'
+--   reads for a page entry that eviction retired. So a result whose
+--   chunk was evicted between emission and delivery is judged by exactly
+--   the rule everything else is, rather than by a special case.
+drainReactionResults ∷ SimWorldState → (SimWorldState, [ReactionResult])
+drainReactionResults sws =
+    ( sws { swsSolidEvents = Seq.empty }
+    , groupReactionResults genOf (toList (swsSolidEvents sws)) )
+  where
+    genOf cc = maybe 0 scsEditGen (HM.lookup cc (swsChunks sws))
 
 processSimCommands ∷ EngineEnv → LoggerState → IORef SimState → IO ()
 processSimCommands env logger simStateRef = do
@@ -242,6 +288,25 @@ handleSimCommand env logger simStateRef cmd = do
                         . (\sws → sws { swsTopology    = topo
                                       , swsIncarnation = Just epoch })) ss
 
+        SimReactionCommitted pid epoch topo syncs →
+            -- The world thread admitted a coherent reaction result and
+            -- has already written the stone into the tiles (#2485).
+            -- Adopt the post-commit terrain and generation for every
+            -- participating chunk while KEEPING the exact active volumes
+            -- this sim already holds; 'applyReactionCommit' is what
+            -- makes that different from the 'SimChunkEdited' re-seed
+            -- above, which would round the reaction's remainder back up.
+            writeIORef simStateRef $
+                modifyWorld pid
+                    (\sws0 → foldl'
+                        (\sws sync → applyReactionCommit
+                            (rcsCoord sync) (rcsEditGen sync)
+                            (rcsFluid sync) (rcsTerrain sync)
+                            (rcsSolidified sync) sws)
+                        (sws0 { swsTopology    = topo
+                              , swsIncarnation = Just epoch })
+                        syncs) ss
+
         SimSetTickRate rate →
             writeIORef simStateRef $ ss { ssTickRate = rate }
 
@@ -267,16 +332,23 @@ handleSimCommand env logger simStateRef cmd = do
                 dirtied = HM.map (\sws →
                     sws { swsDirtyChunks = HS.fromList (HM.keys (swsChunks sws)) })
                     settled
+                -- …and drain each world's reaction results into its own
+                -- delivery (#2485). Unconditional, unlike the tick loop:
+                -- this path emits EVERY world, active or not, so a world
+                -- that keeps its events here would deliver them twice.
+                drained = HM.map drainReactionResults dirtied
             -- Persist the cleared (post-emit) state.
             writeIORef simStateRef $
-                ss { ssWorlds = HM.map clearDirty dirtied, ssPaused = True }
+                ss { ssWorlds = HM.map (clearDirty . fst) drained
+                   , ssPaused = True }
             -- Emit each world's batch and WAIT for the world thread to apply
             -- it before signalling done — the dump reads wsTilesRef right
             -- after. One ack per world (dump worlds are typically just one).
             completeFastSettleWith
-                (\pid sws ack → emitWorldDirtyFluids env pid sws (Just ack))
+                (\pid (sws, results) ack →
+                    emitWorldDirtyFluids env pid sws results (Just ack))
                 monotonicSeconds (logDebug logger CatWorld) req
-                (HM.toList dirtied)
+                (HM.toList drained)
 
 -- | The whole tail of the 'SimFastSettleAll' handler: wait out every
 --   world's acknowledgement, report, and publish the outcome to the
@@ -296,15 +368,19 @@ handleSimCommand env logger simStateRef cmd = do
 --   'emitWorldDirtyFluids' and @'logDebug' logger 'CatWorld'@, which is
 --   exactly what ran here before the seam existed.
 completeFastSettleWith
-    ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
+    ∷ (WorldPageId → π → MVar FluidAckOutcome → IO ())
       -- ^ Emit one world's batch, to be acknowledged through this MVar.
+      --   The payload is whatever the caller's emit step needs — since
+      --   #2485 production passes the world state PAIRED with the
+      --   reaction results drained for it, and a fixture may pass the
+      --   state alone.
     → IO Double
       -- ^ Monotonic clock; production passes
       --   'Engine.Core.Clock.monotonicSeconds'.
     → (Text → IO ())
       -- ^ Report the settle's outcome.
     → FastSettleRequest
-    → [(WorldPageId, SimWorldState)]
+    → [(WorldPageId, π)]
     → IO ()
 completeFastSettleWith emit clock report req worlds = do
     outcome ← awaitFastSettleAcks emit clock (fsrDeadline req) worlds
@@ -331,14 +407,14 @@ completeFastSettleWith emit clock report req worlds = do
 --   published strands the caller just as completely as one never
 --   computed, so the two are gated together.
 awaitFastSettleAcks
-    ∷ (WorldPageId → SimWorldState → MVar FluidAckOutcome → IO ())
+    ∷ (WorldPageId → π → MVar FluidAckOutcome → IO ())
       -- ^ Emit one world's batch, to be acknowledged through this MVar.
     → IO Double
       -- ^ Monotonic clock; production passes
       --   'Engine.Core.Clock.monotonicSeconds'.
     → Double
       -- ^ The shared absolute deadline ('Sim.Command.Types.fsrDeadline').
-    → [(WorldPageId, SimWorldState)]
+    → [(WorldPageId, π)]
     → IO FastSettleOutcome
 awaitFastSettleAcks emit clock deadline = go
   where
@@ -399,12 +475,17 @@ settleNewChunks sws
 --   only to the incarnation it was computed against (#2477). The epoch is
 --   carried verbatim and never compared here — 'Nothing', meaning no
 --   topology-bearing message has reached this page, as honestly as a
---   known one. The sim never touches 'wsTilesRef' itself. With 'Just' ack, the
+--   known one.
+--
+--   The caller's already-drained 'ReactionResult's ride the same batch
+--   (#2485). A delivery carrying only results and no dirty chunk is
+--   still sent: the stone is the whole point of it. The sim never touches 'wsTilesRef' itself. With 'Just' ack, the
 --   world reports the batch's outcome through it once it is done with it
 --   (the synchronous fast-settle waits on that).
 emitWorldDirtyFluids ∷ EngineEnv → WorldPageId → SimWorldState
+                     → [ReactionResult]
                      → Maybe (MVar FluidAckOutcome) → IO ()
-emitWorldDirtyFluids env pid sws mAck = do
+emitWorldDirtyFluids env pid sws results mAck = do
     let dirty = swsDirtyChunks sws
         writebacks = mapMaybe (\cc →
             case HM.lookup cc (swsChunks sws) of
@@ -424,10 +505,11 @@ emitWorldDirtyFluids env pid sws mAck = do
                                             newTerrain newSurf
                                             (scsSideDeco scs))
             ) (HS.toList dirty)
-    when (not (null writebacks) ∨ isJust mAck) $
+    when (not (null writebacks) ∨ not (null results) ∨ isJust mAck) $
         Q.writeQueue (wsWorldQueue (toWorldSimCapability env))
             (WorldApplyFluids
-                (FluidWritebackBatch pid (swsIncarnation sws) writebacks mAck))
+                (FluidWritebackBatch pid (swsIncarnation sws) writebacks
+                                     results mAck))
 
 deriveFluidMap ∷ SimChunkState → V.Vector (Maybe FluidCell)
 deriveFluidMap scs =

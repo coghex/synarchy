@@ -42,6 +42,7 @@ import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
 import World.ZoomMap.Types (ZoomChunkEntry(..))
 import World.Render.Zoom.Types (ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..), ZoomAtlasInfo(..))
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import Sim.Topology (SimTopology(..), simTopologyForParams)
@@ -206,6 +207,20 @@ data WorldState = WorldState
     , wsCursorSnapshotRef ∷ IORef CursorSnapshot
     , wsLoadPhaseRef ∷ IORef LoadPhase
     , wsZoomAtlasRef ∷ IORef (Maybe ZoomAtlasInfo)  -- ^ Atlas info once uploaded to GPU
+    , wsZoomLiveRef ∷ IORef (Maybe ZoomLiveAtlas)
+      -- ^ The atlas PIXELS this page published, kept so a live terrain
+      --   edit can regenerate one chunk's tile and republish the image
+      --   the renderer samples (#2485). Written by whichever path built
+      --   this page's atlas ('World.Thread.Command.Init' on a fresh
+      --   world, 'World.Load.Stage' on a load) and rewritten by every
+      --   accepted refresh.
+      --
+      --   'Nothing' means this page has no atlas of its own to patch —
+      --   an arena, a page whose atlas was refused, or a loaded page
+      --   that is not the session's atlas owner (#1670) — all of which
+      --   render the zoom map per material instead. Session-local
+      --   presentation data, never serialized: a load rebuilds it from
+      --   the pixels it stages.
     , wsEditsRef    ∷ IORef WorldEdits
       -- ^ Player edits accumulated this session. Per-chunk so eviction
       --   doesn't lose them — chunks regenerate, edits replay onto the
@@ -551,6 +566,7 @@ emptyWorldState = do
     wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
     wsLoadPhaseRef ← newIORef LoadIdle
     wsZoomAtlasRef ← newIORef Nothing
+    wsZoomLiveRef  ← newIORef Nothing
     wsEditsRef     ← newIORef emptyWorldEdits
     wsChunkEditGenRef ← newIORef HM.empty
     wsOreSurveyRef ← newIORef HM.empty
@@ -592,7 +608,8 @@ emptyWorldState = do
                         wsChunkResidencyRef
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
-                        wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
+                        wsLoadPhaseRef wsZoomAtlasRef wsZoomLiveRef
+                        wsEditsRef
                         wsChunkEditGenRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsGroundItemLock

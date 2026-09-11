@@ -68,6 +68,7 @@ import World.ZoomMap.Artifact
     , publishZoomArtifact )
 import World.ZoomMap.ColorPalette (ZoomColorPalette, buildColorPalette)
 import World.ZoomMap.ChunkTexture (buildZoomAtlas, ZoomAtlasData(..))
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Map.ImagePlan
     ( MapImageCeiling, MapImageFormat(..)
     , MapImageSource(..), admitMapImage, mapImageRefusalText )
@@ -926,6 +927,17 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                   _ ← evaluate (force atlas)
                   let preview = buildPreviewFromPixels params zoomCache chunkPixels
                   _ ← evaluate (force preview)
+                  -- #2485: this page is the one whose own cache produced
+                  -- these pixels (#1670), so it is the one that keeps
+                  -- them — a live terrain edit regenerates one chunk's
+                  -- tile from here and republishes the image.
+                  writeIORef (wsZoomLiveRef worldState) $ Just ZoomLiveAtlas
+                      { zlaPalette      = palette
+                      , zlaWidth        = zadWidth atlas
+                      , zlaHeight       = zadHeight atlas
+                      , zlaChunksPerRow = zadChunksPerRow atlas
+                      , zlaPixels       = zadPixelData atlas
+                      }
                   pure ( Just (zadWidth atlas, zadHeight atlas, zadPixelData atlas)
                        , Just (piWidth preview, piHeight preview, piData preview)
                        , Nothing )

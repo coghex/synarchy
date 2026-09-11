@@ -773,6 +773,8 @@ library
                      World.Thread.Command.UI
                      World.Thread.Command.Edit
                      World.Thread.Command.Edit.Sync
+                     World.Thread.Command.Reaction
+                     World.Thread.Command.Reaction.Zoom
                      World.Thread.Command.Edit.Terrain
                      World.Thread.Command.Edit.Structure
                      World.Thread.Command.Edit.Vegetation
@@ -1057,6 +1059,7 @@ library
                      World.Weather.Lookup
                      World.Weather.Ambient
                      World.Material
+                     World.Reaction.Stone
                      World.Material.Id
                      World.Preview
                      World.ZoomMap.Cache
@@ -1069,6 +1072,8 @@ library
                      World.ZoomMap.Cache.Pixels
                      World.ZoomMap.Artifact
                      World.ZoomMap.ChunkTexture
+                     World.ZoomMap.Live
+                     World.ZoomMap.Live.Types
                      World.ZoomMap.ColorPalette
                      World.ZoomMap.Pyramid
                      World.ZoomMap.Pyramid.Address
@@ -1405,6 +1410,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Save.Components.Integrity
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
+                   Test.Headless.World.Solidification
                    Test.Headless.World.FluidWritebackIncarnation
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.SessionEpoch

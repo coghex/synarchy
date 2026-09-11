@@ -13,6 +13,7 @@ module Sim.Chunk
     , activateChunk
     , loadedChunkState
     , applyChunkEdit
+    , applyReactionCommit
     ) where
 
 import UPrelude
@@ -115,5 +116,71 @@ applyChunkEdit coord editGen fluidMap terrainMap sws =
     -- HM.adjust is a no-op for an unloaded neighbour; activateChunk is
     -- idempotent for an already-active one.
     withSelf = HM.insert coord activated (swsChunks sws)
+    withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m) withSelf
+                      (simCardinalNeighbors (swsTopology sws) coord)
+
+-- | Adopt one participating chunk of a COMMITTED reaction result
+--   (#2485): the authoritative post-edit terrain and generation, with
+--   the chunk's EXACT live active volumes kept rather than rebuilt.
+--
+--   This is the whole reason the commit does not reuse 'applyChunkEdit'.
+--   That path re-seeds the active grid from the passive
+--   'World.Fluid.Internal.FluidMap' through 'fluidCellToActive', whose
+--   @depth * volumePerLevel@ rounding turns the 1 unit a reaction left
+--   in the contacting water cell into 7 — volume the reaction destroyed,
+--   handed straight back. So an ACTIVE chunk keeps the grid it already
+--   holds and only empties the cells that became stone; the exact
+--   remainder survives because it is never converted at all.
+--
+--   An INACTIVE or absent chunk has no exact volumes to keep — its
+--   grid is empty and its truth is the passive map — so it re-seeds
+--   from @fluidMap@ exactly as 'applyChunkEdit' does. Both branches
+--   adopt @editGen@ and wake the chunk and its physically cardinal
+--   neighbours, resolved through the page's own seam frame (#2044), so
+--   the surviving fluid flows around the new stone.
+--
+--   The solidified cells are emptied in BOTH branches. 'World.Edit.Apply'
+--   already displaces fluid the fill reaches, so the passive map agrees;
+--   clearing here anyway keeps "a solidified column contains no lava" a
+--   property of this handoff rather than a consequence of another
+--   module's rule.
+applyReactionCommit ∷ ChunkCoord → Word64 → FluidMap → VU.Vector Int
+                    → [Int] → SimWorldState → SimWorldState
+applyReactionCommit coord editGen fluidMap terrainMap solidified sws =
+    sws { swsChunks = withNbrs }
+  where
+    existing = HM.lookup coord (swsChunks sws)
+
+    committed = case existing of
+        Just scs | scsActive scs → scs
+            { scsFluid       = fluidMap
+            , scsTerrain     = terrainMap
+            , scsActiveFluid = emptySolidified (scsActiveFluid scs)
+            , scsSettleTicks = reactivateSettleTicks
+            , scsEquilTicks  = 0
+            , scsEditGen     = editGen
+            }
+        _ →
+            let base = case existing of
+                    Just scs → scs { scsFluid       = fluidMap
+                                   , scsTerrain     = terrainMap
+                                   , scsSettleTicks = reactivateSettleTicks
+                                   , scsEditGen     = editGen
+                                   }
+                    Nothing  → (loadedChunkState fluidMap terrainMap)
+                                   { scsSettleTicks = reactivateSettleTicks
+                                   , scsEditGen     = editGen
+                                   }
+                -- Force a fresh activation so the volume grid is rebuilt
+                -- from the NEW fluid, same reason as 'applyChunkEdit'.
+                activated = activateChunk (base { scsActive = False })
+            in activated
+                { scsActiveFluid = emptySolidified (scsActiveFluid activated) }
+
+    emptySolidified grid = grid V.// [ (i, Nothing)
+                                     | i ← solidified
+                                     , i ≥ 0, i < V.length grid ]
+
+    withSelf = HM.insert coord committed (swsChunks sws)
     withNbrs = foldl' (\m nc → HM.adjust activateChunk nc m) withSelf
                       (simCardinalNeighbors (swsTopology sws) coord)
