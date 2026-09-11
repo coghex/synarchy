@@ -21,6 +21,19 @@ the owner is asked to judge is the fluid presentation — whether river and
 lake tops read as flat whole-z steps and whether every drop, one z
 included, shows a vertical edge.
 
+`--window` builds the same scene in a REAL graphical window and leaves it
+open instead of capturing, so the owner can pan, rotate and zoom the steps
+themselves before giving a verdict. That opens a focus-stealing window, so
+it runs only when the owner asks for it::
+
+    python3 tools/flat_fluid_scene.py --engine "$(cabal list-bin exe:synarchy)" \
+        --window --port 9481
+
+Close the window, or press Ctrl-C here, to end it. `--preview` is NOT an
+option for this change: that mode is the texture browser, and it starts no
+world, unit, sim or combat thread, so the render path this scene exercises
+never runs there.
+
 Needs a GPU (a real Vulkan device). Manual-only, never CI-gated, and not
 a probe: it asserts nothing and returns no verdict.
 """
@@ -157,19 +170,34 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=9481)
     ap.add_argument("--size", default="1280x720")
-    ap.add_argument("--out", required=True, help="screenshot path (PNG)")
+    ap.add_argument("--out", help="screenshot path (PNG); required "
+                                  "unless --window")
     ap.add_argument("--engine", help="engine binary; else cabal run")
     ap.add_argument("--log", help="engine log path")
     ap.add_argument("--zoom", type=float, default=0.5,
                     help="camera zoom; quantised by the engine")
+    ap.add_argument("--window", action="store_true",
+                    help="boot a REAL graphical window and leave it open "
+                         "for owner signoff instead of capturing")
+    ap.add_argument("--hold", type=float, default=0.0,
+                    help="with --window, seconds to hold before quitting; "
+                         "0 waits for you to close it")
     args = ap.parse_args()
+    if not args.window and not args.out:
+        ap.error("--out is required unless --window is given")
 
     if args.engine:
         os.environ["SYNARCHY_PROBE_ENGINE_EXE"] = args.engine
 
-    out = os.path.abspath(args.out)
-    proc = probelib.boot(args.port, log=args.log, mode=("--offscreen",),
-                         args=["--size", args.size], label="flat-fluid scene")
+    out = os.path.abspath(args.out) if args.out else None
+    if args.window:
+        # No boot-profile flag at all is the ordinary graphical boot, and
+        # it still takes --port, so the same console script drives it.
+        boot_kw = dict(mode=(), args=[])
+    else:
+        boot_kw = dict(mode=("--offscreen",), args=["--size", args.size])
+    proc = probelib.boot(args.port, log=args.log, label="flat-fluid scene",
+                         **boot_kw)
     try:
         if not wait_for_defs(args.port):
             raise SystemExit("definitions never loaded")
@@ -207,6 +235,26 @@ def main() -> int:
                                            ay, base + 1):
             print("warning: camera z-slice pin did not hold", file=sys.stderr)
         time.sleep(2.0)
+
+        if args.window:
+            print("\nThe scene is up in a real window. Look for:")
+            print("  * every river and lake top FLAT at its own whole z")
+            print("  * a vertical water edge on the ONE-z step, not just "
+                  "the two- and three-z ones")
+            print("  * the same one-z edge where the lane crosses the "
+                  "chunk seam")
+            print("Pan/rotate/zoom freely; the sim is paused, so nothing "
+                  "moves.")
+            if args.hold > 0:
+                print(f"Holding for {args.hold:.0f}s.")
+                time.sleep(args.hold)
+            else:
+                print("Close the window, or press Ctrl-C here, when done.")
+                try:
+                    proc.wait()
+                except KeyboardInterrupt:
+                    print("\ninterrupted; shutting the engine down")
+            return 0
 
         got = send_json(args.port, f"return debug.captureScreenshot('{out}')",
                         timeout=30.0)
