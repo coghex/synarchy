@@ -76,6 +76,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Crafting and bills (#325/#326/#329/#343/#795)](#crafting-and-bills-325326329343795)
 - [Power (#358-#361, #590/#591, #1206)](#power-358-361-590591-1206)
 - [Flora species identity: the authored name is the key (#2241)](#flora-species-identity-the-authored-name-is-the-key-2241)
+- [Flora visual state and fallback (#2526)](#flora-visual-state-and-fallback-2526)
 - [Loot profiles (#2499)](#loot-profiles-2499)
 - [Farming (#331-#336)](#farming-331-336)
 - [Fluid reaction: unlike-fluid contact in the active sim (#2481)](#fluid-reaction-unlike-fluid-contact-in-the-active-sim-2481)
@@ -4144,6 +4145,107 @@ tracked `x1-flora-species-names` fixture really carries all three, and a
 pre-#2243 baseline still decodes as ordinals).
 Flora stays outside `tools/world_check.py`'s baselines, so no terrain
 recapture is owed.
+
+---
+
+## Flora visual state and fallback (#2526)
+
+A flora occurrence's appearance is chosen from FIVE semantic axes, and
+from nothing else: context (`wild`/`cultivated`), life phase, annual
+stage, condition (`alive`/`dead`) and cause of death. The complete
+vocabulary, the `textureVariants` and `corpsePolicy` schemas, the
+worked matching examples and the ten-step fallback ladder live in
+[`docs/flora_visual_state_contract.md`](flora_visual_state_contract.md).
+The invariants are here.
+
+**Declared, never discovered.** Every optional variant is an explicit
+YAML selector with a texture path; the filename convention is readable
+and carries no runtime meaning. Resolution never touches the
+filesystem, so art added to a directory and left out of YAML changes
+nothing. This is live today, not hypothetical:
+`assets/textures/flora/wheat/{wild,cultivated}/` ship twelve files
+(PR #2136) while `data/flora/crops.yaml` still points wheat's `texDir`
+at `white_clover`, and none of them render. Duplicate selectors and
+unknown vocabulary are whole-file refusals, like the closed
+vocabularies `Asset.FloraVocabularySchema` already gates, and so is an
+UNREACHABLE declaration — one naming a phase or stage the species never
+declares, or naming `phase: dead` at all — following the
+`requireDeclared` rule `cycleOverrides` has enforced since #2315.
+
+**`dead` is a legacy phase token, never a phase at death.** Every
+mortal shipped species authors `phases: [{tag: dead}]` and
+`World.Flora.Growth` pins the age to it, so the token stays — but it
+normalizes to `condition: dead` with every other axis wildcard, and its
+`phase: dead` cycle overrides normalize to stage-specific generic-dead
+declarations. Everything else legacy normalizes to `wild` + `alive`. A
+natural-lifespan death requests `condition: dead`, `cause: natural` and
+the frozen LAST LIVING phase and stage, resolving to the same
+`dead.png` shown today. `PhaseDead` therefore survives in
+`LifePhaseTag` for decoding only, and natural and hazard deaths share
+one fallback path.
+
+**The fallback priority is death, then phase, then cause, then annual
+stage.** An exact selector wins; a cultivated request tries the same
+WILD semantic state before discarding any other axis; a dead request
+exhausts every dead candidate before showing living art; and
+phase-appropriate generic-dead art beats an adult-shaped cause asset
+that would misrepresent a juvenile. Overlapping wildcard declarations
+are resolved by that ladder and never by file, alphabetical or
+`HashMap` order, so resolution is deterministic and independently
+testable.
+
+**Two fallbacks, not one.** The final SEMANTIC fallback is the
+species' own base texture — the first `phases` entry's texture, or
+`matured.png` when a species declares none, exactly as
+`registerFloraSpecies` resolves it today.
+`assets/textures/flora/unknown_flora.png` is only the ERROR fallback
+for a base that is itself missing or invalid, and a semantic miss never
+reaches it.
+
+**Context is chosen, never inferred.** Natural generation is `wild`;
+planted row flora and groundcover `CropPlot`s are `cultivated`. Age,
+health, density, placement category and texture path decide nothing. A
+species declaring no cultivated variants renders identically in both
+contexts, so the axis changes no existing visual.
+
+**Retention is authored, and cause does not move it.** `corpsePolicy`
+declares `visibility` (`transient`/`persistent`) with `durationDays`
+and `successor` required for transient and refused for persistent;
+optional `phase`/`cause` overrides each declare a COMPLETE outcome and
+inherit nothing. `successor` (`reseed`/`absent`) names the WILD outcome
+only: a cultivated occurrence always becomes empty and awaits
+replanting by rule, so `await_replanting` is a documented cultivated
+outcome and a REJECTED species token. A corpse freezes its phase and
+annual stage at death and snapshots its retention outcome, so a later
+content edit cannot reinterpret an existing save. An omitted policy
+keeps today's behaviour: transient, 60 days, wild successor `reseed`,
+matching `World.Flora.Growth.deadWindowDays`.
+
+**Persisted state is semantic.** Condition records carry tags —
+context, condition, cause, frozen phase and stage, retention outcome
+and expiry — and never a texture handle or a resolved path, so art can
+be added or renamed without migrating a save.
+
+Design record:
+[`docs/environmental_flora_mortality_design.md`](environmental_flora_mortality_design.md).
+Gates: TODAY, `tools/texture_subset_audit.py` (declared flora texture
+paths resolve to real files — note it enumerates `phases`,
+`annualCycle`, `cycleOverrides` and `harvested_texture`, and does NOT
+yet inspect `textureVariants`), plus hspec `--match
+"Asset.FloraVocabularySchema"` (closed phase/stage/lifecycle
+vocabularies refused at the authoring boundary), `--match
+"Asset.FloraContent"` (whole-file refusal atomicity) and `--match
+"World.FloraGrowth"` (the lifespan and dead-window behaviour the legacy
+default preserves). This section is documentation and adds no gate of
+its own. OWED by the epic's children, each with its own issue: EFM-2
+owes loader and audit gates for `textureVariants` and `corpsePolicy`
+declarations, including the duplicate-selector, unknown-vocabulary and
+legacy-collision refusals and the extension of the texture-subset audit
+to declared variants; EFM-3 owes table-driven resolver tests covering
+all ten ladder steps and both fallbacks; EFM-4 through EFM-6 owe
+occurrence-identity, render-context and persistence gates; EFM-10 owes
+retention and successor behaviour; and EFM-9 owes the pilot's
+end-to-end headless and preview evidence.
 
 ---
 
