@@ -9,18 +9,18 @@ import Engine.Scripting.Lua.CallStats (LuaCallStats)
 import qualified HsLua as Lua
 
 registerAudioAPI ∷ LuaCallStats → CoreCapability → AudioCapability → Lua.LuaE Lua.Exception ()
-registerAudioAPI stats core audio = do
+registerAudioAPI callStats core audio = do
   Lua.newtable
-  registerLuaFunction stats "audio" "play" (playFn core audio)
-  registerLuaFunction stats "audio" "startLoop" (startLoopFn core audio)
-  registerLuaFunction stats "audio" "updateLoop" (updateLoopFn core audio)
-  registerLuaFunction stats "audio" "stopLoop" (stopLoopFn core audio)
-  registerLuaFunction stats "audio" "getStatus" (statusFn audio)
-  registerLuaFunction stats "audio" "getSavedVolumes" savedVolumesFn
-  registerLuaFunction stats "audio" "getDefaultVolumes" defaultVolumesFn
-  registerLuaFunction stats "audio" "setVolumes" (setVolumesFn core audio)
-  registerLuaFunction stats "audio" "saveVolumes" (saveVolumesFn core audio)
-  registerLuaFunction stats "audio" "previewPlay" (previewPlayFn core audio)
-  registerLuaFunction stats "audio" "previewStop" (previewStopFn core audio)
-  registerLuaFunction stats "audio" "previewReload" (previewReloadFn core audio)
+  registerLuaFunction callStats "audio" "play" (playFn core audio)
+  registerLuaFunction callStats "audio" "startLoop" (startLoopFn core audio)
+  registerLuaFunction callStats "audio" "updateLoop" (updateLoopFn core audio)
+  registerLuaFunction callStats "audio" "stopLoop" (stopLoopFn core audio)
+  registerLuaFunction callStats "audio" "getStatus" (statusFn audio)
+  registerLuaFunction callStats "audio" "getSavedVolumes" savedVolumesFn
+  registerLuaFunction callStats "audio" "getDefaultVolumes" defaultVolumesFn
+  registerLuaFunction callStats "audio" "setVolumes" (setVolumesFn core audio)
+  registerLuaFunction callStats "audio" "saveVolumes" (saveVolumesFn core audio)
+  registerLuaFunction callStats "audio" "previewPlay" (previewPlayFn core audio)
+  registerLuaFunction callStats "audio" "previewStop" (previewStopFn core audio)
+  registerLuaFunction callStats "audio" "previewReload" (previewReloadFn core audio)
   Lua.setglobal (Lua.Name "audio")

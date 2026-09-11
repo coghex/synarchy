@@ -1,2 +1,4 @@
 # Keep the pinned upstream header byte-identical, including its trailing spaces.
-cbits/vendor/miniaudio/miniaudio.h whitespace=-blank-at-eol linguist-vendored
+# Keep its 96,000 upstream lines out of patches; the complete source and hashes
+# remain tracked under cbits/vendor/miniaudio for inspection and verification.
+cbits/vendor/miniaudio/miniaudio.h whitespace=-blank-at-eol linguist-vendored -diff
