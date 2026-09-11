@@ -1185,12 +1185,17 @@ executable synarchy
     ghc-options: -rtsopts
                  "-with-rtsopts=-N -A128M"
 
--- The save-compatibility tooling's compiled codec helper (#2273). Its
+-- The save tooling's compiled codec helper (#2273, #2274). Its first
 -- three operations -- canonical-summary dump, fixed-timestamp re-encode,
 -- and raw fixture-descriptor dump -- were GHCi programs fed to
 -- `cabal repl test:synarchy-test-headless` until #2273, so every
 -- invocation loaded the 348-module test suite into the interpreter to
--- reach a handful of library functions.
+-- reach a handful of library functions. #2274 added a fourth,
+-- `compare`: the persistence-contract probe's structural session
+-- comparison, which was the last such GHCi program. Converting it is
+-- why `behavior-probes` no longer builds `synarchy-test-headless` and
+-- why `persistence_contract` no longer holds the shared Cabal build
+-- state exclusively.
 --
 -- Deliberately its OWN executable rather than a mode of `exe:synarchy`.
 -- It must not boot, must not resolve or chdir into a runtime resource

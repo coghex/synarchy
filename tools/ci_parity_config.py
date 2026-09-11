@@ -63,6 +63,50 @@ PROBE_REQUIRED_COMMANDS = frozenset({
      "--exact --retries 1 --jobs 2"),
 })
 
+#: The behavior-probe job's prerequisite build, pinned exactly
+#: (#2274 requirement 4).
+#:
+#: The gate-set comparison above cannot see this at all -- it collects
+#: `python3 tools/*.py` invocations and deliberately ignores every other
+#: command -- and inspecting one CI log proves only what that run did.
+#: So the two halves are declared here and checked against the step's own
+#: `run:` body:
+#:
+#:   * PROBE_PREREQUISITE_TARGETS is EXACTLY what the step builds, in
+#:     the set sense: exactly what a probe execs -- the engine every
+#:     probe boots, and the compiled save codec the persistence probes
+#:     decode through -- and nothing else. A missing target is built
+#:     inside a probe's own timeout; an EXTRA one is build time the job
+#:     does not need, and `synarchy-test-headless` is only the most
+#:     likely of them. Enforcing the exact set rather than a blacklist
+#:     is what makes `lib:synarchy`, `all` or a target invented
+#:     tomorrow fail too.
+#:   * The step must also run that ONE command and no other. A `cabal
+#:     test synarchy-test-headless` beside a correct `cabal build`
+#:     restores the whole cost this issue removed while leaving the
+#:     build line itself untouched, so counting the step's commands is
+#:     part of the same check rather than a separate one.
+#:   * PROBE_FORBIDDEN_PREREQUISITES adds no coverage over the exact set
+#:     above; it is a DIAGNOSTIC list, naming why these particular
+#:     spellings are the ones somebody reaches for, so the failure says
+#:     what went wrong rather than only that a set did not match.
+PROBE_PREREQUISITE_STEP = "Build behavior probe prerequisites"
+PROBE_PREREQUISITE_TARGETS = ("exe:synarchy", "exe:synarchy-save-codec")
+PROBE_FORBIDDEN_PREREQUISITES = {
+    "synarchy-test-headless":
+        "the headless suite, whose `cabal repl` the persistence-contract "
+        "comparison stopped using in #2274 -- five to eight minutes of "
+        "build no probe reads",
+    "test:synarchy-test-headless":
+        "the headless suite under its test-target spelling",
+    "synarchy-test-graphical":
+        "the graphical suite, which needs a display and which no probe "
+        "execs",
+    "all": "every target in the project, including both test suites",
+    "lib:synarchy":
+        "the library, which both executables already pull in",
+}
+
 def workflow_label(job: str) -> str:
     """How a diagnostic names one workflow job."""
     return ".github/workflows/ci.yml (job: %s)" % job

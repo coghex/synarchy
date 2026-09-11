@@ -211,6 +211,13 @@ SAVE_COMPAT_GLOBS = [
     "tools/save_compat_audit_manifest.py",
     "tools/save_compat_audit_register.py",
     "tools/save_compat_audit_generate.py",
+    # The bridge's one consumer outside the save-compat tool (#2274):
+    # the persistence-contract comparison surface. Its `diff_pair` and
+    # `compare_session_files` are exercised by
+    # tools/test_save_compat_audit_compare.py against the real corpus,
+    # so an edit to it faces that coverage the way an edit to an owner
+    # above does.
+    "tools/persistence_snapshot.py",
     # The manifest the audit reads, and the tracked fixture corpus the
     # test decodes. `_CURRENT_FORMAT_FIXTURE_PATH` points into the
     # second, and is re-pointed whenever the metadata component's
@@ -732,6 +739,7 @@ def self_test() -> int:
         ("save-compat",
          ["tools/test_save_compat_audit_reproducibility.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_codec.py"], True),
+        ("save-compat", ["tools/test_save_compat_audit_compare.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_discovery.py"], True),
         ("save-compat", ["tools/test_save_compat_audit_coverage.py"], True),
         # Issue #2049's owner modules. Each is named individually, so a
@@ -746,6 +754,12 @@ def self_test() -> int:
         ("save-compat", ["tools/save_compat_audit_manifest.py"], True),
         ("save-compat", ["tools/save_compat_audit_register.py"], True),
         ("save-compat", ["tools/save_compat_audit_generate.py"], True),
+        # The bridge's one non-save-compat consumer (#2274): the
+        # persistence-contract comparison surface, whose `diff_pair` and
+        # `compare_session_files` the comparison owner above exercises
+        # against the real corpus. Editing it must select the gate that
+        # covers it, exactly as editing an owner does.
+        ("save-compat", ["tools/persistence_snapshot.py"], True),
         # The compiled codec helper (#2273): the program every one of
         # those owners now execs in place of a `cabal repl`.
         ("save-compat", ["app-save-codec/Main.hs"], True),

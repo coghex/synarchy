@@ -67,6 +67,7 @@ import probe_runner_lifecycle  # noqa: E402
 import probe_runner_registry  # noqa: E402
 import probe_runner_resources  # noqa: E402
 import run_probes  # noqa: E402
+import save_compat_audit_codec  # noqa: E402
 
 # Short enough to keep the suite quick, long enough that a correct
 # SIGTERM-then-poll escalation is genuinely exercised rather than skipped.
@@ -214,14 +215,17 @@ def probe_src(root: Path, name: str, *, exit_code: int = 0,
         "print(_args.port, file=_pf)",
         "_pf.flush()",
         "_pf.close()",
-        # What the runner handed this attempt in the environment (#1570):
-        # the resolved engine executable, and the resources an ancestor
+        # What the runner handed this attempt in the environment (#1570,
+        # #2274):
+        # the resolved engine executable, the compiled save codec, and
+        # the resources an ancestor
         # already holds exclusively on its behalf. One line per attempt,
         # empty when the variable was absent -- which is itself the
         # assertion for a probe that must be left on the direct-invocation
         # fallback.
         f"_ef = open({str(root / (name + '.env'))!r}, 'a')",
         "print(os.environ.get('SYNARCHY_PROBE_ENGINE_EXE', ''),"
+        " os.environ.get('SYNARCHY_SAVE_CODEC_EXE', ''),"
         " os.environ.get('SYNARCHY_PROBE_HELD_EXCLUSIVE', ''),"
         " os.environ.get('SYNARCHY_PROBE_HELD_NAMESPACE', ''),"
         " sep='|', file=_ef)",
@@ -342,15 +346,22 @@ class Tree:
         (self.root / "tools").mkdir()
         (self.root / "_descendant.py").write_text(DESCENDANT_SRC)
         self.probes: list[tuple[str, str, str]] = []
-        # What the preflight double answers with (#1570). A real file,
-        # executable, at an absolute path, so `probe_engine`'s validation
-        # runs for real rather than being bypassed.
+        # What the preflight double answers with (#1570, #2274). Real
+        # files,
+        # executable, at absolute paths, so `probe_engine`'s validation
+        # runs for real rather than being bypassed. Two of them, and
+        # DISTINCT: the engine and the compiled save codec reach a probe
+        # under different variables, and a single path shared by both
+        # would let a crossed wiring pass.
         self.executable = self.root / "synthetic-synarchy"
         self.executable.write_text("#!/bin/sh\nexit 0\n")
         self.executable.chmod(0o755)
+        self.codec = self.root / "synthetic-synarchy-save-codec"
+        self.codec.write_text("#!/bin/sh\nexit 0\n")
+        self.codec.chmod(0o755)
 
-    def env_lines(self, name: str) -> list[tuple[str, str, str]]:
-        """`(engine exe, held-exclusive, held-namespace)` per attempt."""
+    def env_lines(self, name: str) -> list[tuple[str, str, str, str]]:
+        """`(engine, codec, held-exclusive, held-namespace)` per attempt."""
         try:
             raw = (self.root / f"{name}.env").read_text()
         except OSError:
@@ -358,13 +369,17 @@ class Tree:
         out = []
         for line in raw.splitlines():
             parts = line.split("|")
-            if len(parts) == 3:
-                out.append((parts[0], parts[1], parts[2]))
+            if len(parts) == 4:
+                out.append((parts[0], parts[1], parts[2], parts[3]))
         return out
 
     def engine_exes(self, name: str) -> list[str]:
         """The engine executable each attempt of this probe was handed."""
-        return [exe for exe, _, _ in self.env_lines(name)]
+        return [exe for exe, _, _, _ in self.env_lines(name)]
+
+    def codec_exes(self, name: str) -> list[str]:
+        """The save codec each attempt of this probe was handed (#2274)."""
+        return [codec for _, codec, _, _ in self.env_lines(name)]
 
     def add(self, name: str, **kw) -> str:
         script = f"{name}_probe.py"
@@ -587,11 +602,16 @@ def progress_lines(out: str, script: str) -> int:
 class PreflightRecorder:
     """A deterministic stand-in for the preflight's subprocess entry point.
 
-    `probe_runner_resources.engine_preflight` makes the ONE Cabal contact an aggregate
-    run is allowed (#1570): a freshness `cabal build` and then a read-only
-    `cabal list-bin`. This answers both without a toolchain — the build
+    `probe_runner_resources.engine_preflight` and `codec_preflight` make
+    the ONLY Cabal contact an aggregate
+    run is allowed (#1570, #2274): a freshness `cabal build` and then a
+    read-only
+    `cabal list-bin`, per target. This answers both without a toolchain —
+    the build
     succeeds silently, the query prints the synthetic tree's own
-    executable — and records every argv it was handed, with the wall-clock
+    executable for `exe:synarchy` and its own codec stand-in for
+    `exe:synarchy-save-codec` — and records every argv it was handed,
+    with the wall-clock
     instant of each call.
 
     The RECORD is the point. Counting the calls is what proves the
@@ -604,9 +624,10 @@ class PreflightRecorder:
     failure-before-anything-spawns case is driven.
     """
 
-    def __init__(self, executable, *, fail: str | None = None,
+    def __init__(self, executable, codec=None, *, fail: str | None = None,
                  message: str = "synthetic preflight failure") -> None:
         self.executable = str(executable)
+        self.codec = str(executable if codec is None else codec)
         self.fail = fail
         self.message = message
         self.calls: list[tuple[tuple[str, ...], float]] = []
@@ -617,7 +638,14 @@ class PreflightRecorder:
         step = "build" if "build" in argv else "locate"
         if self.fail == step:
             return subprocess.CompletedProcess(argv, 1, "", self.message)
-        stdout = "" if step == "build" else f"{self.executable}\n"
+        # Which BINARY was asked for decides what `list-bin` answers
+        # (#2274): the preflight resolves the engine and the compiled
+        # save codec from two different Cabal targets, and a double that
+        # answered one path for both could not tell a test that each
+        # reached the child under its own variable.
+        located = (self.codec if save_compat_audit_codec.CODEC_TARGET in argv
+                   else self.executable)
+        stdout = "" if step == "build" else f"{located}\n"
         return subprocess.CompletedProcess(argv, 0, stdout, "")
 
     @property
@@ -649,11 +677,12 @@ class patched:
                  durations: dict[str, float] | None = None,
                  preflight: "PreflightRecorder | None" = None) -> None:
         self.tree, self.grace = tree, grace
-        # The engine-executable preflight (#1570) is doubled for the same
+        # The executable preflights (#1570, #2274) are doubled for the
+        # same
         # reason the namespace is: a synthetic tree is no Cabal project,
         # and a real `cabal build` here would make every main()-driven
         # case depend on a toolchain and a warm build directory.
-        self.preflight = (PreflightRecorder(tree.executable)
+        self.preflight = (PreflightRecorder(tree.executable, tree.codec)
                           if preflight is None else preflight)
         self.namespace = namespace or f"selftest{uuid.uuid4().hex[:12]}"
         # The synthetic probes have synthetic keys, so the shipped
@@ -679,6 +708,7 @@ class patched:
                        probe_runner_registry.PROBE_TIMEOUT_OVERRIDES,
                        probe_runner_registry.PROBE_EXPECTED_SECONDS,
                        probe_runner_resources.ENGINE_EXECUTABLE,
+                       probe_runner_resources.CODEC_EXECUTABLE,
                        probe_runner_resources.ENGINE_PREFLIGHT_RUNNER)
         # An operator's own export of the runner's variables must not
         # decide what a case here observes; `main` re-derives all of them.
@@ -692,6 +722,7 @@ class patched:
         probe_runner_registry.PROBE_TIMEOUT_OVERRIDES = self.timeouts
         probe_runner_registry.PROBE_EXPECTED_SECONDS = self.durations
         probe_runner_resources.ENGINE_EXECUTABLE = None
+        probe_runner_resources.CODEC_EXECUTABLE = None
         probe_runner_resources.ENGINE_PREFLIGHT_RUNNER = self.preflight
         return self
 
@@ -702,6 +733,7 @@ class patched:
          probe_runner_registry.PROBE_TIMEOUT_OVERRIDES,
          probe_runner_registry.PROBE_EXPECTED_SECONDS,
          probe_runner_resources.ENGINE_EXECUTABLE,
+         probe_runner_resources.CODEC_EXECUTABLE,
          probe_runner_resources.ENGINE_PREFLIGHT_RUNNER) = self._saved
         for name, value in self._saved_env.items():
             if value is None:

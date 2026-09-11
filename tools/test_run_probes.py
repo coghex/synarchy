@@ -14,16 +14,17 @@ under test does:
 
   `readme`        2  #2035's `tools/README.md` registry-count audit, and
                      the proof that a failing audit fails this gate;
-  `registry`     15  timeout-override, expected-duration and
+  `registry`     16  timeout-override, expected-duration and
                      exclusive-resource declarations, the longest-first
                      dispatch order (#2275), exact and substring
                      selection, and reserved port spans;
-  `resources`    20  the one-time engine preflight, resolved-executable
-                     propagation, inherited and foreign holds, and the
+  `resources`    23  the one-time engine and save-codec preflights,
+                     resolved-executable propagation, inherited and
+                     foreign holds, and the
                      reader/writer resource ledger;
   `lifecycle`    14  one probe's launch, teardown, liveness and reap,
                      including the shutdown launch window;
-  `scheduler`    19  aggregate exits, conflict scheduling, #2275's
+  `scheduler`    20  aggregate exits, conflict scheduling, #2275's
                      longest-expected-first dispatch, retries, Ctrl-C,
                      and the synthetic fixtures' own validation;
   `diagnostics`  11  the durable progress and failure record protocols.
@@ -111,21 +112,23 @@ FAMILIES = {
 #: would still pass after a registry entry was deleted.
 NON_OWNER_MODULES = {"__init__", "support"}
 
-#: The group count each family carries: 2 + 15 + 20 + 14 + 19 + 11 = 81.
+#: The group count each family carries: 2 + 16 + 23 + 14 + 20 + 11 = 86.
 #: The issue pinned 1 + 13 + 20 + 14 + 14 + 11 = 73 at 837792c; #2035
 #: landed `test_a_failing_readme_audit_fails_this_gate` beside the audit
-#: it extracted, which is why `readme` is 2, and #2275 added two
+#: it extracted, which is why `readme` is 2; #2275 added two
 #: expected-duration groups to `registry` and five dispatch-order groups
-#: to `scheduler`. A FLOOR, not an exact count, so a legitimately added
+#: to `scheduler`; and #2274 added three save-codec preflight groups to
+#: `resources`, one overlap group to `scheduler` and one declaration
+#: group to `registry`. A FLOOR, not an exact count, so a legitimately added
 #: group joins without an edit here; a family declaring FEWER is a
 #: truncation and is refused. Raising it alongside an addition is what
 #: keeps the floor able to catch that addition's own later loss.
 MINIMUM_GROUPS = {
     "readme": 2,
-    "registry": 15,
-    "resources": 20,
+    "registry": 16,
+    "resources": 23,
     "lifecycle": 14,
-    "scheduler": 19,
+    "scheduler": 20,
     "diagnostics": 11,
 }
 

@@ -107,13 +107,16 @@ session through the real codec, every field via derived `Eq`),
 `--match "persistence reference integrity"`,
 `--match "Lua persistence components"`, `--match "save envelope"` /
 `"save components"` / `"atomic save storage"`.
-`tools/test_save_compat_audit.py --only-reproducibility` (~26 s, spawns
-a `cabal repl`) when the save
+`tools/test_save_compat_audit.py --only-reproducibility` (cheap since
+#2273, which replaced its `cabal repl` with the compiled
+`exe:synarchy-save-codec`) when the save
 format, the tracked fixture corpus, `save_compat_audit.py`, or a Cabal
 path changed — `ci_expensive_gates.py --gate save-compat` is the
 authority. Probes — `persistence_contract_probe.py` (CI-eligible smoke:
 three real fresh-process save→load→save cycles compared via
-`tools/persistence_snapshot.compare_session_files`),
+`tools/persistence_snapshot.compare_session_files`, which since #2274
+execs the compiled `exe:synarchy-save-codec` rather than a `cabal repl`
+of the headless suite),
 `persistence_contract_sweep.py`, `save_barrier_probe.py`,
 `save_storage_probe.py`, `transactional_load_probe.py`,
 `persistence_integrity_probe.py`, `multiworld_save_probe.py`, and

@@ -1603,20 +1603,29 @@ jobs:
             dist-v3-${{ runner.os }}-${{ needs.resolve-image.outputs.image }}-ghc-9.12.2-cabal-3.16.1.0-
             ${{ needs.resolve-image.outputs.image == 'ghcr.io/coghex/synarchy-ci:ci-9eaa6afb33b34025' && format('dist-v2-{0}-ghc-9.12.2-cabal-3.16.1.0-', runner.os) || 'dist-v2-disabled-for-incompatible-image-' }}
 
-      # This runner has its own restored build tree. Besides the executable
-      # every probe launches, persistence_contract shells out to
-      # `cabal repl test:synarchy-test-headless`, and reaches the real save
-      # codec through `save_compat_audit.dump_canonical_summary`, which since
-      # #2273 execs the compiled `exe:synarchy-save-codec`. Compile both
-      # targets here so neither can consume the probe's own timeout
-      # rebuilding a stale cached suite or helper: the probe runner's
-      # preflight resolves `exe:synarchy` and nothing else (#1570), and the
-      # codec bridge's own resolution would otherwise do that build inside
-      # the probe. This job never saves either cache; test-and-audits remains
+      # This runner has its own restored build tree. It compiles exactly
+      # the two things a probe EXECS: `exe:synarchy`, which every probe
+      # boots, and `exe:synarchy-save-codec`, which the persistence probes
+      # decode saves through (#2273, #2274). Compiling them here rather
+      # than leaving it to the runner means neither can consume a probe's
+      # own timeout rebuilding a stale cached binary.
+      #
+      # `synarchy-test-headless` is deliberately NOT built (#2274).
+      # It was, until `persistence_contract` decoded its generations by
+      # shelling out to `cabal repl test:synarchy-test-headless`; that
+      # comparison is now `app-save-codec/Main.hs`'s `compare` operation,
+      # so the suite is no longer an input to anything this job runs. On
+      # the 2026-09-02 runs that build recompiled 211 of 348 modules and
+      # was the bulk of a 346-480 s step. No probe reads `test-headless/`,
+      # and `test-and-audits` remains the job that compiles and runs it.
+      # `tools/ci_parity_audit.py` pins both halves of this: the two
+      # targets that must be here, and the suite that must not.
+      #
+      # This job never saves either cache; test-and-audits remains
       # the sole cache writer for the workflow.
       - name: Build behavior probe prerequisites
         if: steps.probe-selection.outputs.selected == 'true'
-        run: cabal build exe:synarchy exe:synarchy-save-codec synarchy-test-headless
+        run: cabal build exe:synarchy exe:synarchy-save-codec
 
       # --jobs 2 pairs probes on the 4-vCPU runner. --retries 1 reruns a
       # failed probe solo, absorbing the contention flakes this concurrency

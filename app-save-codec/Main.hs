@@ -1,7 +1,7 @@
 -- | The save-compatibility tooling's compiled codec helper (issue
 --   #2273).
 --
---   Three operations the Python save-compat tooling needs from the REAL
+--   Four operations the Python save tooling needs from the REAL
 --   Haskell save codec, and nothing else:
 --
 --     * @summary@         — derive a fixture's canonical-summary JSON
@@ -13,14 +13,27 @@
 --     * @descriptors@     — dump a batch of fixtures' RAW envelope
 --                           manifests (id\/version\/required) as one
 --                           JSON object keyed by fixture path.
+--     * @compare@         — decode N independently-produced session
+--                           saves and report whether every one is
+--                           structurally identical, on both the decoded
+--                           @SessionSnapshot@ and every @lua.\<module\>@
+--                           component's raw payload bytes.
 --
---   Until #2273 each of these was a GHCi program fed to
+--   Until #2273 the first three were GHCi programs fed to
 --   @cabal repl test:synarchy-test-headless@ from
 --   @tools\/save_compat_audit_codec.py@, so every invocation loaded the
 --   348-module test suite into the interpreter to reach a handful of
 --   library functions — 2.6–3.7 minutes per CI run. They are compiled
 --   here instead, against exactly the same library functions, and
 --   @cabal build all@ produces the binary.
+--
+--   @compare@ (#2274) is the fourth and last of that family:
+--   @tools\/persistence_snapshot.py@ kept a GHCi program of its own for
+--   the @persistence_contract@ probe's structural comparison, which is
+--   why that probe had to hold the shared Cabal build state EXCLUSIVELY
+--   and why the @behavior-probes@ CI job built @synarchy-test-headless@
+--   at all. It is the same program, against the same library function,
+--   compiled.
 --
 --   Deliberately a SEPARATE executable rather than a mode of
 --   @exe:synarchy@ (requirement 6 leaves the choice to the solver):
@@ -36,10 +49,18 @@
 --
 --   Every operation reports success with the SAME stdout marker its
 --   GHCi predecessor printed (@DUMP_OK@ \/ @NORMALIZE_OK@ \/
---   @DESCRIPTOR_DUMP_OK@) and, on failure, exits non-zero after naming
---   the offending fixture path and the codec's own error text on stderr
---   (requirement 5), so a broken fixture is diagnosable straight from a
---   CI log.
+--   @DESCRIPTOR_DUMP_OK@ \/ @COMPARE_OK@) and, on failure, exits
+--   non-zero after naming the offending fixture path and the codec's own
+--   error text on stderr (requirement 5), so a broken fixture is
+--   diagnosable straight from a CI log.
+--
+--   @compare@ is the one operation whose non-@OK@ outcomes are ANSWERS
+--   rather than malfunctions: @COMPARE_MISMATCH@ and @DECODE_FAILED@
+--   both describe the fixtures, not this program. It still exits
+--   non-zero for them — a caller judging only the status must not read
+--   "these saves differ" as success — and additionally writes a
+--   machine-readable report to @--output@ so the caller can name WHICH
+--   generation first diverged instead of guessing at the first two.
 module Main where
 
 import UPrelude
@@ -56,9 +77,10 @@ import Data.List (sortOn)
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
+import Control.Exception (IOException, try)
 
 import World.Save.Envelope (decodeSessionEnvelope, currentEnvelopeVersion
-                           , metadataComponentId)
+                           , metadataComponentId, LuaComponentSpec(..))
 import World.Save.Envelope.Codec (DecodedEnvelope(..), decodeEnvelope
                                  , encodeEnvelope)
 import World.Save.Envelope.Types (ComponentId(..), ComponentDescriptor(..)
@@ -116,6 +138,7 @@ main = getArgs ≫= \case
     ("summary" : rest)       → runSummary rest
     ("set-timestamp" : rest) → runSetTimestamp rest
     ("descriptors" : rest)   → runDescriptors rest
+    ("compare" : rest)       → runCompare rest
     args                     → usageFailure args
 
 usageFailure ∷ ∀ α. [String] → IO α
@@ -130,6 +153,7 @@ usageFailure args = do
         , "  " ⧺ prog ⧺ " set-timestamp --fixture PATH --timestamp TS "
               ⧺ "[--output PATH]"
         , "  " ⧺ prog ⧺ " descriptors --output PATH FIXTURE [FIXTURE ...]"
+        , "  " ⧺ prog ⧺ " compare --output PATH FIXTURE FIXTURE [FIXTURE ...]"
         ]
     exitFailure
 
@@ -430,3 +454,117 @@ describeOne path = do
 
 componentIdText ∷ ComponentId → Text
 componentIdText (ComponentId t) = t
+
+-- * compare
+
+-- | Decode N independently-produced session saves and report whether
+--   every one is structurally IDENTICAL to the first.
+--
+--   This is @tools\/persistence_snapshot.py@'s
+--   @compare_session_files@ (#767, save-overhaul D1 requirement 1) with
+--   the GHCi program it used to feed @cabal repl
+--   test:synarchy-test-headless@ compiled in place (#2274). The
+--   comparison itself is unchanged, and is deliberately NOT a bespoke
+--   field-by-field schema:
+--
+--     * @SessionSnapshot@ derives @Eq@ and holds only persistent
+--       gameplay state, so structural equality of two
+--       @decodeSessionEnvelope@-assembled snapshots IS the canonical,
+--       order-independent comparison (every collection is
+--       @HashMap@-keyed).
+--     * @scripts\/lib\/data_codec.lua@'s canonical (sorted-key) encoding
+--       makes two independently-produced encodings of the SAME logical
+--       Lua state byte-identical, so the raw @lua.\<module\>@ payload
+--       bytes are as strong a comparison with no decode step and no live
+--       Lua VM at all.
+--
+--   Both halves are checked, and both are reported separately: a
+--   snapshot that matches while a Lua component's bytes do not is a
+--   different defect from the reverse, and collapsing them into one
+--   \"differs\" answer would hide which.
+--
+--   Every path is compared against the FIRST, which is what makes the
+--   report able to name the generation that first diverged. Pairwise
+--   equality against one reference is transitive equality across the
+--   whole set: if every later file equals the first, they equal each
+--   other.
+runCompare ∷ [String] → IO ()
+runCompare args = do
+    (outputPath, fixturePaths) ← orUsageFailure (requireFlag "--output" args)
+    when (length fixturePaths < 2)
+         (orUsageFailure (Left ("compare requires at least two fixtures, got "
+                                ⧺ show (length fixturePaths))))
+    decoded ← mapM decodeOne fixturePaths
+    case [ (p, e) | (p, Left e) ← decoded ] of
+        errs@(_ : _) → do
+            writeCompareReport outputPath (Aeson.object
+                [ "outcome" .= ("decode_failed" ∷ Text)
+                , "decodeErrors" .= [ Aeson.object [ "path" .= T.pack p
+                                                   , "error" .= T.pack e ]
+                                    | (p, e) ← errs ] ])
+            putStrLn ("DECODE_FAILED: " ⧺ show errs)
+            exitFailure
+        [] → do
+            let compared = [ (p, v) | (p, Right v) ← decoded ]
+            case compared of
+                [] → usageFailure ["compare"]
+                ((refPath, refValue) : rest) → do
+                    let snapDiffs = [ p | (p, v) ← rest
+                                        , comparedSnapshot v
+                                            ≢ comparedSnapshot refValue ]
+                        luaDiffs  = [ p | (p, v) ← rest
+                                        , comparedLua v ≢ comparedLua refValue ]
+                        report outcome = Aeson.object
+                            [ "outcome" .= (outcome ∷ Text)
+                            , "reference" .= T.pack refPath
+                            , "snapshotDiffers" .= map T.pack snapDiffs
+                            , "luaComponentDiffers" .= map T.pack luaDiffs ]
+                    if null snapDiffs ∧ null luaDiffs
+                      then do
+                        writeCompareReport outputPath (report "ok")
+                        putStrLn "COMPARE_OK"
+                      else do
+                        writeCompareReport outputPath (report "mismatch")
+                        putStrLn ("COMPARE_MISMATCH: snapshot-differs="
+                                  ⧺ show snapDiffs
+                                  ⧺ " lua-component-differs=" ⧺ show luaDiffs)
+                        exitFailure
+
+-- | The two halves one save contributes to the comparison: its decoded
+--   session snapshot, and every live @lua.\<module\>@ component's raw
+--   payload bytes keyed by component id.
+data ComparedSave = ComparedSave
+    { comparedSnapshot ∷ SessionSnapshot
+    , comparedLua      ∷ HM.HashMap Text BS.ByteString
+    }
+
+-- | Decode one save, reporting an unreadable FILE the same way an
+--   undecodable one is reported.
+--
+--   @BS.readFile@ throws, and @compare@'s inputs are paths a probe
+--   produced rather than tracked fixtures: a generation that was never
+--   written, or was cleaned up early, is a plausible thing to be handed.
+--   Letting that escape would end the program with an uncaught
+--   @IOException@ and no marker at all, which the Python side can only
+--   classify as "the toolchain broke" — when what actually happened is
+--   a named save this run could not read, which is exactly what
+--   @DECODE_FAILED@ is for.
+decodeOne ∷ FilePath → IO (FilePath, Either String ComparedSave)
+decodeOne path = do
+    readResult ← try (BS.readFile path)
+    pure $ case readResult of
+        Left e → (path, Left ("read: " ⧺ show (e ∷ IOException)))
+        Right bytes → case decodeSessionEnvelope luaComponentNames
+                                                 luaComponentNames bytes of
+            Left err → (path, Left (T.unpack err))
+            Right (_, snap, comps, _) → (path, Right (ComparedSave snap
+                (HM.fromList [ (lcsId c, lcsPayload c) | c ← comps ])))
+
+-- | Write the machine-readable comparison report.
+--
+--   Written for EVERY outcome, including the two that exit non-zero:
+--   the caller's whole reason for asking is to learn which generation
+--   diverged, and a report withheld on the failing path would leave it
+--   with nothing but the stdout line to parse.
+writeCompareReport ∷ FilePath → Aeson.Value → IO ()
+writeCompareReport outputPath = BSL.writeFile outputPath ∘ Aeson.encode

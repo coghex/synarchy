@@ -6,19 +6,28 @@ resources (#1322, #1444): the two declaration tables, the in-process
 `ResourceLedger`, the cross-process interest calculation and holds taken
 through `tools/probe_resource_lock.py` (#1436), the ancestor holds a
 nested runner inherits through the environment (#1570), the repository
-namespace those holds are keyed by, and the single engine-executable
-preflight that resolves the binary every probe execs.
+namespace those holds are keyed by, and the preflights that resolve, once
+per run, every binary a probe execs — the engine, and since #2274 the
+compiled save codec.
 
-Dependencies (#2074 requirement 11): `probe_engine` and
-`probe_resource_lock`, plus the registry owner's declarations when a
-future resource rule needs them. Nothing here imports the lifecycle, the
-scheduler, or the runner command.
+Dependencies (#2074 requirement 11): `probe_engine`,
+`probe_resource_lock` and — for the codec target and handoff NAMES it
+owns, nothing more — `save_compat_audit_codec`, plus the registry
+owner's declarations when a future resource rule needs them. Nothing
+here imports the lifecycle, the scheduler, or the runner command.
 
 `ENGINE_EXECUTABLE` lives here because this owner resolves it: the
 preflight below fills it in, and `probe_runner_lifecycle.run_one` reads
 THIS cell at call time to hand the child its `probe_engine.ENV_ENGINE_EXE`
 (#2074 requirement 14). There is exactly one such cell, and
 `tools/deflake.py` writes it here for the de-flake lab's own runs.
+
+`CODEC_EXECUTABLE` is its twin (#2274), for the compiled
+`exe:synarchy-save-codec` the persistence probes decode saves through.
+Same owner, same one-cell rule, same handoff shape — a second cell
+rather than a second mechanism, because the two binaries are resolved
+from different Cabal targets and a probe may legitimately need either,
+both, or neither.
 
 `REPO_ROOT` is deliberately NOT redefined here: `probe_engine.REPO_ROOT`
 is the one authoritative cell every owner reads at call time, so a test
@@ -30,6 +39,7 @@ import os
 
 import probe_engine
 import probe_resource_lock
+import save_compat_audit_codec
 
 # ---------------------------------------------------------------------------
 # Shared repository-relative resources: the reader/writer conflict model
@@ -84,32 +94,44 @@ import probe_resource_lock
 # reading costs the undeclared probes nothing.
 #
 # `cabal-build` is this checkout's shared Cabal build state — the one
-# `dist-newstyle` every probe's engine comes out of (#1570). Since the
-# preflight below resolves the executable once and every probe execs that
-# binary, an ordinary probe only READS it, which is the shared interest.
-# Three registered probes still drive Cabal themselves, and they are the
-# reason the resource exists — but for two different reasons since #2273,
-# and conflating them is how this comment goes stale again:
+# `dist-newstyle` every probe's binaries come out of (#1570). The
+# preflight below resolves BOTH of them once — `exe:synarchy` and, since
+# #2274, the compiled `exe:synarchy-save-codec` — and every probe execs
+# what it was handed, so an ordinary probe only READS the build state,
+# which is the shared interest.
 #
-#   * `persistence_contract` and `persistence_contract_sweep` run
-#     `cabal repl test:synarchy-test-headless` through
-#     `persistence_snapshot.compare_session_files`. A `cabal repl`
-#     recompiles into the same inplace package database whose concurrent
-#     mutation is the defect. Converting that repl, and with it the
-#     `behavior-probes` job's test-suite build, is the declared follow-up
-#     to #2273.
-#   * `save_compat_migration` reaches no repl at all. It calls
-#     `save_compat_audit.dump_canonical_summary`, which since #2273 execs
-#     the compiled `exe:synarchy-save-codec` — but resolving that helper
-#     freshness-builds it (`save_compat_audit_codec.resolve_codec_exe`),
-#     because the runner preflight builds `exe:synarchy` and nothing else
-#     (#1570). A `cabal build` writes the same package database a `cabal
-#     repl` does, so the interest is identical even though the command is
-#     not.
+# `persistence_contract` was an exclusive holder until #2274 and is no
+# longer one. It held the resource because
+# `persistence_snapshot.compare_session_files` ran `cabal repl
+# test:synarchy-test-headless`, and a `cabal repl` recompiles into the
+# same inplace package database whose concurrent mutation is the defect.
+# That comparison is now `app-save-codec/Main.hs`'s `compare` operation,
+# execed through the preflight-resolved helper, so the probe drives no
+# Cabal command at all and runs beside the rest of a `--jobs 2` sweep
+# instead of alone after it.
 #
-# Each therefore takes `cabal-build` EXCLUSIVELY: two of them cannot
-# overlap each other, and neither overlaps a probe reading the binary they
-# may be relinking.
+# Two registered probes still take it EXCLUSIVELY, for two different
+# reasons; conflating them is how this comment goes stale again:
+#
+#   * `save_compat_migration` calls
+#     `save_compat_audit.dump_canonical_summary`. Under the aggregate
+#     runner that execs the handed-down helper like any other probe, but
+#     the probe is also documented as directly runnable, where
+#     `save_compat_audit_codec.resolve_codec_exe` freshness-builds the
+#     helper itself. A `cabal build` writes the same package database a
+#     `cabal repl` does, so the interest is real on that path.
+#   * `persistence_contract_sweep` RETAINS the hold although its own
+#     Cabal contact is gone with the repl, and requirement 3 of #2274
+#     asks for the reason to be recorded here. The sweep is a probe that
+#     runs a NESTED `tools/run_probes.py`, and its default nested
+#     selection includes `save_compat_migration` — an exclusive holder.
+#     `descendant_hold_env` below exports only what an ancestor holds
+#     EXCLUSIVELY, so a sweep holding `cabal-build` merely shared would
+#     hand its nested runner nothing to inherit; that runner would then
+#     request the resource exclusively for its `save_compat_migration`
+#     child and wait forever on its own ancestor's shared hold. The
+#     sweep is manual-only and long, so it loses nothing by staying
+#     exclusive, and it stops being self-blocking by construction.
 #: The shared Cabal build state, named once so the preflight below, the
 #: two declaration tables, and the direct path's own preparation (#1913)
 #: cannot drift apart. The name is `probe_engine`'s, because that module
@@ -121,7 +143,6 @@ IMPLICIT_SHARED_RESOURCES: tuple[str, ...] = ("repo-config", BUILD_RESOURCE)
 EXCLUSIVE_RESOURCES: dict[str, tuple[str, ...]] = {
     "config_migration": ("repo-config",),
     "config_state": ("repo-config",),
-    "persistence_contract": (BUILD_RESOURCE,),
     "persistence_contract_sweep": (BUILD_RESOURCE,),
     "save_compat_migration": (BUILD_RESOURCE,),
 }
@@ -296,6 +317,7 @@ ENV_HELD_NAMESPACE = "SYNARCHY_PROBE_HELD_NAMESPACE"
 #: own four. A nested runner re-derives each of them, so nothing is
 #: lost by dropping a value the parent set.
 RUNNER_ENV_VARS: tuple[str, ...] = (probe_engine.ENV_ENGINE_EXE,
+                                    save_compat_audit_codec.ENV_CODEC_EXE,
                                     ENV_HELD_EXCLUSIVE,
                                     ENV_HELD_NAMESPACE)
 
@@ -341,17 +363,25 @@ def cross_process_interests(key: str, namespace: str | None,
 
 
 # ---------------------------------------------------------------------------
-# The engine executable: resolved ONCE per run (#1570)
+# The binaries a probe execs: resolved ONCE per run (#1570, #2274)
 #
 # Overridable only so `tools/test_run_probes.py` can drive the preflight
 # with a deterministic subprocess double instead of a real toolchain.
-# Production leaves it None and `tools/run_probes.py`'s preflight fills it
-# in.
+# Production leaves them None and `tools/run_probes.py`'s preflight fills
+# them in.
 ENGINE_EXECUTABLE: str | None = None
 
-#: The subprocess entry point `engine_preflight` resolves through. Tests
-#: substitute a recording double; production leaves it None, which is
-#: `subprocess.run`.
+#: The compiled save codec (`exe:synarchy-save-codec`) the persistence
+#: probes decode through since #2274. Resolved by the same preflight, in
+#: the same hold, handed down the same way — but a SEPARATE cell,
+#: because it is a separate Cabal target and a probe may need either
+#: binary, both, or neither.
+CODEC_EXECUTABLE: str | None = None
+
+#: The subprocess entry point `engine_preflight` and `codec_preflight`
+#: resolve through. Tests substitute a recording double; production
+#: leaves it None, which is `subprocess.run`. ONE seam for both, because
+#: they are one preflight phase making one kind of Cabal contact.
 ENGINE_PREFLIGHT_RUNNER = None
 
 
@@ -360,13 +390,19 @@ def preflight_hold(namespace, *, announce=None, environ=None):
     """Hold the shared Cabal build state EXCLUSIVELY across the preflight.
 
     The preflight is itself a Cabal WRITER — one `cabal build` into the
-    same `dist-newstyle` every probe's engine comes out of — so resolving
-    the executable outside the exclusion would leave exactly the race
-    this issue is about, one level up: two aggregate runs preflighting at
-    once, or one runner's build landing inside another runner's
-    `persistence_contract` repl or `save_compat_migration` helper build.
-    Nothing
+    same `dist-newstyle` every probe's binaries come out of — so
+    resolving an executable outside the exclusion would leave exactly the
+    race this issue is about, one level up: two aggregate runs
+    preflighting at once, or one runner's build landing inside another
+    runner's `save_compat_migration` helper build. Nothing
     inside a single run can see that; only the cross-process lock can.
+
+    Taken once per preflight TARGET (#2274), which is two short
+    acquisitions rather than one long one. Both still finish before any
+    probe is dispatched, and a foreign writer slipping between them can
+    only rebuild what this run has already located — which is the same
+    staleness window a second runner's build has always had, and is what
+    the exclusive hold on each build closes.
 
     Held for the build alone and released before any probe is dispatched,
     so the sweep's own probes are never queued behind it. `namespace` of
@@ -392,7 +428,8 @@ def preflight_hold(namespace, *, announce=None, environ=None):
 
 
 def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
-    """The one Cabal contact an aggregate run makes, before any probe.
+    """The engine half of the Cabal contact an aggregate run makes,
+    before any probe.
 
     Adopts an executable an ANCESTOR already resolved when there is one —
     that is how `persistence_contract_sweep`'s nested runner reaches its
@@ -405,9 +442,41 @@ def engine_preflight(namespace=None, environ=None, *, announce=None) -> str:
     a probe is spawned, a retry allocated, or any probe assertion
     attributed to it.
     """
-    inherited = probe_engine.runner_executable(environ)
+    return _preflight(probe_engine.ENGINE_TARGET, probe_engine.ENV_ENGINE_EXE,
+                      namespace, environ, announce)
+
+
+def codec_preflight(namespace=None, environ=None, *, announce=None) -> str:
+    """The same, for the compiled save codec (#2274).
+
+    `exe:synarchy-save-codec` is what `persistence_contract` decodes its
+    four generations through, and what `save_compat_migration` and the
+    sweep dump canonical summaries through. Resolving it HERE — once, for
+    the whole run, before any probe exists — is what lets
+    `persistence_contract` stop holding `cabal-build` exclusively: a
+    probe that execs a handed-down binary is a reader of the build
+    state, not a writer of it.
+
+    Resolved for EVERY selected probe rather than only the ones known to
+    need it, and that is deliberate. The alternative is a second list of
+    which probes reach the codec, kept in sync with the probes by hand,
+    where a probe that GAINS a decode silently falls back to building the
+    helper itself — inside a merely shared hold, which is #1570's defect.
+    On a warm tree the extra contact is a plan check that compiles
+    nothing; the runner already pays exactly this for the engine.
+    """
+    return _preflight(save_compat_audit_codec.CODEC_TARGET,
+                      save_compat_audit_codec.ENV_CODEC_EXE,
+                      namespace, environ, announce)
+
+
+def _preflight(target: str, env_var: str, namespace, environ,
+               announce) -> str:
+    """Resolve ONE preflight target: adopt an ancestor's, or build it."""
+    inherited = probe_engine.runner_executable(environ, env_var)
     if inherited is not None:
         return inherited
     with preflight_hold(namespace, announce=announce, environ=environ):
         return probe_engine.resolve_executable(
-            probe_engine.REPO_ROOT, run=ENGINE_PREFLIGHT_RUNNER)
+            probe_engine.REPO_ROOT, run=ENGINE_PREFLIGHT_RUNNER,
+            target=target)

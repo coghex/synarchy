@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""The real-codec bridge for the save-compatibility tool (issue #2049,
-requirement 7; converted from GHCi to a compiled helper by issue #2273).
+"""The real-codec bridge for the save tooling (issue #2049,
+requirement 7; converted from GHCi to a compiled helper by issue #2273,
+extended to the persistence-contract comparison by #2274).
 
 A LEAF service (requirement 15): the ONE owner of every real-codec
-operation this tool performs, and of the subprocess protocol behind
-them. It imports only the shared definitions owner.
+operation the Python save tooling performs, and of the subprocess
+protocol behind them. It imports only the shared definitions owner.
 
-It owns the three operations, and the one binary that serves them:
+It owns the four operations, and the one binary that serves them:
 
   - fixed-timestamp rewriting (`set_fixture_timestamp`, and its
     in-place `normalize_fixture_timestamp` form);
   - decoded fixture-descriptor dumping (`dump_fixture_descriptors`);
-  - canonical-summary dumping (`dump_canonical_summary`).
+  - canonical-summary dumping (`dump_canonical_summary`);
+  - structural session comparison (`compare_session_snapshots`).
 
 Everything else CALLS these; nothing else re-implements one
 (requirement 16). In particular save_compat_audit_manifest's
@@ -19,10 +21,14 @@ Everything else CALLS these; nothing else re-implements one
 manifest violations -- is the manifest audit's, not this module's: it
 takes a manifest dict and emits violation strings, so it belongs with
 the audit that aggregates them, and it reaches the real bytes only
-through `dump_fixture_descriptors` here.
+through `dump_fixture_descriptors` here. The same division puts
+`tools/persistence_snapshot.py`'s diagnostic diff there rather than
+here: this module answers "are these saves identical, and if not which
+one diverged", and that module turns the answer into a probe's failure
+text.
 
-Issue #2273: no operation here starts GHCi
---------------------------------------------
+Issues #2273/#2274: no operation here starts GHCi
+--------------------------------------------------
 Until #2273 each operation was a GHCi program fed to
 `cabal repl test:synarchy-test-headless` on stdin, so every call loaded
 the 348-module test suite into the interpreter to reach a handful of
@@ -30,7 +36,7 @@ LIBRARY functions -- 91-133 s for the save-compatibility audit and
 64-88 s for the fixture-reproducibility member on the CI critical path,
 for work that is a few decodes.
 
-Those three programs are now `app-save-codec/Main.hs`, a compiled
+Those programs are now `app-save-codec/Main.hs`, a compiled
 `exe:synarchy-save-codec` that `cabal build all` produces beside the
 engine, and every operation below execs that binary. It decodes and
 re-encodes through the SAME library functions the GHCi programs
@@ -39,15 +45,29 @@ imported -- `World.Save.Envelope.decodeSessionEnvelope`,
 so this is a change of how the real codec is REACHED, never a second
 decoder.
 
+`compare_session_snapshots` is the fourth and last member of that
+family (#2274). `tools/persistence_snapshot.py` kept its own `cabal
+repl` after #2273, which is the entire reason the `persistence_contract`
+probe had to hold the shared Cabal build state EXCLUSIVELY and the
+`behavior-probes` CI job had to build `synarchy-test-headless` at all.
+Moving it here leaves no Python surface in this repository that starts
+GHCi to reach the save codec.
+
 Requirement 8's operational shape is preserved across that conversion:
 each operation keeps its own success marker (`NORMALIZE_OK` /
-`DESCRIPTOR_DUMP_OK` / `DUMP_OK`), a 60-line diagnostic tail on failure,
-and guaranteed temporary-file cleanup. These are still NOT
-interchangeable with save_compat_audit_register's
+`DESCRIPTOR_DUMP_OK` / `DUMP_OK` / `COMPARE_OK`), a 60-line diagnostic
+tail on failure, and guaranteed temporary-file cleanup. These are still
+NOT interchangeable with save_compat_audit_register's
 `_run_real_codec_validation`, which is a different invocation entirely
 (`cabal test synarchy-test-headless --test-options=--match "save
 migrations"`, judged by its return code, 40-line tail) and stays with
 the registration owner it validates for.
+
+`compare_session_snapshots` is the one operation whose non-`OK` outcomes
+are ANSWERS rather than malfunctions, so it does not go through
+`_run_codec`: "these saves differ" and "one of them will not decode" are
+results the caller must be able to tell apart from "the helper broke",
+and a bare (ok, tail) pair cannot express three outcomes.
 
 Resolving the binary (requirement 6)
 ------------------------------------
@@ -77,14 +97,23 @@ Resolving the binary (requirement 6)
      resolves `exe:synarchy` with exactly this shape, and for exactly
      this reason (#1570).
 
-     It is what lets the three probes that reach this module WITHOUT a
-     preceding `cabal build all` keep working -- `persistence_contract`,
-     `persistence_contract_sweep` and `save_compat_migration`, whose
-     runner preflight builds `exe:synarchy` and nothing else. All three
-     already hold the `cabal-build` resource EXCLUSIVELY
-     (`tools/probe_runner_resources.py`), because they drive Cabal
-     themselves, so this build sits inside a hold that already exists
-     rather than being a new concurrent mutation of `dist-newstyle`.
+     Since #2274 branch 1 is what the AGGREGATE probe runner takes:
+     `tools/run_probes.py`'s preflight resolves this helper beside
+     `exe:synarchy` and hands both to every probe it launches, so no
+     probe process reaches branch 2 at all. That handoff is what let
+     `persistence_contract` stop holding `cabal-build` EXCLUSIVELY, and
+     it is why branch 2 must never be a silent fallback for a probe the
+     runner launched: a build there would be a concurrent mutation of
+     `dist-newstyle` under a merely SHARED hold, which is #1570's defect
+     exactly.
+
+     Branch 2 therefore serves the DIRECT, hand-run path only. The
+     persistence probes prepare this helper up front, before they boot
+     anything, the same way `probe_engine.prepare_executable` prepares
+     the engine (#1913) -- inside an EXCLUSIVE `cabal-build` hold, and
+     outside the clock that times probe work. `save_compat_migration`
+     still declares `cabal-build` exclusively, so its own reach into
+     this module is inside a hold either way.
 
      On a tree where `cabal build all` has already run -- CI, `make ci`,
      and any ordinary local invocation -- the build is a plan check that
@@ -195,6 +224,35 @@ def _list_bin() -> tuple[str | None, str]:
     return lines[-1], ""
 
 
+def _invoke_codec(args: list[str]) -> tuple[int | None, str, str]:
+    """Exec one codec-helper operation, without judging its outcome.
+
+    Returns (returncode, combined output, launch diagnostic). A
+    returncode of None means the helper never ran -- it could not be
+    resolved, was not there, or overran `CODEC_TIMEOUT_SECONDS` -- and
+    the third member then says which; every caller has to report that as
+    something other than an answer about the fixtures.
+
+    Split out of `_run_codec` (#2274) because `compare_session_snapshots`
+    needs the raw status and output: its non-zero exits are legitimate
+    ANSWERS, not malfunctions, and a helper that never launched has to
+    stay distinguishable from one that reported a mismatch.
+    """
+    exe, why = resolve_codec_exe()
+    if exe is None:
+        return None, "", why
+    try:
+        proc = subprocess.run(
+            [exe, *args], cwd=common.REPO_ROOT, capture_output=True,
+            text=True, timeout=CODEC_TIMEOUT_SECONDS)
+    except FileNotFoundError:
+        return None, "", f"{exe} was not found -- run `cabal build all` first"
+    except subprocess.TimeoutExpired:
+        return None, "", (f"{Path(exe).name} {args[0]} exceeded "
+                          f"{CODEC_TIMEOUT_SECONDS}s")
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or ""), ""
+
+
 def _run_codec(args: list[str], marker: str) -> tuple[bool, str]:
     """Run one codec-helper operation, judging it by BOTH its exit status
     and its own success marker.
@@ -204,20 +262,10 @@ def _run_codec(args: list[str], marker: str) -> tuple[bool, str]:
     path in `app-save-codec/Main.hs` names the offending fixture and the
     production codec's own error text (issue #2273 requirement 5).
     """
-    exe, why = resolve_codec_exe()
-    if exe is None:
+    returncode, output, why = _invoke_codec(args)
+    if returncode is None:
         return False, why
-    try:
-        proc = subprocess.run(
-            [exe, *args], cwd=common.REPO_ROOT, capture_output=True,
-            text=True, timeout=CODEC_TIMEOUT_SECONDS)
-    except FileNotFoundError:
-        return False, f"{exe} was not found -- run `cabal build all` first"
-    except subprocess.TimeoutExpired:
-        return False, (f"{Path(exe).name} {args[0]} exceeded "
-                       f"{CODEC_TIMEOUT_SECONDS}s")
-    output = (proc.stdout or "") + (proc.stderr or "")
-    if proc.returncode != 0 or marker not in output:
+    if returncode != 0 or marker not in output:
         return False, "\n".join(output.splitlines()[-60:])
     return True, ""
 
@@ -360,3 +408,183 @@ def dump_canonical_summary(fixture_path: Path, output_path: Path) -> tuple[bool,
     finally:
         if staged is not None:
             staged.unlink(missing_ok=True)
+
+
+#: `compare_session_snapshots`'s three fixture-describing outcomes, plus
+#: the one that describes THIS bridge instead. Named so a caller branches
+#: on a constant rather than on a string literal it has to keep in sync
+#: with the helper's stdout markers.
+COMPARE_OK = "ok"
+COMPARE_MISMATCH = "mismatch"
+COMPARE_DECODE_FAILED = "decode_failed"
+COMPARE_ERROR = "error"
+
+#: The `compare` protocol: for each fixture-describing outcome, the
+#: stdout marker that names it and the exit status that must accompany
+#: it.
+#:
+#: THREE independent signals have to agree before an outcome is
+#: believed -- exactly one protocol line, the EXACT exit status that
+#: line carries, and the report's own `outcome` field -- and none of
+#: them alone is the answer. Each is checked for the value the protocol
+#: assigns it, never for a weaker property that happens to hold: "one
+#: distinct outcome" is not "one line", and "nonzero" is not "1".
+#:
+#: The reason is that the marker travels beside attacker-shaped data.
+#: `DECODE_FAILED`'s line carries the offending PATH, and a save file
+#: whose own name contains `COMPARE_OK` is a perfectly ordinary path for
+#: a probe to hand this: a substring scan over the combined output would
+#: then read a decode failure as success and let
+#: `compare_session_files` pass on saves it never compared. The marker
+#: is therefore matched as a whole LINE (a `show`-escaped Haskell string
+#: can never contain a real newline, so no path can forge one), and the
+#: exit status and the report are cross-checked against it, so forging
+#: an outcome would take three simultaneous lies rather than one
+#: filename.
+_COMPARE_PROTOCOL = (
+    ("COMPARE_OK", COMPARE_OK, 0),
+    ("COMPARE_MISMATCH", COMPARE_MISMATCH, 1),
+    ("DECODE_FAILED", COMPARE_DECODE_FAILED, 1),
+)
+
+
+def _compare_protocol_lines(output: str) -> list[tuple[str, str, int, str]]:
+    """Every `compare` protocol LINE in `output`, in order.
+
+    A protocol line is one whose first field -- the text before the
+    first `:`, stripped -- EQUALS one of the three markers. Two
+    properties follow, and both are load-bearing:
+
+      * a marker appearing anywhere else on the line is not a marker.
+        `DECODE_FAILED`'s line carries the offending fixture path, and a
+        save named `gen2-COMPARE_OK.synworld` is an ordinary thing for a
+        probe to hand this;
+      * a marker-SHAPED token is not one either, because the head is
+        compared for equality rather than by prefix, so
+        `NOT_COMPARE_OK` and `COMPARE_OKAY` both fail to match.
+
+    A Haskell `show`-escaped string can never contain a real newline, so
+    no fixture path can split itself across lines to forge a head.
+    """
+    found = []
+    for line in output.splitlines():
+        head = line.split(":", 1)[0].strip()
+        for marker, outcome, status in _COMPARE_PROTOCOL:
+            if head == marker:
+                found.append((marker, outcome, status, line.strip()))
+                break
+    return found
+
+
+def compare_session_snapshots(
+        paths: list[Path]) -> tuple[str, dict | None, str]:
+    """Decode every path and report whether all are structurally equal.
+
+    The canonical persistence-state comparison (#767 requirement 1),
+    reached through the compiled helper since #2274. Every file is
+    compared against the FIRST on both halves the contract names: the
+    decoded `SessionSnapshot` (derived `Eq`) and every `lua.<module>`
+    component's raw canonical payload bytes.
+
+    Returns `(outcome, report, diagnostic)`:
+
+      * `COMPARE_OK` -- every file matched. `report` names the reference
+        and two empty difference lists; `diagnostic` is empty.
+      * `COMPARE_MISMATCH` -- at least one file differed. `report`'s
+        `snapshotDiffers` and `luaComponentDiffers` name WHICH, in the
+        order given, so a caller can diff the reference against the file
+        that first diverged rather than against whichever file happened
+        to be second.
+      * `COMPARE_DECODE_FAILED` -- at least one file would not decode.
+        `report`'s `decodeErrors` pairs each path with the production
+        codec's own error text.
+      * `COMPARE_ERROR` -- the helper could not be resolved, could not be
+        run, overran its allowance, or answered in a way this bridge
+        will not believe: no protocol line, more than one (whether or
+        not they agree), an exit status other than the exact one that
+        line carries, or a report that is missing,
+        unreadable, or names a different outcome. `report` is None and
+        `diagnostic` says which. This is
+        a statement about the toolchain, never about the saves.
+
+    Fewer than two paths is `COMPARE_OK` with no subprocess at all: a
+    single save is trivially equal to itself, and the helper refuses the
+    call as a usage error rather than answering it.
+    """
+    if len(paths) < 2:
+        return COMPARE_OK, {"outcome": COMPARE_OK,
+                            "reference": str(paths[0]) if paths else None,
+                            "snapshotDiffers": [],
+                            "luaComponentDiffers": []}, ""
+    with tempfile.NamedTemporaryFile(
+            suffix=".json", dir=common.REPO_ROOT, delete=False) as tf:
+        report_path = Path(tf.name)
+    try:
+        returncode, output, why = _invoke_codec(
+            ["compare", "--output", str(report_path)]
+            + [str(p) for p in paths])
+        if returncode is None:
+            return COMPARE_ERROR, None, why
+        tail = "\n".join(output.splitlines()[-60:])
+        markers = ", ".join(m for m, _, _ in _COMPARE_PROTOCOL)
+
+        lines = _compare_protocol_lines(output)
+        if not lines:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` exited {returncode} without "
+                f"a protocol line reporting any of {markers}:\n{tail}")
+        # EXACTLY one, not "one distinct outcome". A run that announced
+        # its verdict twice did something this bridge does not model --
+        # the helper emits one line per run and nothing retries it --
+        # and "they agreed, so it is fine" is the reasoning that let a
+        # marker-shaped path through in the first place. Two identical
+        # lines are as much a malfunction as two conflicting ones; only
+        # the diagnostic differs.
+        if len(lines) != 1:
+            outcomes = sorted({outcome for _m, outcome, _s, _l in lines})
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {len(lines)} "
+                f"protocol lines in one run"
+                + (f", naming conflicting outcomes ({', '.join(outcomes)})"
+                   if len(outcomes) > 1
+                   else f", all naming {outcomes[0]}")
+                + f":\n{tail}")
+        _marker, outcome, expected_status, line = lines[0]
+        # The EXACT status the protocol assigns that line, not merely a
+        # matching zero/nonzero sense. A mismatch that exited 2 is a
+        # helper that did something other than `exitFailure` after
+        # deciding -- an unhandled exception on the way out, say -- and
+        # reading it as an ordinary fixture mismatch reports a verdict
+        # this bridge has no reason to trust.
+        if returncode != expected_status:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but exited "
+                f"{returncode}; the protocol assigns that line exit status "
+                f"{expected_status}:\n{tail}")
+
+        # ABSENCE is not the test, for the reason `dump_fixture_descriptors`
+        # states: `NamedTemporaryFile(delete=False)` already created the
+        # path, so a helper that wrote nothing leaves an EMPTY file -- the
+        # condition to judge is whether it parses as the object the
+        # protocol promises. The report is REQUIRED, not a refinement: it
+        # is the third of the three signals that have to agree, and a
+        # verdict this bridge cannot corroborate is a toolchain problem to
+        # report as one rather than a claim about the saves to pass on.
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but wrote "
+                f"no readable report at {report_path}: {error}\n{tail}")
+        if not isinstance(report, dict):
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but wrote "
+                f"{type(report).__name__}, not the object the protocol "
+                f"promises:\n{tail}")
+        if report.get("outcome") != outcome:
+            return COMPARE_ERROR, None, (
+                f"the codec helper's `compare` reported {line!r} but its "
+                f"report names outcome {report.get('outcome')!r}:\n{tail}")
+        return outcome, report, ("" if outcome == COMPARE_OK else line)
+    finally:
+        report_path.unlink(missing_ok=True)
