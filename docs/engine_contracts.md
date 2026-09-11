@@ -4746,6 +4746,19 @@ refresh that dropped it would make the two presentations disagree about
 every cell the chunk has ever edited, not only the one this commit
 touched.
 
+Carrying the ice cell is not enough on its own, because the zoom
+generator has no ice branch: `World.ZoomMap.Cache.Pixels` derives a
+tile's colour from its material and VEGETATION id, and its `hasIce` flag
+only suppresses the fluid tint. Ice reaches the zoom pixels the one way
+`zoomChunkPass` puts it there — as a snow vegetation id. So an override
+for an iced cell recomputes that id with the shared
+`World.ZoomMap.Cache.ChunkPass.snowVegFor`, seeded exactly as the
+generating pass seeds it, instead of forwarding the live column's raw
+vegetation. `WeAddTile` writes vegetation 0, so forwarding it would
+repaint an edited icy tile as bare stone even while the override carried
+its `IceCell` faithfully — the ice would survive in the data and vanish
+from the picture.
+
 The regeneration's override set comes from the CHUNK'S OWN EDIT LOG, not
 from the delivery: the block is rebuilt from generation-time data, so
 overriding only the cells one commit touched would repaint every earlier

@@ -76,6 +76,7 @@ import World.Thread.Command.Reaction
     , reactionChunks, reactionEventTile, reactionIsFresh )
 import World.Thread.Command.Reaction.Zoom (atlasTileIndexFor)
 import World.Render.Zoom.Project (zoomTexelExtent, zoomTileScreenRect)
+import World.ZoomMap.Cache.ChunkPass (snowVegFor)
 import World.ZoomMap.Live
     (ZoomTileOverride(..), liveChunkZoom, liveTileOverrides, patchAtlasTile)
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
@@ -1157,7 +1158,7 @@ spec = describe "solidification (#2485)" $ do
                         HM.lookupDefault [] (lpLava lp) edits
                     , let (cc, (lx, ly)) = globalToChunk agx agy
                     , cc ≡ lpLava lp ]
-        sort (map ztoIndex (liveTileOverrides after cells))
+        sort (map ztoIndex (liveTileOverrides (wgpSeed params) after cells))
             `shouldSatisfy` \is → idxA `elem` is ∧ idxB `elem` is
 
         -- …and the atlas the page now holds agrees with the live chunk
@@ -1222,14 +1223,16 @@ spec = describe "solidification (#2485)" $ do
         (baked, _, _) ← readIORef (wsBakedZoomRef (lpState lp))
         V.null baked `shouldBe` True
 
-    it "keeps an edited cell's LIVE ice and vegetation when it \
-       \regenerates that chunk's zoom tile" $ \env → do
+    it "keeps an edited cell's ice in the REGENERATED PIXELS, not merely \
+       \in the override it carries" $ \env → do
         lp ← livePage env icePageId
         -- No world edit clears 'lcIceMap', so the detailed render goes
-        -- on showing whatever ice a cell has. The override set is the
-        -- whole edit LOG, so a refresh that cleared ice would strip it
-        -- from every cell the chunk has ever edited — and the two
-        -- presentations would then disagree about the same tile.
+        -- on showing whatever ice a cell has. Ice reaches the ZOOM
+        -- pixels only as snow VEGETATION — 'generateChunkPixels' has no
+        -- ice branch, and its hasIce flag only suppresses the fluid tint
+        -- — so a refresh that wrote the live column's raw vegetation
+        -- would repaint an edited icy tile as bare material even while
+        -- carrying its ice cell faithfully.
         let idx = columnIndex 4 4
             icy = IceCell 7 DrapeIce
         before ← chunkAt (lpState lp) (lpLava lp)
@@ -1242,21 +1245,47 @@ spec = describe "solidification (#2485)" $ do
 
         after ← chunkAt (lpState lp) (lpLava lp)
         basalt ← materialFor env SolidBasalt
+        params ← readIORef (wsGenParamsRef (lpState lp)) ⌦ maybe
+            (expectationFailure "page has no gen params" ≫ error "unreachable")
+            pure
+        registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
+        palette ← readIORef (wsZoomLiveRef (lpState lp)) ⌦ maybe
+            (expectationFailure "fixture: page has no zoom atlas"
+             ≫ error "unreachable") (pure . zlaPalette)
         edits ← readIORef (wsEditsRef (lpState lp))
         let cells = [ columnIndex lx ly
                     | WeAddTile agx agy _ ←
                         HM.lookupDefault [] (lpLava lp) edits
                     , let (cc, (lx, ly)) = globalToChunk agx agy
                     , cc ≡ lpLava lp ]
-        case find ((≡ idx) . ztoIndex) (liveTileOverrides after cells) of
+            seed = wgpSeed params
+        case find ((≡ idx) . ztoIndex) (liveTileOverrides seed after cells) of
             Nothing → expectationFailure
                 "the solidified cell is not among the live overrides"
             Just o  → do
                 ztoIce o `shouldBe` Just icy
                 ztoMaterial o `shouldBe` unMaterialId basalt
-                -- …and the vegetation comes from the live column too,
-                -- rather than from the pass's own ice-driven snow.
-                ztoVeg o `shouldBe` 0
+                -- The vegetation the tile is COLOURED through is the
+                -- snow id, not the fresh stone's zero.
+                ztoVeg o `shouldNotBe` 0
+                ztoVeg o `shouldBe`
+                    uncurry (snowVegFor seed) (chunkToGlobal (lpLava lp) 4 4)
+
+        -- …and it shows in the PIXELS: the same chunk regenerated with
+        -- the ice removed from the live map produces a different block.
+        -- Asserting only the override would pass even if nothing
+        -- downstream read it.
+        let iced = snd (liveChunkZoom params registry (Just palette)
+                                      (lpLava lp) after
+                                      (HM.lookupDefault [] (lpLava lp) edits))
+            bare = snd (liveChunkZoom params registry (Just palette)
+                            (lpLava lp)
+                            after { lcIceMap = lcIceMap after V.// [(idx, Nothing)] }
+                            (HM.lookupDefault [] (lpLava lp) edits))
+        case (iced, bare) of
+            (Just a, Just b) → a `shouldNotBe` b
+            _ → expectationFailure "a palette was supplied but no block \
+                                   \came back"
 
     it "skips a page that has no zoom map at all, and commits the stone \
        \anyway" $ \env → do
@@ -1532,7 +1561,10 @@ spec = describe "solidification (#2485)" $ do
                         HM.lookupDefault [] (lpLava lp) edits
                     , let (cc, (lx, ly)) = globalToChunk agx agy
                     , cc ≡ lpLava lp ]
-        case find ((≡ idx) . ztoIndex) (liveTileOverrides after cells) of
+        seed ← readIORef (wsGenParamsRef (lpState lp)) ⌦ maybe
+            (expectationFailure "page has no gen params" ≫ error "unreachable")
+            (pure . wgpSeed)
+        case find ((≡ idx) . ztoIndex) (liveTileOverrides seed after cells) of
             Nothing → expectationFailure
                 "the solidified cell is not among the live overrides"
             Just o  → do

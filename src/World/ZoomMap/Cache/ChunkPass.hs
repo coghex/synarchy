@@ -20,6 +20,7 @@
 --   demand.
 module World.ZoomMap.Cache.ChunkPass
     ( ZoomChunkPass(..)
+    , snowVegFor
     , zoomChunkPass
     , zoomChunkPixels
     , zoomChunkHaloNeighbours
@@ -221,13 +222,25 @@ zoomChunkPass params registry mBorderedCache coord@(ChunkCoord ccx ccy) =
     -- Inject snow veg on ice-covered tiles
     tileDataWithIce = zipWith (\idx' td →
         case chunkIceMap V.! idx' of
-            Just _ →
-                let (e, m, _, gx, gy) = td
-                    h = vegHash seed gx gy
-                    var = fromIntegral ((h `shiftR` 8) ⌃ 0x03) ∷ Word8
-                in (e, m, vegSnow + var, gx, gy)
+            Just _ → let (e, m, _, gx, gy) = td
+                     in (e, m, snowVegFor seed gx gy, gx, gy)
             Nothing → td
         ) [0 ∷ Int ..] tileData
+
+-- | The snow vegetation id an ICE-COVERED tile is coloured through.
+--
+--   'World.ZoomMap.Cache.Pixels.generateChunkPixels' has no ice branch of
+--   its own — its @hasIce@ flag only suppresses the fluid tint — so ice
+--   reaches the pixels ONLY as this vegetation id. Anything that
+--   rebuilds a tile's tuple therefore has to reproduce it, or an iced
+--   cell comes out as bare material: 'World.ZoomMap.Live' does exactly
+--   that for every cell a live edit overrode, which is why this is
+--   shared rather than inlined.
+snowVegFor ∷ Word64 → Int → Int → Word8
+snowVegFor seed gx gy =
+    let h   = vegHash seed gx gy
+        var = fromIntegral ((h `shiftR` 8) ⌃ 0x03) ∷ Word8
+    in vegSnow + var
 
 -- | Pass two for a single chunk: extend ocean across chunk boundaries
 --   using the neighbours' pass-one fluid maps, then render.

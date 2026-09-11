@@ -39,12 +39,12 @@ import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
 import World.Fluid.Types (FluidCell(..), IceCell(..))
 import World.Edit.Types (WorldEdit(..))
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (chunkToGlobal, globalToChunk)
 import World.Generate.Types (WorldGenParams(..))
 import World.Material (MaterialRegistry)
 import World.ZoomMap.Cache.Classify (majorityMaterial)
 import World.ZoomMap.Cache.ChunkPass
-    (ZoomChunkPass(..), zoomChunkPass, zoomChunkPixels
+    (ZoomChunkPass(..), snowVegFor, zoomChunkPass, zoomChunkPixels
     , zoomChunkHaloNeighbours)
 import World.ZoomMap.ColorPalette (ZoomColorPalette)
 import World.ZoomMap.Types (ZoomChunkEntry(..), zoomTileSize)
@@ -59,11 +59,11 @@ data ZoomTileOverride = ZoomTileOverride
     , ztoMaterial ∷ !Word8
       -- ^ The material at that top.
     , ztoVeg      ∷ !Word8
-      -- ^ …and its vegetation byte, read from the live column rather
-      --   than assumed: the pass injects SNOW vegetation on ice-covered
-      --   tiles, and an override that left the pass's value in place
-      --   would colour an edited cell by an ice decision the live chunk
-      --   may no longer agree with.
+      -- ^ …and the vegetation the tile is COLOURED through: the live
+      --   column's own byte, or the snow id an iced cell is drawn by.
+      --   Ice reaches the zoom pixels only as vegetation
+      --   ('World.ZoomMap.Cache.ChunkPass.snowVegFor'), so a raw live
+      --   byte would repaint an edited icy tile as bare material.
     , ztoFluid    ∷ !(Maybe FluidCell)
       -- ^ The live fluid cell. A solidified column has none, and the
       --   pass-one map would still show the lava the contact consumed.
@@ -119,12 +119,12 @@ zoomVisibleEditTile e = case e of
 --   A cell whose column cannot answer — an index out of range, or a
 --   terrain top outside its column — is left to the generated pass
 --   rather than guessed at.
-liveTileOverrides ∷ LoadedChunk → [Int] → [ZoomTileOverride]
-liveTileOverrides lc indices =
+liveTileOverrides ∷ Word64 → LoadedChunk → [Int] → [ZoomTileOverride]
+liveTileOverrides seed lc indices =
     [ ZoomTileOverride { ztoIndex    = i
                        , ztoElev     = liveElev
                        , ztoMaterial = ctMats col VU.! relZ
-                       , ztoVeg      = ctVeg  col VU.! relZ
+                       , ztoVeg      = liveVeg i (ctVeg col VU.! relZ)
                        , ztoFluid    = lcFluidMap lc V.! i
                        , ztoIce      = lcIceMap lc V.! i
                        }
@@ -135,6 +135,18 @@ liveTileOverrides lc indices =
     , let relZ = liveElev - ctStartZ col
     , relZ ≥ 0, relZ < VU.length (ctMats col)
     ]
+  where
+    -- An ICED cell is coloured through snow VEGETATION and nothing
+    -- else: 'generateChunkPixels' has no ice branch, and its @hasIce@
+    -- flag only suppresses the fluid tint. Carrying the ice cell alone
+    -- would therefore repaint an edited icy tile as bare material — a
+    -- fresh 'WeAddTile' writes vegetation 0 — while the detailed render,
+    -- which reads the same 'lcIceMap', goes on showing ice.
+    liveVeg i raw = case lcIceMap lc V.! i of
+        Just _  → snowVegFor seed gx gy
+        Nothing → raw
+      where (gx, gy) = chunkToGlobal (lcCoord lc)
+                           (i `mod` chunkSize) (i `div` chunkSize)
 
 -- | The local cells of @coord@ that this page's edit log has changed on
 --   the zoom map.
@@ -175,7 +187,7 @@ liveChunkZoom params registry mPalette coord lc edits =
 
     generated = zoomChunkPass params registry Nothing coord
     overridden = foldl' overrideOne generated
-        (liveTileOverrides lc (editedZoomCells coord edits))
+        (liveTileOverrides (wgpSeed params) lc (editedZoomCells coord edits))
 
     -- The same summary rule 'World.ZoomMap.Cache.ChunkPass' applies,
     -- re-run over the overridden tiles: beyond-glacier cells are left
