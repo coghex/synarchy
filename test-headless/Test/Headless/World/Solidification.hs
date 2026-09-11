@@ -522,6 +522,26 @@ pureSpec = describe "solidification (#2485)" $ do
             zoomTileScreenRect facing 2.0 0 0 0 0 0 0 8 0 0
                 `shouldBe` Nothing
 
+        it "answers with ONE rectangle for every u-alias of a tile, at \
+           \any number of wrap periods" $ do
+            -- A point query accepts any alias and answers about the tile
+            -- the page actually STORES (CLAUDE.md §Tile coordinates).
+            -- Leaving that to 'bestZoomWrapOffset' is not enough: it
+            -- tries one screen wrap in either direction, so it can carry
+            -- a ±1-period alias but sends anything further out to a
+            -- rectangle the map never drew. Two periods is the case that
+            -- distinguishes a canonicalizing implementation from one
+            -- that merely looks like it.
+            let period = 8 * chunkSize
+                canonical = rect 3 5
+            canonical `shouldSatisfy` isJust
+            forM_ [-3, -2, -1, 1, 2, 3 ∷ Int] $ \k → do
+                let aliased = rect (3 + k * period) (5 - k * period)
+                -- An alias preserves v = gx + gy, which is what makes
+                -- it the SAME tile rather than a different one.
+                ((3 + k * period) + (5 - k * period)) `shouldBe` (3 + 5)
+                aliased `shouldBe` canonical
+
     -- * Requirement 9: the atlas patch itself.
     describe "patching one chunk's tile into the zoom atlas" $ do
         let tilesPerRow = 2

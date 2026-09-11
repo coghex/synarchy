@@ -41,6 +41,7 @@ import Engine.Core.Log.Types (LogConfig(..), LogEntry(..), defaultLogConfig)
 import Location.Instance
     (LocationInstance(..), instancesToList)
 import World.River.Naming (RiverName(..), riverNamesToList)
+import qualified Data.ByteString as BS
 import Engine.Core.State (ZoomAtlasUpload(..))
 import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Types
@@ -530,11 +531,12 @@ spec = do
     describe "publishStagedSession invalidates in-flight preview uploads \
              \on EVERY publish, even one with no preview data at all \
              \(round 11 review, issue #763)" $
-        it "a staged session whose ssPreview is Nothing (the outcome of \
-           \World.Load.Stage's own isArenaParams branch) still bumps \
-           \worldPreviewGenerationRef -- a stale upload racing this \
-           \publish must never be able to see its own generation as \
-           \still current" $ \env →
+        it "a staged session whose ssPreview and ssZoomAtlas are both \
+           \Nothing (the outcome of World.Load.Stage's own isArenaParams \
+           \branch) still bumps worldPreviewGenerationRef AND clears the \
+           \zoom atlas queue -- a stale upload racing this publish must \
+           \never be able to see its own generation as still current, \
+           \nor survive into a session its target pages left" $ \env →
             let slotC = "id_spec_nopreview"
                 cleanup = do
                     removePathForcibly ("saves/" <> slotC)
@@ -569,12 +571,38 @@ spec = do
             -- test here) -- this isolates publishStagedSession's own
             -- unconditional-bump contract from staging's decision about
             -- when a preview exists at all.
-            let staged' = staged { ssPreview = Nothing }
+            let staged' = staged { ssPreview = Nothing
+                                 , ssZoomAtlas = Nothing }
 
             genBefore ← readIORef (worldPreviewGenerationRef env)
+
+            -- The zoom atlas queue is the same shape of trap and is
+            -- asserted in the same publish (#2485). Every pending upload
+            -- captured the exact 'WorldState's it belongs to at enqueue
+            -- time (#763), and this publish replaces the whole session —
+            -- so each of them names a page that is about to stop
+            -- existing. Clearing only where the INCOMING session has an
+            -- atlas of its own would leave the outgoing session's images
+            -- pending here, and the render thread would go on allocating
+            -- and publishing GPU textures into departed pages.
+            outgoing ← do
+                mgr ← readIORef (worldManagerRef env)
+                case lookup (WorldPageId "id_nopreview_w8") (wmWorlds mgr) of
+                    Nothing → expectationFailure
+                        "the page this publish is about to replace is \
+                        \not in the manager"
+                        ≫ error "unreachable"
+                    Just ws → pure ws
+            writeIORef (zoomAtlasDataRef env)
+                [ZoomAtlasUpload 4 4 (BS.replicate 64 0)
+                                 (WorldPageId "id_nopreview_w8") [outgoing]]
+
             publishStagedSession env logger 999999 staged'
+
             genAfter ← readIORef (worldPreviewGenerationRef env)
             genAfter `shouldSatisfy` (> genBefore)
+            readIORef (zoomAtlasDataRef env) ⌦ \pending →
+                map zauPage pending `shouldBe` []
 
     -- Runs LAST (issue #1670): another REAL publish, and the one that
     -- replaces the session for good.

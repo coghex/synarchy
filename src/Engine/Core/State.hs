@@ -252,11 +252,18 @@ data EngineEnv = EngineEnv
     --   would have left one image silently overwritten — the losing
     --   page keeping retained pixels its displayed texture no longer
     --   matches. A live refresh REPLACES any pending entry for its own
-    --   targets and appends otherwise, so a page cannot queue without
-    --   bound either. A world init or a load publish still REPLACES the
-    --   whole queue: both rebuild the page (or the entire session) the
-    --   pending images belonged to, so anything already queued is
-    --   superseded rather than merely older.
+    --   page and appends otherwise, so a page cannot queue without
+    --   bound either.
+    --
+    --   The two rebuild paths differ, because what they rebuild differs.
+    --   A world INIT rebuilds ONE page, so it supersedes only that
+    --   page's own pending image ('queueZoomAtlasUpload') and leaves
+    --   every other page's alone: a live refresh queued for a page this
+    --   init did not touch is not obsolete. A LOAD PUBLISH replaces the
+    --   entire session, so it clears the queue whole — unconditionally,
+    --   even for a session that carries no atlas of its own, since every
+    --   entry still pending names a page that is about to stop
+    --   existing.
   , screenshotRequestQueue ∷ Q.Queue ScreenshotRequest
     -- ^ Pending debug.captureScreenshot requests (#643). The Lua
     --   thread enqueues; the render thread drains one per frame in

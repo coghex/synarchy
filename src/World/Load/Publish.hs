@@ -158,6 +158,16 @@ publishStagedSession env logger requestId staged = do
     -- not left without one: it keeps wsZoomAtlasRef at Nothing until its
     -- own first live refresh publishes its own image. What this decides
     -- is which image is uploaded at LOAD, not which page may have one.
+    -- Cleared UNCONDITIONALLY, before and regardless of whether this
+    -- session has an atlas of its own to enqueue. Every pending upload
+    -- captured the exact 'WorldState's it belongs to (#763), and this
+    -- publish is a whole-session replacement, so each of them names a
+    -- page that no longer exists. A session staged through the arena
+    -- path carries no atlas at all ('ssZoomAtlas' is 'Nothing'), so
+    -- clearing only inside the 'Just' branch below would let the
+    -- OUTGOING session's images survive the load and go on allocating
+    -- and publishing GPU textures into departed pages.
+    writeIORef (zoomAtlasDataRef env) []
     forM_ (ssZoomAtlas staged) $ \(ownerPid, w, h, bytes) → do
         let atlasOwners = [ spWorldState p
                           | p ← ssPages staged, spPageId p ≡ ownerPid ]
@@ -167,9 +177,9 @@ publishStagedSession env logger requestId staged = do
             <> ", which is not among this session's staged pages -- \
                \publishing it with no target rather than attaching it \
                \to a page whose cache did not produce it"
-        -- Replaces the queue rather than appending: this publish is a
-        -- whole-session replacement, so any image still pending belongs
-        -- to pages that no longer exist (#2485's queue).
+        -- Replaces rather than appends, for the same reason the clear
+        -- above is unconditional: the queue holds only this session's
+        -- own image from here on.
         writeIORef (zoomAtlasDataRef env)
             [ZoomAtlasUpload w h bytes ownerPid atlasOwners]
     -- Bump the preview generation on EVERY publish,

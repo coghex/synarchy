@@ -26,7 +26,7 @@ import UPrelude
 import Engine.Graphics.Camera (CameraFacing(..))
 import Engine.Graphics.Viewport (viewportDegenerate)
 import World.Chunk.Types (ChunkCoord(..), chunkSize)
-import World.Generate.Coordinates (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
 import World.Grid (gridToWorld)
 import World.Render.Zoom.ViewBounds (bestZoomWrapOffset)
 import World.ZoomMap.Types (zoomTileSize, zoomTexelTile)
@@ -59,6 +59,10 @@ zoomTexelExtent lx ly
 --   The rectangle is where the tile's texels land, not where its terrain
 --   would be picked: a tile is roughly a 2x2 patch of a
 --   @zoomTileSize@-square block, so this is small by construction.
+--
+--   @(gx, gy)@ is canonicalized against @worldSize@ before anything is
+--   projected, so every u-alias of a tile — at any number of wrap
+--   periods — answers with the one rectangle the map drew it into.
 zoomTileScreenRect
     ∷ CameraFacing
     → Float             -- ^ zoom
@@ -83,7 +87,14 @@ zoomTileScreenRect facing zoom camX camY fbW fbH winW winH worldSize gx gy
             (px1, py1) = project wx1 wy1
         pure (px0, py0, px1 - px0, py1 - py0)
   where
-    (ChunkCoord ccx ccy, (lx, ly)) = globalToChunk gx gy
+    -- Canonicalized FIRST, against the same wrap the quads use. A
+    -- point query accepts any u-alias and answers about the tile the
+    -- page actually stores (CLAUDE.md §Tile coordinates), and a bare
+    -- 'globalToChunk' would leave that to 'bestZoomWrapOffset' — which
+    -- only ever tries ONE screen wrap in either direction, so an alias
+    -- two or more periods out would project to a rectangle the map
+    -- never drew rather than to the tile it did.
+    (ChunkCoord ccx ccy, (lx, ly), _) = canonicalTileFrame worldSize gx gy
     baseGX = ccx * chunkSize
     baseGY = ccy * chunkSize
 
