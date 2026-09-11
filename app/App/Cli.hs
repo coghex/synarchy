@@ -350,11 +350,13 @@ parsePreview (_:rest) = parsePreview rest
 data PreviewCategoryKind
     = SimplePreviewCategory
     | GroupedPreviewCategory
+    | AudioPreviewCategory
     | UnknownPreviewCategory
     deriving (Eq, Show)
 
 classifyPreviewCategory ∷ String → PreviewCategoryKind
 classifyPreviewCategory cat
+    | cat ≡ "audio"                       = AudioPreviewCategory
     | cat `elem` simplePreviewCategories  = SimplePreviewCategory
     | cat `elem` groupedPreviewCategories = GroupedPreviewCategory
     | otherwise                           = UnknownPreviewCategory

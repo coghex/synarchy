@@ -105,6 +105,19 @@ REQUIRED_FAMILIES: tuple[tuple[str, str], ...] = (
     ("cbits/*.h",
      "headers for the c-sources; sdist does not pick these up from "
      "include-dirs on its own"),
+    ("cbits/audio/*.h", "the public audio ABI and private C layouts"),
+    ("cbits/vendor/miniaudio/miniaudio.h", "the pinned decoder/device dependency"),
+    ("cbits/vendor/miniaudio/LICENSE", "the pinned dependency's redistribution license"),
+    ("cbits/vendor/miniaudio/provenance.json", "upstream tag and content checksums"),
+    ("BuildSupport/AudioDependencies.hs", "Setup's shared audio-header dependency hook"),
+    ("test-headless/cbits/*.c", "standalone native audio sanitizer tests"),
+    ("test-headless/cbits/*.h", "native audio test fixtures and assertions"),
+    ("tools/test_audio_native.py", "standalone native audio test build driver"),
+    ("tools/test_audio_build_dependencies.py", "shared-header build-hook regression driver"),
+    ("tools/generate_audio_fixtures.py", "mathematical sample-fixture reproducibility"),
+    ("test-headless/data/audio/README.md", "sample-fixture provenance and regeneration guide"),
+    ("docs/audio_authoring.md", "shipped examples parsed by the audio catalog test"),
+    ("docs/audio_runtime.md", "audio configuration and operator reference"),
     ("data/**/*.yaml",
      "game-data catalogues: materials, vegetation, flora, units, "
      "recipes, buildings, locations"),
@@ -126,8 +139,10 @@ REQUIRED_FAMILIES: tuple[tuple[str, str], ...] = (
      "the save-compatibility fixture envelopes Test.Headless.World.Save"
      ".Compat decodes"),
     ("test-headless/data/**/*.json",
-     "each save-compat fixture's expected canonical post-migration "
-     "state"),
+     "save-compat expected state and deterministic audio fixture provenance"),
+    ("test-headless/data/audio/*.wav", "lossless sample decoder and native upload fixtures"),
+    ("test-headless/data/audio/*.flac", "FLAC decode and budget fixtures"),
+    ("test-headless/data/audio/*.mp3", "MP3 one-shot decode fixture"),
     ("test-headless/data/**/*.txt",
      "Test.Headless.World.FloraOrder's golden and pre-canonical "
      "reference orderings"),
@@ -142,7 +157,8 @@ REQUIRED_FAMILIES: tuple[tuple[str, str], ...] = (
     ("config/*_default.yaml",
      "the versioned config templates a fresh install starts from"),
     ("config/pathing.yaml",
-     "the one shipped config that is tuning rather than a user default"),
+     "shipped pathing tuning rather than a player settings file"),
+    ("config/audio_runtime.yaml", "strict native runtime tuning and resource budgets"),
 )
 
 #: Entries that must never appear, however the manifest is written.
@@ -327,6 +343,23 @@ def sdist_listing(root: Path) -> set[str]:
 #: config exclusions, and nothing else.
 FIXTURE_TRACKED = {
     "cbits/lua_debug.h",
+    "cbits/audio/syn_audio.h",
+    "cbits/vendor/miniaudio/miniaudio.h",
+    "cbits/vendor/miniaudio/LICENSE",
+    "cbits/vendor/miniaudio/provenance.json",
+    "BuildSupport/AudioDependencies.hs",
+    "test-headless/cbits/audio_native_test.c",
+    "test-headless/cbits/audio_test_helpers.h",
+    "tools/test_audio_native.py",
+    "tools/test_audio_build_dependencies.py",
+    "tools/generate_audio_fixtures.py",
+    "test-headless/data/audio/README.md",
+    "docs/audio_authoring.md",
+    "docs/audio_runtime.md",
+    "test-headless/data/audio/tone.wav",
+    "test-headless/data/audio/tone.flac",
+    "test-headless/data/audio/tone.mp3",
+    "config/audio_runtime.yaml",
     "data/materials/glacial.yaml",
     "data/language/concept_id_baseline.json",
     "assets/textures/ui/blank.png",
@@ -414,6 +447,16 @@ def self_test() -> int:
                    f"{name}: report names '{needle}'")
 
     check("a complete listing", FIXTURE_LISTING, FIXTURE_TRACKED, clean=True)
+
+    for path in ("cbits/audio/syn_audio.h", "cbits/vendor/miniaudio/LICENSE",
+                 "BuildSupport/AudioDependencies.hs", "test-headless/data/audio/tone.wav",
+                 "test-headless/data/audio/tone.flac", "test-headless/data/audio/tone.mp3",
+                 "config/audio_runtime.yaml", "test-headless/cbits/audio_native_test.c",
+                 "test-headless/cbits/audio_test_helpers.h", "tools/test_audio_native.py",
+                 "tools/test_audio_build_dependencies.py", "tools/generate_audio_fixtures.py",
+                 "test-headless/data/audio/README.md", "docs/audio_authoring.md", "docs/audio_runtime.md"):
+        check("a missing audio build/runtime/fixture input", FIXTURE_LISTING - {path},
+              FIXTURE_TRACKED, clean=False, needle=path)
 
     check("a missing expected resource",
           FIXTURE_LISTING - {"assets/textures/units/tiller/atlas/index.json"},

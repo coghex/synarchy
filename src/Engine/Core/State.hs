@@ -30,6 +30,8 @@ import Engine.Core.Queue as Q
 import Engine.PlayerEvent (EventStore, NotificationCfg)
 import qualified Combat.Types
 import Engine.ActionOutcome (ActionOutcome)
+import Engine.Audio.Status (AudioStatusRef)
+import Engine.Audio.Transport (AudioTransport)
 import Engine.Scripting.Lua.Types
 import Engine.Graphics.Solar (SolarBase(..))
 import Engine.Graphics.Types
@@ -154,6 +156,10 @@ data EngineEnv = EngineEnv
   , loggerRef           ∷ IORef LoggerState
   , luaToEngineQueue    ∷ Q.Queue LuaToEngineMsg
   , luaQueue            ∷ Q.Queue LuaMsg
+  , audioTransport      ∷ AudioTransport
+    -- ^ Abstract STM transport; native resources belong only to AudioThread.
+  , audioStatusRef      ∷ AudioStatusRef
+    -- ^ Pointer-free telemetry, published by AudioThread.
   , lifecycleRef        ∷ IORef EngineLifecycle
   , assetPoolRef        ∷ IORef AssetPool
   , textureNameRegistryRef ∷ IORef TextureNameRegistry

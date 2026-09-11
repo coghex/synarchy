@@ -408,17 +408,21 @@ def test_real_repo_end_state():
            f"flip -- there is no legal path left for a production module "
            f"to take unrestricted access, got: {nonempty}")
 
-    # 3. SS6.2's documented table still carries all eight capability keys,
+    expect("audio-transport" in CAPABILITIES
+           and TEMPORARY_CEILING.get("audio-transport") == frozenset(),
+           "approved audio capability must exist with no temporary full access")
+
+    # 3. SS6.2's documented table still carries all current capability keys,
     #    each with an EMPTY module set. The keys matter as much as the
     #    emptiness: `audit_ratchet`'s doc/ceiling cross-check iterates the
     #    UNION of both key sets, so a dropped row would silently stop
     #    cross-checking that capability rather than fail.
     doc_temporary = parse_temporary_boundary(real_inventory)
     expect(set(doc_temporary) == set(CAPABILITIES),
-           f"SS6.2's table must have exactly the eight CAPABILITIES keys, "
+           f"SS6.2's table must have exactly the current CAPABILITIES keys, "
            f"got: {sorted(doc_temporary)}")
     expect(set(TEMPORARY_CEILING) == set(CAPABILITIES),
-           f"TEMPORARY_CEILING must retain all eight CAPABILITIES keys "
+           f"TEMPORARY_CEILING must retain all current CAPABILITIES keys "
            f"mapped to empty frozensets, not be reduced to {{}} -- "
            f"otherwise this test's own emptiness assertions go vacuous; "
            f"got: {sorted(TEMPORARY_CEILING)}")

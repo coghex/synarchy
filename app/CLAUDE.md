@@ -72,3 +72,11 @@ dump contract and centered bounded zoom: `docs/engine_contracts.md`
 boot), `tools/preview_probe.py` (manual-only, `needs-gpu`), hspec
 `--match "Preview.Discovery"` / `"Preview.UnitAnimation"` /
 `"Preview.Building"` / `"Preview.Zoom"`.
+
+Audio is a ninth preview category: `audio`, `audio/synth`, `audio/files`, or
+an explicit WAV/FLAC/MP3 path resolved from the caller directory. Missing files
+and invalid audio categories reject before boot. Every preview starts an audio
+worker; hidden preview forces null output. Audio may read its three authored
+catalogs and bounded sample files, including the one explicit external CLI file.
+It adds no gameplay workers or textures. Gates: hspec `"Audio.Preview"`,
+`tools/preview_probe.py --only audio`; runtime/authoring docs own reload behavior.

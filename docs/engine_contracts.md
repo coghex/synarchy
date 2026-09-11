@@ -82,6 +82,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
+- [Audio runtime and authored sounds](#audio-runtime-and-authored-sounds)
 
 **Persistence**
 
@@ -830,7 +831,8 @@ unknown-category error lists exactly this set, no compatibility aliases:
 **simple** (a flat, recursively-browsable asset folder): `icons`,
 `items`, `ui`, `world`; **grouped** (one named entry per item — a bare
 grouped category prints "select a specific ..." and exits without
-booting): `units`, `flora`, `buildings`, `structures`. `equipment`,
+booting): `units`, `flora`, `buildings`, `structures`; **audio**: `audio`
+(default Synth), `audio/synth`, `audio/files`. `equipment`,
 `hud`, `facemap`, `utility`, `vegetation` are NOT exposed.
 
 Pre-boot rejection is the load-bearing rule (`Engine.Preview.Discovery`
@@ -841,9 +843,10 @@ absolute traversal, a symlinked directory (BOTH levels for
 directory was expected all exit 1 **before a window exists**. Trimmed
 loading: only its font, the list widget's own chrome textures, and
 textures within the requested category/item — never `data/*.yaml`
-gameplay catalogs, with exactly TWO single-file exceptions: the units
+gameplay catalogs. Visual-definition exceptions are the units
 viewer's `data/units/<name>.yaml` and the buildings viewer's
-`data/buildings/<name>.yaml`.
+`data/buildings/<name>.yaml`. Audio also reads the three `data/audio/*.yaml`
+catalogs and bounded sample files; it adds no textures or gameplay definitions.
 
 `flora/<name>` and `structures/<name>` reuse the shared browser
 (`scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`, #888) rooted at
@@ -1335,12 +1338,35 @@ itself is reported — so a STATIC building entry, which by design exposes
 no `playback` at all, still reports its zoom at the top level like every
 other mode.
 
+### Audio auditions
+
+Every preview has a bottom-left Audio button. `--preview audio` opens Synth;
+`--preview audio/files` opens Files. `--preview <file.wav|file.flac|file.mp3>`
+accepts one explicit local file, including outside the project. Missing files
+and invalid audio categories fail before boot. Relative files resolve against
+the caller directory before resource-root selection. The production sample
+containment rule remains unchanged. Audio starts before the preview producers,
+uses real output with null fallback, and forces null when the hidden-preview
+probe variable is present. It starts no gameplay workers.
+
+The pane lists synth sounds and bounded sample files, offers Play/Stop/Reload
+and live Master/UI volumes, and preserves visual selection on return. Selecting
+a sound replaces any prior audition. Reload joins/frees the old native core,
+rereads content and waits for a completed catalog revision before restoring
+selection; it does not autoplay. A CLI file autoplays once. The actual engine
+synth, decoder and mixer serve auditions. The three audio catalogs and bounded
+sample discovery are an explicit addition to the trimmed-loading contract;
+Audio adds no textures. See [audio_authoring.md](audio_authoring.md) and
+[audio_runtime.md](audio_runtime.md) for policy and transient ownership.
+Gates: `Audio.Preview`, `Audio.PreviewUI`, `Audio.Lua` hspec,
+`tools/preview_cli_probe.py`, `tools/preview_probe.py --only audio`.
+
 ### Trimmed loading
 
 Preview mode loads only its font, the list widget's own chrome textures
 (`assets/textures/ui/{highlight,scroll*}.png`, loaded once, list-mode
 only), and textures within the requested category/item — never
-`data/*.yaml` gameplay catalogs. There are exactly TWO exceptions, both a
+`data/*.yaml` gameplay catalogs. The two visual-definition exceptions are a
 single file for the requested item: the units viewer's
 `data/units/<name>.yaml` and the buildings viewer's
 `data/buildings/<name>.yaml`.
@@ -4919,3 +4945,39 @@ they have no tracked template to be neutral against, and an absent
 overrides file already defers to `data/notification_categories.yaml`.
 Gates: hspec `--match "config"`, `tools/config_migration_probe.py`,
 `tools/config_state_probe.py`.
+
+
+## Audio runtime and authored sounds
+
+The [runtime guide](audio_runtime.md) owns worker/callback lifecycle, output modes,
+configuration, transport, telemetry and operational checks. The
+[authoring guide](audio_authoring.md) owns the catalog schema, source formats,
+inheritance, policies and public Lua surface. The [design](audio_system_design.md)
+records rationale and excluded features.
+
+The optional Audio worker alone owns the native core. `AudioCapability` aliases
+exactly transport and copied status; the callback is wholly C-owned and only
+consumes the PCM ring. Graphical uses real output with null fallback;
+headless/offscreen and hidden preview force null; ordinary preview supports real
+audio auditions, while dump starts no audio worker. Audio
+starts before producers and joins after them, including partial-boot failure.
+
+Only accepted explicit player pause changes freeze audio. Internal save and
+notification pauses do not. Load publication and world destruction advance the
+transport epoch; the worker clears old voices, loops, cooldown, listener and ring.
+Settings persist separately and survive that reset. Audio changes no save codec.
+
+World sound uses the active camera/page, including headless console camera state.
+Haskell resolves page/wrap/facing geometry and supplies relative coordinates,
+affine motion and orthogonal period vectors; native rebases existing voices and
+keeps their nearest image when camera motion crosses a source's antipode. Zoom
+range/trim follows the render fade to exact World mute; UI remains independent.
+
+Validation: `cabal test synarchy-test-headless --test-options='--match Audio.'`,
+`python3 tools/test_audio_native.py --sanitize`,
+`python3 tools/test_audio_build_dependencies.py`, and
+`python3 tools/audio_null_probe.py --port 9187`. The existing
+`tools/debug_console_boot_probe.py` also proves that required-listener failure
+joins audio (one pre-Lua worker headless, two offscreen). Capability, persistence,
+config-write and source-distribution audits cover the ownership and resource
+inventories. The authoring guide's three YAML examples are parsed by Hspec.

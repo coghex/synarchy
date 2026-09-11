@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/mackron/miniaudio",
+  "tag": "0.11.25",
+  "files": {
+    "miniaudio.h": {
+      "sha256": "ac7af4de748b7e26b777f37e01cee313a308a7296a3eb080e2906b320cc55c89",
+      "bytes": 4108168,
+      "url": "https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.h"
+    },
+    "miniaudio.c": {
+      "sha256": "ab1984bb9804ffd7b0303813595d0b345a8a86c34da1daffc353a14b34102a65",
+      "bytes": 56,
+      "url": "https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/miniaudio.c"
+    },
+    "LICENSE": {
+      "sha256": "457f1b500e0adf6bc059edddfa78a2f62012e7c3bb43476c20e0bd23b25ba0eb",
+      "bytes": 2597,
+      "url": "https://raw.githubusercontent.com/mackron/miniaudio/0.11.25/LICENSE"
+    }
+  }
+}

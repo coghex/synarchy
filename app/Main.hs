@@ -3,6 +3,7 @@ module Main where
 
 import UPrelude
 import System.Environment (setEnv, getArgs)
+import System.Directory (getCurrentDirectory)
 import System.Exit (exitSuccess, exitWith, ExitCode(..))
 import System.IO (hPutStrLn, stderr)
 import Data.List (intercalate)
@@ -16,10 +17,11 @@ import Engine.Preview.Discovery (discoverEntries, resolveFocusedEntry
 import Engine.Preview.Unit (buildPreviewUnit, unitFocusErrorMessage
                            , unitsCategoryRoot)
 import Engine.Preview.Building (buildPreviewBuilding)
+import Engine.Audio.Preview.Discovery (isAudioFile, resolvePreviewFile)
 import World.Plate (defaultPlatesFor)
 import App.Cli (parseDump, defaultLayers, parseArg, parseRegion
                , defaultChunkRegion
-               , parseSize, parsePreview
+               , parseSize, parsePreview, parseStrArg
                , PreviewCategoryKind(..), classifyPreviewCategory
                , simplePreviewCategories, groupedPreviewCategories
                , parseSeeds
@@ -44,6 +46,7 @@ main = do
 #endif
 
   args ← getArgs
+  callerDirectory ← getCurrentDirectory
   -- Resolve + chdir into the runtime resource root before ANY dispatch
   -- (#636): scripts/, assets/, data/, config/ are all loaded by
   -- cwd-relative paths from here on.
@@ -134,7 +137,8 @@ main = do
                       , dgpPlateCount = plateCount }
         region
     SelectPreview → case mPreview of
-        Just (Just (cat, mItem)) → runPreviewTarget cat mItem port
+        Just (Just (cat, mItem)) → runPreviewTarget callerDirectory
+          (fromMaybe "" $ parseStrArg "--preview" args) cat mItem port
         -- @--preview@ with no target at all. Plain 'Nothing' cannot
         -- occur here — 'parsePreview' answering 'Just' is what selected
         -- this mode — and would be the same user error if it did.
@@ -153,12 +157,22 @@ main = do
 -- | Dispatch a resolved @--preview \<category\>[\/\<item\>]@ target.
 --   Lifted out of 'main' by #1086's single boot-mode resolution; the
 --   branches are exactly the ones that were nested inside it.
-runPreviewTarget ∷ String → Maybe String → Maybe Int → IO ()
-runPreviewTarget cat mItem port = case classifyPreviewCategory cat of
+runPreviewTarget ∷ FilePath → String → String → Maybe String → Maybe Int → IO ()
+runPreviewTarget callerDirectory raw cat mItem port
+  | isAudioFile raw = resolvePreviewFile callerDirectory raw ⌦ \case
+      Left err → hPutStrLn stderr (T.unpack err) >> exitWith (ExitFailure 1)
+      Right path → runPreview ("audio", Just $ T.pack path) (PreviewAudio "files" $ Just path) port
+  | otherwise = case classifyPreviewCategory cat of
+    AudioPreviewCategory → case mItem of
+      Nothing → runPreview ("audio", Nothing) (PreviewAudio "synth" Nothing) port
+      Just category | category `elem` ["synth", "files"] →
+        runPreview ("audio", Just $ T.pack category) (PreviewAudio (T.pack category) Nothing) port
+      _ → hPutStrLn stderr "audio preview categories: synth, files (or pass a WAV/FLAC/MP3 file path)"
+        >> exitWith (ExitFailure 1)
     UnknownPreviewCategory → do
         hPutStrLn stderr $ "Unrecognized preview category: " ⧺ cat
             ⧺ " (expected one of: " ⧺ intercalate ", "
-                (simplePreviewCategories ⧺ groupedPreviewCategories)
+                (simplePreviewCategories ⧺ groupedPreviewCategories ⧺ ["audio"])
             ⧺ ")"
         exitWith (ExitFailure 1)
     GroupedPreviewCategory → case mItem of

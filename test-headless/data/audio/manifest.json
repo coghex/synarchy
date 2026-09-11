@@ -1,0 +1,65 @@
+{
+  "generator": "tools/generate_audio_fixtures.py",
+  "source": "Mathematical signals generated for Synarchy tests; project MIT license.",
+  "encoder": "ffmpeg version 8.0 Copyright (c) 2000-2025 the FFmpeg developers",
+  "commands": [
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      "test-headless/data/audio/tone.wav",
+      "-map_metadata",
+      "-1",
+      "-fflags",
+      "+bitexact",
+      "-flags:a",
+      "+bitexact",
+      "-c:a",
+      "flac",
+      "test-headless/data/audio/tone.flac"
+    ],
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-i",
+      "test-headless/data/audio/tone.wav",
+      "-map_metadata",
+      "-1",
+      "-fflags",
+      "+bitexact",
+      "-flags:a",
+      "+bitexact",
+      "-c:a",
+      "libmp3lame",
+      "-b:a",
+      "128k",
+      "test-headless/data/audio/tone.mp3"
+    ]
+  ],
+  "files": {
+    "corrupt.wav": {
+      "sha256": "b72a2e60ab93af52febf42825ef84ac356e0c301b5b6be3cd36b54c76a370ea2",
+      "bytes": 25
+    },
+    "stereo.wav": {
+      "sha256": "43cd10d592d0d5399a53f4deddb1dce6d6a67ce6e41239bd96150ab64eebf4dc",
+      "bytes": 1964
+    },
+    "tone.flac": {
+      "sha256": "1176ec32a2cb1550c70b043ce159cce7c5fa41eaacb3591e61d2930725a39af5",
+      "bytes": 11520
+    },
+    "tone.mp3": {
+      "sha256": "b9702590a14bdd0333522ef662f31a02a536c57245b0296179d0bf06f809fc09",
+      "bytes": 5034
+    },
+    "tone.wav": {
+      "sha256": "d5628c89ed6ac97c60d263eac927ae446a0ea42bfebd8e3f410c33e2d177c426",
+      "bytes": 22094
+    }
+  }
+}

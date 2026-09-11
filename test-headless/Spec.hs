@@ -5,6 +5,21 @@ import Test.Hspec
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
 import qualified Test.Headless.UPrelude as UPreludeSpec
+import qualified Test.Headless.Audio.Native as AudioNative
+import qualified Test.Headless.Audio.Config as AudioConfig
+import qualified Test.Headless.Audio.Catalog as AudioCatalog
+import qualified Test.Headless.Audio.Upload as AudioUpload
+import qualified Test.Headless.Audio.Transport as AudioTransport
+import qualified Test.Headless.Audio.Spatial as AudioSpatial
+import qualified Test.Headless.Audio.Runtime as AudioRuntime
+import qualified Test.Headless.Audio.Integration as AudioIntegration
+import qualified Test.Headless.Audio.Health as AudioHealth
+import qualified Test.Headless.Audio.Preview as AudioPreview
+import qualified Test.Headless.Audio.PreviewUI as AudioPreviewUI
+import qualified Test.Headless.Audio.Thread as AudioThread
+import qualified Test.Headless.Audio.Lua as AudioLua
+import qualified Test.Headless.Audio.Settings as AudioSettings
+import qualified Test.Headless.Capability.Audio as CapabilityAudio
 import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
@@ -482,6 +497,7 @@ main = hspec $ do
         describe "ReadOnlyRef and Capability.ContentRegistriesView projections"
                  CapabilityContentRegistriesView.spec
         describe "Capability.Events projections" CapabilityEvents.spec
+        CapabilityAudio.spec
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
         describe "Capability.RenderHandoff projections" CapabilityRenderHandoff.spec
@@ -1119,6 +1135,20 @@ main = hspec $ do
     StepProtocol.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
+    AudioNative.spec
+    AudioConfig.spec
+    AudioCatalog.spec
+    AudioUpload.spec
+    AudioTransport.spec
+    AudioSpatial.spec
+    AudioRuntime.spec
+    AudioIntegration.spec
+    AudioHealth.spec
+    AudioThread.spec
+    AudioPreview.spec
+    AudioPreviewUI.spec
+    AudioLua.spec
+    AudioSettings.spec
     DebugListener.spec
     DebugSocket.spec
     AppCli.spec

@@ -71,6 +71,7 @@ def check_canonical_dispatch_sweep(port: int) -> bool:
         (f"flora/{first_item('flora')}", "list"),
         ("buildings/workbench", "building"),
         ("structures/wire", "list"),
+        ("audio", "audio"),
     ]
     results = []
     for target, want_mode in targets:

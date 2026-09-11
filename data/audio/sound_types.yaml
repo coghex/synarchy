@@ -1,0 +1,25 @@
+schema_version: 1
+sound_types:
+  - id: world_effect
+    policy:
+      bus: world
+      spatial:
+        mode: world
+        min_distance_tiles: 1.0
+        max_distance_tiles: 40.0
+        rolloff: linear
+        vertical_scale: 1.0
+      gain_db: 0.0
+      priority: 50
+      concurrency: {max_instances: 8, overflow: steal_oldest, cooldown_ms: 0}
+      loop: {allowed: false, stop_fade_ms: 20}
+      player_pause: freeze
+  - id: ui_effect
+    policy:
+      bus: ui
+      spatial: {mode: non_spatial}
+      gain_db: 0.0
+      priority: 80
+      concurrency: {max_instances: 4, overflow: steal_oldest, cooldown_ms: 0}
+      loop: {allowed: false, stop_fade_ms: 10}
+      player_pause: continue

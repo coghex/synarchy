@@ -19,6 +19,7 @@ agent; do not depend on automatic loading.
 |---|---|
 | Boot, CLI, resource roots | [app/CLAUDE.md](app/CLAUDE.md) |
 | Lua, UI, input routing, container windows | [scripts/CLAUDE.md](scripts/CLAUDE.md) |
+| Audio, sound catalogs, player volumes | [audio_runtime.md](docs/audio_runtime.md) and [audio_authoring.md](docs/audio_authoring.md) |
 | Worldgen, terrain, tile coordinates, worldgen profiling | [src/World/CLAUDE.md](src/World/CLAUDE.md) |
 | Save/load, serialized types, state, persisted content identifiers | [src/World/Save/CLAUDE.md](src/World/Save/CLAUDE.md) |
 | Unit source frames, YAML, atlases, animation consumers | [src/Unit/Atlas/CLAUDE.md](src/Unit/Atlas/CLAUDE.md) |
@@ -162,6 +163,12 @@ another owner's processes. User cancellation still ends the wait immediately.
   modules. Preserve this dependency split.
 - `EngineM σ α` has concrete `EngineEnv` and `EngineState`; neither is a
   type parameter. Threads communicate through STM.
+- Audio's optional worker owns native lifecycle and consumes `AudioCapability`.
+  Its C callback only reads the PCM ring. Headless/offscreen force null output;
+  dump starts no audio worker; preview supports auditions (hidden probes force null). Focused gates are `--match "Audio."`,
+  `tools/test_audio_native.py --sanitize`, `tools/test_audio_build_dependencies.py`
+  and `tools/audio_null_probe.py`; paths, ownership and authoring rules are in
+  the audio guides above.
 - `World.Hydrology` / `World.Fluid` concern world generation; runtime fluid
   simulation lives under `Sim.Fluid`. Read the hydrology map below before
   choosing an owner from a module name.

@@ -5,6 +5,10 @@ module Engine.Loop
   ) where
 
 import UPrelude
+import Engine.Audio.Listener (publishCameraListener)
+import Engine.Core.Capability.Audio (toAudioCapability)
+import Engine.Core.Capability.RenderView (toRenderViewCapability)
+import Engine.Core.Capability.WorldSim (toWorldSimCapability)
 import Control.Concurrent (threadDelay)
 import Engine.Core.Monad
 import Engine.Core.State
@@ -124,6 +128,8 @@ cameraUpdates = do
     updateCameraPanning
     updateCameraZoom
     updateCameraMouseDrag
+    env ← ask
+    liftIO $ publishCameraListener (toAudioCapability env) (toRenderViewCapability env) (toWorldSimCapability env)
 
 -- | The GLFW window the windowed mode cannot run without.
 requireWindow ∷ EngineM σ Window

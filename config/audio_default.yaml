@@ -1,0 +1,4 @@
+audio:
+  master_volume: 100
+  world_volume: 100
+  ui_volume: 100

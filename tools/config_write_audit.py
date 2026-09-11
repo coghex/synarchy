@@ -74,6 +74,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # The modules that persist local configuration. Each must route its
 # writes through the helper and must contain no raw write of its own.
 CONFIG_PERSISTENCE_MODULES = {
+    "src/Engine/Audio/Config/Player.hs",
     "src/Engine/Asset/YamlNotifications.hs",
     "src/Engine/Core/Init.hs",
     "src/Engine/Graphics/Config.hs",

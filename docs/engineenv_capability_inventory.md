@@ -1,7 +1,7 @@
 # EngineEnv Capability Inventory
 
 **Status:** Authoritative. The `EngineEnv` capability split (epic #537)
-is **complete**: every one of §2.1's eight capability identifiers has a
+is **complete**: every one of §2.1's nine capability identifiers has a
 capability record or view, §6.2's temporary compatibility boundary is
 **empty**, and `tools/engine_env_capability_audit.py` enforces the
 permanent-only §6.1 boundary — the epic's "restrict direct
@@ -41,7 +41,7 @@ needed.
 <!-- engineenv-field-total -->
 
 `src/Engine/Core/State.hs` declares `data EngineEnv = EngineEnv { ... }`
-with exactly **92** fields, `engineConfig` through `notificationOrder`,
+with exactly **94** fields, `engineConfig` through `notificationOrder`,
 and every one of them has exactly one row in §5 below.
 
 <!-- /engineenv-field-total -->
@@ -103,7 +103,7 @@ is expected to change later, without changing it here):
 
 ### 2.1 Capability identifiers
 
-Every field in §5 is grouped under exactly one of these eight
+Every field in §5 is grouped under exactly one of these nine
 identifiers (kebab-case, matched literally by the audit). This splits
 requirement 3's minimum bucket list more finely in two places — content
 registries are split out from entity managers, since static YAML-backed
@@ -121,19 +121,20 @@ minimum bucket.
 | `content-registries` | Items, crafting, equipment, substances, infections, locations, loot tables, loot profiles, and the tutorial definition tree: static, YAML-backed content registries loaded once and queried thereafter. |
 | `ui-hud-events` | UI, focus, HUD, selections, events, notifications, and popups: the UI page manager, focus manager, HUD active-page tracking, text-input buffers, the player-event store, notification config and category order. (Popups reach Lua as a `luaQueue` message; #2285 removed the write-only engine-side queue that used to sit beside it.) |
 | `save-load-coordination` | Save/load coordination, provenance, and identity allocation: the save barrier, load status, the staged-load handoff, last-save-time bookkeeping, the item-instance id allocator. |
+| `audio-transport` | Abstract semantic command transport, listener and volume snapshots, and pointer-free audio status. Native devices, decoded PCM, catalog maps and voice state remain private to AudioThread. |
 
 Generic buckets (`misc`, `shared`, `other`, a blank cell, or any
 identifier not in this table) are rejected by the audit — every field
-must resolve to exactly one of the eight above.
+must resolve to exactly one of the nine above.
 
-**This vocabulary is closed.** The eight identifiers here and the
+**This vocabulary is closed.** The nine identifiers here and the
 `CAPABILITIES` constant in
 [`tools/engine_env_capability_audit.py`](../tools/engine_env_capability_audit.py)
 are the same list, and a field that fits none of them cannot be
-classified at all. Adding a ninth is possible but deliberately hard —
+classified at all. Adding another is possible but deliberately hard —
 see §6.4(c).
 
-**Eight identifiers, fourteen record/view types.** The record set is
+**Nine identifiers, fifteen record/view types.** The record set is
 finer-grained than the identifier set, because six capabilities are
 deliberately split, for four distinct reasons — two of them by
 §3.1's pointer-record visibility rule (a thread-private field forces a
@@ -156,6 +157,7 @@ behind either half (`units-buildings-combat`, `ui-hud-events`):
 | `content-registries` | `Engine.Core.Capability.ContentRegistries` — `ContentRegistriesCapability` (9 fields, the registries as the raw WRITER interface); `Engine.Core.Capability.ContentRegistriesView` — `ContentRegistriesViewCapability` (5 fields, the reader-facing view: four registries as `ReadOnlyRef`s plus `crvInfectionManagerRef` raw) | #890 (E2) / #1896 (CMA-2) |
 | `ui-hud-events` | `Engine.Core.Capability.Ui` — `UiCapability` (4 fields, UI/focus/HUD); `Engine.Core.Capability.Events` — `EventsCapability` (3 fields, event/notification; the write-only popup queue that used to sit beside them was removed by #2285) | #897 (E7a) / #898 (E7b) |
 | `save-load-coordination` | `Engine.Core.Capability.SaveLoad` — `SaveLoadCapability` (5 fields, the coordination handles) | #899 (E8) |
+| `audio-transport` | `Engine.Core.Capability.Audio` — `AudioCapability` (2 fields) | Audio foundation, approved D-25 |
 <!-- /capability-record-counts -->
 
 Each size in that table is checked against the record it names by
@@ -301,6 +303,7 @@ codebase today (see §4 for which boot profile starts which):
 | `UnitThread` | `Unit.Thread` — unit movement/AI dispatch. Also drains the *building* command queue on the same OS thread (`Unit.Thread` imports `Building.Thread.Command.processAllBuildingCommands`; there is no separate "Building thread"). Not started by the preview profile. |
 | `CombatThread` | `Combat.Thread` — combat resolution and wound ticks, at a fixed 60 Hz. Not started by the preview profile. |
 | `SimThread` | `Sim.Thread` — fluid/chunk-cell simulation. Not started by the preview profile. |
+| `AudioThread` | `Engine.Audio.Thread` owns catalog resolution, native commands, device lifecycle and telemetry. Its native callback reads only the C ring and atomic counters and never enters Haskell or EngineEnv. |
 | `AnyThread` | A field whose access pattern is explicitly documented as thread-agnostic — e.g. a single atomic monotonic counter that is correct to bump from any thread sharing the `EngineEnv` value. Used sparingly, only where the code's own contract says so. |
 
 A Readers/Writers cell in §5 either names one or more of these
@@ -489,13 +492,13 @@ drives several fields' realistic Reader/Writer role lists in §5 (e.g.
 under `world-sim-render-handoff`/`units-buildings-combat` is ever
 written under preview).
 
-| Profile | Module | Input | Lua | World | Unit | Sim | Combat | Window / GPU |
-|---|---|---|---|---|---|---|---|---|
-| Graphical | `app/App/Graphical.hs` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | window + GPU |
-| Offscreen | `app/App/Offscreen.hs` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | GPU, no window |
-| Preview | `app/App/Preview.hs` | ✓ | ✓ | — | — | — | — | window + GPU |
-| Headless | `app/App/Headless.hs` | — | ✓ | ✓ | ✓ | ✓ | ✓ | none |
-| Dump | `app/App/Dump.hs` | — | ✓ | ✓ | ✓ | ✓ | ✓ | none (one-shot, exits after dump) |
+| Profile | Module | Input | Lua | World | Unit | Sim | Combat | Audio | Window / GPU |
+|---|---|---|---|---|---|---|---|---|---|
+| Graphical | `app/App/Graphical.hs` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | real → null fallback | window + GPU |
+| Offscreen | `app/App/Offscreen.hs` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | forced null | GPU, no window |
+| Preview | `app/App/Preview.hs` | ✓ | ✓ | — | — | — | — | real → null fallback; hidden forces null | window + GPU |
+| Headless | `app/App/Headless.hs` | — | ✓ | ✓ | ✓ | ✓ | ✓ | forced null | none |
+| Dump | `app/App/Dump.hs` | — | ✓ | ✓ | ✓ | ✓ | ✓ | — | none (one-shot, exits after dump) |
 
 (A sixth executable entry point, `app/App/LanguageReport.hs`, performs
 no engine initialization at all — by its own module docstring, "no
@@ -586,6 +589,13 @@ not attempt the role claim.
 | `currentKeyDownRef` | transient-handoff | `LuaThread` (only) | `LuaThread` (only) | `IORef (Maybe GLFW.Key)` — see the field's own doc comment, `src/Engine/Core/State.hs:123-128` | `Nothing` (`src/Engine/Core/Init.hs:174`) | None | Meaningful only for the duration of one `onKeyDown` broadcast. |
 | `luaToEngineQueue` | boot-process | `MainRender` (`Engine.Scripting.Lua.Message`'s `processLuaMessages` — deliberately NOT flushed by `World.Load.Publish`'s `discardStaleQueues` the way `unitQueue`/`buildingQueue`/`combatQueue`/`simQueue`/`inputQueue` are; a stale load-time message is instead left in place and naturally skipped, since `processLuaMessages` itself is gated behind the save barrier's `captureLocked` check — see `World/Load/Publish.hs:77-83`'s own comment on why flushing it from the publish side raced this consumer's drain) | `LuaThread` (`Engine.Scripting.Lua.Thread`, `Thread/Dispatch`) | `Q.Queue LuaToEngineMsg` | `Q.newQueue` (`src/Engine/Core/Init.hs:149`) | None | — |
 | `luaQueue` | boot-process | `LuaThread` (drains; `Engine.Scripting.Lua.Thread`, `Engine.Scripting.Lua.Util`) | `WorldThread` (`World.Thread.Command.Init`, `World.Thread.ChunkLoading`, `World.Thread.Command.Save`, `World.Thread.Helpers`), `MainRender` (`Message.Video`), `UnitThread`/`CombatThread` (notification broadcasts), `InputThread`, `LuaThread` (`API.World.Lifecycle:130`'s `worldOpenArenaFn`, a direct Lua-callable enqueue) | `Q.Queue LuaMsg`, multi-producer/single-consumer | `Q.newQueue`, bound as `engineToLuaQueue` (`src/Engine/Core/Init.hs:150,274`) | None | Engine→Lua direction (the field is literally named `luaQueue` on `EngineEnv` but constructed as `engineToLuaQueue`). |
+
+### `audio-transport`
+
+| Field | Lifecycle | Readers | Writers | Sync | Init | Shutdown | Notes |
+|---|---|---|---|---|---|---|---|
+| `audioTransport` | boot-process | `AudioThread` (drains commands), `AnyThread` (reads settings and transport status) | `AnyThread` (bounded semantic producers and session controls), `AudioThread` (drain and availability) | Abstract STM container; ordered bounded events, retained controls, stamped latest listener/volume slots | `src/Engine/Core/Init.hs` creates one transport from runtime tuning and saved volumes | Producers stop before audio; final controls drain before callback join in `src/Engine/Audio/Thread.hs` | Excluded from saves; epoch invalidates prior-session commands and listener state. |
+| `audioStatusRef` | boot-process | `AnyThread` (copied diagnostic snapshots) | `AudioThread` (publishes), `Boot` (failed-fork status only) | `IORef AudioStatus`; immutable pointer-free snapshots | `src/Engine/Core/Init.hs` seeds disabled status; worker publishes starting and actual sink | Worker publishes stopped after native destruction in `src/Engine/Audio/Thread.hs` | Contains no catalog/native pointers; never participates in save capture. |
 
 ### `world-sim-render-handoff`
 
@@ -1023,7 +1033,7 @@ production module holds temporary full-`EngineEnv` access any more.
 
 The assignment method each landed migration applied — kept here because
 it is what a future reader needs to understand the roadmap entries in
-§7, and because §6.4's ninth-capability procedure refers to it — was
+§7, and because §6.4's additional-capability procedure refers to it — was
 applied uniformly and mechanically rather than by directory-name
 guessing. Every name in every cell is a literal, complete Haskell
 module name: **no path-prefix globs, no "and similar" language, and no
@@ -1091,15 +1101,16 @@ one that carried the second copy of the total is governed.
 | `content-registries` | *(none — migrated by #890 (E2): all nine former entries now reach the nine registries (seven when #890 landed; `tutorialRegistryRef` joined them with #957 and `lootProfileRegistryRef` with #2499) through `Engine.Core.Capability.ContentRegistries`, none of them holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.6 |
 | `ui-hud-events` | *(none — migrated in two halves: #897 (E7a) moved 11 UI-dominant entries onto `Engine.Core.Capability.Ui`, and #898 (E7b) moved the two event-dominant ones (`Engine.PlayerEvent.Emit`, `Engine.Scripting.Lua.API.PlayerEvent`) onto `Engine.Core.Capability.Events`. None of the 13 holds unrestricted `EngineEnv` access any more, and no module remains whose dominant field usage is this capability)* | §7.7 |
 | `save-load-coordination` | *(none — and none ever: every module whose dominant field usage is save/load coordination is a permanent orchestration exception listed in §6.1. #899 (E8) added `Engine.Core.Capability.SaveLoad` for this capability's NON-permanent touchpoints — the per-tick `captureLocked`/`acknowledgeCurrent` sites — and narrowed `World.Thread` onto it. `Engine.Scripting.Lua.API.Core` was previously assigned here for its one `loadStatusRef` read, but its dominant usage — `enginePausedRef`/`gameTimeRef`, both read/written more often in the same file — is `world-sim-render-handoff`, so it is listed there instead)* | §7.8 |
+| `audio-transport` | *(none — the audio worker consumes AudioCapability from its first implementation; no unrestricted access)* | §6.4(c), audio design D-25 |
 
-Row counts (0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 0) match
+Row counts (0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 0) match
 24 − 24 exactly — **the temporary boundary is empty**, which is the
-epic's end state (#899, E8). All eight rows are retained deliberately:
+epic's end state (#899, E8), preserved by the audio extension. All nine rows are retained deliberately:
 `tools/engine_env_capability_audit.py`'s `TEMPORARY_CEILING` keeps the
-same eight keys mapped to empty sets, and its doc/ceiling cross-check
+same nine keys mapped to empty sets, and its doc/ceiling cross-check
 iterates the union of both key sets — dropping a row here (or a key
 there) would silently stop cross-checking that capability, and would
-make the end-state self-test's "exactly the eight `CAPABILITIES` keys
+make the end-state self-test's "exactly the nine `CAPABILITIES` keys
 with empty module sets" assertion vacuous.
 
 There is consequently **no legal path left for a production module to
@@ -1196,7 +1207,7 @@ and item 11's map lives in the writer scanner it runs,
 
 3. A capability-inventory row, under the `### <capability>` heading
    for the capability the field belongs to.
-4. That heading must be one of §2.1's closed eight-identifier set. If
+4. That heading must be one of §2.1's closed nine-identifier set. If
    none of them fits, you are in case (c), not this one.
 5. Readers and Writers cells in the **strict grammar** the audit
    enforces: each top-level comma-separated segment is one or more
@@ -1238,9 +1249,9 @@ not everything the capability could plausibly own. If the field is
 private to one thread, §3.1 requires a strictly narrower worker-safe
 view rather than a comment on a wide record.
 
-#### (c) When none of the eight capabilities fit
+#### (c) When none of the nine capabilities fit
 
-A **ninth capability** is permitted only when all three hold:
+A **further capability** is permitted only when all three hold:
 
 1. No existing §2.1 capability fits the field's ownership.
 2. The state is legitimately shared through `EngineEnv` — i.e. (a)
@@ -1253,12 +1264,12 @@ The bar is intentionally high. Ordinary convenience, legacy coupling,
 rejects those identifiers by name precisely so that a field with no
 home has to be argued for rather than filed away.
 
-An approved ninth capability requires these changes **in lockstep**:
+An approved additional capability requires these changes **in lockstep**:
 
 - §2.1's identifier table, and the record/view table beside it.
 - `CAPABILITIES` in `tools/engine_env_capability_audit.py`.
 - `tools/test_engine_env_capability_audit.py` — including the
-  end-state case, whose "exactly the eight `CAPABILITIES` keys"
+  end-state case, whose "exactly the current `CAPABILITIES` keys"
   assertion is written against the live constant and will need to
   move with it.
 - `TEMPORARY_CEILING` gains the new key mapped to an **empty**
@@ -1274,7 +1285,14 @@ An approved ninth capability requires these changes **in lockstep**:
 
 And it must have a **real narrowed consumer** in the same change. No
 unused record is permitted — that rule is what has kept every one of
-the fourteen existing record/view types earning its place.
+the existing record/view types earning its place.
+
+The audio foundation is the approved ninth capability (owner decision D-25 in
+`docs/audio_system_design.md`). Audio transport crosses producer threads and
+has no existing manager owner; placing device state under render or gameplay
+would misstate its lifetime. Only the abstract transport and public status are
+shared. `Engine.Audio.Thread` is the real narrowed consumer; no new permanent
+or temporary full-access importer is admitted.
 
 #### (d) Adding a new module to §6.1
 

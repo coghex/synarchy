@@ -134,6 +134,59 @@ end
 
 data.savedVideo = copyVideo(data.current)
 
+-- Audio has independent live, pending and on-disk baselines. A resize keeps
+-- these tables; only a semantic action below replaces one.
+local function copyAudio(src)
+    return {master = src.master, world = src.world, ui = src.ui}
+end
+data.currentAudio = {master = 100, world = 100, ui = 100}
+data.pendingAudio = copyAudio(data.currentAudio)
+data.savedAudio = copyAudio(data.currentAudio)
+
+function data.resetPendingAudio()
+    data.pendingAudio = copyAudio(data.currentAudio)
+end
+
+function data.reloadAudio()
+    data.savedAudio = copyAudio(audio.getSavedVolumes())
+    data.currentAudio = copyAudio(audio.getStatus().volumes)
+    data.resetPendingAudio()
+end
+
+function data.previewAudio(key, value)
+    if data.pendingAudio[key] == nil then return false end
+    data.pendingAudio[key] = math.max(0, math.min(100, math.floor(value + 0.5)))
+    return audio.setVolumes(copyAudio(data.pendingAudio))
+end
+
+function data.applyAudio()
+    if not audio.setVolumes(copyAudio(data.pendingAudio)) then return false end
+    data.currentAudio = copyAudio(data.pendingAudio)
+    return true
+end
+
+function data.saveAudio()
+    if not audio.saveVolumes(copyAudio(data.currentAudio)) then
+        engine.logWarn("Could not persist audio settings")
+        return false
+    end
+    data.savedAudio = copyAudio(data.currentAudio)
+    return true
+end
+
+function data.revertAudio()
+    data.savedAudio = copyAudio(audio.getSavedVolumes())
+    data.currentAudio = copyAudio(data.savedAudio)
+    data.resetPendingAudio()
+    audio.setVolumes(copyAudio(data.currentAudio))
+end
+
+function data.loadDefaultAudio()
+    data.currentAudio = copyAudio(audio.getDefaultVolumes())
+    data.resetPendingAudio()
+    audio.setVolumes(copyAudio(data.currentAudio))
+end
+
 -- Make data.current the new persisted baseline. Callers are the three
 -- refresh points documented above.
 function data.captureSavedVideo()
@@ -378,6 +431,7 @@ function data.loadDefaults()
     -- local overrides) and reach the live scheduler immediately, the
     -- same way every video setting above is pushed to the engine here.
     data.loadDefaultSaveConfig()
+    data.loadDefaultAudio()
 
     engine.logInfo("Default settings loaded and applied.")
 end
@@ -421,6 +475,7 @@ end
 
 function data.resetPending()
     data.resetPendingSave()
+    data.resetPendingAudio()
     data.pending = {
         width         = data.current.width,
         height        = data.current.height,
@@ -467,6 +522,7 @@ function data.reload()
     -- config/save.local.yaml, not videoConfigRef), so it reloads
     -- alongside rather than through getVideoConfig above.
     data.reloadSave()
+    data.reloadAudio()
 end
 
 -----------------------------------------------------------
@@ -608,6 +664,7 @@ function data.apply(widgetValues)
     -- scheduler is notified inside; nothing is written to disk until
     -- data.save below.
     result.autosaveChanged = data.applySave(widgetValues)
+    result.audioApplied = data.applyAudio()
 
     return result
 end
@@ -631,6 +688,7 @@ function data.save(widgetValues)
     -- #913: persist the just-applied autosave settings to
     -- config/save.local.yaml.
     data.saveSaveConfig()
+    result.audioSaved = result.audioApplied and data.saveAudio()
     -- Refresh the baseline so a later revert restores these saved values,
     -- not the pre-save ones. #2194: this covers all eleven fields, and it
     -- runs AFTER persistence so the snapshot is of what actually reached
@@ -719,6 +777,7 @@ function data.revert()
     -- from disk -- which is why it keeps its own revert path rather
     -- than joining the snapshot above.
     data.revertSave()
+    data.revertAudio()
 end
 
 -----------------------------------------------------------

@@ -16,6 +16,7 @@ local slider         = require("scripts.ui.slider")
 local data           = require("scripts.settings.data")
 local generalTab       = require("scripts.settings.general_tab")
 local graphicsTab      = require("scripts.settings.graphics_tab")
+local audioTab         = require("scripts.settings.audio_tab")
 local notificationsTab = require("scripts.settings.notifications_tab")
 local inputTab         = require("scripts.settings.input_tab")
 local shell            = require("scripts.shell")
@@ -117,6 +118,9 @@ local tabDefs = {
     end },
     { key = "graphics", name = "Graphics", create = function(p)
         return graphicsTab.create(p)
+    end },
+    { key = "audio", name = "Audio", create = function(p)
+        return audioTab.create(p)
     end },
     { key = "input",    name = "Input",    create = function(p)
         return inputTab.create(p)
@@ -600,6 +604,7 @@ function settingsMenu.tabCreateParams(uiscale, s, ts, contentBase)
         trackCheckbox   = settingsMenu.trackCheckbox,
         trackDropdown   = settingsMenu.trackDropdown,
         trackButton     = settingsMenu.trackButton,
+        trackSlider     = settingsMenu.trackSlider,
         -- Extras the input (keybind) tab needs for its key buttons and
         -- capture/conflict popups.
         panelTexSet     = settingsMenu.panelTexSet,
@@ -695,6 +700,7 @@ function settingsMenu.createButtons(panelX, panelY, panelWidth, panelHeight,
 
     settingsMenu.backButtonId = settingsMenu.trackButton(button.new({
         name       = "back_btn",
+        activationSound = "menu_back",
         text       = "Back",
         width      = btnW,
         height     = settingsMenu.baseSizes.btnHeight,

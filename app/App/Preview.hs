@@ -15,7 +15,9 @@ import System.Environment (lookupEnv)
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO, modifyGraphicsState)
 import Engine.Core.State (EngineEnv(..), glfwWindow)
-import Engine.Core.Types (PreviewBrowse)
+import Engine.Core.Types (PreviewBrowse(..))
+import Engine.Audio.Native (Sink(..))
+import Engine.Audio.Preview.Types (PreviewAudioConfig(..))
 import Engine.Core.Log (LogCategory(..))
 import Engine.Core.Log.Monad (logDebugM, logInfoM)
 import Engine.Graphics.Vulkan.Init (initializeVulkan)
@@ -28,7 +30,7 @@ import Engine.Loop.Shutdown (ShutdownTargets(..), shutdownEngine, checkStatus)
 import Engine.Core.Workers (EngineWorkers(..))
 import Engine.Scripting.Lua.Thread (startLuaThread)
 import App.Boot (FatalStream(..), previewBootConfig, handleBootResult
-                , luaThreadOrAbort)
+                , luaThreadOrAbort, withBootPreviewAudio)
 import App.Exception (guardNativeExceptions)
 import App.Preview.Config
   (previewHiddenWindowEnvVar, previewWindowConfig)
@@ -47,45 +49,52 @@ runPreview target browse mPort = do
   EngineInitResult env ← initializeEngine
 
   let env' = previewBootConfig target browse mPort env
-
-  inputThreadState ← startInputThread env'
-  -- Preview keeps graphical's tolerance of a failed listener (#1190
-  -- amendment): it has a real window, so a missing console degrades it
-  -- rather than stranding it. Routed through the shared tail anyway.
-  luaThreadState   ← startLuaThread env'
-      ⌦ luaThreadOrAbort env' [("input", Just inputThreadState)]
-
-  -- Preview's whole point is the trimmed topology: no world, unit, sim
-  -- or combat thread ever starts.
-  let workers = EngineWorkers
-        { ewCombat = Nothing
-        , ewSim    = Nothing
-        , ewUnit   = Nothing
-        , ewWorld  = Nothing
-        , ewInput  = Just inputThreadState
-        , ewLua    = Just luaThreadState
-        }
-
-  videoConfig ← readIORef (videoConfigRef env')
   hiddenWindow ← isJust ⊚ lookupEnv previewHiddenWindowEnvVar
+  let audioConfig = PreviewAudioConfig $ case browse of
+        PreviewAudio _ file → file
+        _ → Nothing
+      sink = if hiddenWindow then ForcedNull else RealWithNullFallback
 
-  let engineAction ∷ EngineM' ()
-      engineAction = do
-        logInfoM CatSystem "Starting engine (preview)..."
-        window ← GLFW.createWindow $
-          previewWindowConfig hiddenWindow videoConfig
-        modifyGraphicsState $ \gs → gs {
-                            glfwWindow = Just window }
+  withBootPreviewAudio env' audioConfig sink $ \audioThreadState → do
 
-        let Window glfwWin = window
-        liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')
+    inputThreadState ← startInputThread env'
+    -- Preview keeps graphical's tolerance of a failed listener (#1190
+    -- amendment): it has a real window, so a missing console degrades it
+    -- rather than stranding it. Routed through the shared tail anyway.
+    luaThreadState   ← startLuaThread env'
+        ⌦ luaThreadOrAbort env' [("input", Just inputThreadState), ("audio", audioThreadState)]
 
-        _ ← initializeVulkan window
-        mainLoop
+    -- Preview's whole point is the trimmed topology: no world, unit, sim
+    -- or combat thread ever starts.
+    let workers = EngineWorkers
+          { ewCombat = Nothing
+          , ewSim    = Nothing
+          , ewUnit   = Nothing
+          , ewWorld  = Nothing
+          , ewInput  = Just inputThreadState
+          , ewLua    = Just luaThreadState
+          , ewAudio  = audioThreadState
+          }
 
-        shutdownEngine ShutdownTargets { stWindow  = Just window
-                                       , stWorkers = workers }
-        logDebugM CatSystem "Preview engine shutdown complete."
+    videoConfig ← readIORef (videoConfigRef env')
 
-  result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  handleBootResult FatalToStdout env' workers result
+    let engineAction ∷ EngineM' ()
+        engineAction = do
+          logInfoM CatSystem "Starting engine (preview)..."
+          window ← GLFW.createWindow $
+            previewWindowConfig hiddenWindow videoConfig
+          modifyGraphicsState $ \gs → gs {
+                              glfwWindow = Just window }
+
+          let Window glfwWin = window
+          liftIO $ setupCallbacks glfwWin (lifecycleRef env') (inputQueue env')
+
+          _ ← initializeVulkan window
+          mainLoop
+
+          shutdownEngine ShutdownTargets { stWindow  = Just window
+                                         , stWorkers = workers }
+          logDebugM CatSystem "Preview engine shutdown complete."
+
+    result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
+    handleBootResult FatalToStdout env' workers result

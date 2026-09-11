@@ -7,6 +7,9 @@ module World.Thread.Command.Basic
     ) where
 
 import UPrelude
+import Control.Concurrent.STM (atomically)
+import Engine.Audio.Transport (resetAudioSession)
+import Engine.Core.Capability.Audio (AudioCapability(..), toAudioCapability)
 import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Engine.Core.State (EngineEnv)
 import Engine.Core.Capability.Building
@@ -225,6 +228,7 @@ handleWorldDestroyAllCommand env logger = do
                -- (#2512).
                , wmSessionEpoch = wmSessionEpoch m' + 1
                , wmTeardownsPending = wmTeardownsPending m' + 1 }, ())
+    atomically $ resetAudioSession (acTransport $ toAudioCapability env)
     writeIORef (rhWorldQuadsRef handoff) emptyLayeredQuads
     clearSceneStats (rhSceneStatsRef handoff)
     -- Reset the entity managers via the UNIT/BUILDING queues, not directly:

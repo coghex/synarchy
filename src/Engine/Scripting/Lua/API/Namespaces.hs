@@ -51,6 +51,7 @@ engineApiNamespaces =
     , "blood", "loot", "item"                     -- Register.Item
     , "world", "flora"                            -- Register.World
     , "camera", "combat", "injury", "thought"     -- Register.Camera
+    , "audio"                                     -- Register.Audio
     ]
 
 -- | Engine API namespaces deliberately kept out of the console sandbox,

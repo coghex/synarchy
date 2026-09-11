@@ -66,6 +66,7 @@ function button.new(params)
         text = params.text or "",
         font = params.font,
         onClick = params.onClick,
+        activationSound = params.activationSound,
         callbackName = params.callbackName or BUTTON_CALLBACK,
         bgColor = bgColor,
         textColor = textColor,
@@ -192,6 +193,7 @@ function button.handleClickByElement(elemHandle)
     if id then
         local btn = buttons[id]
         if btn.onClick then
+            if btn.activationSound then audio.play(btn.activationSound) end
             btn.onClick(id, btn.name)
         end
         return true

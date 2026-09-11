@@ -26,6 +26,9 @@ import Engine.Scripting.Lua.API.Register.Craft (registerCraftAPI)
 import Engine.Scripting.Lua.API.Register.Item (registerItemAPI)
 import Engine.Scripting.Lua.API.Register.World (registerWorldAPI)
 import Engine.Scripting.Lua.API.Register.Camera (registerCameraAPI)
+import Engine.Scripting.Lua.API.Register.Audio (registerAudioAPI)
+import Engine.Core.Capability.Audio (toAudioCapability)
+import Engine.Core.Capability.Core (toCoreCapability)
 import Engine.Core.State (EngineEnv)
 import qualified HsLua as Lua
 
@@ -46,3 +49,4 @@ registerLuaAPI lst env backendState stateRef = do
     registerItemAPI callStats env
     registerWorldAPI callStats env backendState
     registerCameraAPI callStats env
+    registerAudioAPI callStats (toCoreCapability env) (toAudioCapability env)
