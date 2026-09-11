@@ -248,6 +248,10 @@ resetScene env su = do
         { wmWorlds  = [(pageActive, wsA), (pageOwned, wsO)]
         , wmVisible = [pageActive] }
     writeIORef (itemManagerRef env) itemDefs
+    -- The clock is shared across this whole spec file, and #2531's
+    -- successor case ages a claim past repair_claim_timeout by moving
+    -- it. Pin it here so no case inherits another's game time.
+    writeIORef (gameTimeRef env) 0
     writeIORef (unitManagerRef env) emptyUnitManager
         { umDefs = HM.fromList
             [ ("acolyte", minimalDef "acolyte")
@@ -434,8 +438,44 @@ jobField ls uid f = runOk ls $ luaLines
 uidText ∷ Int → Text
 uidText = T.pack ∘ show
 
+iidText ∷ Word64 → Text
+iidText = T.pack ∘ show
+
 q ∷ Text → Text
 q t = "\"" <> t <> "\""
+
+pageText ∷ WorldPageId → Text
+pageText (WorldPageId p) = p
+
+-- | Who holds this instance's repair claim, as the UI reads it.
+claimantOf ∷ LuaBackendState → Word64 → IO Text
+claimantOf ls iid = runOk ls $
+    "return tostring(UNITAI.getRepairClaimant(" <> iidText iid <> "))"
+
+-- | How many times @repair.repairAt@ has been asked to restore anything.
+repairedCount ∷ LuaBackendState → IO Text
+repairedCount ls = runOk ls "return tostring(#REPAIRED)"
+
+-- | Hand one EXACT instance to another owner through the production
+--   cargo verb, which is how a player Store order (#1249) or an AI
+--   hand-off moves a loose item out from under a suspended job.
+--
+--   #1673 refuses a cross-page endpoint pair, so every receiver below
+--   stands on 'pageOwned' with the worker: one elsewhere would silently
+--   never move the item and make the case vacuous. The verb compares
+--   the two units' own pages rather than resolving either, so it still
+--   lands while 'unloadOwnedPage' is in effect.
+transferInstance ∷ LuaBackendState → Int → Int → Text → Word64 → IO Text
+transferInstance ls from to defName iid = runOk ls $ luaLines
+    [ "return tostring(unit.transferItemToUnit("
+    , uidText from <> ", " <> uidText to <> ", '" <> defName <> "',"
+    , iidText iid <> "))" ]
+
+-- | Move the game clock the claim table ages against. @engine.gameTime@
+--   reads this ref directly, so a case can expire a claim without
+--   sleeping and without writing @repairClaims@ by hand.
+setGameTime ∷ EngineEnv → Double → IO ()
+setGameTime env = writeIORef (gameTimeRef env)
 
 -- * The spec
 
@@ -445,6 +485,7 @@ spec = describe "repair ground target" $ do
     selectionSpec
     takeSpec
     returnSpec
+    ownershipLossSpec
     durabilitySpec
 
 -- | The engine half. A stubbed ground table would agree with itself
@@ -812,6 +853,172 @@ returnSpec = describe "returning a ground target" $ do
         runOk ls "return tostring(UNITAI.getRepairClaimant(735))"
             `shouldReturn` q "nil"
 
+-- | #2531: a ground-sourced job whose exact target has left the
+--   worker's LOOSE inventory can never satisfy its return, so it ends
+--   the moment that loss is observed instead of retrying an impossible
+--   drop forever at the 6.0 repair lock utility.
+--
+--   The loss and 'returnSpec'\'s legitimate page-unavailable retry differ
+--   ONLY in where the instance actually is — @unit.dropItemById@ answers
+--   false for both — so every case here moves the item with the
+--   production cargo verb against the real unit manager and reads the
+--   outcome off the real inventories and the real ground. A fixture that
+--   faked either side could not tell the two apart, which is precisely
+--   the conflation being fixed.
+ownershipLossSpec ∷ SpecWith EngineEnv
+ownershipLossSpec = describe "losing a ground target to another owner" $ do
+
+    it "ends the job and releases its own claim when the fetched target \
+       \is handed to another owner before the repair lands" $ \env → do
+        ls ← newBareLuaBackend env
+        scene ← resetScene env baseSetup
+            -- A HEALTHY same-def axe rides along in the worker's own
+            -- inventory (no severity, so it is never a candidate itself):
+            -- ending the job must not drop, release or repair it in place
+            -- of the instance that actually left. The second ground axe
+            -- is less severe than the first, so it loses the initial
+            -- pick and is still there to be chosen afterwards.
+            { suWorkerInv   = [ mkItem "lignite_chunk" 750 100 100 0.5
+                              , mkItem "axe_steel" 752 100 100 1.0 ]
+            , suOwnedGround = [ (mkItem "axe_steel" 751 3 100 1.0, nearAt)
+                              , (mkItem "axe_steel" 753 40 100 1.0, walkAt) ]
+            , suRival       = True }
+        loadRepair ls
+        claimFor ls 1 `shouldReturn` q "fetch_ground"
+        tick ls 1 `shouldReturn` q "fetch_consumable"
+        tick ls 1 `shouldReturn` q "walking"
+        tick ls 1 `shouldReturn` q "repairing"
+        claimantOf ls 751 `shouldReturn` q "1"
+        transferInstance ls 1 2 "axe_steel" 751 `shouldReturn` q "true"
+        tick ls 1 `shouldReturn` q "nil"
+        jobField ls 1 "instanceId" `shouldReturn` q "nil"
+        claimantOf ls 751 `shouldReturn` q "nil"
+        -- Requirement 5: the instance stays with its new owner, nothing
+        -- was substituted for it, and the station never saw anything.
+        repairedCount ls `shouldReturn` q "0"
+        map (\(i, d, _, _, _, _) → (i, d)) ⊚ invOf env rivalUid
+            `shouldReturn` [(751, "axe_steel")]
+        map (\(i, d, _, _, _, _) → (i, d)) ⊚ invOf env workerUid
+            `shouldReturn` [(750, "lignite_chunk"), (752, "axe_steel")]
+        map (\(_, d, i, _, _, _) → (d, i)) ⊚ groundRows (scOwned scene)
+            `shouldReturn` [("axe_steel", 753)]
+        -- Requirement 3: the lock utility went with the job, so the
+        -- worker scores its next eligible target normally.
+        scoreWorker ls `shouldReturn` q "axe_steel|753|condition|ground"
+
+    it "ends a job already in return-retry when the target is handed \
+       \away between retries, and issues no further drop" $ \env → do
+        ls ← newBareLuaBackend env
+        scene ← resetScene env baseSetup
+            { suWorkerInv   = [ mkItem "lignite_chunk" 760 100 100 0.5 ]
+            , suOwnedGround = [ (mkItem "axe_steel" 761 3 100 1.0, nearAt) ]
+            , suRival       = True }
+        loadRepair ls
+        claimFor ls 1 `shouldReturn` q "fetch_ground"
+        tick ls 1 `shouldReturn` q "fetch_consumable"
+        tick ls 1 `shouldReturn` q "walking"
+        tick ls 1 `shouldReturn` q "repairing"
+        -- Park it in return-retry exactly the way returnSpec's control
+        -- does: the repair fails and the drop has no page to land on
+        -- while the instance is still loose here. That is the state the
+        -- job is ENTITLED to retry from, which is what makes the next
+        -- step a change of ownership rather than a change of page.
+        _ ← runOk ls "REPAIR_OK = false; return 'ok'"
+        unloadOwnedPage env
+        tick ls 1 `shouldReturn` q "returning"
+        tick ls 1 `shouldReturn` q "returning"
+        claimantOf ls 761 `shouldReturn` q "1"
+        transferInstance ls 1 2 "axe_steel" 761 `shouldReturn` q "true"
+        tick ls 1 `shouldReturn` q "nil"
+        jobField ls 1 "instanceId" `shouldReturn` q "nil"
+        claimantOf ls 761 `shouldReturn` q "nil"
+        -- The page comes back, which is what a retained job was waiting
+        -- for: it would drop on the very next tick. There is no job left,
+        -- so no further tick issues a drop or refreshes the old claim.
+        writeIORef (worldManagerRef env) emptyWorldManager
+            { wmWorlds  = [ (pageActive, scActive scene)
+                          , (pageOwned, scOwned scene) ]
+            , wmVisible = [pageActive] }
+        tick ls 1 `shouldReturn` q "nil"
+        tick ls 1 `shouldReturn` q "nil"
+        groundRows (scOwned scene) `shouldReturn` []
+        claimantOf ls 761 `shouldReturn` q "nil"
+        map (\(i, _, _, _, _, _) → i) ⊚ invOf env rivalUid
+            `shouldReturn` [761]
+        -- The fetched consumable is not collateral of the termination.
+        map (\(i, _, _, _, _, _) → i) ⊚ invOf env workerUid
+            `shouldReturn` [760]
+
+    it "leaves a claim its successor legitimately took, instead of \
+       \stamping its own uid over that entry on the way out" $ \env → do
+        ls ← newBareLuaBackend env
+        _ ← resetScene env baseSetup
+            { suWorkerInv   = [ mkItem "lignite_chunk" 770 100 100 0.5 ]
+            , suOwnedGround = [ (mkItem "axe_steel" 771 3 100 1.0, nearAt) ]
+            , suRival       = True }
+        loadRepair ls
+        claimFor ls 1 `shouldReturn` q "fetch_ground"
+        tick ls 1 `shouldReturn` q "fetch_consumable"
+        tick ls 1 `shouldReturn` q "walking"
+        tick ls 1 `shouldReturn` q "repairing"
+        transferInstance ls 1 2 "axe_steel" 771 `shouldReturn` q "true"
+        -- The successor claims through the REAL path rather than by
+        -- poking repairClaims: the clock passes repair_claim_timeout
+        -- (30s), so repairClaimedByOther expires the original entry and
+        -- the rival's own repairUtility scores the instance now sitting
+        -- in its inventory as own held gear.
+        setGameTime env 100
+        claimFor ls 2 `shouldReturn` q "fetch_consumable"
+        claimantOf ls 771 `shouldReturn` q "2"
+        -- The tick that used to refresh the claim before noticing the
+        -- loss, and then delete the refreshed entry through
+        -- releaseRepairJob's uid guard.
+        tick ls 1 `shouldReturn` q "nil"
+        jobField ls 1 "instanceId" `shouldReturn` q "nil"
+        claimantOf ls 771 `shouldReturn` q "2"
+        jobField ls 2 "instanceId" `shouldReturn` q "771"
+
+    it "ends a fetched ground job the post-load reconcile aborts for a \
+       \target that is no longer this worker's, rather than parking it \
+       \in return-retry" $ \env → do
+        ls ← newBareLuaBackend env
+        scene ← resetScene env baseSetup
+            { suWorkerInv   = [ mkItem "lignite_chunk" 780 100 100 0.5 ]
+            , suOwnedGround = [ (mkItem "axe_steel" 781 3 100 1.0, nearAt) ]
+            , suRival       = True }
+        loadRepair ls
+        claimFor ls 1 `shouldReturn` q "fetch_ground"
+        tick ls 1 `shouldReturn` q "fetch_consumable"
+        transferInstance ls 1 2 "axe_steel" 781 `shouldReturn` q "true"
+        -- #1589's reconcile reaches abortRepairJob DIRECTLY rather than
+        -- through repairExecute, so the terminal check has to live in
+        -- the abort path as well as ahead of the claim refresh. The
+        -- durability case below only covers a job that never fetched
+        -- anything, which cannot reach the return branch at all.
+        r ← runOk ls $ luaLines
+            [ "local ctx = { unit = { [1] = true }, building = { [900] = true },"
+            , "  item_instance = {},"
+            , "  unitPage = { [1] = '" <> pageText pageOwned <> "' },"
+            , "  byPage = { craft_bill = {}, ground_item = {"
+            , "    ['" <> pageText pageOwned <> "'] = {} },"
+            , "    location_instance = {} },"
+            , "  activePage = '" <> pageText pageActive <> "' };"
+            , "local n = RECON.scrubStaleRefs(1, CORE.aiState[1], ctx,"
+            , "                               RECON.DROP_HOOKS);"
+            , "return tostring(n) .. '|'"
+            , "  .. tostring(CORE.aiState[1].repairJob)"
+            , "  .. '|' .. tostring(CORE.aiState[1].repairPhase)"
+            , "  .. '|' .. tostring(UNITAI.getRepairClaimant(781))" ]
+        r `shouldBe` q "1|nil|nil|nil"
+        -- Left where it now is, with nothing dropped and nothing handed
+        -- to a mule; a further tick has no job to act on.
+        tick ls 1 `shouldReturn` q "nil"
+        map (\(i, _, _, _, _, _) → i) ⊚ invOf env rivalUid
+            `shouldReturn` [781]
+        map (\(i, _, _, _, _, _) → i) ⊚ invOf env workerUid
+            `shouldReturn` [780]
+        groundRows (scOwned scene) `shouldReturn` []
+
 -- | The durable half (lua.unit_ai v7): provenance outlives the tick
 --   that created it, and the gid it carries is a declared reference.
 durabilitySpec ∷ SpecWith EngineEnv
@@ -867,5 +1074,3 @@ durabilitySpec = describe "ground provenance across a save" $ do
         r `shouldBe` q "1|nil|nil"
         groundRows (scOwned scene) `shouldReturn` before
         invOf env workerUid `shouldReturn` []
-  where
-    pageText (WorldPageId p) = p
