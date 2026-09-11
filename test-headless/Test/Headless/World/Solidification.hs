@@ -47,7 +47,7 @@ import Engine.Core.State
     , replaceZoomAtlasTextures, retireZoomAtlasTextures, zoomAtlasDataRef )
 import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
-import Engine.Graphics.Camera (Camera2D(..), CameraFacing(..))
+import Engine.Graphics.Camera (Camera2D(..))
 import World.Grid (gridToWorld)
 import World.Chunk.Admit (pageIncarnation)
 import qualified Engine.Core.Queue as Q
@@ -506,7 +506,7 @@ commitPageId, siblingPageId, stalePageId, mixedPageId ∷ WorldPageId
 crossPageId, ackPageId, missingMatPageId, zoomPageId ∷ WorldPageId
 coherentPageId, evictedPageId, cumulativePageId, bareZoomPageId ∷ WorldPageId
 regenPageId, queueAPageId, queueBPageId, initPageId ∷ WorldPageId
-multiChunkPageId, initOtherPageId ∷ WorldPageId
+multiChunkPageId, initOtherPageId, noMapPageId ∷ WorldPageId
 commitPageId     = WorldPageId "solid_commit_w8"
 siblingPageId    = WorldPageId "solid_sibling_w8"
 stalePageId      = WorldPageId "solid_stale_w8"
@@ -524,6 +524,7 @@ queueAPageId     = WorldPageId "solid_queue_a_w8"
 queueBPageId     = WorldPageId "solid_queue_b_w8"
 initPageId       = WorldPageId "solid_init_w8"
 initOtherPageId  = WorldPageId "solid_init_other_w8"
+noMapPageId      = WorldPageId "solid_nomap_w8"
 multiChunkPageId = WorldPageId "solid_multichunk_w8"
 
 ackTimeoutMicros ∷ Int
@@ -1079,64 +1080,70 @@ spec = describe "solidification (#2485)" $ do
                     Right reapplied →
                         reapplied `shouldBe` zlaPixels patched
 
-    it "refreshes the per-chunk summary entry and drops the baked quads \
-       \even for a page that retains no atlas to patch" $ \env → do
+    it "gives EVERY page that has a zoom map an atlas to refresh, so a \
+       \single-tile commit is never invisible on one" $ \env → do
         lp ← livePage env bareZoomPageId
-        -- A page whose zoom map renders one texture per chunk: an arena,
-        -- a refused atlas, or a loaded page that is not the session's
-        -- atlas owner (#1670). It has no block to patch, but the summary
-        -- entry its renderer DOES read must still move.
-        palette ← readIORef (wsZoomLiveRef (lpState lp)) ⌦ maybe
-            (expectationFailure "fixture: page has no zoom atlas to take a \
-                                \palette from" ≫ error "unreachable")
-            (pure . zlaPalette)
-        writeIORef (wsZoomLiveRef (lpState lp)) Nothing
-        writeIORef (wsBakedZoomRef (lpState lp))
-            (V.singleton undefined, defaultWorldTextures, FaceSouth)
-        cache0 ← readIORef (wsZoomCacheRef (lpState lp))
+        cache ← readIORef (wsZoomCacheRef (lpState lp))
+        live ← readIORef (wsZoomLiveRef (lpState lp))
+        -- The invariant the whole refresh rests on. A page holding a
+        -- zoom cache but no atlas would render one texture per chunk
+        -- ('World.Render.Zoom.Bake.bakeEntries' colours a whole chunk by
+        -- its majority material), in which ONE solidified tile cannot
+        -- appear at all — so its map would silently stop tracking the
+        -- world the first time anything was edited.
+        (V.null cache, isJust live) `shouldNotBe` (False, False)
+        V.null cache `shouldBe` False
+        isJust live `shouldBe` True
+
+        -- …and an ORDINARY single-event commit really does move the
+        -- pixels, without the whole chunk having to change material.
+        basalt ← materialFor env SolidBasalt
         tileIdx ← maybe (expectationFailure "fixture: chunk not in the cache"
                          ≫ error "unreachable") pure
-                        (atlasTileIndexFor cache0 (lpLava lp))
-        -- The WHOLE chunk, so the majority material the per-material
-        -- path bakes from genuinely moves. One result per column rather
-        -- than one result holding them all: a column whose own edit
-        -- cannot apply is then refused alone instead of taking the rest
-        -- of the chunk with it. All of them are admitted against the
-        -- same pre-delivery generation, so none stales another.
-        let before = cache0 V.! tileIdx
-            block = [ (lx, ly) | ly ← [0 .. chunkSize - 1]
-                               , lx ← [0 .. chunkSize - 1] ]
-            results = [ ReactionResult [(lpLava lp, 0)]
-                            [liveEvent (lpLava lp) local (lpLava lp)
-                                       SolidBasalt]
-                      | local ← block ]
-        deliver env (lpState lp) bareZoomPageId [] results
+                        (atlasTileIndexFor cache (lpLava lp))
+        before ← maybe (expectationFailure "fixture: page has no atlas"
+                        ≫ error "unreachable") pure live
+        let idx = columnIndex 4 4
+        deliver env (lpState lp) bareZoomPageId []
+            [ ReactionResult [(lpLava lp, 0)]
+                [liveEvent (lpLava lp) (4, 4) (lpLava lp) SolidBasalt] ]
 
         after ← chunkAt (lpState lp) (lpLava lp)
-        basalt ← materialFor env SolidBasalt
+        topMaterialAt after idx `shouldBe` unMaterialId basalt
+        patched ← maybe (expectationFailure "the refresh dropped the atlas"
+                         ≫ error "unreachable") pure
+                  =≪ readIORef (wsZoomLiveRef (lpState lp))
+        zlaPixels patched `shouldNotBe` zlaPixels before
+        changedTiles (zlaWidth before) (zlaChunksPerRow before)
+                     (zlaPixels before) (zlaPixels patched)
+            `shouldBe` [tileIdx]
 
-        cache1 ← readIORef (wsZoomCacheRef (lpState lp))
-        edits ← readIORef (wsEditsRef (lpState lp))
-        params ← readIORef (wsGenParamsRef (lpState lp)) ⌦ maybe
-            (expectationFailure "page has no gen params" ≫ error "unreachable")
-            pure
-        registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
-        -- The majority material the per-material path bakes from now
-        -- says basalt, and did not before — so this page's renderer is
-        -- reading post-edit data rather than generation-time data.
-        zceTexIndex (cache1 V.! tileIdx) `shouldBe` unMaterialId basalt
-        zceTexIndex before `shouldNotBe` unMaterialId basalt
-        -- …and the whole entry is exactly what regenerating from the
-        -- live chunk produces, rather than a hand-patched field.
-        cache1 V.! tileIdx
-            `shouldBe` fst (liveChunkZoom params registry (Just palette)
-                                          (lpLava lp) after
-                                          (HM.lookupDefault [] (lpLava lp)
-                                                            edits))
-        -- …and the baked entries, which nothing else notices are stale,
-        -- were dropped so the next frame rebakes from it.
+        -- …and the baked entries were dropped so the next frame rebakes
+        -- from the refreshed summary rather than waiting for the upload.
         (baked, _, _) ← readIORef (wsBakedZoomRef (lpState lp))
         V.null baked `shouldBe` True
+
+    it "skips a page that has no zoom map at all, and commits the stone \
+       \anyway" $ \env → do
+        lp ← livePage env noMapPageId
+        -- An arena, or a page whose atlas the device refused — which
+        -- drops its zoom cache with it, precisely so no map is left that
+        -- cannot track the world.
+        writeIORef (wsZoomLiveRef (lpState lp)) Nothing
+        writeIORef (wsZoomCacheRef (lpState lp)) V.empty
+        writeIORef (zoomAtlasDataRef env) []
+        basalt ← materialFor env SolidBasalt
+        let idx = columnIndex 4 4
+        deliver env (lpState lp) noMapPageId []
+            [ ReactionResult [(lpLava lp, 0)]
+                [liveEvent (lpLava lp) (4, 4) (lpLava lp) SolidBasalt] ]
+
+        -- The stone is durable regardless: a page that cannot draw it is
+        -- not a reason to fail a transaction that has already succeeded.
+        after ← chunkAt (lpState lp) (lpLava lp)
+        topMaterialAt after idx `shouldBe` unMaterialId basalt
+        queued ← readIORef (zoomAtlasDataRef env)
+        map zauPage queued `shouldBe` []
 
     it "keeps the stone through a REAL eviction and regeneration of its \
        \chunk, driven by the world thread's own chunk loader" $ \env → do

@@ -934,13 +934,18 @@ stagePage logger registry palette catalog buildingDefs unitDefs
                     pure (Nothing, Nothing, Just (StageError msg))
                 | otherwise → do
                     -- A non-owner page refused an atlas is not a failed
-                    -- load: it renders per material exactly as it did
-                    -- before, and says so.
+                    -- load, but it does not keep a zoom CACHE either
+                    -- (#2485): rendering one texture per chunk cannot
+                    -- show a single changed tile, so a live terrain edit
+                    -- would be permanently invisible on that map. No
+                    -- zoom map is the honest state — the same answer
+                    -- 'World.Thread.Command.Init' gives a refused
+                    -- fresh world.
                     logWarn logger CatWorld $
                         "Save load: page " <> unWorldPageId pid
-                        <> " retains no zoom atlas ("
-                        <> mapImageRefusalText refusal
-                        <> "); its zoom map cannot show a single changed tile"
+                        <> " has no zoom map ("
+                        <> mapImageRefusalText refusal <> ")"
+                    writeIORef (wsZoomCacheRef worldState) V.empty
                     pure (Nothing, Nothing, Nothing)
               Right atlas → do
                 _ ← evaluate (force atlas)

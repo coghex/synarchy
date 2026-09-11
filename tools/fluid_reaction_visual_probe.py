@@ -401,6 +401,21 @@ def fluid_at(port: int, gx: int, gy: int) -> str:
     return raw.strip().strip('"')
 
 
+def place_ocean(chk: Checks, port: int, water_tile) -> None:
+    """The water side goes down BEFORE the before-captures.
+
+    Otherwise the ocean — and whatever it spreads into — is part of every
+    before/after difference, and the zoom evidence could be satisfied by
+    water rather than by stone.
+    """
+    send(port, f"world.setFluidTile('{PAGE}', {water_tile[0]}, "
+               f"{water_tile[1]}, 'ocean'); return 'ok'")
+    time.sleep(1.5)
+    chk.ok(fluid_at(port, *water_tile) == "ocean",
+           f"the water edit landed before the before-captures "
+           f"(got {fluid_at(port, *water_tile)!r})")
+
+
 def react(chk: Checks, port: int, lava_tile, water_tile, baseline):
     """Run the real contact with the sim RUNNING.
 
@@ -414,17 +429,15 @@ def react(chk: Checks, port: int, lava_tile, water_tile, baseline):
     chk.ok(running == "false",
            f"the simulation is running for the contact "
            f"(engine.isPaused() = {running!r})")
-    send(port, f"world.setFluidTile('{PAGE}', {water_tile[0]}, "
-               f"{water_tile[1]}, 'ocean'); return 'ok'")
+    # Only the LAVA goes down here; the ocean was placed before the
+    # before-captures, so it is in both frames.
     send(port, f"world.setFluidTile('{PAGE}', {lava_tile[0]}, "
                f"{lava_tile[1]}, 'lava'); return 'ok'")
     time.sleep(1.0)
-    # The OCEAN side is the durable half of the fixture: the lava is
-    # consumed by the very contact this probe is waiting for, and on a
-    # fast reaction it is already gone a second later — so asserting it
-    # is still there would fail exactly when the probe has succeeded.
-    chk.ok(fluid_at(port, *water_tile) == "ocean",
-           f"the water edit landed (got {fluid_at(port, *water_tile)!r})")
+    # The lava is consumed by the very contact this probe is waiting for,
+    # and on a fast reaction it is already gone a second later — so
+    # asserting it is still there would fail exactly when the probe has
+    # succeeded.
     chk.ok(fluid_at(port, *lava_tile) == "lava"
            or (terrain_at(port, *lava_tile) or 0) > baseline,
            "the lava edit landed, or its contact has already resolved")
@@ -506,6 +519,11 @@ def main() -> int:
             if box is None:
                 return 1
 
+            # -- the water side goes down FIRST, so it is in both the
+            # before and the after frames and cannot supply the
+            # difference the zoom evidence is measuring.
+            place_ocean(chk, port, water_tile)
+
             # -- before: detailed tiles, then the zoom map.
             set_paused(port, True)
             detail_before, detail_noise = capture_pair(
@@ -514,9 +532,24 @@ def main() -> int:
             chk.ok(stats is not None and stats[2] > 16,
                    f"the detailed frame is a real rendered scene, not a blank "
                    f"or near-uniform image (got {stats})")
+            # The detail view offsets everything by
+            # @(z - zSlice) * tileSideHeight@ and the zoom map does not,
+            # so 'world.pickTile' only agrees with where the map DRAWS a
+            # tile once that offset is zero. Pinning the slice to the
+            # target's own z is what makes the tile's zoom pixels
+            # locatable at all (#1286's mechanism, used here for
+            # measurement rather than framing).
+            send(port, f"camera.setZTracking(false); "
+                       f"camera.setZSlice({baseline}); return 'ok'")
             send(port, f"camera.setZoom({MAP_ZOOM}); return 'ok'")
             time.sleep(1.0)
-            map_before, map_noise = capture_pair(port, chk, shots, "map_before")
+            map_box = screen_box_for(port, lava_tile, vp)
+            chk.ok(map_box is not None,
+                   f"the solidified tile's own zoom pixels are locatable "
+                   f"at {map_box} — the atlas gives one tile about a 2x2 "
+                   f"block, so this is a small region by design")
+            map_before, map_noise = capture_pair(port, chk, shots,
+                                                 "map_before", map_box)
             chk.ok(png_differs(detail_before, map_before),
                    "the zoom-map frame is a different view from the detailed "
                    "one, so the map captures are really of the map")
@@ -550,39 +583,38 @@ def main() -> int:
                    f"the detailed tile render changed INSIDE the solidified "
                    f"tile's own screen box {box}: {changed} px against a "
                    f"{floor} px noise floor")
+            send(port, f"camera.setZTracking(false); "
+                       f"camera.setZSlice({baseline}); return 'ok'")
             send(port, f"camera.setZoom({MAP_ZOOM}); return 'ok'")
             time.sleep(1.0)
             map_after, map_noise_after = capture_pair(
-                port, chk, shots, "map_after")
+                port, chk, shots, "map_after", map_box)
             map_changed = whole_frame_changed(map_before, map_after)
             map_floor = max(map_noise, map_noise_after)
-            chk.ok(map_changed > map_floor,
-                   f"the ZOOM MAP changed: {map_changed} px against a "
-                   f"{map_floor} px noise floor — which only a regenerated "
-                   f"terrain pixel block and a republished atlas can do, "
-                   f"since its renderer never reads the edited chunk")
+            chk.ok(map_changed > 0,
+                   f"the ZOOM MAP changed at all ({map_changed} px) — which "
+                   f"only a regenerated terrain pixel block and a "
+                   f"republished atlas can do, since its renderer never "
+                   f"reads the edited chunk")
 
-            # …and the change is CONFINED to the affected chunk's own
-            # quad and reads as the product the reaction actually chose.
-            # A whole-frame delta alone would also pass for a change
-            # anywhere else in the map, or for one the wrong colour.
-            bbox = png_diff_bbox(map_before, map_after)
-            chk.ok(bbox is not None, f"the zoom change has a locatable "
-                                     f"region (bbox {bbox})")
-            if bbox is not None:
-                x0, y0, x1, y1 = bbox
-                region = (x0, y0, x1 - x0, y1 - y0)
-                area = (x1 - x0) * (y1 - y0)
-                frame_area = FRAME[0] * FRAME[1]
-                chk.ok(area <= frame_area * MAP_REGION_FRACTION,
-                       f"…and it is confined to {region}, "
-                       f"{100.0 * area / frame_area:.2f}% of the frame — one "
-                       f"chunk's quad, not a repaint of the map")
+            # …and it changed in the SOLIDIFIED TILE's own zoom pixels,
+            # to the colour of the product the reaction actually chose.
+            # A whole-frame delta would also pass for a change anywhere
+            # else on the map; the water side was placed before both
+            # captures precisely so it cannot be what moved.
+            if map_box is not None:
+                region_changed = png_region_changed_pixels(
+                    map_before, map_after, map_box)
+                chk.ok(region_changed is not None
+                       and region_changed > map_floor,
+                       f"the zoom map changed INSIDE the tile's own region "
+                       f"{map_box}: {region_changed} px against a "
+                       f"{map_floor} px noise floor")
                 chose = texture_mean_colour(PRODUCT_ZOOM_TEXTURE[material])
                 other = texture_mean_colour(PRODUCT_ZOOM_TEXTURE[
                     "obsidian" if material == "basalt" else "basalt"])
-                was = mean_colour(map_before, region)
-                now = mean_colour(map_after, region)
+                was = mean_colour(map_before, map_box)
+                now = mean_colour(map_after, map_box)
                 if None in (chose, other, was, now):
                     chk.ok(False, "could not sample the zoom region's colour")
                 else:
@@ -598,6 +630,18 @@ def main() -> int:
                            f"the other product "
                            f"({colour_distance(now, chose):.1f} vs "
                            f"{colour_distance(now, other):.1f})")
+
+            # The whole-frame change is confined to that chunk's quad,
+            # so nothing else on the map moved either.
+            bbox = png_diff_bbox(map_before, map_after)
+            if bbox is not None:
+                x0, y0, x1, y1 = bbox
+                area = (x1 - x0) * (y1 - y0)
+                frame_area = FRAME[0] * FRAME[1]
+                chk.ok(area <= frame_area * MAP_REGION_FRACTION,
+                       f"…and the whole-frame change is confined to "
+                       f"{(x0, y0, x1 - x0, y1 - y0)}, "
+                       f"{100.0 * area / frame_area:.2f}% of the frame")
 
             # -- and none of it was a reload.
             generated_after = send(port, f"return world.getIdentity('{PAGE}')")

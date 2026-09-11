@@ -208,19 +208,24 @@ data WorldState = WorldState
     , wsLoadPhaseRef ∷ IORef LoadPhase
     , wsZoomAtlasRef ∷ IORef (Maybe ZoomAtlasInfo)  -- ^ Atlas info once uploaded to GPU
     , wsZoomLiveRef ∷ IORef (Maybe ZoomLiveAtlas)
-      -- ^ The atlas PIXELS this page published, kept so a live terrain
-      --   edit can regenerate one chunk's tile and republish the image
-      --   the renderer samples (#2485). Written by whichever path built
-      --   this page's atlas ('World.Thread.Command.Init' on a fresh
-      --   world, 'World.Load.Stage' on a load) and rewritten by every
-      --   accepted refresh.
+      -- ^ The atlas PIXELS this page holds, kept so a live terrain edit
+      --   can regenerate one chunk's tile and republish the image the
+      --   renderer samples (#2485).
       --
-      --   'Nothing' means this page has no atlas of its own to patch —
-      --   an arena, a page whose atlas was refused, or a loaded page
-      --   that is not the session's atlas owner (#1670) — all of which
-      --   render the zoom map per material instead. Session-local
-      --   presentation data, never serialized: a load rebuilds it from
-      --   the pixels it stages.
+      --   EVERY page that has a zoom map has one. 'World.Load.Stage'
+      --   writes it for every staged page, not only the one whose image
+      --   is handed to the GPU at load: a non-owner page can still be
+      --   shown, simulate and accept an edit, and the one-texture-per-
+      --   chunk fallback could never show a single changed tile. #1670
+      --   is unchanged by that — it governs who RECEIVES an upload, and
+      --   a page still never renders through an atlas another page's
+      --   cache produced.
+      --
+      --   'Nothing' only for a page with no zoom map at all: an arena,
+      --   or a page whose atlas the device refused — which drops its
+      --   'wsZoomCacheRef' with it, so there is no map left to stop
+      --   tracking the world. Session-local presentation data, never
+      --   serialized: a load rebuilds it from the pixels it stages.
     , wsEditsRef    ∷ IORef WorldEdits
       -- ^ Player edits accumulated this session. Per-chunk so eviction
       --   doesn't lose them — chunks regenerate, edits replay onto the

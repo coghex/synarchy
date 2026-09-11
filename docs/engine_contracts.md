@@ -4707,10 +4707,10 @@ that path colours a whole chunk by its majority material, in which one
 new stone tile cannot appear. An accepted commit therefore refreshes
 BOTH of the zoom map's own inputs:
 
-* the per-chunk SUMMARY entry in `wsZoomCacheRef`, recomputed from the
-  live chunk — unconditionally, and threaded through ONE vector so a
-  delivery touching two chunks does not have the second write restore
-  the first chunk's original entry; and
+* the per-chunk SUMMARY entry in `wsZoomCacheRef` — which the baked
+  quads carry — recomputed from the live chunk and threaded through ONE
+  vector, so a delivery touching two chunks does not have the second
+  write restore the first chunk's original entry; and
 * the atlas BLOCK, regenerated from the live post-edit chunk and patched
   into the image the page retains (`wsZoomLiveRef`), then republished
   through the same `zoomAtlasDataRef` handoff a fresh init and a load
@@ -4725,15 +4725,20 @@ generated would carry them too but is not the same thing — a loaded chunk
 and `generateZoomTerrain` disagree on far more tiles than any edit
 touched, and following that would repaint the whole block.
 
-**Every page that can react retains its own atlas.** `World.Load.Stage`
-assembles and retains one for EVERY staged page, not only the session's
-atlas owner: a non-owner page can still be shown, simulate and accept a
-live terrain edit, and the per-material fallback it would otherwise
-render through colours a whole chunk by one material, in which a single
-solidified tile cannot appear at all. Only the owner's image is handed to
-the GPU at load; a non-owner's first refresh publishes its own. #1670 is
-unchanged by this — a page still only ever renders through an atlas its
-OWN cache produced.
+**A page with a zoom map has an atlas — that is an invariant, not a
+hope.** `World.Load.Stage` assembles and retains one for EVERY staged
+page, not only the session's atlas owner, and a page whose atlas the
+device refuses drops its zoom CACHE with it (`World.Thread.Command.Init`
+does the same on a fresh world). So the only pages without an atlas are
+the ones with no zoom map at all — arenas, and refused pages. This
+matters because the alternative presentation cannot be refreshed per
+tile: `World.Render.Zoom.Bake.bakeEntries` colours a whole chunk by its
+majority material, so a map rendered that way would silently stop
+tracking the world the first time anything was edited. Only the owner's
+image is handed to the GPU at load; a non-owner's first refresh publishes
+its own. #1670 is unchanged — a page still only ever renders through an
+atlas its OWN cache produced; what it governs is who receives an upload,
+not who may have one.
 
 **The handoff is a queue, and GPU ownership is per page.**
 `zoomAtlasDataRef` holds one pending image per page: two pages can commit
@@ -4752,10 +4757,11 @@ page B disposed the texture page A's `wsZoomAtlasRef` still named and
 left A sampling a dead handle — and entries whose page is gone are
 retired every frame (`retireZoomAtlasTextures`), since nothing uploads
 for a destroyed, reinitialized or replaced page and its GPU image, view,
-sampler and bindless slot would otherwise live until shutdown. The new texture handle is what
-makes `ensureBakedAtlas` drop the entries baked against the old one; a
-page with no atlas at all has no handle to change, so its baked entries
-are dropped directly.
+sampler and bindless slot would otherwise live until shutdown. The new
+texture handle is what makes `ensureBakedAtlas` drop the entries baked
+against the old one, and the commit drops them directly too, so a
+refreshed summary shows on the very next bake rather than waiting for the
+upload.
 
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch

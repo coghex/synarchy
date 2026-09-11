@@ -78,41 +78,40 @@ refreshZoomTerrain env logger pageId ws touched
                 registry ← readIORef
                     (wsMaterialRegistryRef (toWorldSimCapability env))
                 mLive ← readIORef (wsZoomLiveRef ws)
-                when (isNothing mLive) $ logWarn logger CatWorld
-                    "Zoom refresh: this page retains no zoom atlas of its \
-                    \own, so its zoom map renders one texture per chunk \
-                    \from the summary entry and cannot show a single \
-                    \changed tile. Refreshing the summary entries only"
-                td ← readIORef (wsTilesRef ws)
-                cache ← readIORef (wsZoomCacheRef ws)
-                -- The chunk's whole edit log, not this delivery's cells:
-                -- the block is regenerated from generation-time data, so
-                -- an override set scoped to one commit would repaint
-                -- every earlier edit in the chunk back to its generated
-                -- appearance.
-                edits ← readIORef (wsEditsRef ws)
-                let regenerated =
-                        [ (cc, liveChunkZoom params registry
-                                   (zlaPalette <$> mLive) cc lc
-                                   (HM.lookupDefault [] cc edits))
-                        | cc ← touched
-                        , Just lc ← [lookupChunk cc td] ]
-                -- The summary half, for every renderer — and NOT gated on
-                -- the palette: the page that has no palette is exactly
-                -- the page whose renderer reads nothing else.
-                --
-                -- ONE vector threaded through every chunk, not one write
-                -- per chunk from the same starting vector: a delivery
-                -- that touches two chunks would otherwise have the
-                -- second write store the first chunk's ORIGINAL entry
-                -- beside the second chunk's new one, losing the first
-                -- refresh entirely.
-                refreshed ← foldM (refreshCacheEntry logger)
-                                  cache
-                                  [ (cc, entry) | (cc, (entry, _)) ← regenerated ]
-                writeIORef (wsZoomCacheRef ws) refreshed
-                -- …and the atlas half, for the page that has one.
-                forM_ mLive $ \live → do
+                case mLive of
+                  -- No atlas means no zoom map at all: a page whose
+                  -- atlas was refused does not keep a zoom cache either,
+                  -- and an arena never had one. The invariant this rests
+                  -- on is "a page with a zoom cache has an atlas", which
+                  -- is what makes every zoom map in the engine per-tile
+                  -- refreshable rather than some of them silently frozen
+                  -- at generation time.
+                  Nothing → logDebug logger CatWorld
+                      "Zoom refresh skipped: this page has no zoom map"
+                  Just live → do
+                    td ← readIORef (wsTilesRef ws)
+                    cache ← readIORef (wsZoomCacheRef ws)
+                    -- The chunk's whole edit log, not this delivery's
+                    -- cells: the block is regenerated from
+                    -- generation-time data, so an override set scoped to
+                    -- one commit would repaint every earlier edit in the
+                    -- chunk back to its generated appearance.
+                    edits ← readIORef (wsEditsRef ws)
+                    let regenerated =
+                            [ (cc, liveChunkZoom params registry
+                                       (Just (zlaPalette live)) cc lc
+                                       (HM.lookupDefault [] cc edits))
+                            | cc ← touched
+                            , Just lc ← [lookupChunk cc td] ]
+                    -- ONE vector threaded through every chunk, not one
+                    -- write per chunk from the same starting vector: a
+                    -- delivery that touches two chunks would otherwise
+                    -- have the second write store the first chunk's
+                    -- ORIGINAL entry beside the second chunk's new one,
+                    -- losing the first refresh entirely.
+                    refreshed ← foldM (refreshCacheEntry logger) cache
+                        [ (cc, entry) | (cc, (entry, _)) ← regenerated ]
+                    writeIORef (wsZoomCacheRef ws) refreshed
                     patched ← foldM (patchOne logger cache) live
                                     [ (cc, block)
                                     | (cc, (_, Just block)) ← regenerated ]
@@ -121,12 +120,14 @@ refreshZoomTerrain env logger pageId ws touched
                     logDebug logger CatWorld $
                         "Zoom refresh: republished atlas for "
                         <> tshow (length regenerated) <> " chunk(s)"
-                -- The baked entries are derived from the cache vector and
-                -- nothing else notices it changed, so drop them: an atlas
-                -- republication is noticed through its new texture handle,
-                -- but a per-material page has no handle to change.
-                writeIORef (wsBakedZoomRef ws)
-                    (V.empty, defaultWorldTextures, FaceSouth)
+                    -- The baked entries are derived from the cache
+                    -- vector, and 'ensureBakedAtlas' notices only a
+                    -- changed atlas HANDLE — which this republication
+                    -- will eventually supply, but not before the next
+                    -- frame or two. Dropping them is what makes the
+                    -- refreshed summary visible on the very next bake.
+                    writeIORef (wsBakedZoomRef ws)
+                        (V.empty, defaultWorldTextures, FaceSouth)
 
 -- | Write one chunk's refreshed summary entry back into the page's zoom
 --   cache, IN PLACE.

@@ -452,6 +452,14 @@ handleWorldInitCommand env logger pageId seed rawWorldSize rawPlaceCount
             logError logger CatWorld msg
             sendGenLog env msg
             writeIORef (wsZoomAtlasRef worldState) Nothing
+            -- …and the CACHE goes with it (#2485), exactly as the
+            -- admission refusal above does it. A page that keeps its
+            -- cache without an atlas renders the zoom map one texture
+            -- per chunk, which cannot show a single changed tile at all
+            -- — so a live terrain edit would be permanently invisible
+            -- there. No zoom map is the honest state; "a zoom map that
+            -- silently stops tracking the world" is not.
+            writeIORef (wsZoomCacheRef worldState) V.empty
           Right atlas → do
             _ ← evaluate (force atlas)
             -- Issue #763: pair the atlas with the EXACT

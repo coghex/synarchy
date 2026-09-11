@@ -29,12 +29,13 @@ import World.ZoomMap.ColorPalette (ZoomColorPalette)
 --   only way to assemble that image without regenerating every chunk
 --   is to still have the one that was uploaded.
 --
---   'Nothing' whenever this page has no atlas to refresh: a page whose
---   zoom atlas was refused ('Engine.Map.ImageAdmission.admitWorldZoomAtlas'),
---   an arena, or a loaded page that is not the session's atlas owner
---   (#1670). Those pages render the zoom map per material and a live
---   refresh has nothing to patch, which is reported rather than
---   silently skipped.
+--   Held by EVERY page that has a zoom map (#2485): a page that is not
+--   the session's initial atlas owner can still be shown, simulate and
+--   accept a live edit, and the one-texture-per-chunk fallback could
+--   never show a single changed tile. A page with no atlas therefore has
+--   no zoom cache either, and no zoom map — which is why the field is a
+--   'Maybe' at all.
+--
 data ZoomLiveAtlas = ZoomLiveAtlas
     { zlaPalette      ∷ !ZoomColorPalette
       -- ^ The palette this page's pixels were generated with. Rebuilding
