@@ -17,6 +17,8 @@
 --   selection.
 module Engine.Scripting.Lua.API.WorldQuery
     ( worldGetTerrainAtFn
+    , worldGetMaterialAtFn
+    , worldGetIceAtFn
     , worldGetSlopeAtFn
     , worldGetVegAtFn
     , worldIsPlantableFn
@@ -30,6 +32,7 @@ module Engine.Scripting.Lua.API.WorldQuery
     , worldGetHoverTileFn
     , worldGetHoverPosFn
     , worldPickTileFn
+    , worldZoomTileRectFn
     , worldPickPosFn
     , worldPickChunkFn
     , worldLocalizeTileFn

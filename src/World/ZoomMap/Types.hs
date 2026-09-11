@@ -10,10 +10,12 @@
 module World.ZoomMap.Types
     ( ZoomChunkEntry(..)
     , zoomTileSize
+    , zoomTexelTile
     ) where
 
 import UPrelude
 import Control.DeepSeq (NFData(..))
+import World.Chunk.Types (chunkSize)
 
 data ZoomChunkEntry = ZoomChunkEntry
     { zceChunkX   ∷ !Int       -- ^ Canonical chunk X
@@ -38,3 +40,24 @@ instance NFData ZoomChunkEntry where
 --   diamond shape within a square texture tile.
 zoomTileSize ∷ Int
 zoomTileSize = 32
+
+-- | Which LOCAL tile of a chunk one texel of its atlas block belongs to.
+--
+--   The inverse isometric transform the zoom pass draws through: a
+--   @zoomTileSize@-square block holds a @chunkSize@ diamond, so a texel
+--   maps back to a grid-local coordinate that may fall OUTSIDE the
+--   chunk — those are the transparent corners of the square, and the
+--   caller is expected to reject them.
+--
+--   Shared rather than inlined because two places need the same answer:
+--   'World.ZoomMap.Cache.Pixels.generateChunkPixels' colours each texel
+--   by it, and 'World.Render.Zoom.Project.zoomTileScreenRect' inverts it
+--   to say where one tile's texels are drawn. Two copies of an isometric
+--   transform is two chances to disagree about where a tile is.
+zoomTexelTile ∷ Int → Int → (Int, Int)
+zoomTexelTile px py =
+    let cs = fromIntegral chunkSize ∷ Float
+        ts = fromIntegral zoomTileSize ∷ Float
+        u  = (fromIntegral px + 0.5) / ts
+        v  = (fromIntegral py + 0.5) / ts
+    in (floor (cs * (u + v - 0.5)), floor (cs * (v - u + 0.5)))

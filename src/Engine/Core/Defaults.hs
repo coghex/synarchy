@@ -113,7 +113,7 @@ defaultEngineState = EngineState
     , dynamicVertexBuffers   = V.replicate (gcMaxFrames defaultGraphicsConfig) Nothing
     , textInstanceBuffers    = V.replicate (gcMaxFrames defaultGraphicsConfig) Nothing
     , previewTexture         = Nothing
-    , zoomAtlasTexture       = Nothing
+    , zoomAtlasTextures      = []
     }
   , sceneManager     = createSceneManager
   }

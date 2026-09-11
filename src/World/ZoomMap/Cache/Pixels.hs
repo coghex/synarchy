@@ -12,7 +12,7 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Vector as V
 import World.Chunk.Types (chunkSize)
 import World.Fluid.Types (FluidCell(..), FluidType(..), IceMap)
-import World.ZoomMap.Types (zoomTileSize)
+import World.ZoomMap.Types (zoomTileSize, zoomTexelTile)
 import World.Fluid.Internal (FluidMap)
 import World.Vegetation (vegVariants)
 import World.ZoomMap.ColorPalette (ZoomColorPalette, lookupMatColor
@@ -33,20 +33,12 @@ generateChunkPixels palette hasLava _worldSize fluidMap iceMap tileVec =
         , px ← [0 .. zoomTileSize - 1]
         ]
   where
-    cs ∷ Float
-    cs = fromIntegral chunkSize
-    ts ∷ Float
-    ts = fromIntegral zoomTileSize
-
     pixelAt ∷ Int → Int → BB.Builder
     pixelAt px py =
-        let u = (fromIntegral px + 0.5) / ts
-            v = (fromIntegral py + 0.5) / ts
-            -- Inverse isometric: UV bounding box → grid-local coords
-            gxF = cs * (u + v - 0.5)
-            gyF = cs * (v - u + 0.5)
-            lx = floor gxF ∷ Int
-            ly = floor gyF ∷ Int
+        -- Inverse isometric: UV bounding box → grid-local coords. The
+        -- transform is shared with 'World.Render.Zoom.Project', which
+        -- inverts it to locate a tile's texels on screen.
+        let (lx, ly) = zoomTexelTile px py
         in if lx < 0 ∨ lx ≥ chunkSize ∨ ly < 0 ∨ ly ≥ chunkSize
            then BB.word8 0 <> BB.word8 0 <> BB.word8 0 <> BB.word8 0
            else let idx = ly * chunkSize + lx

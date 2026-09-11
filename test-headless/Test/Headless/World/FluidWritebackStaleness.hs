@@ -180,7 +180,7 @@ spec =
         ack ← newEmptyMVar
         sendWorldCommand env
             (WorldApplyFluids
-                (FluidWritebackBatch ackPageId (Just epoch) allStale
+                (FluidWritebackBatch ackPageId (Just epoch) allStale []
                                      (Just ack)))
         acked ← timeout ackTimeoutMicros (takeMVar ack)
         -- Applied, not merely delivered: dropping every writeback is one
@@ -220,9 +220,9 @@ spec =
         logger ← readIORef (loggerRef env)
         ack ← newEmptyMVar
         let boom = ErrorCall "writeback application blew up"
-            batch = FluidWritebackBatch ackPageId Nothing [] (Just ack)
+            batch = FluidWritebackBatch ackPageId Nothing [] [] (Just ack)
         raised ← try $ handleApplyFluidsCommandWith
-            (\_ _ _ _ _ → throwIO boom) env logger batch
+            (\_ _ _ _ _ _ → throwIO boom) env logger batch
 
         -- Rethrown, unchanged: 'Engine.Core.Thread' classifies this
         -- exception exactly as it did before, so the world worker keeps
@@ -357,7 +357,7 @@ withEditedPage env pageId = do
     barrier ← newEmptyMVar
     sendWorldCommand env
         (WorldApplyFluids
-            (FluidWritebackBatch pageId Nothing [] (Just barrier)))
+            (FluidWritebackBatch pageId Nothing [] [] (Just barrier)))
     awaitAck barrier
     after ← chunkAt ws editedCoord
 
@@ -431,7 +431,7 @@ deliverBatch env ws pageId writebacks = do
     ack ← newEmptyMVar
     sendWorldCommand env
         (WorldApplyFluids
-            (FluidWritebackBatch pageId (Just epoch) writebacks (Just ack)))
+            (FluidWritebackBatch pageId (Just epoch) writebacks [] (Just ack)))
     awaitAck ack
 
 ackTimeoutMicros ∷ Int

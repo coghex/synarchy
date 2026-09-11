@@ -297,6 +297,10 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "zoomAtlasDataRef": frozenset({
         "Engine.Scripting.Lua.Message.WorldTexture",
         "World.Thread.Command.Init",
+        # #2485. An accepted reaction commit regenerates the edited
+        # chunk's atlas block and republishes the image through the same
+        # handoff a fresh init and a load publish use.
+        "World.Thread.Command.Reaction.Zoom",
     }),
     "screenshotRequestQueue": frozenset(),
     "worldQuadsRef": frozenset({
