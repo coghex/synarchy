@@ -39,6 +39,12 @@ so this owner adds no build requirement the module did not already have.
 It is deliberately NOT the reproducibility owner: these are ordinary
 cheap members now that no member starts an interpreter, and putting one
 there would make it expensive by construction.
+
+The bridge gained a FOURTH operation in #2274 -- the structural session
+comparison -- and it is covered by `test_save_compat_audit_compare.py`
+rather than here. Its outcomes are answers rather than a bare (ok, tail)
+pair, so the properties worth covering are the protocol's own, not the
+parity and diagnosis this owner exists for.
 """
 from __future__ import annotations
 

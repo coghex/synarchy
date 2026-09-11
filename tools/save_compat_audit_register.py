@@ -15,11 +15,12 @@ here, NOT with save_compat_audit_codec's real-codec bridge (requirement
 8 correction): it is a different invocation -- `cabal test
 synarchy-test-headless --test-options=--match "save migrations"`,
 judged by the process return code, reported with a 40-line tail and its
-own `--skip-validation` hint. The bridge's three operations keep their
-own markers and 60-line tails over in that module, and since issue #2273
-they exec a compiled helper rather than driving `cabal repl`; this one
+own `--skip-validation` hint. The bridge's four operations (#2274 added
+the structural session comparison to #2273's three) keep their
+own markers and 60-line tails over in that module, and they
+exec a compiled helper rather than driving `cabal repl`; this one
 still runs the real test suite, which is the point of it. Do not unify
-the four behind one wrapper.
+this one and those four behind a single wrapper.
 
 The public façade is tools/save_compat_audit.py.
 """

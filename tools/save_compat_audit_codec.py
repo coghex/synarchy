@@ -424,8 +424,11 @@ COMPARE_ERROR = "error"
 #: it.
 #:
 #: THREE independent signals have to agree before an outcome is
-#: believed -- the marker, the exit status, and the report's own
-#: `outcome` field -- and none of them alone is the answer.
+#: believed -- exactly one protocol line, the EXACT exit status that
+#: line carries, and the report's own `outcome` field -- and none of
+#: them alone is the answer. Each is checked for the value the protocol
+#: assigns it, never for a weaker property that happens to hold: "one
+#: distinct outcome" is not "one line", and "nonzero" is not "1".
 #:
 #: The reason is that the marker travels beside attacker-shaped data.
 #: `DECODE_FAILED`'s line carries the offending PATH, and a save file
@@ -497,8 +500,9 @@ def compare_session_snapshots(
         codec's own error text.
       * `COMPARE_ERROR` -- the helper could not be resolved, could not be
         run, overran its allowance, or answered in a way this bridge
-        will not believe: no protocol line, more than one, an exit
-        status that contradicts the line, or a report that is missing,
+        will not believe: no protocol line, more than one (whether or
+        not they agree), an exit status other than the exact one that
+        line carries, or a report that is missing,
         unreadable, or names a different outcome. `report` is None and
         `diagnostic` says which. This is
         a statement about the toolchain, never about the saves.
@@ -529,20 +533,34 @@ def compare_session_snapshots(
             return COMPARE_ERROR, None, (
                 f"the codec helper's `compare` exited {returncode} without "
                 f"a protocol line reporting any of {markers}:\n{tail}")
-        outcomes = {outcome for _marker, outcome, _status, _line in lines}
-        if len(outcomes) > 1:
+        # EXACTLY one, not "one distinct outcome". A run that announced
+        # its verdict twice did something this bridge does not model --
+        # the helper emits one line per run and nothing retries it --
+        # and "they agreed, so it is fine" is the reasoning that let a
+        # marker-shaped path through in the first place. Two identical
+        # lines are as much a malfunction as two conflicting ones; only
+        # the diagnostic differs.
+        if len(lines) != 1:
+            outcomes = sorted({outcome for _m, outcome, _s, _l in lines})
             return COMPARE_ERROR, None, (
-                f"the codec helper's `compare` reported "
-                f"{len(outcomes)} conflicting outcomes "
-                f"({', '.join(sorted(outcomes))}) in one run:\n{tail}")
+                f"the codec helper's `compare` reported {len(lines)} "
+                f"protocol lines in one run"
+                + (f", naming conflicting outcomes ({', '.join(outcomes)})"
+                   if len(outcomes) > 1
+                   else f", all naming {outcomes[0]}")
+                + f":\n{tail}")
         _marker, outcome, expected_status, line = lines[0]
-        # An OK line with a failing status, or a mismatch line with a
-        # zero one, is a helper this bridge does not understand -- not a
-        # verdict to round off in either direction.
-        if (returncode == 0) != (expected_status == 0):
+        # The EXACT status the protocol assigns that line, not merely a
+        # matching zero/nonzero sense. A mismatch that exited 2 is a
+        # helper that did something other than `exitFailure` after
+        # deciding -- an unhandled exception on the way out, say -- and
+        # reading it as an ordinary fixture mismatch reports a verdict
+        # this bridge has no reason to trust.
+        if returncode != expected_status:
             return COMPARE_ERROR, None, (
-                f"the codec helper's `compare` reported {line!r} but "
-                f"exited {returncode}, which contradicts it:\n{tail}")
+                f"the codec helper's `compare` reported {line!r} but exited "
+                f"{returncode}; the protocol assigns that line exit status "
+                f"{expected_status}:\n{tail}")
 
         # ABSENCE is not the test, for the reason `dump_fixture_descriptors`
         # states: `NamedTemporaryFile(delete=False)` already created the

@@ -2551,7 +2551,7 @@ python3 tools/deflake.py --json     # the machine-readable outcome document
 python3 tools/test_deflake.py       # the deterministic self-test (the gate)
 python3 tools/test_deflake.py --only orchestration   # one owner's cases (#1436)
 python3 tools/test_deflake.py --only handoff         # the handoff's (#1659)
-python3 tools/test_deflake.py --only preparation     # engine preparation's (#1913)
+python3 tools/test_deflake.py --only preparation     # binary preparation's (#1913)
 ```
 
 No arguments select a probe, and there is deliberately no run-count or RTS
@@ -2687,12 +2687,16 @@ with three independently delivered contract owners, each declaring its own
 `CASES` inventory: `deflake_selftest_orchestration` (#1436's
 select/claim/measure/record orchestration, 31 cases),
 `deflake_selftest_handoff` (#1659's retained diagnosis handoff, 15) and
-`deflake_selftest_preparation` (#1913's preparation-before-hold ordering, 4);
+`deflake_selftest_preparation` (#1913's preparation-before-hold ordering, 4 --
+which since #2274 prepares BOTH binaries a probe may exec, the engine and the
+compiled save codec, because `persistence_contract` holds `cabal-build` only
+shared now and a child left to resolve the codec itself would build under a
+measurement's hold);
 `deflake_selftest_support` is the single source of what they share — the
 assertion helper and the ONE failure accumulator behind it, the temporary
 census/claim/artifact tree, the real `Measurement` builder, the fake claim,
-the recording, resource and engine-preparation adapters behind `run`, and
-the one save/restore of the runner's executable seam.
+the recording, resource and binary-preparation adapters behind `run`, and
+the one save/restore of the runner's two executable cells.
 The bare command runs every case once in the order it always has
 (orchestration, handoff, preparation) and is what CI and `make ci` invoke;
 `--only <owner>` runs one owner's cases in a fresh process for iteration.

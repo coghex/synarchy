@@ -352,14 +352,14 @@ def test_an_answer_this_bridge_cannot_corroborate_is_an_error() -> None:
             ("a marker with no report",
              f'echo "{mismatch_line}"\nexit 1', "no readable report"),
             # Marker contradicted by the exit status, in both directions.
-            ("a success marker with a failing status",
+            ("a success marker with a nonzero status",
              f'echo "{ok_line}"\n'
              f'printf \'{{"outcome":"ok"}}\' > {report_arg}\nexit 1',
-             "contradicts it"),
+             "the protocol assigns that line exit status 0"),
             ("a mismatch marker with a zero status",
              f'echo "{mismatch_line}"\n'
              f'printf \'{{"outcome":"mismatch"}}\' > {report_arg}\nexit 0',
-             "contradicts it"),
+             "the protocol assigns that line exit status 1"),
             # Marker contradicted by the report's own outcome field.
             ("a marker the report disagrees with",
              f'echo "{mismatch_line}"\n'
@@ -370,6 +370,26 @@ def test_an_answer_this_bridge_cannot_corroborate_is_an_error() -> None:
              f'echo "{ok_line}"\necho "{mismatch_line}"\n'
              f'printf \'{{"outcome":"ok"}}\' > {report_arg}\nexit 1',
              "conflicting outcomes"),
+            # ... and two that AGREE. "They said the same thing twice"
+            # is not a reason to believe a helper that emits one line
+            # per run: agreement is what a marker-shaped path exploits,
+            # so the shape is refused rather than reconciled.
+            ("the same protocol line twice",
+             f'echo "{mismatch_line}"\necho "{mismatch_line}"\n'
+             f'printf \'{{"outcome":"mismatch"}}\' > {report_arg}\nexit 1',
+             "2 protocol lines"),
+            # A coherent mismatch response that exits 2 rather than the
+            # 1 the protocol assigns it: `exitFailure` is 1, so this is
+            # a helper that died on the way out after deciding.
+            ("a mismatch marker with an unexpected nonzero status",
+             f'echo "{mismatch_line}"\n'
+             f'printf \'{{"outcome":"mismatch"}}\' > {report_arg}\nexit 2',
+             "the protocol assigns that line exit status 1"),
+            ("a decode failure with an unexpected nonzero status",
+             f'echo "DECODE_FAILED: [(\\"/x\\",\\"BadMagic\\")]"\n'
+             f'printf \'{{"outcome":"decode_failed"}}\' > {report_arg}\n'
+             f'exit 3',
+             "the protocol assigns that line exit status 1"),
             # A report that is not the promised object.
             ("a report that is not an object",
              f'echo "{mismatch_line}"\n'

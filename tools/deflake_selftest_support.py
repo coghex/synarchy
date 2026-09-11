@@ -7,7 +7,7 @@ and `deflake_selftest_preparation` -- share: the assertion helper and
 the single failure accumulator behind it, the temporary census, claim
 and artifact tree, the real `probe_flake.Measurement` builder, the fake
 claim with its ownership and renewal surface, the recording, resource
-and engine-preparation adapters, and `run`, which is
+and binary-preparation adapters, and `run`, which is
 `deflake.measure_next_probe` with every seam defaulted to a safe fake.
 
 Two of those are single-sourced for correctness rather than tidiness:
@@ -273,8 +273,10 @@ def held_resources(probe, *, namespace=None, repo_root=None):
 
 
 #: What the preparation seam answers with when a case does not care.
-#: Every case needs one: the real seam shells out to Cabal, and a suite
-#: that is engine-free and toolchain-free must never reach it by
+#: A PAIR since #2274 -- the engine and the compiled save codec -- because
+#: that is what `deflake._prepare_probe_binaries` really resolves.
+#: Every case needs both: the real seam shells out to Cabal twice, and a
+#: suite that is engine-free and toolchain-free must never reach it by
 #: forgetting to substitute.
 PREPARED_ENGINE = "/private/tmp/synarchy-selftest-checkout/synarchy"
 PREPARED_CODEC = "/private/tmp/synarchy-selftest-checkout/synarchy-save-codec"

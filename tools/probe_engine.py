@@ -444,7 +444,7 @@ def _build_state_hold(namespace, *, deadline, announce, lock_root,
         try:
             hold = probe_resource_lock.acquire(
                 exclusive={BUILD_RESOURCE}, namespace=namespace,
-                root=root, purpose="probe engine preparation")
+                root=root, purpose=f"probe {target} preparation")
             break
         except probe_resource_lock.ResourceBusy as busy:
             if time.monotonic() >= deadline:
