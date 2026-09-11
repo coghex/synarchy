@@ -106,6 +106,7 @@ registerWorldAPI callStats env backendState = do
   registerLuaFunction callStats "world" "getTerrainAt" (worldGetTerrainAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "getSlopeAt"   (worldGetSlopeAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "getVegAt"     (worldGetVegAtFn (toWorldSimCapability env))
+  registerLuaFunction callStats "world" "getMaterialAt" (worldGetMaterialAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "isPlantable"  (worldIsPlantableFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "getFluidAt" (worldGetFluidAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "getSurfaceAt" (worldGetSurfaceAtFn (toWorldSimCapability env))

@@ -79,7 +79,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Flora visual state and fallback (#2526)](#flora-visual-state-and-fallback-2526)
 - [Loot profiles (#2499)](#loot-profiles-2499)
 - [Farming (#331-#336)](#farming-331-336)
-- [Fluid reaction: unlike-fluid contact in the active sim (#2481)](#fluid-reaction-unlike-fluid-contact-in-the-active-sim-2481)
+- [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
 
@@ -4510,11 +4510,16 @@ gives it a fixture.
 
 ---
 
-## Fluid reaction: unlike-fluid contact in the active sim (#2481)
+## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)
 
 Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
-(decisions D-1, D-3 and D-5). FR-1 of epic #2480; nothing consumes the
-events it produces until FR-2.
+(decisions D-1, D-2, D-3, D-5 and D-7). FR-1 of epic #2480 makes the
+contact react inside the sim; FR-2 (#2485) is the world-side consumer
+that turns the events into durable stone. The two halves are separated
+by a thread boundary that is the whole reason the rules below read the
+way they do: the sim is the only thing that knows a contact happened,
+and the WORLD thread is the only writer of the tiles, the only owner of
+the durable edit log, and the only minter of live-edit generations.
 
 **Occupied-contact identity invariant.** No occupied contact changes
 either cell's fluid type. Unlike contact is `Lava` versus any of `Ocean`,
@@ -4568,19 +4573,122 @@ new lava has arrived and been exhausted again.
 simulation OUTPUT: `emptySimWorldState` starts it empty, and a
 nonreacting, inactive or deactivating tick carries it forward unchanged —
 a deactivating tick bakes its grid to passive fluid but keeps the events
-it already produced. **It is drained only by a consumer (FR-2 owns that)
-and cleared only when the page itself is dropped** (`SimDropWorld`;
-`SimDeactivateWorld` keeps the world entry, so events survive hide/show
-like the chunks do). Until FR-2 lands it is append-only, so a long-lived
-active world grows it without bound — that is accepted for this slice, and
-a later reader must not assume it is per-tick. Never serialized: see
+it already produced. **Every delivery DRAINS it whole** (#2485): an
+emitting tick takes the entire collection, groups it, and leaves the
+world holding none of it, which is what makes "committed exactly once" a
+property of the drain rather than of the world thread's bookkeeping. An
+INACTIVE world emits nothing and therefore drains nothing — its history
+is output it has not delivered yet. It is otherwise cleared only when the
+page itself is dropped (`SimDropWorld`; `SimDeactivateWorld` keeps the
+world entry, so events survive hide/show like the chunks do). Never
+serialized: see
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
 §6.
+
+### The product is durable terrain, not a writeback (#2485)
+
+**The stone is an EDIT.** Each accepted event appends one
+`World.Edit.Types.WeAddTile` for its column and product material to
+`wsEditsRef` and applies it through the same `World.Edit.Apply.applyEdit`,
+`replaceChunkForgettingFlora`, plant/construct revalidation and
+`UnitReGround` a player's own add-tile uses
+(`World.Thread.Command.Reaction`). A fluid writeback could not do this:
+`applyOneWriteback` replaces a chunk's sim-owned fields in memory and
+appends nothing, so terrain written that way would vanish on eviction and
+never reach a save. Replay over regenerated terrain and a fresh-process
+load both reproduce the raised column and its top material. The live
+add-tile handler's out-of-column-range pre-check applies unchanged, and a
+skipped event is logged rather than silently dropped.
+
+**The product material resolves through the registry.** `basalt` and
+`obsidian` (`data/materials/igneous_extrusive.yaml`) are looked up by
+NAME through `World.Reaction.Stone.stoneMaterialFor`, never a literal id.
+A name the registry does not know is reported and the event commits
+NOTHING — omitting the tile would leave the consumed lava with no product
+at all. Which of the two is chosen was decided at the reaction by
+`solidProductFor` above, from the contact's own reading, so queue timing
+cannot change it and both contact orderings agree.
+
+**A result is admitted whole or rejected whole.** A delivered
+`Sim.Fluid.Reaction.ReactionResult` names every participating chunk — the
+lava chunk and the water chunk, including across the cylindrical seam —
+and the live-edit generation each half was computed from. Freshness is
+the same equality `writebackIsFresh` applies per chunk, over all of them
+at once, with an absent entry reading as generation 0. The page-incarnation
+fence (#2477) comes first, exactly as it does for writebacks. Two events
+share a result exactly when they share a participating chunk,
+transitively, so genuinely disjoint contacts in one delivery stay
+independently eligible.
+
+**Generations advance once, after every admitted event has landed.** The
+stone edits themselves bump the generations admission compares against,
+so an event judged after its sibling landed would read as stale purely
+because of it. Every admitted event is applied first; then each EDITED
+chunk's generation is bumped once, and one
+`Sim.Command.Types.SimReactionCommitted` carries the post-commit terrain
+and generation for every participant. A participant that received no
+stone keeps the generation it had.
+
+**A rejected result takes its own fluid with it.** The writebacks for a
+stale result's participating chunks are quarantined — they are the other
+half of the same reaction, and landing the annihilation without the stone
+would destroy volume with no product and then be the state the
+convergence re-seed reads back as authoritative. Every participating
+chunk is then re-seeded from the authoritative tiles through
+`syncEditToSim`, which is what restores the consumed lava and fences any
+sim output still in flight from the refused state. A rejection is a
+completed stale-result decision, not a partial commit: the delivery still
+acknowledges `FluidAckApplied`.
+
+**Exact active volumes survive the handoff.** `SimChunkEdited` rebuilds a
+chunk's active grid from the passive `FluidMap` through
+`fluidCellToActive`, whose `depth * volumePerLevel` rounding turns the 1
+unit a reaction left in the contacting water cell into 7.
+`SimReactionCommitted` therefore does NOT re-seed an active chunk: it
+adopts the post-edit terrain and generation and KEEPS the live grid,
+emptying only the cells that became stone (`Sim.Chunk.applyReactionCommit`).
+An inactive or absent chunk has no exact volumes to keep and re-seeds from
+the passive map as before. This applies while the chunk is active; it
+changes neither the serialized nor the passive representation.
+
+**The acknowledgement still means applied.** Reaction commits run inside
+`handleApplyFluidsCommandWith`'s `try`, so a delivery with an ack reports
+success only after every accepted edit and its fluid state have landed,
+and a raise acknowledges `FluidAckFailed` before the exception leaves the
+handler (#2334).
+
+**Both live presentations refresh, with no page reload.** The detailed
+tile render rebuilds its quads from the chunk the edit replaced, so
+dropping the quad caches is all it needs. The zoom map is NOT: its
+renderer samples a precomputed atlas
+(`World.Render.Zoom.Quads.renderFromBaked` reads `wsZoomCacheRef` and
+`wsZoomAtlasRef`, and `ensureBakedAtlas` only re-derives QUADS), whose
+terrain pixels are produced once at page initialization. Clearing
+`wsZoomAtlasRef` to force per-material baking is not a repair either —
+that path colours a whole chunk by its majority material, in which one
+new stone tile cannot appear. An accepted commit therefore REGENERATES
+the affected chunk's block from the live post-edit chunk and patches it
+into the atlas the page retains (`wsZoomLiveRef`), republishing the whole
+image through the same `zoomAtlasDataRef` handoff a fresh init and a load
+publish use, targeted at the exact `WorldState` that accepted the edit
+(#763/#1670). The new texture handle is what makes `ensureBakedAtlas`
+drop the entries baked against the old one.
 
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch
 per ordering, plus the live-source, capacity-edge, refill and
-event-accumulation cases. The neighbouring groups `Sim.Fluid.Seam`,
+event-accumulation cases. hspec `--match "solidification"`
+(`test-headless/Test/Headless/World/Solidification.hs`) — the product
+predicate clause by clause in both contact orderings, the grouping and
+admission rules, the exact-volume handoff, the atlas patch, and
+world-thread integration against the real
+`World.Thread.Command.applyFluidWritebacks` for the durable commit,
+sibling events at one generation, stale cross-chunk rejection with
+convergence, a refused pre-commit writeback, acknowledgement ordering,
+a missing product material, and the zoom republication.
+`tools/fluid_reaction_probe.py` is the fresh-process durability case;
+`tools/fluid_reaction_visual_probe.py` (offscreen, needs a GPU) is the
+two-presentation evidence. The neighbouring groups `Sim.Fluid.Seam`,
 `Sim.Fluid.Conservation` and `fluid writeback staleness` must stay green
 unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
 the reaction never fires in it and a change there is a regression in

@@ -1,10 +1,12 @@
 {-# LANGUAGE Strict #-}
--- | Per-tile terrain/slope/vegetation surface queries: world.getTerrainAt,
---   world.getSlopeAt, world.getVegAt, world.isPlantable.
+-- | Per-tile terrain/slope/vegetation/material surface queries:
+--   world.getTerrainAt, world.getSlopeAt, world.getVegAt,
+--   world.getMaterialAt, world.isPlantable.
 module Engine.Scripting.Lua.API.WorldQuery.Terrain
     ( worldGetTerrainAtFn
     , worldGetSlopeAtFn
     , worldGetVegAtFn
+    , worldGetMaterialAtFn
     , worldIsPlantableFn
     ) where
 
@@ -13,9 +15,10 @@ import qualified HsLua as Lua
 import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified Data.Text.Encoding as TE
-import Data.IORef (readIORef)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..))
+import Data.IORef (readIORef)
+import World.Material (MaterialId(..), MaterialProps(..), getMaterialProps)
 import World.Types
 import World.Vegetation (isTilledSoil)
 import World.Generate.Coordinates (globalToChunk)
@@ -159,3 +162,56 @@ worldIsPlantableFn wsc = do
         _ → do
             Lua.pushnil
             return 1
+
+-- | world.getMaterialAt(gx, gy [, pageId]) → material id, material name | nil
+--
+--   The material at the top of the column's TERRAIN on the active world,
+--   or on the named page — deliberately the terrain top and not
+--   @lcSurfaceMap@'s rendered surface, which folds in fluid and would
+--   answer about a cell that has no material at all.
+--
+--   Read-only, and the only way a script or probe can ask what a tile is
+--   MADE of: 'worldGetTerrainAtFn' answers how high the column is,
+--   @world.getDigInfoAt@ answers only for a designated mine tile, and
+--   @world.listMaterials@ answers only what the registry holds. Added for
+--   #2485, whose durability probe has to record the product material a
+--   solidification chose and compare it across a fresh-process load.
+--
+--   The optional page argument mirrors 'worldGetTerrainAtFn' exactly, and
+--   for the same reason (#89 multiworld): a caller reading a specific
+--   page's terrain height has to be able to read that same page's
+--   material, or the two answers can come from different worlds.
+worldGetMaterialAtFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+worldGetMaterialAtFn wsc = do
+    mGx ← Lua.tointeger 1
+    mGy ← Lua.tointeger 2
+    mPage ← Lua.tostring 3
+    case (mGx, mGy) of
+        (Just gx', Just gy') → do
+            let gx = fromIntegral gx'
+                gy = fromIntegral gy'
+                (coord, (lx, ly)) = globalToChunk gx gy
+                idx = ly * chunkSize + lx
+            mTd ← Lua.liftIO $ case mPage of
+                Just pidBS → do
+                    mWs ← worldStateByPage wsc (TE.decodeUtf8Lenient pidBS)
+                    case mWs of
+                        Just ws → Just <$> readIORef (wsTilesRef ws)
+                        Nothing → pure Nothing
+                Nothing → getWorldTileData wsc
+            registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef wsc)
+            case mTd ⌦ lookupChunk coord of
+                Nothing → Lua.pushnil ≫ return 1
+                Just lc → do
+                    let col = lcTiles lc V.! idx
+                        z   = lcTerrainSurfaceMap lc VU.! idx
+                        i   = z - ctStartZ col
+                    if i < 0 ∨ i ≥ VU.length (ctMats col)
+                      then Lua.pushnil ≫ return 1
+                      else do
+                        let matId = ctMats col VU.! i
+                            props = getMaterialProps registry (MaterialId matId)
+                        Lua.pushinteger (fromIntegral matId)
+                        Lua.pushstring (TE.encodeUtf8 (mpName props))
+                        return 2
+        _ → Lua.pushnil ≫ return 1
