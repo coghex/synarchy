@@ -1,0 +1,12 @@
+{
+  "tool": "PixelLab edit_image",
+  "input_path": "docs/art/saguaro_sprout_pair/arc_living_candidate.png",
+  "description": "Recolour this exact upright juvenile cactus to its dead state. Change ONLY the green colours into pale dry ivory, muted tan, warm grey and dark brown rib grooves; add just three tiny brown surface blemishes. Preserve the exact existing silhouette, round crown, vertical rib structure, width, height, pixel position and shallow curved bottom edge. All transparent pixels remain transparent. Do not move or redraw the cactus. Same structure, just dead colours and a few blemishes. No roots, no flaring, no narrowing, no drooping, no branches, no soil or shadow. 48x48 pixel art, transparent background.",
+  "width": 48,
+  "height": 48,
+  "no_background": true,
+  "seed": 255976,
+  "owner_living_approval": "the arc version is best, now make the dead version",
+  "owner_living_approval_date": "2026-09-11",
+  "lower_band_start_row": 41
+}

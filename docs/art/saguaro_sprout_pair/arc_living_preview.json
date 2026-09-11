@@ -1,0 +1,210 @@
+{
+  "entryCount": 7,
+  "scrollOffset": 0,
+  "rows": [
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 40.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:1",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/dead.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_1",
+      "handle": 4,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "dead.png",
+      "value": false,
+      "hovered": false
+    },
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 72.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:2",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/matured.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_2",
+      "handle": 7,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "matured.png",
+      "value": false,
+      "hovered": false
+    },
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 104.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:3",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/matured_flowering.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_3",
+      "handle": 10,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "matured_flowering.png",
+      "value": false,
+      "hovered": false
+    },
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 136.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:4",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/matured_fruiting.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_4",
+      "handle": 13,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "matured_fruiting.png",
+      "value": false,
+      "hovered": false
+    },
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 168.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:5",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/sprout.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_5",
+      "handle": 16,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "sprout.png",
+      "value": false,
+      "hovered": false
+    },
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 200.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:6",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/sprout_arc_review.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_6",
+      "handle": 19,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "sprout_arc_review.png",
+      "value": true,
+      "hovered": false
+    },
+    {
+      "focused": false,
+      "bounds": {
+        "x": 40.0,
+        "y": 232.0,
+        "h": 32.0,
+        "w": 1316.0
+      },
+      "id": "list:1:7",
+      "enabled": true,
+      "key": "assets/textures/flora/saguaro/sprout_flat_review.png",
+      "type": "list",
+      "name": "asset_browser_1_list_item_7",
+      "handle": 22,
+      "visible": true,
+      "screen": "preview_manager",
+      "label": "sprout_flat_review.png",
+      "value": false,
+      "hovered": false
+    }
+  ],
+  "zoom": {
+    "surface": 23,
+    "region": {
+      "x": 1376,
+      "y": 40,
+      "width": 2424.0,
+      "height": 2080.0
+    },
+    "min": 0.125,
+    "sprite": {
+      "x": 1548.0,
+      "y": 40.0,
+      "h": 2080.0,
+      "w": 2080.0
+    },
+    "max": 1,
+    "multiplier": 1
+  },
+  "selected": {
+    "path": "assets/textures/flora/saguaro/sprout_arc_review.png",
+    "label": "sprout_arc_review.png"
+  },
+  "panelBounds": {
+    "x": 1376,
+    "y": 40,
+    "width": 2424.0,
+    "height": 2080.0
+  },
+  "mode": "list",
+  "loadedPaths": [
+    "assets/textures/flora/saguaro/dead.png",
+    "assets/textures/flora/saguaro/sprout_arc_review.png"
+  ],
+  "entries": [
+    {
+      "path": "assets/textures/flora/saguaro/dead.png",
+      "label": "dead.png"
+    },
+    {
+      "path": "assets/textures/flora/saguaro/matured.png",
+      "label": "matured.png"
+    },
+    {
+      "path": "assets/textures/flora/saguaro/matured_flowering.png",
+      "label": "matured_flowering.png"
+    },
+    {
+      "path": "assets/textures/flora/saguaro/matured_fruiting.png",
+      "label": "matured_fruiting.png"
+    },
+    {
+      "path": "assets/textures/flora/saguaro/sprout.png",
+      "label": "sprout.png"
+    },
+    {
+      "path": "assets/textures/flora/saguaro/sprout_arc_review.png",
+      "label": "sprout_arc_review.png"
+    },
+    {
+      "path": "assets/textures/flora/saguaro/sprout_flat_review.png",
+      "label": "sprout_flat_review.png"
+    }
+  ],
+  "state": "ready"
+}
