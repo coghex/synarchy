@@ -1,6 +1,6 @@
 -- | Optional audio worker. Unlike simulation workers, audio failure disables
 -- only audio. The normal ThreadState join still covers native callback teardown.
-module Engine.Audio.Thread (startAudioThread, startAudioPreviewThread) where
+module Engine.Audio.Thread (startAudioThread, startAudioPreviewThread, publishSnapshot) where
 
 import UPrelude
 import Control.Concurrent (forkIOWithUnmask)
@@ -8,7 +8,7 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, readMVar, tryPutMVar)
 import Control.Concurrent.STM (atomically)
 import Control.Exception (SomeException, SomeAsyncException, try, throwIO,
   fromException, mask, finally, onException, uninterruptibleMask_)
-import Data.IORef (IORef, newIORef, readIORef)
+import Data.IORef (IORef, newIORef, readIORef, atomicModifyIORef')
 import qualified Data.Text as Text
 import GHC.Clock (getMonotonicTimeNSec)
 import Engine.Audio.Catalog.Resolve (loadCatalog)
@@ -118,8 +118,13 @@ requireNative ∷ Either Text α → IO α
 requireNative = either (ioError ∘ userError ∘ Text.unpack) pure
 
 -- Every publication, including startup/failure/stop, has one monotonic sequence.
+-- Force the new record and its fields before returning, even with no readers.
+-- Keep the mutation here with the audited audioStatusRef writer authority.
 publishSnapshot ∷ AudioCapability → AudioStatus → IO ()
-publishSnapshot capability = publishAudioStatus (acStatusRef capability)
+publishSnapshot capability status = do
+  now ← getMonotonicTimeNSec
+  atomicModifyIORef' (acStatusRef capability) $ \previous →
+    (status { audioSnapshotSequence = audioSnapshotSequence previous + 1, audioPublishedNs = now }, ())
 
 data WorkerHealth = WorkerHealth
   { workerPublishAt ∷ !Word64, workerTransitions ∷ !Word64

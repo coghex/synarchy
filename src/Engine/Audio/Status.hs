@@ -2,12 +2,11 @@
 -- | Pointer-free public telemetry. Only the audio worker publishes snapshots.
 module Engine.Audio.Status
   ( AudioLifecycle(..), AudioDropReason(..), AudioStatus(..), AudioStatusRef
-  , newAudioStatusRef, initialAudioStatus, publishAudioStatus, nativeLifecycle, boundedAudioError
+  , newAudioStatusRef, initialAudioStatus, nativeLifecycle, boundedAudioError
   ) where
 
 import UPrelude
-import Data.IORef (IORef, newIORef, atomicModifyIORef')
-import GHC.Clock (getMonotonicTimeNSec)
+import Data.IORef (IORef, newIORef)
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as Text
 import Engine.Audio.Health (AudioHealth(..))
@@ -50,15 +49,6 @@ initialAudioStatus volumes = AudioStatus AudioDisabled Nothing
 
 newAudioStatusRef ∷ Volumes → IO AudioStatusRef
 newAudioStatusRef = newIORef ∘ initialAudioStatus
-
--- | Every publication, including startup/failure/stop, has one monotonic sequence.
--- Force the new record AND its fields before returning: even when nobody reads
--- telemetry, neither the sequence nor a disabled-worker update may retain history.
-publishAudioStatus ∷ AudioStatusRef → AudioStatus → IO ()
-publishAudioStatus ref status = do
-  now ← getMonotonicTimeNSec
-  atomicModifyIORef' ref $ \previous →
-    (status { audioSnapshotSequence = audioSnapshotSequence previous + 1, audioPublishedNs = now }, ())
 
 nativeLifecycle ∷ Word32 → AudioLifecycle
 nativeLifecycle 0 = AudioStarting

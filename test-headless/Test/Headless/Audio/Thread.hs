@@ -48,22 +48,24 @@ awaitStatus capability predicate = do
 -- Keep the watched value out of the test's stack, and make its sequence depend
 -- on IO so GHC cannot lift the key into an immortal constant.
 {-# NOINLINE watchedStatus #-}
-watchedStatus ∷ IO (AudioStatusRef, Weak AudioStatus, Word64)
+watchedStatus ∷ IO (AudioCapability, Weak AudioStatus, Word64)
 watchedStatus = do
   seed ← getMonotonicTimeNSec
   initial ← evaluate $ (initialAudioStatus defaultVolumes) { audioSnapshotSequence = seed }
   ref ← newIORef initial
   weak ← mkWeakPtr initial Nothing
-  pure (ref, weak, seed)
+  transport ← newAudioTransport defaultRuntimeConfig defaultVolumes
+  pure (AudioCapability transport ref, weak, seed)
 
 spec ∷ Spec
 spec = describe "Audio.Thread" $ do
   forM_ [False, True] $ \disabled →
     it ("releases unread snapshot history with " <> if disabled then "disabled updates" else "fresh updates") $ do
-      (ref, weak, seed) ← watchedStatus
+      (capability, weak, seed) ← watchedStatus
+      let ref = acStatusRef capability
       replicateM_ 10000 $ do
         next ← if disabled then readIORef ref else pure (initialAudioStatus defaultVolumes)
-        publishAudioStatus ref next { audioLifecycle = if disabled then AudioDisabled else AudioRunningNull }
+        publishSnapshot capability next { audioLifecycle = if disabled then AudioDisabled else AudioRunningNull }
       -- Collect BEFORE reading the latest sequence: a UI/status read must not
       -- be necessary to release any of the ten thousand previous snapshots.
       performMajorGC
