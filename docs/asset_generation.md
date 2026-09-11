@@ -115,9 +115,24 @@ all eight masks, including the material comparison sheet, before merge.
 
 ## Flora pipeline (validated)
 
-A deciduous species needs 10 stages (authoritative list = `data/flora/*.yaml`, not existing folders):
-`matured`, `matured_{budding,flowering,senescing,dormant}`, `dead`, `sprout`,
-`sprout_{budding,dormant,senescing}`.
+The established deciduous recipe is a ten-entry set (authoritative list =
+`data/flora/*.yaml`, not existing folders): `matured`,
+`matured_{budding,flowering,senescing,dormant}`, `dead`, `sprout`,
+`sprout_{budding,dormant,senescing}`. That recipe already includes one generic
+`dead`, and it is a starting manifest for a living deciduous family, **not the
+complete set of states a species can be in**.
+
+Anything beyond it — wild versus cultivated presentation, phase-aware death
+such as `sprout_dead`, cause art such as `charred`, or exact
+context/phase/stage/cause combinations — is governed by
+[`flora_visual_state_contract.md`](flora_visual_state_contract.md), which owns
+the selector vocabulary, the `textureVariants` declaration shape, the fallback
+order, and the five-tier art maturity ladder. Read it before planning a flora
+manifest that is not the plain ten-entry recipe: it is what tells you which
+assets actually buy a visual, and every additional texture must be DECLARED in
+YAML to render at all. Each species' authored YAML stays authoritative for the
+assets that species declares; the contract is authoritative for what those
+states mean.
 
 Hand-made sets share ONE skeleton per family (matured-family / sprout-family); only foliage
 changes per season. Replicate that with a **skeleton-freeze mask**:
