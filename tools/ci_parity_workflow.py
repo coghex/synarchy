@@ -13,7 +13,8 @@ job's executable `run:` bodies, the per-job and local-side invocation
 collections, the two-way gate-set comparison over the audited jobs'
 union with its cross-job duplicate rejection and stale-exemption
 detection, aggregate-job dependency validation, the static-audit job's
-topology, the behavior-probe job's condition and required commands, the
+topology, the behavior-probe job's condition, required commands and prerequisite
+build (#2274), the
 unit-asset gate's pinned selection, and the expression normalization
 those checks need.
 
@@ -71,8 +72,11 @@ from ci_parity_config import (
     EXEMPT_COMMANDS,
     IMAGE_JOB,
     LOCAL_GATE_LABEL,
+    PROBE_FORBIDDEN_PREREQUISITES,
     PROBE_JOB,
     PROBE_JOB_IF,
+    PROBE_PREREQUISITE_STEP,
+    PROBE_PREREQUISITE_TARGETS,
     PROBE_REQUIRED_COMMANDS,
     STATIC_AUDIT_JOB,
     UNIT_ASSET_CI_IF,
@@ -89,6 +93,7 @@ from ci_parity_shell import (
     cabal_subcommand,
     extract_cabal_commands,
     extract_invocations,
+    split_shell_commands,
 )
 
 
@@ -428,6 +433,125 @@ def audit_parallel_gate_wiring(yaml_text: str) -> list[str]:
         problems.append(
             f"{WORKFLOW_PATH}: `{PROBE_JOB}` no longer runs required "
             f"command `{command}`.")
+    problems += audit_probe_prerequisite_build(probe)
+    return problems
+
+
+def probe_prerequisite_step(job: dict) -> str:
+    """The `run:` body of the behavior-probe prerequisite step.
+
+    Raises `AuditError` when the step is missing, duplicated, or has no
+    readable body: this check exists to say what that step compiles, and
+    one it cannot read has to fail loudly rather than answer an empty
+    list a caller would then find nothing wrong with.
+    """
+    steps = job.get("steps")
+    named = [step for step in (steps if isinstance(steps, list) else [])
+             if isinstance(step, dict)
+             and step.get("name") == PROBE_PREREQUISITE_STEP]
+    if len(named) != 1:
+        raise AuditError(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}` must have exactly one "
+            f"`{PROBE_PREREQUISITE_STEP}` step, found {len(named)}. #2274 "
+            f"pins what that step may and may not compile, and it cannot "
+            f"do that against a step it cannot find.")
+    body = named[0].get("run")
+    if not isinstance(body, str):
+        raise AuditError(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}`'s `{PROBE_PREREQUISITE_STEP}` "
+            f"step has no `run:` body to read.")
+    return body
+
+
+def probe_prerequisite_targets(job: dict) -> list[str]:
+    """The Cabal targets the behavior-probe prerequisite step builds.
+
+    The step must be exactly ONE command, and that command a `cabal
+    build`. Both halves matter and they fail differently: a second
+    `cabal build` makes "what does this step compile" ambiguous, and a
+    `cabal test synarchy-test-headless` beside a correct build restores
+    the whole cost #2274 removed while leaving the build line itself
+    looking right. Anything that is not a Cabal command at all is
+    refused for the same reason -- this audit reads Cabal, so a step
+    that grew a `python3` line is a deliberate edit to make here rather
+    than one to wave through unread.
+    """
+    where = (f"{WORKFLOW_PATH} (job: {PROBE_JOB}, step: "
+             f"{PROBE_PREREQUISITE_STEP})")
+    body = probe_prerequisite_step(job)
+    segments = [segment.strip()
+                for segment in split_shell_commands(body, where)
+                if segment.strip()]
+    commands = extract_cabal_commands(body, where)
+    if len(segments) != 1 or len(commands) != 1:
+        raise AuditError(
+            f"{where}: must run exactly one command, and that one a `cabal "
+            f"build`; found {len(segments)} command(s), {len(commands)} of "
+            f"them Cabal. #2274 pins this step to the binaries a probe "
+            f"EXECS, and a second command here is how the build cost it "
+            f"removed comes back beside a build line that still looks "
+            f"right.")
+    tokens = commands[0]
+    if cabal_subcommand(tokens) != "build":
+        raise AuditError(
+            f"{where}: the one command must be `cabal build`, got "
+            f"`{' '.join(tokens)}`.")
+    # Everything after `build` that is not a flag. `cabal build` takes no
+    # flag with a separate value in this step, and a step that grew one
+    # would be a deliberate edit to make here.
+    return [token for token in tokens[2:] if not token.startswith("-")]
+
+
+def audit_probe_prerequisite_build(job: dict) -> list[str]:
+    """The probe job builds what probes EXEC, and nothing else (#2274).
+
+    Requirement 4 of #2274 in a durable form. The gate-set comparison
+    collects `python3 tools/*.py` invocations and ignores every other
+    command, so nothing else in this audit can see a Cabal target
+    appearing or disappearing in this step -- and a CI log showing the
+    suite was not compiled is evidence about one run, not a regression
+    guard.
+
+    The target list is compared as an exact SET, not against a
+    blacklist. A blacklist only catches the spellings somebody thought
+    of: `lib:synarchy`, `all`, or a target invented next year would all
+    pass one while costing exactly the build time this issue removed.
+    Order is not pinned, and neither is repetition -- `cabal build` is
+    indifferent to both, so requiring them would be a diff-churn rule
+    rather than a cost one.
+
+    The two directions still fail differently, and say so. A MISSING
+    target means a probe resolves its own binary inside its own timeout,
+    which #1570 and #1913 exist to prevent. An EXTRA one is build time
+    the job does not need; `PROBE_FORBIDDEN_PREREQUISITES` adds no
+    coverage here, only a reason for the spellings somebody actually
+    reaches for.
+    """
+    try:
+        targets = probe_prerequisite_targets(job)
+    except AuditError as error:
+        return [str(error)]
+    problems = []
+    required = set(PROBE_PREREQUISITE_TARGETS)
+    for target in sorted(required - set(targets)):
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}`'s "
+            f"`{PROBE_PREREQUISITE_STEP}` step no longer builds "
+            f"{target!r}, which a probe execs. It would then be built "
+            f"inside a probe's own timeout, or not at all.")
+    for target in sorted(set(targets) - required):
+        reason = PROBE_FORBIDDEN_PREREQUISITES.get(target)
+        problems.append(
+            f"{WORKFLOW_PATH}: `{PROBE_JOB}`'s "
+            f"`{PROBE_PREREQUISITE_STEP}` step builds {target!r}, which no "
+            f"probe execs (#2274)"
+            + (f" -- {reason}" if reason else "")
+            + f". This step is pinned to exactly "
+              f"{sorted(required)}: since the persistence-contract "
+              f"comparison became `app-save-codec/Main.hs`'s `compare` "
+              f"operation, no probe reads either test tree at all, and "
+              f"`test-and-audits` is the job that compiles and runs the "
+              f"headless suite.")
     return problems
 
 

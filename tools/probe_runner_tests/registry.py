@@ -164,6 +164,35 @@ def test_exclusive_resource_declaration_is_data_about_real_probes() -> None:
            "an undeclared probe needs nothing exclusively")
 
 
+def test_persistence_contract_declares_no_exclusive_interest() -> None:
+    print("\n-- persistence_contract is a build-state READER since #2274")
+    exclusive = probe_runner_resources.exclusive_resources(
+        "persistence_contract")
+    expect(exclusive == set(),
+           f"it declares nothing exclusively (got {sorted(exclusive)})")
+    shared = probe_runner_resources.shared_resources("persistence_contract")
+    expect(probe_runner_resources.BUILD_RESOURCE in shared,
+           f"but still declares the shared interest every probe has in "
+           f"the build state, because it EXECS a binary out of it "
+           f"(shared: {sorted(shared)})")
+    # The inheritance rule the sweep's retained hold turns on, stated
+    # here so the reason survives beside the declaration it explains:
+    # only an EXCLUSIVE ancestor hold is exported, so a nested runner
+    # selecting an exclusive child needs its ancestor to be exclusive
+    # too.
+    namespace = "selftest-persistence-contract"
+    expect(probe_runner_resources.descendant_hold_env(
+               "persistence_contract", namespace) == {},
+           "so it exports nothing to a descendant -- it has no nested "
+           "runner, which is why it may be shared where the sweep may not")
+    expect(probe_runner_resources.descendant_hold_env(
+               "persistence_contract_sweep", namespace)
+           .get(probe_runner_resources.ENV_HELD_EXCLUSIVE)
+           == probe_runner_resources.BUILD_RESOURCE,
+           "while the sweep still exports the hold its nested runner's "
+           "`save_compat_migration` child would otherwise wait on")
+
+
 def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     print("\n-- the shipped declaration serializes EVERY exclusive holder "
           "against the whole registry (#1444, #1570)")
@@ -178,18 +207,22 @@ def test_every_probe_declares_what_an_exclusive_holder_takes() -> None:
     for key in sorted(config_probes):
         expect("repo-config" in probe_runner_resources.exclusive_resources(key),
                f"{key} still takes repo-config exclusively")
-    # The three probes that still drive Cabal themselves, which is NOT an
-    # engine boot (#1570): a `cabal repl` through persistence_snapshot for
-    # the first two, and the codec helper's freshness build through
-    # save_compat_audit for the third (#2273).
-    cabal_drivers = {"persistence_contract", "persistence_contract_sweep",
-                     "save_compat_migration"}
+    # The two probes that can still drive Cabal themselves, which is NOT
+    # an engine boot (#1570): `save_compat_migration`, through the codec
+    # helper's own freshness build on its direct path (#2273), and
+    # `persistence_contract_sweep`, whose nested runner selects it and
+    # which therefore has to stay exclusive so that hold is inheritable
+    # (#2274).
+    cabal_drivers = {"persistence_contract_sweep", "save_compat_migration"}
     expect(cabal_drivers <= declared,
            f"every Cabal-driving probe is an exclusive holder too "
            f"(missing: {sorted(cabal_drivers - declared)})")
     for key in sorted(cabal_drivers):
         expect("cabal-build" in probe_runner_resources.exclusive_resources(key),
                f"{key} takes the shared Cabal build state exclusively")
+    expect(declared == config_probes | cabal_drivers,
+           f"and nothing else declares an exclusive interest at all "
+           f"(unexpected: {sorted(declared - config_probes - cabal_drivers)})")
     for key in sorted(declared):
         # An interest is one or the other, never both, or a release would
         # drop the exclusive half and leave the shared count behind.
@@ -479,6 +512,7 @@ TESTS_TIMEOUT_DECLARATIONS = (
 #: Exclusive-resource declaration completeness.
 TESTS_EXCLUSIVE_DECLARATIONS = (
     test_exclusive_resource_declaration_is_data_about_real_probes,
+    test_persistence_contract_declares_no_exclusive_interest,
     test_every_probe_declares_what_an_exclusive_holder_takes,
 )
 

@@ -809,7 +809,8 @@ per-key timeout and expected-duration declarations, and the longest-first
 dispatch order the latter decides), `probe_runner_diagnostics.py` (the durable
 progress and failure record protocols), `probe_runner_resources.py` (the
 reader/writer conflict model, the cross-process holds, the inherited ancestor
-holds, the engine preflight and its `ENGINE_EXECUTABLE` cell),
+holds, the engine and save-codec preflights and their
+`ENGINE_EXECUTABLE`/`CODEC_EXECUTABLE` cells),
 `probe_runner_lifecycle.py` (launching one probe and reaping its whole process
 group) and `probe_runner_scheduler.py` (sequential and `--jobs` orchestration,
 retries, presentation, summary). Dependencies run one way — registry and
@@ -1018,22 +1019,40 @@ before its engine started (`package.conf.inplace already exists`,
 `package.cache: removeDirectoryRecursive: does not exist`). Retries only
 re-ran the loser.
 
-The runner now resolves the executable ONCE. After selection is validated
+The runner now resolves every binary a probe execs ONCE. After selection
+is validated
 and every port refusal has had its chance — so `--list`, an unknown
 `--exact` key and a `--port` that reaches 8008 all stay build-free — and
-before a single probe process exists, it runs one freshness `cabal build
-exe:synarchy` plus one read-only `cabal list-bin exe:synarchy`, prints the
-resolved path, and hands it to every probe it launches through
-`SYNARCHY_PROBE_ENGINE_EXE`. A preflight that fails is the runner's own
+before a single probe process exists, it runs one freshness `cabal build`
+plus one read-only `cabal list-bin` PER TARGET, prints the
+resolved paths, and hands them to every probe it launches through
+`SYNARCHY_PROBE_ENGINE_EXE` and `SYNARCHY_SAVE_CODEC_EXE`. A preflight
+that fails is the runner's own
 exit 2 with Cabal's reason — never a retry, never a probe's assertion
-failure. **The build itself runs inside an EXCLUSIVE `cabal-build` hold**:
+failure. **Each build runs inside an EXCLUSIVE `cabal-build` hold**:
 a preflight is a Cabal writer like any other, so two aggregate runs cannot
-build at once, and a build cannot land inside another runner's `cabal
-repl` probe. The hold covers the build alone and is released before any
+build at once, and a build cannot land inside another runner's
+Cabal-driving probe. The hold covers the build alone and is released
+before any
 probe is dispatched, so a sweep never queues its own probes behind it. That applies to `--jobs 1` as much as to `--jobs N`, and it
 reaches the initial attempt, every parallel worker, every solo retry and
-a nested `run_probes.py` (which adopts the inherited path rather than
+a nested `run_probes.py` (which adopts the inherited paths rather than
 building again).
+
+**Two targets since #2274.** `exe:synarchy` is the engine every probe
+boots; `exe:synarchy-save-codec` is the compiled helper the persistence
+probes decode saves through, and the codec bridge
+(`save_compat_audit_codec.resolve_codec_exe`) takes the handed-down path
+in preference to building one. Resolving it here is what let
+`persistence_contract` stop holding `cabal-build` exclusively: a probe
+that execs a handed-down binary is a READER of the build state, not a
+writer of it. It is resolved for every selected probe rather than for a
+hand-kept list of the ones known to decode a save — such a list is a
+second inventory to keep in step with the registry, and a probe that
+GAINED a decode without joining it would quietly build the helper itself
+inside a parallel sweep, which is exactly the defect this section is
+about. On a
+warm tree the extra contact is a plan check that compiles nothing.
 
 `tools/probe_engine.py` is the single funnel every launch goes through —
 `probelib.boot` and the four probes with their own private launchers
@@ -1079,7 +1098,7 @@ still diagnosed as the boot failure it is.
 `tools/deflake.py` prepares the same way but a step earlier: **before**
 the measurement takes its resource hold, never inside it. A measurement
 holds `cabal-build` (shared for an ordinary probe, exclusive for the
-three that drive Cabal themselves) across all ten runs, and
+two that drive Cabal themselves) across all ten runs, and
 `probe_runner_lifecycle.run_one` strips the inherited runner variables
 on the way
 down — so a child left to prepare its own executable would take an
@@ -1088,18 +1107,35 @@ whole allowance for a holder blocked on it. Preparing first removes that
 by ordering, and the resolved path is installed as the runner's
 executable, which is also what stops each of the ten runs rebuilding.
 
-Three registered probes legitimately still drive Cabal themselves, and
-they are not engine boots: `persistence_contract`,
-`persistence_contract_sweep` and `save_compat_migration` each shell out to
-`cabal repl test:synarchy-test-headless` (through
-`persistence_snapshot.compare_session_files` /
-`save_compat_audit.dump_canonical_summary`). A `cabal repl` recompiles
-into the same package database, so each of them declares the
+Two registered probes legitimately still drive Cabal themselves, and
+they are not engine boots. `save_compat_migration` reaches the real codec
+through `save_compat_audit.dump_canonical_summary`; run BY HAND, with no
+runner to hand it the helper, that resolution freshness-builds
+`exe:synarchy-save-codec` itself. `persistence_contract_sweep` drives no
+Cabal command of its own any more, and RETAINS the hold for a different
+reason: it is a probe that runs a nested `run_probes.py`, its default
+nested selection includes `save_compat_migration`, and
+`probe_runner_resources.descendant_hold_env` exports only what an
+ancestor holds EXCLUSIVELY — so a sweep holding `cabal-build` merely
+shared would hand its nested runner nothing to inherit, and that runner
+would then wait forever on its own ancestor. Both therefore declare the
 `cabal-build` resource EXCLUSIVELY in the reader/writer tables below,
-while every other probe holds it SHARED. They therefore cannot overlap
+while every other probe holds it SHARED. They cannot overlap
 each other, nor a probe reading the binary they may be relinking — the
 same scheduling mechanism `repo-config` already used, with no new one
 invented.
+
+`persistence_contract` was the third until #2274. It held the resource
+because `persistence_snapshot.compare_session_files` ran `cabal repl
+test:synarchy-test-headless`, so the compact probe ran ALONE, after every
+other probe in a `--jobs 2` sweep had finished — 177–206 s of dead time
+at the end of every CI probe step on the 2026-09-02 runs. That comparison
+is now `app-save-codec/Main.hs`'s `compare` operation, execed through the
+preflight-resolved helper, so the probe declares no exclusive interest
+and runs beside the rest of the sweep. Its own direct (hand-run) path
+prepares the helper up front, through
+`persistence_snapshot.prepare_decoder`, under the same exclusive hold
+`probe_engine.prepare_executable` takes for the engine.
 
 **Shared repository resources (#1322, #1444, #1570).**
 `probe_runner_resources` declares two tables: `IMPLICIT_SHARED_RESOURCES`, which EVERY registered
@@ -1174,12 +1210,18 @@ whole grace on an engine that was long gone.
 
 `python3 tools/test_run_probes.py` is that behavior's gate: deterministic,
 GPU-free, synthetic probes and synthetic engine descendants in a throwaway
-tree, no registered probe ever run. It covers the executable preflight
-(#1570) the same way — with the preflight's subprocess entry point
-doubled, so one Cabal contact per run, its ordering ahead of every probe
-spawn, its failure starting nothing, the resolved path reaching every
-attempt including solo retries, and the build-free `--list`/refusal paths
+tree, no registered probe ever run. It covers the executable preflights
+(#1570, #2274) the same way — with the preflight's subprocess entry point
+doubled, so one Cabal contact per target per run, their ordering ahead of
+every probe
+spawn, a failure starting nothing, each resolved path reaching every
+attempt including solo retries under its own environment variable, a
+probe handed the save codec never falling back to building it, and the
+build-free `--list`/refusal paths
 are all the shipped `main`'s behaviour rather than a restatement of it.
+It also pins, as an OVERLAP rather than as an assertion about a table,
+that `persistence_contract` now runs beside an ordinary probe instead of
+alone after it.
 It is a blocking CI step alongside `ci_probes.py --self-test`.
 
 ### `test_action_outcome_probe.py` — chop-fixture classification (#1398)
@@ -2530,7 +2572,7 @@ python3 tools/deflake.py --json     # the machine-readable outcome document
 python3 tools/test_deflake.py       # the deterministic self-test (the gate)
 python3 tools/test_deflake.py --only orchestration   # one owner's cases (#1436)
 python3 tools/test_deflake.py --only handoff         # the handoff's (#1659)
-python3 tools/test_deflake.py --only preparation     # engine preparation's (#1913)
+python3 tools/test_deflake.py --only preparation     # binary preparation's (#1913)
 ```
 
 No arguments select a probe, and there is deliberately no run-count or RTS
@@ -2666,12 +2708,16 @@ with three independently delivered contract owners, each declaring its own
 `CASES` inventory: `deflake_selftest_orchestration` (#1436's
 select/claim/measure/record orchestration, 31 cases),
 `deflake_selftest_handoff` (#1659's retained diagnosis handoff, 15) and
-`deflake_selftest_preparation` (#1913's preparation-before-hold ordering, 4);
+`deflake_selftest_preparation` (#1913's preparation-before-hold ordering, 4 --
+which since #2274 prepares BOTH binaries a probe may exec, the engine and the
+compiled save codec, because `persistence_contract` holds `cabal-build` only
+shared now and a child left to resolve the codec itself would build under a
+measurement's hold);
 `deflake_selftest_support` is the single source of what they share — the
 assertion helper and the ONE failure accumulator behind it, the temporary
 census/claim/artifact tree, the real `Measurement` builder, the fake claim,
-the recording, resource and engine-preparation adapters behind `run`, and
-the one save/restore of the runner's executable seam.
+the recording, resource and binary-preparation adapters behind `run`, and
+the one save/restore of the runner's two executable cells.
 The bare command runs every case once in the order it always has
 (orchestration, handoff, preparation) and is what CI and `make ci` invoke;
 `--only <owner>` runs one owner's cases in a fresh process for iteration.
@@ -4073,7 +4119,7 @@ tools/
 ├── run_probes.py           (opt-in aggregate behavior-probe runner — the command)
 ├── probe_runner_registry.py    (its probe registry, selection, port spans, per-key timeouts + expected durations)
 ├── probe_runner_diagnostics.py (its durable progress/failure record protocols)
-├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine preflight)
+├── probe_runner_resources.py   (its resource conflict model, cross-process holds, engine/save-codec preflights)
 ├── probe_runner_lifecycle.py   (its one-probe launch and process-group teardown)
 ├── probe_runner_scheduler.py   (its sequential/--jobs orchestration, retries, summary)
 ├── gameplay_scenarios.py   (manual first-expedition scenarios, #925 — outside CI; the façade)

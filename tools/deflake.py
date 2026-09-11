@@ -47,9 +47,11 @@ Ownership, in order, and what each step may not do
    runs. A measurement nobody can attribute to an acquisition is worse
    than one that did not happen, so a failure here releases the claim
    and refuses to run.
-4. PREPARE. The engine executable the runs will launch, built and
+4. PREPARE. Both binaries the runs may exec — the engine, and (since
+   #2274) the compiled `exe:synarchy-save-codec` the persistence probes
+   decode through — built and
    located HERE — before the resource hold below, and outside every
-   probe process. A probe that was handed no executable prepares its
+   probe process. A probe that was handed neither prepares its
    own (#1913), which takes `cabal-build` exclusively; doing that
    underneath this measurement's own hold of the same resource is an
    upgrade that can only deadlock, so the ordering is the fix. It also
@@ -194,9 +196,9 @@ import probe_flake  # noqa: E402
 import probe_protocol  # noqa: E402
 import probe_resource_lock  # noqa: E402
 import probe_select  # noqa: E402
-import probe_engine  # noqa: E402
 import probe_runner_lifecycle  # noqa: E402
 import probe_runner_resources  # noqa: E402
+import save_compat_audit_codec  # noqa: E402
 
 # One census measurement, in runs. Taken from the policy module rather
 # than restated: it is the same N the selection ladder measures a cohort
@@ -559,7 +561,7 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
                        stale_after_seconds=probe_census.DEFAULT_STALE_AFTER_SECONDS,
                        inputs=None, load_census=None, claimed=None,
                        acquire_claim=None, acquire_resources=None,
-                       prepare_engine=None,
+                       prepare_binaries=None,
                        measure=None, record_claim=None, record_result=None,
                        head_commit=None, announce=None, argv=None, cwd=None,
                        read_configuration=None, save_handoff=None) -> Result:
@@ -578,8 +580,8 @@ def measure_next_probe(*, repo_root=None, census_path=None, claim_root=None,
                   else claim_lease.acquire)
     take_resources = (acquire_resources if acquire_resources is not None
                       else _acquire_probe_resources)
-    prepare = (prepare_engine if prepare_engine is not None
-               else _prepare_probe_engine)
+    prepare = (prepare_binaries if prepare_binaries is not None
+               else _prepare_probe_binaries)
     run_measure = measure if measure is not None else probe_flake.measure
     log_claim = record_claim if record_claim is not None else probe_census.record_claim
     # The INSTALLED candidate, not just the probe key: #1659's handoff
@@ -754,13 +756,14 @@ def _probe_resource_namespace(*, namespace, repo_root=None) -> str:
     return probe_resource_lock.repository_namespace(repo_root)
 
 
-def _prepare_probe_engine(*, namespace, repo_root=None, announce=None) -> str:
-    """Build and locate the engine BEFORE the measurement takes its hold.
+def _prepare_probe_binaries(*, namespace, repo_root=None,
+                            announce=None) -> tuple[str, str]:
+    """Build and locate BOTH probe binaries before the measurement holds.
 
     A measurement runs the probe as a child process, and a child that
     was handed no executable prepares its own (#1913) — which takes
     `cabal-build` EXCLUSIVELY. This process is by then holding that same
-    resource, SHARED for an ordinary probe and exclusive for the three
+    resource, SHARED for an ordinary probe and exclusive for the two
     that drive Cabal themselves, and `probe_runner_lifecycle.run_one` strips the
     inherited runner variables on the way down, so the child could
     neither see the ancestor's hold nor upgrade past it: it would wait
@@ -769,13 +772,25 @@ def _prepare_probe_engine(*, namespace, repo_root=None, announce=None) -> str:
 
     Preparing HERE removes that by ordering rather than by exception.
     The exclusive hold is taken and released before this measurement's
-    own hold is acquired, so nothing is ever upgraded; the resolved path
-    is then installed as the runner's executable, which puts every run
-    of the measurement on the prebuilt path and leaves it making no
-    Cabal contact at all.
+    own hold is acquired, so nothing is ever upgraded; the resolved
+    paths are then installed as the runner's executables, which puts
+    every run of the measurement on the prebuilt path and leaves it
+    making no Cabal contact at all.
+
+    BOTH binaries since #2274, and the second one is not optional
+    padding. `persistence_contract` decodes its generations through
+    `exe:synarchy-save-codec` and no longer holds `cabal-build`
+    exclusively, so a measurement that prepared only the engine would
+    leave its child freshness-building the codec under this process's
+    merely SHARED hold — a Cabal writer inside a measurement, which is
+    the exact class of defect #1570 and #1913 removed.
     """
-    return probe_engine.prepare_executable(
-        repo_root, namespace=namespace, announce=announce)
+    return (probe_engine.prepare_executable(
+                repo_root, namespace=namespace, announce=announce),
+            probe_engine.prepare_executable(
+                repo_root, namespace=namespace, announce=announce,
+                target=save_compat_audit_codec.CODEC_TARGET,
+                env_var=save_compat_audit_codec.ENV_CODEC_EXE))
 
 
 def _acquire_probe_resources(probe: str, *, namespace, repo_root=None):
@@ -891,35 +906,38 @@ def _measure_claimed(*, probe, claim, selection, target, repo_root, namespace,
             ownership=OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE,
             commit=captured, **common)
 
-    # ---- 5. The engine the runs will launch (#1913) ----------------------
+    # ---- 5. The binaries the runs will launch (#1913, #2274) -------------
     # BEFORE the hold below, never inside it. Preparation is a Cabal
     # writer and takes `cabal-build` exclusively; this measurement is
     # about to hold that same resource, so preparing under it would be
-    # an upgrade that can only deadlock. Resolved once here, the path
-    # goes to every run of the measurement through the runner's own
+    # an upgrade that can only deadlock. Resolved once here, the paths
+    # go to every run of the measurement through the runner's own
     # executable handoff, so no child performs a Cabal contact of its
     # own — which is also what stops each of N runs rebuilding.
     try:
-        engine_exe = prepare(namespace=_probe_resource_namespace(
+        engine_exe, codec_exe = prepare(namespace=_probe_resource_namespace(
             namespace=namespace, repo_root=repo_root),
             repo_root=repo_root, announce=say)
     except (probe_engine.EngineExecutableError,
             probe_resource_lock.ResourceLockError) as error:
         problem = _release(claim)
         return Result(OUTCOME_MANAGED_ERROR, detail=(
-            f"the engine the runs would launch could not be prepared "
+            f"the binaries the runs would launch could not be prepared "
             f"({error}); the probe was not run"),
             ownership=(OWNERSHIP_CLAIM_HELD if problem else OWNERSHIP_NONE),
             commit=captured, **common)
-    # `probe_runner_lifecycle.run_one` reads THIS cell for the executable
-    # it hands each child through `$SYNARCHY_PROBE_ENGINE_EXE` — the one
-    # authoritative cell (#2074), and the same fill-in
+    # `probe_runner_lifecycle.run_one` reads THESE cells for the binaries
+    # it hands each child through `$SYNARCHY_PROBE_ENGINE_EXE` and
+    # `$SYNARCHY_SAVE_CODEC_EXE` — the authoritative cells (#2074), and
+    # the same fill-in
     # `tools/run_probes.py` performs after ITS preflight. `probe_flake`
     # sits between us and `run_one` and forwards nothing of its own, so
-    # this is where a de-flake measurement declares which binary its runs
-    # are measuring.
+    # this is where a de-flake measurement declares which binaries its
+    # runs are measuring.
     probe_runner_resources.ENGINE_EXECUTABLE = engine_exe
+    probe_runner_resources.CODEC_EXECUTABLE = codec_exe
     say(f"engine: {engine_exe}")
+    say(f"save codec: {codec_exe}")
 
     # ---- 6. Resources ---------------------------------------------------
     try:

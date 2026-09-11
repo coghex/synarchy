@@ -51,17 +51,20 @@ each of which keeps its own inventory in `CASES`:
                                     census row, outcome eligibility,
                                     writer failures and the real writer
                                     (15 cases);
-  `deflake_selftest_preparation`    #1913's engine preparation BEFORE the
-                                    measurement's hold: ordering,
-                                    namespace agreement, preparation
-                                    failure, and the real preparation
-                                    against the real hold (4 cases).
+  `deflake_selftest_preparation`    #1913's binary preparation BEFORE the
+                                    measurement's hold -- both binaries a
+                                    probe may exec since #2274, the engine
+                                    and the compiled save codec:
+                                    ordering, namespace agreement,
+                                    preparation failure, and the real
+                                    preparation against the real hold
+                                    (4 cases).
 
 `deflake_selftest_support` is the single source of everything they
 share: the assertion helper and the ONE failure accumulator behind it,
 the temporary census, claim and artifact tree, the real
 `probe_flake.Measurement` builder, the fake claim, and the recording,
-resource and engine-preparation adapters behind `run`.
+resource and binary-preparation adapters behind `run`.
 
 The aggregate runs the owners in `AGGREGATE_OWNER_ORDER`, each owner's
 cases in its own declared order, which is the sequence this gate has

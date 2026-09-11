@@ -8,7 +8,8 @@ encode/decode round trip is lossless for a representative multi-page
 session. What that gate structurally CANNOT prove is requirement 5's own
 literal ask: "terminate the engine. Start a fresh headless engine." This
 probe is the compact, deterministic smoke version of that -- three real
-engine boots in a row, each loading the previous one's save and
+fresh-process boots after the initial save, each loading the previous
+one's save and
 immediately re-saving, so requirement 9's "at least three fresh-process
 save -> load -> save cycles" is exercised even at smoke scale.
 
@@ -28,11 +29,16 @@ identical pattern -- never the developer's real ``saves/``):
      unit_ai attack-target reference, the building_spawn roster
      countdown) is identical before and after. Re-save (no mutation in
      between) to "gen2".
-  3. Quit B. Boot engine C (fresh process). Load "gen2"; re-save to
-     "gen3".
-  4. Quit C. ``persistence_snapshot.compare_session_files`` decodes all
-     three generations through the REAL production codec
-     (``World.Save.Envelope.decodeSessionEnvelope``) and asserts every
+  3. Quit B. Boot engines C and D the same way, each a fresh process
+     loading the previous generation and re-saving: "gen2" -> "gen3",
+     then "gen3" -> "gen4". B, C and D are the three complete
+     fresh-process cycles requirement 9 asks for; engine A's save is
+     the initial one, not itself a cycle.
+  4. Quit D. ``persistence_snapshot.compare_session_files`` decodes all
+     four generations through the REAL production codec
+     (``World.Save.Envelope.decodeSessionEnvelope``, reached since #2274
+     by exec'ing the compiled ``exe:synarchy-save-codec`` rather than a
+     ``cabal repl`` of the test suite) and asserts every
      one is structurally IDENTICAL -- both the Haskell
      ``SessionSnapshot`` (via derived ``Eq``) and every ``lua.<module>``
      canonical component payload (via byte equality) -- the canonical
@@ -70,7 +76,7 @@ from pathlib import Path
 
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
-from persistence_snapshot import compare_session_files
+from persistence_snapshot import compare_session_files, prepare_decoder
 from save_compat_audit import dump_canonical_summary
 
 REPO = Path(__file__).resolve().parent.parent
@@ -397,6 +403,15 @@ def main() -> int:
     proc = None
     try:
         root = make_isolated_root(tmpdir)
+
+        # Every decode below -- the map-mode check and the
+        # four-generation comparison -- execs the compiled save codec
+        # (#2274). Resolved HERE, before the first engine boot: under
+        # tools/run_probes.py it is already exported and this costs
+        # nothing, and run by hand it keeps the build out of the window
+        # that times engine work (#1913's argument, applied to the
+        # second binary).
+        prepare_decoder()
 
         # ── Engine A: build the scenario, save ───────────────────────────
         print("=== engine A: build scenario + save 'gen1' ===")

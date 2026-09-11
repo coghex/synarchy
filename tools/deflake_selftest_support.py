@@ -7,7 +7,7 @@ and `deflake_selftest_preparation` -- share: the assertion helper and
 the single failure accumulator behind it, the temporary census, claim
 and artifact tree, the real `probe_flake.Measurement` builder, the fake
 claim with its ownership and renewal surface, the recording, resource
-and engine-preparation adapters, and `run`, which is
+and binary-preparation adapters, and `run`, which is
 `deflake.measure_next_probe` with every seam defaulted to a safe fake.
 
 Two of those are single-sourced for correctness rather than tidiness:
@@ -25,11 +25,12 @@ Two of those are single-sourced for correctness rather than tidiness:
   function, and only the cases that deliberately exercise the real
   adapters name them.
 * `saved_runner_executable` is the ONE save/restore of
-  `probe_runner_resources.ENGINE_EXECUTABLE`, the only writable
-  production module global this gate touches. `deflake` installs the
-  prepared executable there under every `run` and, being the tool that
-  is about to hand it to child probes, never uninstalls it -- so `run`
-  restores it on every exit, and the preparation cases, which assign it
+  `probe_runner_resources.ENGINE_EXECUTABLE` and `CODEC_EXECUTABLE`,
+  the only writable
+  production module globals this gate touches. `deflake` installs the
+  prepared binaries there under every `run` and, being the tool that
+  is about to hand them to child probes, never uninstalls them -- so `run`
+  restores them on every exit, and the preparation cases, which assign them
   themselves before calling `run`, use the same helper around their own
   assignment.
 
@@ -71,14 +72,16 @@ import probe_claim_storage as claim_storage  # type: ignore  # noqa: E402
 import probe_flake  # type: ignore  # noqa: E402
 import probe_protocol  # type: ignore  # noqa: E402
 import probe_resource_lock  # type: ignore  # noqa: E402
+import probe_engine  # type: ignore  # noqa: E402
 import probe_runner_resources  # type: ignore  # noqa: E402
+import save_compat_audit_codec  # type: ignore  # noqa: E402
 
 from selftestlib import FAILURES, expect  # noqa: E402
 
 __all__ = [
     "ARGV", "COMMIT", "CWD", "FAILURES", "FakeClaim", "NOW", "OTHER",
-    "OTHER_COMMIT", "PREPARED_ENGINE", "PROBE", "Preparer", "Recorder",
-    "Scratch", "TOOLS_DIR", "expect", "held_resources", "installed_census",
+    "OTHER_COMMIT", "PREPARED_CODEC", "PREPARED_ENGINE", "PROBE",
+    "Preparer", "Recorder", "Scratch", "no_handoff_environment", "TOOLS_DIR", "expect", "held_resources", "installed_census",
     "measurement", "run", "saved_runner_executable", "seams_restored",
     "selector_inputs",
 ]
@@ -270,18 +273,29 @@ def held_resources(probe, *, namespace=None, repo_root=None):
 
 
 #: What the preparation seam answers with when a case does not care.
-#: Every case needs one: the real seam shells out to Cabal, and a suite
-#: that is engine-free and toolchain-free must never reach it by
+#: A PAIR since #2274 -- the engine and the compiled save codec -- because
+#: that is what `deflake._prepare_probe_binaries` really resolves.
+#: Every case needs both: the real seam shells out to Cabal twice, and a
+#: suite that is engine-free and toolchain-free must never reach it by
 #: forgetting to substitute.
 PREPARED_ENGINE = "/private/tmp/synarchy-selftest-checkout/synarchy"
+PREPARED_CODEC = "/private/tmp/synarchy-selftest-checkout/synarchy-save-codec"
 
 
 class Preparer:
-    """Records how the engine preparation seam was called."""
+    """Records how the binary-preparation seam was called.
 
-    def __init__(self, executable: str = PREPARED_ENGINE, raises=None,
+    Answers the PAIR the real `deflake._prepare_probe_binaries` answers
+    since #2274 — the engine and the compiled save codec — because the
+    codec is what `persistence_contract` decodes through now that it no
+    longer holds `cabal-build` exclusively.
+    """
+
+    def __init__(self, executable: str = PREPARED_ENGINE,
+                 codec: str = PREPARED_CODEC, raises=None,
                  observe=None) -> None:
         self.executable = executable
+        self.codec = codec
         self.raises = raises
         self.observe = observe
         self.calls: list = []
@@ -292,23 +306,61 @@ class Preparer:
             self.observe()
         if self.raises is not None:
             raise self.raises
-        return self.executable
+        return self.executable, self.codec
 
 
-class saved_runner_executable:
-    """Restore `probe_runner_resources.ENGINE_EXECUTABLE`, which `deflake` installs.
+class no_handoff_environment:
+    """Remove the runner-to-probe binary handoffs for one block.
 
-    It is a module global the runner reads when it hands a child probe
-    its executable, so a case that leaves it set would decide what a
-    later case observes.
+    `probe_engine.prepare_executable` returns an EXPORTED path verbatim
+    rather than building -- that early return is the whole point of the
+    handoff, and it is what `probe_runner_lifecycle.run_one` relies on.
+    It also means a case driving the REAL preparation observes whatever
+    the operator happens to have exported: a shell carrying
+    `SYNARCHY_PROBE_ENGINE_EXE` or `SYNARCHY_SAVE_CODEC_EXE` (exactly
+    what a developer running a probe by hand against a specific build
+    exports) would see the preparation build nothing and the case fail
+    on a `cabal-calls.txt` that stayed empty.
+
+    `probe_runner_tests.support.patched` scrubs the same variables for
+    the same reason, through `probe_runner_resources.RUNNER_ENV_VARS`.
+    This is that rule for the de-flake suite, restoring on every exit.
     """
 
+    NAMES = (probe_engine.ENV_ENGINE_EXE,
+             save_compat_audit_codec.ENV_CODEC_EXE)
+
     def __enter__(self):
-        self._saved = probe_runner_resources.ENGINE_EXECUTABLE
+        self._saved = {name: os.environ.pop(name, None)
+                       for name in self.NAMES}
         return self
 
     def __exit__(self, *exc):
-        probe_runner_resources.ENGINE_EXECUTABLE = self._saved
+        for name, value in self._saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        return False
+
+
+class saved_runner_executable:
+    """Restore the executable cells `deflake` installs.
+
+    `probe_runner_resources.ENGINE_EXECUTABLE` and (since #2274)
+    `CODEC_EXECUTABLE` are module globals the runner reads when it hands
+    a child probe its binaries, so a case that leaves either set would
+    decide what a later case observes.
+    """
+
+    def __enter__(self):
+        self._saved = (probe_runner_resources.ENGINE_EXECUTABLE,
+                       probe_runner_resources.CODEC_EXECUTABLE)
+        return self
+
+    def __exit__(self, *exc):
+        (probe_runner_resources.ENGINE_EXECUTABLE,
+         probe_runner_resources.CODEC_EXECUTABLE) = self._saved
         return False
 
 
@@ -316,7 +368,8 @@ class seams_restored:
     """Assert, on exit, that every seam a case patches is back where it started.
 
     The seams a case in this suite reaches and restores in its own
-    `finally`: `probe_runner_resources.ENGINE_EXECUTABLE` (installed by
+    `finally`: `probe_runner_resources.ENGINE_EXECUTABLE` and
+    `CODEC_EXECUTABLE` (both installed by
     `deflake` under every `run`, and assigned by the preparation cases),
     `PATH` (prepended by the real-preparation case),
     `census_storage.tempfile.mkstemp` and `census_storage.os.fsync` (the two
@@ -327,7 +380,8 @@ class seams_restored:
     outcome, an exception propagating through the cases included.
     """
 
-    SEAMS = ("probe_runner_resources.ENGINE_EXECUTABLE", "PATH",
+    SEAMS = ("probe_runner_resources.ENGINE_EXECUTABLE",
+             "probe_runner_resources.CODEC_EXECUTABLE", "PATH",
              "census_storage.tempfile.mkstemp", "census_storage.os.fsync",
              "argparse.ArgumentParser.parse_args")
 
@@ -336,6 +390,8 @@ class seams_restored:
         return {
             "probe_runner_resources.ENGINE_EXECUTABLE":
                 probe_runner_resources.ENGINE_EXECUTABLE,
+            "probe_runner_resources.CODEC_EXECUTABLE":
+                probe_runner_resources.CODEC_EXECUTABLE,
             "PATH": os.environ.get("PATH"),
             "census_storage.tempfile.mkstemp": census_storage.tempfile.mkstemp,
             "census_storage.os.fsync": census_storage.os.fsync,
@@ -366,7 +422,7 @@ def run(scratch: Scratch, **overrides):
         "inputs": selector_inputs(),
         "acquire_claim": lambda probe, **kw: FakeClaim(probe),
         "acquire_resources": held_resources,
-        "prepare_engine": Preparer(),
+        "prepare_binaries": Preparer(),
         "measure": Recorder(),
         "record_claim": lambda *a, **kw: PROBE,
         # The recording seam now answers with the census row the

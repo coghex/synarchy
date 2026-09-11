@@ -13,7 +13,19 @@ SAME real fresh-process save -> load -> save cycle (three times,
 requirement 9) and the SAME
 ``tools/persistence_snapshot.compare_session_files`` structural
 comparison (requirement 1/2/5) the compact probe uses, just against a
-richer scenario and a real (not tiny) world size.
+richer scenario and a real (not tiny) world size. Since #2274 that
+comparison execs the compiled ``exe:synarchy-save-codec`` rather than a
+``cabal repl`` of the headless test suite.
+
+This sweep nonetheless RETAINS its exclusive ``cabal-build``
+declaration, and requirement 3 of #2274 asks the reason to be recorded:
+its default cross-probe selection includes ``save_compat_migration``,
+which still declares that resource exclusively on its own direct path,
+and ``probe_runner_resources.descendant_hold_env`` exports only what an
+ancestor holds EXCLUSIVELY. A sweep holding it merely shared would hand
+its nested runner nothing to inherit, and that runner would then wait
+forever on its own ancestor. See that module's comment for the full
+argument.
 
 This sweep does NOT re-implement the domain-specific scenarios (chop/
 till/crop/plant designations, power-node placement, the assembled
@@ -87,7 +99,7 @@ from pathlib import Path
 
 from probelib import (boot, quit_engine, send, send_json, wait_load_published,
                        wait_save_complete, capture_request_id)
-from persistence_snapshot import compare_session_files
+from persistence_snapshot import compare_session_files, prepare_decoder
 from probe_runner_diagnostics import FailureEmitter, ProgressEmitter
 from probe_runner_registry import PROBES as REGISTERED_PROBES
 from save_compat_audit import dump_canonical_summary
@@ -663,6 +675,13 @@ def main() -> int:
     proc = None
     try:
         root = make_isolated_root(tmpdir)
+
+        # The compiled save codec every decode below execs (#2274),
+        # resolved before the first engine boot. Under
+        # tools/run_probes.py the preflight already exported it and this
+        # is free; run by hand it keeps the build outside the phases
+        # this sweep times and reports.
+        prepare_decoder()
 
         announce_phase(progress, SWEEP_PHASE_ENGINE_A,
                        "build the representative scenario, save 'gen1'")

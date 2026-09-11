@@ -37,9 +37,13 @@
 --   sweep), both built on 'tools/persistence_snapshot.py''s
 --   @compare_session_files@ — which reuses the EXACT SAME
 --   'decodeSessionEnvelope' entry point this module exercises in-process,
---   just run via a @cabal repl@ subprocess against real files on disk so
+--   just run out of process against real files on disk so
 --   two independently-produced save generations (across a real restart)
---   can be compared the identical way. See
+--   can be compared the identical way. Since #2274 it reaches that entry
+--   point by exec'ing @app-save-codec/Main.hs@'s compiled @compare@
+--   operation, not by starting a @cabal repl@ of THIS suite: nothing
+--   under @test-headless\/@ is an input to a probe any more, which is why
+--   the @behavior-probes@ CI job no longer builds it. See
 --   @docs/persistence_state_inventory.md@ SS12 for the full coverage
 --   map and @docs/persistence_contract.md@ SS6 for the consolidated test
 --   matrix.

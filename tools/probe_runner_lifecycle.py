@@ -11,8 +11,9 @@ child is handed.
 
 Dependencies (#2074 requirement 11): the resource owner (for the
 runner-owned environment variable names `run_one` scrubs, and for the
-`ENGINE_EXECUTABLE` cell it hands the child), `probe_engine`, and
-`probe_protocol`. Nothing here imports the scheduler or the runner
+`ENGINE_EXECUTABLE`/`CODEC_EXECUTABLE` cells it hands the child),
+`probe_engine`, `save_compat_audit_codec` (for the codec handoff's name)
+and `probe_protocol`. Nothing here imports the scheduler or the runner
 command, and nothing here takes a resource hold — a hold spans an
 execution, which is the scheduler's unit, not this one's.
 """
@@ -27,6 +28,7 @@ import time
 import probe_engine
 import probe_protocol
 import probe_runner_resources as resources
+import save_compat_audit_codec
 
 # How long a signalled probe process group gets to leave on its own before
 # the escalation to SIGKILL. One grace period shared by the timeout path
@@ -344,6 +346,17 @@ def run_one(script: str, port: int | None, timeout: float,
     engine_exe = resources.ENGINE_EXECUTABLE
     if engine_exe is not None:
         child_env[probe_engine.ENV_ENGINE_EXE] = engine_exe
+    # The compiled save codec, resolved by the same preflight (#2274) and
+    # handed over under the same contract. Without it a probe that
+    # decodes a save falls back to freshness-building the helper itself,
+    # which — now that `persistence_contract` holds `cabal-build` only
+    # SHARED — would be a Cabal writer inside a parallel sweep, i.e.
+    # #1570's defect returning through a different door. A caller that
+    # resolved none (an in-process test, an older embedding) passes
+    # nothing and leaves the child on its own preparation path.
+    codec_exe = resources.CODEC_EXECUTABLE
+    if codec_exe is not None:
+        child_env[save_compat_audit_codec.ENV_CODEC_EXE] = codec_exe
     if hold_env:
         child_env.update(hold_env)
     if groups is not None and groups.stopping.is_set():

@@ -581,16 +581,20 @@ SKIP_GLOBS = [
 # never the reverse — so no edit under `test/` or `test-headless/` can
 # change what a probe observes.
 #
-# One real coupling survives. The CI-eligible `persistence_contract` probe calls
-# `persistence_snapshot.compare_session_files`, which launches
-# `cabal repl test:synarchy-test-headless`, so it does need `test-headless/`
-# to COMPILE. The separate `behavior-probes` job therefore builds
-# `exe:synarchy`, `synarchy-test-headless` and (since #2273, for the
-# compiled save codec that same probe's `dump_canonical_summary` execs)
-# `exe:synarchy-save-codec` before launching any selected probe. A test-only change still selects no probes and is compiled + tested by
-# `test-and-audits`; a mixed core/test change selects probes and the
-# prerequisite build fails cleanly before their timeout begins. `test/` has no such
-# coupling: it belongs to
+# The one real coupling that used to survive is gone (#2274). The
+# CI-eligible `persistence_contract` probe calls
+# `persistence_snapshot.compare_session_files`, which launched
+# `cabal repl test:synarchy-test-headless` and therefore needed
+# `test-headless/` to COMPILE; that comparison is now
+# `app-save-codec/Main.hs`'s `compare` operation, so no probe reads
+# either test tree any more, in any sense. The separate `behavior-probes`
+# job builds `exe:synarchy` and `exe:synarchy-save-codec` and nothing
+# else before launching any selected probe — the two binaries a probe
+# EXECS — and `tools/ci_parity_audit.py` pins that, in both directions.
+# A test-only change still selects no probes and is compiled + tested by
+# `test-and-audits`; a mixed core/test change selects probes, whose
+# prerequisite build fails cleanly before their timeout begins. `test/`
+# never had the coupling at all: it belongs to
 # `synarchy-test-graphical`, which this selector never builds and which is
 # compiled only when `tools/ci_expensive_gates.py` selects the graphical
 # build through its own independent `GRAPHICAL_GLOBS` entry `test/*` —

@@ -742,7 +742,9 @@ persistence-inventory audit" in `persistence_contract.md`).
   `tools/persistence_snapshot.py`'s `compare_session_files` decodes N
   save files through the real `World.Save.Envelope.decodeSessionEnvelope`
   and asserts every decoded `SessionSnapshot` is pairwise `≡`, GPU-less
-  and engine-less (a `cabal repl` subprocess against raw files).
+  and engine-less. Since #2274 it reaches that function by exec'ing the
+  compiled `exe:synarchy-save-codec`'s `compare` operation against raw
+  files, not by starting a `cabal repl` of the headless test suite.
 - **`lua.<module>` canonical component payload bytes** — the Lua
   components. `scripts/lib/data_codec.lua`'s canonical (sorted-key)
   encoding means identical logical state always re-encodes to identical

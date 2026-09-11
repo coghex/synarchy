@@ -54,6 +54,7 @@ from .support import (
 )
 
 import probe_runner_diagnostics  # noqa: E402
+import probe_runner_resources  # noqa: E402
 from selftestlib import expect  # noqa: E402
 
 
@@ -268,6 +269,45 @@ def test_a_solo_probe_waits_for_work_already_running() -> None:
         tree.cleanup()
 
 
+def test_persistence_contract_overlaps_an_ordinary_probe() -> None:
+    print("\n-- persistence_contract runs BESIDE other probes, not alone "
+          "after them (#2274)")
+    tree = Tree()
+    try:
+        # Named for the real registry key, so the shipped declaration in
+        # `probe_runner_resources.EXCLUSIVE_RESOURCES` is what decides --
+        # re-adding `cabal-build` there turns this red, which is the
+        # whole point of writing it as an overlap rather than as an
+        # assertion about the table.
+        #
+        # `unrelated_a` is second in registry order and both probes dwell
+        # the same length, so under `--jobs 2` an unblocked scheduler
+        # dispatches them together. While the probe was exclusive it ran
+        # alone, after every other probe had finished -- 177-206 s of
+        # dead time at the end of every CI probe step.
+        tree.add("persistence_contract", dwell=0.8, descendant=False)
+        tree.add("unrelated_a", dwell=0.8, descendant=False)
+        rc, out = main_with(tree, ["--jobs", "2"])
+        expect(rc == 0, f"both probes still pass (exit {rc})")
+        expect("2/2 passed" in out, "and the aggregate summary counts both")
+        contract = tree.window("persistence_contract")
+        other = tree.window("unrelated_a")
+        expect(contract[1] is not None and other[1] is not None,
+               f"both ran to completion (contract {contract}, "
+               f"unrelated_a {other})")
+        expect(overlaps(contract, other),
+               f"and they overlapped, so the probe no longer holds "
+               f"`cabal-build` exclusively (contract {contract}, "
+               f"unrelated_a {other})")
+        expect(probe_runner_resources.exclusive_resources(
+                   "persistence_contract") == set(),
+               f"which is the declaration this asserts through: it names "
+               f"no exclusive resource at all (got "
+               f"{sorted(probe_runner_resources.exclusive_resources('persistence_contract'))})")
+    finally:
+        tree.cleanup()
+
+
 def test_conflict_is_released_after_a_failure() -> None:
     print("\n-- a FAILING exclusive probe still releases both interests")
     tree = Tree()
@@ -367,10 +407,12 @@ DRIVER_SRC = textwrap.dedent("""\
     # in-process `patched` fixture supplies it -- otherwise the runner
     # refuses to start and the interrupt below has nothing to interrupt.
     probe_runner_resources.RESOURCE_NAMESPACE = {namespace!r}
-    # ... and the engine-executable preflight (#1570) the same way, for
+    # ... and the executable preflights (#1570, #2274) the same way, for
     # the same reason: the synthetic tree is no Cabal project, so a real
     # freshness build would refuse the run before the interrupt could
-    # reach it. One build, one list-bin, both answered here.
+    # reach it. One build and one list-bin per target, all answered here
+    # with the same synthetic binary -- which binary is which does not
+    # matter to an interrupt test, only that both resolve.
     _synthetic_exe = {executable!r}
 
     def _preflight(argv, cwd=None, capture_output=False, text=False):
@@ -890,6 +932,7 @@ TESTS_KEY_TIMEOUTS = (
 TESTS_RESOURCE_SCHEDULING = (
     test_declared_conflicts_never_overlap,
     test_a_solo_probe_waits_for_work_already_running,
+    test_persistence_contract_overlaps_an_ordinary_probe,
     test_conflict_is_released_after_a_failure,
     test_conflict_is_released_after_a_timeout,
 )

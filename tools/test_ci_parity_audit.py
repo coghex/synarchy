@@ -471,6 +471,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: python3 tools/ci_probes.py --stdin
+      - name: Build behavior probe prerequisites
+        run: cabal build exe:synarchy exe:synarchy-save-codec
       - run: >-
           python3 tools/run_probes.py
           --only "${{ steps.probe-selection.outputs.only }}"
@@ -571,7 +573,101 @@ def _parallel_gate_wiring_self_test() -> list[str]:
              'test "$PROBES_RESULT" = success',
              'test "$PROBES_RESULT" = failure'),
          'test "$PROBES_RESULT" = success'),
+        # #2274 requirement 4, in both directions. The gate-set
+        # comparison above collects `python3 tools/*.py` invocations and
+        # ignores every other command, so nothing else in this audit
+        # would notice a Cabal target appearing or disappearing here.
+        ("restore the headless suite to the prerequisite build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec "
+             "synarchy-test-headless\n"),
+         "builds 'synarchy-test-headless', which no probe execs"),
+        ("build everything instead of what probes exec",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build all\n"),
+         "builds 'all', which no probe execs"),
+        ("drop the save codec from the prerequisite build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy\n"),
+         "no longer builds 'exe:synarchy-save-codec'"),
+        ("drop the engine from the prerequisite build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy-save-codec\n"),
+         "no longer builds 'exe:synarchy'"),
+        ("drop the prerequisite build step outright",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "      - name: Build behavior probe prerequisites\n"
+             "        run: cabal build exe:synarchy "
+             "exe:synarchy-save-codec\n", ""),
+         "must have exactly one `Build behavior probe prerequisites` step"),
+        ("duplicate the prerequisite build step",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "      - name: Build behavior probe prerequisites\n"
+             "        run: cabal build exe:synarchy "
+             "exe:synarchy-save-codec\n",
+             "      - name: Build behavior probe prerequisites\n"
+             "        run: cabal build exe:synarchy "
+             "exe:synarchy-save-codec\n"
+             "      - name: Build behavior probe prerequisites\n"
+             "        run: cabal build synarchy-test-headless\n"),
+         "must have exactly one `Build behavior probe prerequisites` step"),
+        ("prerequisite step that builds nothing",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: echo skipped\n"),
+         "must run exactly one command"),
+        # An EXTRA target no blacklist would have thought of. The exact
+        # set is what catches it: `lib:synarchy` is not a suite, is not
+        # `all`, and costs build time the job does not need.
+        ("an extra target outside the pinned set",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec "
+             "lib:synarchy\n"),
+         "builds 'lib:synarchy', which no probe execs"),
+        ("a target nobody has invented yet",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec "
+             "exe:some-future-helper\n"),
+         "builds 'exe:some-future-helper', which no probe execs"),
+        # A SECOND Cabal command beside a correct build: the build line
+        # still reads exactly right, and the suite is compiled anyway.
+        ("a cabal test beside the correct build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: |\n"
+             "          cabal build exe:synarchy exe:synarchy-save-codec\n"
+             "          cabal test synarchy-test-headless\n"),
+         "must run exactly one command"),
+        ("a second cabal build beside the first",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: |\n"
+             "          cabal build exe:synarchy exe:synarchy-save-codec\n"
+             "          cabal build synarchy-test-headless\n"),
+         "must run exactly one command"),
+        ("a non-Cabal command beside the build",
+         _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+             "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+             "        run: |\n"
+             "          cabal build exe:synarchy exe:synarchy-save-codec\n"
+             "          python3 tools/pack_atlas.py --validate-only\n"),
+         "must run exactly one command"),
+        # The one shape that must NOT fail: the same two targets in the
+        # other order. `cabal build` is indifferent, so pinning order
+        # would be diff churn rather than a cost rule.
     )
+    reordered = _PARALLEL_GATE_WORKFLOW_GOOD.replace(
+        "        run: cabal build exe:synarchy exe:synarchy-save-codec\n",
+        "        run: cabal build exe:synarchy-save-codec exe:synarchy\n")
+    _expect(failures, problems(reordered) == [],
+            "the pinned targets in the other order should still pass, got "
+            f"{problems(reordered)}")
     for label, mutated, needle in mutations:
         got = problems(mutated)
         _expect(failures, any(needle in problem for problem in got),

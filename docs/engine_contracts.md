@@ -328,10 +328,15 @@ sides (#1360).** `tools/test_save_compat_audit.py` gained two flags that
 partition it: `--without-reproducibility` runs every member except
 `test_normalize_fixture_timestamp_makes_generation_reproducible`, and
 `--only-reproducibility` runs exactly that one. The excluded member
-spawns its own `cabal repl test:synarchy-test-headless` to build two
+builds two
 envelopes differing only in `smTimestamp` — ~26 s of a ~58 s module on a
-warm tree — and it exercises fixture GENERATION, which only a
-save-format, fixture, save-tooling or Cabal change can move. Local
+warm tree when it did that through a `cabal repl
+test:synarchy-test-headless` of its own, which since #2273 is the
+compiled `exe:synarchy-save-codec` instead — and it exercises fixture
+GENERATION, which only a
+save-format, fixture, save-tooling or Cabal change can move. The split
+stays because those are still the inputs that can move the result, and
+because `tools/ci_parity_audit.py` pins both command spellings. Local
 `make ci` runs `--without-reproducibility` unconditionally; CI runs it
 for every non-docs-only change and every save-compat input change. Both
 sides reach `--only-reproducibility` through
@@ -363,11 +368,14 @@ re-deriving it, which would put the resolution back after the write.
 Outside CI's ordinary-docs fast path, the main save-compat step stays
 deliberately blocking: `save_compat_audit.py` runs in full, as does every
 other member selected by `--without-reproducibility`. Local `make ci`
-always runs that step. It is not cabal-free:
+always runs that step. It still needs the REAL Haskell codec:
 `save_compat_audit.py`'s real-manifest run decodes the tracked fixtures'
-envelope descriptors through a `cabal repl` of its own
-(`verify_fixture_descriptors` → `dump_fixture_descriptors`), and
-`test_real_manifest_passes_the_audit` runs that same audit. Therefore CI
+envelope descriptors (`verify_fixture_descriptors` →
+`dump_fixture_descriptors`), and
+`test_real_manifest_passes_the_audit` runs that same audit. Since #2273
+it reaches that codec by exec'ing the compiled
+`exe:synarchy-save-codec` that `cabal build all` produces, rather than by
+starting a `cabal repl`. Therefore CI
 skips the whole step only when `ci_docs_fast_path.py` has proved that the
 change is ordinary documentation outside `docs/save_compat/`.
 
