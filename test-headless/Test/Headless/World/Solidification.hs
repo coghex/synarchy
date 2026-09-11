@@ -519,7 +519,7 @@ crossPageId, ackPageId, missingMatPageId, zoomPageId ∷ WorldPageId
 coherentPageId, evictedPageId, cumulativePageId, bareZoomPageId ∷ WorldPageId
 regenPageId, queueAPageId, queueBPageId, initPageId ∷ WorldPageId
 multiChunkPageId, initOtherPageId, noMapPageId ∷ WorldPageId
-twiceReactedPageId ∷ WorldPageId
+twiceReactedPageId, icePageId ∷ WorldPageId
 commitPageId     = WorldPageId "solid_commit_w8"
 siblingPageId    = WorldPageId "solid_sibling_w8"
 stalePageId      = WorldPageId "solid_stale_w8"
@@ -539,6 +539,7 @@ initPageId       = WorldPageId "solid_init_w8"
 initOtherPageId  = WorldPageId "solid_init_other_w8"
 noMapPageId      = WorldPageId "solid_nomap_w8"
 twiceReactedPageId = WorldPageId "solid_twice_w8"
+icePageId        = WorldPageId "solid_ice_w8"
 multiChunkPageId = WorldPageId "solid_multichunk_w8"
 
 ackTimeoutMicros ∷ Int
@@ -1171,6 +1172,42 @@ spec = describe "solidification (#2485)" $ do
         -- from the refreshed summary rather than waiting for the upload.
         (baked, _, _) ← readIORef (wsBakedZoomRef (lpState lp))
         V.null baked `shouldBe` True
+
+    it "keeps an edited cell's LIVE ice and vegetation when it \
+       \regenerates that chunk's zoom tile" $ \env → do
+        lp ← livePage env icePageId
+        -- No world edit clears 'lcIceMap', so the detailed render goes
+        -- on showing whatever ice a cell has. The override set is the
+        -- whole edit LOG, so a refresh that cleared ice would strip it
+        -- from every cell the chunk has ever edited — and the two
+        -- presentations would then disagree about the same tile.
+        let idx = columnIndex 4 4
+            icy = IceCell 7 DrapeIce
+        before ← chunkAt (lpState lp) (lpLava lp)
+        atomicModifyIORef' (wsTilesRef (lpState lp)) $ \td →
+            (insertChunk before { lcIceMap = lcIceMap before V.// [(idx, Just icy)] }
+                         td, ())
+        deliver env (lpState lp) icePageId []
+            [ ReactionResult [(lpLava lp, 0)]
+                [liveEvent (lpLava lp) (4, 4) (lpLava lp) SolidBasalt] ]
+
+        after ← chunkAt (lpState lp) (lpLava lp)
+        basalt ← materialFor env SolidBasalt
+        edits ← readIORef (wsEditsRef (lpState lp))
+        let cells = [ columnIndex lx ly
+                    | WeAddTile agx agy _ ←
+                        HM.lookupDefault [] (lpLava lp) edits
+                    , let (cc, (lx, ly)) = globalToChunk agx agy
+                    , cc ≡ lpLava lp ]
+        case find ((≡ idx) . ztoIndex) (liveTileOverrides after cells) of
+            Nothing → expectationFailure
+                "the solidified cell is not among the live overrides"
+            Just o  → do
+                ztoIce o `shouldBe` Just icy
+                ztoMaterial o `shouldBe` unMaterialId basalt
+                -- …and the vegetation comes from the live column too,
+                -- rather than from the pass's own ice-driven snow.
+                ztoVeg o `shouldBe` 0
 
     it "skips a page that has no zoom map at all, and commits the stone \
        \anyway" $ \env → do

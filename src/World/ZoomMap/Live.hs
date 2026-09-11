@@ -37,7 +37,7 @@ import qualified Data.Vector.Unboxed as VU
 import Foreign.Marshal.Utils (copyBytes)
 import World.Chunk.Types
     (ChunkCoord(..), ColumnTiles(..), LoadedChunk(..), chunkSize)
-import World.Fluid.Types (FluidCell(..))
+import World.Fluid.Types (FluidCell(..), IceCell(..))
 import World.Edit.Types (WorldEdit(..))
 import World.Generate.Coordinates (globalToChunk)
 import World.Generate.Types (WorldGenParams(..))
@@ -59,13 +59,20 @@ data ZoomTileOverride = ZoomTileOverride
     , ztoMaterial ∷ !Word8
       -- ^ The material at that top.
     , ztoVeg      ∷ !Word8
-      -- ^ …and its vegetation byte. Carried rather than assumed zero:
-      --   the pass injects SNOW vegetation on ice-covered tiles, and an
-      --   override that left that in place would paint fresh stone
-      --   white.
+      -- ^ …and its vegetation byte, read from the live column rather
+      --   than assumed: the pass injects SNOW vegetation on ice-covered
+      --   tiles, and an override that left the pass's value in place
+      --   would colour an edited cell by an ice decision the live chunk
+      --   may no longer agree with.
     , ztoFluid    ∷ !(Maybe FluidCell)
       -- ^ The live fluid cell. A solidified column has none, and the
       --   pass-one map would still show the lava the contact consumed.
+    , ztoIce      ∷ !(Maybe IceCell)
+      -- ^ …and the live ice cell. Carried rather than cleared: no world
+      --   edit clears 'World.Types.lcIceMap', so the detailed render
+      --   still shows whatever ice is there, and a zoom refresh that
+      --   dropped it would make the two presentations disagree about
+      --   every cell this chunk has ever edited.
     } deriving (Show, Eq)
 
 -- | The tile a recorded edit changes ON THE ZOOM MAP, if it changes one.
@@ -119,6 +126,7 @@ liveTileOverrides lc indices =
                        , ztoMaterial = ctMats col VU.! relZ
                        , ztoVeg      = ctVeg  col VU.! relZ
                        , ztoFluid    = lcFluidMap lc V.! i
+                       , ztoIce      = lcIceMap lc V.! i
                        }
     | i ← indices
     , i ≥ 0, i < VU.length (lcTerrainSurfaceMap lc)
@@ -195,9 +203,13 @@ liveChunkZoom params registry mPalette coord lc edits =
 --   All four of the pass's per-tile products move together — the tile
 --   tuple the renderer colours from, the elevation vector the ocean
 --   dilation admits against, the composed fluid map, and the ice
---   overlay. Fresh stone is not iced: the column just rose out of a
---   contact hot enough to boil the water off it, and leaving a drape
---   there would colour it as snow no matter what material it is.
+--   overlay — and all four come from the LIVE chunk. The ice in
+--   particular is copied, never cleared: no world edit clears
+--   'World.Types.lcIceMap', so the detailed render goes on showing
+--   whatever ice a cell has, and a zoom refresh that dropped it would
+--   make the two presentations disagree about every cell the chunk has
+--   ever edited — not only the one this commit touched, since the
+--   override set is the whole edit log.
 overrideOne ∷ ZoomChunkPass → ZoomTileOverride → ZoomChunkPass
 overrideOne pass o
     | ztoIndex o < 0 ∨ ztoIndex o ≥ V.length (zcpTiles pass) = pass
@@ -206,7 +218,7 @@ overrideOne pass o
                                                  ztoVeg o, gx, gy))]
         , zcpElevs    = zcpElevs pass VU.// [(i, ztoElev o)]
         , zcpRawFluid = zcpRawFluid pass V.// [(i, ztoFluid o)]
-        , zcpIceMap   = zcpIceMap pass V.// [(i, Nothing)]
+        , zcpIceMap   = zcpIceMap pass V.// [(i, ztoIce o)]
         }
   where
     i = ztoIndex o

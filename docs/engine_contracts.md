@@ -4728,6 +4728,14 @@ BOTH of the zoom map's own inputs:
   publish use, targeted at the exact `WorldState` that accepted the edit
   (#763/#1670).
 
+Every overridden cell is taken from the live chunk WHOLE — its
+elevation, top material, vegetation, fluid AND ice. The ice in particular
+is copied rather than cleared: no world edit clears `lcIceMap`, so the
+detailed render goes on showing whatever ice a cell has, and a zoom
+refresh that dropped it would make the two presentations disagree about
+every cell the chunk has ever edited, not only the one this commit
+touched.
+
 The regeneration's override set comes from the CHUNK'S OWN EDIT LOG, not
 from the delivery: the block is rebuilt from generation-time data, so
 overriding only the cells one commit touched would repaint every earlier
@@ -4792,9 +4800,14 @@ page with no atlas to patch, and the per-page publication queue.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
 and also the alias check for the `world.getMaterialAt` query both probes
 read the product through; `tools/fluid_reaction_visual_probe.py`
-(offscreen, needs a GPU) is the two-presentation evidence — it locates
-the zoom change's own region and asserts it reads as the product the
-reaction chose, rather than accepting a whole-frame delta. The neighbouring groups `Sim.Fluid.Seam`,
+(offscreen, needs a GPU) is the two-presentation evidence. It reacts
+TWICE in one chunk: the first contact's refresh folds every setup edit
+into the atlas, so what the measured one adds is attributable to its own
+stone. It then locates the solidified tile's own zoom pixels through the
+engine's screen-to-tile mapping — with the z-slice pinned, without which
+that mapping does not agree with where the map draws a tile — and
+asserts the pixels that changed there read as the product the reaction
+chose rather than as the material the column was made of. The neighbouring groups `Sim.Fluid.Seam`,
 `Sim.Fluid.Conservation` and `fluid writeback staleness` must stay green
 unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
 the reaction never fires in it and a change there is a regression in

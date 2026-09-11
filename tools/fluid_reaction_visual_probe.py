@@ -64,10 +64,24 @@ PRODUCTS = ("basalt", "obsidian")
 # `World.ZoomMap.ColorPalette.buildColorPalette` derives from the
 # material's own `zoom:` chunk texture — so the probe derives its
 # expectation from the same file rather than from a hardcoded colour.
-PRODUCT_ZOOM_TEXTURE = {
-    "basalt":   "assets/textures/world/zoommap/basalt_chunk.png",
-    "obsidian": "assets/textures/world/zoommap/obsidian_chunk.png",
-}
+def material_zoom_textures() -> dict[str, str]:
+    """name -> zoom chunk texture, read from the authored material YAML.
+
+    The engine's palette entry for a material is built from that
+    material's own `zoom:` image, so reading the same files is what lets
+    this probe state an expectation about colour without hardcoding one.
+    """
+    out: dict[str, str] = {}
+    for path in sorted(glob.glob("data/materials/*.yaml")):
+        name = None
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("name:"):
+                name = stripped.split(":", 1)[1].strip().strip('"\'')
+            elif stripped.startswith("zoom:") and name:
+                out[name] = stripped.split(":", 1)[1].strip().strip('"\'')
+                name = None
+    return out
 FRAME = (1024, 768)
 # Detailed tiles are drawn below World.Grid.zoomFadeStart (1.2) and the
 # zoom map is fully opaque at or above zoomFadeEnd (1.6).
@@ -78,6 +92,15 @@ REACTION_TIMEOUT = 90.0
 # enough that the camera's zoom step does not have to be pinned to the
 # pixel, tight enough that a repaint of the map fails it.
 MAP_REGION_FRACTION = 0.05
+# World.Chunk.Types.chunkSize — the probe only uses it to keep both
+# contact sites inside ONE chunk, so one refresh covers both.
+CHUNK_SIZE = 16
+# Chebyshev separation between the two contact sites. Fluid spreads, so
+# adjacent sites decide each other's contacts.
+SITE_GAP = 4
+# How long the warm-up's fluid is given to stop moving before the
+# baseline captures.
+SETTLE_SECONDS = 15.0
 
 
 class Checks:
@@ -252,6 +275,32 @@ def union_box(a, b):
     return (x0, y0, x1 - x0, y1 - y0)
 
 
+def changed_pixel_means(path_a: str, path_b: str, box):
+    """Mean RGB of the pixels that DIFFER inside box, in each frame.
+
+    Sampling the whole region instead would average the stone's handful
+    of atlas texels together with everything around them — at map zoom a
+    tile is a few pixels, and the mean barely moves however completely
+    the tile itself was repainted. These are the pixels the refresh
+    actually rewrote.
+    """
+    from PIL import Image
+    x, y, w, h = box
+    try:
+        with Image.open(path_a) as a, Image.open(path_b) as b:
+            pa = list(a.convert("RGBA").crop((x, y, x + w, y + h)).getdata())
+            pb = list(b.convert("RGBA").crop((x, y, x + w, y + h)).getdata())
+    except Exception:
+        return None, None
+    pairs = [(u, v) for u, v in zip(pa, pb) if u[:3] != v[:3]]
+    if not pairs:
+        return None, None
+    n = len(pairs)
+    mean = lambda side, i: sum(p[side][i] for p in pairs) / n
+    return ((mean(0, 0), mean(0, 1), mean(0, 2)),
+            (mean(1, 0), mean(1, 1), mean(1, 2)))
+
+
 def colour_distance(a, b) -> float:
     return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
 
@@ -312,50 +361,59 @@ def pick_tile(port: int, px: int, py: int):
     return None, None
 
 
-def find_contact_pair(port: int, around):
-    """A dry, above-sea-level pair of horizontally adjacent land tiles,
-    with the one-z STEP between them BUILT rather than searched for.
+def find_contact_pairs(port: int, around, wanted: int):
+    """`wanted` disjoint contact sites in ONE chunk, searched outward
+    from the tile the camera is looking at.
 
-    The step is what makes the contact happen at all rather than happen
-    to. ``world.setFluidTile`` gives every cell the same single level of
-    depth, so a FLAT pair leaves both surfaces equal and the lateral
-    phase — which only moves fluid down a surface gradient — plans
-    nothing; the two sit side by side indefinitely unless the surrounding
-    terrain happens to drain one of them. With the lava side one z higher
-    its surface stands above the water's and gravity carries it down into
-    it, which is the contact.
+    Two of them, because the zoom baseline has to be established AFTER
+    the setup edits. `world.addTile` and `world.setFluidTile` do not
+    patch or re-upload the atlas, and the reaction refresh rebuilds a
+    chunk's block from its whole edit LOG — so a first reaction folds
+    every setup edit into the image, and only what a SECOND one adds is
+    attributable to its own stone. One chunk, because one refresh covers
+    one chunk's block.
 
-    A generated page is not guaranteed to contain a suitable natural
-    step anywhere near the camera, so one ordinary ``world.addTile`` —
-    the same player edit the debug terrain tool makes — supplies it. That
-    edit lands BEFORE any capture, so nothing it changes is attributed to
-    the reaction.
-
-    Dry, so each fluid edit genuinely places the fluid it names rather
-    than replacing a cell the page already had; above sea level, so the
-    page's own ocean is not what is reacting.
-
-    The search runs OUTWARD from the tile the camera is actually looking
-    at, so the contact lands in frame rather than at a fixed world
-    coordinate the camera may not be over.
+    Each site is a dry, above-sea-level pair of horizontally adjacent
+    land tiles; the one-z step the contact needs is built afterwards (see
+    'raise_lava_side').
     """
     cx, cy = around
+    chunk_of = lambda t: (t[0] // CHUNK_SIZE, t[1] // CHUNK_SIZE)
+    found: list[tuple[tuple[int, int], tuple[int, int], int]] = []
+    used: set[tuple[int, int]] = set()
+    home = None
     for radius in range(0, 10):
         for dy in range(-radius, radius + 1):
             for dx in range(-radius, radius + 1):
                 if max(abs(dx), abs(dy)) != radius:
                     continue
                 gx, gy = cx + dx, cy + dy
-                ta = terrain_at(port, gx, gy)
-                tb = terrain_at(port, gx + 1, gy)
+                lava, water = (gx, gy), (gx + 1, gy)
+                # Well clear of every site already taken, not merely
+                # non-overlapping: fluid spreads, and a site placed next
+                # to another's ocean has its own contact decided by that
+                # neighbour rather than by the lava this probe places.
+                if any(max(abs(t[0] - u[0]), abs(t[1] - u[1])) < SITE_GAP
+                       for t in (lava, water) for u in used):
+                    continue
+                if chunk_of(lava) != chunk_of(water):
+                    continue
+                if home is not None and chunk_of(lava) != home:
+                    continue
+                ta = terrain_at(port, *lava)
+                tb = terrain_at(port, *water)
                 if ta is None or tb is None or ta != tb or ta <= 0:
                     continue
-                if surface_at(port, gx, gy) != ta:
+                if surface_at(port, *lava) != ta:
                     continue
-                if surface_at(port, gx + 1, gy) != tb:
+                if surface_at(port, *water) != tb:
                     continue
-                return (gx, gy), (gx + 1, gy), ta
-    return None, None, None
+                home = chunk_of(lava)
+                used |= {lava, water}
+                found.append((lava, water, ta))
+                if len(found) == wanted:
+                    return found
+    return found
 
 
 def raise_lava_side(chk: Checks, port: int, tile, baseline: int):
@@ -527,25 +585,50 @@ def main() -> int:
                    f"the camera is looking at a real tile (got {centre})")
             if centre[0] is None:
                 return 1
-            lava_tile, water_tile, baseline = find_contact_pair(port, centre)
-            chk.ok(lava_tile is not None,
-                   f"found a flat dry land pair in frame (lava {lava_tile}, "
-                   f"water {water_tile}, terrain top {baseline})")
-            if lava_tile is None:
+            sites = find_contact_pairs(port, centre, 2)
+            chk.ok(len(sites) == 2,
+                   f"found two disjoint contact sites in one chunk "
+                   f"(got {sites})")
+            if len(sites) != 2:
                 return 1
+            (warm_lava, warm_water, warm_base), \
+                (lava_tile, water_tile, baseline) = sites
+
+            # BOTH sites' setup edits go down first, so the warm-up's
+            # refresh folds every one of them into the atlas. Neither
+            # `world.addTile` nor `world.setFluidTile` patches or
+            # re-uploads the zoom image itself, and the reaction refresh
+            # rebuilds a chunk's block from its whole edit LOG — so
+            # without this the measured capture would newly incorporate
+            # the setup as well as the stone.
+            warm_base = raise_lava_side(chk, port, warm_lava, warm_base)
             baseline = raise_lava_side(chk, port, lava_tile, baseline)
+            place_ocean(chk, port, warm_water)
+            place_ocean(chk, port, water_tile)
+
             before_material = material_at(port, *lava_tile)
             chk.ok(before_material not in PRODUCTS,
-                   f"the target column is not already a reaction product "
+                   f"the measured column is not already a reaction product "
                    f"(got {before_material!r})")
 
-            # The camera is deliberately NOT re-pointed. The target was
-            # chosen from what this camera already frames, and
-            # `pin_camera_to_tile` pins the z-slice to the tile's own z,
-            # which re-offsets the whole view and moved the target seven
-            # tiles off centre when it was tried here. Leaving the camera
-            # exactly where the before-capture will be taken is also what
-            # makes before and after comparable at all.
+            # The warm-up reaction. Its own refresh is what establishes
+            # the zoom baseline: after it, the atlas already shows both
+            # sites' raised columns and their water.
+            set_paused(port, False)
+            warm_top = react(chk, port, warm_lava, warm_water, warm_base)
+            chk.ok(warm_top is not None,
+                   "the warm-up contact solidified, folding both sites' "
+                   "setup edits into the atlas")
+            # Let the warm-up's own ocean reach equilibrium BEFORE the
+            # baseline captures. Fluid that is still flowing would move
+            # on its own between the two measured frames, and the edited
+            # cells it sits on are exactly the ones the refresh reads
+            # live.
+            time.sleep(SETTLE_SECONDS)
+            set_paused(port, True)
+            time.sleep(3.0)
+            if warm_top is None:
+                return 1
             # ONE camera state for every capture in this run, pinned
             # before the first of them. Two things make this load-bearing:
             #
@@ -576,11 +659,6 @@ def main() -> int:
                    f"{pick_tile(port, int(vp['win_w'] // 2), int(vp['win_h'] // 2))})")
             if box_before is None:
                 return 1
-
-            # -- the water side goes down FIRST, so it is in both the
-            # before and the after frames and cannot supply the
-            # difference the zoom evidence is measuring.
-            place_ocean(chk, port, water_tile)
 
             # -- before: detailed tiles, then the zoom map.
             set_paused(port, True)
@@ -665,38 +743,65 @@ def main() -> int:
                        f"the zoom map changed INSIDE the tile's own region "
                        f"{map_box}: {region_changed} px against a "
                        f"{map_floor} px noise floor")
-                chose = texture_mean_colour(PRODUCT_ZOOM_TEXTURE[material])
-                other = texture_mean_colour(PRODUCT_ZOOM_TEXTURE[
+                zoom_tex = material_zoom_textures()
+                chose = texture_mean_colour(zoom_tex[material])
+                other = texture_mean_colour(zoom_tex[
                     "obsidian" if material == "basalt" else "basalt"])
-                was = mean_colour(map_before, map_box)
-                now = mean_colour(map_after, map_box)
-                if None in (chose, other, was, now):
-                    chk.ok(False, "could not sample the zoom region's colour")
+                # What the tile was MADE of before the contact. The
+                # question this answers is the one that matters: do those
+                # pixels stop reading as that material and start reading
+                # as the product?
+                was_mat = texture_mean_colour(zoom_tex[before_material]) \
+                    if before_material in zoom_tex else None
+                was, now = changed_pixel_means(map_before, map_after, map_box)
+                if None in (chose, other, was, now, was_mat):
+                    chk.ok(False,
+                           f"could not sample the zoom region's colour "
+                           f"(before material {before_material!r})")
                 else:
+                    # Deliberately NOT asserted the other way round for
+                    # the before-frame: the zoom pass blends a tile's
+                    # material colour with its vegetation, so "these
+                    # pixels read as loam" is not something the renderer
+                    # promises. What it does promise, and what this is
+                    # about, is that afterwards they read as the stone.
+                    print(f"  [note] changed-pixel distance before: "
+                          f"{colour_distance(was, was_mat):.1f} to "
+                          f"{before_material}, "
+                          f"{colour_distance(was, chose):.1f} to {material}")
                     chk.ok(colour_distance(now, chose)
-                           < colour_distance(was, chose),
-                           f"that region moved TOWARD the chosen product's "
-                           f"own zoom colour ({material}): "
-                           f"{colour_distance(was, chose):.1f} -> "
-                           f"{colour_distance(now, chose):.1f}")
+                           < colour_distance(now, was_mat),
+                           f"…and afterwards they read as the PRODUCT "
+                           f"({material}): {colour_distance(now, chose):.1f} "
+                           f"vs {colour_distance(now, was_mat):.1f} to "
+                           f"{before_material}")
                     chk.ok(colour_distance(now, chose)
                            < colour_distance(now, other),
-                           f"…and now reads closer to {material} than to "
-                           f"the other product "
-                           f"({colour_distance(now, chose):.1f} vs "
+                           f"…and closer to {material} than to the other "
+                           f"product ({colour_distance(now, chose):.1f} vs "
                            f"{colour_distance(now, other):.1f})")
 
-            # The whole-frame change is confined to that chunk's quad,
-            # so nothing else on the map moved either.
+            # …and nothing outside that chunk's own quad moved. The
+            # refresh regenerates the WHOLE block, and the ocean
+            # dilation pass-two reads the overridden cells, so a stone
+            # can legitimately change a neighbouring shoreline pixel
+            # inside the same chunk — what it must not do is reach
+            # another chunk, or the rest of the map.
             bbox = png_diff_bbox(map_before, map_after)
+            chk.ok(bbox is not None, "the zoom map changed somewhere")
             if bbox is not None:
                 x0, y0, x1, y1 = bbox
                 area = (x1 - x0) * (y1 - y0)
                 frame_area = FRAME[0] * FRAME[1]
+                print(f"  [note] whole-frame zoom change bbox "
+                      f"{(x0, y0, x1 - x0, y1 - y0)}, "
+                      f"{100.0 * area / frame_area:.2f}% of the frame; "
+                      f"stone tile {map_box}")
                 chk.ok(area <= frame_area * MAP_REGION_FRACTION,
-                       f"…and the whole-frame change is confined to "
+                       f"the whole-frame zoom change is confined to "
                        f"{(x0, y0, x1 - x0, y1 - y0)}, "
-                       f"{100.0 * area / frame_area:.2f}% of the frame")
+                       f"{100.0 * area / frame_area:.2f}% of the frame — one "
+                       f"chunk's quad, not a repaint of the map")
 
             # -- and none of it was a reload.
             generated_after = send(port, f"return world.getIdentity('{PAGE}')")
