@@ -1545,6 +1545,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Chop.Authority
                    Test.Headless.World.Chop.TagPolicy
                    Test.Headless.Lua.ChopGesture
+                   Test.Headless.Lua.ChopDesignationClaim
                    Test.Headless.Lua.ChopFellXp
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage

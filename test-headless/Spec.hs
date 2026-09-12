@@ -246,6 +246,7 @@ import qualified Test.Headless.UI.TutorialHud as UITutorialHud
 import qualified Test.Headless.UI.UnicodeTextEditing as UIUnicodeTextEditing
 import qualified Test.Headless.Lua.DragSelectDeferred as LuaDragSelectDeferred
 import qualified Test.Headless.Lua.ChopGesture as LuaChopGesture
+import qualified Test.Headless.Lua.ChopDesignationClaim as LuaChopDesignationClaim
 import qualified Test.Headless.Lua.ChopFellXp as LuaChopFellXp
 import qualified Test.Headless.Lua.TextWrapping as LuaTextWrapping
 import qualified Test.Headless.Lua.GroupedLogRetention as LuaGroupedLogRetention
@@ -1088,6 +1089,7 @@ main = hspec $ do
     ChopTagPolicy.spec
     LuaChopGesture.spec
     LuaChopFellXp.spec
+    LuaChopDesignationClaim.spec
     describe "World.DesignationSeam (engine)" DesignationSeam.engineSpec
     describe "World.DigDomain (engine)" DigDomain.engineSpec
     FloraIdentity.spec

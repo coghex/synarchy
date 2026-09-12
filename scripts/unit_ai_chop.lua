@@ -3,7 +3,9 @@
 -- Action: chop_designation (#97)
 --
 -- Player-directed tree felling: claim the nearest chop-designated
--- tree, walk to it, and swing until it falls —
+-- tree THIS acolyte may claim (#2536 — a colleague's claim on a nearer
+-- tree, its co-tenant on the same tile included, must not hide farther
+-- free work), walk to it, and swing until it falls —
 -- world.harvestFloraInstance then spawns the wood logs as ground items
 -- and starts that tree's (long) regrowth timer, and its designation is
 -- removed. Structure mirrors dig_designation: module-local claims keyed
@@ -161,19 +163,45 @@ local function chopUtility(uid, s, params)
 
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
+
+    -- #2536: the nearest designation this worker MAY CLAIM, not the
+    -- nearest one outright. Asking for the unconditional nearest and
+    -- then bailing on chopClaimedByOther made one colleague's fresh
+    -- claim hide every farther free tree — and, because two wood-tagged
+    -- trees can share a tile (#1854) while ties break on the lower
+    -- instance id, it hid the co-tenant of the tree being felled
+    -- forever. The exclusion set names exact INSTANCES and comes from
+    -- the live claim registry, pruned on the way past by the same rule
+    -- chopClaimedByOther applies, so the existing timeout and
+    -- dead-claimant recovery still free their trees.
+    --
+    -- SCORING STAYS CLAIM-FREE. The query only reads the registry; the
+    -- claim on the selected tree is still written in execute below. A
+    -- unit that loses action arbitration this tick must not leave a
+    -- claim behind, or the tree it merely considered would be masked
+    -- from everyone for a whole chop_claim_timeout.
+    --
+    -- RANGE lives in BOTH places now, deliberately. The engine bounds
+    -- the scan (same inclusive comparison), so skipping a claimed
+    -- nearer tree can never promote one the worker may not walk to, and
+    -- the marshalled result stays a single tree rather than the page's
+    -- whole designation map. The gate below is kept as the caller-side
+    -- contract and is what still holds for a stubbed or older verb.
+    --
     -- #1854: the fourth return is the winning PLANT's stable id.
-    local gx, gy, dist, iid =
-        chop.nearestDesignation(wid, info.gridX, info.gridY)
+    local now = engine.gameTime()
+    local gx, gy, dist, iid = claimsLib.nearestFreeInstance(
+        chop.nearestFreeDesignation, chopClaims, wid, uid,
+        info.gridX, info.gridY, params.chop_scan_range,
+        params.chop_claim_timeout, now)
     if not gx then return -math.huge end
     if dist > params.chop_scan_range then return -math.huge end
 
-    local now = engine.gameTime()
-    if chopClaimedByOther(chopKey(wid, iid), uid, now,
-                          params.chop_claim_timeout) then
-        return -math.huge
-    end
-
-    -- Stash the scored candidate so execute doesn't re-scan.
+    -- Stash the scored candidate so execute doesn't re-scan. Execute
+    -- still re-checks the claim before taking it: scoring and executing
+    -- are separate ticks, so another worker can win this tree in
+    -- between, and the loser must leave that fresh claim alone and
+    -- re-score next tick rather than substitute another tree.
     s.chopCandidate = { x = gx, y = gy, iid = iid }
 
     local distFactor = math.max(0, 1 - dist / params.chop_scan_range)
@@ -332,6 +360,11 @@ local function chopOnExit(uid, s, params)
     end
 end
 
+
+-- The claim registry, public exactly as unitAi.till.claims and
+-- unitAi.plant.claims are: #1329's load reset empties it IN PLACE, so
+-- this binding and the module's own upvalue stay one table.
+M.claims      = chopClaims
 
 M.chopUtility = chopUtility
 M.chopExecute = chopExecute

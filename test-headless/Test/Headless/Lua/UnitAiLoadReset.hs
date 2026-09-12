@@ -151,6 +151,9 @@ prelude = lns
     , "      out[#out + 1] = { z = 0, x = x, y = y, instanceId = i } end"
     , "    return out end,"
     , "  nearestDesignation = function() return nil end,"
+    -- #2536: the selector verb the production chop utility now calls.
+    -- Still nil here, for the same reason till's and plant's are.
+    , "  nearestFreeDesignation = function() return nil end,"
     , "  cancelDesignation = function() end }"
     , "till = { getDesignationAt = function(w, x, y)"
     , "    return desig(w, x, y) and { z = 0 } or nil end,"

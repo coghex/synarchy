@@ -106,6 +106,10 @@ prelude = lns
     , "    return nil end,"
     , "  getDesignationsAt = function() return {} end,"
     , "  nearestDesignation = function() return nil end,"
+    -- #2536: the selector verb the production utility now calls. Still
+    -- nil here -- this gate drives execute from an explicit swinging
+    -- state, so no scan must ever supply a candidate.
+    , "  nearestFreeDesignation = function() return nil end,"
     , "  cancelDesignation = function() CALLS.cancel = CALLS.cancel + 1 end }"
     , "local chopAi = require('scripts.unit_ai_chop')"
     -- The walk speed the action hands unit.moveTo is not what this gate
