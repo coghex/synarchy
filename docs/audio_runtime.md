@@ -207,7 +207,13 @@ false outside `BootPreview`. Play accepts only playable IDs from the copied
 atomically before enqueueing the audition. A rejected play leaves the epoch
 unchanged. Reload is retained across later session resets, destroys the old core
 before allocating the new one, and preserves live volumes. `previewRevision`
-advances when a preview load attempt completes (including initialization failure);
-the pane waits for that revision before consuming the replacement metadata.
-Normal status publications cannot masquerade as completed reloads. These
-metadata, UI state, and control requests are transient and excluded from saves.
+advances when a preview load attempt completes (including initialization failure).
+The pane remembers the revision whose entries it consumed and reconciles its whole
+entry model, selection and visible rows against any later revision, whichever
+preview caller requested the reload, including one that settled while the pane
+was closed. Preview IDs are reassigned positionally on every load, so selection
+is restored by the sound's own identity rather than its ID, and an unreconciled
+model can name a different sound: the pane refuses playback from one, reconciling
+instead of dispatching when a click or key arrives after the revision advanced. Normal status publications cannot masquerade as
+completed reloads. These metadata, UI state, and control requests are transient
+and excluded from saves.
