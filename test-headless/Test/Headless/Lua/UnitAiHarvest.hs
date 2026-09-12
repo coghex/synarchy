@@ -102,6 +102,21 @@ prelude = lns
     , "TAKEN, MISSING = {}, {}"
     , "PICKUP_CALLS = 0"
     , "WARNINGS = {}"
+    -- Where each yield LIES (#2550). The registered
+    -- item.getGroundForUnit row carries x/y (Items/Ground.hs's
+    -- pushGroundRow), and since #2550 the collecting phase reads them
+    -- to decide whether the worker is close enough to take the item at
+    -- all -- so a stub without coordinates would make every proximity
+    -- assertion vacuous, and would leave the capacity cases below
+    -- doing nil arithmetic. Yields spawned by a real pick are placed
+    -- at the harvested tile by world.harvestFlora below; a case that
+    -- pre-seeds S.harvestLoot instead gets this default, which is the
+    -- worker's own origin tile, so those cases stay the adjacent
+    -- collections they were written as.
+    , "GROUND_AT = {}"
+    , "DEFAULT_GROUND_AT = { x = 0.5, y = 0.5 }"
+    , "local function rowAt(gid)"
+    , "  return GROUND_AT[gid] or DEFAULT_GROUND_AT end"
     , "FLORA = { ['10,0'] = { { gid = 1 }, { gid = 2 } } }"
     , "local function key(x, y) return string.format('%d,%d', x, y) end"
     , "engine = { gameTime = function() return NOW end,"
@@ -131,7 +146,9 @@ prelude = lns
     , "item = {"
     , "  getGroundForUnit = function(_, gid)"
     , "    if TAKEN[gid] or MISSING[gid] then return nil, true end"
-    , "    return { id = gid, defName = 'crop', weight = ROW_WEIGHT }, true end,"
+    , "    local at = rowAt(gid)"
+    , "    return { id = gid, defName = 'crop', weight = ROW_WEIGHT,"
+    , "             x = at.x, y = at.y }, true end,"
     , "  pickupGround = function(_, gid)"
     , "    PICKUP_CALLS = PICKUP_CALLS + 1"
     , "    if TAKEN[gid] or MISSING[gid] then return false end"
@@ -159,6 +176,11 @@ prelude = lns
     , "    CALLS.tags.harvest = tag"
     , "    local yields = FLORA[key(gx, gy)]"
     , "    FLORA[key(gx, gy)] = nil"
+    -- A picked plant drops its yields ON the harvested tile, which is
+    -- what makes the ordinary in-place collection adjacent and an
+    -- interrupted one measurable.
+    , "    for _, yi in ipairs(yields or {}) do"
+    , "      GROUND_AT[yi.gid] = { x = gx + 0.5, y = gy + 0.5 } end"
     , "    return yields or {} end }"
     -- The module under test, reached the way the shipped bootstrap
     -- reaches it: through scripts.unit_ai_farm, whose own require is

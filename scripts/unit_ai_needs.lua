@@ -6,6 +6,9 @@
 
 local mv      = require("scripts.movement_speed")
 local ambient = require("scripts.ambient_movement")
+-- Retained-yield collection (#2550), shared with auto-harvest's
+-- identical collecting phase in scripts/unit_ai_harvest.lua.
+local yieldCollect = require("scripts.unit_ai_yield")
 
 local M = {}
 
@@ -386,14 +389,32 @@ local function forageExecute(uid, s, params)
     -- is the right answer to both -- the stale gids are retired rather
     -- than retried every tick, and the next decision re-finds whatever
     -- is actually still there.
+    --
+    -- PROXIMITY FIRST (#2550), through the same unit_ai_yield helper
+    -- auto-harvest's identical phase uses: this phase survives an
+    -- interruption and item.pickupGround compares no positions, so a
+    -- forager could otherwise pull its old yields in from across the
+    -- map. The helper peeks the tail gid, re-resolves it on THIS unit's
+    -- own page, and either hands it over, walks to the resolved row, or
+    -- ends the collection. It steers by that row, never by
+    -- s.forageTarget, which forageUtility rewrites on every scoring
+    -- pass with whatever its scan found. Still ungated on capacity: an
+    -- approach is a distance test, not an admission policy.
     if s.foragePhase == "collecting" then
         local loot = s.forageLoot or {}
-        local nextGid = table.remove(loot)
-        if not nextGid or not item.pickupGround(uid, nextGid) then
-            s.foragePhase  = nil
-            s.forageLoot   = nil
-            s.forageTarget = nil
+        local need = forageNeed(uid)
+        local speed = (need > 0.8) and mv.ordered(uid) or mv.comfort(uid)
+        local outcome, nextGid = yieldCollect.nextYield(
+            uid, s, "forageCollect", loot, nil, speed)
+        if outcome == "approach" then return end
+        if outcome == "reach" and item.pickupGround(uid, nextGid) then
+            table.remove(loot)
+            return
         end
+        s.foragePhase   = nil
+        s.forageLoot    = nil
+        s.forageTarget  = nil
+        s.forageCollect = nil
         return
     end
 

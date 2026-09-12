@@ -71,8 +71,18 @@ local TRANSIENT_ORDER_FIELDS = { "transferOrder" }
 -- list for a third distinct reason -- restarting the pick is the HONEST
 -- post-load state, not a loss. The three-part why is stated where the
 -- fields are owned, in scripts/unit_ai_harvest.lua's TRANSIENCE note.
+--
+-- #2550 adds the two retained-yield collection approach records
+-- (scripts/unit_ai_yield.lua) for the same reason TRANSIENT_ORDER_FIELDS
+-- drops a restored transfer order's accounting: the closest approach is
+-- re-established from where the worker actually stands on the first
+-- tick after a load, and an interval the AI could not tick through
+-- charges a pending approach nothing. The pending collection ITSELF
+-- (harvestPhase/harvestLoot, foragePhase/forageLoot) is durable and
+-- unaffected -- only its budget restarts.
 local TRANSIENT_WORK_FIELDS =
-    { "harvestProgress", "harvestProgressAt", "lastHarvestAt" }
+    { "harvestProgress", "harvestProgressAt", "lastHarvestAt",
+      "harvestCollect", "forageCollect" }
 
 -- A shallow copy of one unit's aiState entry with every transient
 -- candidate field stripped (requirement 13/14) -- see

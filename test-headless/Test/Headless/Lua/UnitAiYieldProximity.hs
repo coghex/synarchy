@@ -1,0 +1,833 @@
+{-# LANGUAGE TypeApplications #-}
+-- | The "harvest collection proximity" gate (#2550).
+--
+--   Auto-harvest and foraging both finish a pick by leaving the yields
+--   on the ground as ordinary items and then draining a recorded gid
+--   list one item per tick. Neither phase is cleared by a preemption,
+--   and @item.pickupGround@ compares no positions of its own
+--   (@src\/Engine\/Scripting\/Lua\/API\/Items\/Ground.hs@ moves the
+--   resolved instance into the inventory unconditionally), so before
+--   #2550 a worker could harvest, leave for a drink, and then pull its
+--   old yields in from ten tiles away.
+--
+--   What the cases pin: a retained yield out of reach is WALKED to
+--   rather than collected, the gid stays pending across the approach
+--   and across a second interruption, proximity is re-measured on
+--   every tick from the live row on the worker's OWN page, adjacency is
+--   the floored-tile Chebyshev @<= 1@ the surrounding approach branches
+--   already use, and it is measured over the page's cylindrical
+--   u-images so a yield across the U seam is near rather than a world
+--   away. Alongside them: adjacent collection is unchanged, a missing
+--   yield still ends the phase, an UNREACHABLE yield ends it too rather
+--   than oscillating forever, auto-harvest's capacity admission runs
+--   only once adjacency holds (so a long approach cannot warn once per
+--   step) while foraging stays deliberately exempt, and nothing about
+--   the arc re-harvests a plant or grants harvesting XP twice.
+--
+--   Mutation checks this group is written to survive — a reviewer
+--   should be able to break the fix and watch it fail:
+--
+--     * Restore the pickup ahead of the distance test (collect the tail
+--       gid unconditionally) and the auto-harvest case "walks to a
+--       retained yield..." and the foraging case "walks to a retained
+--       forage yield..." both fail.
+--     * Reduce the seam handling to raw subtraction (drop the
+--       @world.getWrapWidth@ round trip, or the three-image alias set)
+--       and "a yield across the U seam is adjacent..." fails while
+--       every other case still passes.
+--     * Evaluate capacity admission on approach ticks instead of at
+--       adjacency and "judges capacity at the moment of truth..."
+--       fails on the warning count.
+--     * @table.remove@ the gid on an approach tick and "keeps the gid
+--       pending..." fails.
+--
+--   Same standalone-Lua-VM pattern as
+--   "Test.Headless.Lua.UnitAiHarvest", which owns the neighbouring
+--   @skill-scaled auto-harvest@ gate: each 'it' runs one self-contained
+--   chunk in a fresh interpreter, requires the PRODUCTION Lua modules
+--   unmodified, and stubs every engine verb. The stubs model the
+--   registered verbs' contracts rather than standing in for them —
+--   @item.getGroundForUnit@ returns a row carrying @x@\/@y@ and the
+--   two-value @(entry|nil, pageResolved)@ shape @Ground.hs@ documents,
+--   @item.pickupGround@ performs no distance check whatsoever, and
+--   @world.getWrapWidth@ answers per page.
+--
+--   Run just this gate: @cabal test synarchy-test-headless
+--   --test-options='--match "harvest collection proximity"'@.
+module Test.Headless.Lua.UnitAiYieldProximity (spec) where
+
+import UPrelude
+import Test.Hspec
+import qualified HsLua as Lua
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+
+runsOk ∷ Text → Expectation
+runsOk chunkText = do
+    result ← Lua.run @Lua.Exception $ do
+        Lua.openlibs
+        status ← Lua.dostring (TE.encodeUtf8 chunkText)
+        case status of
+            Lua.OK → return Nothing
+            _ → do
+                err ← Lua.tostring (-1)
+                return (Just (maybe "<no message>" TE.decodeUtf8Lenient err))
+    case result of
+        Nothing  → pure ()
+        Just msg → expectationFailure (T.unpack msg)
+
+lns ∷ [Text] → Text
+lns = T.intercalate "\n"
+
+-- | The engine surface both actions share, and the only part of this
+--   fixture that models the world rather than the AI.
+--
+--   @GROUND_AT@ is what makes every proximity assertion below
+--   answerable: a ground row's @x@\/@y@ are the live page-local
+--   position of the exact instance @item.pickupGround@ would move
+--   (@pushGroundRow@ builds the row for both @item.listGround@ and
+--   @item.getGroundForUnit@), and a stub without them would let a
+--   "proximity" test pass against code that reads no coordinates at
+--   all.
+--
+--   @advance()@ is the engine walking the unit between AI ticks: one
+--   tile per tick toward the last @unit.moveTo@ destination, going
+--   @idle@ on arrival. It is what makes the dispatcher's re-execute
+--   rule (@switching or activity == 'idle'@, modelled in each
+--   @step@ below) bite — an action that issued a walk does not run
+--   again until the walk ends, exactly as @scripts\/unit_ai.lua@
+--   dispatches.
+worldStubs ∷ Text
+worldStubs = lns
+    [ "NOW = 0"
+    , "POS = { gridX = 9, gridY = 0, page = 'p1' }"
+    , "ACTIVITY = 'idle'"
+    , "WRAP = 0"
+    , "WRAP_PAGES = {}"
+    , "GROUND = {}"
+    , "GROUND_AT = {}"
+    , "TAKEN, MISSING = {}, {}"
+    , "PICKUP_CALLS = 0"
+    , "PICKED = {}"
+    , "WARNINGS = {}"
+    , "MOVED_TO = nil"
+    , "CARRIED, CAPACITY, ROW_WEIGHT = 0.0, 1000.0, 1.0"
+    , "INVENTORY = {}"
+    , "XP = 0"
+    , "CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
+    , "          stop = 0, tags = {} }"
+    , "FLORA = { ['10,0'] = { { gid = 1 }, { gid = 2 } } }"
+    , "WALK_TILES_PER_TICK = 1.0"
+    , "local function key(x, y) return string.format('%d,%d', x, y) end"
+    , "engine = { gameTime = function() return NOW end,"
+    , "           logWarn = function(m) WARNINGS[#WARNINGS + 1] = m end,"
+    , "           logInfo = function() end }"
+    , "unit = {"
+    , "  getInfo = function() return POS end,"
+    , "  exists = function() return true end,"
+    , "  getInventory = function() return INVENTORY end,"
+    , "  getCarryingWeight = function() return CARRIED end,"
+    , "  getStat = function(_, name)"
+    , "    if name == 'carrying_capacity' then return CAPACITY end"
+    , "    if name == 'hunger' then return HUNGER end"
+    , "    if name == 'max_hunger' then return 100.0 end"
+    , "    if name == 'calories' then return CALORIES end"
+    , "    if name == 'max_calories' then return 100.0 end"
+    , "    return 1.0 end,"
+    , "  getSkill = function() return 50.0 end,"
+    , "  addXP = function(_, _, amount) XP = XP + amount end,"
+    , "  pickup = function() CALLS.pickup = CALLS.pickup + 1 end,"
+    , "  feed = function() end,"
+    , "  moveTo = function(_, x, y) CALLS.moveTo = CALLS.moveTo + 1"
+    , "    MOVED_TO = { x = x, y = y }; ACTIVITY = 'walking' end,"
+    , "  getActivity = function() return ACTIVITY end,"
+    , "  stop = function() CALLS.stop = CALLS.stop + 1"
+    , "    ACTIVITY = 'idle' end,"
+    , "  setAnimOverride = function() end,"
+    , "  clearAnimOverride = function() end }"
+    -- The registered ground verbs' contracts, and nothing more. Note
+    -- pickupGround: no coordinate read, no distance test, no weight —
+    -- the whole point is that the CALLER has to gate it.
+    , "item = {"
+    , "  getGroundForUnit = function(_, gid)"
+    , "    if TAKEN[gid] or MISSING[gid] then return nil, true end"
+    , "    local at = GROUND_AT[gid]"
+    , "    if not at then return nil, true end"
+    , "    return { id = gid, defName = 'berry', weight = ROW_WEIGHT,"
+    , "             x = at.x, y = at.y }, true end,"
+    , "  listGround = function()"
+    , "    local out = {}"
+    , "    for gid in pairs(GROUND_AT) do"
+    , "      if not TAKEN[gid] and not MISSING[gid] then"
+    , "        out[#out + 1] = { id = gid } end end"
+    , "    table.sort(out, function(a, b) return a.id < b.id end)"
+    , "    return out end,"
+    , "  getFood = function() return { calories = 100.0 } end,"
+    , "  pickupGround = function(_, gid)"
+    , "    PICKUP_CALLS = PICKUP_CALLS + 1"
+    , "    if TAKEN[gid] or MISSING[gid] then return false end"
+    , "    TAKEN[gid] = true"
+    , "    CARRIED = CARRIED + ROW_WEIGHT"
+    , "    GROUND[#GROUND + 1] = gid"
+    , "    PICKED[gid] = true"
+    , "    INVENTORY[#INVENTORY + 1] ="
+    , "      { food = { nutrition = { calories = 100.0 } } }"
+    , "    return true end,"
+    , "  listDefs = function() return {} end }"
+    , "world = {"
+    , "  getActiveWorldId = function() return 'p1' end,"
+    -- Page-scoped, as world.getWrapWidth is: the page it was ASKED
+    -- about is recorded so a case can prove the actor's own page was
+    -- the one consulted, never the active or visible one.
+    , "  getWrapWidth = function(p)"
+    , "    WRAP_PAGES[#WRAP_PAGES + 1] = p"
+    , "    return WRAP end,"
+    , "  findHarvestableFlora = function(ux, uy, range, tag)"
+    , "    CALLS.find = CALLS.find + 1"
+    , "    CALLS.tags.find = tag"
+    , "    local best, bestD = nil, nil"
+    , "    for k, _ in pairs(FLORA) do"
+    , "      local sx, sy = k:match('(-?%d+),(-?%d+)')"
+    , "      local gx, gy = tonumber(sx), tonumber(sy)"
+    , "      local d = math.sqrt((gx - ux) ^ 2 + (gy - uy) ^ 2)"
+    , "      if d <= range and (not bestD or d < bestD) then"
+    , "        best, bestD = { gx = gx, gy = gy, dist = d }, d"
+    , "      end"
+    , "    end"
+    , "    return best end,"
+    , "  harvestFlora = function(gx, gy, tag)"
+    , "    CALLS.harvest = CALLS.harvest + 1"
+    , "    CALLS.tags.harvest = tag"
+    , "    local yields = FLORA[key(gx, gy)]"
+    , "    FLORA[key(gx, gy)] = nil"
+    -- A picked plant drops its yields ON the harvested tile.
+    , "    for _, yi in ipairs(yields or {}) do"
+    , "      GROUND_AT[yi.gid] = { x = gx + 0.5, y = gy + 0.5 } end"
+    , "    return yields or {} end }"
+    , "function place(x, y) POS.gridX, POS.gridY = x, y end"
+    , "NO_WALK = false"
+    , "function advance()"
+    -- An unreachable destination: the engine's path fails, or
+    -- unit_ai.lua's stuck-walk watchdog calls unit.stop, and either way
+    -- the unit is idle again where it started -- which is what gives
+    -- the action its next execute tick and lets the approach budget
+    -- accumulate at all.
+    , "  if NO_WALK then"
+    , "    if ACTIVITY == 'walking' then ACTIVITY = 'idle' end"
+    , "    return"
+    , "  end"
+    , "  if ACTIVITY ~= 'walking' or not MOVED_TO then return end"
+    , "  local dx = MOVED_TO.x - POS.gridX"
+    , "  local dy = MOVED_TO.y - POS.gridY"
+    , "  local d = math.sqrt(dx * dx + dy * dy)"
+    , "  if d <= WALK_TILES_PER_TICK or d == 0 then"
+    , "    POS.gridX, POS.gridY = MOVED_TO.x, MOVED_TO.y"
+    , "    ACTIVITY = 'idle'"
+    , "  else"
+    , "    POS.gridX = POS.gridX + dx / d * WALK_TILES_PER_TICK"
+    , "    POS.gridY = POS.gridY + dy / d * WALK_TILES_PER_TICK"
+    , "  end"
+    , "end"
+    , "STEP = 0.5"
+    ]
+
+-- | Auto-harvest driven the way @scripts\/unit_ai.lua@ drives it.
+harvestPrelude ∷ Text
+harvestPrelude = lns
+    [ "package.loaded['scripts.unit_ai'] = {}"
+    , worldStubs
+    , "require('scripts.unit_ai_farm')"
+    , "local mv = require('scripts.movement_speed')"
+    , "mv.comfort = function() return 1.0 end"
+    , "mv.ordered = function() return 2.0 end"
+    , "local unitAi = package.loaded['scripts.unit_ai']"
+    , "harvest = unitAi.harvest"
+    , "yieldCollect = require('scripts.unit_ai_yield')"
+    , "PARAMS = { harvest_scan_range = 24.0, harvest_base_utility = 2.0,"
+    , "           harvest_rate = 0.5, harvest_xp_per_harvest = 1.0 }"
+    , "S = {}"
+    , "function step(dt)"
+    , "  NOW = NOW + (dt or STEP)"
+    , "  advance()"
+    , "  local u = harvest.utility(1, S, PARAMS)"
+    , "  if u <= -math.huge then S.currentAction = 'idle'; return u end"
+    , "  local switching = S.currentAction ~= 'auto_harvest'"
+    , "  S.currentAction = 'auto_harvest'"
+    , "  if switching or ACTIVITY == 'idle' then"
+    , "    harvest.execute(1, S, PARAMS)"
+    , "  end"
+    , "  return u"
+    , "end"
+    -- Another action owned the unit for `seconds`, and left it at
+    -- (x, y). Arbitration fires the outgoing action's onExit on the way
+    -- out, which is the boundary the approach budget takes.
+    , "function preempt(seconds, x, y)"
+    , "  harvest.onExit(1, S, PARAMS)"
+    , "  S.currentAction = 'treat_ally'"
+    , "  NOW = NOW + seconds"
+    , "  ACTIVITY = 'idle'"
+    , "  MOVED_TO = nil"
+    , "  if x then place(x, y) end"
+    , "end"
+    -- Work the fixture's single plant through to a pending collection,
+    -- adjacent, exactly as an uninterrupted picker would.
+    , "function harvestToCollecting()"
+    , "  place(9, 0)"
+    , "  local guard = 0"
+    , "  while S.harvestPhase ~= 'collecting' and guard < 120 do"
+    , "    step(); guard = guard + 1"
+    , "  end"
+    , "  assert(S.harvestPhase == 'collecting',"
+    , "    'the fixture must reach a pending collection')"
+    , "  assert(CALLS.harvest == 1, 'by picking exactly one plant')"
+    , "  assert(#S.harvestLoot == 2, 'leaving two recorded yields')"
+    , "  assert(#GROUND == 0, 'none of them collected yet')"
+    , "end"
+    ]
+
+-- | Foraging driven through the production @unit_ai_needs@ module.
+foragePrelude ∷ Text
+foragePrelude = lns
+    [ worldStubs
+    -- Starving, carrying nothing: #94's emergency hunger ladder is
+    -- what selects forage at all, and an empty inventory is what keeps
+    -- eat_from_inventory from outranking it.
+    , "HUNGER, CALORIES = 10.0, 0.0"
+    , "needs = require('scripts.unit_ai_needs')"
+    , "local mv = require('scripts.movement_speed')"
+    , "mv.comfort = function() return 1.0 end"
+    , "mv.ordered = function() return 2.0 end"
+    , "yieldCollect = require('scripts.unit_ai_yield')"
+    , "PARAMS = { forage_max_fraction = 0.5, forage_search_radius = 24,"
+    , "           forage_base_weight = 1.0, forage_urgency_scale = 7.4 }"
+    , "S = {}"
+    , "function forageStep(dt)"
+    , "  NOW = NOW + (dt or STEP)"
+    , "  advance()"
+    , "  local u = needs.forageUtility(1, S, PARAMS)"
+    , "  if u <= -math.huge then S.currentAction = 'idle'; return u end"
+    , "  local switching = S.currentAction ~= 'forage'"
+    , "  S.currentAction = 'forage'"
+    , "  if switching or ACTIVITY == 'idle' then"
+    , "    needs.forageExecute(1, S, PARAMS)"
+    , "  end"
+    , "  return u"
+    , "end"
+    -- Forage registers no onExit (scripts/unit_ai_actions.lua), so a
+    -- preemption announces itself to the approach clock through
+    -- unit_ai_stall.suspendOrders — the same boundary unit_ai.lua's
+    -- collapsed-pose return takes.
+    , "function foragePreempt(seconds, x, y)"
+    , "  require('scripts.unit_ai_stall').suspendOrders(S, 1)"
+    , "  S.currentAction = 'treat_ally'"
+    , "  NOW = NOW + seconds"
+    , "  ACTIVITY = 'idle'"
+    , "  MOVED_TO = nil"
+    , "  if x then place(x, y) end"
+    , "end"
+    , "function forageToCollecting()"
+    , "  FLORA = { ['10,0'] = { { gid = 5 } } }"
+    , "  place(9, 0)"
+    , "  local guard = 0"
+    , "  while S.foragePhase ~= 'collecting' and guard < 60 do"
+    , "    forageStep(); guard = guard + 1"
+    , "  end"
+    , "  assert(S.foragePhase == 'collecting',"
+    , "    'the forager must reach a pending collection')"
+    , "  assert(#S.forageLoot == 1, 'holding its single recorded yield')"
+    , "  assert(#GROUND == 0, 'not yet collected')"
+    , "end"
+    ]
+
+spec ∷ Spec
+spec = describe "harvest collection proximity" $ do
+
+    describe "auto-harvest walks back to a retained yield" $ do
+        it "walks to a retained yield an interruption left tiles away \
+           \instead of collecting it remotely, keeps the gid pending \
+           \for the whole approach, and takes exactly one item on the \
+           \first adjacent tick" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "harvestToCollecting()"
+                , "local harvestsAtCompletion, xpAtCompletion = CALLS.harvest, XP"
+                -- Thirst, combat, a player order: the phase and its
+                -- loot list survive, and the worker does not.
+                , "preempt(30, 20, 0)"
+                , "assert(S.harvestPhase == 'collecting' and #S.harvestLoot == 2,"
+                , "  'an interruption must not discard the pending collection')"
+                -- The defect, stated as an assertion.
+                , "local movesBefore = CALLS.moveTo"
+                , "step()"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'a yield eleven tiles away must not be picked up')"
+                , "assert(CALLS.moveTo == movesBefore + 1,"
+                , "  'the worker must walk toward it instead')"
+                , "assert(MOVED_TO.x == 10.5 and MOVED_TO.y == 0.5,"
+                , "  'and must steer to the live row, not to a stale target')"
+                , "assert(#S.harvestLoot == 2,"
+                , "  'the gid must stay pending while travelling')"
+                -- Every approach tick: the row is still lying there and
+                -- nothing has been taken.
+                , "local ticks = 0"
+                , "while PICKUP_CALLS == 0 and ticks < 120 do"
+                , "  local pending = S.harvestLoot[#S.harvestLoot]"
+                , "  assert(item.getGroundForUnit(1, pending),"
+                , "    'the yield must remain on the ground while approaching')"
+                , "  assert(#S.harvestLoot == 2,"
+                , "    'and must not be consumed by an approach tick')"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(ticks > 1,"
+                , "  'eleven tiles must take more than one tick to close')"
+                , "assert(PICKUP_CALLS == 1,"
+                , "  'exactly one pickup, on the first tick adjacency holds')"
+                , "assert(#GROUND == 1 and GROUND[1] == 2,"
+                , "  'and it must be the exact retained instance')"
+                , "assert(#S.harvestLoot == 1,"
+                , "  'only the collected gid leaves the list')"
+                -- Requirement 4: resuming a collection re-harvests
+                -- nothing and re-earns nothing.
+                , "assert(CALLS.harvest == harvestsAtCompletion,"
+                , "  'resuming a collection must not re-harvest a plant')"
+                , "assert(XP == xpAtCompletion,"
+                , "  'nor grant harvesting XP a second time')"
+                , "assert(CALLS.pickup == 1,"
+                , "  'the bend-down anim belongs to the pick, not to the walk')"
+                -- The second yield is underfoot now, so it comes in on
+                -- the next tick and the phase then clears.
+                , "step()"
+                , "assert(#GROUND == 2 and GROUND[2] == 1,"
+                , "  'the second yield is collected in place')"
+                , "step()"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'and the terminal tick clears the phase')"
+                ]
+
+        it "rechecks proximity after a SECOND interruption: an approach \
+           \carried further away by another action is re-measured and \
+           \re-issued, never completed on the strength of the first \
+           \check" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "harvestToCollecting()"
+                , "preempt(30, 20, 0)"
+                , "step()"
+                , "assert(CALLS.moveTo == 1 and PICKUP_CALLS == 0,"
+                , "  'the first resume must issue a walk and take nothing')"
+                -- Part-way there...
+                , "step(); step()"
+                , "assert(PICKUP_CALLS == 0, 'still short of the yield')"
+                , "local closed = POS.gridX"
+                , "assert(closed < 20, 'and genuinely closer than it started')"
+                -- ...and preempted again, this time DRAGGED FURTHER OUT.
+                , "preempt(45, 30, 0)"
+                , "assert(S.harvestPhase == 'collecting' and #S.harvestLoot == 2,"
+                , "  'the second interruption must not discard the yield')"
+                , "local movesBefore = CALLS.moveTo"
+                , "step()"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'the earlier proximity check must not authorise a pickup')"
+                , "assert(CALLS.moveTo == movesBefore + 1,"
+                , "  'a fresh walk must be issued from the new position')"
+                , "assert(MOVED_TO.x == 10.5,"
+                , "  'toward the same live row')"
+                -- ...and it still finishes.
+                , "local ticks = 0"
+                , "while PICKUP_CALLS == 0 and ticks < 120 do"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(PICKUP_CALLS == 1 and #GROUND == 1,"
+                , "  'the twice-interrupted collection must still complete')"
+                ]
+
+        it "stops a worker that is still moving when it reaches \
+           \adjacency, then picks up exactly once — dispatch can \
+           \execute a winning action mid-stride" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "harvestToCollecting()"
+                -- Another action owned the unit and had it walking; the
+                -- route happens to pass right by the yields, so
+                -- auto_harvest wins back mid-stride. unit_ai.lua's
+                -- `switching` branch executes even though ACTIVITY is
+                -- not idle.
+                , "harvest.onExit(1, S, PARAMS)"
+                , "S.currentAction = 'store_materials'"
+                , "place(10, 1)   -- adjacent to the yields at (10, 0)"
+                , "ACTIVITY = 'walking'"
+                , "MOVED_TO = { x = 40.5, y = 40.5 }"
+                , "local stopsBefore = CALLS.stop"
+                , "step()"
+                , "assert(CALLS.stop == stopsBefore + 1,"
+                , "  'arriving adjacent while moving must stop the unit once')"
+                , "assert(PICKUP_CALLS == 1,"
+                , "  'and collect exactly one yield on that same tick')"
+                , "assert(CALLS.moveTo == 0,"
+                , "  'an adjacent yield must never be walked to')"
+                ]
+
+    describe "the existing collection behaviour is unchanged" $ do
+        it "collects an adjacent yield in place, one item per tick, \
+           \with no walk at all" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "harvestToCollecting()"
+                , "assert(CALLS.moveTo == 0,"
+                , "  'the fixture must have reached the plant without a recorded walk')"
+                , "step()"
+                , "assert(#GROUND == 1 and GROUND[1] == 2,"
+                , "  'exactly one yield comes off the ground per tick')"
+                , "step()"
+                , "assert(#GROUND == 2 and GROUND[2] == 1,"
+                , "  'in the order the recorded list is consumed: from the END')"
+                , "assert(S.harvestPhase == 'collecting',"
+                , "  'the terminal cleanup tick is still owed')"
+                , "step()"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'and clears the phase and its list')"
+                , "assert(CALLS.moveTo == 0,"
+                , "  'no part of an adjacent collection may issue a walk')"
+                ]
+
+        it "a yield that is no longer on the worker's page ends the \
+           \collection in that tick and leaves the rest lying there, \
+           \whether the worker is adjacent or still approaching" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "harvestToCollecting()"
+                -- Adjacent, and the tail gid raced away.
+                , "MISSING[2] = true"
+                , "step()"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'a vanished row must not reach item.pickupGround')"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'and must end the collection cleanly')"
+                , "assert(#WARNINGS == 0,"
+                , "  'a raced row is not a capacity refusal')"
+                , "assert(item.getGroundForUnit(1, 1),"
+                , "  'the surviving yield stays on the ground for someone else')"
+                -- The same reading, reached from an approach rather
+                -- than from adjacency.
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 1 }"
+                , "place(20, 0)"
+                , "step()"
+                , "assert(CALLS.moveTo > 0, 'the worker is approaching')"
+                , "MISSING[1] = true"
+                , "ACTIVITY = 'idle'"
+                , "step()"
+                , "assert(PICKUP_CALLS == 0 and S.harvestPhase == nil,"
+                , "  'a row that vanishes mid-approach ends the collection too')"
+                ]
+
+        it "judges capacity at the moment of truth: a long approach \
+           \draws no warning, and the refusal still warns exactly once \
+           \on the adjacent tick" $
+            runsOk $ lns
+                [ harvestPrelude
+                -- A yield this worker can never fit, eleven tiles off.
+                , "CAPACITY, ROW_WEIGHT = 1.0, 5.0"
+                , "GROUND_AT[7] = { x = 10.5, y = 0.5 }"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(20, 0)"
+                , "step()"
+                , "assert(CALLS.moveTo == 1, 'the worker must approach it')"
+                , "assert(#WARNINGS == 0,"
+                , "  'capacity must not be judged from eleven tiles away')"
+                , "local ticks = 0"
+                , "while S.harvestPhase and ticks < 120 do"
+                , "  assert(#WARNINGS == 0 or PICKUP_CALLS >= 0, 'progress')"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(S.harvestPhase == nil,"
+                , "  'the refusal must end the collection')"
+                , "assert(#WARNINGS == 1,"
+                , "  'and must warn exactly ONCE across the whole approach, got '"
+                , "  .. #WARNINGS)"
+                , "assert(WARNINGS[1]:find('leaving ground', 1, true),"
+                , "  'with the leaving-ground outcome')"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'a refused yield must not reach item.pickupGround')"
+                , "assert(item.getGroundForUnit(1, 7),"
+                , "  'and must be left where it lies')"
+                ]
+
+        it "ends the collection cleanly when the yield cannot be \
+           \reached at all, instead of re-deciding and re-pathing \
+           \forever" $
+            runsOk $ lns
+                [ harvestPrelude
+                -- The walk goes nowhere: a blocked route, an island,
+                -- a yield behind a wall. Without a bound this is the
+                -- livelock the approach would introduce — a pending
+                -- collection scores above idle unconditionally, and
+                -- unit_ai.lua's stuck-walk watchdog clears no phase.
+                , "NO_WALK = true"
+                , "GROUND_AT[7] = { x = 10.5, y = 0.5 }"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(30, 0)"
+                , "local ticks = 0"
+                , "while S.harvestPhase and ticks < 400 do"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'an unreachable yield must end the collection')"
+                , "assert(S.harvestCollect == nil,"
+                , "  'and must leave no approach bookkeeping behind')"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'without ever collecting it remotely')"
+                , "assert(item.getGroundForUnit(1, 7),"
+                , "  'the yield stays on the ground for a worker that can reach it')"
+                -- A STALL timer, not a total-trip budget: it took real
+                -- time, not one tick.
+                , "assert(ticks > 10,"
+                , "  'and must not give up on the first fruitless tick')"
+                ]
+
+    describe "proximity is measured in the page's own seam frame" $ do
+        it "a yield across the U seam is adjacent, and the same fixture \
+           \with no wrap period is a walk — so the check really does \
+           \consult world.getWrapWidth on the ACTOR's page" $
+            runsOk $ lns
+                [ harvestPrelude
+                -- Period 64 ⇒ alias step 32. (0, 40)'s cylindrical
+                -- image along (+u, -v) is (32, 8), which (33, 8) is one
+                -- Chebyshev tile from; raw subtraction puts them 32
+                -- tiles apart.
+                , "WRAP = 64"
+                , "GROUND_AT[7] = { x = 0.5, y = 40.5 }"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(33, 8)"
+                , "step()"
+                , "assert(PICKUP_CALLS == 1,"
+                , "  'a seam-adjacent yield must be collected in place')"
+                , "assert(CALLS.moveTo == 0,"
+                , "  'and must not be walked to across the whole world')"
+                , "assert(WRAP_PAGES[1] == 'p1',"
+                , "  'the period must be read for the ACTOR own page, got '"
+                , "  .. tostring(WRAP_PAGES[1]))"
+                -- The control: identical geometry, no wrap period.
+                , "WRAP = 0"
+                , "TAKEN, GROUND, PICKUP_CALLS = {}, {}, 0"
+                , "CALLS.moveTo = 0"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(33, 8)"
+                , "ACTIVITY = 'idle'"
+                , "step()"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'without a period the same pair is 32 tiles apart')"
+                , "assert(CALLS.moveTo == 1,"
+                , "  'so the worker must walk instead')"
+                ]
+
+        it "the shared primitive measures Chebyshev tiles over the same \
+           \three cylindrical images unit_ai_locations searches, and \
+           \collapses to the plain comparison for an absent period" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "local locations = require('scripts.unit_ai_locations')"
+                , "assert(type(locations.aliasStep) == 'function'"
+                , "   and type(locations.wrapPeriodFor) == 'function',"
+                , "  'the seam-alias primitives must be exported, not re-derived')"
+                , "assert(locations.aliasStep(64) == 32,"
+                , "  'the alias step is half the period')"
+                , "assert(locations.aliasStep(0) == 0"
+                , "   and locations.aliasStep(nil) == 0"
+                , "   and locations.aliasStep(-4) == 0,"
+                , "  'an absent or non-positive period collapses to zero')"
+                -- Chebyshev, not Euclidean: (1, 1) away is ONE tile in
+                -- the frame the surrounding approach branches use.
+                , "assert(yieldCollect.chebyshev(0, 0, 1, 1, 0) == 1,"
+                , "  'a diagonal neighbour is one Chebyshev tile')"
+                , "assert(yieldCollect.adjacent(0, 0, 1, 1, 0),"
+                , "  'and is therefore adjacent')"
+                , "assert(not yieldCollect.adjacent(0, 0, 2, 0, 0),"
+                , "  'two tiles is not')"
+                -- The seam, with the period passed EXPLICITLY, which is
+                -- what keeps the primitive callable from a bare VM.
+                , "assert(yieldCollect.chebyshev(33, 8, 0, 40, 0) == 33,"
+                , "  'raw subtraction puts the seam pair 33 tiles apart')"
+                -- chebyshev takes the ALIAS STEP (half the period);
+                -- adjacent takes the FULL period and derives the step,
+                -- exactly as nearestKnownLocation does.
+                , "assert(yieldCollect.chebyshev(33, 8, 0, 40,"
+                , "                              locations.aliasStep(64)) == 1,"
+                , "  'and the cylindrical images put them next door')"
+                , "assert(yieldCollect.adjacent(33, 8, 0, 40, 64),"
+                , "  'so the seam pair is adjacent under the page period')"
+                , "assert(not yieldCollect.adjacent(33, 8, 0, 40, nil),"
+                , "  'and is not, with no period at all')"
+                ]
+
+    describe "foraging shares the gate and keeps its capacity exemption" $ do
+        it "walks to a retained forage yield an interruption left tiles \
+           \away, steering by the resolved row rather than the target \
+           \forageUtility rewrote on the way past" $
+            runsOk $ lns
+                [ foragePrelude
+                , "forageToCollecting()"
+                , "local harvestsAtCompletion = CALLS.harvest"
+                -- Dragged away, and a nearer piece of ground food
+                -- appears where the worker now stands: forageUtility
+                -- rewrites s.forageTarget to THAT gid on its next
+                -- scoring pass, so a collecting branch steering by the
+                -- target would walk to the wrong item entirely.
+                , "foragePreempt(30, 20, 0)"
+                , "GROUND_AT[9] = { x = 21.5, y = 0.5 }"
+                , "assert(S.foragePhase == 'collecting' and #S.forageLoot == 1,"
+                , "  'the interruption must not discard the pending yield')"
+                , "forageStep()"
+                , "assert(S.forageTarget and S.forageTarget.gid == 9,"
+                , "  'the scan must indeed have retargeted the nearer decoy')"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'a retained yield eleven tiles away must not be picked up')"
+                , "assert(MOVED_TO.x == 10.5 and MOVED_TO.y == 0.5,"
+                , "  'and the walk must steer to the RETAINED row, not the decoy')"
+                , "assert(#S.forageLoot == 1,"
+                , "  'the gid must stay pending while travelling')"
+                , "local ticks = 0"
+                , "while PICKUP_CALLS == 0 and ticks < 120 do"
+                , "  assert(item.getGroundForUnit(1, S.forageLoot[#S.forageLoot]),"
+                , "    'the yield must remain on the ground while approaching')"
+                , "  forageStep(); ticks = ticks + 1"
+                , "end"
+                , "assert(ticks > 1, 'the approach must take real time')"
+                , "assert(PICKUP_CALLS == 1 and GROUND[1] == 5,"
+                , "  'exactly the retained instance, exactly once')"
+                , "assert(CALLS.harvest == harvestsAtCompletion,"
+                , "  'and no plant may be re-harvested to finish it')"
+                -- The pre-existing strand, asserted rather than papered
+                -- over: a collected forage yield puts food in the pack,
+                -- and forageUtility yields to eat_from_inventory the
+                -- moment it does. That is why this group drives the
+                -- approach BEFORE any pickup and never assumes forage
+                -- stays selectable across two collected yields.
+                , "assert(needs.forageUtility(1, S, PARAMS) == -math.huge,"
+                , "  'forage steps aside for eat_from_inventory once fed')"
+                ]
+
+        it "takes an adjacent forage yield whatever the worker is \
+           \carrying — the approach adds a distance test, never the \
+           \capacity admission auto-harvest applies" $
+            runsOk $ lns
+                [ foragePrelude
+                -- Hopelessly over capacity, which is exactly the state
+                -- #2293 decided a starving forager may still eat out of.
+                , "CAPACITY, ROW_WEIGHT, CARRIED = 1.0, 50.0, 40.0"
+                , "forageToCollecting()"
+                , "forageStep()"
+                , "assert(PICKUP_CALLS == 1 and GROUND[1] == 5,"
+                , "  'foraging must remain exempt from the capacity gate')"
+                , "assert(#WARNINGS == 0,"
+                , "  'and must draw no capacity warning')"
+                ]
+
+        it "ends a forage collection when the retained yield is gone, \
+           \and never walks to an adjacent one" $
+            runsOk $ lns
+                [ foragePrelude
+                , "forageToCollecting()"
+                , "assert(CALLS.moveTo == 0,"
+                , "  'the adjacent pick needed no recorded walk')"
+                -- forageUtility has no pending-collection branch -- #1743
+                -- gave one only to auto-harvest -- so forage has to stay
+                -- selectable on its own terms for the terminal tick to
+                -- run at all. A second plant elsewhere in range is the
+                -- honest way to arrange that; a pending-collection branch
+                -- of its own would change the emergency hunger ladder,
+                -- which is out of this issue's scope.
+                , "FLORA['30,0'] = { { gid = 6 } }"
+                , "MISSING[5] = true"
+                , "forageStep()"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'a vanished row must not reach item.pickupGround')"
+                , "assert(S.foragePhase == nil and S.forageLoot == nil,"
+                , "  'and must end the collection cleanly')"
+                , "assert(S.forageCollect == nil,"
+                , "  'leaving no approach bookkeeping behind')"
+                ]
+
+    describe "the approach budget is eligible time only" $ do
+        it "an interruption is not charged against it: a preempted \
+           \approach that keeps making progress still completes" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "local stall = require('scripts.unit_ai_stall')"
+                , "harvestToCollecting()"
+                , "preempt(5, 24, 0)"
+                , "step()"
+                , "assert(S.harvestCollect, 'the approach clock must exist')"
+                -- Minutes elsewhere, announced through onExit, must not
+                -- be charged as approach time.
+                , "preempt(600)"
+                , "assert(S.harvestCollect.stallSeenAt == nil,"
+                , "  'onExit must drop the approach clock last-sample stamp')"
+                , "step()"
+                , "assert(S.harvestPhase == 'collecting',"
+                , "  'a ten-minute interruption must not expire the budget')"
+                -- ...and a swallowed tick takes the same boundary,
+                -- which is the ONLY one foraging gets.
+                , "stall.suspendOrders(S, 1)"
+                , "assert(S.harvestCollect == nil"
+                , "   or S.harvestCollect.stallSeenAt == nil,"
+                , "  'suspendOrders must drop it too')"
+                , "local ticks = 0"
+                , "while PICKUP_CALLS == 0 and ticks < 120 do"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(PICKUP_CALLS == 1,"
+                , "  'and the interrupted approach must still finish')"
+                ]
+
+        it "classifies the approach records transient, so the \
+           \lua.unit_ai component stays at v9" $
+            runsOk $ lns
+                [ "engine = { logWarn = function() end, logInfo = function() end }"
+                , "unit = { exists = function() return true end }"
+                , "local unitAiSave = require('scripts.unit_ai_save')"
+                , "local saveModules = require('scripts.lib.save_modules')"
+                , "local codec = require('scripts.lib.data_codec')"
+                , "local aiState = {}"
+                , "unitAiSave.register(aiState)"
+                , "local spec = saveModules.registry.unit_ai"
+                , "assert(spec.version == 9,"
+                , "  'the retained-yield approach must move no component '"
+                , "  .. 'version; got ' .. tostring(spec.version))"
+                , "aiState[1] = { currentAction = 'auto_harvest',"
+                , "  harvestPhase = 'collecting', harvestLoot = { 1, 2 },"
+                , "  harvestCollect = { bestDist = 4.0, stalledFor = 7.5,"
+                , "                     stallSeenAt = 120 },"
+                , "  foragePhase = 'collecting', forageLoot = { 5 },"
+                , "  forageCollect = { bestDist = 9.0, stalledFor = 2.0,"
+                , "                    stallSeenAt = 120 } }"
+                , "local snap = spec.snapshot()"
+                , "local row = snap[1]"
+                , "assert(row, 'the unit must still be snapshotted')"
+                , "assert(row.harvestCollect == nil and row.forageCollect == nil,"
+                , "  'neither approach record may reach the payload')"
+                -- The pending collection ITSELF is durable, which is
+                -- precisely why its proximity has to be rechecked after
+                -- a load.
+                , "assert(row.harvestPhase == 'collecting'"
+                , "   and row.harvestLoot and #row.harvestLoot == 2,"
+                , "  'the pending harvest collection still persists')"
+                , "assert(row.foragePhase == 'collecting'"
+                , "   and row.forageLoot and #row.forageLoot == 1,"
+                , "  'and so does the pending forage collection')"
+                , "local decoded = spec.decode(spec.version,"
+                , "  codec.decode(codec.encode(snap)))"
+                , "for k in pairs(aiState) do aiState[k] = nil end"
+                , "spec.apply(decoded, nil)"
+                , "local restored = aiState[1]"
+                , "assert(restored, 'the row must survive the round trip')"
+                , "assert(restored.harvestCollect == nil"
+                , "   and restored.forageCollect == nil,"
+                , "  'a loaded worker re-establishes its approach from where it stands')"
+                , "assert(restored.harvestPhase == 'collecting',"
+                , "  'while the collection it still owes survives')"
+                ]
