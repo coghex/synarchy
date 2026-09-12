@@ -93,9 +93,11 @@ spec = describe "Audio.PreviewUI" $ do
       , "current.previewEntries={"
       , "  {id='a',label='bear_brown_growl',category='synth',playable=true},"
       , "  {id='b',label='menu_back',category='synth',playable=true}}"
-      , "current.previewRevision=2; assert(reloads==0)"
+      , "current.previewRevision=2; current.catalogWarnings=1"
+      , "current.lastError='bear_brown_huff.wav missing'; assert(reloads==0)"
       , "pane.update(); local d=pane.dump()"
       , "assert(d.revision==2 and not d.reloading and #d.rows==2)"
+      , "assert(d.state:find('bear_brown_huff.wav missing',1,true))"
       , "assert(d.rows[1].label=='bear_brown_growl' and d.rows[2].label=='menu_back')"
       , "for _,row in ipairs(d.rows) do assert(row.label~='menu_selected') end"
       , "assert(d.selected=='b')"
@@ -167,5 +169,19 @@ spec = describe "Audio.PreviewUI" $ do
       , "current.previewRevision=4; pane.key('Down'); assert(#plays==1)"
       , "assert(pane.dump().revision==4 and pane.dump().selected=='b')"
       , "pane.key('Up'); assert(#plays==2 and plays[2]=='a')"
+      , "pane.shutdown()"
+      ]
+  it "reports a reload that failed while the pane was closed" $
+    runsOk $ fixture <> "\n" <> lns
+      [ "pane.init(1,1,{mode='list'}); local footer=pane.dump().footer.handle"
+      , "pane.click(footer); assert(pane.isOpen() and pane.reload())"
+      , "pane.click(footer); assert(not pane.isOpen())"
+      -- The load attempt fails with no pane left to observe the tick.
+      , "current.lifecycle='disabled'; current.lastError='device unavailable'"
+      , "current.previewEntries={}; current.previewRevision=2"
+      , "pane.click(footer); local d=pane.dump()"
+      , "assert(d.revision==2 and not d.reloading and #d.rows==0 and d.selected==nil)"
+      , "assert(d.state:find('device unavailable',1,true))"
+      , "assert(not pane.play()); assert(#plays==0)"
       , "pane.shutdown()"
       ]

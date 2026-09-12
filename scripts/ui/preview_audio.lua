@@ -48,6 +48,16 @@ local function reveal()
     offset = 0
 end
 
+-- What a settled load attempt has to say for itself.
+local function describe(latest)
+    if latest.lifecycle == "disabled" then
+        return "Audio unavailable: " .. (latest.lastError or "")
+    elseif (latest.catalogWarnings or 0) > 0 then
+        return "Some sounds unavailable: " .. (latest.lastError or "")
+    end
+    return "Ready"
+end
+
 -- Rebuild the displayed model from a settled catalog, keeping the same
 -- semantic sound selected when it survived. Preview IDs are reassigned
 -- positionally on every load, so identity is the only stable key.
@@ -60,13 +70,7 @@ local function reconcile(latest)
     local list = filtered()
     selected = selected or (list[1] and list[1].id)
     reloadSequence, playSequence = nil, nil
-    if latest.lifecycle == "disabled" then
-        message = "Audio unavailable: " .. (latest.lastError or "")
-    elseif (latest.catalogWarnings or 0) > 0 then
-        message = "Some sounds unavailable: " .. (latest.lastError or "")
-    else
-        message = "Ready"
-    end
+    message = describe(latest)
     snapshot = latest
     reveal()
     pane.render()
@@ -234,13 +238,17 @@ function pane.open(value, file)
     -- Resolve the outgoing selection against the catalog it was chosen from,
     -- before that catalog is replaced: a reload settling while the pane was
     -- closed can have moved the same sound onto another positional ID.
-    local old = identity(chosen())
+    local old, previous = identity(chosen()), revision
     snapshot = status()
     entries = snapshot.previewEntries or {}
     revision = snapshot.previewRevision or 0
-    -- update() is dead while the pane is closed, so a reload started here can
-    -- settle unobserved. Reopening on a later revision retires that request.
-    if reloadSequence and revision > reloadSequence then reloadSequence = nil end
+    -- update() is dead while the pane is closed, so a load started here can
+    -- settle unobserved. Reopening on a later revision retires that request and
+    -- reports the attempt, since a failed one leaves an emptied catalog behind.
+    if previous and revision > previous then
+        reloadSequence, playSequence = nil, nil
+        message = describe(snapshot)
+    end
     selected = nil
     for _, entry in ipairs(entries) do if identity(entry) == old then selected = entry.id end end
     local list = filtered()
