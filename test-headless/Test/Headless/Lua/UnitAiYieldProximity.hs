@@ -47,6 +47,13 @@
 --       livelock, whose watchdog cycle outlasts
 --       @stall.MAX_CHARGED_INTERVAL@ so an execute-side sample charges
 --       zero forever.
+--     * Leave a vanished row for execute to retire instead of ending it
+--       from @tickCollection@ and "ends a forage collection when the
+--       retained yield is gone" fails: forage is not selectable on that
+--       tick, so nothing else can clean it up.
+--     * Ungate the closest-approach reset, or the adjacency clear, from
+--       @eligible@ and "is not refunded by an interrupting action..."
+--       fails on each.
 --
 --   Same standalone-Lua-VM pattern as
 --   "Test.Headless.Lua.UnitAiHarvest", which owns the neighbouring
@@ -291,6 +298,18 @@ harvestPrelude = lns
     , "  ACTIVITY = 'idle'"
     , "  MOVED_TO = nil"
     , "  if x then place(x, y) end"
+    , "end"
+    -- ONE thought tick that another action owns. Arbitration scores
+    -- every registered action every tick, so harvest's utility -- and
+    -- with it the collection budget it samples -- still runs; what does
+    -- not happen is this action winning or executing. s.currentAction
+    -- is set BEFORE the scoring pass, exactly as unit_ai.lua leaves it,
+    -- so it names the action that owned the interval just elapsed.
+    , "function foreignStep(dt, x, y)"
+    , "  NOW = NOW + (dt or STEP)"
+    , "  if x then place(x, y) end"
+    , "  S.currentAction = 'treat_ally'"
+    , "  harvest.utility(1, S, PARAMS)"
     , "end"
     -- Work the fixture's single plant through to a pending collection,
     -- adjacent, exactly as an uninterrupted picker would.
@@ -814,16 +833,21 @@ spec = describe "harvest collection proximity" $ do
                 , "forageToCollecting()"
                 , "assert(CALLS.moveTo == 0,"
                 , "  'the adjacent pick needed no recorded walk')"
-                -- forageUtility has no pending-collection branch -- #1743
-                -- gave one only to auto-harvest -- so forage has to stay
-                -- selectable on its own terms for the terminal tick to
-                -- run at all. A second plant elsewhere in range is the
-                -- honest way to arrange that; a pending-collection branch
-                -- of its own would change the emergency hunger ladder,
-                -- which is out of this issue's scope.
-                , "FLORA['30,0'] = { { gid = 6 } }"
+                -- NOTHING else to forage anywhere in range: the plant
+                -- this fixture held has been picked, and the yield it
+                -- dropped is the row about to vanish. forageUtility
+                -- therefore scores -math.huge and forageExecute never
+                -- runs -- which is exactly why retiring a vanished row
+                -- has to happen on the UTILITY tick. Adding a second
+                -- plant here to keep forage selectable would test the
+                -- fixture rather than the code.
+                , "assert(next(FLORA) == nil,"
+                , "  'the fixture must hold no other harvestable plant')"
                 , "MISSING[5] = true"
-                , "forageStep()"
+                , "local u = forageStep()"
+                , "assert(u == -math.huge,"
+                , "  'forage must indeed be unselectable on this tick, so the '"
+                , "  .. 'cleanup cannot have come from forageExecute')"
                 , "assert(PICKUP_CALLS == 0,"
                 , "  'a vanished row must not reach item.pickupGround')"
                 , "assert(S.foragePhase == nil and S.forageLoot == nil,"
@@ -862,6 +886,72 @@ spec = describe "harvest collection proximity" $ do
                 , "end"
                 , "assert(PICKUP_CALLS == 1,"
                 , "  'and the interrupted approach must still finish')"
+                ]
+
+        it "is not refunded by an interrupting action that happens to \
+           \carry the worker closer: only this collection's own ticks \
+           \may record a new closest approach" $
+            runsOk $ lns
+                [ harvestPrelude
+                -- A yield the worker never closes on by itself.
+                , "NO_WALK = true"
+                , "GROUND_AT[7] = { x = 10.5, y = 0.5 }"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(40, 0)"
+                -- Spend a real part of the budget on this collection's
+                -- own eligible ticks.
+                , "for _ = 1, 30 do step() end"
+                , "local spent = S.harvestCollect and S.harvestCollect.stalledFor"
+                , "assert(spent and spent > 5,"
+                , "  'the approach must have spent real budget first, got '"
+                , "  .. tostring(spent))"
+                , "assert(S.harvestPhase == 'collecting',"
+                , "  'and must not have expired yet')"
+                -- Now treat_ally owns the worker and walks it a long
+                -- way TOWARD the yield. That is a genuine new closest
+                -- approach -- and it is not this collection's, so it
+                -- must buy the collection nothing.
+                , "local closer = 40"
+                , "for _ = 1, 12 do closer = closer - 2; foreignStep(nil, closer, 0) end"
+                , "assert(closer > 11,"
+                , "  'the interruption must still leave the yield out of reach')"
+                , "assert(S.harvestCollect,"
+                , "  'the approach record must survive the interruption')"
+                , "assert(S.harvestCollect.stalledFor >= spent,"
+                , "  'an interruption that carried the worker closer must not '"
+                , "  .. 'refund a budget this collection had already spent: '"
+                , "  .. tostring(spent) .. ' -> '"
+                , "  .. tostring(S.harvestCollect.stalledFor))"
+                -- ...and the interval itself is not charged either, so
+                -- the interruption is neither a refund nor a penalty.
+                , "assert(S.harvestCollect.stalledFor == spent,"
+                , "  'nor may the interruption be charged as approach time')"
+                -- The sharpest version of the same rule: the
+                -- interrupting action carries the worker right PAST the
+                -- yield and out the other side. Merely being adjacent
+                -- on a tick this collection does not own must not
+                -- retire the approach record, which would hand the
+                -- whole spent budget back just as surely as a reset.
+                , "foreignStep(nil, 10, 0)"
+                , "assert(S.harvestCollect,"
+                , "  'passing adjacent under another action must not retire '"
+                , "  .. 'the approach record')"
+                , "foreignStep(nil, 40, 0)"
+                , "assert(S.harvestCollect"
+                , "   and S.harvestCollect.stalledFor == spent,"
+                , "  'and must leave the spent budget exactly as it was: '"
+                , "  .. tostring(spent) .. ' -> '"
+                , "  .. tostring(S.harvestCollect and S.harvestCollect.stalledFor))"
+                -- The collection still gives up on schedule rather than
+                -- being kept alive by repeated interruptions.
+                , "local ticks = 0"
+                , "while S.harvestPhase and ticks < 600 do"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(S.harvestPhase == nil,"
+                , "  'the unreachable collection must still expire')"
+                , "assert(PICKUP_CALLS == 0, 'and collect nothing remotely')"
                 ]
 
         it "classifies the approach records transient, so the \

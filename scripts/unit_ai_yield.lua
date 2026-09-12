@@ -146,12 +146,21 @@ local function yieldDistance(uid, gid)
                        locations.aliasStep(M.periodForUnit(uid))), row
 end
 
+-- End `spec`'s collection: clear its approach record and exactly the
+-- fields that action's own execute branch clears on a terminal exit.
+-- Whatever gids remain simply stay on the ground -- they were
+-- materialized as ordinary items before collection began -- so nothing
+-- is deleted or half-moved.
+local function endCollection(s, spec)
+    s[spec.clock] = nil
+    for _, f in ipairs(spec.clear) do s[f] = nil end
+end
+
 -- Sample `spec`'s pending collection against its approach budget, and
--- END the collection when that budget runs out -- clearing exactly the
--- fields the action's own terminal exit clears. Returns whether it did.
--- A no-op when no collection is pending, when the row cannot be
--- resolved (execute ends that case, on its own reading), or when the
--- worker is already adjacent.
+-- END the collection when that budget runs out, or when the retained
+-- row no longer resolves at all. Returns whether it ended one. A no-op
+-- when no collection is pending, when the worker itself is gone (its
+-- state is moot), or while the approach is still within budget.
 --
 -- CALLED FROM UTILITY, NOT EXECUTE, and that is the whole point.
 -- scripts/unit_ai.lua re-executes an unchanged action only once the
@@ -175,6 +184,17 @@ end
 -- also what gives foraging correct accounting despite registering no
 -- onExit (scripts/unit_ai_actions.lua).
 --
+-- A vanished row is retired HERE and not left to execute, because
+-- execute is not reliably reachable. Auto-harvest's utility keeps
+-- scoring a pending collection, so its execute would get the tick --
+-- but forageUtility has no pending-collection branch at all (#1743
+-- gave one only to auto-harvest), so a forager whose scan finds no
+-- other plant and no other ground food scores -math.huge, never
+-- executes, and would strand foragePhase/forageLoot indefinitely. The
+-- READING is unchanged from what both branches have always done: the
+-- collection ends in that tick and any remaining gids stay on the
+-- ground for whoever finds them.
+--
 -- Ending a collection here is silent: no core.reportFailure, unlike the
 -- commanded pickup order this borrows its shape from. That order is a
 -- PLAYER instruction whose abandonment the player must hear about;
@@ -186,32 +206,58 @@ function M.tickCollection(uid, s, spec, timeout)
     local gid = loot and loot[#loot]
     if gid == nil then return false end
 
-    local d = yieldDistance(uid, gid)
-    if d == nil then return false end
+    local d, row = yieldDistance(uid, gid)
+    if d == nil then
+        -- A resolved row with no distance means the WORKER is gone, not
+        -- the yield; its whole state table is moot, so touch nothing.
+        if row then return false end
+        endCollection(s, spec)
+        return true
+    end
+
+    -- ELIGIBILITY, read the way pickupUtility reads it: from
+    -- s.currentAction BEFORE this tick re-scores, so it names the
+    -- action that owned the interval which just elapsed rather than the
+    -- one about to start.
+    local eligible = s.currentAction == spec.action
+
     if d <= M.ADJACENT_TILES then
-        -- Underfoot: there is no approach to time.
-        s[spec.clock] = nil
+        -- Underfoot: there is no approach to time. Only THIS action may
+        -- retire the record, for the same reason it is the only one
+        -- that may reset it below -- an interrupting action that
+        -- happens to carry the worker past the yield must not hand the
+        -- budget back.
+        if eligible then s[spec.clock] = nil end
         return false
     end
 
     local clock = s[spec.clock]
     if not clock then clock = {}; s[spec.clock] = clock end
     local now = engine.gameTime()
-    -- A new closest approach refunds the whole budget; charging happens
-    -- against whatever is left. Reset first, exactly as
-    -- unit_ai_pickup.lua's pickupUtility orders the two. A STALL timer,
-    -- not a total-trip budget (#920): a worker genuinely walking twenty
-    -- tiles keeps refreshing it and is never abandoned mid-route.
-    if not clock.bestDist or d < clock.bestDist - M.PROGRESS_TILES then
+    -- A new closest approach refunds the whole budget -- and making
+    -- that reset THIS action's alone is the other half of the
+    -- eligible-time contract, not a detail: an interruption that
+    -- happens to carry the worker closer (a treat_ally walk, a combat
+    -- chase in the same direction) must not refund a budget the
+    -- collection had already spent, or repeated interruptions keep an
+    -- unreachable yield alive forever. Nothing is lost by waiting --
+    -- the approach is a fact about where the worker now IS, so the
+    -- first eligible sample after the interruption records it and
+    -- starts the budget over then. Gated and ordered exactly as
+    -- unit_ai_pickup.lua's pickupUtility gates and orders the same two
+    -- steps. A STALL timer, not a total-trip budget (#920): a worker
+    -- genuinely walking twenty tiles keeps refreshing it and is never
+    -- abandoned mid-route.
+    if eligible
+       and (not clock.bestDist or d < clock.bestDist - M.PROGRESS_TILES) then
         clock.bestDist = d
         stall.reset(clock, now)
     end
-    if stall.charge(clock, s.currentAction == spec.action, now)
+    if stall.charge(clock, eligible, now)
        <= (timeout or M.COLLECT_TIMEOUT) then
         return false
     end
-    s[spec.clock] = nil
-    for _, f in ipairs(spec.clear) do s[f] = nil end
+    endCollection(s, spec)
     return true
 end
 
