@@ -171,12 +171,19 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     -- pose/activity regen logic and let the fixed organ-failure
     -- drain run unopposed. Only stamina opts into this via the
     -- organ_failure_check flag.
+    --
+    -- The floor is energy.atFatFloor's, NOT a copy of it (#2556): this
+    -- check used the height-only 0.44·h² long after seeding and
+    -- catabolism moved to 0.02·frame_mass, so every acolyte off bulk
+    -- 1.0 either sat in permanent organ failure while well fed (slim)
+    -- or regenerated normally with its reserves gone (bulky). The
+    -- helper also decides which input applies, so a frame-carrying
+    -- unit with no height stat is now evaluated rather than skipped.
     local inOrganFailure = false
     if params.organ_failure_check then
         local fat = unit.getStat(uid, "fat_mass")
-        local h   = unit.getStat(uid, "height")
-        if fat and h then
-            inOrganFailure = fat <= (0.44 * h * h) + energy.FAT_FLOOR_TOL
+        if fat then
+            inOrganFailure = energy.atFatFloor(uid, fat)
         end
     end
 

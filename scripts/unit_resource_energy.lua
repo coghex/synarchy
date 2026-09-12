@@ -38,10 +38,10 @@ local DIGESTION_CONVERSION = 1.0
 -- Phase 4 catabolism / organ failure constants.
 --
 -- Starvation eats body in two regimes. While fat reserves are above
--- min_fat(h), the deficit is paid mostly from fat with a small muscle
--- toll — MUSCLE_CATABOLISM_FRACTION of the kcal deficit comes from
--- lean tissue, the rest from fat. Once fat hits min_fat, catabolism
--- switches to pure muscle.
+-- the unit's fat floor (M.minFatFor below), the deficit is paid mostly
+-- from fat with a small muscle toll — MUSCLE_CATABOLISM_FRACTION of the
+-- kcal deficit comes from lean tissue, the rest from fat. Once fat
+-- reaches that floor, catabolism switches to pure muscle.
 local MUSCLE_CATABOLISM_FRACTION = 0.05
 
 -- Tolerance for fat-at-floor comparisons. Engine stores uiStats as
@@ -51,9 +51,49 @@ local MUSCLE_CATABOLISM_FRACTION = 0.05
 -- tolerance, `fat <= min_fat` stays false even when fat is clamped
 -- exactly to the floor, and the organ-failure branch never fires.
 -- 1e-4 kg = 0.1 g — orders of magnitude above the ~1e-7 Float32
--- noise but biologically negligible. Also used by unit_resource_tick's
--- organ-failure check (same fat floor, same Float32 tolerance).
+-- noise but biologically negligible. Applied by M.atFatFloor below, so
+-- the catabolism regime here and unit_resource_tick's organ-failure
+-- check share one tolerance as well as one floor.
 M.FAT_FLOOR_TOL = 1e-4
+
+-- The fat floor itself, as fractions of frame mass / height², matching
+-- seedBodyComposition's minFatFrac (src/Unit/Thread/Command/Body.hs).
+-- frame_mass = 22·h²·bulk is the stable structural size, so the frame
+-- form scales correctly for any creature; the height-only form is the
+-- legacy fallback for units seeded before frame_mass existed, and the
+-- two agree only at bulk 1.0.
+local MIN_FAT_FRAC          = 0.02
+local LEGACY_MIN_FAT_PER_H2 = 0.44
+
+-----------------------------------------------------------
+-- The minimum viable fat mass for a unit, in kg. This is THE fat-floor
+-- policy: catabolism's regime split below and unit_resource_tick's
+-- organ-failure check both read it, so neither can drift onto a
+-- different formula than the one seedBodyComposition seeded against
+-- (#2556 — the organ-failure check kept the height-only form after
+-- seeding moved to frame_mass, and the two disagree at every bulk
+-- except 1.0).
+--
+-- frame_mass wins whenever it is readable; height is only consulted for
+-- units that predate it. Returns nil when NEITHER is readable, which
+-- callers must treat as "no floor policy applies" rather than 0.
+-----------------------------------------------------------
+function M.minFatFor(uid)
+    local frame = unit.getStat(uid, "frame_mass")
+    if frame then return MIN_FAT_FRAC * frame end
+    local h = unit.getStat(uid, "height")
+    if h then return LEGACY_MIN_FAT_PER_H2 * h * h end
+    return nil
+end
+
+-- Whether `fat` has reached this unit's floor, within FAT_FLOOR_TOL.
+-- False when no floor input is readable: a unit with no body model is
+-- not in organ failure and not in pure-muscle catabolism.
+function M.atFatFloor(uid, fat)
+    local minFat = M.minFatFor(uid)
+    if not minFat then return false end
+    return fat <= minFat + M.FAT_FLOOR_TOL
+end
 
 -----------------------------------------------------------
 -- Surplus regrowth (calorie store > 75 %): divert
@@ -163,10 +203,13 @@ function M.tickStarvation(uid, dt)
 
     -- Frame-proportional viability floors (match seedBodyComposition's
     -- minFatFrac/minLeanFrac). frame_mass = the stable structural size,
-    -- so these scale correctly for any creature; fall back to the old
-    -- height-only formula for units seeded before frame_mass existed.
+    -- so these scale correctly for any creature; the lean floor falls
+    -- back to the old height-only formula for units seeded before
+    -- frame_mass existed. The FAT floor comes from the shared
+    -- M.minFatFor, which applies the same preference, so the value this
+    -- clamps to is exactly the value the organ-failure check tests.
     local frame   = unit.getStat(uid, "frame_mass")
-    local minFat  = frame and (0.02 * frame) or (0.44 * h * h)
+    local minFat  = M.minFatFor(uid)
     local minLean = frame and (0.20 * frame) or (4.4  * h * h)
 
     -- Respiratory failure: sharp death when skeletal muscle (which
@@ -188,7 +231,7 @@ function M.tickStarvation(uid, dt)
     local deficit = rate * dt
 
     local fatEaten, muscleEaten
-    if fat > minFat + M.FAT_FLOOR_TOL then
+    if not M.atFatFloor(uid, fat) then
         fatEaten    = deficit * (1 - MUSCLE_CATABOLISM_FRACTION) / KCAL_PER_KG_FAT
         muscleEaten = deficit *      MUSCLE_CATABOLISM_FRACTION  / KCAL_PER_KG_LEAN
     else
