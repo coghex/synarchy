@@ -55,6 +55,7 @@ import qualified Test.Headless.Unit.Fall as FallTest
 import qualified Test.Headless.Unit.StopTransition as StopTransition
 import qualified Test.Headless.Unit.Stats as StatsTest
 import qualified Test.Headless.Unit.StanceRecovery as StanceRecovery
+import qualified Test.Headless.Unit.SourceDrinkingHydration as SourceDrinkingHydration
 import qualified Test.Headless.Unit.StaminaCommit as StaminaCommit
 import qualified Test.Headless.Unit.AddXpApi as UnitAddXpApi
 import qualified Test.Headless.Unit.AccessoryUnequip as AccessoryUnequip
@@ -862,6 +863,7 @@ main = hspec $ do
     describe "Unit.StopTransition" StopTransition.spec
     describe "Unit.Stats" StatsTest.spec
     StanceRecovery.spec
+    SourceDrinkingHydration.spec
     StaminaCommit.spec
     AccessoryUnequip.spec
     SpawnShedTest.spec

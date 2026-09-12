@@ -39,6 +39,101 @@ local UPHILL_EXERTION_PER_GRADE = movementSpeed.UPHILL_EXERTION_PER_GRADE
 local STAMINA_RESOURCE = "stamina"
 
 -----------------------------------------------------------
+-- Source-drinking hydration eligibility (#2541)
+--
+-- The fast hydration factor was authored for exactly one situation: a
+-- unit on all fours at the bank of a lake or river, actually drinking
+-- (scripts/unit_ai_water.lua's drink_from_source sequence). Keying it
+-- on the Crawling POSE was never that situation. Crawling is also
+-- ordinary injured locomotion -- unit_resource_injury.lua puts any
+-- conscious unit with a disabling leg injury into it -- and the sleep
+-- goal routes both its descent and its wake ascent through Crawling as
+-- a deliberate waypoint (#612). So a broken leg, or a nap, used to
+-- supply unlimited free water with no source, no drinking action and no
+-- world query at all.
+--
+-- Eligibility now needs BOTH halves, and both are re-read on every
+-- hydration tick:
+--
+--   * the AI is in the DRINKING phase of drink_from_source
+--     (s.sourcePhase == "drinking", set by unit_ai_water.lua once the
+--     descent has reached Crawling at the bank), and
+--   * the actor still has LIVE access to an eligible source: its own
+--     projection reports a page and a grid position, its own tile is
+--     dry, and an adjacent tile holds lake or river water.
+--
+-- Re-reading is the requirement, not an optimisation. unit_ai_water
+-- verifies the fluid ONCE, at descent entry, and its drinking branch
+-- re-reads only hydration against the maximum; the AI decides roughly
+-- once per second while this tick runs every 0.1 s (init_loader.lua).
+-- A flag latched at drink admission would therefore keep paying out for
+-- about ten hydration ticks after the water was gone.
+--
+-- Remembered water never authorises recovery. s.knownWaterSources is a
+-- lead to walk to, not a source in reach, and it only ever grows -- a
+-- unit remembers every pond it has ever seen.
+-----------------------------------------------------------
+
+-- Chebyshev-adjacent tile offsets. Mirrors drink_from_source's own entry
+-- condition (cheb == 1 to the water, the unit's own tile dry), so the
+-- tick admits recovery for exactly the geometry the sequence stops the
+-- unit in, and refuses it the moment the unit is no longer there.
+local DRINK_ADJACENT_OFFSETS = {
+    {  1,  0 }, { -1,  0 }, {  0,  1 }, {  0, -1 },
+    {  1,  1 }, {  1, -1 }, { -1,  1 }, { -1, -1 },
+}
+
+-- The fluid kinds drink_from_source will descend to. Ocean (salt) and
+-- lava are neither drinkable nor recorded by the water-memory scan;
+-- restating the pair here keeps this gate from admitting a source the
+-- sequence itself would refuse.
+local function isDrinkableFluid(kind)
+    return kind == "lake" or kind == "river"
+end
+
+-- Live source access, read off the ACTOR's own projection.
+--
+-- world.getFluidAt takes only (gx, gy) -- there is no page-parameterised
+-- fluid query, and water memory stores bare {x, y} -- so "on the actor's
+-- page" cannot be enforced by passing a page down. Two things carry it
+-- instead: unit_resources.update iterates unit.getAllIds(), which the
+-- engine restricts to instances of the ACTIVE page, and this read fails
+-- CLOSED whenever the actor's own projection cannot establish a page or
+-- a position (unit_ai_page.lua's rule -- unknown is never a match). A
+-- unit whose projection has gone is not drinking.
+local function hasLiveSourceAccess(uid)
+    local info = unit.getInfo(uid)
+    if not info then return false end
+    if info.page == nil or info.page == "" then return false end
+    if info.gridX == nil or info.gridY == nil then return false end
+
+    local utx = math.floor(info.gridX)
+    local uty = math.floor(info.gridY)
+    -- Standing IN the water is not the posture the sequence reaches:
+    -- drink_from_source only ever descends from a dry bank tile.
+    if world.getFluidAt(utx, uty) ~= nil then return false end
+
+    for _, off in ipairs(DRINK_ADJACENT_OFFSETS) do
+        if isDrinkableFluid(world.getFluidAt(utx + off[1],
+                                             uty + off[2])) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Public so the gate is assertable in its own right, not only through
+-- the hydration it does or doesn't produce.
+function M.sourceDrinkingEligible(uid)
+    -- Lazy, in-function require: this module has no top-level dependency
+    -- on the AI, and a top-level one would close a load-order cycle.
+    -- unit_resource_injury.lua reaches s.sleepPhase the same way.
+    local s = require("scripts.unit_ai").getState(uid)
+    if not (s and s.sourcePhase == "drinking") then return false end
+    return hasLiveSourceAccess(uid)
+end
+
+-----------------------------------------------------------
 -- Per-resource tick. Returns nothing; side-effects on the unit.
 -----------------------------------------------------------
 function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
@@ -91,8 +186,23 @@ function M.tickResource(uid, defName, resourceName, params, activity, pose, dt)
     local regenFactor
     if inOrganFailure then
         regenFactor = 0
+    elseif params.regen_factor_source_drinking
+           and M.sourceDrinkingEligible(uid) then
+        -- #2541: source drinking, checked BEFORE the pose branches
+        -- because an eligible drinker IS crawling -- and deliberately
+        -- WITHOUT requiring that pose, so the gate never depends on the
+        -- injury tick having left the drinker in it (docs/bugs.md
+        -- BUG-14 stands a healthy crawler back up and does not except
+        -- s.sourcePhase). A resource declaring no source-drinking
+        -- factor short-circuits here and reaches neither the AI nor the
+        -- world, so this costs every other resource nothing.
+        regenFactor = params.regen_factor_source_drinking
     elseif pose     == "collapsed" then regenFactor = params.regen_factor_collapsed
     elseif pose     == "sleeping"  then regenFactor = params.regen_factor_sleeping
+    -- Still the generic pose-keyed factor, as collapsed/sleeping/
+    -- crouching are. No def declares it since #2541: hydration's fast
+    -- recovery was never about the pose, and moved to the gated
+    -- source-drinking branch above.
     elseif pose     == "crawling"  then regenFactor = params.regen_factor_crawling
     elseif pose     == "crouching" then regenFactor = params.regen_factor_crouching
     elseif activity == "walking"   then regenFactor = params.regen_factor_walking
