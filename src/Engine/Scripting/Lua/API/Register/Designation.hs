@@ -78,8 +78,9 @@ registerDesignationAPI callStats env = do
   -- add, eraseAt/eraseInRect erase — over the shared selection oracle;
   -- designateInstances/eraseInstances are the exact-identity authority
   -- beneath them, for callers that already hold ids. The chop AI drives
-  -- nearestDesignation/getDesignationAt/cancelDesignation (claims are
-  -- Lua-side, like dig jobs — no engine job status).
+  -- nearestFreeDesignation/getDesignationAt/cancelDesignation (claims
+  -- are Lua-side, like dig jobs — no engine job status, which is why
+  -- the AI's selector is the claim-EXCLUDING query, #2536).
   Lua.newtable
   registerLuaFunction callStats "chop" "designateAt"         (chopDesignateAtFn env)
   registerLuaFunction callStats "chop" "designateInRect"     (chopDesignateInRectFn env)
@@ -97,6 +98,8 @@ registerDesignationAPI callStats env = do
       (chopGetDesignationForInstanceFn (toWorldSimCapability env))
   registerLuaFunction callStats "chop" "getDesignationCount" (chopGetDesignationCountFn (toWorldSimCapability env))
   registerLuaFunction callStats "chop" "nearestDesignation"  (chopNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "chop" "nearestFreeDesignation"
+      (chopNearestFreeDesignationFn (toWorldSimCapability env))
   registerLuaFunction callStats "chop" "setDesignateTexture" (chopSetDesignateTextureFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "chop")
 

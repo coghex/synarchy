@@ -22,10 +22,12 @@
 --       are GONE — the gesture has no world-side anchor and no tile
 --       rectangle crosses the queue.
 --
---   The chop AI still drives nearestDesignation \/
+--   The chop AI still drives nearestFreeDesignation \/
 --   getDesignationForInstance \/ cancelDesignation (claims are Lua-side
 --   like dig jobs, so there is no engine-side job status), and the HUD
---   sets the marker texture.
+--   sets the marker texture. Its SELECTOR is the claim-excluding
+--   @nearestFreeDesignation@, not the unconditional
+--   @nearestDesignation@ below: #2536.
 module Engine.Scripting.Lua.API.Chop
     ( chopDesignateAtFn
     , chopDesignateInRectFn
@@ -39,6 +41,7 @@ module Engine.Scripting.Lua.API.Chop
     , chopGetDesignationForInstanceFn
     , chopGetDesignationCountFn
     , chopNearestDesignationFn
+    , chopNearestFreeDesignationFn
     , chopSetDesignateTextureFn
     ) where
 
@@ -66,6 +69,8 @@ import World.Command.Types (WorldCommand(..))
 import World.Flora.Identity
     (FloraInstanceId, floraInstanceIdToLua, floraInstanceIdFromLua)
 import World.Generate.Coordinates (canonicalTile, seamTileDist2)
+import Engine.Scripting.Lua.API.FreeDesignation
+    (nearestFreeInstanceDesignationOn)
 import World.Chop.Types
 
 -- * The gesture surface (#1856)
@@ -414,6 +419,12 @@ chopGetDesignationCountFn wsc = do
 --   id, which is deterministic — two equidistant trees on one tile used
 --   to be indistinguishable, and picking by hashmap order would have
 --   made the AI's choice vary run to run.
+--
+--   #2536: this is no longer the chop AI's selector, because it knows
+--   nothing of Lua-side claims — a claimed nearer tree is still the
+--   answer here, and the AI had no way past it. It stays the plain
+--   query for callers that want it, probes included;
+--   'chopNearestFreeDesignationFn' is the selector.
 chopNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 chopNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -444,6 +455,22 @@ chopNearestDesignationFn wsc = do
                             return 4
                 Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
+
+-- | chop.nearestFreeDesignation(pageId, x, y [, maxDist [, excluded]])
+--   → gx, gy, dist, instanceId | nil. The chop AI's real selector
+--   (#2536): the nearest chop designation the asking worker may CLAIM,
+--   skipping the exact TREES its live colleagues already hold so a
+--   claimed nearer tree stops hiding farther free work — including a
+--   co-tenant standing on the very same tile, which is why the
+--   exclusion names instances rather than tiles. Body shared with the
+--   farming selectors' module — see
+--   "Engine.Scripting.Lua.API.FreeDesignation" for the exclusion shape,
+--   the inclusive range bound and the instance-id tie-break.
+chopNearestFreeDesignationFn
+    ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+chopNearestFreeDesignationFn wsc =
+    nearestFreeInstanceDesignationOn wsc wsChopDesignationsRef
+                                     chopDesignationTile
 
 -- | chop.setDesignateTexture(pageId, texHandle) — marker texture for
 --   committed chop designations.

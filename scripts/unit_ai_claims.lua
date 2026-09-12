@@ -125,6 +125,44 @@ function M.claimedTiles(claims, wid, uid, now, timeout)
     return out
 end
 
+-- Page-qualified flora INSTANCES on page `wid` held by a LIVE OTHER
+-- worker (#2536), as the flat { iid1, iid2, ... } array the engine's
+-- chop.nearestFreeDesignation exclusion argument takes.
+--
+-- claimedTiles' sibling for the instanceKey registries, and the same
+-- pass does the same two jobs on the same rules: it PRUNES timed-out
+-- and dead-claimant entries by byte-for-byte the recovery rule the
+-- per-key claimedByOther applies, and it leaves `uid`'s OWN claims
+-- both unexcluded and unpruned so a preempted worker keeps its tree
+-- while its job waits.
+--
+-- Exclusion by INSTANCE, not by tile, is the whole point: two
+-- wood-tagged trees can share one tile (#1854), so a tile-shaped
+-- exclusion would hide a co-tenant the claim never touched.
+--
+-- The `wid .. ":#"` prefix test does double duty. It keeps a claim on
+-- ANOTHER page from excluding a tree here, exactly as claimedTiles'
+-- prefix does; and its "#" is what keeps a COORDINATE claim key
+-- ("<wid>:<x>,<y>", were this ever handed a tile registry) from
+-- contributing a bogus instance id -- the mirror of the "<x>,<y>" tail
+-- test claimedTiles uses to reject these.
+function M.claimedInstances(claims, wid, uid, now, timeout)
+    local prefix = tostring(wid) .. ":#"
+    local plen = #prefix
+    local out = {}
+    for k, c in pairs(claims) do
+        if c.uid ~= uid then
+            if now - c.at > timeout or not unit.exists(c.uid) then
+                claims[k] = nil
+            elseif k:sub(1, plen) == prefix then
+                local iid = k:match("^(-?%d+)$", plen + 1)
+                if iid then out[#out + 1] = tonumber(iid) end
+            end
+        end
+    end
+    return out
+end
+
 -- Nearest designation within `range` that `uid` may claim (#2534).
 -- `query` is the namespace's own nearestFreeDesignation verb; both
 -- farming actions route through here so the exclusion set, the page
@@ -135,6 +173,18 @@ end
 function M.nearestFree(query, claims, wid, uid, x, y, range, timeout, now)
     return query(wid, x, y, range,
                  M.claimedTiles(claims, wid, uid, now, timeout))
+end
+
+-- Nearest designation within `range` naming an INSTANCE that `uid` may
+-- claim (#2536) -- nearestFree's sibling for the instance-keyed
+-- registries. `query` is the namespace's own nearestFreeDesignation
+-- verb. Returns the verb's own gx, gy, dist, instanceId -- the distance
+-- OF THE TREE IT PICKED, which is the one the caller must score, not
+-- the rejected nearer tree's.
+function M.nearestFreeInstance(query, claims, wid, uid, x, y, range,
+                               timeout, now)
+    return query(wid, x, y, range,
+                 M.claimedInstances(claims, wid, uid, now, timeout))
 end
 
 -- Empty every enrolled table in place; returns how many entries were

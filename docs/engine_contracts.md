@@ -4488,26 +4488,39 @@ calls; whether a TAGGED call skips the window is AUTHORED per
 Tilling: `till.*` mirrors `chop.*`; completion writes `world.setVegAt`
 (edit-log — survives eviction/saves); consumers must use
 `world.isPlantable`, never compare `getVegAt` to raw id 77. Which
-designation a worker takes is **Worker selection** below. Gates:
+designation a worker takes — for chop as well as till/plant — is
+**Worker selection** below. Gates:
 `flora_growth_probe.py` (registers a max-tolerance `probe_berry`
 species), `till_probe.py`.
 
-### Worker selection: the nearest CLAIMABLE designation (#2534)
+### Worker selection: the nearest CLAIMABLE designation (#2534, #2536)
 
-A farming worker picks the nearest till/plant designation **it may
-claim**, not the nearest one outright. Claims are Lua-side
+A designation worker picks the nearest till/plant/chop designation **it
+may claim**, not the nearest one outright. Claims are Lua-side
 (`scripts/unit_ai_claims.lua`), so the engine's own
-`<ns>.nearestDesignation` cannot see them; until #2534 both actions
-asked for the unconditional nearest and returned `-math.huge` when
-`claimedByOther` said a colleague held it, so ONE fresh claim on a
-shared nearest tile hid every farther free designation and clustered
-farmers reported no farming work at all.
+`<ns>.nearestDesignation` cannot see them; until #2534 and #2536 each
+action asked for the unconditional nearest and returned `-math.huge`
+when `claimedByOther` said a colleague held it, so ONE fresh claim on
+the nearest designation hid every farther free one and clustered
+workers reported no work of that kind at all.
 
-`till.nearestFreeDesignation` / `plant.nearestFreeDesignation`
-(`Engine.Scripting.Lua.API.FreeDesignation`, one shared body) take the
-caller's scan range and a flat `{x1, y1, ...}` array of tiles it may
-not take, and answer with the single nearest remaining designation.
-Four properties the callers depend on:
+Chop's shape of the same defect was worse than farming's. A chop
+designation names one PLANT rather than one tile (#1854), and
+`chop.nearestDesignation` breaks an exact distance tie on the LOWEST
+instance id — so two designated trees sharing a tile always nominated
+the same one, and the co-tenant of a claimed tree was hidden for as
+long as the claim lived rather than merely until the worker moved.
+
+`till.nearestFreeDesignation` / `plant.nearestFreeDesignation` /
+`chop.nearestFreeDesignation` (`Engine.Scripting.Lua.API.FreeDesignation`
+— one body for the two tile-keyed farming maps, one for chop's
+instance-keyed map) take the caller's scan range and a flat array of
+the designations it may not take, and answer with the single nearest
+remaining one. What the exclusion array NAMES follows the map's own
+key: `{x1, y1, x2, y2, ...}` canonical tiles for farming,
+`{iid1, iid2, ...}` flora instances for chop. Chop's must name
+instances — a tile-shaped exclusion cannot say "this tree is taken and
+its co-tenant is not". Four properties the callers depend on:
 
 - **The exclusion travels IN, the designation set never travels out.**
   Every action's `utility` runs for every unit on every thought tick
@@ -4519,28 +4532,56 @@ Four properties the callers depend on:
   onto the key the fold tests, so one physical designation occupies
   exactly one claim slot; and the query is page-scoped, so a claim
   recorded on another page never excludes a tile here.
-- **Ties break on ascending canonical `(x, y)`**, not hash order: two
-  equidistant free designations must resolve the same way on every run.
-- **The reported distance is the SELECTED tile's**, which is what the
-  action scores — never the rejected nearer tile's.
+- **Ties break deterministically, not on hash order:** ascending
+  canonical `(x, y)` for the farming maps, ascending INSTANCE ID for
+  chop — which is what `chop.nearestDesignation` has always used
+  (#1854), so #2536 preserves chop's existing selection order rather
+  than replacing it.
+- **The reported distance is the SELECTED designation's**, which is
+  what the action scores — never the rejected nearer one's.
 
-`scripts/unit_ai_claims.lua`'s `claimedTiles` builds the exclusion in
-one pass that also prunes expired and dead-claimant entries, by exactly
-the rule `claimedByOther` applies to a single key, so selection and the
-execute-time re-check can never disagree. It never excludes or prunes
-the ASKING worker's own claims: a preempted worker's claim ages while
-its job waits, and dropping it would hand its tile away mid-job.
-Selection does not grant the tile — `execute` re-checks the claim and
-declines rather than overwrite a claim won in between, leaving the
-loser free to select other work next tick.
+The **range bound lives in both places** and that is deliberate. The
+engine bounds the scan with the SAME inclusive comparison the caller
+applies (`dist > range` refuses; a designation at exactly the range is
+eligible), so skipping a claimed nearer designation can never promote
+one the worker may not walk to, and the marshalled result stays a
+single designation. The Lua-side gate is kept as the caller-side
+contract and is what still holds against a stubbed or older verb.
 
-Gate: hspec `--match "farm designation claim selection"`
-(`Test.Headless.Lua.FarmDesignationClaim`), which drives the production
-`unit_ai_farm.lua` utility/execute against the REAL registered verbs
-and a synthetic page — a fixture handing the AI a pre-filtered
-candidate could not tell the fix from the bug. `till_probe.py`,
-`plant_probe.py` and `farm_ai_probe.py` stay the single-worker
-end-to-end gates.
+`scripts/unit_ai_claims.lua`'s `claimedTiles` (farming) and
+`claimedInstances` (chop) build the exclusion in one pass that also
+prunes expired and dead-claimant entries, by exactly the rule
+`claimedByOther` applies to a single key, so selection and the
+execute-time re-check can never disagree. Each reads only its own key
+shape — `<page>:<x>,<y>` versus `<page>:#<iid>` — so neither registry's
+keys can leak into the other's array as a bogus exclusion. Neither
+excludes nor prunes the ASKING worker's own claims: a preempted
+worker's claim ages while its job waits, and dropping it would hand its
+work away mid-job.
+
+**Selection does not grant the designation, and scoring writes no
+claim.** `utility` only READS the registry; `execute` writes the claim.
+A unit that loses action arbitration must leave nothing behind, or the
+designation it merely considered would be masked from everyone for a
+whole claim timeout. `execute` then re-checks the claim and declines
+FOR THAT TICK rather than overwrite a claim won in between — it never
+re-scans and substitutes a different target — leaving the loser to
+re-score and find other work next tick.
+
+Chop eligibility is **claims and range only**. Regrowth is not part of
+it: a designated instance inside its post-fell regrowth window is still
+selectable and is still refused by `chopExecute`'s existing
+`instanceRegrowth` guard, exactly as before #2536.
+
+Gates: hspec `--match "farm designation claim selection"`
+(`Test.Headless.Lua.FarmDesignationClaim`) and `--match "chop
+designation claim selection"`
+(`Test.Headless.Lua.ChopDesignationClaim`), which drive the production
+`unit_ai_farm.lua` / `unit_ai_chop.lua` utility and execute against the
+REAL registered verbs and a synthetic page — a fixture handing the AI a
+pre-filtered candidate could not tell the fix from the bug.
+`till_probe.py`, `plant_probe.py`, `farm_ai_probe.py` and
+`chop_probe.py` stay the single-worker end-to-end gates.
 
 ### Authored harvest-tag policy (#2212)
 
