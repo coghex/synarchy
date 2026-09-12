@@ -37,30 +37,55 @@ local SEARCH_DIRECTIONS = {
 -----------------------------------------------------------
 -- Action: refill_canteen
 --
--- Proactive maintenance: when the canteen is past the emptiness
--- threshold and the unit has a remembered water location, walk to it
--- and top up. The quadratic urgency ramp keeps a partly-empty canteen
--- BELOW follow_command (so a topping-off doesn't interrupt orders), but
--- a near-dry one crosses above it (a dry canteen interrupts orders,
--- #306). FOV memory is updated separately at the top of tickOne.
+-- Proactive maintenance: when the EMPTIEST carried canteen is past the
+-- emptiness threshold and the unit has a remembered water location,
+-- walk to it and top up. The quadratic urgency ramp keeps a
+-- partly-empty canteen BELOW follow_command (so a topping-off doesn't
+-- interrupt orders), but a near-dry one crosses above it (a dry canteen
+-- interrupts orders, #306). FOV memory is updated separately at the top
+-- of tickOne.
 -----------------------------------------------------------
-local function findCanteenWithHeadroom(uid, defName)
+
+-- Scan the WHOLE inventory for the MOST URGENT refillable canteen — the
+-- emptiest one — not merely the first row with headroom (#2546). Both
+-- water utilities increase monotonically in emptiness, so "most urgent"
+-- is "emptiest" for each even though their thresholds differ. Before
+-- this, a partially depleted canteen sitting AHEAD of an empty one hid
+-- it: eligibility and urgency both read that earlier row, so a 1.9 L/2 L
+-- canteen suppressed refill outright while its empty peer stayed dry,
+-- and merely reordering the same inventory changed the score.
+--
+-- The presence-and-headroom guard stays BEFORE the division, which is
+-- what keeps the scan from manufacturing a NaN: unit.getInventory emits
+-- `capacity` only for container defs, and `currentFill < capacity` is
+-- false at capacity 0, so no degenerate row reaches the divide. A NaN
+-- emptiness would pass every `< threshold` comparison (NaN comparisons
+-- are false in Lua) and enter arbitration as a NaN utility.
+--
+-- Returns the instance and its emptiness ∈ (0, 1], or nil. Ties break on
+-- inventory order, which is immaterial: tied canteens are equally urgent.
+local function emptiestCanteenWithHeadroom(uid, defName)
     local inv = unit.getInventory(uid)
     if not inv then return nil end
+    local best, bestEmptiness = nil, -math.huge
     for _, it in ipairs(inv) do
         if it.defName == defName and it.capacity
            and it.currentFill < it.capacity then
-            return it
+            local emptiness = 1 - (it.currentFill / it.capacity)
+            if emptiness > bestEmptiness then
+                best, bestEmptiness = it, emptiness
+            end
         end
     end
-    return nil
+    if not best then return nil end
+    return best, bestEmptiness
 end
 
 local function refillUtility(uid, s, params)
     if not hasKnownWaterSource(s) then return -math.huge end
-    local canteen = findCanteenWithHeadroom(uid, params.canteen_def)
+    local canteen, emptiness =
+        emptiestCanteenWithHeadroom(uid, params.canteen_def)
     if not canteen then return -math.huge end
-    local emptiness = 1 - (canteen.currentFill / canteen.capacity)
     if emptiness < params.refill_min_emptiness then return -math.huge end
     -- Quadratic ramp: x = normalised position in [threshold, 1.0],
     -- squared so urgency stays low while the canteen is mostly full
@@ -125,13 +150,18 @@ local function refillExecute(uid, s, params)
         -- other known sources stay.
         local fluidType = world.getFluidAt(loc.x, loc.y)
         if fluidType == "lake" or fluidType == "river" then
-            local canteen = findCanteenWithHeadroom(uid, params.canteen_def)
+            -- Same selection refillUtility scored, so the canteen that
+            -- justified this action's urgency is the one that gets
+            -- filled (#2546): the emptiest instance with headroom, not
+            -- whichever matching row happens to come first.
+            local canteen =
+                emptiestCanteenWithHeadroom(uid, params.canteen_def)
             if canteen then
                 local headroom = canteen.capacity - canteen.currentFill
                 if headroom > 0 then
                     -- Fill the EXACT instance the headroom was measured
                     -- on (#1220). unit.modifyItemFill writes to the
-                    -- first item matching defName, so an earlier FULL
+                    -- first item matching defName, so a fuller peer
                     -- canteen would absorb the write as a clamped no-op
                     -- and the empty one would never fill — while the
                     -- pickup anim below still played and the AI moved on
@@ -298,7 +328,8 @@ end
 -----------------------------------------------------------
 -- Action: search_for_water
 --
--- Fires when canteen has headroom AND no water is known. Walks the
+-- Fires when a carried canteen has headroom AND no water is known,
+-- scored off the emptiest such canteen (#2546). Walks the
 -- unit through a rosette of waypoints (8 compass directions per ring,
 -- expanding rings). FOV scans during the walk; if water is spotted
 -- (scanForWater fires every tickOne), the refill action takes over
@@ -343,9 +374,9 @@ local function searchUtility(uid, s, params)
         return params.goal_search_floor
              + params.goal_search_urgency * thirst
     end
-    local canteen = findCanteenWithHeadroom(uid, params.canteen_def)
+    local canteen, emptiness =
+        emptiestCanteenWithHeadroom(uid, params.canteen_def)
     if not canteen then return -math.huge end
-    local emptiness = 1 - (canteen.currentFill / canteen.capacity)
     if emptiness < params.search_min_emptiness then return -math.huge end
     return params.search_base_weight
          + (emptiness - params.search_min_emptiness)
