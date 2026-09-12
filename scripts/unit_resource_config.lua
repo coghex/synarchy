@@ -47,8 +47,11 @@ local config = {
             -- stamina drain — exhaustion death falls out of the same
             -- mechanism rather than needing its own kill check.
             kill_on_zero           = true,
-            -- Phase 4 organ failure: when fat_mass ≤ min_fat(h), the
-            -- body has spent its reserves and biology can't keep up.
+            -- Phase 4 organ failure: when fat_mass reaches the unit's
+            -- own fat floor (unit_resource_energy.minFatFor — 2% of
+            -- frame mass, so it scales with bulk and not with height
+            -- alone), the body has spent its reserves and biology
+            -- can't keep up.
             -- tickResource overrides regen to 0 and adds
             -- ORGAN_FAILURE_DRAIN_PER_SEC on top of any other drains,
             -- regardless of activity or pose. The unit ends via the
