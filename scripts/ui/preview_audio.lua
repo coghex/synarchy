@@ -245,7 +245,8 @@ function pane.open(value, file)
     -- update() is dead while the pane is closed, so a load started here can
     -- settle unobserved. Reopening on a later revision retires that request and
     -- reports the attempt, since a failed one leaves an emptied catalog behind.
-    if previous and revision > previous then
+    local settled = previous and revision > previous
+    if settled then
         reloadSequence, playSequence = nil, nil
         message = describe(snapshot)
     end
@@ -258,6 +259,8 @@ function pane.open(value, file)
         for _, entry in ipairs(entries) do if entry.path == file then selected = entry.id end end
         autoplayPath = file
     end
+    -- The page kept from before the close belongs to the old catalog.
+    if settled then reveal() end
     opened = true
     UI.hidePage(basePage)
     UI.showPage(page)

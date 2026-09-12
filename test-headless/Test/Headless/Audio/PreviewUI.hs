@@ -185,3 +185,24 @@ spec = describe "Audio.PreviewUI" $ do
       , "assert(not pane.play()); assert(#plays==0)"
       , "pane.shutdown()"
       ]
+  it "pages back to the surviving selection when a reload settled while closed" $
+    runsOk $ fixture <> "\n" <> lns
+      [ "current.previewEntries={}"
+      , "for index,label in ipairs({'one','two','three','four','five'}) do"
+      , "  current.previewEntries[index]={id='s'..index,label=label,category='synth',playable=true} end"
+      , "pane.init(1,1,{mode='list'}); local footer=pane.dump().footer.handle"
+      , "pane.click(footer); pane.resize(800,300)"
+      , "for _=1,4 do pane.key('Down') end"
+      , "local d=pane.dump(); assert(#d.rows==2 and d.rows[2].label=='five' and d.selected=='s5')"
+      , "pane.click(footer); assert(not pane.isOpen())"
+      -- 'five' survives onto the first page of a list that still needs paging.
+      , "current.previewEntries={{id='s1',label='five',category='synth',playable=true},"
+      , "  {id='s2',label='one',category='synth',playable=true},"
+      , "  {id='s3',label='two',category='synth',playable=true},"
+      , "  {id='s4',label='three',category='synth',playable=true}}"
+      , "current.previewRevision=2"
+      , "pane.click(footer); d=pane.dump()"
+      , "assert(d.revision==2 and d.selected=='s1')"
+      , "assert(#d.rows==2 and d.rows[1].label=='five')"
+      , "pane.shutdown()"
+      ]
