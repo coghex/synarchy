@@ -10,7 +10,6 @@ module Engine.Scripting.Lua.API.World.Query
 import UPrelude
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Vector as V
-import qualified Data.Vector.Unboxed as VU
 import qualified HsLua as Lua
 import qualified Data.Text.Encoding as TE
 import Data.IORef (readIORef)
@@ -20,13 +19,10 @@ import Engine.Core.Capability.RenderView
     (RenderViewCapability(..), toRenderViewCapability)
 import Engine.Core.State (EngineEnv)
 import World.Types
-import World.Generate.Coordinates (canonicalTileFrame)
-import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..)
-                      , materialIdByName)
+import World.Material (MaterialId(..), getMaterialProps, MaterialProps(..))
 import World.Gem (gemChanceAt)
-import World.Spoil.Logic (spoilBlockedAt)
 import World.Spoil.Types (SpoilPile(..))
-import World.Mine.Types (MineDesignation(..))
+import World.Mine.DigInfo (DigInfo(..), digInfoAt)
 import World.Render.Quads (renderWorldQuads)
 import World.Render.Textures (getTileTexture)
 import Engine.Graphics.Camera (Camera2D(..))
@@ -46,6 +42,11 @@ import Engine.Scene.Types (SortableQuad(..))
 --   world.getMineDesignationAt and the dig command itself do — the three
 --   are one job's read/inspect/consume trio and must resolve the same
 --   stored key. Identity away from the seam.
+--
+--   The rules themselves live in 'World.Mine.DigInfo', shared with
+--   world.nearestWorkableMineDesignation (#2538): the candidate walk
+--   must reject exactly the tiles this query reports as unworkable, and
+--   two copies of the material, z-range and spoil tests could drift.
 worldGetDigInfoAtFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldGetDigInfoAtFn env = do
     pageIdArg ← Lua.tostring 1
@@ -54,8 +55,7 @@ worldGetDigInfoAtFn env = do
     case (pageIdArg, gxArg, gyArg) of
         (Just pageIdBS, Just gxN, Just gyN) → do
             let pageId = WorldPageId (TE.decodeUtf8Lenient pageIdBS)
-                rawGX = round gxN ∷ Int
-                rawGY = round gyN ∷ Int
+                tile = (round gxN ∷ Int, round gyN ∷ Int)
             mgr ← Lua.liftIO $ readIORef (wsWorldManagerRef (toWorldSimCapability env))
             case lookup pageId (wmWorlds mgr) of
                 Nothing → Lua.pushnil >> return 1
@@ -65,45 +65,17 @@ worldGetDigInfoAtFn env = do
                     registry ← Lua.liftIO $ readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
                     piles ← Lua.liftIO $ readIORef (wsSpoilRef ws)
                     worldSize ← Lua.liftIO $ pageWrapWorldSize ws
-                    let (coord, (lx, ly), (dgx, dgy)) =
-                            canonicalTileFrame worldSize rawGX rawGY
-                        gx = rawGX + dgx
-                        gy = rawGY + dgy
-                        mInfo = do
-                            md ← HM.lookup (gx, gy) desigs
-                            lc ← lookupChunk coord tileData
-                            let col = lcTiles lc V.! columnIndex lx ly
-                                relZ = mdZ md - ctStartZ col
-                            if relZ ≥ 0 ∧ relZ < VU.length (ctMats col)
-                                then pure (ctMats col VU.! relZ, mdZ md)
-                                else Nothing
-                    case mInfo of
+                    case digInfoAt registry tileData desigs piles
+                                   worldSize tile of
                         Nothing → Lua.pushnil >> return 1
-                        Just (matId, digZ) → do
-                            let props = getMaterialProps registry
-                                            (MaterialId matId)
-                                -- Blocked check from the tile center;
-                                -- the per-tick gate re-checks with the
-                                -- digger's real position.
-                                blocked = case mpDigSpoil props of
-                                    Nothing → False
-                                    Just spoilName →
-                                        case materialIdByName registry
-                                                 spoilName of
-                                            Nothing → False
-                                            Just spoilId →
-                                                spoilBlockedAt tileData
-                                                    desigs piles spoilId
-                                                    digZ
-                                                    ( fromIntegral gx + 0.5
-                                                    , fromIntegral gy + 0.5 )
-                                                    (gx, gy)
-                            Lua.pushinteger (fromIntegral matId)
+                        Just di → do
+                            Lua.pushinteger
+                                (fromIntegral (diMaterial di))
                             Lua.pushnumber (Lua.Number
-                                (realToFrac (mpPickSpeed props)))
+                                (realToFrac (diPickSpeed di)))
                             Lua.pushnumber (Lua.Number
-                                (realToFrac (mpShovelSpeed props)))
-                            Lua.pushboolean blocked
+                                (realToFrac (diShovelSpeed di)))
+                            Lua.pushboolean (diSpoilBlocked di)
                             return 4
         _ → Lua.pushnil >> return 1
 

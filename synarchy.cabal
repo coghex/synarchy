@@ -888,6 +888,7 @@ library
                      World.Geology.Types
                      World.Geology.Ore
                      World.Geology.Ore.Types
+                     World.Mine.DigInfo
                      World.Mine.Types
                      World.Construct.Art
                      World.Construct.Attempt
@@ -1546,6 +1547,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.Chop.TagPolicy
                    Test.Headless.Lua.ChopGesture
                    Test.Headless.Lua.ChopDesignationClaim
+                   Test.Headless.Lua.MineDesignationEligibility
                    Test.Headless.Lua.ChopFellXp
                    Test.Headless.World.CropPlant
                    Test.Headless.World.StructureStage

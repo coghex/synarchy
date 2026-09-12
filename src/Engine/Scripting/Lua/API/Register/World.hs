@@ -83,6 +83,14 @@ registerWorldAPI callStats env backendState = do
     (worldGetMineDesignationCountFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "nearestMineDesignation"
     (worldNearestMineDesignationFn (toWorldSimCapability env))
+  -- #2538: the mining AI scores THIS one, because one claimed,
+  -- unloaded, spoil-blocked or un-diggable nearest tile must not hide
+  -- the workable designation behind it. nearestMineDesignation stays
+  -- registered as the unconditional geometric answer, exactly as
+  -- chop/till/plant.nearestDesignation did through #2534 and #2536 —
+  -- none of those has a Lua caller either now.
+  registerLuaFunction callStats "world" "nearestWorkableMineDesignation"
+    (worldNearestWorkableMineDesignationFn (toWorldSimCapability env))
   registerLuaFunction callStats "world" "getDigInfoAt" (worldGetDigInfoAtFn env)
   registerLuaFunction callStats "world" "getSpoilInfo" (worldGetSpoilInfoFn env)
   registerLuaFunction callStats "world" "getGemInfoAt" (worldGetGemInfoAtFn env)
