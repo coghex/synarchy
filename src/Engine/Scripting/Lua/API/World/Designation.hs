@@ -25,7 +25,8 @@ import Engine.Scripting.Lua.API.FreeDesignation
     (maxDistBound, readExcludedTiles)
 import World.Types
 import World.Generate.Coordinates (canonicalTile, seamTileDist2)
-import World.Mine.DigInfo (DigInfo(..), digInfoAt)
+import World.Mine.DigInfo
+    (digMaterialAt, firstWorkableDesignation, spoilBlockedFor)
 import World.Mine.Types (MineDesignation(..))
 
 -- * Mine designation tool
@@ -155,7 +156,7 @@ worldNearestMineDesignationFn wsc = do
 --     * @maxDist@ — the caller's own scan range, inclusive, in tiles.
 --     * Resident, in-range dig information: an unloaded chunk answers
 --       nothing and is not workable, and selection NEVER queues a load
---       ('digInfoAt' reads only what is already there).
+--       ('digMaterialAt' reads only what is already there).
 --     * Spoil disposal: a tile whose spoil has nowhere to go would have
 --       the dig command refuse every tick.
 --     * @tools@ — @{ pick = true, shovel = true }@, the tool CLASSES
@@ -168,15 +169,15 @@ worldNearestMineDesignationFn wsc = do
 --   omitted @maxDist@ is unbounded — the same "a caller that cannot say
 --   gets the unrestricted query" convention the sibling verbs use.
 --
---   COST is bounded by construction, which matters because this runs in
---   every idle miner's thought tick. Candidates are ordered by
---   'seamTileDist2' ONCE and walked ascending; the walk stops at the
---   first workable candidate, and the cheap tests (range, claim) are
---   settled before the list is built, so the comparatively expensive
---   dig-information read — it re-derives spoil capacity around the tile
---   — is never issued for a candidate already excluded by one of them.
---   A worker carrying no digging tool at all rejects every candidate
---   without reading any of them.
+--   COST is bounded by construction, which matters because this runs
+--   in every idle miner's thought tick. Candidates are ordered by
+--   'seamTileDist2' ONCE and walked ascending, and the walk stops at
+--   the first workable one. Range and the claim exclusion are settled
+--   before the list is even built; 'World.Mine.DigInfo' then splits the
+--   per-candidate work so 'firstWorkableDesignation' pays the cheap
+--   resident read first and reaches the expensive spoil-capacity sweep
+--   ONLY for a candidate the carried tools have already admitted. A
+--   worker carrying neither class reads nothing at all.
 --
 --   Ties are broken on ascending canonical @(x, y)@, NOT hash order:
 --   two equidistant workable designations must nominate the same one on
@@ -213,15 +214,18 @@ worldNearestWorkableMineDesignationFn wsc = do
                                     (wsMaterialRegistryRef wsc)
                     let dist2 = seamTileDist2 worldSize (ux, uy)
                         maxD2 = maxDistBound maxArg
-                        info  = digInfoAt registry tileData desigs piles
-                                          worldSize
+                        materialOf = digMaterialAt registry tileData desigs
+                                                   worldSize
+                        blocked = spoilBlockedFor registry tileData desigs
+                                                  piles
                         candidates = sort
                             [ (d2, k)
                             | k ← HM.keys desigs
                             , not (HS.member k excluded)
                             , let d2 = dist2 k
                             , not (maybe False (d2 >) maxD2) ]
-                    case firstWorkable tools info candidates of
+                    case firstWorkableDesignation tools materialOf blocked
+                                                  candidates of
                         Nothing → Lua.pushnil >> return 1
                         Just ((gx, gy), d2, tool, speed) → do
                             Lua.pushinteger (fromIntegral gx)
@@ -231,37 +235,6 @@ worldNearestWorkableMineDesignationFn wsc = do
                             Lua.pushnumber (Lua.Number (realToFrac speed))
                             return 5
         _ → Lua.pushnil >> return 1
-
--- | Walk distance-ordered candidates and stop at the first one this
---   toolset can work. Nothing beyond it is read, which is what keeps a
---   normal selection to a single dig-information query.
-firstWorkable ∷ (Bool, Bool) → ((Int, Int) → Maybe DigInfo)
-              → [(Float, (Int, Int))]
-              → Maybe ((Int, Int), Float, Text, Float)
-firstWorkable tools info = go
-  where
-    go []               = Nothing
-    go ((d2, k) : rest) = case usableTool tools =≪ info k of
-        Just (tool, speed) → Just (k, d2, tool, speed)
-        Nothing            → go rest
-
--- | The tool a worker carrying these classes would dig this tile with,
---   and its speed — or 'Nothing' when the tile is spoil-blocked or
---   neither carried class can cut the material at all.
---
---   The shovel is chosen unless a carried pick is STRICTLY faster,
---   which is exactly what @bestDigTool@ did in Lua before #2538 (it set
---   the shovel first and let the pick override only on @>@). A tie
---   therefore still goes to the shovel.
-usableTool ∷ (Bool, Bool) → DigInfo → Maybe (Text, Float)
-usableTool (hasPick, hasShovel) di
-    | diSpoilBlocked di = Nothing
-    | pickSpeed > shovelSpeed = admit ("pick", pickSpeed)
-    | otherwise               = admit ("shovel", shovelSpeed)
-  where
-    pickSpeed   = if hasPick   then diPickSpeed di   else 0
-    shovelSpeed = if hasShovel then diShovelSpeed di else 0
-    admit (tool, speed) = if speed > 0 then Just (tool, speed) else Nothing
 
 -- | Read the @{ pick = true, shovel = true }@ toolset table at @idx@.
 --   A missing or non-table argument is no restriction — both classes

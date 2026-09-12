@@ -42,6 +42,7 @@ module Test.Headless.Lua.MineDesignationEligibility (spec) where
 
 import UPrelude
 import Test.Hspec
+import Control.Exception (ErrorCall(..), evaluate)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List (nub)
 import qualified Data.HashMap.Strict as HM
@@ -67,6 +68,7 @@ import World.Fluid.Types (emptyIceMap)
 import World.Material
     (MaterialId(..), MaterialProps(..), MaterialRegistry
     , defaultMaterialProps, emptyMaterialRegistry, registerMaterial)
+import World.Mine.DigInfo (DigMaterial(..), firstWorkableDesignation)
 import World.Page.Types (WorldPageId(..))
 import World.Spoil.Logic (spoilStartVertex)
 import World.Spoil.Types (SpoilPile(..), SpoilPiles, candidateVertices)
@@ -217,6 +219,7 @@ spec = beforeAll setup $
         recoverySpec
         registrySpec
         querySpec
+        costOrderSpec
   where
     setup = do
         EngineInitResult env ← initializeEngineHeadlessQuiet
@@ -539,6 +542,79 @@ querySpec = describe "the engine query" $ do
     before ← chunkCount ws
     _ ← utilityAt fx 1 plainOrigin
     chunkCount ws `shouldReturn` before
+
+-- | The walk's COST ORDER, driven straight rather than through Lua.
+--
+--   'firstWorkableDesignation' takes the cheap resident read and the
+--   expensive spoil-capacity sweep as separate functions precisely so
+--   the order can be proved here: the sweep is a poison that throws if
+--   it is ever called, and each case says whether calling it would have
+--   been correct. Asserting this through the engine would prove
+--   nothing — a sweep that ran and was then discarded gives the same
+--   selection as one that never ran.
+costOrderSpec ∷ SpecWith Fixture
+costOrderSpec = describe "the candidate walk's cost order" $ do
+
+  it "never sweeps spoil for a candidate no carried tool can cut" $
+      \_ →
+    -- A pick-carrying miner walking a field of shovel-only tiles is the
+    -- case that used to pay a full spoil-capacity sweep per candidate,
+    -- every thought tick, for tiles it could never take.
+    firstWorkableDesignation pickOnly shovelOnlyField poisonSweep
+        shovelOnlyCandidates
+      `shouldBe` Nothing
+
+  it "reads no candidate AT ALL when the toolset carries neither class" $
+      \_ →
+    -- Not even the cheap read: both arguments are poison here.
+    firstWorkableDesignation (False, False) poisonRead poisonSweep
+        shovelOnlyCandidates
+      `shouldBe` Nothing
+
+  it "does sweep once the toolset admits a candidate — the poison is \
+     \live" $ \_ →
+    -- Without this the two cases above would pass against a walk that
+    -- had simply lost its spoil test altogether.
+    evaluate (firstWorkableDesignation shovelOnly shovelOnlyField
+                  poisonSweep shovelOnlyCandidates)
+      `shouldThrow` (\(ErrorCall m) → m ≡ sweepPoison)
+
+  it "stops at the first workable candidate, sweeping no farther one" $
+      \_ → do
+    -- The winner is swept; nothing past it is even read.
+    let materialOf k
+            | k ≡ near1 = Just (dig granite graniteSpeed 0)
+            | otherwise = poisonRead k
+    firstWorkableDesignation pickOnly materialOf (const False)
+        [(1, near1), (2, near2)]
+      `shouldBe` Just (near1, 1, "pick", realToFrac graniteSpeed)
+
+-- | A miner carrying only a pick, and one carrying only a shovel, in
+--   'firstWorkableDesignation' @(carries pick, carries shovel)@ form.
+pickOnly, shovelOnly ∷ (Bool, Bool)
+pickOnly   = (True, False)
+shovelOnly = (False, True)
+
+-- | Three candidates whose material only a shovel cuts.
+shovelOnlyCandidates ∷ [(Float, (Int, Int))]
+shovelOnlyCandidates = [(1, near1), (2, near2), (3, near3)]
+
+shovelOnlyField ∷ (Int, Int) → Maybe DigMaterial
+shovelOnlyField k = Just (dig loam 0 loamSpeed) { dmTile = k }
+
+dig ∷ Word8 → Double → Double → DigMaterial
+dig mat pick shovel = DigMaterial
+    { dmTile = near1, dmZ = zSlice, dmMaterial = mat
+    , dmPickSpeed = realToFrac pick, dmShovelSpeed = realToFrac shovel }
+
+sweepPoison ∷ String
+sweepPoison = "spoil capacity was swept"
+
+poisonSweep ∷ DigMaterial → Bool
+poisonSweep _ = error sweepPoison
+
+poisonRead ∷ (Int, Int) → Maybe DigMaterial
+poisonRead _ = error "a candidate was read"
 
 -- * Driving the production AI
 

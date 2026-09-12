@@ -4597,7 +4597,7 @@ WHOLE rejection set as `gx, gy, dist, tool, speed`:
   the dig command refuse every tick;
 - **the carried tools**, passed in as `{ pick = ..., shovel = ... }`.
 
-The middle two come from `World.Mine.DigInfo.digInfoAt`, which
+The middle two come from `World.Mine.DigInfo`, which
 `world.getDigInfoAt` also answers from: the walk must reject exactly
 the tiles the per-tile query calls unworkable, and two copies of the
 material, z-range and spoil tests would drift. The tool rule moved with
@@ -4607,11 +4607,19 @@ Lua before #2538. `scripts/unit_ai_dig.lua` keeps only the
 defName → class half, in `carriedDigTools`.
 
 **Cost is bounded by construction**, because this runs in every idle
-miner's thought tick: candidates are ordered once, the walk stops at
-the first workable one, and the comparatively expensive dig-information
-read is never issued for a candidate the cheap range and claim tests
-already excluded. A miner carrying no digging tool refuses before any
-candidate is read at all.
+miner's thought tick. That module's split into `digMaterialAt` (a
+resident tile read plus a registry lookup) and `spoilBlockedFor` (which
+re-derives spoil capacity over 81 vertices) IS the cost contract, not
+tidiness: `firstWorkableDesignation` walks the ordered candidates
+paying the cheap read first and reaches the sweep ONLY for a candidate
+the carried tools have already admitted, and a worker carrying neither
+class reads nothing at all. Range and the claim exclusion are settled
+before the candidate list is built, and the walk stops at the first
+workable one — so an ordinary selection costs one cheap read and one
+sweep. Folding the two halves into one strict record would evaluate the
+sweep for every candidate, including every tile the toolset rejects
+outright; that is what a pick-carrying miner crossing a field of
+shovel-only tiles used to pay.
 
 **Each evaluation overwrites or clears `s.digCandidate`.** Before
 #2538 every refusal left whatever a previous tick stored, which was
@@ -4631,7 +4639,12 @@ the fix from the bug. The mining group's blocked-spoil cases establish
 real page state (piles of a conflicting material at exactly the
 vertices `spoilStartVertex`/`candidateVertices` name) and assert the
 engine's own `spoilBlocked` before and after, rather than hard-coding
-the rejection. `till_probe.py`, `plant_probe.py`, `farm_ai_probe.py`
+the rejection. Its cost-order cases drive
+`firstWorkableDesignation` directly, with the spoil sweep as a poison
+that throws if reached — asserting that through the engine would prove
+nothing, since a sweep that ran and was discarded yields the same
+selection as one that never ran. `till_probe.py`, `plant_probe.py`,
+`farm_ai_probe.py`
 and `chop_probe.py` stay the single-worker end-to-end gates for their
 own actions; mining has no probe of its own, so `role_probe.py`'s
 chop-versus-dig arbitration is the nearest live exercise of the dig
