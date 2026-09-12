@@ -143,12 +143,21 @@ organFailureWalkingLoss = (0.5 + 0.1) * tickDt   -- -0.06
 
 -- | The rolled stat map a spawning acolyte carries INTO
 --   'seedBodyComposition': the body block plus the attributes the
---   stamina tick reads.
+--   stamina tick reads. @max_stamina@ is STORED rather than left to
+--   @unit_stats@'s @endurance × 10@ derivation, so the pool every
+--   assertion is bounded by is a fixture input and not a second
+--   formula that could drift; the two agree at @endurance@ 1.
 rolledStats ∷ Float → Float → HM.HashMap Text Float
 rolledStats bulk bodyfat = HM.fromList
     [ ("height", profileHeight), ("bulk", bulk), ("bodyfat", bodyfat)
     , ("strength", 1.0), ("endurance", 1.0)
-    , ("stamina", startStamina) ]
+    , ("max_stamina", fixtureMax), ("stamina", startStamina) ]
+
+-- | The stamina pool: @endurance@ (1) × 10, which is both what
+--   @unit_stats@'s @max_stamina@ derivation returns and what the
+--   fixture stores.
+fixtureMax ∷ Float
+fixtureMax = 10.0
 
 -- | A body profile as the PRODUCTION seeder leaves it. @bulk@ and
 --   @bodyfat@ are consumed and dropped; @frame_mass@, @body_mass@,
@@ -316,6 +325,15 @@ spec = aroundAll withHeadlessEngineNoWorld $
             frameFloorAt 1.5 `shouldSatisfy` (> legacyFloor)
             abs (frameFloorAt 1.0 - legacyFloor) `shouldSatisfy` (< tol)
 
+        it "the STORED max_stamina is the pool in force, so the seeded \
+           \bound is a live fixture input rather than an inert entry" $
+          \env → do
+            resetScene env $ HM.insert "stamina" (fixtureMax - 0.01) $
+                seededStats 1.0 meanBodyfat
+            ls ← setupLua env
+            tickStamina ls 10
+            storedStamina env `shouldBeNear` fixtureMax
+
     -- §1 The headline defect: a fed, freshly seeded SLIM acolyte,
     -- above its own floor but below the height-only one.
     describe "a fresh slim acolyte, fed and above its own floor (§1)" $ do
@@ -414,7 +432,7 @@ spec = aroundAll withHeadlessEngineNoWorld $
         it "enters organ failure at 0.7128 kg — the floor moved, the \
            \consequence did not" $ \env → do
             resetScene env
-                (seededWithFat 0.5 leanBodyfat (frameFloorAt 0.5))
+                (seededWithFat 0.5 meanBodyfat (frameFloorAt 0.5))
             ls ← setupLua env
             fails env ls
 
