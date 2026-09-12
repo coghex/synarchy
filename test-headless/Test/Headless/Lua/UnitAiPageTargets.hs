@@ -859,7 +859,22 @@ pageSpec = describe "AI page pairing" $ do
                 [ prelude
                 -- The other pickup form: the yields a harvested plant
                 -- left on the ground, pulled in one per tick.
+                --
+                -- The yields are real rows lying UNDERFOOT (#2550): the
+                -- collecting rung re-resolves each gid on the actor's
+                -- own page and takes it only from within one tile, so a
+                -- pair of bare gids with no row behind them would now
+                -- be a vanished collection rather than an
+                -- over-capacity one, and this case would stop measuring
+                -- capacity at all. Adjacency is only the precondition
+                -- here; the proximity rule itself is gated by
+                -- "Test.Headless.Lua.UnitAiYieldProximity".
                 , "unit.getCarryingWeight = function() return 500 end"
+                , "local y7 = { id = 7, defName = 'berry', x = 0, y = 0,"
+                , "             weight = 40 }"
+                , "local y8 = { id = 8, defName = 'berry', x = 0, y = 0,"
+                , "             weight = 40 }"
+                , "GROUND_BY_PAGE = { [HOME] = { y7, y8 } }"
                 , "local s = newState()"
                 , "s.foragePhase = 'collecting'"
                 , "s.forageLoot  = { 7, 8 }"
@@ -897,7 +912,18 @@ pageSpec = describe "AI page pairing" $ do
            \retrying the stale gid" $
             runsOk $ lns
                 [ prelude
+                -- A RACED COMMIT, which is a different reading from a
+                -- vanished row and has to stay one: the yields resolve
+                -- and lie underfoot, and the pickup loses anyway. Left
+                -- as bare gids with no rows behind them (#2550) this
+                -- would be the vanished-row path instead, which ends
+                -- the phase without ever calling item.pickupGround --
+                -- so the "attempted once" assertion below would pass
+                -- for entirely the wrong reason.
                 , "PICKUP_OK = false"
+                , "local y7 = { id = 7, defName = 'berry', x = 0, y = 0 }"
+                , "local y8 = { id = 8, defName = 'berry', x = 0, y = 0 }"
+                , "GROUND_BY_PAGE = { [HOME] = { y7, y8 } }"
                 , "local s = newState()"
                 , "s.foragePhase = 'collecting'"
                 , "s.forageLoot  = { 7, 8 }"
