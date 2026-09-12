@@ -32,6 +32,7 @@ filesystem/YAML/atlas expectations, the texture-loading check — live in
                            the declared lifecycle/facing matrix
   dispatch   phases 8-9    grouped flora/structure items, category sweep
   zoom       phase 11      all six display kinds
+  audio                    live synth/file player and visual-preview footer
 
 `--only <family>` runs just that family's boots; with no selector the
 run is every scenario exactly once, in the inventory's order.
@@ -133,7 +134,7 @@ Checks:
      in order and the first auto-selected.
   9. Canonical dispatch sweep (#888 / epic #427 acceptance): every
      canonical category — icons, items, ui, world, units, flora,
-     buildings, structures — boots to its documented mode, and the
+     buildings, structures, audio — boots to its documented mode, and the
      Phase 1 (#632) "placeholder" mode is gone from every one of them.
  10. Trimmed loading (Requirement 5, a shared per-phase helper rather
      than a boot of its own): engine.getLoadedTexturePaths() —
@@ -165,7 +166,7 @@ Checks:
 
 Usage:
   python3 tools/preview_probe.py [--port 9150]
-      [--only {simple,units,buildings,dispatch,zoom}]
+      [--only {simple,units,buildings,dispatch,zoom,audio}]
 
 Exit 0 = all checks passed.
 """
@@ -177,7 +178,7 @@ import sys
 from types import ModuleType
 from typing import NamedTuple
 
-from preview import buildings, dispatch, harness, simple, units, zoom
+from preview import audio, buildings, dispatch, harness, simple, units, zoom
 
 
 class Family(NamedTuple):
@@ -207,6 +208,8 @@ FAMILIES: tuple[Family, ...] = (
            ("check_flat_grouped_dispatch", "check_canonical_dispatch_sweep")),
     Family("zoom", zoom,
            ("check_zoom",)),
+    Family("audio", audio,
+           ("check_audio_synth", "check_audio_file", "check_audio_footer")),
 )
 
 FAMILY_NAMES: tuple[str, ...] = tuple(family.name for family in FAMILIES)

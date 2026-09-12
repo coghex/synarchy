@@ -10,6 +10,7 @@
 --   discover its texture/facemap paths instead of hardcoding them.
 module Engine.Scripting.Lua.API.Yaml
     ( loadYamlFn
+    , pushAeson
     ) where
 
 import UPrelude

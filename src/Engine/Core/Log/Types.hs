@@ -59,6 +59,7 @@ data LogCategory
   | CatTest
   | CatEvent  -- ^ Player Events subsystem (registry load, unknown
               --   category warnings from 'Engine.PlayerEvent.emitEvent').
+  | CatAudio
   deriving (Show, Eq, Ord, Enum, Bounded)
 
 -- | Every 'LogCategory', in constructor order. The single enumeration

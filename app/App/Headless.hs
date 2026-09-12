@@ -6,6 +6,7 @@ module App.Headless
   ) where
 
 import UPrelude
+import Engine.Audio.Native (Sink(..))
 import Data.IORef (readIORef, writeIORef)
 import Engine.Core.Init (initializeEngineHeadless, EngineInitResult(..))
 import Engine.Core.Monad (runEngineM, EngineM', liftIO)
@@ -22,7 +23,7 @@ import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import Engine.Core.Workers (EngineWorkers(..), shutdownEngineWorkers)
 import App.Boot (FatalStream(..), bootConfig, handleBootResult
-                , luaThreadOrAbort)
+                , luaThreadOrAbort, withBootAudio)
 import App.Exception (guardNativeExceptions)
 
 runHeadless ∷ BootProfile → Maybe Int → IO ()
@@ -31,37 +32,40 @@ runHeadless bootProfile mPort = do
 
   let env' = bootConfig ModeHeadless bootProfile mPort env
 
-  -- The debug console is headless's ONLY control surface, so a listener
-  -- that never came up aborts the boot (#1190) instead of continuing
-  -- with an inert command queue. Nothing has started yet — Lua is this
-  -- mode's first worker — hence the empty already-started set.
-  luaThreadState   ← startLuaThread env' ⌦ luaThreadOrAbort env' []
-  worldThreadState ← startWorldThread env'
-  unitThreadState  ← startUnitThread env'
-  simThreadState   ← startSimThread env'
-  combatThreadState ← startCombatThread env'
+  withBootAudio env' ForcedNull $ \audioThreadState → do
 
-  -- Headless starts no input thread — the debug console lives inside
-  -- the Lua thread.
-  let workers = EngineWorkers
-        { ewCombat = Just combatThreadState
-        , ewSim    = Just simThreadState
-        , ewUnit   = Just unitThreadState
-        , ewWorld  = Just worldThreadState
-        , ewInput  = Nothing
-        , ewLua    = Just luaThreadState
-        }
+    -- The debug console is headless's ONLY control surface, so a listener
+    -- that never came up aborts the boot (#1190) instead of continuing
+    -- with an inert command queue. Audio is already running and must
+    -- be joined if the required Lua listener fails.
+    luaThreadState   ← startLuaThread env' ⌦ luaThreadOrAbort env' [("audio", audioThreadState)]
+    worldThreadState ← startWorldThread env'
+    unitThreadState  ← startUnitThread env'
+    simThreadState   ← startSimThread env'
+    combatThreadState ← startCombatThread env'
 
-  let engineAction ∷ EngineM' ()
-      engineAction = do
-        logInfoM CatSystem "Starting engine (headless)..."
-        headlessLoop
-        logInfoM CatSystem "Headless engine shutting down..."
-        liftIO $ shutdownEngineWorkers workers
-        logger ← liftIO $ readIORef $ loggerRef env'
-        liftIO $ shutdownLogger logger
-        liftIO $ writeIORef (lifecycleRef env') EngineStopped
-        logDebugM CatSystem "Headless engine shutdown complete."
+    -- Headless starts no input thread — the debug console lives inside
+    -- the Lua thread.
+    let workers = EngineWorkers
+          { ewCombat = Just combatThreadState
+          , ewSim    = Just simThreadState
+          , ewUnit   = Just unitThreadState
+          , ewWorld  = Just worldThreadState
+          , ewInput  = Nothing
+          , ewLua    = Just luaThreadState
+          , ewAudio  = audioThreadState
+          }
 
-  result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  handleBootResult FatalToStdout env' workers result
+    let engineAction ∷ EngineM' ()
+        engineAction = do
+          logInfoM CatSystem "Starting engine (headless)..."
+          headlessLoop
+          logInfoM CatSystem "Headless engine shutting down..."
+          liftIO $ shutdownEngineWorkers workers
+          logger ← liftIO $ readIORef $ loggerRef env'
+          liftIO $ shutdownLogger logger
+          liftIO $ writeIORef (lifecycleRef env') EngineStopped
+          logDebugM CatSystem "Headless engine shutdown complete."
+
+    result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
+    handleBootResult FatalToStdout env' workers result

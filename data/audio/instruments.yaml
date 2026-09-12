@@ -1,0 +1,17 @@
+# Exact authored parameters of the approved docs/audio/menu_cues reference.
+schema_version: 1
+instruments:
+  - id: menu_selected
+    timbre:
+      generator: {waveform: white_noise, noise_seed: 1831565813}
+      envelope: {attack_ms: 0.2, decay_ms: 5, sustain_level: 0, release_ms: 55}
+      filter: {mode: band_pass, cutoff_hz: 620, resonance_q: 2.8}
+      gain_db: 12
+      default_gate_ms: 6
+  - id: menu_back
+    timbre:
+      generator: {waveform: white_noise, noise_seed: 1831565813}
+      envelope: {attack_ms: 0.25, decay_ms: 7, sustain_level: 0, release_ms: 85}
+      filter: {mode: band_pass, cutoff_hz: 310, resonance_q: 4.2}
+      gain_db: 15.5
+      default_gate_ms: 8

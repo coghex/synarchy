@@ -61,6 +61,7 @@ local function computeLayout(params)
     menu.backButtonId = params.trackButton(button.new({
         name       = "back_btn",
         text       = "Back",
+        activationSound = "menu_back",
         width      = btnW,
         height     = base.btnHeight,
         fontSize   = btnFontSize,

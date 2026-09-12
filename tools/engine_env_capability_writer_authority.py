@@ -232,6 +232,8 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "loggerRef": frozenset(),
     "luaToEngineQueue": frozenset(),
     "luaQueue": frozenset(),
+    "audioTransport": frozenset(),
+    "audioStatusRef": frozenset({"Engine.Audio.Thread"}),
     # The six workers dropped off this list in #2283: the fail-stop
     # transition they each used to write at the end of their own crash
     # callback is now `Engine.Core.Thread`'s, performed through
@@ -297,6 +299,10 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
     "zoomAtlasDataRef": frozenset({
         "Engine.Scripting.Lua.Message.WorldTexture",
         "World.Thread.Command.Init",
+        # #2485. An accepted reaction commit regenerates the edited
+        # chunk's atlas block and republishes the image through the same
+        # handoff a fresh init and a load publish use.
+        "World.Thread.Command.Reaction.Zoom",
     }),
     "screenshotRequestQueue": frozenset(),
     "worldQuadsRef": frozenset({

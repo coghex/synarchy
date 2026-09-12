@@ -258,7 +258,7 @@ wireSpec = describe "the epoch on the wire" $ do
 
         -- The tick shape: no ack at all. The barrier behind it is what
         -- makes "the world thread has finished with it" observable.
-        emitWorldDirtyFluids env fencePageId dirty Nothing
+        emitWorldDirtyFluids env fencePageId dirty [] Nothing
         barrier env fencePageId
         appliedSeed ws coord before
 
@@ -475,7 +475,7 @@ deliver env pageId mEpoch writebacks = do
     ack ← newEmptyMVar
     sendWorldCommand env
         (WorldApplyFluids
-            (FluidWritebackBatch pageId mEpoch writebacks (Just ack)))
+            (FluidWritebackBatch pageId mEpoch writebacks [] (Just ack)))
     awaitAck ack
 
 -- | A FIFO barrier on the world queue: an empty batch applies nothing
@@ -573,7 +573,7 @@ settle env pageId sws = do
                                       / 1000000
                 }
     ran ← timeout ackTimeoutMicros $ completeFastSettleWith
-        (\pid s ack → emitWorldDirtyFluids env pid s (Just ack))
+        (\pid s ack → emitWorldDirtyFluids env pid s [] (Just ack))
         monotonicSeconds (const (pure ())) req [(pageId, sws)]
     case ran of
         Nothing → pure Nothing

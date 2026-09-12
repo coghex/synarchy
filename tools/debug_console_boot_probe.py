@@ -46,7 +46,7 @@ Checks:
      can never show that the pre-thread Lua state was closed or that an
      already-started input worker was stopped. Each cleanup step emits
      its own stderr line AS it runs, and the worker count is asserted
-     exactly — 0 for headless (Lua is its first worker), 1 for offscreen
+     exactly — 1 for headless (audio), 2 for offscreen
      (the input thread) — so a teardown that silently stopped doing the
      work fails here rather than passing on a vague substring.
   6. --dump is unchanged (#46): exit 0, valid JSON on stdout, the
@@ -201,6 +201,7 @@ PORT_ZERO_REASON = "no TCP listener at all"
 BIND_REASON = "failed to start"
 LUA_CLEANUP = "boot cleanup: closed the Lua state"
 INPUT_CLEANUP = "boot cleanup: stopped the input worker"
+AUDIO_CLEANUP = "boot cleanup: stopped the audio worker"
 # Offscreen logs this to STDOUT the moment it enters its engine action,
 # immediately before initializeVulkanOffscreen — so its absence is proof
 # the boot never reached any GPU work.
@@ -230,8 +231,8 @@ def check_failed_boot(label: str, args: list[str], mode: str, port: int,
     """One console-required boot that must fail cleanly.
 
     ``expected_workers`` is how many worker threads the mode had ALREADY
-    started when it reached the listener — 0 for headless (Lua is its
-    first worker), 1 for offscreen (the input thread) — asserted exactly,
+    started when it reached the listener — 1 for headless (audio),
+    2 for offscreen (audio and input) — asserted exactly,
     so a teardown that stops nothing cannot pass.
     """
     try:
@@ -256,7 +257,9 @@ def check_failed_boot(label: str, args: list[str], mode: str, port: int,
         problems.append("no evidence the pre-thread Lua state was closed")
     if f"boot cleanup: {expected_workers} worker thread(s) stopped" not in stderr:
         problems.append(f"did not report exactly {expected_workers} worker(s) stopped")
-    if (INPUT_CLEANUP in stderr) != (expected_workers > 0):
+    if AUDIO_CLEANUP not in stderr:
+        problems.append("no evidence the already-started audio worker was joined")
+    if (INPUT_CLEANUP in stderr) != (mode == "offscreen"):
         problems.append("input-worker teardown line disagrees with the "
                         "worker set this mode had actually started")
     if mode == "offscreen" and OFFSCREEN_ENGINE_MARK in stdout:
@@ -270,16 +273,16 @@ def check_port_zero() -> bool:
     print("1-2. port 0 in a console-required mode: refused before any socket")
     return all([
         check_failed_boot("headless --port 0", ["--headless", "--port", "0"],
-                          "headless", 0, PORT_ZERO_REASON, 0),
+                          "headless", 0, PORT_ZERO_REASON, 1),
         check_failed_boot("offscreen --port 0", ["--offscreen", "--port", "0"],
-                          "offscreen", 0, PORT_ZERO_REASON, 1),
+                          "offscreen", 0, PORT_ZERO_REASON, 2),
     ])
 
 
 def check_invalid_service() -> bool:
     print("3. an unbindable port (-1): a real Left from the listener")
     return check_failed_boot("headless --port -1", ["--headless", "--port", "-1"],
-                             "headless", -1, BIND_REASON, 0)
+                             "headless", -1, BIND_REASON, 1)
 
 
 def check_occupied_port(port: int) -> bool:
@@ -298,10 +301,10 @@ def check_occupied_port(port: int) -> bool:
         return all([
             check_failed_boot(f"headless --port {port} (in use)",
                               ["--headless", "--port", str(port)],
-                              "headless", port, BIND_REASON, 0),
+                              "headless", port, BIND_REASON, 1),
             check_failed_boot(f"offscreen --port {port} (in use)",
                               ["--offscreen", "--port", str(port)],
-                              "offscreen", port, BIND_REASON, 1),
+                              "offscreen", port, BIND_REASON, 2),
         ])
     finally:
         holder.close()

@@ -11,6 +11,7 @@
 module Engine.Scripting.Lua.API.WorldQuery.Lookup
     ( getWorldTileData
     , worldStateByPage
+    , targetWorldState
     , getWorldGenParams
     ) where
 
@@ -42,3 +43,14 @@ getWorldGenParams wsc = do
     case mWs of
         Just ws → readIORef (wsGenParamsRef ws)
         Nothing → pure Nothing
+
+-- | The 'WorldState' a page-scoped query targets: the named page when
+--   one is given, the active world otherwise.
+--
+--   Returning the STATE rather than just its tiles is what lets a point
+--   query canonicalize before it looks a chunk up — the u-wrap width is
+--   a property of the page ('pageWrapWorldSize'), so a query that only
+--   ever saw the tile map could not resolve a seam alias at all.
+targetWorldState ∷ WorldSimCapability → Maybe Text → IO (Maybe WorldState)
+targetWorldState wsc = maybe (activeWorldStateFrom (wsWorldManagerRef wsc))
+                             (worldStateByPage wsc)

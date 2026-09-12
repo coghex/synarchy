@@ -38,6 +38,11 @@ PARALLEL_PORT_BASE = 9400
 # probe accepts --port (#723); each script's own default is its historical
 # fixed port, so a bare invocation behaves exactly as before.
 PROBES = [
+    ("audio_manual", "audio_manual_probe.py",
+     "manual listening/device diagnostics and rendered Audio settings; direct --interactive or --offscreen-check required"),
+    ("audio_null", "audio_null_probe.py",
+     "forced-null audio: real worker/callback, sampled+synth loops, spatial listener, "
+     "pause, volumes, diagnostics, session reset and shutdown in an isolated resource root"),
     ("action_outcome", "action_outcome_probe.py",
      "F4 action-outcome oracle: recordOutcome/drainActionOutcomes public "
      "contract, destructive drain, till/chop mixed-sweep partial paths (#646)"),
@@ -120,6 +125,13 @@ PROBES = [
      "derived flora growth/age/phase under the advancing calendar (#332)"),
     ("follow_command_priority", "follow_command_priority_probe.py",
      "follow-command priority against other AI goals (#306)"),
+    ("fluid_reaction", "fluid_reaction_probe.py",
+     "lava-water solidification is DURABLE: the product stone survives a "
+     "save, a process exit and a fresh-process load (#2485)"),
+    ("fluid_reaction_visual", "fluid_reaction_visual_probe.py",
+     "an accepted solidification appears in BOTH live presentations — the "
+     "detailed tile render and the zoom map — with no page reload (#2485; "
+     "offscreen, needs a GPU)"),
     ("foraging", "foraging_probe.py",
      "foraging AI + harvestable-flora gating (#94)"),
     ("infection", "infection_probe.py",
@@ -545,6 +557,7 @@ def timeout_plan(chosen, explicit: float | None = None) -> str:
 # measured on PR run 33666483367 (2026-09-02), listed longest first, which
 # is the order dispatch will consider them in.
 PROBE_EXPECTED_SECONDS: dict[str, float] = {
+    "audio_null": 8.0,
     "persistence_contract": 206.0,
     "craft": 97.0,
     "repair_item": 88.0,
@@ -664,4 +677,3 @@ def unknown_exact_keys(only: str | None) -> list[str]:
         return []
     known = {p[0] for p in PROBES}
     return [n for n in _only_tokens(only) if n not in known]
-

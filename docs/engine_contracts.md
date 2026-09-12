@@ -79,9 +79,10 @@ exactly why the detail could move out of the always-loaded file.
 - [Flora visual state and fallback (#2526)](#flora-visual-state-and-fallback-2526)
 - [Loot profiles (#2499)](#loot-profiles-2499)
 - [Farming (#331-#336)](#farming-331-336)
-- [Fluid reaction: unlike-fluid contact in the active sim (#2481)](#fluid-reaction-unlike-fluid-contact-in-the-active-sim-2481)
+- [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
+- [Audio runtime and authored sounds](#audio-runtime-and-authored-sounds)
 
 **Persistence**
 
@@ -830,7 +831,8 @@ unknown-category error lists exactly this set, no compatibility aliases:
 **simple** (a flat, recursively-browsable asset folder): `icons`,
 `items`, `ui`, `world`; **grouped** (one named entry per item — a bare
 grouped category prints "select a specific ..." and exits without
-booting): `units`, `flora`, `buildings`, `structures`. `equipment`,
+booting): `units`, `flora`, `buildings`, `structures`; **audio**: `audio`
+(default Synth), `audio/synth`, `audio/files`. `equipment`,
 `hud`, `facemap`, `utility`, `vegetation` are NOT exposed.
 
 Pre-boot rejection is the load-bearing rule (`Engine.Preview.Discovery`
@@ -841,9 +843,10 @@ absolute traversal, a symlinked directory (BOTH levels for
 directory was expected all exit 1 **before a window exists**. Trimmed
 loading: only its font, the list widget's own chrome textures, and
 textures within the requested category/item — never `data/*.yaml`
-gameplay catalogs, with exactly TWO single-file exceptions: the units
+gameplay catalogs. Visual-definition exceptions are the units
 viewer's `data/units/<name>.yaml` and the buildings viewer's
-`data/buildings/<name>.yaml`.
+`data/buildings/<name>.yaml`. Audio also reads the three `data/audio/*.yaml`
+catalogs and bounded sample files; it adds no textures or gameplay definitions.
 
 `flora/<name>` and `structures/<name>` reuse the shared browser
 (`scripts/ui/asset_browser.lua` + `scripts/ui/list.lua`, #888) rooted at
@@ -1335,12 +1338,35 @@ itself is reported — so a STATIC building entry, which by design exposes
 no `playback` at all, still reports its zoom at the top level like every
 other mode.
 
+### Audio auditions
+
+Every preview has a bottom-left Audio button. `--preview audio` opens Synth;
+`--preview audio/files` opens Files. `--preview <file.wav|file.flac|file.mp3>`
+accepts one explicit local file, including outside the project. Missing files
+and invalid audio categories fail before boot. Relative files resolve against
+the caller directory before resource-root selection. The production sample
+containment rule remains unchanged. Audio starts before the preview producers,
+uses real output with null fallback, and forces null when the hidden-preview
+probe variable is present. It starts no gameplay workers.
+
+The pane lists synth sounds and bounded sample files, offers Play/Stop/Reload
+and live Master/UI volumes, and preserves visual selection on return. Selecting
+a sound replaces any prior audition. Reload joins/frees the old native core,
+rereads content and waits for a completed catalog revision before restoring
+selection; it does not autoplay. A CLI file autoplays once. The actual engine
+synth, decoder and mixer serve auditions. The three audio catalogs and bounded
+sample discovery are an explicit addition to the trimmed-loading contract;
+Audio adds no textures. See [audio_authoring.md](audio_authoring.md) and
+[audio_runtime.md](audio_runtime.md) for policy and transient ownership.
+Gates: `Audio.Preview`, `Audio.PreviewUI`, `Audio.Lua` hspec,
+`tools/preview_cli_probe.py`, `tools/preview_probe.py --only audio`.
+
 ### Trimmed loading
 
 Preview mode loads only its font, the list widget's own chrome textures
 (`assets/textures/ui/{highlight,scroll*}.png`, loaded once, list-mode
 only), and textures within the requested category/item — never
-`data/*.yaml` gameplay catalogs. There are exactly TWO exceptions, both a
+`data/*.yaml` gameplay catalogs. The two visual-definition exceptions are a
 single file for the requested item: the units viewer's
 `data/units/<name>.yaml` and the buildings viewer's
 `data/buildings/<name>.yaml`.
@@ -4518,11 +4544,16 @@ gives it a fixture.
 
 ---
 
-## Fluid reaction: unlike-fluid contact in the active sim (#2481)
+## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)
 
 Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
-(decisions D-1, D-3 and D-5). FR-1 of epic #2480; nothing consumes the
-events it produces until FR-2.
+(decisions D-1, D-2, D-3, D-5 and D-7). FR-1 of epic #2480 makes the
+contact react inside the sim; FR-2 (#2485) is the world-side consumer
+that turns the events into durable stone. The two halves are separated
+by a thread boundary that is the whole reason the rules below read the
+way they do: the sim is the only thing that knows a contact happened,
+and the WORLD thread is the only writer of the tiles, the only owner of
+the durable edit log, and the only minter of live-edit generations.
 
 **Occupied-contact identity invariant.** No occupied contact changes
 either cell's fluid type. Unlike contact is `Lava` versus any of `Ocean`,
@@ -4548,7 +4579,8 @@ snapshot-empty destination that an earlier source filled live in the same
 phase, and `phaseWaterfall`. All five route through ONE applier,
 `Sim.Fluid.Reaction.applyTransfer` — do not re-derive the rule at a call
 site. A wrapped cylindrical-seam event names the exhausted lava cell's own
-CANONICAL stored chunk key (#2044), whichever side of the seam it is on.
+CANONICAL stored chunk key (#2044), whichever side of the seam it is on,
+and names the contacting water cell's canonical key the same way.
 
 **Snapshot plans are paid from live cells.** The three in-chunk phases
 plan requests from a frozen snapshot and mutate a live grid, and a
@@ -4568,27 +4600,281 @@ keeps its own.
 destination for later phases and requests in the same tick, and may be
 refilled with any fluid. Refill neither cancels nor duplicates the event
 that coordinate already emitted. At most one event is emitted per
-canonical coordinate PER TICK; a later tick may emit another there once
-new lava has arrived and been exhausted again.
+canonical coordinate PER TICK — keeping the FIRST contact's product and
+water type — and a later tick may emit another there once new lava has
+arrived and been exhausted again.
+
+What the dedupe does NOT drop is the later contacts' participating
+chunks. A coordinate exhausted against an in-chunk neighbour, refilled
+with lava by a later phase and exhausted again across the seam has taken
+fluid from two chunks, so `sevWaterChunks` carries the UNION in contact
+order. Both of those chunks' consumed-fluid writebacks ride the same
+delivery as the one stone, and keeping only the first would leave the
+second outside the result's own admission — an intervening edit there
+could then stale its writeback while the stone committed anyway (#2485).
 
 **Event accumulation.** Events land in `SimWorldState`'s `swsSolidEvents`
 (`src/Sim/State/Types.hs`), in emission order. The collection is transient
 simulation OUTPUT: `emptySimWorldState` starts it empty, and a
 nonreacting, inactive or deactivating tick carries it forward unchanged —
 a deactivating tick bakes its grid to passive fluid but keeps the events
-it already produced. **It is drained only by a consumer (FR-2 owns that)
-and cleared only when the page itself is dropped** (`SimDropWorld`;
-`SimDeactivateWorld` keeps the world entry, so events survive hide/show
-like the chunks do). Until FR-2 lands it is append-only, so a long-lived
-active world grows it without bound — that is accepted for this slice, and
-a later reader must not assume it is per-tick. Never serialized: see
+it already produced. **Every delivery DRAINS it whole** (#2485): an
+emitting tick takes the entire collection, groups it, and leaves the
+world holding none of it, which is what makes "committed exactly once" a
+property of the drain rather than of the world thread's bookkeeping. An
+INACTIVE world emits nothing and therefore drains nothing — its history
+is output it has not delivered yet. It is otherwise cleared only when the
+page itself is dropped (`SimDropWorld`; `SimDeactivateWorld` keeps the
+world entry, so events survive hide/show like the chunks do). Never
+serialized: see
 [`docs/persistence_state_inventory.md`](persistence_state_inventory.md)
 §6.
+
+### The product is durable terrain, not a writeback (#2485)
+
+**The stone is an EDIT.** Each accepted event appends one
+`World.Edit.Types.WeAddTile` for its column and product material to
+`wsEditsRef` and applies it through the same `World.Edit.Apply.applyEdit`,
+`replaceChunkForgettingFlora`, plant/construct revalidation and
+`UnitReGround` a player's own add-tile uses
+(`World.Thread.Command.Reaction`). A fluid writeback could not do this:
+`applyOneWriteback` replaces a chunk's sim-owned fields in memory and
+appends nothing, so terrain written that way would vanish on eviction and
+never reach a save. Replay over regenerated terrain and a fresh-process
+load both reproduce the raised column and its top material. The live
+add-tile handler's out-of-column-range pre-check applies unchanged, and a
+skipped event is logged rather than silently dropped.
+
+**The product material resolves through the registry.** `basalt` and
+`obsidian` (`data/materials/igneous_extrusive.yaml`) are looked up by
+NAME through `World.Reaction.Stone.stoneMaterialFor`, never a literal id.
+A name the registry does not know is reported and the event commits
+NOTHING — omitting the tile would leave the consumed lava with no product
+at all. Which of the two is chosen was decided at the reaction by
+`solidProductFor` above, from the contact's own reading, so queue timing
+cannot change it and both contact orderings agree.
+
+**A result is admitted whole or rejected whole, BEFORE anything is
+applied.** A delivered `Sim.Fluid.Reaction.ReactionResult` names every
+participating chunk — the lava chunk and the water chunk, including
+across the cylindrical seam — and the live-edit generation each half was
+computed from. `World.Thread.Command.Reaction.admitReaction` decides it
+against the tiles as they stood before the delivery, and it decides four
+things, not one:
+
+1. every participant is still at the generation its half was computed
+   from — the same equality `writebackIsFresh` applies per chunk, over
+   all of them at once, with an absent entry reading as generation 0;
+2. every participant is still LOADED. Eviction retires a chunk's
+   generation entry, so a result computed at generation 0 and delivered
+   after one participant was evicted passes (1) on the number alone, and
+   would then have its events, its writeback and its sync entry all
+   skipped for that chunk — a partial commit by omission;
+3. every event's product material resolves through the registry; and
+4. every event's edit actually applies, rehearsed in order against a
+   private overlay, so a sibling that only becomes applicable after an
+   earlier one has grown its column is judged on what it will really
+   meet.
+
+The page-incarnation fence (#2477) comes first, exactly as it does for
+writebacks. Two events share a result exactly when they share a
+participating chunk, transitively, so genuinely disjoint contacts in one
+delivery stay independently eligible.
+
+A refusal says which KIND it is. A participant that has moved on, or a
+chunk the page no longer holds, is the ordinary outcome of the race this
+fence exists for and is reported at debug level. A product material the
+registry cannot name, or an event whose own edit cannot apply, is a fault
+— lava was consumed with no stone to account for it — and is reported at
+ERROR level, because world debug logging is off by default and "fails
+loudly" cannot mean a channel nobody is listening to. Either way the
+delivery still acknowledges `FluidAckApplied`: a refusal is a completed
+decision, and neither the fluid nor the stone commits.
+
+Deciding all four up front is what makes the delivery all-or-nothing.
+The writebacks are applied on the strength of that decision, so a commit
+that could still drop an event — for a material it could not name, or a
+column it could not raise — would leave the annihilation recorded with
+no stone. The commit is therefore total by construction, and an
+impossible state raises rather than skipping.
+
+**Generations advance once, after every admitted event has landed.** The
+stone edits themselves bump the generations admission compares against,
+so an event judged after its sibling landed would read as stale purely
+because of it. Every admitted event is applied first; then each EDITED
+chunk's generation is bumped once, and one
+`Sim.Command.Types.SimReactionCommitted` carries the post-commit terrain
+and generation for every participant. A participant that received no
+stone keeps the generation it had.
+
+**A rejected result takes its own fluid with it.** The writebacks for a
+stale result's participating chunks are quarantined — they are the other
+half of the same reaction, and landing the annihilation without the stone
+would destroy volume with no product and then be the state the
+convergence re-seed reads back as authoritative. Every participating
+chunk is then re-seeded from the authoritative tiles through
+`syncEditToSim`, which is what restores the consumed lava and fences any
+sim output still in flight from the refused state. A rejection is a
+completed stale-result decision, not a partial commit: the delivery still
+acknowledges `FluidAckApplied`.
+
+**Exact active volumes survive the handoff.** `SimChunkEdited` rebuilds a
+chunk's active grid from the passive `FluidMap` through
+`fluidCellToActive`, whose `depth * volumePerLevel` rounding turns the 1
+unit a reaction left in the contacting water cell into 7.
+`SimReactionCommitted` therefore does NOT re-seed an active chunk: it
+adopts the post-edit terrain and generation and KEEPS the live grid
+(`Sim.Chunk.applyReactionCommit`). An inactive or absent chunk has no
+exact volumes to keep and re-seeds from the passive map as before.
+
+An ACTIVE chunk's solidified cell is DISPLACED, not emptied. One z of
+terrain arrived under it, so exactly one level's worth of volume no
+longer fits and whatever stood above that still does — the same rule
+`World.Edit.Apply` applies to the passive cell, in volume terms. Clearing
+it outright would contradict the refill policy above: a cell emptied by
+annihilation is an ordinary empty destination for the rest of that tick,
+so the cell an event names may be holding water again by the time the
+commit lands, and deleting it would then be carried into the tiles by the
+next generation-correct writeback.
+
+The INACTIVE branch is not displaced at all. It rebuilds from the
+post-edit passive map, which `World.Edit.Apply` has already taken that
+level out of, so displacing again would charge a deep cell twice — and
+that branch is reached in ordinary play, because a synchronous fast
+settle drains reaction results only after settling its chunks inactive. This applies while the chunk is active; it
+changes neither the serialized nor the passive representation.
+
+**The acknowledgement still means applied.** Reaction commits run inside
+`handleApplyFluidsCommandWith`'s `try`, so a delivery with an ack reports
+success only after every accepted edit and its fluid state have landed,
+and a raise acknowledges `FluidAckFailed` before the exception leaves the
+handler (#2334).
+
+**Both live presentations refresh, with no page reload.** The detailed
+tile render rebuilds its quads from the chunk the edit replaced, so
+dropping the quad caches is all it needs. The zoom map is NOT: its
+renderer samples a precomputed atlas
+(`World.Render.Zoom.Quads.renderFromBaked` reads `wsZoomCacheRef` and
+`wsZoomAtlasRef`, and `ensureBakedAtlas` only re-derives QUADS), whose
+terrain pixels are produced once at page initialization. Clearing
+`wsZoomAtlasRef` to force per-material baking is not a repair either —
+that path colours a whole chunk by its majority material, in which one
+new stone tile cannot appear. An accepted commit therefore refreshes
+BOTH of the zoom map's own inputs:
+
+* the per-chunk SUMMARY entry in `wsZoomCacheRef` — which the baked
+  quads carry — recomputed from the live chunk and threaded through ONE
+  vector, so a delivery touching two chunks does not have the second
+  write restore the first chunk's original entry; and
+* the atlas BLOCK, regenerated from the live post-edit chunk and patched
+  into the image the page retains (`wsZoomLiveRef`), then republished
+  through the same `zoomAtlasDataRef` handoff a fresh init and a load
+  publish use, targeted at the exact `WorldState` that accepted the edit
+  (#763/#1670).
+
+Every overridden cell is taken from the live chunk WHOLE — its
+elevation, top material, vegetation, fluid AND ice. The ice in particular
+is copied rather than cleared: no world edit clears `lcIceMap`, so the
+detailed render goes on showing whatever ice a cell has, and a zoom
+refresh that dropped it would make the two presentations disagree about
+every cell the chunk has ever edited, not only the one this commit
+touched.
+
+Carrying the ice cell is not enough on its own, because the zoom
+generator has no ice branch: `World.ZoomMap.Cache.Pixels` derives a
+tile's colour from its material and VEGETATION id, and its `hasIce` flag
+only suppresses the fluid tint. Ice reaches the zoom pixels the one way
+`zoomChunkPass` puts it there — as a snow vegetation id. So an override
+for an iced cell recomputes that id with the shared
+`World.ZoomMap.Cache.ChunkPass.snowVegFor`, seeded exactly as the
+generating pass seeds it, instead of forwarding the live column's raw
+vegetation. `WeAddTile` writes vegetation 0, so forwarding it would
+repaint an edited icy tile as bare stone even while the override carried
+its `IceCell` faithfully — the ice would survive in the data and vanish
+from the picture.
+
+The regeneration's override set comes from the CHUNK'S OWN EDIT LOG, not
+from the delivery: the block is rebuilt from generation-time data, so
+overriding only the cells one commit touched would repaint every earlier
+edit in that chunk back to its generated appearance. Diffing live against
+generated would carry them too but is not the same thing — a loaded chunk
+and `generateZoomTerrain` disagree on far more tiles than any edit
+touched, and following that would repaint the whole block.
+
+**A page with a zoom map has an atlas — that is an invariant, not a
+hope.** `World.Load.Stage` assembles and retains one for EVERY staged
+page, not only the session's atlas owner, and a page whose atlas the
+device refuses drops its zoom CACHE with it (`World.Thread.Command.Init`
+does the same on a fresh world). So the only pages without an atlas are
+the ones with no zoom map at all — arenas, and refused pages. This
+matters because the alternative presentation cannot be refreshed per
+tile: `World.Render.Zoom.Bake.bakeEntries` colours a whole chunk by its
+majority material, so a map rendered that way would silently stop
+tracking the world the first time anything was edited. Only the owner's
+image is handed to the GPU at load; a non-owner's first refresh publishes
+its own. #1670 is unchanged — a page still only ever renders through an
+atlas its OWN cache produced; what it governs is who receives an upload,
+not who may have one.
+
+**The handoff is a queue, and GPU ownership is per page.**
+`zoomAtlasDataRef` holds one pending image per page: two pages can commit
+between render frames, and a single slot would drop one while its page
+kept retained pixels its displayed texture no longer matched. A second
+refresh of one page replaces that page's own pending entry, so a busy
+page cannot queue without bound; a world init or a load publish
+supersedes only the payloads for the page (or session) it rebuilds.
+Supersession is keyed by the PAGE ID
+(`Engine.Core.State.queueZoomAtlasUpload`) and never by the target
+`WorldState`s: a same-id reinitialization builds fresh refs, so keying on
+those would leave the previous incarnation's image queued for a page that
+no longer exists. `GraphicsState`'s `zoomAtlasTextures` is keyed per page
+too (`replaceZoomAtlasTextures`), because with one slot an upload for
+page B disposed the texture page A's `wsZoomAtlasRef` still named and
+left A sampling a dead handle — and entries whose page is gone are
+retired every frame (`retireZoomAtlasTextures`), since nothing uploads
+for a destroyed, reinitialized or replaced page and its GPU image, view,
+sampler and bindless slot would otherwise live until shutdown. The new
+texture handle is what makes `ensureBakedAtlas` drop the entries baked
+against the old one, and the commit drops them directly too, so a
+refreshed summary shows on the very next bake rather than waiting for the
+upload.
 
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch
 per ordering, plus the live-source, capacity-edge, refill and
-event-accumulation cases. The neighbouring groups `Sim.Fluid.Seam`,
+event-accumulation cases. hspec `--match "solidification"`
+(`test-headless/Test/Headless/World/Solidification.hs`) — the product
+predicate clause by clause in both contact orderings, the grouping and
+admission rules, the exact-volume handoff, the atlas patch, and
+world-thread integration against the real
+`World.Thread.Command.applyFluidWritebacks` for the durable commit, a
+delivery carrying the reaction's own writeback beside its stone,
+sibling events at one generation, accepted and rejected cross-chunk
+results, an evicted participant, convergence, a refused pre-commit
+writeback, acknowledgement ordering, a missing product material, a real
+eviction and regeneration, the cumulative same-chunk zoom refresh, a
+page with no atlas to patch, and the per-page publication queue.
+`tools/fluid_reaction_probe.py` is the fresh-process durability case,
+and also the alias check for the `world.getMaterialAt` query both probes
+read the product through; `tools/fluid_reaction_visual_probe.py`
+(offscreen, needs a GPU) is the two-presentation evidence. It reacts
+TWICE in one chunk: the first contact's refresh folds every setup edit
+into the atlas, so what the measured one adds is attributable to its own
+stone. Both sites are ICE-FREE, checked through `world.getIceAt`: the
+zoom map draws an iced tile as snow whatever material lies under it, so
+a solidification there correctly changes no zoom pixel, and a probe
+grading such a tile could only ever pass by the very defect the snow-veg
+rule above closes. It then locates the solidified tile's own ATLAS pixels through
+`world.zoomTileRect`, which runs the map's own projection forwards — the
+chunk rectangle the atlas bakes over, the wrap offset the quads apply,
+and the inverse-isometric texel transform the pass colours through. The
+detail hit test cannot answer that question: it walks terrain z and
+unprojects through `(z - zSlice) * tileSideHeight - tileHeight / 2`,
+while the zoom map maps its UVs over an elevation-free `gridToWorld`
+rectangle, so a padded hit-test box takes in the tile's neighbours. The
+probe then asserts the pixels that changed in that region read as the
+product the reaction chose rather than as the material the column was
+made of. The neighbouring groups `Sim.Fluid.Seam`,
 `Sim.Fluid.Conservation` and `fluid writeback staleness` must stay green
 unchanged; `Sim.Fluid.Conservation`'s randomized sweep is Lake-only, so
 the reaction never fires in it and a change there is a regression in
@@ -4659,3 +4945,39 @@ they have no tracked template to be neutral against, and an absent
 overrides file already defers to `data/notification_categories.yaml`.
 Gates: hspec `--match "config"`, `tools/config_migration_probe.py`,
 `tools/config_state_probe.py`.
+
+
+## Audio runtime and authored sounds
+
+The [runtime guide](audio_runtime.md) owns worker/callback lifecycle, output modes,
+configuration, transport, telemetry and operational checks. The
+[authoring guide](audio_authoring.md) owns the catalog schema, source formats,
+inheritance, policies and public Lua surface. The [design](audio_system_design.md)
+records rationale and excluded features.
+
+The optional Audio worker alone owns the native core. `AudioCapability` aliases
+exactly transport and copied status; the callback is wholly C-owned and only
+consumes the PCM ring. Graphical uses real output with null fallback;
+headless/offscreen and hidden preview force null; ordinary preview supports real
+audio auditions, while dump starts no audio worker. Audio
+starts before producers and joins after them, including partial-boot failure.
+
+Only accepted explicit player pause changes freeze audio. Internal save and
+notification pauses do not. Load publication and world destruction advance the
+transport epoch; the worker clears old voices, loops, cooldown, listener and ring.
+Settings persist separately and survive that reset. Audio changes no save codec.
+
+World sound uses the active camera/page, including headless console camera state.
+Haskell resolves page/wrap/facing geometry and supplies relative coordinates,
+affine motion and orthogonal period vectors; native rebases existing voices and
+keeps their nearest image when camera motion crosses a source's antipode. Zoom
+range/trim follows the render fade to exact World mute; UI remains independent.
+
+Validation: `cabal test synarchy-test-headless --test-options='--match Audio.'`,
+`python3 tools/test_audio_native.py --sanitize`,
+`python3 tools/test_audio_build_dependencies.py`, and
+`python3 tools/audio_null_probe.py --port 9187`. The existing
+`tools/debug_console_boot_probe.py` also proves that required-listener failure
+joins audio (one pre-Lua worker headless, two offscreen). Capability, persistence,
+config-write and source-distribution audits cover the ownership and resource
+inventories. The authoring guide's three YAML examples are parsed by Hspec.

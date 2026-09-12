@@ -76,6 +76,7 @@ bareTargets = ShutdownTargets
       , ewWorld  = Nothing
       , ewInput  = Nothing
       , ewLua    = Nothing
+      , ewAudio  = Nothing
       }
   }
 

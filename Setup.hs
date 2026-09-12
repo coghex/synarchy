@@ -1,18 +1,22 @@
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad (when)
-import Distribution.Simple (UserHooks (postBuild), defaultMainWithHooks, simpleUserHooks)
+import Distribution.Simple (UserHooks (buildHook, postBuild), defaultMainWithHooks, simpleUserHooks)
 import Distribution.Simple.LocalBuildInfo (interpretSymbolicPathLBI)
 import Distribution.Types.LocalBuildInfo (buildDir)
 import System.Directory (doesDirectoryExist, findExecutable)
 import System.Info (os)
 import System.IO (hPutStrLn, stderr)
 import System.Process (callProcess)
+import BuildSupport.AudioDependencies (invalidateAudioDependencies)
 
 main :: IO ()
 main =
     defaultMainWithHooks
         simpleUserHooks
-            { postBuild = \args flags pkg lbi -> do
+            { buildHook = \pkg lbi hooks flags -> do
+                invalidateAudioDependencies (interpretSymbolicPathLBI lbi (buildDir lbi))
+                buildHook simpleUserHooks pkg lbi hooks flags
+            , postBuild = \args flags pkg lbi -> do
                 postBuild simpleUserHooks args flags pkg lbi
                 clearMacOSQuarantine (interpretSymbolicPathLBI lbi (buildDir lbi))
             }

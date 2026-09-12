@@ -77,6 +77,7 @@ uiStub = lns
     , "UI = {"
     , "  newPage = function() return 1 end,"
     , "  showPage = function() end,"
+    , "  hidePage = function() end,"
     , "  deletePage = function() end,"
     , "  newSprite = function(name, w, h, tex, r, g, b, a)"
     , "      local id = nextElem; nextElem = nextElem + 1"
@@ -132,6 +133,7 @@ uiStub = lns
     , "               text = e.text, visible = e.visible, tex = e.tex }"
     , "  end,"
     , "}"
+    , "UI.newElement = function(name,w,h) return UI.newSprite(name,w,h,0,0,0,0,0) end"
     ]
 
 -- | An @engine@ global with no live state behind it. @loadTexture@
@@ -160,6 +162,7 @@ engineStub = lns
     , "  getPreviewBrowse = function() return BROWSE end,"
     , "  getPreviewTarget = function() return TARGET end,"
     , "  realTime = function() return NOW or 0 end,"
+    , "  getTextWidth = function(_,text,size) return #text * size * 0.5 end,"
     , "}"
     ]
 
@@ -293,4 +296,3 @@ harness = lns
     , "        what .. ': not vertically centered')"
     , "end"
     ]
-

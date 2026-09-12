@@ -79,6 +79,7 @@ function mainMenu.buildMenuItems()
         if #mainMenu.saves > 1 then
             table.insert(items, {
                 name = "load_game",
+        activationSound = "menu_selected",
                 label = "Load Game",
                 onClick = function() mainMenu.onLoadGame() end,
             })
@@ -87,11 +88,13 @@ function mainMenu.buildMenuItems()
 
     table.insert(items, {
         name = "create_world",
+        activationSound = "menu_selected",
         label = "Create World",
         onClick = function() mainMenu.onCreateWorld() end,
     })
     table.insert(items, {
         name = "settings",
+        activationSound = "menu_selected",
         label = "Settings",
         onClick = function() mainMenu.onSettings() end,
     })
@@ -278,7 +281,10 @@ function mainMenu.createUI()
         UI.setInteractiveOverflow(boxH, true)
 
         -- Register the onClick handler
-        mainMenu.clickHandlers[boxH] = item.onClick
+        mainMenu.clickHandlers[boxH] = function()
+            if item.activationSound then audio.play(item.activationSound) end
+            item.onClick()
+        end
 
         -- Create a text child, centered inside the box
         local textH = UI.newText(

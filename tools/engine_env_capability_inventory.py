@@ -8,7 +8,7 @@ the same way tools/persistence_inventory_audit.py guards the persistence
 inventory (issue #756) it's deliberately modeled on. Every field
 currently declared on `EngineEnv` (src/Engine/Core/State.hs) must have
 exactly one row in the capability inventory doc, under a `### `
-heading naming one of the eight known capability identifiers, with a
+heading naming one of the nine known capability identifiers, with a
 valid Lifecycle category, a Readers and a Writers cell each naming a
 known thread/execution role (or an explicitly justified `None`), a
 non-placeholder Sync/Init/Shutdown cell, a non-BLANK Notes cell (a
@@ -66,7 +66,7 @@ from engine_env_capability_common import (  # type: ignore
 )
 
 
-# docs/engineenv_capability_inventory.md SS2.1 -- the eight capability
+# docs/engineenv_capability_inventory.md SS2.1 -- the nine capability
 # identifiers a field may be classified under. A generic bucket
 # ("misc"/"shared"/"other"), a blank heading, or anything else is not
 # in this set and is therefore rejected.
@@ -79,6 +79,7 @@ CAPABILITIES = (
     "content-registries",
     "ui-hud-events",
     "save-load-coordination",
+    "audio-transport",
 )
 
 # docs/engineenv_capability_inventory.md SS2.2 -- the thread/execution-
@@ -93,6 +94,7 @@ THREAD_ROLES = (
     "UnitThread",
     "CombatThread",
     "SimThread",
+    "AudioThread",
     "AnyThread",
 )
 

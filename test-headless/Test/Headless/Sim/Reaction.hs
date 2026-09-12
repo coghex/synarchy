@@ -270,6 +270,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 8 8
+                        , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 2
@@ -295,6 +296,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 9 8
+                        , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 1
@@ -351,6 +353,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 9 8
+                        , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = River
                         , sevConsumed     = 2
                         , sevStoneTop     = 1
@@ -433,6 +436,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 10 8
+                        , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = Lake
                         , sevConsumed     = 8
                         , sevStoneTop     = 1
@@ -473,6 +477,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = homeChunk
                         , sevIndex        = idxOf 8 8
+                        , sevWaterChunks  = [homeChunk]
                         , sevWaterType    = Lake
                         , sevConsumed     = 1
                         , sevStoneTop     = 4
@@ -521,6 +526,7 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = a
                         , sevIndex        = seamIdxA
+                        , sevWaterChunks  = [b]
                         , sevWaterType    = Lake
                         , sevConsumed     = 3
                         , sevStoneTop     = 2
@@ -549,12 +555,57 @@ spec = do
                     [ SolidificationEvent
                         { sevChunk        = b
                         , sevIndex        = seamIdxB
+                        , sevWaterChunks  = [a]
                         , sevWaterType    = Ocean
                         , sevConsumed     = 3
                         , sevStoneTop     = 1
                         , sevWaterSurface = volumeToSurface 0 17
                         , sevProduct      = SolidBasalt
                         } ]
+
+        -- #2485: a coordinate can react TWICE in one tick — exhausted
+        -- against an in-chunk neighbour, refilled with lava by a later
+        -- phase, then exhausted again across the seam. One stone comes
+        -- out of that, but fluid was taken from BOTH chunks, and both of
+        -- their consumed-fluid writebacks ride the same delivery as the
+        -- stone. Dropping the second contact's chunk would leave it
+        -- outside the result's own admission.
+        describe "a coordinate exhausted in-chunk, refilled, and \
+                 \exhausted again across the seam" $ do
+            let seamCell = seamIdxA
+                -- Chunk A: water above the seam cell (gravity
+                -- annihilates its lava), and a lava neighbour beside it
+                -- (lateral refills the emptied cell with lava).
+                chunkA = mkChunk
+                    (terrainWith [ (idxOf (chunkSize - 1) 7, 1)
+                                 , (seamCell, 0)
+                                 , (idxOf (chunkSize - 2) 8, 0) ])
+                    (fluidWith [ (idxOf (chunkSize - 1) 7, cell Lake 7)
+                               , (seamCell, cell Lava 1)
+                               , (idxOf (chunkSize - 2) 8, cell Lava 20) ])
+                before = mkState SimFlatTopology
+                    [ (a, chunkA)
+                    , (b, mkSeamChunk 0 seamIdxB (cell Ocean 40)) ]
+                after = simulateActiveTick before
+
+            it "pins the fixture: the seam cell really did react twice" $ do
+                -- In-chunk first (the gravity contact), then the seam
+                -- one after the lateral refill — so the cell is empty
+                -- again at the end and the ocean has paid for it.
+                cellAt a seamCell after `shouldBe` Nothing
+                fmap afcType (cellAt b seamIdxB after) `shouldBe` Just Ocean
+
+            it "emits ONE stone for that coordinate" $
+                map (\e → (sevChunk e, sevIndex e)) (events after)
+                    `shouldBe` [(a, seamCell)]
+
+            it "names BOTH chunks that lost fluid to it as participants" $
+                -- The union, in contact order: the in-chunk contact
+                -- first, the seam one second. Keeping only the first
+                -- would leave chunk B's own consumed-fluid writeback
+                -- outside the result's admission, so an intervening edit
+                -- there could stale it while the stone committed anyway.
+                map sevWaterChunks (events after) `shouldBe` [[a, b]]
 
         describe "across the cylindrical U wrap boundary (#2044)" $ do
             it "pins the fixture: the far side really is a wrapped key" $
@@ -565,6 +616,12 @@ spec = do
                         (seamWorld cylTopo
                             wrapXA 1 (cell Lava 3) wrapXB 0 (cell Lake 5))
                 eventCoords after `shouldBe` [(wrapXA, seamIdxA)]
+                -- …and names the far side's own canonical key as the
+                -- WATER participant (#2485 requirement 3): FR-2 admits
+                -- both halves of a seam contact together, so a wrapped
+                -- contact that named an unwrapped water key would be
+                -- judged against a chunk the page stores nothing under.
+                map sevWaterChunks (events after) `shouldBe` [[wrapXB]]
                 cellAt wrapXA seamIdxA after `shouldBe` Nothing
                 cellAt wrapXB seamIdxB after `shouldBe` cell Lake 2
 
@@ -573,6 +630,7 @@ spec = do
                         (seamWorld cylTopo
                             wrapXA 0 (cell Ocean 20) wrapXB 0 (cell Lava 3))
                 eventCoords after `shouldBe` [(wrapXB, seamIdxB)]
+                map sevWaterChunks (events after) `shouldBe` [[wrapXA]]
                 cellAt wrapXA seamIdxA after `shouldBe` cell Ocean 17
                 cellAt wrapXB seamIdxB after `shouldBe` Nothing
 
@@ -630,6 +688,7 @@ spec = do
                 [ SolidificationEvent
                     { sevChunk        = homeChunk
                     , sevIndex        = idxOf 8 8
+                    , sevWaterChunks  = [homeChunk]
                     , sevWaterType    = Lake
                     , sevConsumed     = 1
                     , sevStoneTop     = 1

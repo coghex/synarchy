@@ -5,6 +5,21 @@ import Test.Hspec
 import Test.Headless.Harness (withHeadlessEngine, withHeadlessEngineNoWorld)
 import qualified Test.Headless.Harness.WorkerHealth as HarnessWorkerHealth
 import qualified Test.Headless.UPrelude as UPreludeSpec
+import qualified Test.Headless.Audio.Native as AudioNative
+import qualified Test.Headless.Audio.Config as AudioConfig
+import qualified Test.Headless.Audio.Catalog as AudioCatalog
+import qualified Test.Headless.Audio.Upload as AudioUpload
+import qualified Test.Headless.Audio.Transport as AudioTransport
+import qualified Test.Headless.Audio.Spatial as AudioSpatial
+import qualified Test.Headless.Audio.Runtime as AudioRuntime
+import qualified Test.Headless.Audio.Integration as AudioIntegration
+import qualified Test.Headless.Audio.Health as AudioHealth
+import qualified Test.Headless.Audio.Preview as AudioPreview
+import qualified Test.Headless.Audio.PreviewUI as AudioPreviewUI
+import qualified Test.Headless.Audio.Thread as AudioThread
+import qualified Test.Headless.Audio.Lua as AudioLua
+import qualified Test.Headless.Audio.Settings as AudioSettings
+import qualified Test.Headless.Capability.Audio as CapabilityAudio
 import qualified Test.Headless.WorldGen as WorldGen
 import qualified Test.Headless.WorldGen.Geology as Geology
 import qualified Test.Headless.WorldGen.Parity as Parity
@@ -111,6 +126,7 @@ import qualified Test.Headless.World.MapImageAdmission as MapImageAdmission
 import qualified Test.Headless.World.MaterialRegistryMerge as MaterialRegistryMerge
 import qualified Test.Headless.World.TransferOrders as WorldTransferOrders
 import qualified Test.Headless.World.FluidWritebackStaleness as FluidWritebackStaleness
+import qualified Test.Headless.World.Solidification as Solidification
 import qualified Test.Headless.World.FluidWritebackIncarnation as FluidWritebackIncarnation
 import qualified Test.Headless.World.CursorInfo as CursorInfo
 import qualified Test.Headless.World.CursorTextureDispatch as CursorTextureDispatch
@@ -481,6 +497,7 @@ main = hspec $ do
         describe "ReadOnlyRef and Capability.ContentRegistriesView projections"
                  CapabilityContentRegistriesView.spec
         describe "Capability.Events projections" CapabilityEvents.spec
+        CapabilityAudio.spec
         describe "Capability.Input projections" CapabilityInput.spec
         describe "Capability.Render projections" CapabilityRender.spec
         describe "Capability.RenderHandoff projections" CapabilityRenderHandoff.spec
@@ -560,6 +577,11 @@ main = hspec $ do
     aroundAll withHeadlessEngine $ do
         FluidWritebackStaleness.spec
         describe "persistence contract" FluidWritebackStaleness.saveSpec
+    -- Own engine (#2485): each example generates its own private w8
+    -- page, hand-delivers reaction results to the live world thread, and
+    -- reads the commit's sim handoff off an UNDRAINED sim queue -- none
+    -- of which the shared-worlds engine may see.
+    aroundAll withHeadlessEngine Solidification.spec
     -- Own engine (#2477): DESTROYS and re-creates a page under the same
     -- id, and drives the sim's own command handler and emit step by
     -- hand against the live world thread -- none of which the
@@ -921,6 +943,7 @@ main = hspec $ do
     describe "Sim.Fluid.Seam" SimSeam.spec
     describe "Sim.Fluid.Conservation" SimConservation.spec
     describe "unlike-fluid reaction" SimReaction.spec
+    Solidification.pureSpec
     describe "Input.KeyNames" InputKeyNames.spec
     describe "Input.Bindings" InputBindings.spec
     describe "Input.Inject" InputInject.spec
@@ -1112,6 +1135,20 @@ main = hspec $ do
     StepProtocol.spec
     ShutdownAtlasRelease.spec
     WorkerLifecycle.spec
+    AudioNative.spec
+    AudioConfig.spec
+    AudioCatalog.spec
+    AudioUpload.spec
+    AudioTransport.spec
+    AudioSpatial.spec
+    AudioRuntime.spec
+    AudioIntegration.spec
+    AudioHealth.spec
+    AudioThread.spec
+    AudioPreview.spec
+    AudioPreviewUI.spec
+    AudioLua.spec
+    AudioSettings.spec
     DebugListener.spec
     DebugSocket.spec
     AppCli.spec

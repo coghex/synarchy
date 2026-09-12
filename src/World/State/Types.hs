@@ -42,6 +42,7 @@ import World.Render.Camera.Types (WorldCamera(..), WorldQuadCache(..))
 import World.Render.Textures.Types (WorldTextures(..), defaultWorldTextures)
 import World.ZoomMap.Types (ZoomChunkEntry(..))
 import World.Render.Zoom.Types (ZoomQuadCache(..), BakedZoomEntry(..), ZoomMapMode(..), ZoomAtlasInfo(..))
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Tool.Types (ToolMode(..))
 import World.Generate.Types (WorldGenParams(..))
 import Sim.Topology (SimTopology(..), simTopologyForParams)
@@ -206,6 +207,25 @@ data WorldState = WorldState
     , wsCursorSnapshotRef ∷ IORef CursorSnapshot
     , wsLoadPhaseRef ∷ IORef LoadPhase
     , wsZoomAtlasRef ∷ IORef (Maybe ZoomAtlasInfo)  -- ^ Atlas info once uploaded to GPU
+    , wsZoomLiveRef ∷ IORef (Maybe ZoomLiveAtlas)
+      -- ^ The atlas PIXELS this page holds, kept so a live terrain edit
+      --   can regenerate one chunk's tile and republish the image the
+      --   renderer samples (#2485).
+      --
+      --   EVERY page that has a zoom map has one. 'World.Load.Stage'
+      --   writes it for every staged page, not only the one whose image
+      --   is handed to the GPU at load: a non-owner page can still be
+      --   shown, simulate and accept an edit, and the one-texture-per-
+      --   chunk fallback could never show a single changed tile. #1670
+      --   is unchanged by that — it governs who RECEIVES an upload, and
+      --   a page still never renders through an atlas another page's
+      --   cache produced.
+      --
+      --   'Nothing' only for a page with no zoom map at all: an arena,
+      --   or a page whose atlas the device refused — which drops its
+      --   'wsZoomCacheRef' with it, so there is no map left to stop
+      --   tracking the world. Session-local presentation data, never
+      --   serialized: a load rebuilds it from the pixels it stages.
     , wsEditsRef    ∷ IORef WorldEdits
       -- ^ Player edits accumulated this session. Per-chunk so eviction
       --   doesn't lose them — chunks regenerate, edits replay onto the
@@ -551,6 +571,7 @@ emptyWorldState = do
     wsCursorSnapshotRef ← newIORef emptyCursorSnapshot
     wsLoadPhaseRef ← newIORef LoadIdle
     wsZoomAtlasRef ← newIORef Nothing
+    wsZoomLiveRef  ← newIORef Nothing
     wsEditsRef     ← newIORef emptyWorldEdits
     wsChunkEditGenRef ← newIORef HM.empty
     wsOreSurveyRef ← newIORef HM.empty
@@ -592,7 +613,8 @@ emptyWorldState = do
                         wsChunkResidencyRef
                         wsMapModeRef
                         wsCursorRef wsToolModeRef wsCursorSnapshotRef
-                        wsLoadPhaseRef wsZoomAtlasRef wsEditsRef
+                        wsLoadPhaseRef wsZoomAtlasRef wsZoomLiveRef
+                        wsEditsRef
                         wsChunkEditGenRef
                         wsOreSurveyRef wsMineDesignationsRef
                         wsGroundItemsRef wsGroundItemLock

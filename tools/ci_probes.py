@@ -54,6 +54,10 @@ ALL_KEYS = {p[0] for p in PROBES}
 # their subsystem.
 # --------------------------------------------------------------------------
 CI_ELIGIBLE = {
+    # One empty-arena boot, generated resident fixtures, no AI decisions,
+    # worldgen, GPU or physical device. Polls monotonic callback/admission/reset
+    # facts; numerical DSP and injected failure cases have separate native gates.
+    "audio_null",
     # #1220: the only automated proof that the two water AI actions mutate
     # the canteen instance they selected. Deterministic by construction —
     # the unit_ai tick is neutralised and the sim is PAUSED, so the two
@@ -167,6 +171,9 @@ class Reason:
 # branch must not add a `flaky` reason opportunistically -- and never from
 # an old mention or one unrelated failing run.
 MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
+    "audio_manual": (Reason(NEEDS_GPU, "renders the actual Settings screen through Vulkan"),
+                     Reason(TARGETED, "direct invocation requires --interactive for owner listening/device recovery "
+                            "or --offscreen-check for null output; never opens speakers from CI")),
     # --- flaky: AI-reaction/arbitration timing the slower, variable-speed
     # Linux CI runner destabilizes run-to-run;
     # within-run retry can't fix run-to-run flakiness. ---
@@ -360,6 +367,10 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
     # --- needs-gpu: requires a real Vulkan device, which the CI runner
     # does not have. First candidate for a future GPU-equipped CI lane. ---
     "offscreen": (Reason(NEEDS_GPU, "boots the full Vulkan render pipeline (windowless) — no GPU on the CI runner"),),
+    "fluid_reaction_visual": (Reason(NEEDS_GPU, "offscreen boot: captures the detailed tile "
+                                     "render and the zoom-map atlas either side of a real "
+                                     "solidification, both of which need a real Vulkan "
+                                     "device — no GPU on the CI runner (#2485)"),),
     "blood_gpu_lifecycle": (Reason(NEEDS_GPU, "offscreen boot: uploadBloodTextures needs a real Vulkan "
                                               "device to upload/dispose blood textures (#788) — no GPU on the CI runner"),),
     "preview": (Reason(NEEDS_GPU, "real preview boot creates a GLFW window and calls "
@@ -452,6 +463,9 @@ MANUAL_ONLY_REASONS: dict[str, tuple[Reason, ...]] = {
                              "mixed tillable/fluid box and a real tree for the chop "
                              "partial path (#646)"),),
     "flora_growth": (Reason(SLOW_WORLDGEN, "needs a real generated world for natural ground cover"),),
+    "fluid_reaction": (Reason(SLOW_WORLDGEN, "generates a real world page and boots two "
+                              "engines (react+save, fresh-process load) to prove the "
+                              "reaction product survives leaving the process (#2485)"),),
     "multiworld_save": (Reason(SLOW_WORLDGEN, "generates two real world pages"),),
     "persistence_integrity": (Reason(SLOW_WORLDGEN, "generates a real world page and boots "
                                      "three engines (build+save, dangling-reference load, "
@@ -617,6 +631,10 @@ CORE_GLOBS = [
 # Empty sets are intentional for subsystems whose behavior probes are now
 # manual-only because they are scenario-heavy or too narrowly targeted.
 FEATURE_RULES: list[tuple[list[str], set[str]]] = [
+    (["src/Engine/Audio/*", "cbits/audio/*", "cbits/vendor/miniaudio/*",
+      "data/audio/*", "config/audio*.yaml", "tools/audio_null_probe.py",
+      "src/Engine/Scripting/Lua/API/Audio*", "src/Engine/Scripting/Lua/API/Register/Audio.hs",
+      "scripts/settings/audio_tab.lua"], {"audio_null"}),
     (["src/Combat/*", "scripts/acolyte_combat.lua", "scripts/combat_log.lua",
       "scripts/injury_log*.lua"],
      # medic_coord gates the bestMedicFor/medicAvailable distance-discounted

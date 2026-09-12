@@ -11,6 +11,7 @@ module App.Offscreen
   ) where
 
 import UPrelude
+import Engine.Audio.Native (Sink(..))
 import Data.IORef (readIORef, writeIORef)
 import qualified Engine.Core.Queue as Q
 import Engine.Core.Init (initializeEngine, EngineInitResult(..))
@@ -32,7 +33,7 @@ import Unit.Thread (startUnitThread)
 import Combat.Thread (startCombatThread)
 import Sim.Thread (startSimThread)
 import App.Boot (FatalStream(..), bootConfig, handleBootResult
-                , luaThreadOrAbort)
+                , luaThreadOrAbort, withBootAudio)
 import App.Exception (guardNativeExceptions)
 
 -- | Run the engine offscreen: GPU on, window off. The render size
@@ -46,48 +47,51 @@ runOffscreen bootProfile mPort mSize = do
 
   let env' = bootConfig ModeOffscreen bootProfile mPort env
 
-  inputThreadState ← startInputThread env'
-  -- Offscreen has no window either, so the debug console is likewise
-  -- its only control surface and a dead listener aborts the boot
-  -- (#1190) — here with a genuinely partial worker set: the input
-  -- thread is already running and has to be stopped, and Vulkan is
-  -- never initialized because that happens inside 'engineAction' below.
-  luaThreadState   ← startLuaThread env'
-      ⌦ luaThreadOrAbort env' [("input", Just inputThreadState)]
-  worldThreadState ← startWorldThread env'
-  unitThreadState  ← startUnitThread env'
-  simThreadState   ← startSimThread env'
-  combatThreadState ← startCombatThread env'
+  withBootAudio env' ForcedNull $ \audioThreadState → do
 
-  let workers = EngineWorkers
-        { ewCombat = Just combatThreadState
-        , ewSim    = Just simThreadState
-        , ewUnit   = Just unitThreadState
-        , ewWorld  = Just worldThreadState
-        , ewInput  = Just inputThreadState
-        , ewLua    = Just luaThreadState
-        }
+    inputThreadState ← startInputThread env'
+    -- Offscreen has no window either, so the debug console is likewise
+    -- its only control surface and a dead listener aborts the boot
+    -- (#1190) — here with a genuinely partial worker set: the input
+    -- thread is already running and has to be stopped, and Vulkan is
+    -- never initialized because that happens inside 'engineAction' below.
+    luaThreadState   ← startLuaThread env'
+        ⌦ luaThreadOrAbort env' [("input", Just inputThreadState), ("audio", audioThreadState)]
+    worldThreadState ← startWorldThread env'
+    unitThreadState  ← startUnitThread env'
+    simThreadState   ← startSimThread env'
+    combatThreadState ← startCombatThread env'
 
-  videoConfig ← readIORef (videoConfigRef env')
-  let (w, h) = fromMaybe (vcWidth videoConfig, vcHeight videoConfig) mSize
+    let workers = EngineWorkers
+          { ewCombat = Just combatThreadState
+          , ewSim    = Just simThreadState
+          , ewUnit   = Just unitThreadState
+          , ewWorld  = Just worldThreadState
+          , ewInput  = Just inputThreadState
+          , ewLua    = Just luaThreadState
+          , ewAudio  = audioThreadState
+          }
 
-  -- What GLFW.createWindow does for windowed boots: seed the size refs
-  -- and tell the Lua UI its (fixed) framebuffer geometry so layout
-  -- runs against the real render size.
-  writeIORef (windowSizeRef env') (w, h)
-  writeIORef (framebufferSizeRef env') (w, h)
-  Q.writeQueue (luaQueue env') (LuaWindowResize w h)
-  Q.writeQueue (luaQueue env') (LuaFramebufferResize w h)
+    videoConfig ← readIORef (videoConfigRef env')
+    let (w, h) = fromMaybe (vcWidth videoConfig, vcHeight videoConfig) mSize
 
-  let engineAction ∷ EngineM' ()
-      engineAction = do
-        logInfoM CatSystem "Starting engine (offscreen)..."
-        _ ← initializeVulkanOffscreen (w, h)
-        mainLoopOffscreen
+    -- What GLFW.createWindow does for windowed boots: seed the size refs
+    -- and tell the Lua UI its (fixed) framebuffer geometry so layout
+    -- runs against the real render size.
+    writeIORef (windowSizeRef env') (w, h)
+    writeIORef (framebufferSizeRef env') (w, h)
+    Q.writeQueue (luaQueue env') (LuaWindowResize w h)
+    Q.writeQueue (luaQueue env') (LuaFramebufferResize w h)
 
-        shutdownEngine ShutdownTargets { stWindow  = Nothing
-                                       , stWorkers = workers }
-        logDebugM CatSystem "Offscreen engine shutdown complete."
+    let engineAction ∷ EngineM' ()
+        engineAction = do
+          logInfoM CatSystem "Starting engine (offscreen)..."
+          _ ← initializeVulkanOffscreen (w, h)
+          mainLoopOffscreen
 
-  result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
-  handleBootResult FatalToStdout env' workers result
+          shutdownEngine ShutdownTargets { stWindow  = Nothing
+                                         , stWorkers = workers }
+          logDebugM CatSystem "Offscreen engine shutdown complete."
+
+    result ← guardNativeExceptions $ runEngineM engineAction env' checkStatus
+    handleBootResult FatalToStdout env' workers result

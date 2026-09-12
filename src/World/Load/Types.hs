@@ -79,10 +79,13 @@ data StagedSession = StagedSession
       --   page alone: 'World.Render.Zoom.Bake' indexes a page's own
       --   cache using its ASSIGNED atlas's layout, so a page holding
       --   another page's atlas bakes its quads against the wrong
-      --   world's pixels. A page with no atlas of its own keeps
-      --   'wsZoomAtlasRef' at 'Nothing' and renders through
-      --   'World.Render.Zoom.Bake.ensureBakedAtlas''s existing
-      --   per-material fallback.
+      --   world's pixels. A page not named here keeps 'wsZoomAtlasRef'
+      --   at 'Nothing' until it publishes its OWN image: since #2485
+      --   every staged page retains its own atlas pixels
+      --   ('World.State.Types.wsZoomLiveRef'), so a live terrain edit on
+      --   one of them regenerates a tile and republishes from there.
+      --   What this field decides is only which image is uploaded AT
+      --   LOAD, never which page may have one.
     , ssPreview       ∷ !(Maybe (Int, Int, ByteString))
     , ssReconcile     ∷ !LoadReconcileContext
       -- ^ The restored session's item-instance / unit-page /

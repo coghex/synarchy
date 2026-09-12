@@ -41,6 +41,9 @@ import Engine.Core.Log.Types (LogConfig(..), LogEntry(..), defaultLogConfig)
 import Location.Instance
     (LocationInstance(..), instancesToList)
 import World.River.Naming (RiverName(..), riverNamesToList)
+import qualified Data.ByteString as BS
+import Engine.Core.State (ZoomAtlasUpload(..))
+import World.ZoomMap.Live.Types (ZoomLiveAtlas(..))
 import World.Types
 import Language.Generated.Types
     ( LanguageProvenance(..), LangSeed(..), GeneratorVersion(..)
@@ -528,11 +531,12 @@ spec = do
     describe "publishStagedSession invalidates in-flight preview uploads \
              \on EVERY publish, even one with no preview data at all \
              \(round 11 review, issue #763)" $
-        it "a staged session whose ssPreview is Nothing (the outcome of \
-           \World.Load.Stage's own isArenaParams branch) still bumps \
-           \worldPreviewGenerationRef -- a stale upload racing this \
-           \publish must never be able to see its own generation as \
-           \still current" $ \env →
+        it "a staged session whose ssPreview and ssZoomAtlas are both \
+           \Nothing (the outcome of World.Load.Stage's own isArenaParams \
+           \branch) still bumps worldPreviewGenerationRef AND clears the \
+           \zoom atlas queue -- a stale upload racing this publish must \
+           \never be able to see its own generation as still current, \
+           \nor survive into a session its target pages left" $ \env →
             let slotC = "id_spec_nopreview"
                 cleanup = do
                     removePathForcibly ("saves/" <> slotC)
@@ -567,12 +571,38 @@ spec = do
             -- test here) -- this isolates publishStagedSession's own
             -- unconditional-bump contract from staging's decision about
             -- when a preview exists at all.
-            let staged' = staged { ssPreview = Nothing }
+            let staged' = staged { ssPreview = Nothing
+                                 , ssZoomAtlas = Nothing }
 
             genBefore ← readIORef (worldPreviewGenerationRef env)
+
+            -- The zoom atlas queue is the same shape of trap and is
+            -- asserted in the same publish (#2485). Every pending upload
+            -- captured the exact 'WorldState's it belongs to at enqueue
+            -- time (#763), and this publish replaces the whole session —
+            -- so each of them names a page that is about to stop
+            -- existing. Clearing only where the INCOMING session has an
+            -- atlas of its own would leave the outgoing session's images
+            -- pending here, and the render thread would go on allocating
+            -- and publishing GPU textures into departed pages.
+            outgoing ← do
+                mgr ← readIORef (worldManagerRef env)
+                case lookup (WorldPageId "id_nopreview_w8") (wmWorlds mgr) of
+                    Nothing → expectationFailure
+                        "the page this publish is about to replace is \
+                        \not in the manager"
+                        ≫ error "unreachable"
+                    Just ws → pure ws
+            writeIORef (zoomAtlasDataRef env)
+                [ZoomAtlasUpload 4 4 (BS.replicate 64 0)
+                                 (WorldPageId "id_nopreview_w8") [outgoing]]
+
             publishStagedSession env logger 999999 staged'
+
             genAfter ← readIORef (worldPreviewGenerationRef env)
             genAfter `shouldSatisfy` (> genBefore)
+            readIORef (zoomAtlasDataRef env) ⌦ \pending →
+                map zauPage pending `shouldBe` []
 
     -- Runs LAST (issue #1670): another REAL publish, and the one that
     -- replaces the session for good.
@@ -648,30 +678,52 @@ spec = do
             ownerState ← stagedState staged "id_atlas_owner_w8"
             otherState ← stagedState staged "id_atlas_other_w8"
 
-            -- Clear the handoff slot first: a WorldInit above already
-            -- wrote an atlas into it, so reading a Just afterwards would
-            -- prove nothing about THIS publish.
-            writeIORef (zoomAtlasDataRef env) Nothing
+            -- Clear the handoff queue first: a WorldInit above already
+            -- wrote an atlas into it, so reading one afterwards would
+            -- prove nothing about THIS publish. Since #2485 the handoff
+            -- is a QUEUE (a runtime atlas republication must not be able
+            -- to overwrite another page's pending image), and a publish
+            -- still replaces it whole, so exactly one entry is expected.
+            writeIORef (zoomAtlasDataRef env) []
             publishStagedSession env logger 999998 staged
 
             enqueued ← readIORef (zoomAtlasDataRef env)
             case enqueued of
-                Nothing → expectationFailure
+                [] → expectationFailure
                     "publish enqueued no zoom atlas payload at all"
-                Just (_, _, _, targets) → do
+                (_ : _ : _) → expectationFailure
+                    "publish left more than one pending atlas; a whole-\
+                    \session publish replaces the queue"
+                [upload] → do
+                    let targets = zauTargets upload
                     -- WorldState has neither Eq nor Show; a page's own
                     -- private IORef IS its identity, and IORef's Eq is
                     -- pointer equality, so compare through that.
+                    zauPage upload `shouldBe` WorldPageId "id_atlas_owner_w8"
                     length targets `shouldBe` 1
                     map (isSamePage ownerState) targets `shouldBe` [True]
                     map (isSamePage otherState) targets `shouldBe` [False]
 
-            -- Requirement 2: the excluded page renders through the
-            -- existing Maybe-Nothing per-material fallback rather than
-            -- another page's atlas. (Nothing ever uploads it here --
-            -- headless runs no handleZoomAtlasUpload -- so this is the
-            -- state the render path would actually see.)
+            -- Requirement 2: the excluded page is not handed another
+            -- page's atlas. (Nothing ever uploads one here -- headless
+            -- runs no handleZoomAtlasUpload -- so this is the state the
+            -- render path would actually see.)
             readIORef (wsZoomAtlasRef otherState) `shouldReturn` Nothing
+
+            -- …but since #2485 it RETAINS its own atlas pixels, built
+            -- from its own zoom cache. A non-owner page can still be
+            -- shown, simulate and accept a live terrain edit, and the
+            -- per-material fallback it would otherwise render through
+            -- colours a whole chunk by one material — in which a single
+            -- solidified tile cannot appear at all. Retaining the pixels
+            -- is what gives it a per-tile refreshable presentation; its
+            -- first refresh is what publishes them.
+            ownerLive ← readIORef (wsZoomLiveRef ownerState)
+            otherLive ← readIORef (wsZoomLiveRef otherState)
+            fmap zlaWidth ownerLive `shouldSatisfy` isJust
+            fmap zlaWidth otherLive `shouldSatisfy` isJust
+            -- Each page's pixels are its OWN, not a shared image.
+            fmap zlaPixels ownerLive `shouldNotBe` fmap zlaPixels otherLive
 
 -- | Whether two 'WorldState' handles are the same page. 'WorldState'
 --   derives neither 'Eq' nor 'Show', but each page's own private

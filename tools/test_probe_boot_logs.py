@@ -30,7 +30,7 @@ silently and be checked in milliseconds:
     silently fall back to probelib's shared per-port default and collide
     again.
 
-Since #2089 the preview probe is a facade over five family owners, and its
+Since #2089 the preview probe is a facade over six family owners, and its
 dispatcher is pinned here too, entirely from the facade's own `FAMILIES`
 inventory rather than a list written down in this file (which is how the
 previous "full run" phase list drifted to an obsolete synthetic roster
@@ -68,11 +68,11 @@ from preview import harness as preview_harness  # type: ignore  # noqa: E402
 import selftestlib  # noqa: E402
 from selftestlib import FAILURES, expect  # noqa: E402
 
-#: The five family names #2089 fixes, in the order the aggregate runs
+#: The six family names #2089 fixes, in the order the aggregate runs
 #: them. Spelled out here ON PURPOSE: this is the one place a test may
 #: state the contract independently of the inventory, so a renamed or
 #: reordered family fails rather than being read back from the facade.
-PREVIEW_FAMILY_NAMES = ("simple", "units", "buildings", "dispatch", "zoom")
+PREVIEW_FAMILY_NAMES = ("simple", "units", "buildings", "dispatch", "zoom", "audio")
 
 
 @contextlib.contextmanager
@@ -179,7 +179,7 @@ def test_a_repeated_phase_still_gets_its_own_log() -> None:
 
 
 def test_the_inventory_names_every_scenario_exactly_once() -> None:
-    print("preview: the inventory is the five families, each owning its "
+    print("preview: the inventory is the six families, each owning its "
           "scenario-shaped functions exactly once")
     families = preview_probe.FAMILIES
     expect(tuple(f.name for f in families) == PREVIEW_FAMILY_NAMES,
@@ -284,7 +284,7 @@ def test_an_unknown_selector_invokes_nothing() -> None:
 
 
 def test_the_help_documents_exactly_the_five_families() -> None:
-    print("preview: --help lists exactly the five focused choices")
+    print("preview: --help lists exactly the six focused choices")
     code, printed, _ = run_facade(["--help"])
     expect(code == 0, f"--help exits 0 (got {code})")
     match = re.search(r"--only \{([^}]*)\}", printed)
