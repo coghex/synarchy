@@ -231,12 +231,18 @@ end
 function pane.open(value, file)
     if not page then page = UI.newPage("preview_audio", "menu") end
     category = value or category
+    -- Resolve the outgoing selection against the catalog it was chosen from,
+    -- before that catalog is replaced: a reload settling while the pane was
+    -- closed can have moved the same sound onto another positional ID.
+    local old = identity(chosen())
     snapshot = status()
     entries = snapshot.previewEntries or {}
     revision = snapshot.previewRevision or 0
     -- update() is dead while the pane is closed, so a reload started here can
     -- settle unobserved. Reopening on a later revision retires that request.
     if reloadSequence and revision > reloadSequence then reloadSequence = nil end
+    selected = nil
+    for _, entry in ipairs(entries) do if identity(entry) == old then selected = entry.id end end
     local list = filtered()
     local current = chosen()
     if not current or current.category ~= category then selected = list[1] and list[1].id end

@@ -106,16 +106,20 @@ spec = describe "Audio.PreviewUI" $ do
       , "assert(not pane.play() and #plays==2)"
       , "pane.shutdown()"
       ]
-  it "retires a reload request that settled while the pane was closed" $
+  it "restores selection by sound, not ID, when a reload settled while closed" $
     runsOk $ fixture <> "\n" <> lns
       [ "pane.init(1,1,{mode='list'}); local footer=pane.dump().footer.handle"
       , "pane.click(footer); assert(pane.isOpen() and pane.reload())"
       , "pane.click(footer); assert(not pane.isOpen())"
-      -- The engine finishes the reload with no pane left to observe the tick.
-      , "current.previewEntries[1].label='menu_home'; current.previewRevision=2"
+      -- The engine finishes the reload with no pane left to observe the tick,
+      -- moving menu_back onto 'b' while 'a' becomes an entirely different sound.
+      , "current.previewEntries={{id='a',label='bear_brown_growl',category='synth',playable=true},"
+      , "  {id='b',label='menu_back',category='synth',playable=true}}"
+      , "current.previewRevision=2"
       , "pane.click(footer); local d=pane.dump()"
-      , "assert(d.revision==2 and not d.reloading and d.rows[1].label=='menu_home')"
-      , "assert(pane.play()); assert(#plays==1)"
+      , "assert(d.revision==2 and not d.reloading)"
+      , "assert(d.rows[1].label=='bear_brown_growl' and d.selected=='b')"
+      , "assert(pane.play()); assert(#plays==1 and plays[1]=='b')"
       , "pane.shutdown()"
       ]
   it "keeps the surviving selection on a visible page when an external reload reorders it" $

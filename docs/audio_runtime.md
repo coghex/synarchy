@@ -210,9 +210,10 @@ before allocating the new one, and preserves live volumes. `previewRevision`
 advances when a preview load attempt completes (including initialization failure).
 The pane remembers the revision whose entries it consumed and reconciles its whole
 entry model, selection and visible rows against any later revision, whichever
-preview caller requested the reload. Preview IDs are reassigned positionally on
-every load, so an unreconciled model can name a different sound: the pane refuses
-playback from one, reconciling instead of dispatching when a click or key arrives
-after the revision advanced. Normal status publications cannot masquerade as
+preview caller requested the reload, including one that settled while the pane
+was closed. Preview IDs are reassigned positionally on every load, so selection
+is restored by the sound's own identity rather than its ID, and an unreconciled
+model can name a different sound: the pane refuses playback from one, reconciling
+instead of dispatching when a click or key arrives after the revision advanced. Normal status publications cannot masquerade as
 completed reloads. These metadata, UI state, and control requests are transient
 and excluded from saves.
