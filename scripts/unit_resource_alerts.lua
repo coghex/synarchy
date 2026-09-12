@@ -137,8 +137,9 @@ end
 -- Translate the resourceName that triggered a kill into a
 -- player-visible cause. The two real kill paths in tickResource are
 -- hydration (death_threshold) and stamina (kill_on_zero from organ
--- failure when fat reserves hit min_fat). tickStarvation's
--- respiratory-failure path passes "starvation" explicitly.
+-- failure when fat reserves hit the unit's fat floor).
+-- tickStarvation's respiratory-failure path passes "starvation"
+-- explicitly.
 function M.deathCauseFor(resourceName)
     if resourceName == "hydration" then return "dehydration"  end
     if resourceName == "stamina"   then return "starvation"   end
