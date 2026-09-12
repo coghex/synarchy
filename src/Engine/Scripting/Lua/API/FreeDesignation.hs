@@ -53,9 +53,19 @@
 --   identity the exclusion set names, what the tie-break compares and
 --   how many values come back. What they genuinely share — the
 --   inclusive distance bound's sentinel form — is 'maxDistBound'.
+--   The two argument READERS and the bound are shared more widely than
+--   the bodies are: @world.nearestWorkableMineDesignation@ (#2538) is a
+--   third shape again — it walks candidates in distance order instead of
+--   folding to one winner, because mining rejects a tile for reasons the
+--   designation map alone cannot answer — but its @maxDist@ and
+--   @excluded@ arguments must mean exactly what they mean here, so it
+--   takes 'readExcludedTiles' and 'maxDistBound' rather than a fourth
+--   spelling of them.
 module Engine.Scripting.Lua.API.FreeDesignation
     ( nearestFreeDesignationOn
     , nearestFreeInstanceDesignationOn
+    , readExcludedTiles
+    , maxDistBound
     ) where
 
 import UPrelude

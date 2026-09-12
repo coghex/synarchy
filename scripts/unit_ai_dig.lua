@@ -13,6 +13,13 @@
 -- build sites); claims expire on timeout or when the claimant dies,
 -- and the whole table is emptied when a load replaces the session
 -- (#1329 — see scripts/unit_ai_claims.lua for both rules).
+--
+-- #2538: selection asks for the nearest WORKABLE designation rather
+-- than the nearest one outright. Every rejection below — a colleague's
+-- claim, an unloaded chunk, nowhere for the spoil to go, no tool that
+-- cuts this material — used to refuse the whole action, so one unusable
+-- nearest tile hid every workable designation behind it and clustered
+-- miners reported no mining work at all.
 -----------------------------------------------------------
 
 local core = require("scripts.unit_ai_core")
@@ -40,24 +47,33 @@ local function digClaimedByOther(key, uid, now, timeout)
     return true
 end
 
--- Best carried tool for a material: returns toolName, speed (0 when
--- the unit has no digging tool — no tool, no dig).
-local function bestDigTool(uid, params, pickSpeed, shovelSpeed)
+-- The tool CLASSES this unit carries, as the toolset table
+-- world.nearestWorkableMineDesignation takes. Which class can actually
+-- cut a given tile, and which of two carried ones is faster, is a
+-- property of the MATERIAL — so the engine settles that per candidate
+-- while it walks, by the same rule this side used to apply to the one
+-- geometric winner (the shovel unless a carried pick is strictly
+-- faster). What stays here is the only half that is Lua's: the
+-- defName → class mapping the tunables spell out.
+--
+-- nil when the unit carries no digging tool at all. No tool, no dig:
+-- every candidate on the page would be refused, so the walk is worth
+-- nothing to this unit and is not run.
+local function carriedDigTools(uid, params)
     local inv = unit.getInventory(uid)
-    if not inv then return nil, 0 end
-    local hasShovel, hasPick = false, false
+    if not inv then return nil end
+    local tools = { pick = false, shovel = false }
+    local any = false
     for _, it in ipairs(inv) do
-        if params.dig_tools.shovel.defs[it.defName] then hasShovel = true end
-        if params.dig_tools.pick.defs[it.defName]   then hasPick   = true end
+        if params.dig_tools.shovel.defs[it.defName] then
+            tools.shovel, any = true, true
+        end
+        if params.dig_tools.pick.defs[it.defName] then
+            tools.pick, any = true, true
+        end
     end
-    local tool, speed = nil, 0
-    if hasShovel and (shovelSpeed or 0) > speed then
-        tool, speed = "shovel", shovelSpeed
-    end
-    if hasPick and (pickSpeed or 0) > speed then
-        tool, speed = "pick", pickSpeed
-    end
-    return tool, speed
+    if not any then return nil end
+    return tools
 end
 
 local function releaseDigJob(wid, s, uid)
@@ -84,6 +100,14 @@ local function digComplete(wid, uid, s, params)
 end
 
 local function digUtility(uid, s, params)
+    -- Every evaluation clears the stashed candidate before it looks for
+    -- a new one (#2538). Each of the refusals below used to leave
+    -- whatever a previous tick stored, which was inert only because a
+    -- -math.huge score can never reach digExecute; now that selection
+    -- can reject one tile and accept another, a candidate left over
+    -- from an earlier tick must never be the tile execute takes.
+    s.digCandidate = nil
+
     local wid = world.getActiveWorldId()
     if not wid then return -math.huge end
 
@@ -99,28 +123,48 @@ local function digUtility(uid, s, params)
 
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
-    local gx, gy, dist =
-        world.nearestMineDesignation(wid, info.gridX, info.gridY)
+
+    -- The cheapest refusal there is, and the only one that does not
+    -- need a candidate: a unit with no digging tool cannot work ANY
+    -- designation, so no tile is read at all.
+    local tools = carriedDigTools(uid, params)
+    if not tools then return -math.huge end
+
+    -- #2538: the nearest designation this worker can actually DIG.
+    -- The engine walks candidates in ascending seam-aware distance and
+    -- stops at the first that survives the whole rejection set — this
+    -- worker's claim exclusion (stale and dead claims pruned on the way
+    -- past, so the existing recovery still frees their tiles), the scan
+    -- range, resident dig information, spoil disposal, and the carried
+    -- tools. Each rule is the one that was applied here before; what
+    -- changed is that a rejection now advances to the next candidate
+    -- instead of refusing the action.
+    --
+    -- Selection reads only resident state: an unloaded chunk is simply
+    -- not workable and is never loaded to find out. And nothing is
+    -- claimed while merely scoring — a unit that loses arbitration this
+    -- tick must leave no claim behind.
+    --
+    -- RANGE lives in BOTH places deliberately, as it does for chop
+    -- (#2536): the engine applies the same inclusive bound, so skipping
+    -- a nearer unusable tile can never promote one the worker may not
+    -- walk to, and the gate below stays the caller-side contract.
+    --
+    -- `dist`, `tool` and `speed` all describe the tile actually chosen,
+    -- so the range gate and the score below both measure the job this
+    -- worker will do rather than the tile it skipped.
+    local now = engine.gameTime()
+    local gx, gy, dist, tool, speed = claimsLib.nearestWorkable(
+        world.nearestWorkableMineDesignation, digClaims, wid, uid,
+        info.gridX, info.gridY, params.dig_scan_range,
+        params.dig_claim_timeout, now, tools)
     if not gx then return -math.huge end
     if dist > params.dig_scan_range then return -math.huge end
 
-    local now = engine.gameTime()
-    if digClaimedByOther(digKey(wid, gx, gy), uid, now,
-                         params.dig_claim_timeout) then
-        return -math.huge
-    end
-
-    local _, pickSpeed, shovelSpeed, spoilBlocked =
-        world.getDigInfoAt(wid, gx, gy)
-    if not pickSpeed then return -math.huge end   -- chunk not loaded
-    -- No room for the spoil around this tile (boxed in by water,
-    -- cliffs, or other designations): the engine would refuse every
-    -- dig tick, so don't take the job at all.
-    if spoilBlocked then return -math.huge end
-    local tool, speed = bestDigTool(uid, params, pickSpeed, shovelSpeed)
-    if not tool or speed <= 0 then return -math.huge end
-
-    -- Stash the scored candidate so execute doesn't re-scan.
+    -- Stash the scored candidate so execute doesn't re-scan. Execute
+    -- still re-checks the claim before taking it: scoring and executing
+    -- are separate ticks, so another worker can win this tile in
+    -- between, and the loser must leave that fresh claim alone.
     s.digCandidate = { x = gx, y = gy, tool = tool }
 
     local distFactor = math.max(0, 1 - dist / params.dig_scan_range)
@@ -329,6 +373,12 @@ local function digOnExit(uid, s, params)
     end
 end
 
+
+-- The claim registry, exposed as unitAi.till.claims / .plant.claims and
+-- unitAiChop.claims already are: the shared exclusion pass in
+-- scripts/unit_ai_claims.lua takes it as an argument, and a regression
+-- has to be able to read and seed it.
+M.claims = digClaims
 
 M.digUtility = digUtility
 M.digExecute = digExecute

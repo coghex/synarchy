@@ -4493,16 +4493,20 @@ designation a worker takes — for chop as well as till/plant — is
 `flora_growth_probe.py` (registers a max-tolerance `probe_berry`
 species), `till_probe.py`.
 
-### Worker selection: the nearest CLAIMABLE designation (#2534, #2536)
+### Worker selection: the nearest designation a worker can TAKE (#2534, #2536, #2538)
 
-A designation worker picks the nearest till/plant/chop designation **it
-may claim**, not the nearest one outright. Claims are Lua-side
-(`scripts/unit_ai_claims.lua`), so the engine's own
-`<ns>.nearestDesignation` cannot see them; until #2534 and #2536 each
-action asked for the unconditional nearest and returned `-math.huge`
-when `claimedByOther` said a colleague held it, so ONE fresh claim on
-the nearest designation hid every farther free one and clustered
-workers reported no work of that kind at all.
+A designation worker picks the nearest till/plant/chop/mine
+designation **it can actually take**, not the nearest one outright.
+Until #2534, #2536 and #2538 each action asked for the unconditional
+nearest and returned `-math.huge` the moment that one designation
+failed a gate, so ONE unusable nearest designation hid every workable
+one behind it and clustered workers reported no work of that kind at
+all. For farming and chop the gate was a colleague's claim; for mining
+it was any of four.
+
+Claims are Lua-side (`scripts/unit_ai_claims.lua`), so the engine's own
+`<ns>.nearestDesignation` cannot see them — which is why the exclusion
+set has to travel INTO every one of these queries.
 
 Chop's shape of the same defect was worse than farming's. A chop
 designation names one PLANT rather than one tile (#1854), and
@@ -4573,15 +4577,65 @@ it: a designated instance inside its post-fell regrowth window is still
 selectable and is still refused by `chopExecute`'s existing
 `instanceRegrowth` guard, exactly as before #2536.
 
+#### Mining: eligibility is more than claims (#2538)
+
+Mining is the one member of this family whose eligibility the
+designation map alone cannot answer, so it gets a third query shape
+rather than a fourth copy of `nearestFreeDesignationOn`.
+`world.nearestWorkableMineDesignation`
+(`Engine.Scripting.Lua.API.World.Designation`, registered in
+`Register/World.hs`) orders the page's designations by `seamTileDist2`
+ONCE and walks them ascending, answering the first that survives the
+WHOLE rejection set as `gx, gy, dist, tool, speed`:
+
+- the `{x1, y1, ...}` claim exclusion and the inclusive range bound,
+  both read through `FreeDesignation`'s own `readExcludedTiles` and
+  `maxDistBound` so they mean exactly what they mean for the siblings;
+- **resident dig information** — an unloaded chunk is not workable, and
+  selection NEVER queues a load to find out;
+- **spoil disposal** — a tile whose spoil has nowhere to go would have
+  the dig command refuse every tick;
+- **the carried tools**, passed in as `{ pick = ..., shovel = ... }`.
+
+The middle two come from `World.Mine.DigInfo.digInfoAt`, which
+`world.getDigInfoAt` also answers from: the walk must reject exactly
+the tiles the per-tile query calls unworkable, and two copies of the
+material, z-range and spoil tests would drift. The tool rule moved with
+it — **the shovel unless a carried pick is STRICTLY faster**, so an
+exact speed tie stays the shovel's, which is what `bestDigTool` did in
+Lua before #2538. `scripts/unit_ai_dig.lua` keeps only the
+defName → class half, in `carriedDigTools`.
+
+**Cost is bounded by construction**, because this runs in every idle
+miner's thought tick: candidates are ordered once, the walk stops at
+the first workable one, and the comparatively expensive dig-information
+read is never issued for a candidate the cheap range and claim tests
+already excluded. A miner carrying no digging tool refuses before any
+candidate is read at all.
+
+**Each evaluation overwrites or clears `s.digCandidate`.** Before
+#2538 every refusal left whatever a previous tick stored, which was
+inert only because a `-math.huge` score can never reach `digExecute`;
+now that selection can reject one tile and accept another, a candidate
+from an earlier tick must never be the tile execute takes.
+
 Gates: hspec `--match "farm designation claim selection"`
-(`Test.Headless.Lua.FarmDesignationClaim`) and `--match "chop
-designation claim selection"`
-(`Test.Headless.Lua.ChopDesignationClaim`), which drive the production
-`unit_ai_farm.lua` / `unit_ai_chop.lua` utility and execute against the
-REAL registered verbs and a synthetic page — a fixture handing the AI a
-pre-filtered candidate could not tell the fix from the bug.
-`till_probe.py`, `plant_probe.py`, `farm_ai_probe.py` and
-`chop_probe.py` stay the single-worker end-to-end gates.
+(`Test.Headless.Lua.FarmDesignationClaim`), `--match "chop designation
+claim selection"` (`Test.Headless.Lua.ChopDesignationClaim`) and
+`--match "mine designation eligibility selection"`
+(`Test.Headless.Lua.MineDesignationEligibility`), which drive the
+production `unit_ai_farm.lua` / `unit_ai_chop.lua` / `unit_ai_dig.lua`
+utility and execute against the REAL registered verbs and a synthetic
+page — a fixture handing the AI a pre-filtered candidate could not tell
+the fix from the bug. The mining group's blocked-spoil cases establish
+real page state (piles of a conflicting material at exactly the
+vertices `spoilStartVertex`/`candidateVertices` name) and assert the
+engine's own `spoilBlocked` before and after, rather than hard-coding
+the rejection. `till_probe.py`, `plant_probe.py`, `farm_ai_probe.py`
+and `chop_probe.py` stay the single-worker end-to-end gates for their
+own actions; mining has no probe of its own, so `role_probe.py`'s
+chop-versus-dig arbitration is the nearest live exercise of the dig
+utility.
 
 ### Authored harvest-tag policy (#2212)
 

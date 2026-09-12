@@ -129,6 +129,11 @@ prelude = lns
     , "  getMineDesignationAt = function(w, x, y)"
     , "    if desig(w, x, y) then return 0, 1, 1, 1, 1 end end,"
     , "  nearestMineDesignation = function() return nil end,"
+    -- #2538: the selector verb the production dig utility now calls.
+    -- Still nil here, for the same reason till's, plant's and chop's
+    -- are: this fixture drives execute from an explicit candidate, so
+    -- no scan must ever supply one.
+    , "  nearestWorkableMineDesignation = function() return nil end,"
     , "  getDigInfoAt = function() return nil, 1.0, 1.0, false end,"
     , "  getFluidAt = function() return nil end,"
     , "  getFloraAt = function() return nil end,"
