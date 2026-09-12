@@ -7,7 +7,7 @@ local elements, actions, navElements = {}, {}, {}
 local opened, audioOnly = false, false
 local category, selected, entries, offset = "synth", nil, {}, 0
 local width, height, rowCount = 800, 600, 8
-local snapshot, reloadSequence, playSequence, autoplayPath
+local snapshot, reloadSequence, playSequence, autoplayPath, revision
 local message = "Choose a sound"
 local rows, controls = {}, {}
 local statusSize, statusWidth = 16, 1
@@ -35,6 +35,53 @@ local function identity(entry)
     return entry and (entry.category .. ":" .. (entry.path or entry.label))
 end
 
+-- Keep the selected row on a visible page after the catalog shrinks.
+local function reveal()
+    local list = filtered()
+    for index, entry in ipairs(list) do
+        if entry.id == selected then
+            offset = math.max(0, math.min(offset, index - 1))
+            if index > offset + rowCount then offset = index - rowCount end
+            return
+        end
+    end
+    offset = 0
+end
+
+-- Rebuild the displayed model from a settled catalog, keeping the same
+-- semantic sound selected when it survived. Preview IDs are reassigned
+-- positionally on every load, so identity is the only stable key.
+local function reconcile(latest)
+    local old = identity(chosen())
+    entries = latest.previewEntries or {}
+    revision = latest.previewRevision or 0
+    selected = nil
+    for _, entry in ipairs(entries) do if identity(entry) == old then selected = entry.id end end
+    local list = filtered()
+    selected = selected or (list[1] and list[1].id)
+    reloadSequence, playSequence = nil, nil
+    if latest.lifecycle == "disabled" then
+        message = "Audio unavailable: " .. (latest.lastError or "")
+    elseif (latest.catalogWarnings or 0) > 0 then
+        message = "Some sounds unavailable: " .. (latest.lastError or "")
+    else
+        message = "Ready"
+    end
+    snapshot = latest
+    reveal()
+    pane.render()
+end
+
+-- Any advance of previewRevision is a settled load attempt, whoever asked for
+-- it: the engine has already replaced the catalog. Reconcile before acting.
+local function sync()
+    if not opened then return false end
+    local latest = status()
+    if (latest.previewRevision or 0) > (revision or 0) then reconcile(latest); return true end
+    snapshot = latest
+    return false
+end
+
 local function clear()
     for _, handle in ipairs(elements) do UI.deleteElement(handle) end
     elements, actions, rows, controls = {}, {}, {}, {}
@@ -60,8 +107,10 @@ local function text(name, label, x, y, size, action, maxWidth)
 end
 
 function pane.play()
+    if sync() then return false end
+    if reloadSequence or (snapshot or {}).lifecycle == "starting" then return false end
     local entry = chosen()
-    if reloadSequence or not entry then return false end
+    if not entry then return false end
     if not entry.playable then
         message = "Could not load: " .. ((snapshot or {}).lastError or entry.label)
         return false
@@ -184,6 +233,10 @@ function pane.open(value, file)
     category = value or category
     snapshot = status()
     entries = snapshot.previewEntries or {}
+    revision = snapshot.previewRevision or 0
+    -- update() is dead while the pane is closed, so a reload started here can
+    -- settle unobserved. Reopening on a later revision retires that request.
+    if reloadSequence and revision > reloadSequence then reloadSequence = nil end
     local list = filtered()
     local current = chosen()
     if not current or current.category ~= category then selected = list[1] and list[1].id end
@@ -227,15 +280,20 @@ function pane.click(handle)
         if opened and not audioOnly then pane.close() else pane.open() end
         return true
     end
-    local action = opened and actions[handle]
+    if not opened then return false end
+    -- A click arrives between update ticks, so the engine can have replaced the
+    -- catalog since these handles captured their IDs. Rebuild instead of playing.
+    if sync() then return false end
+    local action = actions[handle]
     if action then action(); return true end
     return false
 end
 
 function pane.key(key)
     if not opened then return false end
-    if key == "Escape" then if audioOnly then engine.quit() else pane.close() end
-    elseif key == "Space" then pane.play()
+    if key == "Escape" then if audioOnly then engine.quit() else pane.close() end; return true end
+    if sync() then return true end
+    if key == "Space" then pane.play()
     elseif key == "Up" or key == "Down" then
         local list = filtered()
         for index, entry in ipairs(list) do
@@ -255,20 +313,8 @@ function pane.update()
     if not opened then return end
     local latest = status()
     local sequence = latest.snapshotSequence or 0
-    if reloadSequence and (latest.previewRevision or 0) > reloadSequence and latest.lifecycle == "disabled" then
-        reloadSequence = nil
-        message = "Audio unavailable: " .. (latest.lastError or "")
-    elseif reloadSequence and (latest.previewRevision or 0) > reloadSequence and latest.lifecycle ~= "starting" then
-        local old = identity(chosen())
-        entries = latest.previewEntries or {}
-        selected = nil
-        for _, entry in ipairs(entries) do if identity(entry) == old then selected = entry.id end end
-        local list = filtered()
-        selected = selected or (list[1] and list[1].id)
-        reloadSequence, playSequence = nil, nil
-        message = (latest.catalogWarnings or 0) > 0 and "Some sounds unavailable: " .. (latest.lastError or "") or "Ready"
-        snapshot = latest
-        pane.render()
+    if (latest.previewRevision or 0) > (revision or 0) then
+        reconcile(latest)
     elseif playSequence and sequence > playSequence then
         message = (latest.native and latest.native.activeVoices or 0) > 0 and "Playing" or "Ready"
     end
@@ -297,7 +343,8 @@ function pane.dump()
     end
     for name, handle in pairs(controls) do buttons[name] = {handle=handle, bounds=info(handle)} end
     return {open=opened, category=category, selected=selected, entries=entries, rows=visibleRows,
-        buttons=buttons, footer={handle=footer,bounds=info(footer)}, state=message, reloading=reloadSequence ~= nil}
+        buttons=buttons, footer={handle=footer,bounds=info(footer)}, state=message, revision=revision,
+        reloading=reloadSequence ~= nil or (snapshot or {}).lifecycle == "starting"}
 end
 
 function pane.shutdown()
@@ -308,7 +355,7 @@ function pane.shutdown()
     if navPage then UI.deletePage(navPage) end
     font, basePage, navPage, page, footer = nil, nil, nil, nil, nil
     opened, audioOnly, entries, selected, offset = false, false, {}, nil, 0
-    snapshot, reloadSequence, playSequence, autoplayPath = nil, nil, nil, nil
+    snapshot, reloadSequence, playSequence, autoplayPath, revision = nil, nil, nil, nil, nil
     navElements, category, message = {}, "synth", "Choose a sound"
 end
 

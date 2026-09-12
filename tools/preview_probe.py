@@ -32,7 +32,9 @@ filesystem/YAML/atlas expectations, the texture-loading check — live in
                            the declared lifecycle/facing matrix
   dispatch   phases 8-9    grouped flora/structure items, category sweep
   zoom       phase 11      all six display kinds
-  audio                    live synth/file player and visual-preview footer
+  audio                    live synth/file player, externally reloaded
+                           catalog resynchronization, and the
+                           visual-preview footer
 
 `--only <family>` runs just that family's boots; with no selector the
 run is every scenario exactly once, in the inventory's order.
@@ -209,7 +211,8 @@ FAMILIES: tuple[Family, ...] = (
     Family("zoom", zoom,
            ("check_zoom",)),
     Family("audio", audio,
-           ("check_audio_synth", "check_audio_file", "check_audio_footer")),
+           ("check_audio_synth", "check_audio_file", "check_audio_external_reload",
+            "check_audio_footer")),
 )
 
 FAMILY_NAMES: tuple[str, ...] = tuple(family.name for family in FAMILIES)

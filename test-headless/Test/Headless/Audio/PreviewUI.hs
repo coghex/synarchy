@@ -84,3 +84,84 @@ spec = describe "Audio.PreviewUI" $ do
       , "assert(pane.dump().state:find('device unavailable',1,true))"
       , "pane.shutdown()"
       ]
+  it "reconciles an externally reloaded catalog that reorders, shrinks and reuses IDs" $
+    runsOk $ fixture <> "\n" <> lns
+      [ "pane.init(1,1,{mode='audio',category='synth'})"
+      , "assert(pane.dump().selected=='a' and pane.dump().revision==1)"
+      -- Another preview caller reloads: 'a' and 'b' now label different sounds,
+      -- the files entry is gone, and the pane never asked for any of it.
+      , "current.previewEntries={"
+      , "  {id='a',label='bear_brown_growl',category='synth',playable=true},"
+      , "  {id='b',label='menu_back',category='synth',playable=true}}"
+      , "current.previewRevision=2; assert(reloads==0)"
+      , "pane.update(); local d=pane.dump()"
+      , "assert(d.revision==2 and not d.reloading and #d.rows==2)"
+      , "assert(d.rows[1].label=='bear_brown_growl' and d.rows[2].label=='menu_back')"
+      , "for _,row in ipairs(d.rows) do assert(row.label~='menu_selected') end"
+      , "assert(d.selected=='b')"
+      , "pane.click(d.rows[1].handle); assert(#plays==1 and plays[1]=='a')"
+      , "pane.click(pane.dump().rows[2].handle); assert(#plays==2 and plays[2]=='b')"
+      , "pane.chooseCategory('files'); assert(#pane.dump().rows==0)"
+      , "current.lifecycle='starting'; pane.chooseCategory('synth')"
+      , "assert(not pane.play() and #plays==2)"
+      , "pane.shutdown()"
+      ]
+  it "retires a reload request that settled while the pane was closed" $
+    runsOk $ fixture <> "\n" <> lns
+      [ "pane.init(1,1,{mode='list'}); local footer=pane.dump().footer.handle"
+      , "pane.click(footer); assert(pane.isOpen() and pane.reload())"
+      , "pane.click(footer); assert(not pane.isOpen())"
+      -- The engine finishes the reload with no pane left to observe the tick.
+      , "current.previewEntries[1].label='menu_home'; current.previewRevision=2"
+      , "pane.click(footer); local d=pane.dump()"
+      , "assert(d.revision==2 and not d.reloading and d.rows[1].label=='menu_home')"
+      , "assert(pane.play()); assert(#plays==1)"
+      , "pane.shutdown()"
+      ]
+  it "keeps the surviving selection on a visible page when an external reload reorders it" $
+    runsOk $ fixture <> "\n" <> lns
+      [ "current.previewEntries={}"
+      , "for index,label in ipairs({'one','two','three','four','five'}) do"
+      , "  current.previewEntries[index]={id='s'..index,label=label,category='synth',playable=true} end"
+      , "pane.init(1,1,{mode='audio',category='synth'}); pane.resize(800,300)"
+      , "for _=1,4 do pane.key('Down') end"
+      , "local d=pane.dump(); assert(#d.rows==2 and d.rows[2].label=='five' and d.selected=='s5')"
+      -- 'five' survives but moves to the top of a list that still needs paging,
+      -- and 's1' now labels it rather than 'one'.
+      , "current.previewEntries={"
+      , "  {id='s1',label='five',category='synth',playable=true},"
+      , "  {id='s2',label='one',category='synth',playable=true},"
+      , "  {id='s3',label='two',category='synth',playable=true},"
+      , "  {id='s4',label='three',category='synth',playable=true}}"
+      , "current.previewRevision=2; pane.update(); d=pane.dump()"
+      , "assert(d.selected=='s1' and #d.rows==2 and d.rows[1].label=='five')"
+      , "pane.shutdown()"
+      ]
+  it "never dispatches a row, key or play captured before an unobserved advance" $
+    runsOk $ fixture <> "\n" <> lns
+      [ "pane.init(1,1,{mode='audio',category='synth'})"
+      , "local stale=pane.dump(); assert(stale.rows[1].label=='menu_back' and stale.selected=='a')"
+      -- The engine replaces the catalog between ticks: no pane.update() runs,
+      -- so 'a' still renders as menu_back while it now plays a bear.
+      , "current.previewEntries={{id='a',label='bear_brown_growl',category='synth',playable=true},"
+      , "  {id='b',label='menu_back',category='synth',playable=true}}"
+      , "current.previewRevision=2"
+      , "assert(not pane.click(stale.rows[1].handle)); assert(#plays==0)"
+      , "local d=pane.dump(); assert(d.revision==2 and #d.rows==2)"
+      , "assert(d.rows[1].label=='bear_brown_growl' and d.selected=='b')"
+      , "pane.click(d.rows[1].handle); assert(#plays==1 and plays[1]=='a')"
+      -- A direct play refuses on a model the engine has already superseded.
+      , "current.previewEntries={{id='a',label='bear_brown_growl',category='synth',playable=true},"
+      , "  {id='b',label='menu_back',category='synth',playable=true}}"
+      , "current.previewRevision=3"
+      , "assert(not pane.play()); assert(#plays==1)"
+      , "assert(pane.dump().revision==3 and pane.dump().selected=='a')"
+      -- Up/Down autoplay obeys the same rule: reconcile, never walk a list the
+      -- engine has already replaced, and never play from it.
+      , "current.previewEntries={{id='a',label='menu_back',category='synth',playable=true},"
+      , "  {id='b',label='bear_brown_growl',category='synth',playable=true}}"
+      , "current.previewRevision=4; pane.key('Down'); assert(#plays==1)"
+      , "assert(pane.dump().revision==4 and pane.dump().selected=='b')"
+      , "pane.key('Up'); assert(#plays==2 and plays[2]=='a')"
+      , "pane.shutdown()"
+      ]

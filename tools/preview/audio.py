@@ -123,3 +123,78 @@ def check_audio_footer(port):
     finally:
         quit_engine(port, proc)
     return all(results)
+
+
+def check_audio_external_reload(port):
+    """#2611: a reload another preview caller starts must refresh the pane.
+
+    The pane's own Reload control is deliberately never clicked here.
+    `audio.previewReload()` arrives through the debug console instead, which
+    is the exact path that used to leave stale rows behind — preview IDs are
+    reassigned positionally on every load, so an unreconciled row dispatches a
+    reused ID to a different sound.
+    """
+    results = []
+    root = Path('assets/audio')
+    owned = not root.exists()
+    kept, dropped = root / 'kept.wav', root / 'dropped.wav'
+    # Never overwrite authored audio: this scenario deletes what it writes.
+    for path in (kept, dropped):
+        if path.exists():
+            raise RuntimeError(f'{path} already exists; refusing to overwrite it')
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copyfile('test-headless/data/audio/tone.wav', kept)
+        shutil.copyfile('test-headless/data/audio/stereo.wav', dropped)
+        proc = boot_preview(port, 'external audio reload', 'audio',
+                            'audio external reload')
+        try:
+            poll_state(port, 'ready')
+            _click(port, 'files')
+            panel = dump(port)['audio']
+            labels = [row['label'] for row in panel['rows']]
+            results.append(check('both discovered files are listed before the external reload',
+                {'kept.wav', 'dropped.wav'} <= set(labels), f'rows={labels}'))
+            # Select the entry that will NOT survive, so the fallback is exercised.
+            row = next(r for r in panel['rows'] if r['label'] == 'dropped.wav')
+            click_element(port, row['bounds'])
+            time.sleep(0.12)
+            before = _status(port)
+            dropped.unlink()
+            results.append(check('an external caller accepts the reload request',
+                send_json(port, 'return audio.previewReload()') is True))
+            after = _await(port, lambda s: s['previewRevision'] > before['previewRevision'])
+            settled = after['previewRevision']
+            # A stale pane never reaches the settled revision. Report what it
+            # is still displaying instead of timing out into a traceback.
+            panel = poll_until(10, lambda: (lambda p: p if p.get('revision') == settled
+                else None)(dump(port).get('audio') or {})) or dump(port).get('audio') or {}
+            rows = panel.get('rows') or []
+            labels = [row['label'] for row in rows]
+            results.append(check('the pane reconciles without a second Reload click',
+                labels == ['kept.wav'],
+                f'rows={labels} revision={panel.get("revision")} settled={settled}'))
+            entries = {entry['id']: entry['label'] for entry in after['previewEntries']}
+            results.append(check('every displayed row names the sound its current ID plays',
+                bool(rows) and all(entries.get(row['id']) == row['label'] for row in rows),
+                f'rows={[(row["id"], row["label"]) for row in rows]} catalog={entries}'))
+            results.append(check('selection falls back to a surviving entry in the category',
+                entries.get(panel.get('selected')) == 'kept.wav',
+                f'selected={panel.get("selected")}'))
+            accepted = _status(port)['native']['accepted']
+            if rows:
+                click_element(port, rows[0]['bounds'])
+            played = rows and poll_until(10, lambda: (lambda s: s
+                if s['native']['accepted'] > accepted else None)(_status(port)))
+            results.append(check('a reconciled row click reaches the engine mixer',
+                bool(played) and played['native']['peakVoices'] == 1,
+                f'accepted={_status(port)["native"]["accepted"]} before={accepted}'))
+        finally:
+            quit_engine(port, proc)
+    finally:
+        for path in (kept, dropped):
+            if path.is_file():
+                path.unlink()
+        if owned and root.is_dir():
+            root.rmdir()
+    return all(results)
