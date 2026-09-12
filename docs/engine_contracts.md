@@ -4487,9 +4487,60 @@ calls; whether a TAGGED call skips the window is AUTHORED per
 `regrowthRemaining`+`tags`, not `harvestable`.
 Tilling: `till.*` mirrors `chop.*`; completion writes `world.setVegAt`
 (edit-log — survives eviction/saves); consumers must use
-`world.isPlantable`, never compare `getVegAt` to raw id 77. Gates:
+`world.isPlantable`, never compare `getVegAt` to raw id 77. Which
+designation a worker takes is **Worker selection** below. Gates:
 `flora_growth_probe.py` (registers a max-tolerance `probe_berry`
 species), `till_probe.py`.
+
+### Worker selection: the nearest CLAIMABLE designation (#2534)
+
+A farming worker picks the nearest till/plant designation **it may
+claim**, not the nearest one outright. Claims are Lua-side
+(`scripts/unit_ai_claims.lua`), so the engine's own
+`<ns>.nearestDesignation` cannot see them; until #2534 both actions
+asked for the unconditional nearest and returned `-math.huge` when
+`claimedByOther` said a colleague held it, so ONE fresh claim on a
+shared nearest tile hid every farther free designation and clustered
+farmers reported no farming work at all.
+
+`till.nearestFreeDesignation` / `plant.nearestFreeDesignation`
+(`Engine.Scripting.Lua.API.FreeDesignation`, one shared body) take the
+caller's scan range and a flat `{x1, y1, ...}` array of tiles it may
+not take, and answer with the single nearest remaining designation.
+Four properties the callers depend on:
+
+- **The exclusion travels IN, the designation set never travels out.**
+  Every action's `utility` runs for every unit on every thought tick
+  and one drag can designate 128x128 tiles, so the result stays one
+  tile and the marshalled array is bounded by the live claim registry
+  instead — at most one entry per working unit.
+- **Coordinates in and out are CANONICAL** (#1175), compared by
+  `seamTileDist2`. A seam alias handed in as an exclusion canonicalises
+  onto the key the fold tests, so one physical designation occupies
+  exactly one claim slot; and the query is page-scoped, so a claim
+  recorded on another page never excludes a tile here.
+- **Ties break on ascending canonical `(x, y)`**, not hash order: two
+  equidistant free designations must resolve the same way on every run.
+- **The reported distance is the SELECTED tile's**, which is what the
+  action scores — never the rejected nearer tile's.
+
+`scripts/unit_ai_claims.lua`'s `claimedTiles` builds the exclusion in
+one pass that also prunes expired and dead-claimant entries, by exactly
+the rule `claimedByOther` applies to a single key, so selection and the
+execute-time re-check can never disagree. It never excludes or prunes
+the ASKING worker's own claims: a preempted worker's claim ages while
+its job waits, and dropping it would hand its tile away mid-job.
+Selection does not grant the tile — `execute` re-checks the claim and
+declines rather than overwrite a claim won in between, leaving the
+loser free to select other work next tick.
+
+Gate: hspec `--match "farm designation claim selection"`
+(`Test.Headless.Lua.FarmDesignationClaim`), which drives the production
+`unit_ai_farm.lua` utility/execute against the REAL registered verbs
+and a synthetic page — a fixture handing the AI a pre-filtered
+candidate could not tell the fix from the bug. `till_probe.py`,
+`plant_probe.py` and `farm_ai_probe.py` stay the single-worker
+end-to-end gates.
 
 ### Authored harvest-tag policy (#2212)
 

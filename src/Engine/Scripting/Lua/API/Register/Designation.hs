@@ -102,8 +102,9 @@ registerDesignationAPI callStats env = do
 
   -- Till designation tool (#333). Mirrors the chop-designation API:
   -- the tool drives setAnchor/clearAnchor/designate, the till AI drives
-  -- nearestDesignation/getDesignationAt/cancelDesignation (claims are
-  -- Lua-side, like dig/chop jobs — no engine job status).
+  -- nearestFreeDesignation/getDesignationAt/cancelDesignation (claims
+  -- are Lua-side, like dig/chop jobs — no engine job status, which is
+  -- why the AI's selector is the claim-EXCLUDING query, #2534).
   Lua.newtable
   registerLuaFunction callStats "till" "setAnchor"           (tillSetAnchorFn (toWorldSimCapability env))
   registerLuaFunction callStats "till" "clearAnchor"         (tillClearAnchorFn (toWorldSimCapability env))
@@ -112,18 +113,20 @@ registerDesignationAPI callStats env = do
   registerLuaFunction callStats "till" "getDesignationAt"    (tillGetDesignationAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "till" "getDesignationCount" (tillGetDesignationCountFn (toWorldSimCapability env))
   registerLuaFunction callStats "till" "nearestDesignation"  (tillNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "till" "nearestFreeDesignation" (tillNearestFreeDesignationFn (toWorldSimCapability env))
   registerLuaFunction callStats "till" "setDesignateTexture" (tillSetDesignateTextureFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "till")
 
   -- Plant designation tool (#335). Single-tile, no anchor: the tool
-  -- drives designate, the farm AI (#336) drives nearestDesignation/
+  -- drives designate, the farm AI (#336) drives nearestFreeDesignation/
   -- getDesignationAt/cancelDesignation (claims are Lua-side, like dig/
-  -- chop/till jobs — no engine job status).
+  -- chop/till jobs — no engine job status, #2534).
   Lua.newtable
   registerLuaFunction callStats "plant" "designate"           (plantDesignateFn (toWorldSimCapability env))
   registerLuaFunction callStats "plant" "cancelDesignation"   (plantCancelDesignationFn (toWorldSimCapability env))
   registerLuaFunction callStats "plant" "getDesignationAt"    (plantGetDesignationAtFn (toWorldSimCapability env))
   registerLuaFunction callStats "plant" "getDesignationCount" (plantGetDesignationCountFn (toWorldSimCapability env))
   registerLuaFunction callStats "plant" "nearestDesignation"  (plantNearestDesignationFn (toWorldSimCapability env))
+  registerLuaFunction callStats "plant" "nearestFreeDesignation" (plantNearestFreeDesignationFn (toWorldSimCapability env))
   registerLuaFunction callStats "plant" "setDesignateTexture" (plantSetDesignateTextureFn (toWorldSimCapability env))
   Lua.setglobal (Lua.Name "plant")

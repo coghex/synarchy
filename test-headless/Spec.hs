@@ -386,6 +386,7 @@ import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiPageTargets as LuaUnitAiPageTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
+import qualified Test.Headless.Lua.FarmDesignationClaim as LuaFarmDesignationClaim
 import qualified Test.Headless.Lua.UnitAiReconcile as LuaUnitAiReconcile
 import qualified Test.Headless.Lua.SessionTeardown as LuaSessionTeardown
 import qualified Test.Headless.Lua.BuildingSpawnSentinel as LuaBuildingSpawnSentinel
@@ -915,6 +916,10 @@ main = hspec $ do
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiPageTargets.spec
     LuaUnitAiLoadReset.spec
+    -- #2534: its own headless engine and a synthetic page, so the
+    -- production farming selection runs against the REAL till/plant
+    -- designation verbs rather than a stub.
+    LuaFarmDesignationClaim.spec
     LuaUnitAiReconcile.spec
     LuaSessionTeardown.spec
     LuaBuildingSpawnSentinel.spec

@@ -84,6 +84,59 @@ function M.instanceKey(wid, iid)
     return tostring(wid) .. ":#" .. iid
 end
 
+-- Canonical tiles on page `wid` held by a LIVE OTHER worker (#2534),
+-- as the flat { x1, y1, x2, y2, ... } array the engine's
+-- <ns>.nearestFreeDesignation exclusion argument takes.
+--
+-- One pass does both jobs. It PRUNES every entry whose claim has timed
+-- out or whose claimant is gone -- byte for byte the recovery rule
+-- unitAi.<ns>.claimedByOther applies to the single key it is asked
+-- about -- so selection and the execute-time re-check can never
+-- disagree about which tiles are eligible. And `uid`'s OWN claims are
+-- neither excluded nor pruned, matching claimedByOther's early
+-- `c.uid == uid` return: a preempted worker's claim ages while its job
+-- waits (onExit keeps the job, only execute refreshes `at`), and
+-- dropping it here would hand its tile to someone else mid-job.
+--
+-- The `wid` prefix test is what keeps a claim on ANOTHER page from
+-- excluding a tile here; the "<x>,<y>" tail test is what keeps
+-- instanceKey's "#<iid>" claims (chop's, were this ever handed one)
+-- from contributing a bogus tile. Coordinates are already canonical --
+-- every claim key is built from an engine query's canonical result --
+-- and the engine canonicalises the array again anyway, so a seam alias
+-- can never open a second claim slot on one physical designation.
+function M.claimedTiles(claims, wid, uid, now, timeout)
+    local prefix = tostring(wid) .. ":"
+    local plen = #prefix
+    local out = {}
+    for k, c in pairs(claims) do
+        if c.uid ~= uid then
+            if now - c.at > timeout or not unit.exists(c.uid) then
+                claims[k] = nil
+            elseif k:sub(1, plen) == prefix then
+                local sx, sy = k:match("^(-?%d+),(-?%d+)$", plen + 1)
+                if sx then
+                    out[#out + 1] = tonumber(sx)
+                    out[#out + 1] = tonumber(sy)
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- Nearest designation within `range` that `uid` may claim (#2534).
+-- `query` is the namespace's own nearestFreeDesignation verb; both
+-- farming actions route through here so the exclusion set, the page
+-- scope and the range bound are one implementation rather than two
+-- copies that can drift. Returns the verb's own gx, gy, dist -- the
+-- distance OF THE TILE IT PICKED, which is the one the caller must
+-- score, not the rejected nearer tile's.
+function M.nearestFree(query, claims, wid, uid, x, y, range, timeout, now)
+    return query(wid, x, y, range,
+                 M.claimedTiles(claims, wid, uid, now, timeout))
+end
+
 -- Empty every enrolled table in place; returns how many entries were
 -- dropped, for the caller's load diagnostic.
 function M.resetAll()

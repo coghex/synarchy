@@ -155,10 +155,15 @@ prelude = lns
     , "till = { getDesignationAt = function(w, x, y)"
     , "    return desig(w, x, y) and { z = 0 } or nil end,"
     , "  nearestDesignation = function() return nil end,"
+    -- #2534: the selector verb the production utility now calls.
+    -- Still nil here -- this fixture drives execute from an
+    -- explicit candidate, so no scan must ever supply one.
+    , "  nearestFreeDesignation = function() return nil end,"
     , "  cancelDesignation = function() end }"
     , "plant = { getDesignationAt = function(w, x, y)"
     , "    return desig(w, x, y) and { z = 0, crop = 'oats', category = 'row' } or nil end,"
     , "  nearestDesignation = function() return nil end,"
+    , "  nearestFreeDesignation = function() return nil end,"
     , "  cancelDesignation = function() end }"
     , "construction = { getDesignationAt = function(w, x, y)"
     , "    return desig(w, x, y) and { x = x, y = y, category = 'structure',"

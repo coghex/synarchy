@@ -2,9 +2,11 @@
 -- | Lua API for the till-designation tool (issue #333) — the @till.*@
 --   namespace. Mirrors the chop-designation API (#97): the tool drives
 --   setAnchor / clearAnchor / designate, the till AI
---   (scripts/unit_ai.lua) drives nearestDesignation / getDesignationAt /
---   cancelDesignation (claims are Lua-side like dig/chop jobs, so there
---   is no engine-side job status), and the HUD sets the marker texture.
+--   (scripts/unit_ai_farm.lua) drives nearestFreeDesignation /
+--   getDesignationAt / cancelDesignation (claims are Lua-side like
+--   dig/chop jobs, so there is no engine-side job status), and the HUD
+--   sets the marker texture. The AI's SELECTOR is the free query, not
+--   the unconditional @nearestDesignation@ below: #2534.
 --   Completion goes through the generic @world.setVegAt@ primitive, not
 --   a till-specific one (mirrors how chop completion calls
 --   world.harvestFlora before chop.cancelDesignation).
@@ -16,6 +18,7 @@ module Engine.Scripting.Lua.API.Till
     , tillGetDesignationAtFn
     , tillGetDesignationCountFn
     , tillNearestDesignationFn
+    , tillNearestFreeDesignationFn
     , tillSetDesignateTextureFn
     ) where
 
@@ -33,6 +36,8 @@ import World.Types (WorldManager(..), WorldState(..), pageWrapWorldSize)
 import World.Page.Types (WorldPageId(..))
 import World.Command.Types (WorldCommand(..))
 import World.Generate.Coordinates (canonicalTile, seamTileDist2)
+import Engine.Scripting.Lua.API.FreeDesignation
+    (nearestFreeDesignationOn)
 import World.Till.Types
 
 -- | till.setAnchor(pageId, gx, gy) — first-click anchor.
@@ -146,8 +151,11 @@ tillGetDesignationCountFn wsc = do
 
 -- | till.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tile by Euclidean distance — the till AI's
---   "distance to nearest till job" term. Mirrors chop.nearestDesignation,
---   including its seam-aware compare and canonical result (#1175).
+--   "distance to nearest till job" term, unaware of Lua-side claims.
+--   Mirrors chop.nearestDesignation, including its seam-aware compare
+--   and canonical result (#1175). The till AI selects through
+--   'tillNearestFreeDesignationFn' instead (#2534); this stays the
+--   plain query for callers that want it, probes included.
 tillNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 tillNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -178,6 +186,18 @@ tillNearestDesignationFn wsc = do
                         Nothing → Lua.pushnil >> return 1
                 Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
+
+-- | till.nearestFreeDesignation(pageId, x, y [, maxDist [, excluded]])
+--   → gx, gy, dist | nil. The till AI's real selector (#2534): the
+--   nearest till designation the asking worker may CLAIM, skipping the
+--   tiles its live colleagues already hold so a claimed nearer tile
+--   stops hiding farther free work. Body shared with
+--   plant.nearestFreeDesignation — see
+--   "Engine.Scripting.Lua.API.FreeDesignation" for the exclusion shape,
+--   the range bound and the canonical tie-break.
+tillNearestFreeDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+tillNearestFreeDesignationFn wsc =
+    nearestFreeDesignationOn wsc wsTillDesignationsRef
 
 -- | till.setDesignateTexture(pageId, texHandle) — marker texture for
 --   committed till designations.
