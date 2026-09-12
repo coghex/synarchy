@@ -152,7 +152,23 @@ function unitAi.harvest.utility(uid, s, params)
     -- need, order and combat response still preempts it, and #2550's
     -- collection budget is what stops an unreachable yield from
     -- holding the phase open forever.
-    if s.harvestPhase == "collecting" then
+    --
+    -- That budget is SAMPLED HERE rather than in execute, because
+    -- utility is the only one of the two that runs on every thought
+    -- tick: an action that has issued a walk is not re-executed until
+    -- the unit is idle, and unit_ai.lua's stuck-walk watchdog takes
+    -- longer to return it there than stall.MAX_CHARGED_INTERVAL allows
+    -- a single interval to be. unit_ai_yield.tickCollection states the
+    -- whole argument; unit_ai_pickup.lua charges pickup_timeout from
+    -- its own utility for the same reason.
+    --
+    -- tickCollection returns true only when it has just ENDED an
+    -- unreachable collection, and then this tick falls through to the
+    -- ordinary scan below rather than short-circuiting: with nothing
+    -- pending any more there is no reason to skip a plant that is
+    -- standing right there.
+    if s.harvestPhase == "collecting"
+       and not yieldCollect.tickCollection(uid, s, yieldCollect.HARVEST) then
         return params.harvest_base_utility
              * roles.weight(s, "auto_harvest")
     end
@@ -245,9 +261,9 @@ function unitAi.harvest.execute(uid, s, params)
     -- half-moved.
     if s.harvestPhase == "collecting" then
         s.lastHarvestAt = nil
-        local loot = s.harvestLoot or {}
+        local loot = s.harvestLoot
         local outcome, nextGid = yieldCollect.nextYield(
-            uid, s, "harvestCollect", loot, nil, mv.comfort(uid))
+            uid, s, yieldCollect.HARVEST, mv.comfort(uid))
         if outcome == "approach" then return end
         if outcome == "reach" and admitYield(uid, nextGid)
                               and item.pickupGround(uid, nextGid) then

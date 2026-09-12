@@ -6,8 +6,7 @@
 
 local mv      = require("scripts.movement_speed")
 local ambient = require("scripts.ambient_movement")
--- Retained-yield collection (#2550), shared with auto-harvest's
--- identical collecting phase in scripts/unit_ai_harvest.lua.
+-- Retained-yield collection (#2550), shared with auto-harvest.
 local yieldCollect = require("scripts.unit_ai_yield")
 
 local M = {}
@@ -336,6 +335,12 @@ local function findGroundFood(uid, ux, uy, radius)
 end
 
 local function forageUtility(uid, s, params)
+    -- #2550's collection-approach budget is sampled here, ahead of
+    -- every early return below: utility is the only path that runs on
+    -- every thought tick. unit_ai_yield.tickCollection says why an
+    -- execute-side sample can never expire. Ranks nothing -- it only
+    -- ends a collection whose yield the forager cannot reach.
+    yieldCollect.tickCollection(uid, s, yieldCollect.FORAGE)
     local need, hungerFrac = forageNeed(uid)
     if hungerFrac >= params.forage_max_fraction then return -math.huge end
     -- Carrying food? Eating it (eat_from_inventory) is the better
@@ -391,21 +396,19 @@ local function forageExecute(uid, s, params)
     -- is actually still there.
     --
     -- PROXIMITY FIRST (#2550), through the same unit_ai_yield helper
-    -- auto-harvest's identical phase uses: this phase survives an
+    -- auto-harvest's identical phase uses: the phase survives an
     -- interruption and item.pickupGround compares no positions, so a
     -- forager could otherwise pull its old yields in from across the
-    -- map. The helper peeks the tail gid, re-resolves it on THIS unit's
-    -- own page, and either hands it over, walks to the resolved row, or
-    -- ends the collection. It steers by that row, never by
-    -- s.forageTarget, which forageUtility rewrites on every scoring
-    -- pass with whatever its scan found. Still ungated on capacity: an
-    -- approach is a distance test, not an admission policy.
+    -- map. It peeks the tail gid, re-resolves it on THIS unit's page,
+    -- and hands it over or walks to the RESOLVED row -- never to
+    -- s.forageTarget, which forageUtility rewrites every scoring pass.
+    -- Still ungated on capacity: an approach is a distance test.
     if s.foragePhase == "collecting" then
-        local loot = s.forageLoot or {}
+        local loot = s.forageLoot
         local need = forageNeed(uid)
         local speed = (need > 0.8) and mv.ordered(uid) or mv.comfort(uid)
         local outcome, nextGid = yieldCollect.nextYield(
-            uid, s, "forageCollect", loot, nil, speed)
+            uid, s, yieldCollect.FORAGE, speed)
         if outcome == "approach" then return end
         if outcome == "reach" and item.pickupGround(uid, nextGid) then
             table.remove(loot)

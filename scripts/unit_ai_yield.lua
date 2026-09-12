@@ -16,6 +16,13 @@
 -- share a defect, and two private copies of a seam-aware proximity test
 -- are two chances to disagree about where the seam is.
 --
+-- TWO entry points, and which one is which matters. M.tickCollection
+-- is the BUDGET, and its callers put it in their UTILITY, because that
+-- is the only path that runs on every thought tick; M.nextYield is the
+-- per-tick DECISION and belongs in execute. The long argument for that
+-- split is at tickCollection itself -- it is the difference between an
+-- unreachable yield being abandoned and it re-pathing forever.
+--
 -- A leaf: this requires unit_ai_locations (which requires nothing),
 -- unit_ai_page and unit_ai_stall (likewise), so no cycle reaches back
 -- through unit_ai.lua. The walk SPEED is the caller's argument rather
@@ -44,8 +51,8 @@ M.PROGRESS_TILES = 0.5
 
 -- The adjacency both callers' own approach branches stop at, in
 -- Chebyshev tiles. Named once so the collection test and the walk it
--- guards cannot drift apart from each other or from harvest:229 /
--- needs:415, which spell the same bound inline.
+-- guards cannot drift apart from each other, nor from the `cheb <= 1`
+-- the harvest and forage walk-to-target branches spell inline.
 M.ADJACENT_TILES = 1
 
 -- How long a worker may fail to close on a retained yield, in ELIGIBLE
@@ -58,6 +65,20 @@ M.ADJACENT_TILES = 1
 -- pickup_timeout's -- "can this worker reach the item it is going for?"
 -- -- and callers may still override it per call.
 M.COLLECT_TIMEOUT = 30.0
+
+-- The two collecting phases this module serves, each naming its own
+-- state fields and the action name arbitration knows it by. A table
+-- rather than six arguments at four call sites, and a CONSTANT one so
+-- no call allocates. `clear` is that action's terminal exit spelled
+-- out -- the same field set its own execute branch clears, and the same
+-- one scripts/unit_ai_ref_schema.lua's `onEmpty` clears when the load
+-- scrub empties the list.
+M.HARVEST = { action = "auto_harvest", phase = "harvestPhase",
+              loot = "harvestLoot", clock = "harvestCollect",
+              clear = { "harvestPhase", "harvestLoot" } }
+M.FORAGE  = { action = "forage", phase = "foragePhase",
+              loot = "forageLoot", clock = "forageCollect",
+              clear = { "foragePhase", "forageLoot", "forageTarget" } }
 
 -- Chebyshev TILE distance from (ax, ay) to (bx, by), minimised over b's
 -- cylindrical u-images: itself plus one shift each way along (+u, -v) by
@@ -110,8 +131,92 @@ function M.periodForUnit(uid)
     return locations.wrapPeriodFor(page.ofUnit(uid))
 end
 
--- Decide what this collection tick does with the retained gid list
--- `loot`, WITHOUT consuming anything from it. Returns one of:
+-- Chebyshev tile separation between `uid` and the live row `gid` names
+-- on ITS OWN page, or nil when either cannot be resolved. Both callers
+-- measure through this, so the budget sampled below and the approach
+-- issued by nextYield can never disagree about how far away the yield
+-- is.
+local function yieldDistance(uid, gid)
+    local row = item.getGroundForUnit(uid, gid)
+    if not row then return nil end
+    local info = unit.getInfo(uid)
+    if not info then return nil, row end
+    return M.chebyshev(math.floor(info.gridX), math.floor(info.gridY),
+                       math.floor(row.x), math.floor(row.y),
+                       locations.aliasStep(M.periodForUnit(uid))), row
+end
+
+-- Sample `spec`'s pending collection against its approach budget, and
+-- END the collection when that budget runs out -- clearing exactly the
+-- fields the action's own terminal exit clears. Returns whether it did.
+-- A no-op when no collection is pending, when the row cannot be
+-- resolved (execute ends that case, on its own reading), or when the
+-- worker is already adjacent.
+--
+-- CALLED FROM UTILITY, NOT EXECUTE, and that is the whole point.
+-- scripts/unit_ai.lua re-executes an unchanged action only once the
+-- unit is idle again, so an execute-side sample is throttled by the
+-- very walk it exists to time. Its stuck-walk watchdog returns a
+-- going-nowhere unit to idle only after params.stuck_walk_timeout
+-- (6 s), which is LONGER than stall.MAX_CHARGED_INTERVAL (5 s) -- and
+-- an interval past that bound charges ZERO rather than being clamped,
+-- deliberately, because it cannot be one uninterrupted stretch. So
+-- every interval an execute-side sample ever saw would be discarded,
+-- stalledFor would never advance, and the unreachable yield would
+-- re-decide, re-path and re-report a failure forever: the livelock the
+-- bound exists to prevent, surviving the bound. Utility runs on every
+-- thought tick whatever the unit is doing, which is exactly why
+-- scripts/unit_ai_pickup.lua charges pickup_timeout there too.
+--
+-- Eligibility is read the same way pickupUtility reads it: from
+-- s.currentAction BEFORE this tick re-scores, so it names the action
+-- that owned the interval which just elapsed rather than the one about
+-- to start. An interval another action won charges nothing, which is
+-- also what gives foraging correct accounting despite registering no
+-- onExit (scripts/unit_ai_actions.lua).
+--
+-- Ending a collection here is silent: no core.reportFailure, unlike the
+-- commanded pickup order this borrows its shape from. That order is a
+-- PLAYER instruction whose abandonment the player must hear about;
+-- autonomous farm-tending giving up on one unreachable yield is not,
+-- and the yields stay on the ground for whoever can reach them.
+function M.tickCollection(uid, s, spec, timeout)
+    if s[spec.phase] ~= "collecting" then return false end
+    local loot = s[spec.loot]
+    local gid = loot and loot[#loot]
+    if gid == nil then return false end
+
+    local d = yieldDistance(uid, gid)
+    if d == nil then return false end
+    if d <= M.ADJACENT_TILES then
+        -- Underfoot: there is no approach to time.
+        s[spec.clock] = nil
+        return false
+    end
+
+    local clock = s[spec.clock]
+    if not clock then clock = {}; s[spec.clock] = clock end
+    local now = engine.gameTime()
+    -- A new closest approach refunds the whole budget; charging happens
+    -- against whatever is left. Reset first, exactly as
+    -- unit_ai_pickup.lua's pickupUtility orders the two. A STALL timer,
+    -- not a total-trip budget (#920): a worker genuinely walking twenty
+    -- tiles keeps refreshing it and is never abandoned mid-route.
+    if not clock.bestDist or d < clock.bestDist - M.PROGRESS_TILES then
+        clock.bestDist = d
+        stall.reset(clock, now)
+    end
+    if stall.charge(clock, s.currentAction == spec.action, now)
+       <= (timeout or M.COLLECT_TIMEOUT) then
+        return false
+    end
+    s[spec.clock] = nil
+    for _, f in ipairs(spec.clear) do s[f] = nil end
+    return true
+end
+
+-- Decide what this collection tick does with `spec`'s retained gid
+-- list, WITHOUT consuming anything from it. Returns one of:
 --
 --   "empty"                -- nothing left; the caller ends the phase
 --   "gone",     gid        -- the row does not resolve on this worker's
@@ -124,49 +229,28 @@ end
 --                             forage deliberately does not)
 --   "approach", gid, row   -- out of reach; the walk has been issued
 --                             and the gid stays pending
---   "stalled",  gid, row   -- out of reach for longer than the eligible-
---                             time budget: terminal, so an unreachable
---                             yield ends the phase instead of
---                             oscillating forever
 --
 -- The gid is PEEKED, never popped: both callers used to table.remove
 -- ahead of the pickup, and an approach tick placed after that pop would
 -- silently drop the yield. It leaves the list only on the tick that
 -- calls item.pickupGround, or on a terminal exit.
 --
--- `field` names the per-action approach clock on `s`
--- (s.harvestCollect / s.forageCollect): a small stall record so
--- stall.reset / stall.charge are reused unchanged, dropped on every
--- terminal outcome and on arrival so a later collection starts fresh.
--- Both names are stripped from the lua.unit_ai payload
--- (scripts/unit_ai_save.lua's TRANSIENT_WORK_FIELDS).
---
--- BOUNDING the approach is not optional. A pending collection scores a
--- fixed positive utility that beats idle unconditionally, and
--- scripts/unit_ai.lua's stuck-walk watchdog stops the unit and reports
--- a failure without clearing any action phase -- so an unreachable
--- retained yield would re-decide, re-path and re-fail every cycle
--- forever. The budget is a STALL timer, not a total-trip budget (#920):
--- it resets on every new closest approach, so a worker genuinely
--- walking twenty tiles is never abandoned mid-route.
-function M.nextYield(uid, s, field, loot, timeout, speed)
+-- The approach BUDGET is not this function's: M.tickCollection above
+-- owns it, from the utility path, for the reason stated there. This one
+-- runs only when the action is actually executing, which is precisely
+-- what makes it the wrong place to time a walk from.
+function M.nextYield(uid, s, spec, speed)
+    local loot = s[spec.loot]
     local gid = loot and loot[#loot]
-    if gid == nil then s[field] = nil; return "empty" end
+    if gid == nil then return "empty" end
 
     -- Re-resolved on the WORKER'S OWN page every tick (#1666/#1673),
     -- which is the page item.pickupGround commits through, so the
     -- coordinates measured belong to the exact instance that would
     -- move. Requirement 3: this runs before EVERY pickup, including the
     -- one that resumes after a second interruption.
-    local row = item.getGroundForUnit(uid, gid)
-    if not row then s[field] = nil; return "gone", gid end
-    local info = unit.getInfo(uid)
-    if not info then s[field] = nil; return "gone", gid end
-
-    local utx, uty = math.floor(info.gridX), math.floor(info.gridY)
-    local tx,  ty  = math.floor(row.x), math.floor(row.y)
-    local step = locations.aliasStep(M.periodForUnit(uid))
-    local d = M.chebyshev(utx, uty, tx, ty, step)
+    local d, row = yieldDistance(uid, gid)
+    if d == nil then return "gone", gid end
 
     if d <= M.ADJACENT_TILES then
         -- Arrived. Stop a unit still under way toward the yield before
@@ -175,7 +259,6 @@ function M.nextYield(uid, s, field, loot, timeout, speed)
         -- dispatch's `switching or activity == "idle"` can land here
         -- mid-stride at all. Unlike picking, collection charges no
         -- work clock, so the pickup happens on this same tick.
-        s[field] = nil
         local activity = unit.getActivity and unit.getActivity(uid)
         if activity == "walking" or activity == "running" then
             unit.stop(uid)
@@ -183,41 +266,11 @@ function M.nextYield(uid, s, field, loot, timeout, speed)
         return "reach", gid, row
     end
 
-    local clock = s[field]
-    if not clock then clock = {}; s[field] = clock end
-    local now = engine.gameTime()
-    -- A new closest approach refunds the whole budget; charging happens
-    -- against whatever is left. Reset first, exactly as
-    -- unit_ai_pickup.lua's pickupUtility orders the two.
-    if not clock.bestDist or d < clock.bestDist - M.PROGRESS_TILES then
-        clock.bestDist = d
-        stall.reset(clock, now)
-    end
-    -- Charged as eligible, because this only runs from execute and
-    -- execute only runs for the action arbitration put in control. The
-    -- intervals that are NOT this action's announce themselves by
-    -- dropping stallSeenAt as they happen: unit_ai_harvest's onExit for
-    -- an ordinary preemption, unit_ai_stall's suspendOrders for the
-    -- collapsed-pose and mid-animation ticks unit_ai.lua swallows
-    -- without firing one, and MAX_CHARGED_INTERVAL as the backstop for
-    -- a gap no path could announce. One residual: forage registers no
-    -- onExit (scripts/unit_ai_actions.lua), so a SHORT interval another
-    -- action won from a forager -- longer ones the backstop already
-    -- zeroes -- is charged against its collection budget. That is a
-    -- deliberate accept, not an oversight: the only consequence is
-    -- abandoning an approach marginally sooner, which leaves the yields
-    -- lying there for the next decision, and never the other way
-    -- around. Giving forage an onExit is an arbitration change this
-    -- issue's scope does not reach.
-    if stall.charge(clock, true, now) > (timeout or M.COLLECT_TIMEOUT) then
-        s[field] = nil
-        return "stalled", gid, row
-    end
     -- Steer to the RESOLVED row, floored to its tile, so the walk and
-    -- the Chebyshev test above share one frame. Never to a cached
-    -- target: forage rewrites s.forageTarget on every scoring pass,
-    -- with whatever its scan found, which need not be this gid at all.
-    unit.moveTo(uid, tx + 0.5, ty + 0.5, speed)
+    -- the Chebyshev test share one frame. Never to a cached target:
+    -- forage rewrites s.forageTarget on every scoring pass, with
+    -- whatever its scan found, which need not be this gid at all.
+    unit.moveTo(uid, math.floor(row.x) + 0.5, math.floor(row.y) + 0.5, speed)
     return "approach", gid, row
 end
 

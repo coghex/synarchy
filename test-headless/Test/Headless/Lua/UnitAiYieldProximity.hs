@@ -40,6 +40,13 @@
 --       fails on the warning count.
 --     * @table.remove@ the gid on an approach tick and "keeps the gid
 --       pending..." fails.
+--     * Move the approach budget from @tickCollection@ (utility) back
+--       into @nextYield@ (execute) and both "ends the collection
+--       cleanly when the yield cannot be reached at all" and "charges
+--       the budget from the UTILITY tick" fail — the stuck-walk
+--       livelock, whose watchdog cycle outlasts
+--       @stall.MAX_CHARGED_INTERVAL@ so an execute-side sample charges
+--       zero forever.
 --
 --   Same standalone-Lua-VM pattern as
 --   "Test.Headless.Lua.UnitAiHarvest", which owns the neighbouring
@@ -206,14 +213,30 @@ worldStubs = lns
     , "    return yields or {} end }"
     , "function place(x, y) POS.gridX, POS.gridY = x, y end"
     , "NO_WALK = false"
+    -- scripts/unit_ai.lua's own default (params.stuck_walk_timeout).
+    -- It is deliberately LONGER than stall.MAX_CHARGED_INTERVAL, which
+    -- is what makes the stuck-walk path the hard case: a sampler that
+    -- only runs between walks sees nothing but intervals past the bound
+    -- — and an interval past the bound charges ZERO, not the bound.
+    , "STUCK_WALK_TIMEOUT = 6.0"
+    , "STUCK_FOR = 0.0"
+    , "WATCHDOG_STOPS = 0"
     , "function advance()"
-    -- An unreachable destination: the engine's path fails, or
-    -- unit_ai.lua's stuck-walk watchdog calls unit.stop, and either way
-    -- the unit is idle again where it started -- which is what gives
-    -- the action its next execute tick and lets the approach budget
-    -- accumulate at all.
+    -- An unreachable destination. The unit does NOT bounce back to idle
+    -- on the next tick: it stays `walking` at an unpathable waypoint,
+    -- and only unit_ai.lua's stuck-walk watchdog returns it to idle,
+    -- after STUCK_WALK_TIMEOUT of no position progress. Modelling that
+    -- honestly is the whole point — an instant-idle stub would hand the
+    -- action an execute tick every 0.5 s and hide the defect.
     , "  if NO_WALK then"
-    , "    if ACTIVITY == 'walking' then ACTIVITY = 'idle' end"
+    , "    if ACTIVITY == 'walking' then"
+    , "      STUCK_FOR = STUCK_FOR + STEP"
+    , "      if STUCK_FOR >= STUCK_WALK_TIMEOUT then"
+    , "        STUCK_FOR = 0.0"
+    , "        WATCHDOG_STOPS = WATCHDOG_STOPS + 1"
+    , "        ACTIVITY = 'idle'"
+    , "      end"
+    , "    end"
     , "    return"
     , "  end"
     , "  if ACTIVITY ~= 'walking' or not MOVED_TO then return end"
@@ -585,6 +608,63 @@ spec = describe "harvest collection proximity" $ do
                 -- time, not one tick.
                 , "assert(ticks > 10,"
                 , "  'and must not give up on the first fruitless tick')"
+                -- The scenario really was the stuck-walk one: the unit
+                -- spent whole watchdog intervals walking nowhere, so
+                -- the budget cannot have been charged from execute.
+                , "assert(WATCHDOG_STOPS > 1,"
+                , "  'the fixture must have gone through more than one '"
+                , "  .. 'stuck-walk watchdog cycle, got '"
+                , "  .. tostring(WATCHDOG_STOPS))"
+                ]
+
+        it "charges the budget from the UTILITY tick, so a stuck walk \
+           \whose watchdog cycle is longer than MAX_CHARGED_INTERVAL \
+           \cannot make an unreachable collection immortal" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "local stall = require('scripts.unit_ai_stall')"
+                -- The exact numeric relationship that breaks an
+                -- execute-side sampler: every interval such a sampler
+                -- could ever observe is longer than the bound, and an
+                -- interval past the bound charges ZERO rather than
+                -- being clamped down to it. Pinned as an assertion so
+                -- this case cannot quietly stop being the hard one.
+                , "assert(STUCK_WALK_TIMEOUT > stall.MAX_CHARGED_INTERVAL,"
+                , "  'the watchdog cycle must outlast MAX_CHARGED_INTERVAL '"
+                , "  .. 'for this case to mean anything')"
+                , "NO_WALK = true"
+                , "GROUND_AT[7] = { x = 10.5, y = 0.5 }"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(30, 0)"
+                -- Every tick scores the action; only the ones that find
+                -- the unit idle execute it. Count both, so the case can
+                -- say the budget did NOT come from the execute path.
+                , "local ticks, executed = 0, 0"
+                , "while S.harvestPhase and ticks < 600 do"
+                , "  if ACTIVITY == 'idle' then executed = executed + 1 end"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(S.harvestPhase == nil and S.harvestLoot == nil,"
+                , "  'a permanently stuck approach must still end the '"
+                , "  .. 'collection; it ran ' .. tostring(ticks) .. ' ticks')"
+                , "assert(PICKUP_CALLS == 0,"
+                , "  'and must never collect the yield remotely')"
+                , "assert(item.getGroundForUnit(1, 7),"
+                , "  'the yield stays on the ground')"
+                , "assert(WATCHDOG_STOPS > 1,"
+                , "  'the unit must have sat through more than one full '"
+                , "  .. 'watchdog cycle, got ' .. tostring(WATCHDOG_STOPS))"
+                -- The load-bearing assertion. Charging only on the
+                -- execute ticks could not reach the 30 s budget in the
+                -- number of executes this run produced, because each
+                -- gap between them exceeds MAX_CHARGED_INTERVAL and so
+                -- charges nothing at all.
+                , "assert(executed * stall.MAX_CHARGED_INTERVAL"
+                , "       < yieldCollect.COLLECT_TIMEOUT,"
+                , "  'the budget must not have been reachable from the '"
+                , "  .. 'execute path alone: ' .. tostring(executed)"
+                , "  .. ' execute tick(s)')"
                 ]
 
     describe "proximity is measured in the page's own seam frame" $ do
