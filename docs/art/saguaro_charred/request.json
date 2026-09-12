@@ -1,0 +1,11 @@
+{
+  "tool": "PixelLab edit_image",
+  "job_id": "609385be-8e2e-4ad0-aba8-efd57743c067",
+  "input_path": "assets/textures/flora/saguaro/matured.png",
+  "description": "Use case: precise-object-edit. Asset type: 128x128 transparent pixel-art flora sprite for Synarchy. Edit target: the supplied living mature saguaro. Change only its material and small surface damage: make the same upright cactus into fire-killed charred remains with blackened charcoal trunk and arms, restrained ember-grey and ash-grey highlights along the existing vertical rib edges, and a few modest scorched blemishes. Preserve exactly the existing upright posture, trunk, two arms, branching, canvas placement, base, ground-contact row, proportions, and recognizable species silhouette. Tips may be burnt slightly short but must never extend. Keep hard pixel edges, compact shading, restrained palette, and genuine transparent background. No green tissue; no tan weathered skeleton treatment; no collapse, droop, flared base, added arms, removed arms, flames, smoke, glow, embers, soil, dirt mound, painted shadow, scenery, text, or watermark.",
+  "width": 128,
+  "height": 128,
+  "no_background": true,
+  "seed": 2596,
+  "lower_band_start_row": 97
+}
