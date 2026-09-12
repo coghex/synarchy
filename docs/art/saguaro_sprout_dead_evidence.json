@@ -1,0 +1,62 @@
+{
+  "tool": "PixelLab edit_image",
+  "job_id": "c24b78a1-1e06-4b56-aeff-965877d9ed5f",
+  "seed": 255976,
+  "request": "docs/art/saguaro_sprout_pair/dead_request.json",
+  "reference_path": "assets/textures/flora/saguaro/sprout.png",
+  "reference_sha256": "a038c89b1ad04a67415220583c75627a4fb04c62d70e04409d0be36cff57b470",
+  "original_placeholder_sha256": "19ecafb5ea3cfb6228fdefd7a5c57cdb99f0bb9f9b5279068da62b21ad15162e",
+  "delivered_path": "assets/textures/flora/saguaro/sprout_dead.png",
+  "delivered_sha256": "2d47798ed6bec8a05399856cf7acf0cf67cb2d9b1d4efb21c1199a261d11dd5c",
+  "raw_output_path": "docs/art/saguaro_sprout_pair/dead_raw.png",
+  "raw_output_sha256": "2d47798ed6bec8a05399856cf7acf0cf67cb2d9b1d4efb21c1199a261d11dd5c",
+  "postprocessing": "None. Exact downloaded PNG bytes delivered; complete alpha already matches approved living base.",
+  "dimensions": [
+    48,
+    48
+  ],
+  "mode": "RGBA",
+  "alpha_values": [
+    0,
+    255
+  ],
+  "alpha_bounds": [
+    18,
+    5,
+    30,
+    47
+  ],
+  "complete_alpha_difference_pixels": 0,
+  "lower_band_start_row": 41,
+  "lower_band_alpha_difference_pixels": 0,
+  "lowest_opaque_row": 46,
+  "last_row_transparent": true,
+  "living_owner_approval": "the arc version is best, now make the dead version",
+  "living_owner_approval_date": "2026-09-11",
+  "dead_owner_approval": "yes, that looks great",
+  "dead_owner_approval_date": "2026-09-11",
+  "preview": "Real Synarchy --preview flora/saguaro, port 9259; sprout_dead.png selected; previously successful cabal build all at 13bd01bdeb3043e0087b93adc90d67352a253bf0, no code changes since.",
+  "preview_capture": "docs/art/saguaro_sprout_pair/dead_preview.png",
+  "preview_selection_dump": "docs/art/saguaro_sprout_pair/dead_preview.json",
+  "texture_subset_audit": "PASS, all 13 subsets, 2026-09-11",
+  "generation_inputs": {
+    "tool": "PixelLab edit_image",
+    "input_path": "docs/art/saguaro_sprout_pair/arc_living_candidate.png",
+    "description": "Recolour this exact upright juvenile cactus to its dead state. Change ONLY the green colours into pale dry ivory, muted tan, warm grey and dark brown rib grooves; add just three tiny brown surface blemishes. Preserve the exact existing silhouette, round crown, vertical rib structure, width, height, pixel position and shallow curved bottom edge. All transparent pixels remain transparent. Do not move or redraw the cactus. Same structure, just dead colours and a few blemishes. No roots, no flaring, no narrowing, no drooping, no branches, no soil or shadow. 48x48 pixel art, transparent background.",
+    "width": 48,
+    "height": 48,
+    "no_background": true,
+    "seed": 255976,
+    "owner_living_approval": "the arc version is best, now make the dead version",
+    "owner_living_approval_date": "2026-09-11",
+    "lower_band_start_row": 41
+  },
+  "owner_issue_decision": "Keep the issue unchanged; I’ll handle the override",
+  "owner_issue_decision_date": "2026-09-11",
+  "band_choice_rationale": "Rows 41–46 cover the lower upright stem and approved shallow arc; row 47 is surrounding transparency. Chosen by silhouette before generation, not by foliage colour.",
+  "issue_spec_departures": [
+    "Owner-authorized replacement of sprout.png rather than preserving the original placeholder.",
+    "Owner-approved upright structure and recolouring with blemishes rather than inward collapse.",
+    "Entire alpha silhouette already matches; colour-shifted band restoration is an identity operation."
+  ]
+}

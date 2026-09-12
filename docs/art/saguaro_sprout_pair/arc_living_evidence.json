@@ -1,0 +1,21 @@
+{
+  "tool": "PixelLab edit_image",
+  "input_path": "docs/art/saguaro_sprout_pair/flat_living_candidate.png",
+  "description": "Keep this cactus exactly the same height, upright body, rounded crown, vertical ribs, colours and placement. Change only the last three rows of its bottom silhouette. Remove the one-pixel flared extensions of the bottom bar. Soften the two bottom corners into a very shallow downward oval arc: the outer edges end one or two pixels higher than the center, the center still reaches the original bottom contact row46. The stem stays full width right down to this short curved underside. It must not be shortened or moved upward, and must not taper for many rows like a capsule. The bottom is green cactus tissue continuous with its ribs, without a separate dark horizontal underline. Keep transparent background and row47 transparent; add no ground or other objects.",
+  "width": 48,
+  "height": 48,
+  "no_background": true,
+  "seed": 255974,
+  "owner_direction": "Slight oval arc at ground contact in top-downish view; less rounded than original, softer than straight bar. All owner verifications in Synarchy --preview.",
+  "background_job_id": "0651c000-d5c4-4ff5-8535-da61096d6400",
+  "input_sha256": "c0cf533c25c374b1ac04d20cc3fa0ee2c9ce2914f43f4d7551023a9a6223f1e9",
+  "candidate_sha256": "a038c89b1ad04a67415220583c75627a4fb04c62d70e04409d0be36cff57b470",
+  "alpha_bounds": [
+    18,
+    5,
+    30,
+    47
+  ],
+  "owner_approval": "the arc version is best, now make the dead version",
+  "owner_approval_date": "2026-09-11"
+}

@@ -1,0 +1,23 @@
+{
+  "tool": "PixelLab edit_image",
+  "input_path": "assets/textures/flora/saguaro/sprout.png",
+  "input_revision": "13bd01bdeb3043e0087b93adc90d67352a253bf0",
+  "archived_input": "original_sprout.png",
+  "status": "Rejected as too flat; retained only as the input used to generate the approved arc.",
+  "description": "Redesign the bottom silhouette of this upright living juvenile cactus so that it visibly continues into the ground. Its lower sides must remain roughly vertical at the full stem width, with its ribs continuing straight down to a nearly horizontal flat bottom edge at pixel row46. The cactus should look cropped by the soil line, with the rest of its stem below ground and invisible. Remove the rounded tapered foot entirely: no narrowing toward a rounded point, no capsule bottom, no exposed bulb or root ball. There must be a broad flat ground contact about the same width as the lower stem, with only one-pixel natural irregularity if needed. Keep the cactus upright and unbranched, keep its rounded crown, green ribbed body, hard pixel-art style, compact olive-green shading and approximate original size and center placement on the 48x48 canvas. Background remains transparent, row47 fully transparent. Do not paint the ground itself: no soil, dirt mound, ground patch, pot, roots, shadow or scenery.",
+  "width": 48,
+  "height": 48,
+  "no_background": true,
+  "seed": 255972,
+  "owner_scope_decision": "2026-09-11: redesign the rounded lower silhouette; the cactus should enter the ground roughly flat. Dead version preserves the selected upright living structure with blemishes and colour change. Both sprites may be included in this PR.",
+  "background_job_id": "1984491b-b941-41d8-b10a-c39cba4e23dc",
+  "input_sha256": "19ecafb5ea3cfb6228fdefd7a5c57cdb99f0bb9f9b5279068da62b21ad15162e",
+  "candidate_sha256": "c0cf533c25c374b1ac04d20cc3fa0ee2c9ce2914f43f4d7551023a9a6223f1e9",
+  "alpha_bounds": [
+    18,
+    5,
+    32,
+    47
+  ],
+  "owner_approval": null
+}
