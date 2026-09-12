@@ -397,6 +397,54 @@ local function fetchWantsFromMule(uid, wants, info, params)
     return false
 end
 
+-- Plan one job's fetch shortfall down the ladder: what to take from
+-- ground, from a technomule, and from cargo storage so that inventory
+-- reaches `demands` ({defName → count}). Returns three fresh
+-- `wants` tables in that preference order; whatever inventory already
+-- covers is charged to nobody.
+--
+-- `fromX`/`fromY` are the position the ground rung is measured from,
+-- so the caller decides the frame: a craft bill plans its FIRST cycle
+-- from wherever the bill was scanned and every LATER cycle from the
+-- station it is standing at (#2524), which is what keeps a
+-- continuation's ground reach bounded by `range` of the station rather
+-- than of a scan position it has since walked away from.
+--
+-- The cargo rung takes the remainder unconditionally rather than
+-- clamping to cargoCountOf: the claim-time feasibility gate
+-- (loadFeasible plus the caller's own sourceability check) already
+-- established the stock exists, and the fetch phases reconcile against
+-- real inventory afterwards, so an over-optimistic cargo entry costs a
+-- release rather than a fabricated item.
+--
+-- The three tables are consumed IN PLACE by fetchWantsFromGround /
+-- fetchWantsFromMule / fetchWantsFromCargo, which empty them as they
+-- go. A job that runs more than one cycle must therefore call this
+-- again per cycle; reusing the previous cycle's tables silently
+-- sources nothing (#2524).
+local function planFetchSources(uid, fromX, fromY, demands, range)
+    local fromGround, fromMule, fromCargo = {}, {}, {}
+    local mule = findTechnomule(uid, fromX, fromY)
+    for defName, count in pairs(demands) do
+        local short = count - inventoryCountOf(uid, defName)
+        if short > 0 then
+            local ground = math.min(short,
+                groundCountOf(uid, fromX, fromY, defName, range))
+            if ground > 0 then fromGround[defName] = ground end
+            local muleTake = 0
+            if short - ground > 0 and mule then
+                muleTake = math.min(short - ground,
+                                    inventoryCountOf(mule.uid, defName))
+                if muleTake > 0 then fromMule[defName] = muleTake end
+            end
+            if short - ground - muleTake > 0 then
+                fromCargo[defName] = short - ground - muleTake
+            end
+        end
+    end
+    return fromGround, fromMule, fromCargo
+end
+
 M.inventoryCountOf       = inventoryCountOf
 M.deliverItemWeight      = deliverItemWeight
 M.loadFeasible           = loadFeasible
@@ -408,5 +456,6 @@ M.fetchWantsFromMule     = fetchWantsFromMule
 M.fetchWantsFromCargo    = fetchWantsFromCargo
 M.cargoCountOf           = cargoCountOf
 M.moveBesideBuilding     = moveBesideBuilding
+M.planFetchSources       = planFetchSources
 
 return M

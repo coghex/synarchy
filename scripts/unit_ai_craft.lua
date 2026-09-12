@@ -10,6 +10,14 @@
 -- (craft.executeAt), drop the new outputs at the station, grant XP,
 -- and advance the bill (craft.completeBillCycle).
 --
+-- Sourcing is planned PER CYCLE, not per claim (#2524):
+-- fetch.planFetchSources builds the ground/mule/cargo wants tables,
+-- the fetch helpers empty those tables in place as they source, and a
+-- bill that chains into another cycle re-plans against current
+-- inventory and currently available sources before re-entering the
+-- fetch phase. Only job.need — the whole cycle's demand — is planned
+-- once and left alone.
+--
 -- Skill: the recipe's `skill` tag when present, else "smithing".
 -- Material races are NOT reserved cross-unit — same self-heal as
 -- construction.
@@ -49,6 +57,7 @@ local fetchWantsFromCargo  = fetch.fetchWantsFromCargo
 local cargoCountOf         = fetch.cargoCountOf
 local moveBesideBuilding   = fetch.moveBesideBuilding
 local loadFeasible         = fetch.loadFeasible
+local planFetchSources     = fetch.planFetchSources
 
 local roles = require("scripts.unit_roles")
 local page = require("scripts.unit_ai_page")
@@ -275,31 +284,17 @@ local function craftExecute(uid, s, params)
                                params.craft_claim_timeout) then
             return
         end
-        -- Fetch shortfalls, planned once at claim time (inventory →
-        -- ground → mule → cargo). Reconciled against real inventory
-        -- after the fetch phases run.
-        local need, fromGround, fromMule, fromCargo = {}, {}, {}, {}
-        local mule = findTechnomule(uid, info.gridX, info.gridY)
-        for item, count in pairs(cand.demands) do
-            need[item] = count
-            local have = inventoryCountOf(uid, item)
-            local short = count - have
-            if short > 0 then
-                local ground = math.min(short,
-                    groundCountOf(uid, info.gridX, info.gridY, item,
-                                  params.craft_scan_range))
-                if ground > 0 then fromGround[item] = ground end
-                local muleTake = 0
-                if short - ground > 0 and mule then
-                    muleTake = math.min(short - ground,
-                                        inventoryCountOf(mule.uid, item))
-                    if muleTake > 0 then fromMule[item] = muleTake end
-                end
-                if short - ground - muleTake > 0 then
-                    fromCargo[item] = short - ground - muleTake
-                end
-            end
-        end
+        -- The FIRST cycle's shortfall, planned from where the bill was
+        -- scanned and reconciled against real inventory once the fetch
+        -- phases have run. job.need is owned by the job (a copy, so a
+        -- later candidate table can never alias it); the three source
+        -- tables are per-cycle — see the header and the continuation
+        -- below.
+        local need = {}
+        for defName, count in pairs(cand.demands) do need[defName] = count end
+        local fromGround, fromMule, fromCargo =
+            planFetchSources(uid, info.gridX, info.gridY, need,
+                             params.craft_scan_range)
         s.craftJob = {
             billId   = cand.bill.id,
             bid      = cand.bill.station,
@@ -452,6 +447,20 @@ local function craftExecute(uid, s, params)
             local remaining = craft.completeBillCycle(uid, job.billId)
             if remaining and remaining ~= 0
                and not (bill.paused or untilStockSatisfied(bill)) then
+                -- #2524: the finished cycle consumed its own fetch
+                -- tables (the fetchWants* helpers empty them as they
+                -- source), so the next cycle needs a fresh plan. Without
+                -- it the next tick saw three empty tables, failed the
+                -- reconciliation above, and released a bill it could
+                -- have continued. Planned from `info` — beside the
+                -- station, where this cycle finished — so the ground
+                -- rung reaches craft_scan_range of the STATION, and
+                -- from CURRENT inventory, so a leftover carry reduces
+                -- what this cycle sources and a source exhausted last
+                -- cycle just drops to a lower rung.
+                job.fromGround, job.fromMule, job.fromCargo =
+                    planFetchSources(uid, info.gridX, info.gridY,
+                                     job.need, params.craft_scan_range)
                 job.phase = "fetch"      -- next cycle: source again
             else
                 -- #795: an until-stock claim survives a satisfied cycle; release.

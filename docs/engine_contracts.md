@@ -3993,7 +3993,49 @@ the same formula the crafting panel uses. Skill-tagged recipes derive
 output quality from the crafter, then shift by live mental
 effectiveness (±10), so quality assertions must pin the
 neutral-effectiveness precondition (#878). Gates: `craft_probe.py`,
-`craft_bill_probe.py`.
+`craft_bill_probe.py`, hspec `--match "craft bill cycle replenishment"`.
+
+**Sourcing is planned per CYCLE, not per claim (#2524).** A craft job's
+`job.need` is the whole cycle's demand (inputs plus fuel, summed by def
+name — `craftDemands`, mirroring `Craft.Types.recipeDemands`) and is
+planned once. Its three fetch-source tables — `job.fromGround`,
+`job.fromMule`, `job.fromCargo` — are per-cycle, because the
+`unit_ai_fetch.fetchWants*` helpers empty them IN PLACE as they source:
+the ground helper clears an entry once satisfied or exhausted, and the
+mule and cargo helpers clear every entry after one visit. So every
+worker that chains into another cycle must re-plan them through
+`unit_ai_fetch.planFetchSources` before re-entering the fetch phase;
+reusing the previous cycle's tables sources nothing and fails the
+post-fetch reconciliation. Invariants this pins:
+
+- A continuing UNPAUSED cycle keeps its claim. `completeBillCycle`
+  retains `cbClaimant` for a finite bill with cycles left and for a
+  repeat-forever bill, so the Lua side must not release and re-claim
+  between cycles. "An output eventually appeared" is not evidence:
+  releasing and letting a later utility scan re-claim produces the same
+  outputs, which is exactly the defect #2524 fixed. Assert claimant
+  continuity and count `craft.releaseBill` calls.
+- The continuing plan is computed from the worker's CURRENT position and
+  CURRENT inventory. After a completed cycle that position is beside the
+  station, so the ground rung reaches `craft_scan_range` of the STATION,
+  not of wherever the bill was originally scanned; anything still
+  carried is credited and not fetched again; and a rung exhausted last
+  cycle simply drops out in favour of a lower one (inventory → ground →
+  technomule → cargo is unchanged).
+- A continuation that no source can cover still gives up the old way:
+  the post-fetch reconciliation calls `craft.releaseBill` and clears the
+  local job, so the bill returns to pending for a worker that can cover
+  it. Re-planning must never leave a worker holding an unfulfillable
+  claim indefinitely.
+- The pause boundary (#796) and the until-stock stop (#795) are ahead of
+  the continuation branch and unchanged: a bill paused before its
+  in-flight cycle completes releases WITHOUT any inter-cycle sourcing,
+  walking, or `craft.setBillWorking(true)`.
+- Inter-cycle fetching and walking are not crafting work.
+  `completeBillCycle` clears `cbWorking` and `s.lastCraftAt` is
+  re-stamped only at the walking→working transition, so the gap charges
+  no `stall.workInterval` and registers no active recipe power demand
+  (#590).
 
 **Bill selection order (#2523).** A station's queue is ordered by
 `cbSeq`, not by `cbId`: `billsForStation` sorts on it and `reorderBill`
