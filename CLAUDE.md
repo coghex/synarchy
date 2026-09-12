@@ -128,7 +128,9 @@ another owner's processes. User cancellation still ends the wait immediately.
   §The `make ci` gate set. It is not a prerequisite to opening a PR.
 - Expensive gate selection is owned by `tools/ci_expensive_gates.py`.
   Save-compat reproducibility runs only when its `save-compat` inputs change;
-  `test_save_compat_audit.py --without-reproducibility` covers the cheap part.
+  `test_save_compat_audit.py --without-reproducibility` covers the rest.
+  Neither form starts GHCi since #2273: every real-codec operation execs
+  the compiled `exe:synarchy-save-codec` that `cabal build all` produces.
 - GPU-free specs belong in `test-headless/`; automated gates only compile
   `test/`, whose GLFW initialization prevents assertions without a display.
   Boot fixtures through `Test.Headless.Harness.Log`; use

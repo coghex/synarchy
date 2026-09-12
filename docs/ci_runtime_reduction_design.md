@@ -171,11 +171,15 @@ concrete precondition
   naive suite sharding could regress runtime by duplicating those worlds.
 - `tools/test_save_compat_audit.py` invokes `sca.audit(...)` 24 times. Each
   synthetic manifest containing a complete-session fixture reaches
-  `verify_fixture_descriptors`, whose `dump_fixture_descriptors` starts
-  `cabal repl test:synarchy-test-headless`. This repeated real-codec startup
-  explains why the CI step documented as a cheap static audit consistently
-  costs about 2m20s. The production audit still needs one real fixture decode;
-  synthetic unit cases do not need to pay for a fresh Cabal REPL each time.
+  `verify_fixture_descriptors`, whose `dump_fixture_descriptors` started
+  `cabal repl test:synarchy-test-headless`. That repeated real-codec startup
+  is what made the CI step documented as a cheap static audit consistently
+  cost about 2m20s — the measurement above stands as the record of it.
+  CIR-2 was implemented in #2273 by taking the stronger form: every GHCi
+  program in that family is now the compiled `exe:synarchy-save-codec`,
+  which `cabal build all` produces and `dump_fixture_descriptors` execs.
+  The production audit still performs one real fixture decode; it no longer
+  pays an interpreter startup for it, and no descriptor caching was needed.
 - The pre-CIR-4 `dist-newstyle` cache key was stable for a dependency plan.
   Because GitHub cache entries are immutable, the first snapshot for a plan was
   frozen and later runs rebuilt every project change since that snapshot. This

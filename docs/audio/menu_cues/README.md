@@ -26,10 +26,10 @@ The owner's verdict after hearing the first pair was:
   selection will have a separate sound later. Other controls and keyboard
   shortcuts have not been given a sound contract by this session.
 
-The owner approved preserving these exact settings, previews, reproduction
-script, and signoff, and publishing the reference through a standalone PR.
-This archive documents the approved sounds; production IDs and runtime wiring
-remain for the later integration task.
+The owner subsequently authorized retaining these exact settings, previews,
+reproduction script, and signoff in `docs-wip`, with no new tracker artifact.
+This is a local documentation delivery; no publication or runtime change was
+authorized. Production IDs and wiring remain for the later integration task.
 
 ## Listen
 

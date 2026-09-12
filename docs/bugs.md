@@ -51,8 +51,12 @@ No GitHub duplicate search was performed; that belongs to `process-report`.
 - [ ] BUG-17. Focus cleanup discards typed dropdown choices before submission
 - [ ] BUG-18. Routine body-regrowth ticks lose muscle growth and desynchronize total mass
 - [ ] BUG-19. Treatment aliases separate wounds inflicted at the same game time
-- [ ] BUG-20. Healed blood-loss patients have no route through the revival blood gate
+- [ ] BUG-20. Healing does not restore blood needed for revival
 - [ ] BUG-21. Ground-repair return retries never end after the item leaves its worker
+- [ ] BUG-22. Dead and collapsed builders continue producing building progress
+- [ ] BUG-23. Dead and collapsed medics retain claims that block replacement treatment
+- [ ] BUG-24. An out-of-range preferred medic prevents nearby medics from treating
+- [ ] BUG-25. Autonomous infection treatment ignores antibiotic kits without bandages
 
 ---
 
@@ -987,12 +991,30 @@ repair this defect.
 
 ## Medical treatment and recovery: September 7, 2026 continuation
 
-Verified against `289d454b12c0ec2e0db1e72aa4073b0462743a59`, using the existing headless component's REPL. The live API
+Verified against `289d454b12c0ec2e0db1e72aa4073b0462743a59`, using the
+existing headless component's REPL. A final source comparison against
+`53e448ac9af8f63723787cf379a3d013abecfc92` found no intervening changes
+to implementation, test, tool or data files. The live API
 fixtures reuse `Test.Headless.Unit.MedicalKitInstance` inside the isolated
 `withMenusEngine` harness. No unit/combat simulation worker or graphical
 window runs; treatment APIs, item consumption, wound storage, and Lua
 revival decisions are real. Wound progression is called explicitly through
 its production pure helper.
+
+**Coverage and existing reports:** The wound group passed 16 examples and
+medical-kit instance coverage passed 11 examples. `MedicalReach` passed 29
+of 30 examples in the REPL: its concurrent moving-patient test failed only
+because all 300 attempts were refused, leaving the required successful-case
+sample empty. The earlier state/transaction invariants passed. The same
+example passed the canonical compiled targeted Cabal run and five further
+compiled runs. This is a qualified observation about race-test sampling,
+not a confirmed treatment transaction failure. No production fix is proposed
+for that observation without a controlled reproduction.
+
+`docs/expedition_survival_calibration.md` SURV-10 already records missing
+end-to-end stabilization observations. The two findings below establish
+specific current implementation defects beyond that broader coverage gap;
+SURV-9's owner-approved above-collapse locomotion policy is unaffected.
 
 ### BUG-19. Treatment aliases separate wounds inflicted at the same game time
 
@@ -1054,7 +1076,7 @@ types and a less-infected non-target whose infection must never increase.
 If the chosen solution changes persisted wound records, follow the save
 schema/migration contract.
 
-### BUG-20. Healed blood-loss patients have no route through the revival blood gate
+### BUG-20. Healing does not restore blood needed for revival
 
 **Verification:** After the real wound tick removed a patient's final healed
 wound, 10,000 ticks left blood at 1 L of a 5.25 L maximum. The real revival
@@ -1077,7 +1099,7 @@ request to remove the anti-flapping blood gate.
   line 271 refuses revival below 50% of maximum blood.
 - `src/Combat/Wounds/Tick.hs:174` — a wound-free unit only decays immunity;
   it leaves `uiBlood` untouched.
-- `src/Combat/Wounds/Tick.hs:404` and `:474` — the wounded path computes
+- `src/Combat/Wounds/Tick.hs:401` and `:474` — the wounded path computes
   `newBlood = uiBlood inst - totalDrain` and stores its nonnegative clamp.
   Healing/removing the last wound does not add blood.
 - `src/Engine/Scripting/Lua/API/Units/Medical.hs:167` and `:550` — bleeding
@@ -1138,9 +1160,9 @@ and refreshes its claim on every execution.
 - `scripts/unit_ai_repair_target.lua:231` — the return helper only checks
   whether `unit.dropItemById` returned true; it cannot distinguish a missing
   item from a temporarily unavailable destination.
-- `scripts/unit_ai_repair.lua:183` — an existing repair job receives the
+- `scripts/unit_ai_repair.lua:181` — an existing repair job receives the
   configured lock utility before candidate eligibility is considered.
-- `scripts/unit_ai_repair.lua:301` — every execution refreshes the claim;
+- `scripts/unit_ai_repair.lua:302` — every execution refreshes the claim;
   the `returning` branch at line 308 retries the drop and otherwise returns
   without checking whether the worker still owns the item.
 - `src/Engine/Scripting/Lua/API/Units/Cargo.hs:181` — an exact-instance
@@ -1164,7 +1186,8 @@ unit. Drive the real repair scoring/claim and pickup, reaching
 Real inventory reads show only lignite on the original worker and axe 735
 on the second unit. The reproduction reuses the existing fixture's station
 and pace stubs, but no pickup, transfer, inventory-read, or drop result is
-stubbed. No actual repair operation is needed; it exercises abort cleanup.
+stubbed. No actual repair operation is needed; it exercises abort cleanup. The
+existing ground-repair group passed all 24 examples in the same REPL.
 
 **Handoff context:** Reconcile the return obligation against current item
 ownership. Keep retrying while the worker still holds the item and the drop
@@ -1173,3 +1196,260 @@ left. Preserve the exact-instance and own-page return policies. Cover player
 transfer/drop during repair, missing targets, and temporary page loss. The
 stale job is not an infinite-utility lock: higher-priority survival/combat can
 still preempt it, but ordinary work stays displaced whenever repair resumes.
+
+
+## Building work eligibility: September 7, 2026 continuation
+
+### BUG-22. Dead and collapsed builders continue producing building progress
+
+**Verification:** The real construction update and real building-progress
+API added `10.000001907349` worker-seconds in each of three cases: the sole
+cached builder was Dead, Collapsed, or Standing. All three were counted as
+one adjacent worker after the real AI suspension helper had run.
+
+Worker-built buildings gain progress from a census of adjacent units whose
+cached AI action is `build_nearby`. That census does not check pose or
+activity. The AI stops executing dead/collapsed units but preserves their
+cached action and building target. Consequently a corpse or unconscious
+worker still contributes normal construction work; several such workers
+also receive the construction rate's coordination multiplier.
+
+**Evidence:**
+
+- `scripts/unit_ai_core.lua:313` — `countAdjacentBuilders` checks cached
+  action, target and geometric adjacency, without checking whether the unit
+  is alive, standing or otherwise able to work.
+- `src/Engine/Scripting/Lua/API/Units/List.hs:46` — active-unit enumeration
+  filters by page, not by living pose, so retained corpses remain enumerable.
+- `scripts/unit_ai.lua:280` — Dead/Collapsed takes the `suspendOrders`
+  early return without action reselection or an outgoing action callback.
+- `scripts/unit_ai_stall.lua:230` — suspension resets order/work clocks and
+  craft/structure-construction phases, but does not clear `currentAction`
+  or `buildTarget` used by this different construction system.
+- `scripts/building_spawn.lua:626` and `:639` — the worker census feeds
+  `workerRate(n) * dt` into building progress; one worker yields 1×, two 4×,
+  and three 9×.
+- `src/Engine/Scripting/Lua/API/Buildings/Progress.hs:172` — the progress
+  commit receives only building id and delta, so there is no later worker
+  eligibility check that can correct the false census.
+- `src/Unit/Thread/Command/Pose.hs:107` — killing a unit stamps Dead while
+  retaining its instance; this is not the separate destroy/remove operation.
+
+**Reproduction:** Install the existing medical fixture's unit at `(10,10)`
+and a same-page 1×1 building at `(11,10)` with required work 100, progress 0,
+and no material demands. The building uses `Building.Placement`'s ordinary
+fixture definition with its work requirement changed. Set AI state to
+`{currentAction="build_nearby", buildTarget=1}` and call
+`core.suspendOrders(1)`. For each pose, reset the fixture and call the real
+`building_spawn.update(0.1)` 100 times:
+
+| Unit pose | Counted workers | Committed building progress |
+|---|---:|---:|
+| Dead | 1 | 10.000001907349 |
+| Collapsed | 1 | 10.000001907349 |
+| Standing | 1 | 10.000001907349 |
+
+Unit queries, building activity/material checks, and progress writes are
+real Haskell APIs. The pause facade returns false to permit explicit
+updates; no simulation worker moves or revives the fixture unit. This
+verifies stored progress, not construction rendering. The existing five
+building-spawn sentinel examples also passed; those cover portal rejection
+and roster handling, not worker eligibility.
+
+**Handoff context:** Count only currently eligible workers and use the same
+eligibility for saturation/recruitment (`countBuildersAt` in
+`unit_ai_logistics.lua`) so an incapacitated reservation cannot falsely fill
+a site either. Cover death and collapse after work begins, recovery, mixed
+healthy/incapacitated teams, and unrelated action preemption. Keep this
+worker-built-building path distinct from `constructJob`'s structure-placement
+clock, whose suspension cleanup already exists.
+
+
+## Medic selection and supplies: further September 7, 2026 audit
+
+Verified against `53e448ac9af8f63723787cf379a3d013abecfc92`. These cases
+use the real `unit_ai_medic` module and live unit, wound, inventory,
+knowledge, faction and page projections. The headless medical-kit fixture
+supplies the world/item definitions and pinned treatment generator. Each
+case replaces its unit roster with the explicitly described three units.
+The fixture's movement-speed facade returns 1; simulation workers are not
+running. Scoring and explicit execution are driven from the component REPL.
+No movement completion, rendered scene or whole-game survival outcome is
+inferred from these fixtures.
+
+**Validation:** The canonical targeted run
+`cabal test synarchy-test-headless --test-options='--match "AI page pairing"'`
+passed all 30 examples. Its medic cases test page boundaries, providing
+positive controls for the shared discovery code while leaving the specific
+same-page conditions below uncovered. Source freshness was checked again at
+`cfd30002dde1901f91ad7db251a07f1e01889330`; the only intervening source
+change was an unrelated worker-shutdown comment. No full suite was run.
+
+### BUG-23. Dead and collapsed medics retain claims that block replacement treatment
+
+**Verification:** A dead or collapsed medic's retained claim made a nearby
+healthy medic return utility `-inf` for a still-wounded ally. Calling the
+real AI suspension helper preserved the blocking claim. Clearing only that
+claim changed the healthy medic's utility to 8 and nominated the patient.
+
+The claim filter promises a LIVE, AVAILABLE claimant but only checks its
+continued existence, matching page and lack of a combat action. Death
+retains the unit instance, and collapse/death suspend the AI without clearing
+`treatClaim`. Consequently the unavailable owner never reaches the executor
+that would release its reservation, while other medics refuse to intervene.
+This differs from BUG-22's builder census: it is a treatment reservation
+that suppresses another unit's work, requiring its own eligibility check.
+
+**Evidence:**
+
+- `scripts/unit_ai_medic.lua:174` — `patientClaimed` accepts an existing
+  same-page claimant without calling `canActAsMedic` or checking pose.
+- `scripts/unit_ai_medic.lua:50` and `:133` — the new-medic ranking DOES
+  exclude dead/collapsed units. That protection comes too late for an
+  existing claim: `findPatient` rejects the patient at line 201 first.
+- `scripts/unit_ai.lua:280` — a dead/collapsed actor returns through
+  `core.suspendOrders`, bypassing treatment execution.
+- `scripts/unit_ai_stall.lua:230` — suspension preserves `treatClaim`.
+- `src/Unit/Thread/Command/Pose.hs:107` — death retains the instance;
+  `unit.getInfo` can still resolve the former medic.
+- `test-headless/Test/Headless/Lua/UnitAiPageTargets.hs:1026` — existing
+  claim coverage proves an off-page claimant does not block treatment,
+  but its same-page control does not test claimant incapacitation.
+
+**Reproduction:** Patient 2 at `(11,10)` has the fixture's bleeding/infected
+slash. Healthy medic 1 at `(10,10)` has bleed-control knowledge 20 and a
+stocked kit. Medic 3 at `(10,11)` has knowledge 100, pose `dead` or
+`collapsed`, and cached state
+`{currentAction="treat_ally", treatClaim={patient=2}}`. Call
+`core.suspendOrders(3)`, then score medic 1. Both poses return:
+
+```json
+{"blocked":"-inf","retained":true,"control":"8.0","pending":2}
+```
+
+`control` and `pending` are measured after deleting only medic 3's claim.
+The claim was seeded as a legitimate in-flight reservation; this fixture
+does not simulate the injury that incapacitates its owner.
+
+**Handoff context:** A retained reservation must not exclude replacement
+care when its owner cannot act. Cover death, collapse, recovery and an
+unavailable medic returning after someone else finishes treatment. Preserve
+claim exclusivity for a living, available owner and the existing page/combat
+exceptions. Avoid relying solely on new-candidate ranking, which this path
+never reaches.
+
+### BUG-24. An out-of-range preferred medic prevents nearby medics from treating
+
+**Verification:** With a patient one tile from a novice medic and 100 tiles
+from an expert, BOTH medics returned treatment utility `-inf`. Moving only
+the expert to 59 tiles from the patient made the expert nominate and score
+the patient at 8. The shipped scan range is 60 tiles.
+
+Patient discovery rejects targets outside scan range, but the squad ranking
+considers every same-page available medic at any distance. Its distance
+penalty stops at 50%, so a sufficiently capable remote medic remains the
+preferred choice even though its own discovery cannot select this patient.
+The nearby medic stands down for a helper that will never take the job in
+that stationary configuration.
+
+**Evidence:**
+
+- `scripts/unit_ai_medic.lua:130` and `:146` — `bestMedicFor` uses scan
+  range only to scale a capped distance discount. There is no `d <= range`
+  eligibility check before considering a medic.
+- `scripts/unit_ai_medic.lua:197` and `:207` — `findPatient` applies a
+  hard scan-range cutoff, so the remote winning medic cannot discover the
+  patient that made it win the ranking.
+- `scripts/unit_ai_medic.lua:236` — every other medic returns `-inf`
+  when the ranking prefers someone else.
+- `scripts/unit_ai_tunables.lua:486` — acolytes use range 60, with entry
+  and lock utility both 8.
+- `test-headless/Test/Headless/Lua/UnitAiPageTargets.hs:993` — ranking
+  coverage distinguishes same-page versus off-page medics, but does not
+  cross the same-page discovery-radius boundary.
+
+**Reproduction:** Use the same wounded patient at `(11,10)` and medic 1 at
+`(10,10)` with bleed-control knowledge 20. Give medic 3 knowledge 100 and put
+it at `(111,10)`. Both medics are standing, allied, on the patient's page,
+have supplies, and have no claims or combat actions. Fixture intelligence
+resolves to 1 for each. The expert scores 50 in the ranking while the nearby
+medic scores approximately 19.83, but the expert's own scan finds no patient:
+
+```json
+{"near":"-inf","far":"-inf"}
+```
+
+Move only medic 3 to `(70,10)`, 59 tiles from the patient:
+
+```json
+{"near":"-inf","far":"8.0","farTarget":2}
+```
+
+These are actual production utility results with real positions, not a
+reimplementation of the ranking formula. The test does not assert the
+patient stays untreated after unrelated movement changes the configuration.
+
+**Handoff context:** Align the set of ranked medics with those eligible to
+accept that patient, or explicitly dispatch the selected remote medic.
+Test just inside, exactly on and outside the discovery boundary, differing
+capabilities, and a nearby fallback. Retain the intended preference for a
+better medic who can actually take the job.
+
+### BUG-25. Autonomous infection treatment ignores antibiotic kits without bandages
+
+**Verification:** A medic with infection-control knowledge repeatedly failed
+to treat infection 0.6 despite a same-page supplier one tile away holding
+five antibiotic doses. After 100 executions it had fetched nothing, retained
+its treatment claim and utility 8, and left infection unchanged. Adding one
+bandage to that same kit caused one real transfer, one antibiotic dose to be
+spent, infection to reach zero and the claim to clear. The bandage was not
+consumed: this patient's bleeding was already controlled.
+
+Autonomous treatment recognizes infection as a reason to claim a patient,
+but its supply phase only discovers kits containing bandages. An antibiotic
+kit whose last bandage has been used is invisible to that phase. The medic
+falls through to treatment without the medicine, reports the missing dose,
+and holds the claim. The shared supply module already has a separate
+antibiotic-kit finder; this executor never uses it.
+
+**Evidence:**
+
+- `scripts/unit_ai_medic.lua:60` and `:77` — infected wounds independently
+  qualify for treatment even if no bleeding needs a dressing.
+- `scripts/unit_ai_medic.lua:252` and `:263` — `ownKit` aliases only
+  `supply.bandageKit`, and `findKitHolder` calls that alias for every holder.
+- `scripts/unit_ai_medic.lua:318` — fetch decisions use that bandage-only
+  discovery before either treatment verb is selected.
+- `scripts/unit_ai_medic.lua:375` — the infection phase calls
+  `unit.treatInfection` using the medic's own supplies. Its failure logs a
+  warning without clearing or changing the supply plan or claim.
+- `scripts/medical_supply.lua:60` — `antibioticsKit` exists and can find
+  the same exact container by antibiotic fill without requiring bandages.
+- `test-headless/Test/Headless/Unit/MedicalKitInstance.hs:133` — the
+  stocked-kit fixture combines antibiotics and bandages, so exact-instance
+  fetch coverage does not establish antibiotic-only acquisition.
+
+**Reproduction:** Patient 2 at `(11,10)` has infection 0.6, wound clot 1
+and bandage seep 0. Medic 1 at `(10,10)` knows bleed/infection control at 100
+and starts with empty inventory. Supplier 3 at `(10,11)` has no medical
+knowledge and holds kit 400. Its sole content is antibiotic instance 407,
+fill 5. Register medic 1's real AI state, score it, and run up to 100
+score/execute iterations. Compare with the identical fixture plus one
+bandage in kit 400:
+
+| Supplier's kit | Transfers | Final infection | Claim retained | Final utility |
+|---|---:|---:|---|---|
+| Antibiotics only | 0 | 0.60000002384186 | Yes | 8 |
+| Antibiotics and one bandage | 1 | 0 | No | `-inf` |
+
+Real inventory contents show the first kit still on the supplier with fill
+5; the control kit moves to the medic with fill 4 and its bandage intact.
+No inventory query, transfer or treatment result is stubbed. The 100 calls
+isolate AI behavior; wound/infection progression is not running concurrently.
+
+**Handoff context:** Discover and fetch supplies for the patient's actual
+unmet treatment needs, including antibiotic-only kits and a medic carrying
+bandages while antibiotics remain on another unit. Define a bounded fallback
+when required medicine is unavailable so a futile cure loop does not hold
+ordinary work indefinitely. Preserve the exact-instance and page/reach
+policies already enforced by the shared discovery and treatment APIs.

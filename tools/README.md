@@ -3562,7 +3562,9 @@ quick worldgen-output regression checking, graphical test-suite compilation,
 the unit-asset inventory pair (`test_pack_atlas.py` +
 `pack_atlas.py --validate-only --strict`, #1257), and the save-compat
 fixture-reproducibility test (`test_save_compat_audit.py
---only-reproducibility`, #1360). All four run unconditionally after a merge
+--only-reproducibility`, #1360 — it spawned a `cabal repl` of its own
+until #2273 replaced every GHCi program in that family with the compiled
+`exe:synarchy-save-codec`). All four run unconditionally after a merge
 to master. The mapping is intentionally explicit; add a relevant glob when
 introducing a new worldgen output, graphics entry point, unit-asset input, or
 save-format/fixture/save-tooling path.
