@@ -5,15 +5,18 @@
 --   tool is single-tile (the planting screen already scopes the player
 --   to one tile before a crop is chosen), so there is no pending
 --   rectangle to track. The tool drives designate, the farm AI (#336)
---   will drive nearestDesignation / getDesignationAt / cancelDesignation
---   (claims are Lua-side like dig/chop/till jobs, so there is no
---   engine-side job status), and the HUD sets the marker texture.
+--   drives nearestFreeDesignation / getDesignationAt /
+--   cancelDesignation (claims are Lua-side like dig/chop/till jobs, so
+--   there is no engine-side job status), and the HUD sets the marker
+--   texture. The AI's SELECTOR is the free query, not the
+--   unconditional @nearestDesignation@ below: #2534.
 module Engine.Scripting.Lua.API.Plant
     ( plantDesignateFn
     , plantCancelDesignationFn
     , plantGetDesignationAtFn
     , plantGetDesignationCountFn
     , plantNearestDesignationFn
+    , plantNearestFreeDesignationFn
     , plantSetDesignateTextureFn
     , worldGetPlantSuitabilityFn
     ) where
@@ -37,6 +40,8 @@ import World.Flora.Placement (speciesFitnessDetail, FitnessFactor(..))
 import World.Weather.Lookup (lookupLocalClimate, LocalClimate(..))
 import World.Generate.Coordinates
     (globalToChunk, canonicalTile, seamTileDist2)
+import Engine.Scripting.Lua.API.FreeDesignation
+    (nearestFreeDesignationOn)
 
 -- | plant.designate(pageId, gx, gy, cropName) — single-tile plant
 --   designation, no anchor. Refused world-thread-side unless the tile
@@ -147,8 +152,11 @@ plantGetDesignationCountFn wsc = do
 
 -- | plant.nearestDesignation(pageId, x, y) → gx, gy, dist | nil.
 --   Nearest designated tile by Euclidean distance — the farm AI's
---   "distance to nearest plant job" term. Mirrors till.nearestDesignation,
---   including its seam-aware compare and canonical result (#1175).
+--   "distance to nearest plant job" term, unaware of Lua-side claims.
+--   Mirrors till.nearestDesignation, including its seam-aware compare
+--   and canonical result (#1175). The farm AI selects through
+--   'plantNearestFreeDesignationFn' instead (#2534); this stays the
+--   plain query for callers that want it, probes included.
 plantNearestDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
 plantNearestDesignationFn wsc = do
     pageIdArg ← Lua.tostring 1
@@ -179,6 +187,18 @@ plantNearestDesignationFn wsc = do
                         Nothing → Lua.pushnil >> return 1
                 Nothing → Lua.pushnil >> return 1
         _ → Lua.pushnil >> return 1
+
+-- | plant.nearestFreeDesignation(pageId, x, y [, maxDist [, excluded]])
+--   → gx, gy, dist | nil. The farm AI's real selector (#2534): the
+--   nearest plant designation the asking worker may CLAIM, skipping the
+--   tiles its live colleagues already hold so a claimed nearer tile
+--   stops hiding farther free work. Body shared with
+--   till.nearestFreeDesignation — see
+--   "Engine.Scripting.Lua.API.FreeDesignation" for the exclusion shape,
+--   the range bound and the canonical tie-break.
+plantNearestFreeDesignationFn ∷ WorldSimCapability → Lua.LuaE Lua.Exception Lua.NumResults
+plantNearestFreeDesignationFn wsc =
+    nearestFreeDesignationOn wsc wsPlantDesignationsRef
 
 -- | plant.setDesignateTexture(pageId, texHandle) — marker texture for
 --   committed plant designations.

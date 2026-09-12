@@ -662,6 +662,7 @@ library
                      Engine.Scripting.Lua.API.Chop
                      Engine.Scripting.Lua.API.Till
                      Engine.Scripting.Lua.API.Plant
+                     Engine.Scripting.Lua.API.FreeDesignation
                      Engine.Scripting.Lua.API.Yaml
                      Structure.Palette
                      Engine.Scripting.Lua.API.Combat
@@ -1788,6 +1789,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiLogisticsTargets
                    Test.Headless.Lua.UnitAiPageTargets
                    Test.Headless.Lua.UnitAiLoadReset
+                   Test.Headless.Lua.FarmDesignationClaim
                    Test.Headless.Lua.UnitAiReconcile
                    Test.Headless.Lua.UnitAiPickupPage
                    Test.Headless.Lua.UnitAiRepairGround

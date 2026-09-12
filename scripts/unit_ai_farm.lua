@@ -25,8 +25,9 @@ local claimsLib = require("scripts.unit_ai_claims")
 -----------------------------------------------------------
 -- Action: till_designation (#333)
 --
--- Player-directed tilling: claim the nearest till-designated tile,
--- walk to it, and work until done — world.setVegAt then flips the
+-- Player-directed tilling: claim the nearest till-designated tile
+-- THIS acolyte may claim (#2534 — a colleague's claim on a nearer tile
+-- must not hide farther free work), walk to it, and work until done — world.setVegAt then flips the
 -- tile's ground cover to the tilled-soil id and the designation is
 -- removed. Structure mirrors chop_designation: module-local claims
 -- keyed by tile so two acolytes never till the same tile, expiring on
@@ -93,18 +94,28 @@ function unitAi.till.utility(uid, s, params)
 
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
-    local gx, gy, dist =
-        till.nearestDesignation(wid, info.gridX, info.gridY)
+
+    -- #2534: the nearest designation this worker MAY CLAIM, not the
+    -- nearest one outright. Asking for the unconditional nearest and
+    -- then bailing on claimedByOther made one colleague's fresh claim
+    -- hide every farther free tile, so clustered farmers reported no
+    -- work at all. The exclusion set comes from the live claim registry
+    -- (stale and dead claims pruned on the way past, so the existing
+    -- recovery still frees their tiles), and `dist` describes the tile
+    -- actually chosen -- the range gate and the score below therefore
+    -- both measure the job this worker will do.
+    local now = engine.gameTime()
+    local gx, gy, dist = claimsLib.nearestFree(
+        till.nearestFreeDesignation, unitAi.till.claims, wid, uid,
+        info.gridX, info.gridY, params.till_scan_range,
+        params.till_claim_timeout, now)
     if not gx then return -math.huge end
     if dist > params.till_scan_range then return -math.huge end
 
-    local now = engine.gameTime()
-    if unitAi.till.claimedByOther(unitAi.till.key(wid, gx, gy), uid, now,
-                                  params.till_claim_timeout) then
-        return -math.huge
-    end
-
-    -- Stash the scored candidate so execute doesn't re-scan.
+    -- Stash the scored candidate so execute doesn't re-scan. Execute
+    -- still re-checks the claim before taking it: scoring and executing
+    -- are separate ticks, so another worker can win this tile in
+    -- between, and the loser must leave that fresh claim alone.
     s.tillCandidate = { x = gx, y = gy }
 
     local distFactor = math.max(0, 1 - dist / params.till_scan_range)
@@ -223,7 +234,8 @@ end
 -- Action: plant_designation (#336)
 --
 -- Player-directed planting: claim the nearest plant-designated tile
--- (#335), walk to it, and work until done — dispatches to
+-- (#335) THIS acolyte may claim (#2534), walk to it, and work until
+-- done — dispatches to
 -- world.plantCropAt (groundcover crops, a CropPlot) or
 -- world.plantRowCropAt (row crops, a FloraInstance) by the
 -- designation's category, then the designation is removed. Structure
@@ -290,18 +302,20 @@ function unitAi.plant.utility(uid, s, params)
 
     local info = unit.getInfo(uid)
     if not info then return -math.huge end
-    local gx, gy, dist =
-        plant.nearestDesignation(wid, info.gridX, info.gridY)
+
+    -- #2534, exactly as unitAi.till.utility above: the nearest
+    -- designation this worker MAY CLAIM. See there for why the
+    -- unconditional nearest plus a claimedByOther bail was the bug.
+    local now = engine.gameTime()
+    local gx, gy, dist = claimsLib.nearestFree(
+        plant.nearestFreeDesignation, unitAi.plant.claims, wid, uid,
+        info.gridX, info.gridY, params.plant_scan_range,
+        params.plant_claim_timeout, now)
     if not gx then return -math.huge end
     if dist > params.plant_scan_range then return -math.huge end
 
-    local now = engine.gameTime()
-    if unitAi.plant.claimedByOther(unitAi.plant.key(wid, gx, gy), uid, now,
-                                   params.plant_claim_timeout) then
-        return -math.huge
-    end
-
-    -- Stash the scored candidate so execute doesn't re-scan.
+    -- Stash the scored candidate so execute doesn't re-scan; execute
+    -- re-checks the claim before taking it (see till's note).
     s.plantCandidate = { x = gx, y = gy }
 
     local distFactor = math.max(0, 1 - dist / params.plant_scan_range)

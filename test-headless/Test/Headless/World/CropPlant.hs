@@ -494,13 +494,25 @@ plantPrelude = lns
     , "    CALLS.clearAnim = CALLS.clearAnim + 1 end }"
     , "plant = {"
     , "  getDesignationAt = function(_, x, y) return DESIGNATIONS[key(x, y)] end,"
-    , "  nearestDesignation = function(_, ux, uy)"
+    -- #2534: the production selector's verb. Same contract the engine
+    -- implements -- nearest NOT-excluded designation within maxDist,
+    -- ties broken by canonical (x, y) -- so this fixture keeps scoring
+    -- the real utility path rather than a pre-filtered candidate.
+    , "  nearestFreeDesignation = function(_, ux, uy, maxDist, excluded)"
+    , "    local skip = {}"
+    , "    for i = 1, #(excluded or {}) - 1, 2 do"
+    , "      skip[excluded[i] .. ',' .. excluded[i + 1]] = true end"
+    , "    local bx, by, bd"
     , "    for k, _ in pairs(DESIGNATIONS) do"
     , "      local sx, sy = k:match('(-?%d+),(-?%d+)')"
     , "      local gx, gy = tonumber(sx), tonumber(sy)"
-    , "      return gx, gy, math.sqrt((gx - ux) ^ 2 + (gy - uy) ^ 2)"
+    , "      local d = math.sqrt((gx - ux) ^ 2 + (gy - uy) ^ 2)"
+    , "      if not skip[k] and not (maxDist and d > maxDist)"
+    , "         and (not bd or d < bd or (d == bd and"
+    , "              (gx < bx or (gx == bx and gy < by)))) then"
+    , "        bx, by, bd = gx, gy, d end"
     , "    end"
-    , "    return nil end,"
+    , "    return bx, by, bd end,"
     , "  cancelDesignation = function(x, y)"
     , "    CALLS.cancel = CALLS.cancel + 1"
     , "    DESIGNATIONS[key(x, y)] = nil end }"
