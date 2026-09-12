@@ -63,12 +63,22 @@ local config = {
         },
         hydration = {
             max_from        = "max_hydration",
-            -- When on all fours at a water source (pose == "crawling"),
-            -- regen tops up hydration fast — ~5 L/s × endurance ≈ 5 L/s
-            -- for a typical unit. Other poses/activities don't regen
-            -- hydration; canteen-drinking is a separate (Lua-side)
-            -- bolus.
-            regen_factor_crawling = 5.0,
+            -- Drinking from a natural source (#2541): while the
+            -- drink_from_source sequence is in its DRINKING phase and
+            -- the unit still has live access to an adjacent lake or
+            -- river tile, hydration tops up fast — ~5 L/s × endurance
+            -- ≈ 5 L/s for a typical unit.
+            --
+            -- Keyed on the ACT of drinking, never on the Crawling pose
+            -- this entry used to name. Crawling is also ordinary
+            -- injured locomotion, and the sleep goal passes through it
+            -- as a waypoint (#612), so the pose form handed a broken
+            -- leg an unlimited water supply with no source in reach.
+            -- unit_resource_tick.sourceDrinkingEligible owns both
+            -- halves of the gate and re-reads them every tick.
+            --
+            -- Canteen-drinking is a separate (Lua-side) bolus.
+            regen_factor_source_drinking = 5.0,
             -- Constant per-second drain in any activity. Tuned so an
             -- average pool (~43 L) empties in 3 game-days. At
             -- timeScale 1.0 (1 game-minute per real-second), 3 days =
@@ -86,8 +96,9 @@ local config = {
             -- drain in thermo.lua is a SEPARATE, climate-driven loss; this
             -- is the metabolic baseline reacting to activity.
             drain_activity_scaled = true,
-            -- No regen: hydration only restored by drinking events
-            -- (separate API, not yet wired).
+            -- No PASSIVE regen in any pose or activity: hydration
+            -- rises only while the unit is actually drinking — the
+            -- gated source factor above, or a canteen bolus.
             collapse_threshold = 0.2,
             -- Revive requires drinking to bring hydration back up to
             -- 50% — phase 3 work. Until drinking exists, a collapsed-

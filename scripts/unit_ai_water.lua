@@ -177,8 +177,12 @@ end
 -- Pose descent + ascent are chained two-step (standing↔crouching↔
 -- crawling) and use stride=2 so the visible duration is halved — the
 -- player doesn't sit through every frame of two 9-frame transitions.
--- Hydration regen happens at pose == "crawling" (on all fours at the
--- water), keyed by regen_factor_crawling in unit_resources.
+-- Hydration regen belongs to the "drinking" phase, not to the Crawling
+-- pose (#2541): unit_resource_tick.sourceDrinkingEligible pays out
+-- regen_factor_source_drinking only while s.sourcePhase == "drinking"
+-- AND the unit still has live access to an adjacent lake/river tile, so
+-- the descent and ascent legs of this sequence regen nothing and a
+-- source that dries up stops the recovery on the next hydration tick.
 -----------------------------------------------------------
 local STRIDE_DESCEND = 2
 local STRIDE_ASCEND  = 2
@@ -218,8 +222,11 @@ local function drinkFromSourceExecute(uid, s, params)
         return
     end
 
-    -- Drinking: at the water on all fours. unit_resources regens
-    -- hydration. When mostly full, kick off the ascent.
+    -- Drinking: at the water on all fours. This phase flag is half of
+    -- what authorises unit_resources' hydration regen -- the other half
+    -- is that tick's own live re-read of the adjacent water (#2541), so
+    -- setting the phase does not by itself supply any. When mostly
+    -- full, kick off the ascent.
     if s.sourcePhase == "drinking" then
         local hyd    = unit.getStat(uid, "hydration") or 0
         local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration") or 0
