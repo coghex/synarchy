@@ -12,14 +12,21 @@ canteens in a unit's inventory that silently hit the wrong one:
     as a clamp-to-zero no-op while hydration was still credited — water
     conjured, sipped canteen still full.
   * ``refillExecute`` (scripts/unit_ai_water.lua) measures headroom on
-    the first canteen WITH HEADROOM, so an earlier FULL canteen absorbed
-    the write as a clamped no-op and the empty one never filled — while
-    the pickup anim played and the AI moved on believing it refilled.
+    the canteen it selected, so an earlier FULL canteen absorbed the
+    write as a clamped no-op and the empty one never filled — while the
+    pickup anim played and the AI moved on believing it refilled.
 
 The two fixtures are deliberately opposite orderings, because each bug
 needs its own: empty-before-full reproduces the drink bug (and would let
 first-match refill succeed), full-before-empty reproduces the refill bug
 (and would let first-match drink succeed).
+
+Since #2546 ``refillExecute`` selects the EMPTIEST canteen with headroom
+rather than the first one, so its full-before-empty fixture now reaches
+the empty canteen by selection as well as by mutation. The per-instance
+assertions below remain the gate on ``unit.modifyItemFillById``'s
+instance targeting; order-independent SELECTION is gated separately by
+the headless group "multi-canteen water selection".
 
 Both phases drive the PRODUCTION execute functions against a real engine
 and assert per-INSTANCE fills by ``instanceId``, so a regression to
