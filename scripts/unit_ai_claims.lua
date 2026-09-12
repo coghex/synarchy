@@ -187,6 +187,27 @@ function M.nearestFreeInstance(query, claims, wid, uid, x, y, range,
                  M.claimedInstances(claims, wid, uid, now, timeout))
 end
 
+-- Nearest designation within `range` that `uid` may claim AND can
+-- actually work (#2538) -- nearestFree's sibling for a namespace whose
+-- eligibility is more than claims and range.
+--
+-- `query` is world.nearestWorkableMineDesignation, which walks
+-- candidates in ascending seam-aware distance and answers the first one
+-- that survives the whole rejection set: the claim exclusion built here,
+-- its own copy of the range bound, resident dig information, spoil
+-- disposal, and `tools` -- the tool CLASSES this worker is carrying,
+-- which the engine needs because the speed that decides usability is a
+-- property of the material rather than of the worker.
+--
+-- Returns the verb's own gx, gy, dist, tool, speed -- all five
+-- describing the tile it PICKED, which is the one the caller must
+-- score, never the rejected nearer tile's.
+function M.nearestWorkable(query, claims, wid, uid, x, y, range,
+                           timeout, now, tools)
+    return query(wid, x, y, range,
+                 M.claimedTiles(claims, wid, uid, now, timeout), tools)
+end
+
 -- Empty every enrolled table in place; returns how many entries were
 -- dropped, for the caller's load diagnostic.
 function M.resetAll()
