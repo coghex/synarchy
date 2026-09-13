@@ -28,10 +28,12 @@
 module World.GroundItems
     ( selectGroundItemOnPage
     , takeGroundItemOnPage
+    , takeGroundItemsOnPageWhere
     ) where
 
 import UPrelude
 import Control.Concurrent.MVar (withMVar)
+import Data.List (sortOn)
 import qualified Data.HashMap.Strict as HM
 import Data.IORef (readIORef, atomicModifyIORef')
 import Item.Ground (GroundItem, GroundItems(..), removeGroundItem)
@@ -72,3 +74,43 @@ takeGroundItemOnPage ∷ WorldState → Int → IO (Maybe GroundItem)
 takeGroundItemOnPage ws gid =
     withMVar (wsGroundItemLock ws) $ \_ →
         atomicModifyIORef' (wsGroundItemsRef ws) (removeGroundItem gid)
+
+-- | Remove every ground item of @ws@ satisfying @doomed@, answering the
+--   removed entries in ascending id order (#2490).
+--
+--   The bulk counterpart of 'takeGroundItemOnPage', for a caller
+--   destroying whatever happens to be at a place rather than taking one
+--   item it already named. It takes the SAME lock, for the same reason:
+--   the predicate is evaluated and every matching entry deleted inside
+--   one hold, so a selection cannot validate an id this removal is
+--   about to retire.
+--
+--   Unlike the single-item take it also CLEARS a selection of an item
+--   it removed, and that difference is deliberate. A pickup leaves the
+--   selection standing because @scripts\/item_info_panel.lua@'s
+--   same-id refresh notices and clears it; a solidification can destroy
+--   an item on a page the player is not looking at, with no panel open
+--   to notice, so the clear has to happen where the removal does
+--   (requirement 3 of #2490). A selection naming an item this call did
+--   NOT remove is left exactly as it was.
+takeGroundItemsOnPageWhere ∷ WorldState → (GroundItem → Bool)
+                           → IO [(Int, GroundItem)]
+takeGroundItemsOnPageWhere ws doomed =
+    withMVar (wsGroundItemLock ws) $ \_ → do
+        removed ← atomicModifyIORef' (wsGroundItemsRef ws) $ \gis →
+            let hit = sortOn fst [ e | e@(_, gi) ← HM.toList (gisItems gis)
+                                     , doomed gi ]
+            in ( gis { gisItems = foldl' (flip HM.delete) (gisItems gis)
+                                         (map fst hit) }
+               , hit )
+        -- 'gisNextId' is untouched for the same reason
+        -- 'Item.Ground.sanitizeGroundItems' leaves it alone: removal
+        -- retires ids, it never rewinds the allocator.
+        when (not (null removed)) $
+            atomicModifyIORef' (wsCursorRef ws) $ \cs →
+                ( case selectedGroundItem cs of
+                    Just gid | gid `elem` map fst removed →
+                        cs { selectedGroundItem = Nothing }
+                    _ → cs
+                , () )
+        pure removed

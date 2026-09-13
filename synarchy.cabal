@@ -621,6 +621,7 @@ library
                      Unit.Thread.Command.Motion
                      Unit.Thread.Command.MotionGuard
                      Unit.Thread.Command.Pose
+                     Unit.Thread.Command.Solidify
                      Unit.Thread.Movement
                      Unit.Thread.Movement.Types
                      Unit.Thread.Movement.Leap
@@ -1110,6 +1111,7 @@ library
                      World.Weather.Lookup
                      World.Weather.Ambient
                      World.Material
+                     World.Reaction.Occupants
                      World.Reaction.Stone
                      World.Material.Id
                      World.Preview
@@ -1501,6 +1503,7 @@ test-suite synarchy-test-headless
                    Test.Headless.World.TransferOrders
                    Test.Headless.World.FluidWritebackStaleness
                    Test.Headless.World.Solidification
+                   Test.Headless.World.SolidificationOccupants
                    Test.Headless.World.FluidWritebackIncarnation
                    Test.Headless.World.PauseSpeed
                    Test.Headless.World.SessionEpoch

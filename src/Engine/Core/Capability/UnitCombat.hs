@@ -160,7 +160,8 @@ data UnitCombatCapability = UnitCombatCapability
   , ucInjuryEventsRef  ∷ IORef (Seq Combat.Types.CombatEvent)
     -- ^ NON-combat injury stream (falls, hazards, wound-caused deaths)
     --   → Lua, reusing the @CombatEvent@ shape with the victim in
-    --   @target@. Produced by @UnitThread@ (falls), @LuaThread@
+    --   @target@. Produced by @UnitThread@ (falls, and #2490's deaths
+    --   at a solidifying cell), @LuaThread@
     --   (@unit.injure@, @injury.emit@) and reset by @WorldThread@'s
     --   load publish; __drained__ by @LuaThread@ via
     --   @injury.drainEvents@ into the injury-log UI, with the same

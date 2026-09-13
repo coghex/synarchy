@@ -664,9 +664,12 @@ data EngineEnv = EngineEnv
     --   ('Engine.PlayerEvent.EventStore', #1714). Per-session only —
     --   not serialized to save files.
     --   An STM TVar, so pushes from any thread are safe; the call
-    --   sites that actually exist today are the world thread and the
-    --   Lua thread, both via 'Engine.PlayerEvent.emitEvent' (no unit-
-    --   or combat-thread emitter exists). Read atomically by Lua-side
+    --   sites that actually exist today are the world thread, the Lua
+    --   thread and the unit thread, all via
+    --   'Engine.PlayerEvent.emitEvent'. The unit-thread one is
+    --   #2490's: a solidification death is decided on the thread that
+    --   owns the pose, so that is where it is reported. No
+    --   combat-thread emitter exists. Read atomically by Lua-side
     --   queries (e.g. the event-log panel).
     --
     --   Rows and counter share this ONE ref so a sequence is assigned

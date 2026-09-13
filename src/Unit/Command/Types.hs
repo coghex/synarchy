@@ -120,6 +120,34 @@ data UnitCommand
         --   operates on one known 'World.State.Types.WorldState', and
         --   without it a coordinate-matched unit on ANOTHER page got
         --   snapped to this page's surface.
+    | UnitSolidifyOccupants !WorldPageId !Int !Int ![UnitId]
+        -- ^ #2490: tile (gx, gy) OF THE NAMED PAGE became stone under
+        --   the lava-water reaction's own commit. Destroy the named
+        --   occupants and settle whatever is left standing there.
+        --
+        --   This REPLACES 'UnitReGround' on the solidification path
+        --   rather than joining it: the ordinary lift carries a living
+        --   unit up with the new terrain, and the owner's decision
+        --   (epic #2480) is that anything occupying a solidifying cell
+        --   dies instead. Every other terrain edit keeps the lift.
+        --
+        --   The coordinates are CANONICAL (§Tile-coordinate seam
+        --   frame), and the page is carried for the same reason
+        --   'UnitReGround' carries one: a coordinate-matched unit on
+        --   another page is not standing on the edited tile at all.
+        --
+        --   The victim list is the EDIT-TIME occupant set, resolved by
+        --   'World.Reaction.Occupants.destroySolidificationOccupants'
+        --   from the manager's own positions at the moment the stone
+        --   landed, and it is exhaustive — dead occupants included.
+        --   Carrying it rather than re-selecting at the drain is the
+        --   point: this queue is drained on the unit thread's own tick,
+        --   so a unit that walked onto the tile afterwards would
+        --   otherwise be killed by a reaction it was never caught in,
+        --   and one that walked off would escape a reaction it was.
+        --   The handler still reads each victim's pose from the
+        --   authoritative sim state, so a unit that died of something
+        --   else in between is settled rather than killed twice.
     | UnitClearAll
         -- ^ Drop every unit instance + selection + sim state. Enqueued by
         --   world.destroyAll (Exit to Menu) so the clear is ordered AFTER

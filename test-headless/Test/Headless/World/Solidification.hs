@@ -21,7 +21,23 @@
 --
 --   Run:
 --   @cabal test synarchy-test-headless --test-options='--match "solidification"'@
-module Test.Headless.World.Solidification (spec, pureSpec) where
+module Test.Headless.World.Solidification
+    ( spec
+    , pureSpec
+      -- * Live fixtures, shared with the occupant half
+      --
+      -- #2490 drives the SAME commit against a real generated page and
+      -- needs the same page, the same hand-delivery and the same
+      -- material lookup. They are exported rather than copied so the
+      -- two halves cannot drift into testing two different deliveries.
+    , LivePage(..)
+    , livePage
+    , deliver
+    , liveEvent
+    , chunkAt
+    , materialFor
+    , ackTimeoutMicros
+    ) where
 
 import UPrelude
 import Test.Hspec

@@ -483,8 +483,9 @@ initializeEngineWith logBackend = do
   -- Player Events: load the notification registry (data/) merged
   -- with player overrides (config/) and allocate the ring buffer.
   -- It is an STM TVar, so a push from any thread is safe; the
-  -- emitters that exist today are the world thread and the Lua
-  -- thread, via Engine.PlayerEvent.emitEvent. Popup delivery
+  -- emitters that exist today are the world thread, the Lua thread
+  -- and -- since #2490's solidification deaths -- the unit thread,
+  -- all via Engine.PlayerEvent.emitEvent. Popup delivery
   -- allocates nothing here: it is the LuaShowPopup message on
   -- luaQueue, and #2285 removed the write-only queue that used to
   -- shadow it. The cfg IORef is updated at runtime by the Phase 2

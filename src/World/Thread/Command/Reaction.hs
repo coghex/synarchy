@@ -62,14 +62,14 @@ import Data.IORef (readIORef, writeIORef, atomicModifyIORef')
 import Data.List (nub)
 import qualified Data.Text as T
 import qualified Engine.Core.Queue as Q
+import Engine.Core.Capability.UnitCombat (toUnitCombatCapability)
 import Engine.Core.Capability.WorldSim
     (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
-import Engine.Core.State (EngineEnv, unitQueue)
+import Engine.Core.State (EngineEnv)
 import Sim.Command.Types (SimCommand(..), ReactionChunkSync(..))
 import Control.Applicative ((<|>))
 import Sim.Fluid.Reaction (ReactionResult(..), SolidificationEvent(..))
-import Unit.Command.Types (UnitCommand(..))
 import World.Chunk.Admit (pageIncarnation)
 import World.Construct.Revalidate
     (ConstructScope(..), revalidateConstructDesignations)
@@ -79,6 +79,7 @@ import World.Flora.Designation (replaceChunkForgettingFlora)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Material (MaterialId(..), MaterialRegistry)
 import World.Plant.Validate (revalidatePlantDesignations)
+import World.Reaction.Occupants (destroySolidificationOccupants)
 import World.Reaction.Stone (stoneMaterialFor)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Thread.Command.Reaction.Zoom (refreshZoomTerrain)
@@ -293,7 +294,7 @@ commitEvent logger ws acc (ev, mat) = do
 -- | Everything that happens ONCE, after every admitted event has been
 --   applied: the generation advance, the sim handoff that keeps the
 --   reaction's exact active volumes, the designation revalidation, the
---   unit re-ground, and the two live presentations.
+--   occupant destruction (#2490), and the two live presentations.
 publishCommit ∷ EngineEnv → LoggerState → WorldPageId → WorldState
               → [ReactionResult] → [(ChunkCoord, [Int])] → IO ()
 publishCommit env logger pageId ws results touched = do
@@ -336,9 +337,13 @@ publishCommit env logger pageId ws results touched = do
     let tiles = [ reactionEventTile ev | rr ← results, ev ← rrEvents rr ]
     _ ← revalidatePlantDesignations logger ws
     _ ← revalidateConstructDesignations env logger ws (ConstructKeys tiles)
-    -- Units standing on a solidified tile ride up with it.
-    forM_ tiles $ \(gx, gy) →
-        Q.writeQueue (unitQueue env) (UnitReGround pageId gx gy)
+    -- #2490: whatever was standing on a solidified tile is DESTROYED,
+    -- not carried up with it. This replaces the add-tile path's
+    -- 'UnitReGround' rather than joining it — see
+    -- "World.Reaction.Occupants" for why the lift is wrong here and
+    -- where each half of the destruction runs.
+    destroySolidificationOccupants (toUnitCombatCapability env) logger
+                                   pageId ws tiles
     logDebug logger CatWorld $
         "Committed " <> tshow (length results) <> " reaction result(s), "
         <> tshow (length tiles) <> " stone tile(s)"

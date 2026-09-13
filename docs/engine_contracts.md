@@ -79,7 +79,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Flora visual state and fallback (#2526)](#flora-visual-state-and-fallback-2526)
 - [Loot profiles (#2499)](#loot-profiles-2499)
 - [Farming (#331-#336)](#farming-331-336)
-- [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485)
+- [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485-2490)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
 - [Audio runtime and authored sounds](#audio-runtime-and-authored-sounds)
@@ -4754,7 +4754,7 @@ gives it a fixture.
 
 ---
 
-## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)
+## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)
 
 Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
 (decisions D-1, D-2, D-3, D-5 and D-7). FR-1 of epic #2480 makes the
@@ -5049,6 +5049,72 @@ against the old one, and the commit drops them directly too, so a
 refreshed summary shows on the very next bake rather than waiting for the
 upload.
 
+### Occupants of a solidifying cell are destroyed (#2490)
+
+**The lift is replaced, not joined.** A player's add-tile settles
+whoever is standing on the tile by re-grounding them
+(`Unit.Command.Types.UnitReGround`), and #2485 inherited that. An
+accepted solidification does NOT: the owner's decision (epic #2480, D-3
+and D-6) is that anything occupying the cell is destroyed instantly, so
+`World.Thread.Command.Reaction.publishCommit` sends
+`UnitSolidifyOccupants` INSTEAD of the re-ground for every tile that
+received stone. Displacement and damage-and-lift were considered and
+rejected. Every other terrain edit keeps the lift unchanged.
+
+**Each half runs where its state lives.** Ground items are removed on
+the WORLD thread, by `World.Reaction.Occupants`, through
+`World.GroundItems.takeGroundItemsOnPageWhere` — the same page
+ground-item lock a selection takes, so a removal cannot slip between a
+selection's check and its commit. Units are only NAMED there: their sim
+state belongs to the unit thread (#1890), so the kill rides that
+thread's queue and lands in `Unit.Thread.Command.Solidify`, which calls
+the ordinary `handleUnitKillCommand` rather than restating a terminal
+state that could then drift from every other death's.
+
+**The victim set is fixed at the edit and travels with the message.**
+The unit queue is drained on the unit thread's own tick, an unbounded
+delay later. Naming only the tile would kill whoever stood there THEN —
+a unit caught by a reaction it walked into afterwards — and would let
+one that walked off escape a reaction it was in. So the occupants are
+resolved from the manager while the stone is landing, and the handler
+re-reads only each named victim's own pose.
+
+**Occupancy is a floor in the canonical frame.** A unit's position is a
+sub-tile float, so the tile it is on is `floor` of it — which is why a
+unit mid-crossing occupies the tile it is currently over and dies,
+though `UnitReGround` (idle-only) would have skipped it. Both sides are
+moved into the stored frame with `canonicalTile`, so a position naming a
+u-alias of the solidified tile still matches (§Tile-coordinate seam
+frame); ground items match the same way, from `floor` of their own
+stored float position. Identity away from the seam.
+
+**A death is recorded twice, and only for a unit that was alive.** An
+injury-stream `"death"` event naming the victim, whose `cause` names the
+reaction and the tile (`scripts/injury_log.lua`'s `deathLine` renders it
+as "… died of …"), and a player event-log row attributed to the unit at
+the reaction PAGE's coordinates, under the existing `unit_warning`
+category whose shipped defaults log it — no category was added. Both are
+emitted from the unit thread, not from the world thread that commits the
+stone, because whether a named occupant was still alive is only
+answerable from the sim state the unit thread owns. An occupant that was
+ALREADY dead keeps its terminal state and produces neither event.
+
+**Nothing is buried, and nothing else moves.** Every occupant of the
+tile — the fresh corpse and an older one alike — is raised to the new
+surface if it is below it, in the sim state and the render-facing
+instance together. That is a `max`, not a snap: it is the minimum
+correction that keeps a body out of the stone, and it never moves one
+horizontally. A selection naming a destroyed item is cleared with the
+removal (unlike an ordinary pickup, which leaves that to
+`scripts/item_info_panel.lua`'s refresh — a reaction can fire on a page
+with no panel watching); a selection naming any other item is untouched.
+A unit or item on an adjacent tile, or at the same coordinates on
+another page, is not an occupant of this tile at all (#1593). A refused
+result destroys nothing, for the same reason it commits nothing.
+
+No persisted type changes and no save-version bump: the injury and
+event streams stay transient exactly as before.
+
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch
 per ordering, plus the live-source, capacity-edge, refill and
@@ -5064,9 +5130,21 @@ results, an evicted participant, convergence, a refused pre-commit
 writeback, acknowledgement ordering, a missing product material, a real
 eviction and regeneration, the cumulative same-chunk zoom refresh, a
 page with no atlas to patch, and the per-page publication queue.
+hspec `--match "solidification occupants"`
+(`test-headless/Test/Headless/World/SolidificationOccupants.hs`) is
+#2490's own group, on the same live world thread with the unit queue
+drained by hand: the death and its two event rows, the corpse's height
+on both surfaces, a mid-crossing victim, an already-dead occupant
+producing no second death, transfer-order retirement and selection
+clearing, a u-alias occupant, a same-coordinate row on another page, a
+refused result, a replayed one, and the edit-time victim set surviving
+queue delay — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
-and also the alias check for the `world.getMaterialAt` query both probes
-read the product through; `tools/fluid_reaction_visual_probe.py`
+the alias check for the `world.getMaterialAt` query both probes read the
+product through, and #2490's live occupant scenario (a unit and an item
+on the cell, a control pair beside it, graded through the SIM's own
+reaction; it stubs `injury_log_panel`'s tick so it owns the injury
+stream, and `unit_ai`'s so the occupant does not wander off); `tools/fluid_reaction_visual_probe.py`
 (offscreen, needs a GPU) is the two-presentation evidence. It reacts
 TWICE in one chunk: the first contact's refresh folds every setup edit
 into the atlas, so what the measured one adds is attributable to its own
