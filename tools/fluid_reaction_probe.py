@@ -84,6 +84,13 @@ OCCUPANT_ITEM = "granite_chunk"
 # the sim's own activation and settle ticks at 10 Hz, one contact, and
 # the commit that follows it.
 REACTION_TIMEOUT = 60.0
+# How long the OCCUPANT outcome has after the stone is observable. The
+# stone appears in `commitEvent`; the occupant set is resolved later in
+# `publishCommit`, the kill rides the unit queue to the unit thread's
+# own tick, and the item removal is a third moment. Generous, because a
+# probe that graded any of them one shot after the height rose would be
+# racing all three.
+OCCUPANT_TIMEOUT = 30.0
 
 
 class Checks:
@@ -364,10 +371,65 @@ def ground_ids(port: int):
     return out
 
 
+def drain_injuries(port: int):
+    """One destructive drain of the injury stream, flattened for Python."""
+    drained = send_json(port,
+        "local out = {}; "
+        "for _, e in ipairs(injury.drainEvents() or {}) do "
+        "local p = e.payload or {}; "
+        "out[#out+1] = {target=tostring(e.target), kind=tostring(e.kind), "
+        "cause=tostring(p.cause or '')} end; return out")
+    return [e for e in drained if isinstance(e, dict)] \
+        if isinstance(drained, list) else []
+
+
+def await_occupant_destruction(port: int, uid: int, seconds: float):
+    """Poll until the occupant is dead, ACCUMULATING every injury batch
+    drained on the way, and answer (pose, events).
+
+    The terrain height this probe already waited for is NOT the finish
+    line. ``commitEvent`` writes the stone into the tiles, and only then
+    does ``publishCommit`` resolve the occupants and queue
+    ``UnitSolidifyOccupants``; the unit thread drains that on its own
+    tick, and the injury event and the item removal land at different
+    moments again. A one-shot read right after the height rose could
+    therefore see stone, a still-standing unit, and an empty stream.
+
+    Accumulating is what makes the polling safe rather than merely
+    patient: ``injury.drainEvents`` is DESTRUCTIVE, so a poll that threw
+    its batch away would be the very race it was added to close.
+    """
+    events = []
+    deadline = time.time() + seconds
+    pose = None
+    while True:
+        events.extend(drain_injuries(port))
+        pose = send(port, f"return unit.getPose({uid})").strip().strip('"')
+        if pose == "dead" or time.time() >= deadline:
+            break
+        time.sleep(0.25)
+    # One last sweep: the pose is stamped by the same handler that files
+    # the event, but the two reads above are separate round trips, so the
+    # event can land between them on the final iteration.
+    events.extend(drain_injuries(port))
+    return pose, events
+
+
+def await_item_removed(port: int, gid: int, seconds: float):
+    """Poll the ground listing until @gid@ is gone, answering the last
+    listing read — for the same asynchrony reason as the pose."""
+    deadline = time.time() + seconds
+    remaining = ground_ids(port)
+    while remaining is not None and gid in remaining and time.time() < deadline:
+        time.sleep(0.25)
+        remaining = ground_ids(port)
+    return remaining
+
+
 def check_occupants(chk: Checks, port: int, lava_tile, uid, control_uid,
                     gid, control_gid) -> None:
     """Grade #2490 against the reaction that has already committed."""
-    pose = send(port, f"return unit.getPose({uid})").strip().strip('"')
+    pose, drained = await_occupant_destruction(port, uid, OCCUPANT_TIMEOUT)
     chk.ok(pose == "dead",
            f"the occupant of the solidified cell is dead (pose {pose!r})")
     control_pose = send(port,
@@ -375,19 +437,7 @@ def check_occupants(chk: Checks, port: int, lava_tile, uid, control_uid,
     chk.ok(control_pose != "dead",
            f"the unit on the control tile survived (pose {control_pose!r})")
 
-    # ONE drain, read for both units: the stream is destructive, so a
-    # second call would report an empty buffer rather than a second
-    # opinion.
-    drained = send_json(port,
-        "local out = {}; "
-        "for _, e in ipairs(injury.drainEvents() or {}) do "
-        "local p = e.payload or {}; "
-        "out[#out+1] = {target=tostring(e.target), kind=tostring(e.kind), "
-        "cause=tostring(p.cause or '')} end; return out")
-    deaths = []
-    if isinstance(drained, list):
-        deaths = [e for e in drained
-                  if isinstance(e, dict) and e.get("kind") == "death"]
+    deaths = [e for e in drained if e.get("kind") == "death"]
     mine = [e for e in deaths if as_int(e.get("target")) == uid]
     chk.ok(len(mine) == 1,
            f"exactly one 'death' injury event names the occupant "
@@ -426,7 +476,7 @@ def check_occupants(chk: Checks, port: int, lava_tile, uid, control_uid,
                f"the event-log row names the reaction's own page "
                f"(got {row.get('page')!r}, expected {PAGE!r})")
 
-    remaining = ground_ids(port)
+    remaining = await_item_removed(port, gid, OCCUPANT_TIMEOUT)
     chk.ok(remaining is not None,
            f"the page answered a ground-item listing (got {remaining!r})")
     if remaining is not None:

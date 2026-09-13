@@ -54,6 +54,9 @@ import Unit.Transfer.Orders
     (TransferOrders(..), addTransferOrder, emptyTransferOrders)
 import Unit.Types
 import World.Chunk.Admit (pageIncarnation)
+import World.Edit.Apply (applyEdit)
+import World.Edit.Types (WorldEdit(..))
+import World.Flora.Designation (replaceChunkForgettingFlora)
 import World.Generate.Coordinates (canonicalTile)
 import World.Plate.Wrap (worldWidthTiles)
 import World.Reaction.Occupants (occupiesTile)
@@ -72,6 +75,7 @@ import Test.Headless.World.Solidification
 victimPageId, corpsePageId, moverPageId, otherPageId ∷ WorldPageId
 reactingPageId, crossingPageId, aliasPageId, stalePageId ∷ WorldPageId
 replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
+mirrorPageId, floodedPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -84,6 +88,8 @@ replayPageId    = WorldPageId "occupants_replay_w8"
 delayPageId     = WorldPageId "occupants_delay_w8"
 selectionPageId = WorldPageId "occupants_selection_w8"
 emptyTilePageId = WorldPageId "occupants_emptytile_w8"
+mirrorPageId    = WorldPageId "occupants_mirror_w8"
+floodedPageId   = WorldPageId "occupants_flooded_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -254,6 +260,50 @@ placeAt env uid (gx, gy) = atomicModifyIORef' (utsRef env) $ \uts →
               (\ss → ss { usRealX = fromIntegral gx + 0.5
                         , usRealY = fromIntegral gy + 0.5 })
               uid (utsSimStates uts) }, () )
+
+-- | Move one unit's RENDER-FACING position without touching its
+--   authoritative one — the state the unit thread's own
+--   @publishToRender@ would reconcile on its next tick.
+--
+--   No production path writes these two out of step on purpose; a
+--   fixture does, because being up to one tick apart is exactly what
+--   the mirror IS between publishes, and a selection reading the wrong
+--   one of the pair is the defect this pins.
+placeMirrorAt ∷ EngineEnv → UnitId → (Int, Int) → IO ()
+placeMirrorAt env uid (gx, gy) =
+    atomicModifyIORef' (unitManagerRef env) $ \um →
+        ( um { umInstances = HM.adjust
+                 (\inst → inst { uiGridX = fromIntegral gx + 0.5
+                               , uiGridY = fromIntegral gy + 0.5 })
+                 uid (umInstances um) }, () )
+
+-- | Stand DEEP fluid over a column, so the page's resolved surface is
+--   above its terrain top BOTH before the reaction and after it.
+--
+--   Deep on purpose. @world.setFluidTile@ places exactly one level, and
+--   'World.Edit.Apply.applyEdit' displaces a cell the new stone reaches
+--   — so a one-level flood would be gone by the time the correction
+--   runs, and the case could not tell a terrain-top lookup from a
+--   surface one. Three levels survive the single z the stone adds,
+--   which is the retained-fluid state engine contracts §Fluid reaction
+--   describes for an active chunk's solidified cell.
+--
+--   Applied through the production 'World.Edit.Apply.applyEdit' and the
+--   production 'World.Flora.Designation.replaceChunkForgettingFlora',
+--   so the fluid map and the surface map move together exactly as a
+--   real edit moves them. Written straight into the page rather than
+--   queued because there is no world command for an explicit fluid
+--   SURFACE; the world thread is idle here (the page's init has been
+--   waited for and no batch is in flight).
+floodTileDeep ∷ WorldState → ChunkCoord → (Int, Int) → (Int, Int) → IO ()
+floodTileDeep ws coord (gx, gy) cell = do
+    lc ← chunkAt ws coord
+    let top = terrainTopAt lc cell
+        lc' = applyEdit (WeSetFluidSnapshot gx gy Lake (top + 3)) lc
+    replaceChunkForgettingFlora ws lc lc'
+
+surfaceAt ∷ LoadedChunk → (Int, Int) → Int
+surfaceAt lc (lx, ly) = lcSurfaceMap lc VU.! columnIndex lx ly
 
 -- * The live group ----------------------------------------------------
 
@@ -590,6 +640,73 @@ spec = describe "solidification occupants (#2490)" $ do
         readEventLog env `shouldReturn` []
         (Seq.length <$> readIORef (injuryEventsRef env)) `shouldReturn` 0
 
+    it "judges occupancy on the AUTHORITATIVE sim position, not on the \
+       \render mirror that lags it by up to a tick" $ \env → do
+        prepare env
+        lp ← livePage env mirrorPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+            beside = tileOf lp nextCell
+        before ← chunkAt ws (lpLava lp)
+        -- `caught` has really crossed onto the doomed tile; its mirror
+        -- still shows the neighbour it came from.
+        caught ← spawnAt env ws mirrorPageId 9921 beside
+                         (terrainTopAt before nextCell)
+        placeAt env caught doomed
+        placeMirrorAt env caught beside
+        -- `spared` has really crossed OFF it; its mirror still shows the
+        -- doomed tile.
+        spared ← spawnAt env ws mirrorPageId 9922 doomed
+                         (terrainTopAt before reactCell)
+        placeAt env spared beside
+        placeMirrorAt env spared doomed
+        -- The fixture is only meaningful while the two genuinely
+        -- disagree, which is what a mid-tick mover looks like.
+        caughtInst ← instanceOf env caught
+        (floor (uiGridX caughtInst), floor (uiGridY caughtInst))
+            `shouldBe` beside
+        sparedInst ← instanceOf env spared
+        (floor (uiGridX sparedInst), floor (uiGridY sparedInst))
+            `shouldBe` doomed
+
+        react env lp mirrorPageId reactCell
+        drainUnits env
+
+        poseOf env caught `shouldReturn` Dead
+        (length <$> deathsFor env caught) `shouldReturn` 1
+        poseOf env spared `shouldReturn` Standing
+        (length <$> deathsFor env spared) `shouldReturn` 0
+
+    it "rests the corpse on the STONE, not on fluid the solidified cell \
+       \still holds above it" $ \env → do
+        prepare env
+        lp ← livePage env floodedPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        floodTileDeep ws (lpLava lp) doomed reactCell
+        before ← chunkAt ws (lpLava lp)
+        let baseTop = terrainTopAt before reactCell
+        -- The whole point of the case: the page's RESOLVED surface here
+        -- stands above its terrain top, so a correction that read the
+        -- surface would float the body.
+        (surfaceAt before reactCell > baseTop) `shouldBe` True
+        victim ← spawnAt env ws floodedPageId 9931 doomed baseTop
+
+        react env lp floodedPageId reactCell
+        drainUnits env
+
+        after ← chunkAt ws (lpLava lp)
+        let stoneTop = terrainTopAt after reactCell
+        stoneTop `shouldBe` baseTop + 1
+        (surfaceAt after reactCell > stoneTop) `shouldBe` True
+        ss ← simStateOf env victim
+        inst ← instanceOf env victim
+        poseOf env victim `shouldReturn` Dead
+        -- EXACTLY the stone top: at it, so it is not buried, and no
+        -- higher, so it is not floating on the water above it.
+        usGridZ ss `shouldBe` stoneTop
+        uiGridZ inst `shouldBe` stoneTop
+
 -- * The occupancy predicate itself ------------------------------------
 
 -- | Pinned directly as well as through the live commits above, because
@@ -601,34 +718,15 @@ pureSpec = describe "solidification occupants (#2490) — occupancy" $ do
     let w = fixtureWorldSize
         step = worldWidthTiles w `div` 2
     it "reads a sub-tile position as the tile it is the floor of" $ do
-        occupiesTile w (3, 4) (unitAt 3.9 4.1) `shouldBe` True
-        occupiesTile w (3, 4) (unitAt 4.0 4.1) `shouldBe` False
+        occupiesTile w (3, 4) 3.9 4.1 `shouldBe` True
+        occupiesTile w (3, 4) 4.0 4.1 `shouldBe` False
     it "uses floor, not truncation, on a negative coordinate" $ do
-        occupiesTile w (-1, 0) (unitAt (-0.5) 0.5) `shouldBe` True
-        occupiesTile w (0, 0) (unitAt (-0.5) 0.5) `shouldBe` False
+        occupiesTile w (-1, 0) (-0.5) 0.5 `shouldBe` True
+        occupiesTile w (0, 0) (-0.5) 0.5 `shouldBe` False
     it "matches a u-alias of the tile, named from either side" $ do
-        occupiesTile w (3, 4)
-            (unitAt (fromIntegral (3 + step) + 0.5)
-                    (fromIntegral (4 - step) + 0.5)) `shouldBe` True
-        occupiesTile w (3 + step, 4 - step) (unitAt 3.5 4.5) `shouldBe` True
+        occupiesTile w (3, 4) (fromIntegral (3 + step) + 0.5)
+                              (fromIntegral (4 - step) + 0.5)
+            `shouldBe` True
+        occupiesTile w (3 + step, 4 - step) 3.5 4.5 `shouldBe` True
     it "does not match a genuinely different tile" $
-        occupiesTile w (3, 4) (unitAt 5.5 4.5) `shouldBe` False
-
--- | A bare instance carrying nothing but a position.
-unitAt ∷ Float → Float → UnitInstance
-unitAt gx gy = UnitInstance
-    { uiDefName = occupantDefName, uiName = ""
-    , uiPage = WorldPageId "occupancy_pure"
-    , uiTexture = TextureHandle 0, uiDirSprites = Map.empty
-    , uiBaseWidth = 0, uiGridX = gx, uiGridY = gy, uiGridZ = 0
-    , uiRealZ = 0, uiFacing = DirE
-    , uiCurrentAnim = "", uiAnimStart = 0, uiAnimReverse = False
-    , uiActivity = "idle", uiPose = "standing", uiAnimStride = 1
-    , uiStats = HM.empty
-    , uiModifiers = HM.empty, uiSkills = HM.empty
-    , uiKnowledge = HM.empty, uiInventory = [], uiEquipment = HM.empty
-    , uiAccessories = [], uiFactionId = FactionPlayer, uiWounds = []
-    , uiScars = [], uiImmuneResponse = 0, uiImmunities = HM.empty
-    , uiBlood = 100, uiLastAttackerUid = Nothing, uiLastAttackerAt = 0
-    , uiAnimOverride = "", uiFrozen = False, uiForceLoop = False
-    , uiClimbDest = Nothing, uiTrailState = Nothing }
+        occupiesTile w (3, 4) 5.5 4.5 `shouldBe` False

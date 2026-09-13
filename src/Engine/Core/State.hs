@@ -348,7 +348,13 @@ data EngineEnv = EngineEnv
     --   path, *Until timers). Lives on EngineEnv (not encapsulated in
     --   the unit thread) so the save/load handler can snapshot and
     --   restore it; the unit thread treats it as the sole authority
-    --   for movement and timed states.
+    --   for movement and timed states, and is its only WRITER.
+    --   Other threads read it where they need the authoritative
+    --   answer rather than the once-per-tick render mirror: the save
+    --   capture and @unit.getInfo@, and since #2490 the world
+    --   thread's solidification commit, which resolves the occupants
+    --   of the cell it just turned to stone from these positions
+    --   ("World.Reaction.Occupants").
   , statRNGRef          ∷ IORef StdGen
     -- ^ Runtime RNG for stat rolls. Seeded from system entropy at
     --   startup; not tied to the world seed (stats are non-deterministic

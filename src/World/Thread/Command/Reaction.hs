@@ -298,6 +298,18 @@ commitEvent logger ws acc (ev, mat) = do
 publishCommit ∷ EngineEnv → LoggerState → WorldPageId → WorldState
               → [ReactionResult] → [(ChunkCoord, [Int])] → IO ()
 publishCommit env logger pageId ws results touched = do
+    -- #2490 FIRST, before anything slower runs: whatever was standing
+    -- on a solidified tile is DESTROYED, not carried up with it. This
+    -- replaces the add-tile path's 'UnitReGround' rather than joining
+    -- it — see "World.Reaction.Occupants" for why the lift is wrong
+    -- here, where each half of the destruction runs, and why the
+    -- occupant set is read HERE rather than after the refreshes: the
+    -- unit thread keeps moving units while they run, and every step it
+    -- takes in between is a step the victim set is judged against
+    -- instead of against the moment the stone landed.
+    let tiles = [ reactionEventTile ev | rr ← results, ev ← rrEvents rr ]
+    destroySolidificationOccupants (toUnitCombatCapability env) logger
+                                   pageId ws tiles
     -- One bump per EDITED chunk, however many of its events landed. A
     -- participant that received no stone keeps the generation it has:
     -- nothing about it changed, and bumping it would fence out its own
@@ -334,16 +346,8 @@ publishCommit env logger pageId ws results touched = do
 
     -- #1858 / #1844, scoped to the tiles whose inputs moved, exactly as
     -- the live add-tile handler scopes them.
-    let tiles = [ reactionEventTile ev | rr ← results, ev ← rrEvents rr ]
     _ ← revalidatePlantDesignations logger ws
     _ ← revalidateConstructDesignations env logger ws (ConstructKeys tiles)
-    -- #2490: whatever was standing on a solidified tile is DESTROYED,
-    -- not carried up with it. This replaces the add-tile path's
-    -- 'UnitReGround' rather than joining it — see
-    -- "World.Reaction.Occupants" for why the lift is wrong here and
-    -- where each half of the destruction runs.
-    destroySolidificationOccupants (toUnitCombatCapability env) logger
-                                   pageId ws tiles
     logDebug logger CatWorld $
         "Committed " <> tshow (length results) <> " reaction result(s), "
         <> tshow (length tiles) <> " stone tile(s)"

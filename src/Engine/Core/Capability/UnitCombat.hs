@@ -117,11 +117,14 @@ data UnitCombatCapability = UnitCombatCapability
     --   rationale on 'ucCombatQueue'.
   , ucUtsRef           ∷ IORef UnitThreadState
     -- ^ Sim-side per-unit state (position, pose, activity, target,
-    --   path, @*Until@ timers). Single-thread-owned by @UnitThread@
-    --   outside a load publish (@WorldThread@) or a save capture
-    --   (@WorldThread@, read-only) — it lives on 'EngineEnv' rather
-    --   than inside the unit thread precisely so those two can reach
-    --   it. Also read by @LuaThread@ for @unit.getInfo@.
+    --   path, @*Until@ timers). WRITTEN by @UnitThread@ alone
+    --   outside a load publish (@WorldThread@) — it lives on
+    --   'EngineEnv' rather than inside the unit thread precisely so
+    --   other roles can reach it. Read by @WorldThread@ for a save
+    --   capture and, since #2490, for the solidification commit's
+    --   occupant resolution (@World.Reaction.Occupants@, which needs
+    --   the authoritative positions rather than the once-per-tick
+    --   render mirror), and by @LuaThread@ for @unit.getInfo@.
   , ucStatRNGRef       ∷ IORef StdGen
     -- ^ Runtime RNG for stat rolls, seeded from system entropy at
     --   startup — deliberately __not__ world-seeded, so stats are

@@ -42,18 +42,31 @@
 --   named victim's own pose, so one that died of something else in the
 --   meantime is settled rather than killed twice.
 --
---   __Where the positions come from.__ @umInstances@, which is the
---   only unit position the world thread may read: @utsSimStates@
---   belongs to the unit thread and nothing outside it may touch that.
---   It is not a separate reading — @Unit.Thread.publishToRender@
---   copies @usRealX@\/@usRealY@ into @uiGridX@\/@uiGridY@ verbatim, so
---   this IS the simulation's own authored position, republished once
---   per unit tick. What it can be is up to one tick old, which is the
---   nearest thing to "at the edit" any cross-thread reader can have,
---   and strictly nearer than what the alternative would give: letting
---   the handler select at the drain would read a position an unbounded
---   number of ticks later, which is the substitution the carried set
---   exists to prevent.
+--   __Where the positions come from.__ @utsSimStates@ — the
+--   AUTHORITATIVE simulation coordinates, read through
+--   'Engine.Core.Capability.UnitCombat.ucUtsRef'. That record lives on
+--   'Engine.Core.State.EngineEnv' rather than inside the unit thread
+--   precisely so another thread can read it (the save capture and
+--   @unit.getInfo@ both already do); this is a READ, and the unit
+--   thread remains its only writer.
+--
+--   @umInstances@ answers ONE question here: which units belong to
+--   this page. It is never asked for a position.
+--   @Unit.Thread.publishToRender@ republishes @usRealX@/@usRealY@ into
+--   @uiGridX@/@uiGridY@ once per unit tick, so the mirror is up to a
+--   whole tick behind — and a unit that crossed OFF the cell inside
+--   that tick would have been killed by a reaction it was no longer
+--   in, while one that crossed ONTO it would have escaped.
+--
+--   This runs FIRST in 'World.Thread.Command.Reaction.publishCommit',
+--   ahead of the generation advance, the sim handoff, the zoom refresh
+--   and the designation revalidation, so the positions it reads are as
+--   close to the edit as the world thread can get them. The unit
+--   thread is genuinely concurrent, so "as close as possible" is the
+--   honest claim rather than "atomic": what it buys is that a mover
+--   travels at most a fraction of one tick between the stone landing
+--   and the set being taken, instead of one tick per queued command
+--   until the drain.
 --
 --   __Occupancy is a floor in the canonical frame.__ A unit's authored
 --   position is a sub-tile float, so the tile it is ON is the floor of
@@ -78,7 +91,8 @@ import Engine.Core.Capability.UnitCombat (UnitCombatCapability(..))
 import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Ground (GroundItem(..))
 import Unit.Command.Types (UnitCommand(..))
-import Unit.Types (UnitInstance(..), UnitManager(..), unitsOnPage)
+import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
+import Unit.Types (UnitManager(..), unitsOnPage)
 import World.Generate.Coordinates (canonicalTile)
 import World.GroundItems (takeGroundItemsOnPageWhere)
 import World.Page.Types (WorldPageId(..))
@@ -111,14 +125,20 @@ destroySolidificationOccupants uc logger pageId ws tiles
             HS.member (canonicalTile worldSize (floor (giX gi))
                                                (floor (giY gi)))
                       canonical
-        -- ONE read of the manager for the whole commit, so two tiles
-        -- of the same delivery cannot be judged against different
-        -- positions of the same walking unit.
-        um ← readIORef (ucUnitManagerRef uc)
-        let onPage = unitsOnPage pageId (umInstances um)
+        -- ONE read of each, so two tiles of the same delivery cannot
+        -- be judged against different positions of the same walking
+        -- unit. Page ownership from the manager (@uiPage@ is the
+        -- instance's own field), position from the sim state.
+        um  ← readIORef (ucUnitManagerRef uc)
+        uts ← readIORef (ucUtsRef uc)
+        let onPage = HS.fromList
+                         (HM.keys (unitsOnPage pageId (umInstances um)))
             plan = [ ( canonicalTile worldSize gx gy
-                     , [ uid | (uid, inst) ← HM.toList onPage
-                             , occupiesTile worldSize (gx, gy) inst ] )
+                     , [ uid
+                       | (uid, ss) ← HM.toList (utsSimStates uts)
+                       , HS.member uid onPage
+                       , occupiesTile worldSize (gx, gy)
+                                      (usRealX ss) (usRealY ss) ] )
                    | (gx, gy) ← tiles ]
         forM_ plan $ \((cgx, cgy), victims) →
             -- The message is sent even with no victims: it is what
@@ -135,14 +155,17 @@ destroySolidificationOccupants uc logger pageId ws tiles
             <> " unit occupant(s) across " <> tshow (length tiles)
             <> " stone tile(s) on page " <> unWorldPageId pageId
 
--- | Is this instance standing on @tile@, in the canonical frame?
+-- | Is a unit at authoritative sim position @(ux, uy)@ standing on
+--   @tile@, in the canonical frame?
 --
 --   Exported so the contract is checkable against the function the
---   commit actually calls rather than a restatement of it. The page is
---   NOT re-checked here — the caller has already narrowed to one page's
---   instances, and a coordinate match on another page is not an
+--   commit actually calls rather than a restatement of it. It takes
+--   the bare coordinates rather than a record, so no caller can reach
+--   it with the render mirror's lagging copy of them by accident. The
+--   page is NOT re-checked here — the caller has already narrowed to
+--   one page's units, and a coordinate match on another page is not an
 --   occupant of this tile at all (#1593).
-occupiesTile ∷ Int → (Int, Int) → UnitInstance → Bool
-occupiesTile worldSize (gx, gy) inst =
-    canonicalTile worldSize (floor (uiGridX inst)) (floor (uiGridY inst))
+occupiesTile ∷ Int → (Int, Int) → Float → Float → Bool
+occupiesTile worldSize (gx, gy) ux uy =
+    canonicalTile worldSize (floor ux) (floor uy)
         ≡ canonicalTile worldSize gx gy

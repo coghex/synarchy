@@ -55,7 +55,7 @@ import Engine.PlayerEvent.Emit (emitEventFullOnPage)
 import Combat.Types (pushInjuryEvent)
 import Unit.Types
 import Unit.Sim.Types
-import Unit.Thread.Command.Lifecycle (lookupSurfaceZ)
+import Unit.Thread.Command.Lifecycle (lookupTerrainTopZ)
 import Unit.Thread.Command.Pose (handleUnitKillCommand)
 import World.Page.Types (WorldPageId(..))
 
@@ -90,11 +90,15 @@ handleUnitSolidifyOccupantsCommand
     → [UnitId] → IO ()
 handleUnitSolidifyOccupantsCommand env utsRef pageId gx gy victims = do
     -- Resolved against the POST-commit tiles, so the height a corpse is
-    -- corrected to is the one the new stone left. Nothing here is
-    -- conditional on it: a page or chunk that answers no surface still
-    -- kills, because the deaths are the contract and the height is the
-    -- tidy-up.
-    mSurf ← lookupSurfaceZ env pageId gx gy
+    -- corrected to is the one the new stone left. The TERRAIN top, not
+    -- the resolved surface: a solidified cell may still hold fluid
+    -- above its stone (engine contracts §Fluid reaction — an active
+    -- chunk's cell is displaced by one level, not emptied), and
+    -- correcting to that would float the body on the water instead of
+    -- resting it on the rock. Nothing here is conditional on it: a page
+    -- or chunk that answers no top still kills, because the deaths are
+    -- the contract and the height is the tidy-up.
+    mSurf ← lookupTerrainTopZ env pageId gx gy
     uts0 ← readIORef utsRef
     -- A victim the roster dropped between the commit and this drain has
     -- no sim state either, so it is neither killed nor settled.

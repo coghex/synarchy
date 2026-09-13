@@ -6,6 +6,7 @@ module Unit.Thread.Command.Lifecycle
     , handleUnitTeleportCommand
     , handleUnitReGroundCommand
     , lookupSurfaceZ
+    , lookupTerrainTopZ
     ) where
 
 import UPrelude
@@ -25,6 +26,8 @@ import Unit.Transfer.Live (retireTransferOrdersEverywhere)
 import World.Types (WorldManager(..), WorldState(..), LoadedChunk(..), columnIndex, lookupChunk)
 import World.Page.Types (WorldPageId(..))
 import World.Generate (globalToChunk)
+import World.Generate.Coordinates (canonicalTileFrame)
+import World.State.Types (pageWrapWorldSize)
 
 handleUnitDestroyCommand ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
 handleUnitDestroyCommand env utsRef uid = do
@@ -258,6 +261,44 @@ unitIdsOnPage env pageId = do
 --   This replaces the pre-#1593 @wmVisible@ scan, which returned the
 --   first visible page with a matching chunk and so let a terrain edit on
 --   one page snap coordinate-matched units on another.
+-- | The TERRAIN top of one named page's column at (gx, gy) — the z of
+--   the highest solid tile, with no fluid folded in (#2490).
+--
+--   Two deliberate differences from 'lookupSurfaceZ', which is about
+--   "where does a unit stand here" and therefore reads @lcSurfaceMap@:
+--
+--   * It reads @lcTerrainSurfaceMap@. A solidified cell may still hold
+--     fluid above its new stone — engine contracts §Fluid reaction:
+--     an ACTIVE chunk's solidified cell is DISPLACED by one level, not
+--     emptied — so the resolved surface there can stand above the
+--     stone. Correcting a corpse to that would float it on the water
+--     instead of resting it on the rock, which is not the minimum
+--     correction requirement 4 of #2490 asks for.
+--   * It CANONICALIZES the coordinate before the lookup.
+--     'World.Tile.Types.lookupChunk' wraps nothing, so a coordinate
+--     naming a u-alias of a stored chunk misses it and reads as "not
+--     loaded" (§Tile-coordinate seam frame). 'lookupSurfaceZ' has
+--     never done this and changing it is not #2490's to make; this
+--     one is new, so it starts correct.
+--
+--   'Nothing' when the page is not registered, has no gen params yet,
+--   or holds no loaded chunk at the coordinate — never another page's
+--   z, for 'lookupSurfaceZ''s own reason (#1593).
+lookupTerrainTopZ ∷ EngineEnv → WorldPageId → Int → Int → IO (Maybe Int)
+lookupTerrainTopZ env pageId gx gy = do
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    case lookup pageId (wmWorlds wm) of
+        Nothing → return Nothing
+        Just ws → do
+            worldSize ← pageWrapWorldSize ws
+            td ← readIORef (wsTilesRef ws)
+            let (chunkCoord, (lx, ly), _) =
+                    canonicalTileFrame worldSize gx gy
+            return $ case lookupChunk chunkCoord td of
+                Just lc → Just (lcTerrainSurfaceMap lc
+                                    VU.! columnIndex lx ly)
+                Nothing → Nothing
+
 lookupSurfaceZ ∷ EngineEnv → WorldPageId → Int → Int → IO (Maybe Int)
 lookupSurfaceZ env pageId gx gy = do
     wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
