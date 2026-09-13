@@ -31,11 +31,13 @@ import qualified Data.Sequence as Seq
 import qualified Data.Vector.Unboxed as VU
 import Data.Foldable (toList)
 import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (writeTVar)
 
 import qualified Engine.Core.Queue as Q
 import Engine.Asset.Handle (TextureHandle(..))
+import Engine.Core.Capability.WorldSim (WorldSimCapability(..), toWorldSimCapability)
 import Engine.Core.State (EngineEnv(..))
 import Engine.PlayerEvent (PlayerEvent(..), StoredEvent(..), emptyEventStore)
 import Engine.PlayerEvent.Emit (readEventLog)
@@ -54,6 +56,10 @@ import Unit.Transfer.Orders
     (TransferOrders(..), addTransferOrder, emptyTransferOrders)
 import Unit.Types
 import World.Chunk.Admit (pageIncarnation)
+import World.Material (MaterialRegistry, matLoam)
+import World.Thread.Command.Reaction
+    ( ReactionAdmission(..), ReactionCommitSeams(..), admitReaction
+    , commitReactionsWith )
 import World.Edit.Apply (applyEdit)
 import World.Edit.Types (WorldEdit(..))
 import World.Flora.Designation (replaceChunkForgettingFlora)
@@ -61,6 +67,7 @@ import World.Generate.Coordinates (canonicalTile)
 import World.Plate.Wrap (worldWidthTiles)
 import World.Reaction.Occupants (occupiesTile)
 import World.Types
+import Test.Headless.Harness (getWorldState, sendWorldCommand)
 import Test.Headless.World.Solidification
     (LivePage(..), chunkAt, deliver, livePage, liveEvent)
 
@@ -76,6 +83,7 @@ victimPageId, corpsePageId, moverPageId, otherPageId ∷ WorldPageId
 reactingPageId, crossingPageId, aliasPageId, stalePageId ∷ WorldPageId
 replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
 mirrorPageId, floodedPageId ∷ WorldPageId
+seamPageId, movedPageId, retiredPageId, orphanPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -90,6 +98,10 @@ selectionPageId = WorldPageId "occupants_selection_w8"
 emptyTilePageId = WorldPageId "occupants_emptytile_w8"
 mirrorPageId    = WorldPageId "occupants_mirror_w8"
 floodedPageId   = WorldPageId "occupants_flooded_w8"
+seamPageId      = WorldPageId "occupants_seam_w8"
+movedPageId     = WorldPageId "occupants_moved_w8"
+retiredPageId   = WorldPageId "occupants_retired_w8"
+orphanPageId    = WorldPageId "occupants_orphan_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -247,6 +259,22 @@ logRowsFor env (UnitId raw) = do
     rows ← readEventLog env
     pure [ seEvent r | r ← rows, peUid (seEvent r) ≡ Just raw ]
 
+-- | Raise one column by @n@ z, through the production add-tile edit —
+--   the same 'World.Edit.Apply.applyEdit' a player's own add-tile
+--   makes, so the terrain and surface maps move together.
+--
+--   Written straight into the page for 'floodTileDeep'\'s reason: the
+--   world thread is idle here, and this is fixture setup rather than
+--   anything under test.
+raiseCellBy ∷ WorldState → ChunkCoord → (Int, Int) → (Int, Int) → Int
+            → IO ()
+raiseCellBy ws coord (gx, gy) cell n = forM_ [1 .. n] $ \_ → do
+    lc ← chunkAt ws coord
+    let lc' = applyEdit (WeAddTile gx gy matLoam) lc
+    when (terrainTopAt lc' cell ≡ terrainTopAt lc cell) $
+        expectationFailure "fixture: the add-tile did not raise the column"
+    replaceChunkForgettingFlora ws lc lc'
+
 terrainTopAt ∷ LoadedChunk → (Int, Int) → Int
 terrainTopAt lc (lx, ly) = lcTerrainSurfaceMap lc VU.! columnIndex lx ly
 
@@ -304,6 +332,74 @@ floodTileDeep ws coord (gx, gy) cell = do
 
 surfaceAt ∷ LoadedChunk → (Int, Int) → Int
 surfaceAt lc (lx, ly) = lcSurfaceMap lc VU.! columnIndex lx ly
+
+-- | Drive the REAL commit for one solidification, running @between@
+--   after the occupant snapshot and before the first stone.
+--
+--   The production path is 'World.Thread.Command.Reaction.commitReactions',
+--   which is 'commitReactionsWith' with a no-op seam; this is the same
+--   body with the hook filled in, not a reimplementation of it. It also
+--   uses the production 'admitReaction' to decide the result, so the
+--   case cannot pass by committing something the world thread would
+--   have refused.
+--
+--   Called from the example's own thread rather than through the world
+--   queue, because the point is to interleave a unit-position change
+--   with the commit's internals. That is safe here for the reason
+--   'floodTileDeep' is: the page's init has been waited for, no batch
+--   is in flight, and the world thread touches nothing in between.
+reactWithSeam ∷ EngineEnv → LivePage → WorldPageId → (Int, Int) → IO ()
+                → IO ()
+reactWithSeam env lp pageId cell between = do
+    let ws = lpState lp
+    registry ← readIORef (wsMaterialRegistryRef (toWorldSimCapability env))
+    gens ← readIORef (wsChunkEditGenRef ws)
+    td ← readIORef (wsTilesRef ws)
+    logger ← readIORef (loggerRef env)
+    let rr = ReactionResult
+                 [(lpLava lp, HM.lookupDefault 0 (lpLava lp) gens)]
+                 [liveEvent (lpLava lp) cell (lpLava lp) SolidBasalt]
+    case admitReaction (registry ∷ MaterialRegistry) gens td rr of
+        ReactionRefused why →
+            expectationFailure ("fixture: the result was refused: " ⧺ show why)
+        ReactionAdmitted evs →
+            commitReactionsWith
+                ReactionCommitSeams { seamAfterOccupantSnapshot = between }
+                env logger pageId ws [(rr, evs)]
+
+-- | Re-initialise a page under the SAME id, which is what retires the
+--   previous incarnation's rows (#2476/#2477).
+--
+--   'waitForWorldInit' alone is not enough here: a page already stands
+--   under this id, so it would answer with the OUTGOING one the instant
+--   it was asked. The wait is therefore for a genuinely different
+--   'WorldState' object to be registered, which is what the lifecycle
+--   transition installs — and the transition is also what retires the
+--   previous incarnation's unit rows, so that is exactly the edge the
+--   caller needs to have passed.
+reinitPage ∷ EngineEnv → WorldPageId → WorldState → IO WorldState
+reinitPage env pageId old = do
+    sendWorldCommand env (WorldInit pageId 45 8 3 Nothing)
+    awaitReplacement (3000 ∷ Int)
+  where
+    awaitReplacement 0 =
+        expectationFailure "fixture: the page was never re-initialised"
+            ≫ error "unreachable"
+    awaitReplacement n = do
+        mWs ← getWorldState env pageId
+        case mWs of
+            Just ws | not (sameWorldState ws old) → do
+                phase ← readIORef (wsLoadPhaseRef ws)
+                if phase ≡ LoadDone
+                    then pure ws
+                    else threadDelay 10000 ≫ awaitReplacement (n - 1)
+            _ → threadDelay 10000 ≫ awaitReplacement (n - 1)
+
+-- | Are these two handles the same live page object? Compared by one of
+--   its own 'IORef's, since a 'WorldState' is a record of refs with no
+--   identity of its own.
+sameWorldState ∷ WorldState → WorldState → Bool
+sameWorldState a b = wsTilesRef a ≡ wsTilesRef b
 
 -- * The live group ----------------------------------------------------
 
@@ -706,6 +802,127 @@ spec = describe "solidification occupants (#2490)" $ do
         -- higher, so it is not floating on the water above it.
         usGridZ ss `shouldBe` stoneTop
         uiGridZ inst `shouldBe` stoneTop
+
+    it "judges the victim set on the snapshot taken BEFORE the stone, \
+       \so a unit that moves while the commit runs cannot change it" $
+      \env → do
+        prepare env
+        lp ← livePage env seamPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+            beside = tileOf lp nextCell
+        before ← chunkAt ws (lpLava lp)
+        caught ← spawnAt env ws seamPageId 9941 doomed
+                         (terrainTopAt before reactCell)
+        latecomer ← spawnAt env ws seamPageId 9942 beside
+                            (terrainTopAt before nextCell)
+
+        -- The interleaving a running unit thread could produce, made
+        -- deterministic: the two swap tiles after the occupants have
+        -- been read and before a single stone has landed. Everything
+        -- the commit does afterwards — the edits, the item removals,
+        -- the generation advance, both refreshes — happens with the
+        -- units in their SWAPPED positions.
+        reactWithSeam env lp seamPageId reactCell $ do
+            placeAt env caught beside
+            placeAt env latecomer doomed
+        drainUnits env
+
+        poseOf env caught `shouldReturn` Dead
+        (length <$> deathsFor env caught) `shouldReturn` 1
+        poseOf env latecomer `shouldReturn` Standing
+        (length <$> deathsFor env latecomer) `shouldReturn` 0
+
+    it "settles a victim that moved before the drain against ITS OWN \
+       \column, not against the column the stone went into" $ \env → do
+        prepare env
+        lp ← livePage env movedPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        -- A neighbour raised HIGHER than the stone will leave the
+        -- reacting column, built rather than searched for: a generated
+        -- page is flat enough around any given cell that looking for a
+        -- natural step makes the case depend on the seed.
+        raiseCellBy ws (lpLava lp) (tileOf lp nextCell) nextCell 3
+        before ← chunkAt ws (lpLava lp)
+        victim ← spawnAt env ws movedPageId 9951 doomed
+                         (terrainTopAt before reactCell)
+
+        react env lp movedPageId reactCell
+        -- Moves after the commit and before the drain — the window the
+        -- carried victim set exists to survive, and the one the
+        -- correction has to notice.
+        placeAt env victim (tileOf lp nextCell)
+        drainUnits env
+
+        after ← chunkAt ws (lpLava lp)
+        let stoneTop = terrainTopAt after reactCell
+            ownTop   = terrainTopAt after nextCell
+        -- The fixture is only meaningful while the two columns differ,
+        -- and differ in the direction that BURIES rather than floats.
+        (ownTop > stoneTop) `shouldBe` True
+        poseOf env victim `shouldReturn` Dead
+        ss ← simStateOf env victim
+        inst ← instanceOf env victim
+        -- Clear of ITS OWN ground. Correcting against the stone column
+        -- would have left it at `stoneTop`, two z inside the ground it
+        -- is actually lying on.
+        usGridZ ss `shouldBe` ownTop
+        uiGridZ inst `shouldBe` ownTop
+
+    it "skips a victim whose page was re-initialised under the same id \
+       \before the kill was drained, killing and reporting nothing" $
+      \env → do
+        prepare env
+        lp ← livePage env retiredPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        doomedUnit ← spawnAt env ws retiredPageId 9961 doomed
+                             (terrainTopAt before reactCell)
+
+        react env lp retiredPageId reactCell
+        -- The page is REPLACED while the kill sits queued. #2476 retires
+        -- the previous incarnation's instances at once and leaves their
+        -- sim rows to a UnitClearPage that is queued BEHIND our message,
+        -- so a handler checking only the sim state would kill and report
+        -- an orphan — at coordinates that now mean the new world.
+        _ ← reinitPage env retiredPageId ws
+        clearStreams env
+        drainUnits env
+
+        (length <$> deathsFor env doomedUnit) `shouldReturn` 0
+        logRowsFor env doomedUnit `shouldReturn` []
+
+    it "skips a victim the ROSTER no longer holds, even while the page \
+       \itself is still the one the commit ran against" $ \env → do
+        prepare env
+        lp ← livePage env orphanPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        orphan ← spawnAt env ws orphanPageId 9971 doomed
+                         (terrainTopAt before reactCell)
+
+        react env lp orphanPageId reactCell
+        -- EXACTLY the window `registerPageIncarnation` opens: its
+        -- `retirePageUnits` drops the instances immediately, under the
+        -- lifecycle lock, and leaves the sim rows to a `UnitClearPage`
+        -- that can still be queued BEHIND this kill. Reproduced by hand
+        -- so the roster half of the check is what decides the outcome,
+        -- with the page — and therefore its incarnation — unchanged.
+        atomicModifyIORef' (unitManagerRef env) $ \um →
+            (um { umInstances = HM.delete orphan (umInstances um) }, ())
+        clearStreams env
+        drainUnits env
+
+        -- Nothing was killed and nothing was reported about a row that
+        -- no longer exists.
+        (length <$> deathsFor env orphan) `shouldReturn` 0
+        logRowsFor env orphan `shouldReturn` []
+        uts ← readIORef (utsRef env)
+        map usPose (maybeToList (HM.lookup orphan (utsSimStates uts)))
+            `shouldBe` [Standing]
 
 -- * The occupancy predicate itself ------------------------------------
 

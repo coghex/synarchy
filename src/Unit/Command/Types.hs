@@ -120,7 +120,8 @@ data UnitCommand
         --   operates on one known 'World.State.Types.WorldState', and
         --   without it a coordinate-matched unit on ANOTHER page got
         --   snapped to this page's surface.
-    | UnitSolidifyOccupants !WorldPageId !Int !Int ![UnitId]
+    | UnitSolidifyOccupants !WorldPageId !ChunkGeneration !Int !Int
+                            ![UnitId]
         -- ^ #2490: tile (gx, gy) OF THE NAMED PAGE became stone under
         --   the lava-water reaction's own commit. Destroy the named
         --   occupants and settle whatever is left standing there.
@@ -136,18 +137,31 @@ data UnitCommand
         --   'UnitReGround' carries one: a coordinate-matched unit on
         --   another page is not standing on the edited tile at all.
         --
-        --   The victim list is the EDIT-TIME occupant set, resolved by
-        --   'World.Reaction.Occupants.destroySolidificationOccupants'
-        --   from the manager's own positions at the moment the stone
-        --   landed, and it is exhaustive — dead occupants included.
-        --   Carrying it rather than re-selecting at the drain is the
-        --   point: this queue is drained on the unit thread's own tick,
-        --   so a unit that walked onto the tile afterwards would
-        --   otherwise be killed by a reaction it was never caught in,
-        --   and one that walked off would escape a reaction it was.
-        --   The handler still reads each victim's pose from the
-        --   authoritative sim state, so a unit that died of something
-        --   else in between is settled rather than killed twice.
+        --   The 'World.Chunk.Residency.ChunkGeneration' is the page
+        --   INCARNATION the commit ran against, for exactly
+        --   @UnitSpawn@'s reason: a page id is a reusable NAME, so
+        --   without it a kill admitted for a departed incarnation
+        --   could land on the replacement registered under that same
+        --   name (#2476/#2477).
+        --
+        --   The victim list is the COMMIT-TIME occupant set, resolved
+        --   by 'World.Reaction.Occupants.snapshotSolidificationOccupants'
+        --   from the AUTHORITATIVE sim positions before the first
+        --   stone of the delivery landed, and it is exhaustive — dead
+        --   occupants included. Carrying it rather than re-selecting
+        --   at the drain is the point: this queue is drained on the
+        --   unit thread's own tick, so a unit that walked onto the
+        --   tile afterwards would otherwise be killed by a reaction it
+        --   was never caught in, and one that walked off would escape
+        --   a reaction it was.
+        --
+        --   The handler still re-reads each named victim itself: its
+        --   pose, so one that died of something else in between is
+        --   settled rather than killed twice; whether the roster still
+        --   holds it on this page, so an orphan of a torn-down
+        --   incarnation is skipped; and its CURRENT column, so the
+        --   burial correction is applied where the body actually is
+        --   rather than where the stone went.
     | UnitClearAll
         -- ^ Drop every unit instance + selection + sim state. Enqueued by
         --   world.destroyAll (Exit to Menu) so the clear is ordered AFTER

@@ -28,19 +28,37 @@
 --
 --   * __Units are only NAMED here.__ Their sim state belongs to the
 --     unit thread (#1890), so the kill rides that thread's own queue
---     and its own handler; see "Unit.Thread.Command.Solidify". What the
---     world thread contributes is the VICTIM SET, resolved from the
---     manager while the stone is landing.
+--     and its own handler; see "Unit.Thread.Command.Solidify".
 --
---   __Why the victim set travels with the message.__ The unit queue is
---   drained on the unit thread's next tick, which is an unbounded delay
---   from here. Naming the tile alone and letting the handler select
---   would kill whoever is standing there THEN — a unit that walked on
---   afterwards, caught by a reaction it was never in — and would let a
---   unit that walked off escape one it was. The set is therefore
---   resolved at the edit and carried; the handler re-reads only each
---   named victim's own pose, so one that died of something else in the
---   meantime is settled rather than killed twice.
+--   __The victim set is a SNAPSHOT, taken before the first stone.__
+--   'snapshotSolidificationOccupants' runs at the very top of
+--   'World.Thread.Command.Reaction.commitReactions', ahead of every
+--   'World.Edit.Apply.applyEdit' of the delivery, and its result is
+--   carried to 'destroySolidificationOccupants' and from there onto the
+--   unit queue. Two things follow, and both are the point:
+--
+--   * Nothing this commit DOES can move the answer. The terrain writes,
+--     the item removals, the generation advance, the sim handoff, the
+--     zoom refresh and the designation revalidation all happen after
+--     the roster has been read, so none of them can be the reason a
+--     unit is in or out of the set. Reading it later would have made
+--     the victim set depend on how long the commit's own bookkeeping
+--     took.
+--   * Every event of one delivery is judged against ONE roster. Two
+--     tiles of the same commit cannot be graded against different
+--     positions of the same walking unit.
+--
+--   What it is NOT is atomic with respect to the unit thread, and no
+--   lock-free arrangement could be: @utsSimStates@ is written by
+--   @Unit.Thread@'s movement tick, which runs on its own thread and
+--   takes nothing this one could hold. What IS guaranteed is the shape
+--   of the residual window. Positions change only in that movement
+--   tick, so this reads the positions as of the last movement tick
+--   before the snapshot — one well-defined instant, not a smear —
+--   and the alternative it replaces (selecting at the drain) would
+--   read the last movement tick before the DRAIN, an unbounded number
+--   of ticks later and behind however much of the queue was already
+--   waiting.
 --
 --   __Where the positions come from.__ @utsSimStates@ — the
 --   AUTHORITATIVE simulation coordinates, read through
@@ -48,25 +66,17 @@
 --   'Engine.Core.State.EngineEnv' rather than inside the unit thread
 --   precisely so another thread can read it (the save capture and
 --   @unit.getInfo@ both already do); this is a READ, and the unit
---   thread remains its only writer.
+--   thread remains its only writer. One 'readIORef' of an immutable map
+--   is a consistent whole-roster snapshot, so no victim can be seen
+--   half-moved.
 --
---   @umInstances@ answers ONE question here: which units belong to
---   this page. It is never asked for a position.
+--   @umInstances@ answers ONE question here: which units belong to this
+--   page. It is never asked for a position.
 --   @Unit.Thread.publishToRender@ republishes @usRealX@/@usRealY@ into
 --   @uiGridX@/@uiGridY@ once per unit tick, so the mirror is up to a
 --   whole tick behind — and a unit that crossed OFF the cell inside
---   that tick would have been killed by a reaction it was no longer
---   in, while one that crossed ONTO it would have escaped.
---
---   This runs FIRST in 'World.Thread.Command.Reaction.publishCommit',
---   ahead of the generation advance, the sim handoff, the zoom refresh
---   and the designation revalidation, so the positions it reads are as
---   close to the edit as the world thread can get them. The unit
---   thread is genuinely concurrent, so "as close as possible" is the
---   honest claim rather than "atomic": what it buys is that a mover
---   travels at most a fraction of one tick between the stone landing
---   and the set being taken, instead of one tick per queued command
---   until the drain.
+--   that tick would have been killed by a reaction it was no longer in,
+--   while one that crossed ONTO it would have escaped.
 --
 --   __Occupancy is a floor in the canonical frame.__ A unit's authored
 --   position is a sub-tile float, so the tile it is ON is the floor of
@@ -78,7 +88,9 @@
 --   (§Tile-coordinate seam frame); away from the seam every step here
 --   is the identity.
 module World.Reaction.Occupants
-    ( destroySolidificationOccupants
+    ( SolidificationVictims(..)
+    , snapshotSolidificationOccupants
+    , destroySolidificationOccupants
     , occupiesTile
     ) where
 
@@ -92,78 +104,113 @@ import Engine.Core.Log (logDebug, LogCategory(..), LoggerState)
 import Item.Ground (GroundItem(..))
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
-import Unit.Types (UnitManager(..), unitsOnPage)
+import Unit.Types (UnitId(..), UnitManager(..), unitsOnPage)
+import World.Chunk.Residency (ChunkGeneration)
 import World.Generate.Coordinates (canonicalTile)
 import World.GroundItems (takeGroundItemsOnPageWhere)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), pageWrapWorldSize)
 
--- | Destroy everything caught at the tiles one reaction commit turned
---   to stone, on the page that committed it.
+-- | Who was standing where, at the instant the commit began.
 --
---   Called by 'World.Thread.Command.Reaction.publishCommit' INSTEAD of
---   the add-tile path's @UnitReGround@, once per commit, with the
---   canonical tiles that actually received stone. A commit that
---   solidified nothing reaches this with an empty list and does
---   nothing; a page whose gen params are not loaded yet has no wrap to
+--   Carried from 'snapshotSolidificationOccupants' to
+--   'destroySolidificationOccupants' as a VALUE rather than re-derived
+--   at the second call, which is the whole reason the two are split:
+--   a second read would be a second instant, and the commit's own work
+--   sits between them.
+--
+--   One entry per solidified tile, each naming that tile in the
+--   CANONICAL frame (so the unit thread never has to canonicalize
+--   again) beside the units occupying it — dead ones included, since a
+--   corpse the stone closed over still has to be kept out of the rock.
+newtype SolidificationVictims = SolidificationVictims
+    { svTiles ∷ [((Int, Int), [UnitId])] }
+    deriving (Show, Eq)
+
+-- | Read the occupants of the tiles this commit is ABOUT to turn to
+--   stone, before it turns any of them.
+--
+--   Reads only. The caller applies the edits afterwards and then hands
+--   this straight to 'destroySolidificationOccupants'; see the module
+--   header for why the order is load-bearing rather than incidental.
+--
+--   A page whose gen params are not loaded yet has no wrap to
 --   canonicalize against, and 'pageWrapWorldSize' answering 0 is the
---   identity, which is the right answer for a page holding no chunks
---   either.
-destroySolidificationOccupants
-    ∷ UnitCombatCapability → LoggerState → WorldPageId → WorldState
-    → [(Int, Int)] → IO ()
-destroySolidificationOccupants uc logger pageId ws tiles
-    | null tiles = pure ()
+--   identity — the right answer for a page holding no chunks either.
+snapshotSolidificationOccupants
+    ∷ UnitCombatCapability → WorldPageId → WorldState → [(Int, Int)]
+    → IO SolidificationVictims
+snapshotSolidificationOccupants uc pageId ws tiles
+    | null tiles = pure (SolidificationVictims [])
     | otherwise = do
         worldSize ← pageWrapWorldSize ws
-        let canonical = HS.fromList [ canonicalTile worldSize gx gy
-                                    | (gx, gy) ← tiles ]
-        -- Items first, and unconditionally: their removal is this
-        -- thread's own work, and it must not be skipped because the
-        -- page happens to be holding no units.
-        removed ← takeGroundItemsOnPageWhere ws $ \gi →
-            HS.member (canonicalTile worldSize (floor (giX gi))
-                                               (floor (giY gi)))
-                      canonical
-        -- ONE read of each, so two tiles of the same delivery cannot
-        -- be judged against different positions of the same walking
-        -- unit. Page ownership from the manager (@uiPage@ is the
-        -- instance's own field), position from the sim state.
+        -- ONE read of each. Page ownership from the manager (@uiPage@ is
+        -- the instance's own field), position from the sim state.
         um  ← readIORef (ucUnitManagerRef uc)
         uts ← readIORef (ucUtsRef uc)
         let onPage = HS.fromList
                          (HM.keys (unitsOnPage pageId (umInstances um)))
-            plan = [ ( canonicalTile worldSize gx gy
-                     , [ uid
-                       | (uid, ss) ← HM.toList (utsSimStates uts)
-                       , HS.member uid onPage
-                       , occupiesTile worldSize (gx, gy)
-                                      (usRealX ss) (usRealY ss) ] )
-                   | (gx, gy) ← tiles ]
+        pure $ SolidificationVictims
+            [ ( canonicalTile worldSize gx gy
+              , [ uid
+                | (uid, ss) ← HM.toList (utsSimStates uts)
+                , HS.member uid onPage
+                , occupiesTile worldSize (gx, gy) (usRealX ss) (usRealY ss) ] )
+            | (gx, gy) ← tiles ]
+
+-- | Destroy everything caught at the tiles this commit turned to stone.
+--
+--   Called by 'World.Thread.Command.Reaction.publishCommit' INSTEAD of
+--   the add-tile path's @UnitReGround@, once per commit, with the
+--   snapshot taken before the first edit landed. A commit that
+--   solidified nothing reaches this with an empty snapshot and does
+--   nothing.
+--
+--   @epoch@ is the page's incarnation ('World.Chunk.Admit.pageIncarnation'),
+--   stamped onto every message so a queued kill cannot land on a
+--   DIFFERENT page that has since been registered under the same name
+--   (#2476/#2477) — the same fence @UnitSpawn@ carries, for the same
+--   reason.
+destroySolidificationOccupants
+    ∷ UnitCombatCapability → LoggerState → WorldPageId → ChunkGeneration
+    → WorldState → SolidificationVictims → IO ()
+destroySolidificationOccupants uc logger pageId epoch ws (SolidificationVictims plan)
+    | null plan = pure ()
+    | otherwise = do
+        worldSize ← pageWrapWorldSize ws
+        let canonical = HS.fromList (map fst plan)
+        -- Items are matched here rather than in the snapshot because
+        -- nothing moves a ground item on its own: they are placed and
+        -- taken by explicit acts, so there is no equivalent of a mover
+        -- crossing the cell between the two calls.
+        removed ← takeGroundItemsOnPageWhere ws $ \gi →
+            HS.member (canonicalTile worldSize (floor (giX gi))
+                                               (floor (giY gi)))
+                      canonical
         forM_ plan $ \((cgx, cgy), victims) →
-            -- The message is sent even with no victims: it is what
-            -- carries "this tile solidified" to the unit thread, and a
-            -- handler given an empty set is a cheap no-op. Sending it
-            -- unconditionally keeps the solidification path from
-            -- quietly re-acquiring the lift it replaced.
+            -- Sent even with no victims: it is what carries "this tile
+            -- solidified" to the unit thread, and a handler given an
+            -- empty set is a cheap no-op. Sending it unconditionally
+            -- keeps the solidification path from quietly re-acquiring
+            -- the lift it replaced.
             Q.writeQueue (ucUnitQueue uc)
-                (UnitSolidifyOccupants pageId cgx cgy victims)
+                (UnitSolidifyOccupants pageId epoch cgx cgy victims)
         logDebug logger CatWorld $
             "Solidification destroyed " <> tshow (length removed)
             <> " ground item(s) and named "
             <> tshow (sum (map (length ∘ snd) plan))
-            <> " unit occupant(s) across " <> tshow (length tiles)
+            <> " unit occupant(s) across " <> tshow (length plan)
             <> " stone tile(s) on page " <> unWorldPageId pageId
 
 -- | Is a unit at authoritative sim position @(ux, uy)@ standing on
 --   @tile@, in the canonical frame?
 --
 --   Exported so the contract is checkable against the function the
---   commit actually calls rather than a restatement of it. It takes
---   the bare coordinates rather than a record, so no caller can reach
---   it with the render mirror's lagging copy of them by accident. The
---   page is NOT re-checked here — the caller has already narrowed to
---   one page's units, and a coordinate match on another page is not an
+--   commit actually calls rather than a restatement of it. It takes the
+--   bare coordinates rather than a record, so no caller can reach it
+--   with the render mirror's lagging copy of them by accident. The page
+--   is NOT re-checked here — the caller has already narrowed to one
+--   page's units, and a coordinate match on another page is not an
 --   occupant of this tile at all (#1593).
 occupiesTile ∷ Int → (Int, Int) → Float → Float → Bool
 occupiesTile worldSize (gx, gy) ux uy =

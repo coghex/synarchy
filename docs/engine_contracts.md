@@ -5084,14 +5084,28 @@ Resolved from `utsSimStates`, the AUTHORITATIVE positions, never from
 `uiGridY` once per unit tick, so the mirror is up to a whole tick behind
 and a unit that crossed off the cell inside that tick would be killed by
 a reaction it was no longer in. `umInstances` answers one question here:
-which units belong to this page. And the resolution runs FIRST in
-`publishCommit` — before the generation advance, the sim handoff, the
-zoom refresh and the designation revalidation — because the unit thread
-keeps moving units while those run. The unit thread is genuinely
-concurrent, so this is "as close to the edit as the world thread can
-get", not "atomic": what it buys is that a mover travels at most a
-fraction of one tick before the set is taken, instead of one tick per
-queued command until the drain.
+which units belong to this page.
+
+And it is a SNAPSHOT taken before the first stone.
+`commitReactions` reads it at its very top, ahead of every `applyEdit`
+of the delivery, and carries the result to `publishCommit`. Two things
+follow: nothing the commit itself does — the terrain writes, the item
+removals, the generation advance, the sim handoff, either presentation
+refresh — can be the reason a unit is in or out of the set; and every
+event of one delivery is judged against ONE roster, so two tiles of the
+same commit cannot be graded against different positions of one walking
+unit. `ReactionCommitSeams` is the seam a test interposes on to drive
+that ordering deterministically, the same shape as `SpawnSeams`.
+
+It is NOT atomic with respect to the unit thread, and no lock-free
+arrangement could be: `utsSimStates` is written by the unit thread's
+movement tick, which takes nothing the world thread could hold. What is
+guaranteed is the shape of the residual window. Positions change only in
+that movement tick, so the snapshot reads the positions as of the last
+movement tick before it — one well-defined instant, not a smear — where
+selecting at the drain would read the last movement tick before the
+DRAIN, an unbounded number of ticks later and behind however much of the
+queue was already waiting.
 
 **Occupancy is a floor in the canonical frame.** A unit's position is a
 sub-tile float, so the tile it is on is `floor` of it — which is why a
@@ -5111,14 +5125,28 @@ category whose shipped defaults log it — no category was added. Both are
 emitted from the unit thread, not from the world thread that commits the
 stone, because whether a named occupant was still alive is only
 answerable from the sim state the unit thread owns. An occupant that was
-ALREADY dead keeps its terminal state and produces neither event.
+ALREADY dead keeps its terminal state and produces neither event, and
+one the ROSTER no longer holds on this page is skipped entirely — a
+teardown or a same-id re-init drops the manager rows at once and leaves
+the sim rows to a queued `UnitClearPage` that can still be behind this
+kill, so a sim-state-only check would kill and report an orphan. The
+whole message additionally carries the page's incarnation and is dropped
+when it no longer matches, exactly as `UnitSpawn` is fenced
+(#2476/#2477): otherwise a queued kill could land on the replacement
+registered under the same name, and file coordinates that now mean a
+different world.
 
-**Nothing is buried, and nothing else moves.** Every occupant of the
-tile — the fresh corpse and an older one alike — is raised to the new
-TERRAIN top if it is below it, in the sim state and the render-facing
-instance together. That is a `max`, not a snap: it is the minimum
-correction that keeps a body out of the stone, and it never moves one
-horizontally. The terrain top specifically, through
+**Nothing is buried, and nothing else moves.** Every surviving occupant
+— the fresh corpse and an older one alike — is raised clear of the
+terrain it is standing on if it is below it, in the sim state and the
+render-facing instance together. That is a `max`, not a snap: it is the
+minimum correction that keeps a body out of the ground, and it never
+moves one horizontally. Resolved against the victim's OWN CURRENT column
+on its OWN page, not against the solidified tile the message names: a
+victim can have moved between the commit and the drain — that is the
+very delay the carried set exists to survive — and correcting it to the
+stone column's height would float it over lower ground or leave it
+buried under higher. The terrain top specifically, through
 `Unit.Thread.Command.Lifecycle.lookupTerrainTopZ` and not the
 fluid-inclusive `lookupSurfaceZ` a re-ground reads: an active chunk's
 solidified cell is DISPLACED by one level rather than emptied, so it can
@@ -5159,9 +5187,12 @@ on both surfaces, a mid-crossing victim, an already-dead occupant
 producing no second death, transfer-order retirement and selection
 clearing, a u-alias occupant, a same-coordinate row on another page, a
 refused result, a replayed one, the edit-time victim set surviving
-queue delay, a mover whose sim position and render mirror disagree, and
-a corpse under fluid the solidified cell retained — plus the occupancy
-predicate itself.
+queue delay, a mover whose sim position and render mirror disagree, a
+movement committed between the snapshot and the first stone (through
+`ReactionCommitSeams`), a victim that walked onto a higher column before
+the drain, a corpse under fluid the solidified cell retained, a victim
+the roster no longer holds, and a page re-initialised under the same id
+before the kill drained — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
 the alias check for the `world.getMaterialAt` query both probes read the
 product through, and #2490's live occupant scenario (a unit and an item
@@ -5169,9 +5200,12 @@ on the cell, a control pair beside it, graded through the SIM's own
 reaction; it stubs `injury_log_panel`'s tick so it owns the injury
 stream, and `unit_ai`'s so the occupant does not wander off). The stone
 becoming visible is NOT that scenario's finish line — the occupants are
-resolved after it, the kill rides the unit queue, and the item removal
-is a third moment — so it polls for each, accumulating the destructive
-injury drains rather than reading the stream once; `tools/fluid_reaction_visual_probe.py`
+dispatched after it, the kill rides the unit queue, and inside the
+handler the pose is stamped before the injury event is pushed and the
+event-log row written — so it polls until the COMPLETE outcome is
+present (dead pose, a matching drained `"death"`, and a matching log
+row), accumulating the destructive injury drains rather than reading the
+stream once, and polls the ground listing the same way; `tools/fluid_reaction_visual_probe.py`
 (offscreen, needs a GPU) is the two-presentation evidence. It reacts
 TWICE in one chunk: the first contact's refresh folds every setup edit
 into the atlas, so what the measured one adds is attributable to its own

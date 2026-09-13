@@ -383,36 +383,60 @@ def drain_injuries(port: int):
         if isinstance(drained, list) else []
 
 
+def event_log_rows_for(port: int, uid: int):
+    """The event-log rows attributed to one unit. The log is a RING, not
+    a stream, so reading it takes nothing away from the log panel and is
+    safe to poll."""
+    rows = send_json(port,
+        f"local out = {{}}; "
+        f"for _, r in ipairs(engine.getEventLog() or {{}}) do "
+        f"if tostring(r.uid) == '{uid}' then "
+        f"local c = r.coords or {{}}; "
+        f"out[#out+1] = {{cat=tostring(r.category), page=tostring(r.page), "
+        f"x=tostring(c.x), y=tostring(c.y)}} "
+        f"end end; return out")
+    return [r for r in rows if isinstance(r, dict)] \
+        if isinstance(rows, list) else []
+
+
 def await_occupant_destruction(port: int, uid: int, seconds: float):
-    """Poll until the occupant is dead, ACCUMULATING every injury batch
-    drained on the way, and answer (pose, events).
+    """Poll until the COMPLETE outcome is present — dead pose, a drained
+    ``"death"`` injury event naming the unit, AND an event-log row
+    attributed to it — answering (pose, events, rows).
 
-    The terrain height this probe already waited for is NOT the finish
-    line. ``commitEvent`` writes the stone into the tiles, and only then
-    does ``publishCommit`` resolve the occupants and queue
-    ``UnitSolidifyOccupants``; the unit thread drains that on its own
-    tick, and the injury event and the item removal land at different
-    moments again. A one-shot read right after the height rose could
-    therefore see stone, a still-standing unit, and an empty stream.
+    Waiting for the pose alone would not be enough, and none of the
+    three is a proxy for the others. The terrain height the probe waited
+    for earlier is not the finish line either: ``commitEvent`` writes the
+    stone into the tiles, and only afterwards does ``publishCommit``
+    dispatch the occupant destruction; the unit thread drains that on its
+    own tick; and inside the handler ``handleUnitKillCommand`` stamps the
+    pose BEFORE ``recordSolidificationDeath`` pushes the injury event and
+    then writes the player-event row. A reader that stopped at the first
+    ``dead`` could therefore drain an empty stream and read a log that
+    has not been written to yet.
 
-    Accumulating is what makes the polling safe rather than merely
-    patient: ``injury.drainEvents`` is DESTRUCTIVE, so a poll that threw
-    its batch away would be the very race it was added to close.
+    Accumulating the batches is what makes polling safe rather than
+    merely patient: ``injury.drainEvents`` is DESTRUCTIVE, so a poll that
+    discarded a batch would be the very race it was added to close. The
+    event log is a ring and is simply re-read.
     """
     events = []
+    rows = []
     deadline = time.time() + seconds
     pose = None
     while True:
         events.extend(drain_injuries(port))
         pose = send(port, f"return unit.getPose({uid})").strip().strip('"')
-        if pose == "dead" or time.time() >= deadline:
+        rows = event_log_rows_for(port, uid)
+        complete = (pose == "dead"
+                    and any(e.get("kind") == "death"
+                            and as_int(e.get("target")) == uid
+                            for e in events)
+                    and rows)
+        if complete or time.time() >= deadline:
             break
         time.sleep(0.25)
-    # One last sweep: the pose is stamped by the same handler that files
-    # the event, but the two reads above are separate round trips, so the
-    # event can land between them on the final iteration.
-    events.extend(drain_injuries(port))
-    return pose, events
+    return pose, events, rows
 
 
 def await_item_removed(port: int, gid: int, seconds: float):
@@ -429,7 +453,8 @@ def await_item_removed(port: int, gid: int, seconds: float):
 def check_occupants(chk: Checks, port: int, lava_tile, uid, control_uid,
                     gid, control_gid) -> None:
     """Grade #2490 against the reaction that has already committed."""
-    pose, drained = await_occupant_destruction(port, uid, OCCUPANT_TIMEOUT)
+    pose, drained, rows = await_occupant_destruction(
+        port, uid, OCCUPANT_TIMEOUT)
     chk.ok(pose == "dead",
            f"the occupant of the solidified cell is dead (pose {pose!r})")
     control_pose = send(port,
@@ -453,20 +478,10 @@ def check_occupants(chk: Checks, port: int, lava_tile, uid, control_uid,
     chk.ok(not [e for e in deaths if as_int(e.get("target")) == control_uid],
            "no death event names the unit on the control tile")
 
-    # The player event log is a RING, not a stream, so reading it takes
-    # nothing away from the log panel.
-    rows = send_json(port,
-        f"local out = {{}}; "
-        f"for _, r in ipairs(engine.getEventLog() or {{}}) do "
-        f"if tostring(r.uid) == '{uid}' then "
-        f"local c = r.coords or {{}}; "
-        f"out[#out+1] = {{cat=tostring(r.category), page=tostring(r.page), "
-        f"x=tostring(c.x), y=tostring(c.y)}} "
-        f"end end; return out")
-    chk.ok(isinstance(rows, list) and len(rows) == 1,
+    chk.ok(len(rows) == 1,
            f"exactly one event-log row is attributed to the occupant "
            f"(got {rows!r})")
-    if isinstance(rows, list) and len(rows) == 1:
+    if len(rows) == 1:
         row = rows[0]
         chk.ok((as_int(row.get("x")), as_int(row.get("y"))) == lava_tile,
                f"the event-log row carries the solidified tile's "

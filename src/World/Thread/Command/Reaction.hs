@@ -49,6 +49,9 @@ module World.Thread.Command.Reaction
     , reactionIsFresh
     , reactionChunks
     , commitReactions
+    , commitReactionsWith
+    , ReactionCommitSeams(..)
+    , productionReactionCommitSeams
     , convergeRejectedReactions
     , reactionEventTile
     ) where
@@ -79,7 +82,9 @@ import World.Flora.Designation (replaceChunkForgettingFlora)
 import World.Generate.Coordinates (chunkToGlobal)
 import World.Material (MaterialId(..), MaterialRegistry)
 import World.Plant.Validate (revalidatePlantDesignations)
-import World.Reaction.Occupants (destroySolidificationOccupants)
+import World.Reaction.Occupants
+    ( SolidificationVictims(..), destroySolidificationOccupants
+    , snapshotSolidificationOccupants )
 import World.Reaction.Stone (stoneMaterialFor)
 import World.Thread.Command.Edit.Sync (syncEditToSim)
 import World.Thread.Command.Reaction.Zoom (refreshZoomTerrain)
@@ -239,14 +244,54 @@ type Solidified = HM.HashMap ChunkCoord [Int]
 commitReactions ∷ EngineEnv → LoggerState → WorldPageId → WorldState
                 → [(ReactionResult, [(SolidificationEvent, MaterialId)])]
                 → IO ()
-commitReactions env logger pageId ws admitted
+commitReactions = commitReactionsWith productionReactionCommitSeams
+
+-- | The one point a test may interpose on, so the window between the
+--   occupant SNAPSHOT and everything the commit does afterwards can be
+--   driven deterministically instead of raced for (#2490).
+--
+--   Same shape and the same reason as
+--   'Unit.Thread.Command.Spawn.SpawnSeams' and
+--   'World.Thread.worldTickWith': the production entry point supplies
+--   'productionReactionCommitSeams', so what a test drives is this
+--   module's real body with one hook filled in, never a
+--   reimplementation of it.
+newtype ReactionCommitSeams = ReactionCommitSeams
+    { seamAfterOccupantSnapshot ∷ IO ()
+      -- ^ Runs after the victim set has been read and before the first
+      --   'World.Edit.Apply.applyEdit' of the delivery. A test moves a
+      --   unit here; production does nothing, which is what makes the
+      --   snapshot's precedence over everything downstream the only
+      --   thing standing between the two.
+    }
+
+productionReactionCommitSeams ∷ ReactionCommitSeams
+productionReactionCommitSeams = ReactionCommitSeams
+    { seamAfterOccupantSnapshot = pure () }
+
+commitReactionsWith
+    ∷ ReactionCommitSeams → EngineEnv → LoggerState → WorldPageId
+    → WorldState → [(ReactionResult, [(SolidificationEvent, MaterialId)])]
+    → IO ()
+commitReactionsWith seams env logger pageId ws admitted
     | null admitted = pure ()
     | otherwise = do
+        -- #2490, BEFORE the first stone: who is standing on the cells
+        -- this delivery is about to solidify. Nothing below can move
+        -- that answer, which is exactly why it is read here and not
+        -- after the edits, the item removals, the generation advance or
+        -- either presentation refresh. See "World.Reaction.Occupants".
+        let tiles = [ reactionEventTile ev
+                    | (_, evs) ← admitted, (ev, _) ← evs ]
+        victims ← snapshotSolidificationOccupants
+                      (toUnitCombatCapability env) pageId ws tiles
+        seamAfterOccupantSnapshot seams
         solidified ← foldM (commitEvent logger ws) HM.empty
                            (concatMap snd admitted)
         let touched = [ (cc, reverse is) | (cc, is) ← HM.toList solidified ]
         when (not (null touched)) $
             publishCommit env logger pageId ws (map fst admitted) touched
+                          victims
 
 -- | Apply one admitted event. Every event is applied against the chunk
 --   as its siblings have left it — the tiles are re-read per event — so
@@ -296,20 +341,19 @@ commitEvent logger ws acc (ev, mat) = do
 --   reaction's exact active volumes, the designation revalidation, the
 --   occupant destruction (#2490), and the two live presentations.
 publishCommit ∷ EngineEnv → LoggerState → WorldPageId → WorldState
-              → [ReactionResult] → [(ChunkCoord, [Int])] → IO ()
-publishCommit env logger pageId ws results touched = do
-    -- #2490 FIRST, before anything slower runs: whatever was standing
-    -- on a solidified tile is DESTROYED, not carried up with it. This
-    -- replaces the add-tile path's 'UnitReGround' rather than joining
-    -- it — see "World.Reaction.Occupants" for why the lift is wrong
-    -- here, where each half of the destruction runs, and why the
-    -- occupant set is read HERE rather than after the refreshes: the
-    -- unit thread keeps moving units while they run, and every step it
-    -- takes in between is a step the victim set is judged against
-    -- instead of against the moment the stone landed.
-    let tiles = [ reactionEventTile ev | rr ← results, ev ← rrEvents rr ]
+              → [ReactionResult] → [(ChunkCoord, [Int])]
+              → SolidificationVictims → IO ()
+publishCommit env logger pageId ws results touched victims = do
+    -- #2490: whatever was standing on a solidified tile is DESTROYED,
+    -- not carried up with it. This replaces the add-tile path's
+    -- 'UnitReGround' rather than joining it. The set was resolved by
+    -- 'commitReactionsWith' BEFORE the first stone landed and is only
+    -- dispatched here, so nothing between the two can have changed it —
+    -- see "World.Reaction.Occupants".
+    epoch0 ← pageIncarnation ws
     destroySolidificationOccupants (toUnitCombatCapability env) logger
-                                   pageId ws tiles
+                                   pageId epoch0 ws victims
+    let tiles = [ reactionEventTile ev | rr ← results, ev ← rrEvents rr ]
     -- One bump per EDITED chunk, however many of its events landed. A
     -- participant that received no stone keeps the generation it has:
     -- nothing about it changed, and bumping it would fence out its own
