@@ -61,6 +61,7 @@ import Unit.Anim (poseTag)
 import Unit.Command.Types (UnitCommand(..))
 import Unit.Faction (Faction(..))
 import Unit.Sim.Types
+import Unit.Thread.Command.Motion (handleUnitMoveToCommand)
 import Unit.Thread.Command.Pose
     ( handleUnitCollapseCommand, handleUnitCrawlCommand
     , handleUnitKillCommand, handleUnitReviveCommand
@@ -283,11 +284,16 @@ pump env = do
         UnitKill u              → handleUnitKillCommand env (utsRef env) u
         UnitTransitionTo u p st →
             handleUnitTransitionToCommand env (utsRef env) u p st
-        -- Movement, animation and inventory commands are recorded and
-        -- otherwise ignored: no example here depends on the unit
-        -- actually travelling, and leaving it planted on the bank is
-        -- what makes "the phase did not end" attributable to the phase
-        -- machine rather than to a walk.
+        -- Moves go through the real handler because its POSE GATE is
+        -- itself under test: Motion.hs accepts a move only from
+        -- Standing or Crawling, which is what makes an abandoned
+        -- Crouching unit unable to act at all. Nothing here ticks
+        -- movement, so an accepted move sets a target and the unit
+        -- stays planted on the bank -- which keeps "the phase did not
+        -- end" attributable to the phase machine rather than to a walk.
+        UnitMoveTo u tx ty sp hz →
+            handleUnitMoveToCommand env (utsRef env) u tx ty sp hz
+        -- Animation and inventory commands are recorded and ignored.
         _                       → pure ()
     publishPoses env
     pure cmds
@@ -388,6 +394,27 @@ simSecond physiologyFirst env ls = do
         then (<>) <$> physiologySecond env ls <*> aiSecond env ls
         else (<>) <$> aiSecond env ls <*> physiologySecond env ls
 
+-- | Advance game time one second at a time, running ONLY the AI tick,
+--   until @done@ holds or @limit@ is reached; returns the pose commands
+--   requested. Used where the AI has to be the sole actor -- an
+--   abandonment from a given pose would otherwise race the physiology
+--   tick's own claim on it -- and bounded rather than a single step
+--   because the production thought schedule is jittered
+--   (@thought_interval@ 1.0 ± @thought_jitter@ 0.5), so any one second
+--   may score nothing at all.
+runAiUntil ∷ EngineEnv → LuaBackendState → Int → IO Bool → IO [Text]
+runAiUntil env ls limit done = go 0 []
+  where
+    go n acc
+        | n ≥ limit = pure acc
+        | otherwise = do
+            finished ← done
+            if finished then pure acc else do
+                now ← readIORef (gameTimeRef env)
+                writeIORef (gameTimeRef env) (now + 1.0)
+                cmds ← aiSecond env ls
+                go (n + 1) (acc <> poseLabels cmds)
+
 -- | Run simulated seconds until @done@ holds or @limit@ is reached.
 --   Returns the number of seconds actually run and every pose command
 --   requested along the way — a bounded loop with no sleeping and no
@@ -470,6 +497,27 @@ currentAction ls = evalDebug ls
 eligible ∷ LuaBackendState → IO Text
 eligible ls = evalDebug ls
     "return _G.__tick.sourceDrinkingEligible(1) == true"
+
+-- | Issue a real @unit.moveTo@ and report whether the engine ACCEPTED
+--   it. This is the cost of a stranded pose stated directly: a unit
+--   Motion.hs refuses moves from is one no player order can reach.
+moveAccepted ∷ EngineEnv → LuaBackendState → IO Bool
+moveAccepted env ls = do
+    modifyTarget env (const Nothing)
+    r ← evalDebug ls "return unit.moveTo(1, 4.5, 4.5, 1.0)"
+    r `shouldBe` "true"
+    _ ← pump env
+    uts ← readIORef (utsRef env)
+    pure $ case HM.lookup acolyteUid (utsSimStates uts) of
+        Just ss → usTarget ss ≢ Nothing
+        Nothing → False
+
+modifyTarget ∷ EngineEnv → (Maybe MoveTarget → Maybe MoveTarget) → IO ()
+modifyTarget env f = do
+    uts ← readIORef (utsRef env)
+    writeIORef (utsRef env) uts
+        { utsSimStates = HM.adjust (\ss → ss { usTarget = f (usTarget ss) })
+                             acolyteUid (utsSimStates uts) }
 
 -- | Quoted, because debug-console string returns arrive JSON-encoded.
 q ∷ Text → Text
@@ -562,6 +610,34 @@ completesSequence physiologyFirst env = do
     action ← currentAction ls
     action `shouldSatisfy` (≢ q "drink_from_source")
     phaseOf ls `shouldReturn` q "nil"
+
+-- | Drive the sequence to the FIRST step of its descent and stop: phase
+--   live, unit crouching. This is the state every abandonment path has
+--   to be able to leave safely, and the one the injury tick cannot
+--   rescue on its own -- its revive branch acts on Crawling alone.
+atFirstCrouch ∷ EngineEnv → LuaBackendState → IO ()
+atFirstCrouch env ls = do
+    (_, _) ← runUntil True env ls 10 $ do
+        phase ← phaseOf ls
+        pose  ← livePose env
+        pure (phase ≡ q "descending" ∧ pose ≡ "crouching")
+    phaseOf ls `shouldReturn` q "descending"
+    livePose env `shouldReturn` "crouching"
+    -- The trap, stated: a crouching unit cannot be moved at all.
+    moveAccepted env ls `shouldReturn` False
+
+-- | Wind the live phase's deadline back past its budget, so the NEXT
+--   execute tick expires it. Real elapsed game time reaches exactly
+--   this value; setting it directly is what lets an example choose the
+--   POSE the expiry lands on. The end-to-end 60-second expiry is
+--   covered without this in §2.
+expireNow ∷ LuaBackendState → IO ()
+expireNow ls = do
+    r ← evalDebug ls
+        "local s = _G.__ai.getState(1); \
+        \s.sourcePhaseAt = engine.gameTime() - _G.__phase.BUDGET - 1; \
+        \return true"
+    r `shouldBe` "true"
 
 spec ∷ Spec
 spec = aroundAll withHeadlessEngineNoWorld $
@@ -657,6 +733,84 @@ spec = aroundAll withHeadlessEngineNoWorld $
             -- And it really was starved rather than quietly satisfied.
             after ← storedHydration env
             after `shouldSatisfy` (< before)
+
+    -- §2b Abandoning has to UNWIND the posture, not just drop the flag.
+    -- Crouching is the trap: Motion.hs accepts a move only from
+    -- Standing or Crawling, and the injury tick's revive branch acts
+    -- only on Crawling -- so a unit abandoned mid-step would sit
+    -- crouched forever, ignoring player orders as well as its own AI.
+    describe "abandoning from the crouching step (§2b)" $ do
+        it "the budget expiring mid-descent stands the unit back up, \
+           \and it can move again" $ \env → do
+            resetScene env baseStats []
+            ls ← setupLua env
+            seedState ls
+            atFirstCrouch env ls
+
+            expireNow ls
+            cmds ← runAiUntil env ls 5 ((≡ q "nil") <$> phaseOf ls)
+            cmds `shouldSatisfy` elem "transition:standing"
+            phaseOf ls `shouldReturn` q "nil"
+            deadlineSet ls `shouldReturn` "false"
+            livePose env `shouldReturn` "standing"
+            moveAccepted env ls `shouldReturn` True
+
+        it "a mental short-circuit mid-descent does the same through \
+           \the action's onExit" $ \env → do
+            resetScene env baseStats []
+            ls ← setupLua env
+            seedState ls
+            atFirstCrouch env ls
+
+            -- No bounded loop needed: shortCircuit preempts BEFORE the
+            -- thought-schedule gate, so the very next tick fires onExit.
+            setConsciousness env deliriousConsciousness
+            cmds ← aiSecond env ls
+            currentAction ls `shouldReturn` q "delirious"
+            poseLabels cmds `shouldSatisfy` elem "transition:standing"
+            phaseOf ls `shouldReturn` q "nil"
+            livePose env `shouldReturn` "standing"
+
+            setConsciousness env 1.0
+            moveAccepted env ls `shouldReturn` True
+
+        it "the unwind does not fight injury handling: a unit that goes \
+           \down mid-descent is crawled by the next injury tick, not \
+           \left standing" $ \env → do
+            resetScene env baseStats []
+            ls ← setupLua env
+            seedState ls
+            atFirstCrouch env ls
+
+            -- The leg shatters between the AI's pose step and the next
+            -- physiology tick, so the abandonment below runs against a
+            -- unit the injury machine has not yet ruled on.
+            woundNow env shatteredLeg
+            expireNow ls
+            unwound ← runAiUntil env ls 5 ((≡ q "nil") <$> phaseOf ls)
+            unwound `shouldSatisfy` elem "transition:standing"
+            livePose env `shouldReturn` "standing"
+
+            -- The injury tick's own branches fire from ANY pose, so it
+            -- takes the unit straight back down on its next 0.1 s tick.
+            cmds ← physiologySecond env ls
+            poseLabels cmds `shouldSatisfy` elem "crawl"
+            poseLabels cmds `shouldSatisfy` notElem "revive"
+            livePose env `shouldReturn` "crawling"
+
+        it "an unconscious unit that goes down mid-descent is collapsed \
+           \rather than stood up and left there" $ \env → do
+            resetScene env baseStats []
+            ls ← setupLua env
+            seedState ls
+            atFirstCrouch env ls
+
+            setConsciousness env 0.05
+            expireNow ls
+            _ ← runAiUntil env ls 5 ((≡ q "nil") <$> phaseOf ls)
+            cmds ← physiologySecond env ls
+            poseLabels cmds `shouldSatisfy` elem "collapse"
+            livePose env `shouldReturn` "collapsed"
 
     -- §3 The second entry into the same lock: a preemption fires only
     -- the OUTGOING action's onExit, and the phase used to survive it.

@@ -243,7 +243,7 @@ end
 local function drinkFromSourceExecute(uid, s, params)
     -- The bound, before any leg runs: an abandoned sequence executes
     -- nothing this tick, including the standing entry below.
-    if sourcePhase.expire(s) then return end
+    if sourcePhase.expire(uid, s) then return end
 
     local pose = unit.getPose(uid) or "standing"
 
@@ -480,8 +480,10 @@ end
 -- OUTGOING action's onExit when delirium or a mental break takes the
 -- tick, and its wander then carries the unit off the bank; without this
 -- the phase outlived the episode and re-locked at math.huge afterwards.
+-- Abandons rather than merely clears: a preemption can land between any
+-- two pose steps, and a unit left CROUCHING cannot move at all.
 local function drinkFromSourceOnExit(uid, s, params)
-    sourcePhase.clear(s)
+    sourcePhase.abandon(uid, s)
 end
 
 M.refillUtility          = refillUtility

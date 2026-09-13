@@ -41,6 +41,15 @@
 -- with a fresh pose. Abandoning returns the utility to a finite score,
 -- which is all ordinary arbitration needs to take the unit back.
 --
+-- Abandoning also has to UNWIND the posture, not merely drop the flag.
+-- The sequence steps standing -> crouching -> crawling, and Crouching
+-- is a trap: src/Unit/Thread/Command/Motion.hs refuses a move from any
+-- pose but Standing and Crawling, and nothing outside the two
+-- deliberate descent chains ever leaves it -- unit_resource_injury's
+-- revive branch acts on Crawling alone. A unit abandoned half-way down
+-- or half-way up would therefore sit crouched forever, silently
+-- ignoring every later move including a player order.
+--
 -- Abandoning is not a cooldown, and deliberately so: the very next
 -- thought tick may score drink_from_source highest again and enter a
 -- FRESH sequence with a fresh budget. In every reachable case that is
@@ -89,9 +98,40 @@ end
 -- outlive the phase it bounds, and unit_resource_injury.lua's crawling
 -- exemption keys on the phase alone, so a phase left set by a cleared
 -- deadline would suppress a genuine revive forever.
+--
+-- State only: the COMPLETION path calls this, and a completed sequence
+-- is already standing. Every abandonment goes through M.abandon.
 function M.clear(s)
     s.sourcePhase   = nil
     s.sourcePhaseAt = nil
+end
+
+-- The stride the sequence's own pose steps use, so an unwind looks like
+-- the ascent it is replacing rather than a snap.
+local UNWIND_STRIDE = 2
+
+-- Give up on the sequence: release the lock AND leave the unit in a
+-- pose it can act from. Every abandonment path uses this -- the budget
+-- below, and drink_from_source's onExit when a mental short-circuit
+-- preempts it (unit_ai_water.lua).
+--
+-- Only a CROUCHING unit is stood up, and that restriction is what keeps
+-- this from fighting injury handling rather than a guess at health:
+--
+--   * unit_resource_injury.tickInjuries produces Collapsed and Crawling
+--     and never Crouching, so a crouching unit is one its last tick
+--     judged fit to stand -- and if that judgement changes, its
+--     collapse and crawl branches fire from ANY pose on the next 0.1 s
+--     tick, so nothing here can strand an injured unit upright.
+--   * Crawling is deliberately left alone. It IS a pose the injury
+--     machine owns, it can move, and once this phase is nil that same
+--     revive branch stands a healthy crawler up by itself.
+--   * Collapsed likewise belongs to the injury tick's own checkRevive.
+function M.abandon(uid, s)
+    M.clear(s)
+    if unit.getPose(uid) == "crouching" then
+        unit.transitionTo(uid, "standing", UNWIND_STRIDE)
+    end
 end
 
 -- Check the budget for one execute tick. Returns true once the sequence
@@ -103,7 +143,7 @@ end
 -- (unit_ai_save.lua strips the clock, which cannot outlive the session
 -- it was measured in): that re-arms here with a full budget, the same
 -- answer every other reloaded wait in the AI gives.
-function M.expire(s)
+function M.expire(uid, s)
     if s.sourcePhase == nil then return false end
     local now = engine.gameTime()
     if s.sourcePhaseAt == nil then
@@ -111,7 +151,7 @@ function M.expire(s)
         return false
     end
     if now - s.sourcePhaseAt < BUDGET then return false end
-    M.clear(s)
+    M.abandon(uid, s)
     return true
 end
 
