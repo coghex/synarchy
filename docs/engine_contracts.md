@@ -5130,23 +5130,37 @@ one the ROSTER no longer holds on this page is skipped entirely — a
 teardown or a same-id re-init drops the manager rows at once and leaves
 the sim rows to a queued `UnitClearPage` that can still be behind this
 kill, so a sim-state-only check would kill and report an orphan. The
-whole message additionally carries the page's incarnation and is dropped
-when it no longer matches, exactly as `UnitSpawn` is fenced
-(#2476/#2477): otherwise a queued kill could land on the replacement
-registered under the same name, and file coordinates that now mean a
-different world.
+whole message additionally carries the page's incarnation, and the
+revalidation plus every write it authorises happen inside
+`pageLifecycleLock` — the same commit FENCE `UnitSpawn` uses
+(#2476/#2477), and for the same reason: `registerPageIncarnation` holds
+that lock across retiring the outgoing incarnation's rows and
+registering the replacement, so a bare check before the act would be
+pure time-of-check-to-time-of-use. Without it a replacement landing in
+that gap would leave the handler killing an orphan off its own captured
+list and attributing the death to the page that replaced it.
+`SolidifySeams` is the seam a test interposes on to land exactly that
+schedule.
 
 **Nothing is buried, and nothing else moves.** Every surviving occupant
 — the fresh corpse and an older one alike — is raised clear of the
 terrain it is standing on if it is below it, in the sim state and the
 render-facing instance together. That is a `max`, not a snap: it is the
 minimum correction that keeps a body out of the ground, and it never
-moves one horizontally. Resolved against the victim's OWN CURRENT column
-on its OWN page, not against the solidified tile the message names: a
-victim can have moved between the commit and the drain — that is the
+moves one horizontally. Which column depends on where the body ended up. A victim
+that MOVED is corrected against its own current column on its own page,
+live: a victim can move between the commit and the drain — that is the
 very delay the carried set exists to survive — and correcting it to the
 stone column's height would float it over lower ground or leave it
-buried under higher. The terrain top specifically, through
+buried under higher. A victim still ON the solidified cell is corrected
+against the terrain top the commit itself left, CARRIED on the message
+and maxed with a live lookup when one succeeds. The carried height is
+what makes that correction survive an eviction: the queue delay is
+unbounded, the world thread's own tick can evict the reaction chunk
+inside it, and a live-only lookup would then answer nothing at all —
+leaving a body that never moved embedded one z under the stone the
+moment the durable edit is replayed. The terrain top in both cases,
+through
 `Unit.Thread.Command.Lifecycle.lookupTerrainTopZ` and not the
 fluid-inclusive `lookupSurfaceZ` a re-ground reads: an active chunk's
 solidified cell is DISPLACED by one level rather than emptied, so it can
@@ -5191,8 +5205,10 @@ queue delay, a mover whose sim position and render mirror disagree, a
 movement committed between the snapshot and the first stone (through
 `ReactionCommitSeams`), a victim that walked onto a higher column before
 the drain, a corpse under fluid the solidified cell retained, a victim
-the roster no longer holds, and a page re-initialised under the same id
-before the kill drained — plus the occupancy predicate itself.
+the roster no longer holds, a page re-initialised under the same id
+before the kill drained, a page replaced AFTER the handler's first epoch
+check (through `SolidifySeams`), and the reaction's chunk evicted before
+the drain — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
 the alias check for the `world.getMaterialAt` query both probes read the
 product through, and #2490's live occupant scenario (a unit and an item

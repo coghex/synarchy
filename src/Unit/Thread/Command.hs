@@ -82,8 +82,8 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz)
 handleUnitCommand env utsRef (UnitReGround pageId gx gy)
   = handleUnitReGroundCommand env utsRef pageId gx gy
 handleUnitCommand env utsRef
-                  (UnitSolidifyOccupants pageId epoch gx gy victims)
-  = handleUnitSolidifyOccupantsCommand env utsRef pageId epoch gx gy
+                  (UnitSolidifyOccupants pageId epoch gx gy top victims)
+  = handleUnitSolidifyOccupantsCommand env utsRef pageId epoch gx gy top
                                        victims
 handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed hazard)
   = handleUnitMoveToCommand env utsRef uid tx ty speed hazard

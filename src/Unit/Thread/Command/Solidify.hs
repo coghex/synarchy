@@ -54,6 +54,9 @@
 --   units left to carry.
 module Unit.Thread.Command.Solidify
     ( handleUnitSolidifyOccupantsCommand
+    , handleUnitSolidifyOccupantsCommandWith
+    , SolidifySeams(..)
+    , productionSolidifySeams
     , solidificationDeathCause
     , solidificationDeathText
     , solidificationEventCategory
@@ -74,7 +77,10 @@ import Unit.Types
 import Unit.Sim.Types
 import Unit.Thread.Command.Lifecycle (lookupTerrainTopZ)
 import Unit.Thread.Command.Pose (handleUnitKillCommand)
+import Engine.Core.Capability.WorldSim (withPageLifecycle)
 import World.Chunk.Admit (pageIncarnation)
+import World.Generate.Coordinates (canonicalTile)
+import World.State.Types (pageWrapWorldSize)
 import World.Chunk.Residency (ChunkGeneration)
 import World.Page.Types (WorldPageId(..))
 import World.Types (WorldManager(..), wmWorlds)
@@ -105,37 +111,92 @@ solidificationDeathText name gx gy =
     (if T.null name then "A unit" else name)
     <> " was entombed by solidifying lava at " <> tshow (gx, gy) <> "."
 
+-- | The one point a test may interpose on, so the
+--   check-then-replace-then-act schedule can be built deterministically
+--   instead of raced for.
+--
+--   The same shape and the same purpose as
+--   'Unit.Thread.Command.Spawn.SpawnSeams': the production entry point
+--   supplies 'productionSolidifySeams', so what a test drives is this
+--   module's real body with one hook filled in, never a
+--   reimplementation of it.
+newtype SolidifySeams = SolidifySeams
+    { seamAfterEpochCheck ∷ IO ()
+      -- ^ Runs after the handler's FIRST epoch check and before it
+      --   enters the lifecycle lock. A test lands a same-id re-init
+      --   here; production does nothing, which is what makes the
+      --   commit fence's revalidation the only thing standing between
+      --   the two.
+    }
+
+productionSolidifySeams ∷ SolidifySeams
+productionSolidifySeams = SolidifySeams { seamAfterEpochCheck = pure () }
+
 handleUnitSolidifyOccupantsCommand
     ∷ EngineEnv → IORef UnitThreadState → WorldPageId → ChunkGeneration
-    → Int → Int → [UnitId] → IO ()
-handleUnitSolidifyOccupantsCommand env utsRef pageId epoch gx gy victims = do
-    -- The #2476/#2477 fence, first and for the whole message. A page id
-    -- is a reusable NAME, so without this a kill resolved against one
-    -- incarnation could land on the replacement registered under that
-    -- name: it would kill rows the queued UnitClearPage is about to
-    -- retire anyway, and — worse — file their deaths at coordinates and
-    -- under a page name that now mean the NEW world's tiles.
+    → Int → Int → Int → [UnitId] → IO ()
+handleUnitSolidifyOccupantsCommand = handleUnitSolidifyOccupantsCommandWith
+    productionSolidifySeams
+
+handleUnitSolidifyOccupantsCommandWith
+    ∷ SolidifySeams → EngineEnv → IORef UnitThreadState → WorldPageId
+    → ChunkGeneration → Int → Int → Int → [UnitId] → IO ()
+handleUnitSolidifyOccupantsCommandWith
+        seams env utsRef pageId epoch gx gy committedTop victims = do
+    -- The #2476/#2477 fence. A page id is a reusable NAME, so without
+    -- it a kill resolved against one incarnation could land on the
+    -- replacement registered under that name: it would kill rows the
+    -- queued UnitClearPage is about to retire anyway, and — worse —
+    -- file their deaths at coordinates and under a page name that now
+    -- mean the NEW world's tiles.
+    --
+    -- Read here only as a cheap early-out. It is a time-of-CHECK, and
+    -- the decision that matters is taken again below.
     current ← pageIncarnationOf env pageId
     when (current ≡ Just epoch) $ do
-        um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
-        uts0 ← readIORef utsRef
-        -- Present in BOTH records, and still on this page. The roster
-        -- half is what makes the "Gone" case real rather than
-        -- documented: a teardown drops the instance at once and leaves
-        -- the sim row for a clear that may be queued behind this.
-        let live uid = case ( HM.lookup uid (umInstances um)
-                            , HM.lookup uid (utsSimStates uts0) ) of
-                (Just inst, Just ss) | uiPage inst ≡ pageId → Just ss
-                _                                           → Nothing
-            named  = [ (uid, ss) | uid ← victims, Just ss ← [live uid] ]
-            living = [ uid | (uid, ss) ← named, usPose ss ≢ Dead ]
-        forM_ living $ \uid → do
-            handleUnitKillCommand env utsRef uid
-            recordSolidificationDeath env pageId gx gy uid
-        -- Against each body's OWN column, read AFTER the kills so a
-        -- unit whose death moved nothing is still measured from where
-        -- it actually lies.
-        forM_ (map fst named) (settleClearOfTerrain env utsRef)
+        seamAfterEpochCheck seams
+        -- …and the REAL fence: revalidate and act inside the page
+        -- lifecycle lock, in one critical section, exactly as
+        -- 'Unit.Thread.Command.Spawn.handleUnitSpawnCommandWith' does.
+        -- 'World.Thread.Command.Init.registerPageIncarnation' holds this
+        -- same lock across retiring the outgoing incarnation's rows and
+        -- registering the replacement, so a transition cannot interleave
+        -- between the revalidation and the kills. Without it the check
+        -- above is pure time-of-check-to-time-of-use: a replacement
+        -- landing after it would leave this handler killing an orphan
+        -- off its own captured list and attributing the death to the
+        -- page that replaced it.
+        --
+        -- Taken with no other page or entity lock held. What runs
+        -- inside reads the manager, the sim states and the page's
+        -- tiles, and writes the two unit records — the world thread
+        -- never blocks on this thread while holding this lock.
+        withPageLifecycle (toWorldSimCapability env) $ do
+            live ← pageIncarnationOf env pageId
+            when (live ≡ Just epoch) $ do
+                um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
+                uts0 ← readIORef utsRef
+                -- Present in BOTH records, and still on this page. The
+                -- roster half is what makes the "Gone" case real rather
+                -- than documented: a teardown drops the instance at once
+                -- and leaves the sim row for a clear queued behind this.
+                let onPage uid =
+                        case ( HM.lookup uid (umInstances um)
+                             , HM.lookup uid (utsSimStates uts0) ) of
+                            (Just inst, Just ss) | uiPage inst ≡ pageId →
+                                Just ss
+                            _ → Nothing
+                    named  = [ (uid, ss) | uid ← victims
+                                         , Just ss ← [onPage uid] ]
+                    living = [ uid | (uid, ss) ← named, usPose ss ≢ Dead ]
+                forM_ living $ \uid → do
+                    handleUnitKillCommand env utsRef uid
+                    recordSolidificationDeath env pageId gx gy uid
+                -- Read AFTER the kills, so a unit whose death moved
+                -- nothing is still measured from where it actually lies.
+                forM_ (map fst named)
+                      (settleClearOfTerrain env utsRef pageId gx gy
+                                            committedTop)
 
 -- | The incarnation the page registered under @pageId@ currently
 --   stands at, or 'Nothing' when no page is registered under that name.
@@ -174,26 +235,59 @@ recordSolidificationDeath env pageId gx gy uid@(UnitId raw) = do
 --   step and for the same reason: a corpse whose visual z lagged a tick
 --   would be drawn inside the rock it is resting on.
 --
---   The column is resolved from the unit's OWN current position and its
---   OWN page, so a victim that moved between the commit and this drain
---   is corrected where it actually lies. The TERRAIN top, never the
---   resolved surface: a solidified cell may still hold fluid above its
---   stone (engine contracts §Fluid reaction — an active chunk's cell is
---   displaced by one level, not emptied), and correcting to that would
---   float the body on the water instead of resting it on the rock.
+--   Which column, and from where, depends on whether the body is still
+--   on the cell that solidified:
 --
---   Silent when the page or chunk answers no top: the deaths are the
---   contract and the height is the tidy-up.
-settleClearOfTerrain ∷ EngineEnv → IORef UnitThreadState → UnitId → IO ()
-settleClearOfTerrain env utsRef uid = do
+--   * __Still there.__ The floor is @committedTop@, the terrain top the
+--     commit itself left, MAXed with a live lookup if one succeeds. The
+--     carried value is what makes this correction survive an eviction:
+--     the queue delay is unbounded, the world thread's own tick can
+--     evict the reaction chunk in it, and a live lookup would then
+--     answer nothing at all — leaving a body that never moved embedded
+--     one z under the stone as soon as the durable edit is replayed.
+--   * __Moved.__ Its own current column on its own page, live. Nothing
+--     this reaction did buried it there, so if that lookup cannot be
+--     made there is nothing this handler owes it, and the carried
+--     height would be the wrong answer rather than a fallback.
+--
+--   The terrain top in both cases, never the resolved surface: a
+--   solidified cell may still hold fluid above its stone (engine
+--   contracts §Fluid reaction — an active chunk's cell is displaced by
+--   one level, not emptied), and correcting to that would float the
+--   body on the water instead of resting it on the rock.
+settleClearOfTerrain
+    ∷ EngineEnv → IORef UnitThreadState → WorldPageId → Int → Int → Int
+    → UnitId → IO ()
+settleClearOfTerrain env utsRef pageId gx gy committedTop uid = do
     um ← readIORef (ucUnitManagerRef (toUnitCombatCapability env))
     uts ← readIORef utsRef
     case ( HM.lookup uid (umInstances um), HM.lookup uid (utsSimStates uts) ) of
         (Just inst, Just ss) → do
-            mTop ← lookupTerrainTopZ env (uiPage inst)
-                       (floor (usRealX ss)) (floor (usRealY ss))
+            let vx = floor (usRealX ss)
+                vy = floor (usRealY ss)
+            onSolidified ← sameTileOnPage env pageId (vx, vy) (gx, gy)
+            mLive ← lookupTerrainTopZ env (uiPage inst) vx vy
+            let mTop | onSolidified ∧ uiPage inst ≡ pageId =
+                         Just (maybe committedTop (max committedTop) mLive)
+                     | otherwise = mLive
             forM_ mTop $ \z → when (usGridZ ss < z) $ raiseTo env utsRef z uid
         _ → pure ()
+
+-- | Do these two tiles name the same physical cell of @pageId@?
+--
+--   Canonical, because a position near the cylindrical seam can name an
+--   alias of the solidified tile (§Tile-coordinate seam frame) — and
+--   the carried height belongs to the CELL, not to a spelling of it.
+--   A page with no gen params yet wraps nothing, which is the identity.
+sameTileOnPage ∷ EngineEnv → WorldPageId → (Int, Int) → (Int, Int) → IO Bool
+sameTileOnPage env pageId a b = do
+    wm ← readIORef (wsWorldManagerRef (toWorldSimCapability env))
+    case lookup pageId (wmWorlds wm) of
+        Nothing → pure False
+        Just ws → do
+            worldSize ← pageWrapWorldSize ws
+            pure $ uncurry (canonicalTile worldSize) a
+                 ≡ uncurry (canonicalTile worldSize) b
 
 -- | Commit the height @z@ to both surfaces. Split from the decision so
 --   the decision reads as one expression.

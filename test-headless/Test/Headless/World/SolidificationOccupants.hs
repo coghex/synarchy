@@ -30,7 +30,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq
 import qualified Data.Vector.Unboxed as VU
 import Data.Foldable (toList)
-import Data.IORef (atomicModifyIORef', readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TVar (writeTVar)
@@ -50,7 +50,9 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Sim.Types
 import Unit.Thread.Command (processAllUnitCommands)
 import Unit.Thread.Command.Solidify
-    (solidificationDeathCause, solidificationEventCategory)
+    ( SolidifySeams(..), handleUnitSolidifyOccupantsCommandWith
+    , productionSolidifySeams, solidificationDeathCause
+    , solidificationEventCategory )
 import Unit.Transfer (TransferBatch(..), TransferEndpoint(..))
 import Unit.Transfer.Orders
     (TransferOrders(..), addTransferOrder, emptyTransferOrders)
@@ -84,6 +86,7 @@ reactingPageId, crossingPageId, aliasPageId, stalePageId ∷ WorldPageId
 replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
 mirrorPageId, floodedPageId ∷ WorldPageId
 seamPageId, movedPageId, retiredPageId, orphanPageId ∷ WorldPageId
+racedPageId, evictedPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -102,6 +105,8 @@ seamPageId      = WorldPageId "occupants_seam_w8"
 movedPageId     = WorldPageId "occupants_moved_w8"
 retiredPageId   = WorldPageId "occupants_retired_w8"
 orphanPageId    = WorldPageId "occupants_orphan_w8"
+racedPageId     = WorldPageId "occupants_raced_w8"
+evictedPageId   = WorldPageId "occupants_evicted_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -400,6 +405,38 @@ reinitPage env pageId old = do
 --   identity of its own.
 sameWorldState ∷ WorldState → WorldState → Bool
 sameWorldState a b = wsTilesRef a ≡ wsTilesRef b
+
+-- | Drain the unit queue by hand, running the real solidification
+--   handler with a seam for every 'UnitSolidifyOccupants' it holds.
+--
+--   The same recipe 'Test.Headless.World.PageIncarnation' uses for
+--   'Unit.Thread.Command.Spawn.SpawnSeams': flush the queue and call
+--   the production handler with one hook filled in, so what runs is its
+--   real body and not a restatement of it.
+drainUnitsWithSolidifySeam ∷ EngineEnv → IO () → IO ()
+drainUnitsWithSolidifySeam env between = do
+    held ← Q.flushQueue (unitQueue env)
+    let seams = productionSolidifySeams { seamAfterEpochCheck = between }
+    forM_ held $ \cmd → case cmd of
+        UnitSolidifyOccupants pageId epoch gx gy top victims →
+            handleUnitSolidifyOccupantsCommandWith seams env (utsRef env)
+                pageId epoch gx gy top victims
+        other → handleOther other
+  where
+    handleOther cmd = do
+        Q.writeQueue (unitQueue env) cmd
+        drainUnits env
+
+-- | Drop one chunk from a page's tiles, as an eviction does.
+--
+--   Written straight into the page for 'floodTileDeep'\'s reason: the
+--   world thread is idle here, and this is fixture setup standing in
+--   for @updateChunkLoading@ rather than anything under test. What
+--   matters to the case is only that the lookup the handler would make
+--   can no longer be answered.
+evictChunkFrom ∷ WorldState → ChunkCoord → IO ()
+evictChunkFrom ws coord = atomicModifyIORef' (wsTilesRef ws) $ \td →
+    (td { wtdChunks = HM.delete coord (wtdChunks td) }, ())
 
 -- * The live group ----------------------------------------------------
 
@@ -923,6 +960,61 @@ spec = describe "solidification occupants (#2490)" $ do
         uts ← readIORef (utsRef env)
         map usPose (maybeToList (HM.lookup orphan (utsSimStates uts)))
             `shouldBe` [Standing]
+
+    it "refuses the kill when the page is replaced AFTER the handler's \
+       \first epoch check, not only before the drain" $ \env → do
+        prepare env
+        lp ← livePage env racedPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        victim ← spawnAt env ws racedPageId 9981 doomed
+                         (terrainTopAt before reactCell)
+
+        react env lp racedPageId reactCell
+        clearStreams env
+        -- The schedule the FIRST check cannot cover: the replacement
+        -- lands after the handler has accepted the epoch and before it
+        -- acts. Only the revalidation inside the lifecycle lock refuses
+        -- it. (Run on this thread, as PageIncarnation's own spawn cases
+        -- run theirs — the world thread is idle and the seam is the
+        -- interleaving under test.)
+        replaced ← newIORef False
+        drainUnitsWithSolidifySeam env $ do
+            _ ← reinitPage env racedPageId ws
+            writeIORef replaced True
+        readIORef replaced `shouldReturn` True
+
+        (length <$> deathsFor env victim) `shouldReturn` 0
+        logRowsFor env victim `shouldReturn` []
+
+    it "still lifts the corpse clear of the stone when the reaction's \
+       \chunk is EVICTED before the kill is drained" $ \env → do
+        prepare env
+        lp ← livePage env evictedPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        let baseZ = terrainTopAt before reactCell
+        victim ← spawnAt env ws evictedPageId 9991 doomed baseZ
+
+        react env lp evictedPageId reactCell
+        after ← chunkAt ws (lpLava lp)
+        let stoneTop = terrainTopAt after reactCell
+        stoneTop `shouldBe` baseZ + 1
+        -- The world thread's own tick can evict the reaction chunk
+        -- inside this queue's unbounded delay. The handler's live
+        -- lookup then answers nothing, and only the height the commit
+        -- CARRIED can keep the body out of the stone the durable edit
+        -- will replay.
+        evictChunkFrom ws (lpLava lp)
+        drainUnits env
+
+        poseOf env victim `shouldReturn` Dead
+        ss ← simStateOf env victim
+        inst ← instanceOf env victim
+        usGridZ ss `shouldBe` stoneTop
+        uiGridZ inst `shouldBe` stoneTop
 
 -- * The occupancy predicate itself ------------------------------------
 

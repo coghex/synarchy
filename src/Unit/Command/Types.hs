@@ -121,7 +121,7 @@ data UnitCommand
         --   without it a coordinate-matched unit on ANOTHER page got
         --   snapped to this page's surface.
     | UnitSolidifyOccupants !WorldPageId !ChunkGeneration !Int !Int
-                            ![UnitId]
+                            !Int ![UnitId]
         -- ^ #2490: tile (gx, gy) OF THE NAMED PAGE became stone under
         --   the lava-water reaction's own commit. Destroy the named
         --   occupants and settle whatever is left standing there.
@@ -155,12 +155,21 @@ data UnitCommand
         --   was never caught in, and one that walked off would escape
         --   a reaction it was.
         --
+        --   The bare 'Int' after the coordinates is the COMMITTED
+        --   terrain top of that tile, read from the chunk after the
+        --   stone landed. It is carried because the lookup the
+        --   handler would otherwise make can fail outright: this
+        --   queue's delay is unbounded, and the chunk can be evicted
+        --   in the meantime — leaving a body that never left the cell
+        --   embedded one z inside the stone the moment the durable
+        --   edit is replayed.
+        --
         --   The handler still re-reads each named victim itself: its
         --   pose, so one that died of something else in between is
         --   settled rather than killed twice; whether the roster still
         --   holds it on this page, so an orphan of a torn-down
-        --   incarnation is skipped; and its CURRENT column, so the
-        --   burial correction is applied where the body actually is
+        --   incarnation is skipped; and its CURRENT column, so a
+        --   victim that walked off is corrected where it actually is
         --   rather than where the stone went.
     | UnitClearAll
         -- ^ Drop every unit instance + selection + sim state. Enqueued by

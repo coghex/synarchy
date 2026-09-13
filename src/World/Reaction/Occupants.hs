@@ -106,7 +106,10 @@ import Unit.Command.Types (UnitCommand(..))
 import Unit.Sim.Types (UnitSimState(..), UnitThreadState(..))
 import Unit.Types (UnitId(..), UnitManager(..), unitsOnPage)
 import World.Chunk.Residency (ChunkGeneration)
-import World.Generate.Coordinates (canonicalTile)
+import qualified Data.Vector.Unboxed as VU
+import World.Generate.Coordinates (canonicalTile, canonicalTileFrame)
+import World.Tile.Types (lookupChunk)
+import World.Chunk.Types (LoadedChunk(..), columnIndex)
 import World.GroundItems (takeGroundItemsOnPageWhere)
 import World.Page.Types (WorldPageId(..))
 import World.State.Types (WorldState(..), pageWrapWorldSize)
@@ -187,14 +190,30 @@ destroySolidificationOccupants uc logger pageId epoch ws (SolidificationVictims 
             HS.member (canonicalTile worldSize (floor (giX gi))
                                                (floor (giY gi)))
                       canonical
-        forM_ plan $ \((cgx, cgy), victims) →
+        -- The tiles as this commit LEFT them. Read here, on the world
+        -- thread that owns them and while the chunk is certainly still
+        -- loaded, because the handler's own lookup may not be able to:
+        -- the queue delay is unbounded and the chunk can be evicted in
+        -- the meantime.
+        td ← readIORef (wsTilesRef ws)
+        forM_ plan $ \((cgx, cgy), victims) → do
+            let (coord, (lx, ly), _) = canonicalTileFrame worldSize cgx cgy
+                committedTop = case lookupChunk coord td of
+                    Just lc → lcTerrainSurfaceMap lc VU.! columnIndex lx ly
+                    -- Unreachable: this commit just edited that column.
+                    -- Answering the floor of the z domain rather than
+                    -- raising keeps a lost chunk from turning a
+                    -- tidy-up into a crash, and leaves the handler's
+                    -- own live lookup to do the work if it can.
+                    Nothing → minBound
             -- Sent even with no victims: it is what carries "this tile
             -- solidified" to the unit thread, and a handler given an
             -- empty set is a cheap no-op. Sending it unconditionally
             -- keeps the solidification path from quietly re-acquiring
             -- the lift it replaced.
             Q.writeQueue (ucUnitQueue uc)
-                (UnitSolidifyOccupants pageId epoch cgx cgy victims)
+                (UnitSolidifyOccupants pageId epoch cgx cgy committedTop
+                                       victims)
         logDebug logger CatWorld $
             "Solidification destroyed " <> tshow (length removed)
             <> " ground item(s) and named "
