@@ -120,7 +120,19 @@ of the headless suite),
 `persistence_contract_sweep.py`, `save_barrier_probe.py`,
 `save_storage_probe.py`, `transactional_load_probe.py`,
 `persistence_integrity_probe.py`, `multiworld_save_probe.py`, and
-`autosave_probe.py` (manual-only). NB #365: a save containing an arena
-page hangs the world thread on load — never use arenas as a save-test
-page. The headless hspec harness cannot run `engine.saveWorld` end to
+`autosave_probe.py` (manual-only). An arena page is a supported
+save-test page. Loading a save containing one used to hang the world
+thread — the arena's synthetic gen params wedged the
+regenerate-from-params path — and #365 fixed it by rebuilding the page
+through the shared flat builder from its own recorded seed, then
+replaying the edit overlay and the dig/construct slopes
+(`World.Load.Stage`'s `isArenaParams` branch, `World.Generate.Arena`;
+#1718 settled which seed it rebuilds from). `multiworld_save_probe.py
+--arena` is the standing regression for that restore path. That is the
+save/load restore path only, and nothing more: arena pages have their own
+limits elsewhere (requesting chunks outside the 5×5 footprint is a
+separate hazard — see `tools/construction_probe.py`), and because
+`--arena` swaps only the secondary page, an arena run never stands in for
+the default run's two generated worlds or for generated-world persistence
+coverage. The headless hspec harness cannot run `engine.saveWorld` end to
 end; save round trips are proved by the probes.

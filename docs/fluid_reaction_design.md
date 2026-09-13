@@ -310,7 +310,9 @@ Resolved by D-7.
   event landed as a durable edit, bumped the generation, and re-seeded the
   sim (the `--match "fluid writeback staleness"` family is the model).
 - Persistence: the stone product present after a fresh-process save→load
-  (persistence-contract style; NB #365 — never on an arena page).
+  (persistence-contract style, on an ordinary generated page — this gate
+  wants the real generated-world path, which an arena's flat rebuild is
+  not; #365's arena-load hang is fixed and is no longer the reason).
 - A headless probe driving `world.setFluidTile` lava against water on a real
   page end-to-end is a candidate FR-3-adjacent gate; CI eligibility per
   `tools/ci_probes.py` rules.
