@@ -5144,10 +5144,21 @@ schedule.
 
 **Nothing is buried, and nothing else moves.** Every surviving occupant
 — the fresh corpse and an older one alike — is raised clear of the
-terrain it is standing on if it is below it, in the sim state and the
+terrain it is standing on where it is below it, in the sim state and the
 render-facing instance together. That is a `max`, not a snap: it is the
 minimum correction that keeps a body out of the ground, and it never
-moves one horizontally. Which column depends on where the body ended up. A victim
+moves one horizontally.
+
+BOTH heights are corrected, each by its own `max`: the discrete `gridZ`
+and the continuous `realZ`/`uiRealZ`. They are separate fields that
+separate things read, and a unit killed mid-ascent can have one already
+clear while the other is not — a one-level pull-up commits `gridZ` to
+the ledge while `realZ` is still lerping up from the start. Gating on
+`gridZ` alone would decline to touch either, and `handleUnitKillCommand`
+has just cleared the climb endpoints and the transition timer, so no
+later tick would ever finish the lerp: the corpse would render inside
+the rock permanently. Correcting each field independently also means
+clearing one never drags the other down. Which column depends on where the body ended up. A victim
 that MOVED is corrected against its own current column on its own page,
 live: a victim can move between the commit and the drain — that is the
 very delay the carried set exists to survive — and correcting it to the
@@ -5207,8 +5218,9 @@ movement committed between the snapshot and the first stone (through
 the drain, a corpse under fluid the solidified cell retained, a victim
 the roster no longer holds, a page re-initialised under the same id
 before the kill drained, a page replaced AFTER the handler's first epoch
-check (through `SolidifySeams`), and the reaction's chunk evicted before
-the drain — plus the occupancy predicate itself.
+check (through `SolidifySeams`), the reaction's chunk evicted before the
+drain, and a victim killed mid-pull-up whose grid z was already clear
+while its continuous z was not — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
 the alias check for the `world.getMaterialAt` query both probes read the
 product through, and #2490's live occupant scenario (a unit and an item

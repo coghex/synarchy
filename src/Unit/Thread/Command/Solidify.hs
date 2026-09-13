@@ -270,7 +270,12 @@ settleClearOfTerrain env utsRef pageId gx gy committedTop uid = do
             let mTop | onSolidified ∧ uiPage inst ≡ pageId =
                          Just (maybe committedTop (max committedTop) mLive)
                      | otherwise = mLive
-            forM_ mTop $ \z → when (usGridZ ss < z) $ raiseTo env utsRef z uid
+            -- Unconditional: 'raiseTo' owns the "is it below?" rule,
+            -- for both the discrete and the continuous height, and is a
+            -- no-op when neither is. Deciding here as well would be a
+            -- second copy of it — and the copy this replaces tested
+            -- only the grid z, which is exactly the case below.
+            forM_ mTop $ \z → raiseTo env utsRef z uid
         _ → pure ()
 
 -- | Do these two tiles name the same physical cell of @pageId@?
@@ -289,25 +294,45 @@ sameTileOnPage env pageId a b = do
             pure $ uncurry (canonicalTile worldSize) a
                  ≡ uncurry (canonicalTile worldSize) b
 
--- | Commit the height @z@ to both surfaces. Split from the decision so
---   the decision reads as one expression.
+-- | Raise one row to terrain top @z@ where it stands below it — the
+--   discrete @gridZ@ and the continuous @realZ@ each by their own
+--   @max@ — on both surfaces, the sim state and the render-facing
+--   instance. Idempotent, and a no-op for a row already clear.
 raiseTo ∷ EngineEnv → IORef UnitThreadState → Int → UnitId → IO ()
 raiseTo env utsRef z uid = do
     atomicModifyIORef' utsRef $ \uts →
         case HM.lookup uid (utsSimStates uts) of
-            Just ss | usGridZ ss < z →
+            Just ss | belowEither (usGridZ ss) (usRealZ ss) →
                 ( uts { utsSimStates = HM.insert uid
-                            ss { usGridZ = z, usRealZ = fromIntegral z }
+                            ss { usGridZ = max (usGridZ ss) z
+                               , usRealZ = max (usRealZ ss) realZ }
                             (utsSimStates uts) }
                 , () )
             _ → (uts, ())
     atomicModifyIORef' (ucUnitManagerRef (toUnitCombatCapability env)) $ \um →
         case HM.lookup uid (umInstances um) of
-            Nothing → (um, ())
-            Just inst
-                | uiGridZ inst < z →
-                    ( um { umInstances = HM.insert uid
-                             inst { uiGridZ = z, uiRealZ = fromIntegral z }
-                             (umInstances um) }
-                    , () )
-                | otherwise → (um, ())
+            Just inst | belowEither (uiGridZ inst) (uiRealZ inst) →
+                ( um { umInstances = HM.insert uid
+                         inst { uiGridZ = max (uiGridZ inst) z
+                              , uiRealZ = max (uiRealZ inst) realZ }
+                         (umInstances um) }
+                , () )
+            _ → (um, ())
+  where
+    realZ = fromIntegral z
+    -- BOTH heights, because they are separate fields that separate
+    -- things read, and a unit killed mid-ascent can have one already
+    -- clear while the other is not. @usRealZ@ is the CONTINUOUS
+    -- position, equal to the grid z except during a climb, where it
+    -- lerps from the start z to the top: a one-level pull-up commits
+    -- the grid z to the ledge while the body is still visibly below it.
+    -- Correcting on the grid z alone would then decline to touch
+    -- either, and 'Unit.Thread.Command.Pose.handleUnitKillCommand' has
+    -- just cleared the climb endpoints and the transition timer, so no
+    -- later tick will ever finish the lerp — the corpse would render
+    -- inside the rock permanently.
+    --
+    -- Each field is raised by its OWN @max@, so clearing one never
+    -- drags the other down: a body whose real z already stands above
+    -- the new top keeps it.
+    belowEither gridZ contZ = gridZ < z ∨ contZ < realZ

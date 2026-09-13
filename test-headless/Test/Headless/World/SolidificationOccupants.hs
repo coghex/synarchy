@@ -86,7 +86,7 @@ reactingPageId, crossingPageId, aliasPageId, stalePageId ∷ WorldPageId
 replayPageId, delayPageId, selectionPageId, emptyTilePageId ∷ WorldPageId
 mirrorPageId, floodedPageId ∷ WorldPageId
 seamPageId, movedPageId, retiredPageId, orphanPageId ∷ WorldPageId
-racedPageId, evictedPageId ∷ WorldPageId
+racedPageId, evictedPageId, climbingPageId ∷ WorldPageId
 victimPageId    = WorldPageId "occupants_victim_w8"
 corpsePageId    = WorldPageId "occupants_corpse_w8"
 moverPageId     = WorldPageId "occupants_corpseheight_w8"
@@ -107,6 +107,7 @@ retiredPageId   = WorldPageId "occupants_retired_w8"
 orphanPageId    = WorldPageId "occupants_orphan_w8"
 racedPageId     = WorldPageId "occupants_raced_w8"
 evictedPageId   = WorldPageId "occupants_evicted_w8"
+climbingPageId  = WorldPageId "occupants_climbing_w8"
 
 -- | The world size every 'livePage' here generates at, and therefore
 --   the one its u-aliases are computed against.
@@ -1014,6 +1015,55 @@ spec = describe "solidification occupants (#2490)" $ do
         ss ← simStateOf env victim
         inst ← instanceOf env victim
         usGridZ ss `shouldBe` stoneTop
+        uiGridZ inst `shouldBe` stoneTop
+
+    it "lifts a victim killed MID-PULL-UP by its continuous height too, \
+       \not only by the grid z its climb had already committed" $
+      \env → do
+        prepare env
+        lp ← livePage env climbingPageId
+        let ws     = lpState lp
+            doomed = tileOf lp reactCell
+        before ← chunkAt ws (lpLava lp)
+        let baseZ = terrainTopAt before reactCell
+        victim ← spawnAt env ws climbingPageId 9995 doomed baseZ
+        -- A one-level pull-up in flight: `usGridZ` has already committed
+        -- to the destination, while `usRealZ` is still lerping up from
+        -- the start and stands BELOW it. That is the shape
+        -- `Unit.Thread.Movement` leaves during a climb, and the reason
+        -- the two fields exist separately.
+        atomicModifyIORef' (utsRef env) $ \uts →
+            ( uts { utsSimStates = HM.adjust
+                      (\ss → ss { usGridZ  = baseZ + 1
+                                , usRealZ  = fromIntegral baseZ
+                                , usState  = TransitioningTo Standing
+                                , usClimbToTile =
+                                    Just ( fromIntegral (fst doomed)
+                                         , fromIntegral (snd doomed)
+                                         , baseZ + 1 ) })
+                      victim (utsSimStates uts) }, () )
+        atomicModifyIORef' (unitManagerRef env) $ \um →
+            ( um { umInstances = HM.adjust
+                     (\inst → inst { uiGridZ = baseZ + 1
+                                   , uiRealZ = fromIntegral baseZ })
+                     victim (umInstances um) }, () )
+
+        react env lp climbingPageId reactCell
+        drainUnits env
+
+        after ← chunkAt ws (lpLava lp)
+        let stoneTop = terrainTopAt after reactCell
+        stoneTop `shouldBe` baseZ + 1
+        poseOf env victim `shouldReturn` Dead
+        ss ← simStateOf env victim
+        inst ← instanceOf env victim
+        -- The grid z was ALREADY at the new top, so a correction that
+        -- only looked at it would have declined to touch anything — and
+        -- the kill has just cleared the climb endpoints and the
+        -- transition timer, so no later tick would ever finish the lerp.
+        usGridZ ss `shouldBe` stoneTop
+        (usRealZ ss ≥ fromIntegral stoneTop) `shouldBe` True
+        (uiRealZ inst ≥ fromIntegral stoneTop) `shouldBe` True
         uiGridZ inst `shouldBe` stoneTop
 
 -- * The occupancy predicate itself ------------------------------------
