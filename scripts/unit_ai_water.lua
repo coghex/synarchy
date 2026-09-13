@@ -14,6 +14,7 @@ local addWaterSource       = core.addWaterSource
 local isGoalActive         = core.isGoalActive
 
 local mv = require("scripts.movement_speed")
+local sourcePhase = require("scripts.unit_ai_source_phase")
 local needs = require("scripts.unit_ai_needs")
 local findCanteenWithWater = needs.findCanteenWithWater
 
@@ -203,6 +204,9 @@ end
 -- per-unit phase flag (s.sourcePhase ∈ {"descending","drinking",
 -- "ascending", nil}). Lock-in: utility returns math.huge while the
 -- phase is non-nil so a half-completed sequence can't be pre-empted.
+-- That lock is BOUNDED, and RELEASED on preemption: both belong to
+-- scripts/unit_ai_source_phase.lua (#2545), which every entry, advance
+-- and exit of the flag goes through. Read its header first.
 --
 -- Pose descent + ascent are chained two-step (standing↔crouching↔
 -- crawling) and use stride=2 so the visible duration is halved — the
@@ -218,7 +222,7 @@ local STRIDE_DESCEND = 2
 local STRIDE_ASCEND  = 2
 
 local function drinkFromSourceUtility(uid, s, params)
-    if s.sourcePhase then return math.huge end
+    if sourcePhase.active(s) then return math.huge end
 
     local hyd = unit.getStat(uid, "hydration")
     local maxHyd = require("scripts.unit_stats").get(uid, "max_hydration")
@@ -237,6 +241,10 @@ local function drinkFromSourceUtility(uid, s, params)
 end
 
 local function drinkFromSourceExecute(uid, s, params)
+    -- The bound, before any leg runs: an abandoned sequence executes
+    -- nothing this tick, including the standing entry below.
+    if sourcePhase.expire(uid, s) then return end
+
     local pose = unit.getPose(uid) or "standing"
 
     -- Descending: step one pose down per AI tick (between ticks, the
@@ -247,7 +255,7 @@ local function drinkFromSourceExecute(uid, s, params)
         elseif pose == "crouching" then
             unit.transitionTo(uid, "crawling", STRIDE_DESCEND)
         elseif pose == "crawling"  then
-            s.sourcePhase = "drinking"
+            sourcePhase.advance(s, "drinking")
         end
         return
     end
@@ -265,7 +273,7 @@ local function drinkFromSourceExecute(uid, s, params)
         -- the math.huge phase lock forever on a condition that can
         -- never become true.
         if maxHyd <= 0 or hyd / maxHyd >= 0.95 then
-            s.sourcePhase = "ascending"
+            sourcePhase.advance(s, "ascending")
             unit.transitionTo(uid, "crouching", STRIDE_ASCEND)
         end
         return
@@ -281,7 +289,7 @@ local function drinkFromSourceExecute(uid, s, params)
         elseif pose == "crouching" then
             unit.transitionTo(uid, "standing", STRIDE_ASCEND)
         elseif pose == "standing"  then
-            s.sourcePhase = nil
+            sourcePhase.clear(s)
         end
         return
     end
@@ -303,7 +311,7 @@ local function drinkFromSourceExecute(uid, s, params)
     if cheb == 1 and not onFluid then
         local fluidType = world.getFluidAt(loc.x, loc.y)
         if fluidType == "lake" or fluidType == "river" then
-            s.sourcePhase = "descending"
+            sourcePhase.begin(s)
             unit.transitionTo(uid, "crouching", STRIDE_DESCEND)
         else
             forgetWaterSource(s, loc.x, loc.y)
@@ -468,10 +476,21 @@ local function scanForWater(uid, s, params)
     return added
 end
 
+-- Preemption exit (#2545). unit_ai_mental.preempt fires only the
+-- OUTGOING action's onExit when delirium or a mental break takes the
+-- tick, and its wander then carries the unit off the bank; without this
+-- the phase outlived the episode and re-locked at math.huge afterwards.
+-- Abandons rather than merely clears: a preemption can land between any
+-- two pose steps, and a unit left CROUCHING cannot move at all.
+local function drinkFromSourceOnExit(uid, s, params)
+    sourcePhase.abandon(uid, s)
+end
+
 M.refillUtility          = refillUtility
 M.refillExecute          = refillExecute
 M.drinkFromSourceUtility = drinkFromSourceUtility
 M.drinkFromSourceExecute = drinkFromSourceExecute
+M.drinkFromSourceOnExit  = drinkFromSourceOnExit
 M.searchUtility          = searchUtility
 M.searchExecute          = searchExecute
 M.scanForWater           = scanForWater

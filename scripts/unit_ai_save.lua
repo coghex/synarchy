@@ -80,9 +80,18 @@ local TRANSIENT_ORDER_FIELDS = { "transferOrder" }
 -- charges a pending approach nothing. The pending collection ITSELF
 -- (harvestPhase/harvestLoot, foragePhase/forageLoot) is durable and
 -- unaffected -- only its budget restarts.
+--
+-- #2545 adds the source-drink phase's deadline for the reason
+-- constructJob.staking is stripped below: it is a CLOCK, and a wait
+-- cannot outlive the session whose clock it was measured against. The
+-- phase ITSELF (sourcePhase) is durable and stays -- a unit saved on
+-- all fours at a bank resumes drinking there -- and
+-- unit_ai_source_phase.expire re-arms a full budget on the first tick
+-- after a load, which is the honest answer for an interval the AI
+-- could not tick through.
 local TRANSIENT_WORK_FIELDS =
     { "harvestProgress", "harvestProgressAt", "lastHarvestAt",
-      "harvestCollect", "forageCollect" }
+      "harvestCollect", "forageCollect", "sourcePhaseAt" }
 
 -- A shallow copy of one unit's aiState entry with every transient
 -- candidate field stripped (requirement 13/14) -- see

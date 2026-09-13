@@ -191,7 +191,7 @@ unitAi.registerActions("acolyte", {
     { name = "forage", utility = needs.forageUtility, execute = needs.forageExecute },
     { name = "refill_canteen", utility = water.refillUtility, execute = water.refillExecute },
     { name = "search_for_water", utility = water.searchUtility, execute = water.searchExecute },
-    { name = "drink_from_source", utility = water.drinkFromSourceUtility, execute = water.drinkFromSourceExecute },
+    { name = "drink_from_source", utility = water.drinkFromSourceUtility, execute = water.drinkFromSourceExecute, onExit = water.drinkFromSourceOnExit },
     { name = "go_to_sleep", utility = sleepGoal.sleepUtility, execute = sleepGoal.sleepExecute },
     { name = "notify_allies", utility = notify.notifyAlliesUtility, execute = notify.notifyAlliesExecute },
     { name = "build_nearby", utility = logistics.buildNearbyUtility, execute = logistics.buildNearbyExecute },
