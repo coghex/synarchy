@@ -28,18 +28,31 @@ local stall = require("scripts.unit_ai_stall")
 -- bounded approach, and the peek-don't-pop rule, shared with foraging's
 -- identical collecting phase in scripts/unit_ai_needs.lua.
 local yieldCollect = require("scripts.unit_ai_yield")
+-- Which harvest verb takes the plant a food search chose (#2553),
+-- shared with unit_ai_needs.lua's forage rung.
+local foragePick = require("scripts.unit_ai_forage_pick")
 
 -----------------------------------------------------------
 -- Action: auto_harvest (#336, skill-scaled since #1582)
 --
 -- Skill-gated colony farm-tending: pick up any ripe harvestable flora
--- in range — planted crops AND wild flora alike (world.
--- findHarvestableFlora / world.harvestFlora, #94, don't distinguish the
--- two; #334's crop species carry worldGen.density 0.0, so any crop
--- instance found here was deliberately planted, never a wild spawn).
+-- in range — planted crops AND wild flora alike (#94's
+-- world.findHarvestableFlora does not distinguish the two; #334's crop
+-- species carry worldGen.density 0.0, so any crop instance found here
+-- was deliberately planted, never a wild spawn).
 -- Both calls stay UNTAGGED: the tag argument belongs to callers with a
 -- specific material in mind (chop asks for "wood"), while farm-tending
 -- takes whatever the plant yields.
+--
+-- #2553: the SCAN is still world.findHarvestableFlora, but the PICK
+-- goes through unit_ai_forage_pick.lua rather than straight to
+-- world.harvestFlora. An untagged scan admits only species with an
+-- edible yield while a coordinate harvest takes the first admitting
+-- instance on the tile with no edibility test at all, so on a shared
+-- tile the two could name different plants and the wood-producing
+-- co-tenant took the yield and the regrowth timer. A wild winner is now
+-- picked by its own instanceId; a crop plot, which carries none, still
+-- goes by coordinate. Both remain untagged.
 --
 -- Harvest is a WORK ACTION, not an instant one (#1582): picking
 -- accumulates s.harvestProgress toward WORK_TOTAL at
@@ -67,10 +80,10 @@ unitAi.harvest.WORK_TOTAL = 1.0
 -- TRANSIENCE (#1582, extended by #2550). s.harvestProgress,
 -- s.harvestProgressAt, s.lastHarvestAt and s.harvestCollect are
 -- stripped from the lua.unit_ai save payload
--- (scripts/unit_ai_save.lua's TRANSIENT_WORK_FIELDS), so a load starts
--- every picker on a fresh plant and every pending collection on a
--- fresh approach budget. That is the honest post-load state, not a
--- loss, for three reasons:
+-- (scripts/unit_ai_save_transient.lua's TRANSIENT_WORK_FIELDS), so a
+-- load starts every picker on a fresh plant and every pending
+-- collection on a fresh approach budget. That is the honest post-load
+-- state, not a loss, for three reasons:
 --
 --   * Under four game-seconds of work is re-earned immediately.
 --     Persisting it buys nothing a player could notice, and the same
@@ -83,17 +96,20 @@ unitAi.harvest.WORK_TOTAL = 1.0
 --     being its named example -- is that it charges nothing. Dropping
 --     the stamp IS that answer, applied at the boundary rather than
 --     after it.
---   * harvestProgressAt names a TILE, and the progress is only ever
---     valid for the instance standing on it. A load replaces the whole
---     session, so nothing promises the same plant is still there.
+--   * harvestProgressAt names a PLANT -- a tile plus, since #2553, the
+--     selected instance's own id -- and the progress is only ever valid
+--     for that plant. A load replaces the whole session, so nothing
+--     promises it is still there; the stored id does not survive the
+--     boundary either (scripts/unit_ai_save_transient.lua strips it),
+--     which is a second reason this accumulator cannot.
 --
 -- All three apply verbatim to #2550's s.harvestCollect, which is a
 -- closest-approach record plus the same kind of last-sample stamp: a
 -- load boundary charges a pending approach nothing, and the first tick
 -- afterwards re-establishes the closest approach from where the worker
 -- actually stands and gives the collection its full budget again --
--- the same answer unit_ai_save.lua's TRANSIENT_ORDER_FIELDS note gives
--- a restored transfer order.
+-- the same answer unit_ai_save_transient.lua's TRANSIENT_ORDER_FIELDS
+-- note gives a restored transfer order.
 --
 -- Nothing has to re-populate them: bindProgress below seeds a fresh
 -- accumulator on the first adjacent tick, and unit_ai_yield seeds a
@@ -102,24 +118,35 @@ unitAi.harvest.WORK_TOTAL = 1.0
 -- collection itself survives a load, which is precisely why its
 -- proximity has to be rechecked.
 
--- Progress belongs to ONE flora instance, identified by its tile.
--- Dropping it here is what stops partial work on a plant that vanished,
--- was picked by someone else, or stopped being the nearest candidate
--- from being spent on the next plant instead.
+-- Progress belongs to ONE flora instance. Dropping it here is what
+-- stops partial work on a plant that vanished, was picked by someone
+-- else, or stopped being the nearest candidate from being spent on the
+-- next plant instead.
 function unitAi.harvest.resetProgress(s)
     s.harvestProgress   = nil
     s.harvestProgressAt = nil
     s.lastHarvestAt     = nil
 end
 
--- Bind the accumulator to (tx, ty), restarting it whenever the target
--- moved. lastHarvestAt is cleared alongside so the first tick on a new
--- plant charges no elapsed time.
-function unitAi.harvest.bindProgress(s, tx, ty)
+-- Bind the accumulator to the selected plant, restarting it whenever
+-- the target moved. lastHarvestAt is cleared alongside so the first
+-- tick on a new plant charges no elapsed time.
+--
+-- #2553: the binding is (tile, INSTANCE), not the tile alone. It was
+-- the tile alone while the pick was by coordinate, on the premise that
+-- a tile named one plant -- but co-tenants are legitimate, so the scan
+-- can switch from one plant to another WITHOUT the coordinates
+-- changing, and work banked against the edible plant would then have
+-- completed a pick on the co-tenant standing beside it. Comparing the
+-- id closes that: a different plant is a different accumulator, at the
+-- same tile or any other. A crop plot has no id, so its binding is
+-- (tile, nil) and behaves exactly as before -- and a plot never shares
+-- a tile with wild flora, so the pair can never collide.
+function unitAi.harvest.bindProgress(s, tx, ty, iid)
     local at = s.harvestProgressAt
-    if not at or at.x ~= tx or at.y ~= ty then
+    if not at or at.x ~= tx or at.y ~= ty or at.iid ~= iid then
         s.harvestProgress   = 0
-        s.harvestProgressAt = { x = tx, y = ty }
+        s.harvestProgressAt = { x = tx, y = ty, iid = iid }
         s.lastHarvestAt     = nil
     end
 end
@@ -183,7 +210,9 @@ function unitAi.harvest.utility(uid, s, params)
         unitAi.harvest.resetProgress(s)
         return -math.huge
     end
-    s.harvestTarget = { x = spot.gx, y = spot.gy }
+    -- #2553: the chosen plant's own identity rides with its tile.
+    -- ABSENT for a crop plot, which has none.
+    s.harvestTarget = { x = spot.gx, y = spot.gy, iid = spot.instanceId }
     local distFactor = math.max(0, 1 - spot.dist / params.harvest_scan_range)
     return params.harvest_base_utility * distFactor
          * roles.weight(s, "auto_harvest")
@@ -304,7 +333,7 @@ function unitAi.harvest.execute(uid, s, params)
             return
         end
 
-        unitAi.harvest.bindProgress(s, tgt.x, tgt.y)
+        unitAi.harvest.bindProgress(s, tgt.x, tgt.y, tgt.iid)
         -- Elapsed time is charged only between two consecutive
         -- ADJACENT, STATIONARY, executing ticks, by #1291's two rules:
         --
@@ -340,7 +369,10 @@ function unitAi.harvest.execute(uid, s, params)
                           + params.harvest_rate * (0.5 + fSkill / 100.0) * dt
         if s.harvestProgress < unitAi.harvest.WORK_TOTAL then return end
 
-        local yields = world.harvestFlora(tgt.x, tgt.y)
+        -- #2553: by IDENTITY for a wild plant, by coordinate for a crop
+        -- plot, and refused outright when the identity is gone --
+        -- unit_ai_forage_pick.lua states which is which and why.
+        local yields = foragePick.pick(tgt)
         if yields and #yields > 0 then
             unit.pickup(uid)   -- bend-down anim over the plant
             local gids = {}
@@ -349,9 +381,11 @@ function unitAi.harvest.execute(uid, s, params)
             s.harvestPhase = "collecting"
             grantWorkXP(uid, "farming", params.harvest_xp_per_harvest or 0)
         end
-        -- Raced / regrowing after all, or a completed harvest either
-        -- way: forget the target and its accumulator; the next
-        -- decision re-finds and starts fresh.
+        -- Raced / regrowing after all, a pick REFUSED because the
+        -- chosen plant is gone or its identity did not survive a load
+        -- (#2553), or a completed harvest: either way forget the target
+        -- and its accumulator; the next decision re-finds and starts
+        -- fresh. Never a silent fallback to a co-tenant.
         s.harvestTarget = nil
         unitAi.harvest.resetProgress(s)
         return

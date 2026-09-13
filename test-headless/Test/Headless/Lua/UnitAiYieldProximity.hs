@@ -133,6 +133,14 @@ worldStubs = lns
     , "FLORA = { ['10,0'] = { { gid = 1 }, { gid = 2 } } }"
     , "WALK_TILES_PER_TICK = 1.0"
     , "local function key(x, y) return string.format('%d,%d', x, y) end"
+    -- #2553: a FLORA tile carries a wild plant with a stable id, which
+    -- is what the engine's findHarvestableFlora reports for a wild
+    -- winner and what both production callers now name their pick by.
+    -- Derived from the tile so no case has to track one. Nothing here
+    -- is a crop plot, so world.getCropPlotAt is absent from the world
+    -- stub below and every pick takes the exact-instance verb -- which
+    -- is the path this gate's collecting phases now actually reach.
+    , "local function iidAt(x, y) return 1000 + (x * 31 + y) end"
     , "engine = { gameTime = function() return NOW end,"
     , "           logWarn = function(m) WARNINGS[#WARNINGS + 1] = m end,"
     , "           logInfo = function() end }"
@@ -205,19 +213,37 @@ worldStubs = lns
     , "      local gx, gy = tonumber(sx), tonumber(sy)"
     , "      local d = math.sqrt((gx - ux) ^ 2 + (gy - uy) ^ 2)"
     , "      if d <= range and (not bestD or d < bestD) then"
-    , "        best, bestD = { gx = gx, gy = gy, dist = d }, d"
+    , "        best, bestD = { gx = gx, gy = gy, dist = d,"
+    , "                        instanceId = iidAt(gx, gy) }, d"
     , "      end"
     , "    end"
-    , "    return best end,"
-    , "  harvestFlora = function(gx, gy, tag)"
-    , "    CALLS.harvest = CALLS.harvest + 1"
-    , "    CALLS.tags.harvest = tag"
-    , "    local yields = FLORA[key(gx, gy)]"
-    , "    FLORA[key(gx, gy)] = nil"
-    -- A picked plant drops its yields ON the harvested tile.
-    , "    for _, yi in ipairs(yields or {}) do"
-    , "      GROUND_AT[yi.gid] = { x = gx + 0.5, y = gy + 0.5 } end"
-    , "    return yields or {} end }"
+    , "    return best end }"
+    -- A picked plant drops its yields ON the harvested tile, which is
+    -- what makes every proximity measurement below a real one. Shared
+    -- by both harvest verbs, so they can only differ in WHICH plant
+    -- they accept, never in what a successful pick does.
+    , "local function takeYields(gx, gy)"
+    , "  local yields = FLORA[key(gx, gy)]"
+    , "  FLORA[key(gx, gy)] = nil"
+    , "  for _, yi in ipairs(yields or {}) do"
+    , "    GROUND_AT[yi.gid] = { x = gx + 0.5, y = gy + 0.5 } end"
+    , "  return yields end"
+    -- CALLS.harvest counts a completed pick by either verb, so the
+    -- expectations here keep meaning what they meant. The coordinate
+    -- verb stays registered because the production crop-plot branch
+    -- still reaches it; no case in this file plants a plot, so it is
+    -- the exact-instance verb that actually runs.
+    , "world.harvestFlora = function(gx, gy, tag)"
+    , "  CALLS.harvest = CALLS.harvest + 1"
+    , "  CALLS.tags.harvest = tag"
+    , "  return takeYields(gx, gy) or {} end"
+    -- The engine refuses (nil) when the tile does not hold that
+    -- instance (Forage/Harvest.hs).
+    , "world.harvestFloraInstance = function(gx, gy, iid, tag)"
+    , "  CALLS.harvest = CALLS.harvest + 1"
+    , "  CALLS.tags.harvest = tag"
+    , "  if iid ~= iidAt(gx, gy) then return nil end"
+    , "  return takeYields(gx, gy) end"
     , "function place(x, y) POS.gridX, POS.gridY = x, y end"
     , "NO_WALK = false"
     -- scripts/unit_ai.lua's own default (params.stuck_walk_timeout).

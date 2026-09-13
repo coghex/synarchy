@@ -42,8 +42,8 @@
 --     AI never derives one from a pick or from arithmetic over two.
 --   * They are only ever CONSUMED by point verbs, all of which accept
 --     any u-alias -- not just the designation reads/cancels but every
---     verb that FINISHES a job: world.getDigInfoAt/digTile,
---     harvestFlora, setVegAt, plantCropAt/plantRowCropAt,
+--     verb that FINISHES a job: world.getDigInfoAt/digTile, setVegAt,
+--     harvestFlora/harvestFloraInstance, plantCropAt/plantRowCropAt,
 --     structure.place/hasAt/floorZAt/clear, and building.spawn/
 --     canPlaceAt for a CtBuilding stake. That set is what lets a coord
 --     persisted by a pre-#1175 save (lua.unit_ai v1-v4, possibly an

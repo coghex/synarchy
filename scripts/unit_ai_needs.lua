@@ -2,12 +2,18 @@
 --
 -- Personal-maintenance action cluster: idle, wander, drink from a
 -- carried canteen, eat from inventory, and forage from the land
--- (#94). Self-contained except for movement_speed and unit_stats.
+-- (#94). The modules required below are the walking pace, the ambient
+-- wander policy, and the two pieces of the forage rung that
+-- auto-harvest shares -- no other action's state is reached.
 
 local mv      = require("scripts.movement_speed")
 local ambient = require("scripts.ambient_movement")
 -- Retained-yield collection (#2550), shared with auto-harvest.
 local yieldCollect = require("scripts.unit_ai_yield")
+-- The land-food ladder's own two questions (#2553), shared with
+-- auto-harvest: which ground definitions a forager may eat, and which
+-- harvest verb takes the plant its search actually chose.
+local foragePick = require("scripts.unit_ai_forage_pick")
 
 local M = {}
 
@@ -267,10 +273,13 @@ end
 --
 -- Acquire food from the LAND when the unit is hungry and carrying
 -- none: walk to the nearest harvestable flora tile
--- (world.findHarvestableFlora), harvest it (the yield spawns as
--- ground items), and pick the yield up — eat_from_inventory then
--- takes over. If no harvestable plant is in range but edible ground
--- items are, fetch those instead. The #94 emergency-hunger ladder is
+-- (world.findHarvestableFlora), harvest THE PLANT THAT SEARCH CHOSE
+-- (#2553 -- by identity, through scripts/unit_ai_forage_pick.lua,
+-- because the untagged search filters on an EDIBLE yield and a
+-- coordinate harvest does not), and pick the yield up —
+-- eat_from_inventory then takes over. If no harvestable plant is in
+-- range but edible ground items are, fetch those instead. The #94
+-- emergency-hunger ladder is
 -- inventory → flora → ground food; the first rung is
 -- eat_from_inventory itself, which outranks forage whenever the unit
 -- actually carries food.
@@ -281,18 +290,6 @@ end
 -- drops its orders and goes foraging. Finite by construction (peak
 -- base + scale = 8.4) — never math.huge.
 -----------------------------------------------------------
-local foodDefCache = {}   -- defName → bool: def has an edible food block
-
-local function isFoodDef(defName)
-    local c = foodDefCache[defName]
-    if c ~= nil then return c end
-    local f = item.getFood and item.getFood(defName)
-    local edible = (f ~= nil)
-        and ((f.calories or 0) > 0 or (f.caloriesPerKg or 0) > 0)
-    foodDefCache[defName] = edible
-    return edible
-end
-
 -- Blended food need ∈ [0,1]: stomach emptiness matters (it's what
 -- "feeling hungry" is) but the calorie STORE emptying is what actually
 -- kills — it dominates the ramp so the emergency fires on real
@@ -309,29 +306,6 @@ local function forageNeed(uid)
         storeNeed = 1 - math.max(0, math.min(1, cal / maxCal))
     end
     return math.max((1 - hungerFrac) * 0.6, storeNeed), hungerFrac
-end
-
--- #1673: item.listGround is ACTIVE-page scoped while item.pickupGround
--- commits on the CARRIER's page, so a same-numbered gid on another page
--- is a different item entirely. Every listed id is re-resolved on the
--- ACTING unit's own page through item.getGroundForUnit (#1666's
--- owning-page reader) and every predicate below reads the RESOLVED row,
--- so a forager can neither be sent to another world's coordinates nor
--- hand a foreign gid to a pickup that would move something else.
--- Failing closed: an id that does not resolve is not a candidate.
-local function findGroundFood(uid, ux, uy, radius)
-    local ground = item.listGround()
-    if not ground then return nil end
-    local best, bestD2 = nil, radius * radius + 1
-    for _, g in ipairs(ground) do
-        local owned = item.getGroundForUnit(uid, g.id)
-        if owned and isFoodDef(owned.defName) then
-            local dx, dy = owned.x - ux, owned.y - uy
-            local d2 = dx * dx + dy * dy
-            if d2 < bestD2 then best, bestD2 = owned, d2 end
-        end
-    end
-    return best
 end
 
 local function forageUtility(uid, s, params)
@@ -354,10 +328,16 @@ local function forageUtility(uid, s, params)
     local plant = world.findHarvestableFlora
         and world.findHarvestableFlora(ux, uy, params.forage_search_radius)
     if plant then
-        s.forageTarget = { kind = "flora", x = plant.gx, y = plant.gy }
+        -- #2553: the plant's own identity rides along, so the pick
+        -- below takes the edible plant this search chose rather than
+        -- whichever co-tenant happens to be first in the tile's list.
+        -- ABSENT for a crop plot, which has none; foragePick.pick
+        -- reads that absence as the discriminator.
+        s.forageTarget = { kind = "flora", x = plant.gx, y = plant.gy,
+                           iid = plant.instanceId }
     else
-        local g = findGroundFood(uid, info.gridX, info.gridY,
-                                 params.forage_search_radius)
+        local g = foragePick.findGroundFood(uid, info.gridX, info.gridY,
+                                            params.forage_search_radius)
         if not g then
             s.forageTarget = nil
             return -math.huge
@@ -442,7 +422,10 @@ local function forageExecute(uid, s, params)
 
     if cheb <= 1 then
         if tgt.kind == "flora" then
-            local yields = world.harvestFlora(tgt.x, tgt.y)
+            -- #2553: by IDENTITY for a wild plant, by coordinate for a
+            -- crop plot, and refused outright when the identity is gone
+            -- -- unit_ai_forage_pick.lua states which is which and why.
+            local yields = foragePick.pick(tgt)
             if yields and #yields > 0 then
                 unit.pickup(uid)   -- bend-down anim over the plant
                 local gids = {}
@@ -450,8 +433,11 @@ local function forageExecute(uid, s, params)
                 s.forageLoot  = gids
                 s.foragePhase = "collecting"
             else
-                -- Raced / regrowing / decorative after all: forget the
-                -- target; the next decision re-finds.
+                -- Raced / regrowing / decorative after all, or a pick
+                -- REFUSED because the chosen plant is gone or its
+                -- identity did not survive a load (#2553): forget the
+                -- target; the next decision re-finds. Never a silent
+                -- fallback to whatever else stands on the tile.
                 s.forageTarget = nil
             end
         else
