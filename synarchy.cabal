@@ -1433,6 +1433,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Unit.StanceRecovery
                    Test.Headless.Unit.FrameOrganFailure
                    Test.Headless.Unit.SourceDrinkingHydration
+                   Test.Headless.Unit.SourceDrinkPose
                    Test.Headless.Unit.StaminaCommit
                    Test.Headless.Unit.AddXpApi
                    Test.Headless.Unit.AccessoryUnequip

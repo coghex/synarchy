@@ -157,15 +157,34 @@ function M.tickInjuries(uid, info, pose)
         elseif pose == "crawling" then
             -- Legs healed enough to walk — stand up (revive handles the
             -- Crawling→Standing snap; checkRevive handles Collapsed).
-            -- Exception (#612): the sleep goal's lie-down/wake-up chain
-            -- passes through Crawling as a deliberate WAYPOINT (stand ->
-            -- crouch -> crawl -> sleep), not an injury symptom — reviving
-            -- mid-chain would snap a healthy, about-to-sleep unit back to
-            -- Standing and the AI would just re-descend forever, never
-            -- reaching Sleeping. unit_ai_sleep.lua drives the unit back up
-            -- itself once the chain completes.
+            --
+            -- Exception: a DELIBERATE posture is not an injury symptom.
+            -- Two AI sequences descend a healthy unit through Crawling
+            -- on purpose and drive it back up themselves when they are
+            -- done, and reviving mid-sequence snaps it to Standing while
+            -- the sequence keeps re-issuing its descent — a nonprogress-
+            -- ing loop, since both hold their action at infinite utility
+            -- and nothing else can be chosen:
+            --   * the sleep goal's lie-down/wake-up chain (#612), which
+            --     passes THROUGH Crawling on its way to Sleeping
+            --     (unit_ai_sleep.lua); and
+            --   * the no-canteen source drink (#2545), which DWELLS in
+            --     Crawling for its whole drinking phase — that is the
+            --     posture hydration is earned in (unit_ai_water.lua).
+            --
+            -- Keyed on the phase flags alone, never on "is at a bank" or
+            -- any other guess at intent, so the exemption lasts exactly
+            -- as long as the sequence does. Both flags are BOUNDED by
+            -- their owners (scripts/unit_ai_source_phase.lua for the
+            -- drink), which is what keeps this from becoming a permanent
+            -- revive suppression: the moment a sequence completes or
+            -- abandons, its flag is nil and the next tick revives here.
+            --
+            -- Only this branch is exempted. A newly incapacitating
+            -- injury during either sequence still collapses or crawls
+            -- the unit through the branches above.
             local s = require("scripts.unit_ai").getState(uid)
-            if not (s and s.sleepPhase) then
+            if not (s and (s.sleepPhase or s.sourcePhase)) then
                 unit.revive(uid)
             end
         end
