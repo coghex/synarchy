@@ -52,10 +52,11 @@ end
 -- building_spawn.lua's own references() already uses for its
 -- per-building key.
 -- (the *Candidate fields carry no reference here at all -- see
--- unit_ai_save.lua's TRANSIENT_CANDIDATE_FIELDS: they are stripped
--- before this function ever sees them.) CALLED by saveModules.prepareLoad
--- (requirement 11/12) and, since issue #764 (save-overhaul C3), its
--- returned {kind=,id=} list is actually CROSS-VALIDATED --
+-- unit_ai_save_transient.lua's TRANSIENT_CANDIDATE_FIELDS: they are
+-- stripped before this function ever sees them.) CALLED by
+-- saveModules.prepareLoad (requirement 11/12) and, since issue #764
+-- (save-overhaul C3), its returned {kind=,id=} list is actually
+-- CROSS-VALIDATED --
 -- Engine.Scripting.Lua.API.Save's knownEntitiesFromSaveData /
 -- World.Save.Integrity.luaReferenceErrors check every entry against
 -- this load's real entity sets and log a diagnostic naming the
@@ -78,8 +79,8 @@ end
 -- stores a unit/building/bill/item/ground-item id is added as a
 -- REF_SCHEMA row above -- one edit, not one per walk; any NEW
 -- *Candidate-style scratch field should instead be added to
--- unit_ai_save.lua's TRANSIENT_CANDIDATE_FIELDS if it can embed a raw
--- id or a copy of live content, matching the existing ones.
+-- unit_ai_save_transient.lua's TRANSIENT_CANDIDATE_FIELDS if it can
+-- embed a raw id or a copy of live content, matching the existing ones.
 -- Every edge is tagged with the OWNING unit id (issue #764, save-
 -- overhaul C3): craft_bill/ground_item ids are PER-PAGE allocators (the
 -- same number legitimately names two different real entities on two

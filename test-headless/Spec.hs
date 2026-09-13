@@ -76,6 +76,7 @@ import qualified Test.Headless.World.TimeLocal as TimeLocal
 import qualified Test.Headless.World.Climate as Climate
 import qualified Test.Headless.Item.GroundPageOwnership as GroundPageOwnership
 import qualified Test.Headless.Item.GroundSelection as GroundSelection
+import qualified Test.Headless.Lua.FoodHarvestTarget as LuaFoodHarvestTarget
 import qualified Test.Headless.Lua.UnitAiPickupPage as LuaUnitAiPickupPage
 import qualified Test.Headless.Lua.UnitAiRepairGround as LuaUnitAiRepairGround
 import qualified Test.Headless.Item.Temperature as ItemTemp
@@ -683,6 +684,13 @@ main = hspec $ do
     -- carrier and its target sit on live, non-active page B, and drives
     -- the production scripts/unit_ai_pickup.lua over it.
     aroundAll withHeadlessEngine LuaUnitAiPickupPage.spec
+    -- Own engine for the same reason (#2553): the food-harvest identity
+    -- gate installs its own single-page world manager carrying two
+    -- co-tenant plants on ONE tile, rewrites the flora catalog, item
+    -- registry and unit manager per example, and drives the production
+    -- scripts/unit_ai_needs.lua and unit_ai_harvest.lua over the
+    -- engine's real flora query and harvest verbs.
+    aroundAll withHeadlessEngine LuaFoodHarvestTarget.spec
     -- Own engine for the same reason (#1737): the repair AI's ground
     -- rung is judged against two live pages carrying the SAME gid, and
     -- it drives the production scripts/unit_ai_repair.lua +

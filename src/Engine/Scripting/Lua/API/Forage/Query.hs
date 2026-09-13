@@ -283,6 +283,13 @@ worldGetFloraGrowthAtFn env = do
 --   @instanceId@ at all: a plot is tile-keyed by construction and has no
 --   instance identity to give, and the reserved non-identity value is
 --   never handed out as if it were a usable id.
+--
+--   #2553: every food caller now CARRIES that id to its pick. This
+--   verb's edibility filter and the coordinate harvest's first-match
+--   selection disagree on a shared tile, so an id-less round trip
+--   handed the yield to whatever plant happened to be listed first.
+--   Callers branch on the field's ABSENCE -- the crop-plot case, which
+--   keeps the coordinate verb -- and never on a sentinel comparison.
 worldFindHarvestableFloraFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
 worldFindHarvestableFloraFn env = do
     mGx ← Lua.tointeger 1

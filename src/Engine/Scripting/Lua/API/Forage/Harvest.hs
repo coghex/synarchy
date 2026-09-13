@@ -147,9 +147,19 @@ worldHarvestFloraFn env = do
 --   rather than a scan of every resident chunk.
 --
 --   Deliberately ADDITIVE: world.harvestFlora keeps its coordinate
---   contract and result shape for every existing forage caller (needs,
---   farm-harvest), which is what stops this from being a silent API
---   break.
+--   contract and result shape unchanged, which is what stops this from
+--   being a silent API break.
+--
+--   #2553 moved the two FOOD callers -- unit_ai_needs.lua's forage rung
+--   and unitAi.harvest's auto_harvest -- onto this verb, for a defect
+--   that is a property of the pair rather than of either verb: the
+--   untagged 'worldFindHarvestableFloraFn' search admits only species
+--   with an EDIBLE yield, while 'harvestWildFlora' with no wanted
+--   instance takes the first admitting plant on the tile and tests no
+--   edibility at all, so a wood-producing co-tenant took the yield and
+--   the regrowth timer. Both verbs' own contracts are unchanged. What
+--   still reaches world.harvestFlora is a planted CROP PLOT, which has
+--   no instance identity to name.
 --
 --   nil when the tile does not hold that instance, when the instance is
 --   not a (matching) harvestable species, when the tag does not admit

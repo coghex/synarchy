@@ -1799,6 +1799,7 @@ test-suite synarchy-test-headless
                    Test.Headless.Lua.UnitAiLoadReset
                    Test.Headless.Lua.FarmDesignationClaim
                    Test.Headless.Lua.UnitAiReconcile
+                   Test.Headless.Lua.FoodHarvestTarget
                    Test.Headless.Lua.UnitAiPickupPage
                    Test.Headless.Lua.UnitAiRepairGround
                    Test.Headless.Lua.SessionTeardown

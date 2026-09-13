@@ -12,12 +12,23 @@
 --   otherwise identical farming-0 picker is still working, that
 --   low-skill picker does finish given enough time, an absent farming
 --   skill falls back to the same 25.0 novice base till and plant use,
---   and the accumulator is bound to the target's TILE so partial work on
---   one plant never lands on another. Deleting the @unit.getSkill@ read,
---   the target binding, or the completion threshold fails one of them.
+--   and the accumulator is bound to the target PLANT (its tile and,
+--   since #2553, its instance id) so partial work on one plant never
+--   lands on another. Deleting the @unit.getSkill@ read, the target
+--   binding, or the completion threshold fails one of them.
+--
+--   #2553 moved the COMPLETION verb: a wild winner is now picked by
+--   @world.harvestFloraInstance@ naming the plant the scan chose, and
+--   only a crop plot (which has no instance identity) still goes
+--   through @world.harvestFlora@. The accumulator binds to that plant
+--   rather than to its tile alone, so a co-tenant replacing the
+--   selection restarts the work even though the coordinates did not
+--   move. @CALLS.harvest@ counts a completed pick by either verb, so
+--   every expectation below that meant "the plant was picked" still
+--   does; @CALLS.byCoord@\/@CALLS.byInstance@ say which one ran.
 --
 --   Everything the action already did is pinned alongside: untagged
---   @world.findHarvestableFlora@\/@world.harvestFlora@ calls, the
+--   @world.findHarvestableFlora@ and completion calls, the
 --   @roles.weight@ arbitration multiplier (arbitration, NOT the skill —
 --   #265\/requirement 5), the @collecting@ phase pulling ground yields
 --   one per tick, the raced\/regrowing recovery that clears
@@ -89,8 +100,11 @@ prelude = lns
     , "ACTIVITY = 'idle'"
     , "GROUND = {}"
     , "XP = 0"
-    , "CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
-    , "          stop = 0, setSkill = 0, tags = {} }"
+    , "function resetCalls()"
+    , "  CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
+    , "            stop = 0, setSkill = 0, tags = {},"
+    , "            byCoord = 0, byInstance = 0 } end"
+    , "resetCalls()"
     -- The capacity model the collecting phase gates on (#2293), and the
     -- ground rows it weighs. TAKEN is what makes "the refused yield is
     -- still on the ground" answerable: a successful pickup REMOVES the
@@ -119,6 +133,18 @@ prelude = lns
     , "  return GROUND_AT[gid] or DEFAULT_GROUND_AT end"
     , "FLORA = { ['10,0'] = { { gid = 1 }, { gid = 2 } } }"
     , "local function key(x, y) return string.format('%d,%d', x, y) end"
+    -- #2553: every FLORA tile carries a wild plant with a stable id,
+    -- unless the case declares it a CROP plot -- which is what the
+    -- engine's findHarvestableFlora does, reporting instanceId for a
+    -- wild winner and omitting it entirely for a plot. The id is
+    -- derived from the tile so a case can name it without bookkeeping,
+    -- and IID_AT lets a case override one to model a co-tenant
+    -- replacing the plant the scan chose.
+    , "CROP, IID_AT = {}, {}"
+    , "local function iidAt(x, y)"
+    , "  local k = key(x, y)"
+    , "  if CROP[k] then return nil end"
+    , "  return IID_AT[k] or (1000 + (x * 31 + y)) end"
     , "engine = { gameTime = function() return NOW end,"
     , "           logWarn = function(m) WARNINGS[#WARNINGS + 1] = m end,"
     , "           logInfo = function() end }"
@@ -167,21 +193,45 @@ prelude = lns
     , "      local gx, gy = tonumber(sx), tonumber(sy)"
     , "      local d = math.sqrt((gx - ux) ^ 2 + (gy - uy) ^ 2)"
     , "      if d <= range and (not bestD or d < bestD) then"
-    , "        best, bestD = { gx = gx, gy = gy, dist = d }, d"
+    , "        best, bestD = { gx = gx, gy = gy, dist = d,"
+    , "                        instanceId = iidAt(gx, gy) }, d"
     , "      end"
     , "    end"
     , "    return best end,"
-    , "  harvestFlora = function(gx, gy, tag)"
-    , "    CALLS.harvest = CALLS.harvest + 1"
-    , "    CALLS.tags.harvest = tag"
-    , "    local yields = FLORA[key(gx, gy)]"
-    , "    FLORA[key(gx, gy)] = nil"
+    -- The plot lookup the crop branch discriminates on. Only a case
+    -- that declares a tile a CROP gets a row back.
+    , "  getCropPlotAt = function(gx, gy)"
+    , "    if not CROP[key(gx, gy)] then return nil end"
+    , "    return { harvestable = true } end }"
     -- A picked plant drops its yields ON the harvested tile, which is
     -- what makes the ordinary in-place collection adjacent and an
-    -- interrupted one measurable.
-    , "    for _, yi in ipairs(yields or {}) do"
-    , "      GROUND_AT[yi.gid] = { x = gx + 0.5, y = gy + 0.5 } end"
-    , "    return yields or {} end }"
+    -- interrupted one measurable. Shared by both harvest verbs below,
+    -- so the two can only differ in WHICH plant they accept, never in
+    -- what a successful pick does.
+    , "local function takeYields(gx, gy)"
+    , "  local yields = FLORA[key(gx, gy)]"
+    , "  FLORA[key(gx, gy)] = nil"
+    , "  for _, yi in ipairs(yields or {}) do"
+    , "    GROUND_AT[yi.gid] = { x = gx + 0.5, y = gy + 0.5 } end"
+    , "  return yields end"
+    -- CALLS.harvest counts a completed PICK whichever verb performed
+    -- it, so every existing expectation about "the plant was picked"
+    -- keeps meaning that; CALLS.byCoord and CALLS.byInstance say which
+    -- verb ran, which is what #2553's own cases assert on.
+    , "world.harvestFlora = function(gx, gy, tag)"
+    , "  CALLS.harvest = CALLS.harvest + 1"
+    , "  CALLS.byCoord = CALLS.byCoord + 1"
+    , "  CALLS.tags.harvest = tag"
+    , "  return takeYields(gx, gy) or {} end"
+    -- The engine refuses (nil) when the tile does not hold that
+    -- instance; a plant that IS there and yields nothing returns an
+    -- empty table, never nil (Forage/Harvest.hs).
+    , "world.harvestFloraInstance = function(gx, gy, iid, tag)"
+    , "  CALLS.harvest = CALLS.harvest + 1"
+    , "  CALLS.byInstance = CALLS.byInstance + 1"
+    , "  CALLS.tags.harvest = tag"
+    , "  if iid ~= iidAt(gx, gy) then return nil end"
+    , "  return takeYields(gx, gy) end"
     -- The module under test, reached the way the shipped bootstrap
     -- reaches it: through scripts.unit_ai_farm, whose own require is
     -- the one link unit_ai.lua still makes (#1582's split).
@@ -564,8 +614,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- pickup would race against the first run's row.
                 , "  CARRIED = 0.0; TAKEN = {}; MISSING = {}"
                 , "  PICKUP_CALLS = 0; WARNINGS = {}"
-                , "  CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
-                , "            stop = 0, setSkill = 0, tags = {} }"
+                , "  resetCalls()"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"
                 , "  S = {}"
                 , "  place(9, 0)"
@@ -593,8 +642,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- halves the time, at one fixed skill level.
                 , "local function timeToPick(r)"
                 , "  NOW = 0; SKILL = 50.0"
-                , "  CALLS = { find = 0, harvest = 0, pickup = 0, moveTo = 0,"
-                , "            stop = 0, setSkill = 0, tags = {} }"
+                , "  resetCalls()"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"
                 , "  S = {}"
                 , "  PARAMS.harvest_rate = r"
@@ -642,8 +690,7 @@ spec = describe "skill-scaled auto-harvest" $ do
                 -- ...but two workers of equal SKILL and unequal role
                 -- take exactly as long as each other.
                 , "local function runRole(role)"
-                , "  NOW = 0; SKILL = 50.0; CALLS = { find = 0, harvest = 0,"
-                , "    pickup = 0, moveTo = 0, stop = 0, setSkill = 0, tags = {} }"
+                , "  NOW = 0; SKILL = 50.0; resetCalls()"
                 , "  FLORA = { ['10,0'] = { { gid = 1 } } }"
                 , "  S = { role = role }"
                 , "  place(9, 0)"
@@ -818,7 +865,70 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "assert(CALLS.tags.find == nil,"
                 , "  'world.findHarvestableFlora must be called with no tag')"
                 , "assert(CALLS.tags.harvest == nil,"
-                , "  'world.harvestFlora must be called with no tag')"
+                , "  'the completing harvest must be called with no tag')"
+                ]
+
+        -- #2553: the completion verb moved, and this pins WHICH one a
+        -- wild winner reaches. The identity-preserving behaviour itself
+        -- is gated end to end against the real engine by
+        -- "Test.Headless.Lua.FoodHarvestTarget"; what this stub adds is
+        -- that the action stopped calling the coordinate verb at all
+        -- for a wild plant, which no engine fixture states as directly.
+        it "completes a WILD pick through world.harvestFloraInstance, \
+           \naming the plant its own scan chose" $
+            runsOk $ lns
+                [ prelude
+                , "place(9, 0)"
+                , "tick(3.0)"
+                , "assert(harvested(), 'the pick must complete')"
+                , "assert(CALLS.byInstance == 1,"
+                , "  'the wild pick must name the selected instance')"
+                , "assert(CALLS.byCoord == 0,"
+                , "  'and must not fall back to the coordinate verb')"
+                ]
+
+        -- Requirement 3's compatibility control: a crop plot carries no
+        -- instanceId, so it keeps the coordinate verb it always used.
+        it "completes a CROP-PLOT pick through world.harvestFlora, which \
+           \is the only verb a plot can be named by" $
+            runsOk $ lns
+                [ prelude
+                , "CROP['10,0'] = true"
+                , "place(9, 0)"
+                , "tick(3.0)"
+                , "assert(harvested(), 'the pick must complete')"
+                , "assert(CALLS.byCoord == 1,"
+                , "  'a plot has no identity to name')"
+                , "assert(CALLS.byInstance == 0,"
+                , "  'so the exact-instance verb must not be reached')"
+                ]
+
+        -- The accumulator fix (#2553). Same tile, different plant: the
+        -- tile-keyed binding this file's own case above pins would have
+        -- carried the banked work straight onto the co-tenant.
+        it "restarts the accumulator when the scan switches plants \
+           \WITHOUT the tile changing" $
+            runsOk $ lns
+                [ prelude
+                , "place(9, 0)"
+                , "tick(1.5)"
+                , "assert(S.harvestProgress > 0, 'work must have accumulated')"
+                , "assert(not harvested(), 'and must not be finished yet')"
+                -- The plant the scan chose is replaced by a co-tenant
+                -- at the SAME coordinates.
+                , "IID_AT['10,0'] = 4242"
+                , "step(0.5)"
+                , "assert(S.harvestTarget and S.harvestTarget.x == 10,"
+                , "  'the tile has not moved')"
+                , "assert(S.harvestTarget.iid == 4242,"
+                , "  'but the selected plant has')"
+                , "assert(S.harvestProgress == 0,"
+                , "  'work banked on the old plant must not complete a pick on this one')"
+                , "tick(1.0)"
+                , "assert(not harvested(),"
+                , "  'the new plant must take its own full time')"
+                , "tick(1.0)"
+                , "assert(harvested(), 'and then complete on its own schedule')"
                 ]
 
         it "recovers from a raced completion: the plant is gone by the \
@@ -844,7 +954,9 @@ spec = describe "skill-scaled auto-harvest" $ do
                 [ savePrelude
                 -- A unit caught mid-pick at save time.
                 , "aiState[1] = { currentAction = 'auto_harvest',"
-                , "  harvestTarget = { x = 10, y = 0 },"
+                , "  harvestTarget = { x = 10, y = 0, iid = 1310 },"
+                , "  forageTarget = { kind = 'flora', x = 4, y = 5,"
+                , "                   iid = 1129 },"
                 , "  harvestProgress = 0.75,"
                 , "  harvestProgressAt = { x = 10, y = 0 },"
                 , "  lastHarvestAt = 120 }"
@@ -873,6 +985,22 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "  'the action itself still persists')"
                 , "assert(row.harvestTarget and row.harvestTarget.x == 10,"
                 , "  'and so does the target, exactly as before #1582')"
+                -- #2553: the SELECTED PLANT is not durable. A bare
+                -- FloraInstanceId on the wire would carry a reference
+                -- kind unit_ai_ref_schema.lua does not declare and the
+                -- integrity graph could not check -- the chopJob.iid
+                -- rule, applied to the two food targets. Both holders
+                -- are stripped; the targets themselves survive whole.
+                , "assert(row.harvestTarget.iid == nil,"
+                , "  'the selected plant must not reach the payload')"
+                , "assert(row.forageTarget and row.forageTarget.x == 4"
+                , "   and row.forageTarget.iid == nil,"
+                , "  'and neither must the forage rung\\'s')"
+                -- Stripping a COPY, never the live table: the AI is
+                -- still working that plant on the tick after the save.
+                , "assert(aiState[1].harvestTarget.iid == 1310"
+                , "   and aiState[1].forageTarget.iid == 1129,"
+                , "  'the live state must not be mutated by a snapshot')"
                 -- And a real round trip restores a unit that picks from
                 -- zero rather than one carrying a stale clock.
                 , "local decoded = spec.decode(spec.version,"
@@ -884,6 +1012,9 @@ spec = describe "skill-scaled auto-harvest" $ do
                 , "assert(restored.harvestProgress == nil"
                 , "   and restored.lastHarvestAt == nil,"
                 , "  'a loaded picker starts its plant over, never mid-pick')"
+                , "assert(restored.harvestTarget.iid == nil"
+                , "   and restored.forageTarget.iid == nil,"
+                , "  'and re-selects a plant rather than trusting a stale id')"
                 ]
 
         it "requiring scripts.unit_ai_farm still attaches all three \
