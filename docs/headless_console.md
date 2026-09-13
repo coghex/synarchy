@@ -181,9 +181,15 @@ echo 'return engine.getLoadStatus()' | nc -w 2 localhost 9008
 ```
 
 Budget ~15 s after a 128-world load before querying tiles — chunks
-queue progressively after `LoadPublished`. NB #365: a save containing
-an arena page hangs the world thread on load — never use arenas as a
-save-test page.
+queue progressively after `LoadPublished`. A save containing an arena
+page loads: the old regenerate-from-params hang was fixed in #365 by
+rebuilding the page through the shared flat builder from its recorded
+seed and replaying edits and dig/construct slopes (`World.Load.Stage`'s
+`isArenaParams` branch), and `tools/multiworld_save_probe.py --arena` is
+its standing regression, so an arena is a usable save-test page. That
+covers the restore path only — outside it, arena pages keep their own
+limits, such as the separate hazard of requesting chunks beyond the
+arena's 5×5 footprint (`tools/construction_probe.py`).
 
 ## Subsystem probes
 
