@@ -2535,11 +2535,23 @@ the seam. Picking (`pickWorldTile` and every Lua caller it backs —
 `world.pickTile`/`pickPos`/`getHoverTile`/`getHoverPos`), designation
 maps, and every point read / mutation / cancellation — including the
 verbs a worker FINISHES a job with (`world.getDigInfoAt`/`digTile`,
-`harvestFlora`, `setVegAt`, `plantCropAt`/`plantRowCropAt`,
+`harvestFlora`/`harvestFloraInstance`, `setVegAt`,
+`plantCropAt`/`plantRowCropAt`,
 `structure.place`/`hasAt`/`floorZAt`/`clear`, and
 `building.spawn`/`canPlaceAt`, whose footprint walk resolves each tile)
 — use CANONICAL coords and accept any alias, so pre-#1175 saved job
 coords need no migration.
+
+`harvestFloraInstance` belongs in that list on the same terms as the
+coordinate verb: it canonicalizes through `canonicalTile` before the
+tile read (`src/Engine/Scripting/Lua/API/Forage/Harvest.hs`), and the
+tile it is passed comes from `findHarvestableFlora`, which already
+reports canonical `gx`/`gy`. Since #2553 it is the verb the two FOOD
+callers finish through — chop has used it since #1854 — so the alias
+rule has to cover it or the AI's most common completion path is
+unstated. A plant's identity is frame-independent — #1854 derives it
+from the CANONICAL tile — so naming one through an alias resolves to the
+same plant.
 
 RECTANGLES are the exception: canonical is a STORAGE frame, not a
 geometry one, so a drag's second endpoint is re-expressed in the

@@ -7,8 +7,8 @@
 --   @0.5 + farming\/100@ factor @unitAi.till@ and @unitAi.plant@ use.
 --
 --   What the cases pin, in the order a reviewer would ask for them:
---   picking is no longer instant (@world.harvestFlora@ is not called on
---   the tick the worker arrives), a farming-100 picker finishes while an
+--   picking is no longer instant (no harvest verb is called on the tick
+--   the worker arrives), a farming-100 picker finishes while an
 --   otherwise identical farming-0 picker is still working, that
 --   low-skill picker does finish given enough time, an absent farming
 --   skill falls back to the same 25.0 novice base till and plant use,
@@ -84,13 +84,18 @@ lns = T.intercalate "\n"
 --   @scripts\/unit_ai.lua@ does for an idle unit.
 --
 --   Every engine call the action makes is recorded rather than
---   performed: @CALLS.harvest@ counts @world.harvestFlora@ (with the
---   tag it was passed, so an untagged call stays untagged),
---   @CALLS.find@ the same for the scan, @CALLS.pickup@ the bend-down
---   anim, @CALLS.moveTo@ the walk, and @XP@ the farming grant.
+--   performed: @CALLS.harvest@ counts a completed pick by EITHER harvest
+--   verb (with the tag it was passed, so an untagged call stays
+--   untagged), @CALLS.byInstance@\/@CALLS.byCoord@ split that count by
+--   which verb ran, @CALLS.find@ counts the scan, @CALLS.pickup@ the
+--   bend-down anim, @CALLS.moveTo@ the walk, and @XP@ the farming grant.
 --   @FLORA@ maps a @\"x,y\"@ key to a yield list; deleting an entry is
---   how a case makes a plant vanish, and @world.harvestFlora@ on a
---   missing one returns the empty list the raced\/regrowing path sees.
+--   how a case makes a plant vanish, and since #2553 the exact-instance
+--   verb answers a missing entry with @nil@ — the refusal the
+--   raced\/regrowing path reads, which it treats exactly as it treated
+--   the empty list the coordinate verb used to return. An entry that is
+--   PRESENT but empty still returns an empty table, which is the engine's
+--   own distinction between "refused" and "picked, paid nothing".
 prelude ∷ Text
 prelude = lns
     [ "package.loaded['scripts.unit_ai'] = {}"
@@ -123,7 +128,8 @@ prelude = lns
     -- all -- so a stub without coordinates would make every proximity
     -- assertion vacuous, and would leave the capacity cases below
     -- doing nil arithmetic. Yields spawned by a real pick are placed
-    -- at the harvested tile by world.harvestFlora below; a case that
+    -- at the harvested tile by takeYields below, whichever verb called
+    -- it; a case that
     -- pre-seeds S.harvestLoot instead gets this default, which is the
     -- worker's own origin tile, so those cases stay the adjacent
     -- collections they were written as.
@@ -312,8 +318,8 @@ spec ∷ Spec
 spec = describe "skill-scaled auto-harvest" $ do
 
     describe "picking accumulates work instead of completing instantly" $ do
-        it "does not call world.harvestFlora on the tick the worker \
-           \reaches the plant" $
+        it "calls no harvest verb on the tick the worker reaches the \
+           \plant" $
             runsOk $ lns
                 [ prelude
                 , "place(9, 0)   -- already adjacent"

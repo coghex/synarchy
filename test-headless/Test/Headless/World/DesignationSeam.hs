@@ -27,7 +27,7 @@ module Test.Headless.World.DesignationSeam (spec, engineSpec) where
 
 import UPrelude
 import World.Flora.Identity
-    (FloraInstanceId, generatedFloraInstanceId)
+    (FloraInstanceId, floraInstanceIdToLua, generatedFloraInstanceId)
 import Test.Hspec
 import Data.IORef (IORef, atomicModifyIORef', readIORef, writeIORef, newIORef)
 import Data.List (sort)
@@ -932,7 +932,7 @@ engineSpec = beforeAll setup $ do
               [ (seamCandidate,   berrySpecies)
               , (planarCandidate, berrySpecies) ])
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind seamCandidate "probe_berry" "4.00"
+        `shouldReturn` expectedFind seamCandidate berrySpecies "probe_berry" "4.00"
 
     it "answers the same when the search ORIGIN is the other alias" $
         \(env, ls) → do
@@ -940,7 +940,7 @@ engineSpec = beforeAll setup $ do
               [ (seamCandidate,   berrySpecies)
               , (planarCandidate, berrySpecies) ])
       findFlora ls (aliasOf forageOrigin) forageRadius Nothing
-        `shouldReturn` expectedFind seamCandidate "probe_berry" "4.00"
+        `shouldReturn` expectedFind seamCandidate berrySpecies "probe_berry" "4.00"
 
     it "returns the planar candidate once the seam one is gone" $
         \(env, ls) → do
@@ -950,7 +950,7 @@ engineSpec = beforeAll setup $ do
       _ ← forageWorld env worldSize 0
               (floraAtTiles [(planarCandidate, berrySpecies)])
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+        `shouldReturn` expectedFind planarCandidate berrySpecies "probe_berry" "16.12"
 
     it "ranks a seam-crossing CROP PLOT on that same geometry" $
         \(env, ls) → do
@@ -963,7 +963,7 @@ engineSpec = beforeAll setup $ do
           [ (seamCandidate,   newCropPlot cloverSpecies 0 1)
           , (planarCandidate, newCropPlot cloverSpecies 0 1) ]
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind seamCandidate "probe_clover" "4.00"
+        `shouldReturn` expectedFindPlot seamCandidate "probe_clover" "4.00"
 
     it "keeps the tagged scan seam-aware AND the bare/tagged split \
        \intact" $ \(env, ls) → do
@@ -972,11 +972,11 @@ engineSpec = beforeAll setup $ do
               , (planarCandidate, berrySpecies) ])
       -- The chop flow's "wood" call (#97) crosses the seam too.
       findFlora ls forageOrigin forageRadius (Just "wood")
-        `shouldReturn` expectedFind seamCandidate "probe_log" "4.00"
+        `shouldReturn` expectedFind seamCandidate logSpecies "probe_log" "4.00"
       -- A BARE call must still refuse the inedible yield, near as it is,
       -- and take the farther berry instead.
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+        `shouldReturn` expectedFind planarCandidate berrySpecies "probe_berry" "16.12"
 
     it "still skips a tile whose CANONICAL key carries a live regrowth \
        \timer" $ \(env, ls) → do
@@ -989,7 +989,7 @@ engineSpec = beforeAll setup $ do
       writeIORef (wsFloraHarvestsRef ws) (HM.singleton
           (fixtureTileFloraId seamCandidate berrySpecies) 123)
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+        `shouldReturn` expectedFind planarCandidate berrySpecies "probe_berry" "16.12"
 
     it "breaks an equidistant tie by canonical gx, as it always has" $
         \(env, ls) → do
@@ -998,7 +998,7 @@ engineSpec = beforeAll setup $ do
       _ ← forageWorld env worldSize 0 (floraAtTiles
               [ (tieByY, berrySpecies), (tieByX, berrySpecies) ])
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind tieByX "probe_berry" "4.00"
+        `shouldReturn` expectedFind tieByX berrySpecies "probe_berry" "4.00"
 
     it "is the identity on a non-wrapping page" $ \(env, ls) → do
       -- Same fixture, world size 0: nothing aliases, so the far chunk
@@ -1008,7 +1008,7 @@ engineSpec = beforeAll setup $ do
               [ (seamCandidate,   berrySpecies)
               , (planarCandidate, berrySpecies) ])
       findFlora ls forageOrigin forageRadius Nothing
-        `shouldReturn` expectedFind planarCandidate "probe_berry" "16.12"
+        `shouldReturn` expectedFind planarCandidate berrySpecies "probe_berry" "16.12"
 
   describe "the flora point queries take either alias (#1707)" $ do
 
@@ -1283,24 +1283,43 @@ evalDebug ∷ LuaBackendState → Text → IO Text
 evalDebug ls src = T.dropAround (≡ '"') <$> executeDebugLua (lbsLuaState ls) src
 
 -- | Drive the PRODUCTION world.findHarvestableFlora through the real
---   registered verb, flattening its table to "gx,gy,id,dist" (or "nil").
+--   registered verb, flattening its table to
+--   "gx,gy,id,dist,instanceId" (or "nil").
+--
 --   Every field the issue's consumers read is in that string: the coords
---   they forward to world.harvestFlora and the distance the auto-harvest
---   action divides into its utility.
+--   they forward to the harvest verb, the distance the auto-harvest
+--   action divides into its utility, and — since #2553 — the winning
+--   plant's own @instanceId@, which both FOOD callers now carry to
+--   @world.harvestFloraInstance@ instead of re-entering by coordinate.
+--   That last field belongs in a SEAM gate specifically: the id is
+--   derived from the CANONICAL tile ('fixtureFloraId'), so a search run
+--   from the other alias has to report the same plant, and a caller that
+--   harvests by identity is only alias-safe because it does.
+--   A crop plot carries no identity and flattens to @nil@ there.
 findFlora ∷ LuaBackendState → (Int, Int) → Int → Maybe Text → IO Text
 findFlora ls (ox, oy) radius mTag =
     evalDebug ls $ T.concat
         [ "local f = world.findHarvestableFlora(", tshow ox, ", ", tshow oy
         , ", ", tshow radius, tagArg, "); "
         , "return f and (f.gx .. ',' .. f.gy .. ',' .. f.id .. ',' .. "
-        , "string.format('%.2f', f.dist)) or 'nil'" ]
+        , "string.format('%.2f', f.dist) .. ',' .. "
+        , "tostring(f.instanceId)) or 'nil'" ]
   where tagArg = maybe "" (\t → T.concat [", '", t, "'"]) mTag
 
 -- | The 'findFlora' string a given canonical tile, species and distance
---   should produce.
-expectedFind ∷ (Int, Int) → Text → Text → Text
-expectedFind (gx, gy) name dist =
-    T.intercalate "," [tshow gx, tshow gy, name, dist]
+--   should produce, for a WILD winner: its identity is the one a real
+--   generated plant of that species on that canonical tile carries.
+expectedFind ∷ (Int, Int) → FloraId → Text → Text → Text
+expectedFind tile fid name dist = T.intercalate ","
+    [ tshow (fst tile), tshow (snd tile), name, dist
+    , tshow (floraInstanceIdToLua (fixtureTileFloraId tile fid)) ]
+
+-- | The same for a CROP PLOT winner, which has no instance identity to
+--   give (#1854) and so reports none — the ABSENCE #2553's callers
+--   discriminate on.
+expectedFindPlot ∷ (Int, Int) → Text → Text → Text
+expectedFindPlot (gx, gy) name dist =
+    T.intercalate "," [tshow gx, tshow gy, name, dist, "nil"]
 
 -- | Prepare the seam page for a forage example: the given flora, this
 --   fixture's three species, and the item registry the BARE call's
