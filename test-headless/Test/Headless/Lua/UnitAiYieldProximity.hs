@@ -943,6 +943,12 @@ spec = describe "harvest collection proximity" $ do
                 , "  'and must leave the spent budget exactly as it was: '"
                 , "  .. tostring(spent) .. ' -> '"
                 , "  .. tostring(S.harvestCollect and S.harvestCollect.stalledFor))"
+                -- Deliberately returned to where it started before the
+                -- collection resumes, so this case measures the
+                -- INELIGIBLE ticks alone. What happens when the
+                -- interruption leaves the worker genuinely closer is
+                -- the separate contract pinned in the next case; the
+                -- two must not be conflated.
                 -- The collection still gives up on schedule rather than
                 -- being kept alive by repeated interruptions.
                 , "local ticks = 0"
@@ -952,6 +958,87 @@ spec = describe "harvest collection proximity" $ do
                 , "assert(S.harvestPhase == nil,"
                 , "  'the unreachable collection must still expire')"
                 , "assert(PICKUP_CALLS == 0, 'and collect nothing remotely')"
+                ]
+
+        it "re-baselines and restarts the budget on the first eligible \
+           \sample after an interruption that left the worker closer — \
+           \the shared stall contract — and cannot be strung out \
+           \forever by it, because the closest approach only ratchets \
+           \downward" $
+            runsOk $ lns
+                [ harvestPrelude
+                , "local stall = require('scripts.unit_ai_stall')"
+                , "NO_WALK = true"
+                , "GROUND_AT[7] = { x = 10.5, y = 0.5 }"
+                , "S.harvestPhase = 'collecting'"
+                , "S.harvestLoot  = { 7 }"
+                , "place(40, 0)"
+                , "for _ = 1, 30 do step() end"
+                , "local spent = S.harvestCollect and S.harvestCollect.stalledFor"
+                , "assert(spent and spent > 5,"
+                , "  'the approach must have spent real budget first')"
+                , "local baseline = S.harvestCollect.bestDist"
+                , "assert(baseline and baseline > 25,"
+                , "  'and recorded its closest approach at the far distance')"
+                -- treat_ally carries the worker a long way toward the
+                -- yield and LEAVES it there. This is the case the
+                -- previous example deliberately does not cover.
+                , "foreignStep(nil, 20, 0)"
+                , "assert(S.harvestCollect.stalledFor == spent,"
+                , "  'the ineligible tick itself must neither charge nor refund')"
+                , "assert(S.harvestCollect.bestDist == baseline,"
+                , "  'nor may it record a closest approach of its own')"
+                -- Now the collection resumes, still out of reach, and
+                -- runs several eligible ticks from the new position.
+                -- scripts/unit_ai_stall.lua states the rule this pins:
+                -- \"the first eligible sample after the interruption
+                -- records it and starts the budget over then\", and
+                -- unit_ai_pickup.lua's pickupUtility gates
+                -- bestDist/stall.reset in exactly this shape. The
+                -- collection budget deliberately does not diverge from
+                -- the order budget it shares an accumulator with.
+                , "step(); step(); step()"
+                , "assert(S.harvestPhase == 'collecting',"
+                , "  'the collection is still pending')"
+                , "assert(S.harvestCollect.bestDist"
+                , "       and S.harvestCollect.bestDist < baseline,"
+                , "  'the first eligible sample re-baselines to where the '"
+                , "  .. 'worker now actually stands')"
+                , "assert(S.harvestCollect.stalledFor < spent,"
+                , "  'and the shared contract restarts the budget from there')"
+                -- The part that makes that safe, and the reason this is
+                -- not a way to keep an unreachable yield alive: a reset
+                -- costs a STRICT decrease in bestDist of more than
+                -- PROGRESS_TILES, so the closest approach is a ratchet.
+                -- No amount of interrupting can produce an unbounded
+                -- number of refunds, and the sequence terminates at
+                -- adjacency, which is a completed pickup rather than a
+                -- stall.
+                , "local ratchet = S.harvestCollect.bestDist"
+                , "for _ = 1, 20 do step() end"
+                , "if S.harvestPhase then"
+                , "  assert(S.harvestCollect == nil"
+                , "     or S.harvestCollect.bestDist <= ratchet,"
+                , "    'the closest approach may never grow')"
+                , "end"
+                -- Standing still at the new distance, it expires on
+                -- schedule: the re-baseline bought one budget, not
+                -- immunity.
+                , "local ticks = 0"
+                , "while S.harvestPhase and ticks < 600 do"
+                , "  step(); ticks = ticks + 1"
+                , "end"
+                , "assert(S.harvestPhase == nil,"
+                , "  'the collection must still expire from the new baseline')"
+                , "assert(PICKUP_CALLS == 0, 'and collect nothing remotely')"
+                -- The bound, stated as arithmetic rather than as a
+                -- hope: from any starting distance, each refund costs a
+                -- strict PROGRESS_TILES of real closing, so the number
+                -- of them a shuttling interrupter can ever buy is
+                -- finite.
+                , "assert(stall.MAX_CHARGED_INTERVAL > 0"
+                , "   and yieldCollect.PROGRESS_TILES > 0,"
+                , "  'the ratchet step must be positive for that bound to hold')"
                 ]
 
         it "classifies the approach records transient, so the \
