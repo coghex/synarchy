@@ -36,10 +36,10 @@ local foragePick = require("scripts.unit_ai_forage_pick")
 -- Action: auto_harvest (#336, skill-scaled since #1582)
 --
 -- Skill-gated colony farm-tending: pick up any ripe harvestable flora
--- in range — planted crops AND wild flora alike (world.
--- findHarvestableFlora / world.harvestFlora, #94, don't distinguish the
--- two; #334's crop species carry worldGen.density 0.0, so any crop
--- instance found here was deliberately planted, never a wild spawn).
+-- in range — planted crops AND wild flora alike (#94's
+-- world.findHarvestableFlora does not distinguish the two; #334's crop
+-- species carry worldGen.density 0.0, so any crop instance found here
+-- was deliberately planted, never a wild spawn).
 -- Both calls stay UNTAGGED: the tag argument belongs to callers with a
 -- specific material in mind (chop asks for "wood"), while farm-tending
 -- takes whatever the plant yields.

@@ -399,9 +399,9 @@ local config = {
         -- stays the QUICKEST farm job, at more than double till/plant's
         -- rate. NOT hunger-gated like forage: routine farm-tending,
         -- weighted by the farming ROLE (#265) in arbitration and by the
-        -- farming SKILL in execution. Reuses world.findHarvestableFlora/
-        -- world.harvestFlora, which cover planted crops AND wild flora
-        -- alike (a diligent farmer keeps the whole area picked).
+        -- farming SKILL in execution. Reuses world.findHarvestableFlora
+        -- and whichever harvest verb its winner names (#2553), covering
+        -- planted crops AND wild flora alike (a farmer picks the lot).
         harvest_scan_range     = 24.0,
         harvest_base_utility   = 2.0,
         harvest_rate           = 0.5,  -- picking progress/sec at farming
