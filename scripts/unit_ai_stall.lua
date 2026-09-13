@@ -248,6 +248,16 @@ function M.suspendOrders(s, uid)
     -- accumulated on the plant survives the interruption, exactly as a
     -- partially spent stall budget does.
     s.lastHarvestAt = nil
+    -- #2550's retained-yield collection approaches are stall records
+    -- rather than bare stamps, but the hazard is identical: a worker
+    -- knocked down while walking back to its harvested or foraged
+    -- yields would have the whole collapse charged against the budget
+    -- that decides the yields are unreachable. Only the last-sample
+    -- stamp is dropped, so a partially spent budget stays spent.
+    -- Foraging registers no onExit at all (unit_ai_actions.lua), which
+    -- makes this the one boundary its collection clock gets.
+    if s.harvestCollect then s.harvestCollect.stallSeenAt = nil end
+    if s.forageCollect  then s.forageCollect.stallSeenAt  = nil end
     -- Craft's and construct's work clocks (#2332) are the same kind of
     -- last-sample stamp and take the same boundary. Without it a
     -- crafter or builder knocked down mid-pour keeps its stamp, and the

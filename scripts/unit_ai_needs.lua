@@ -6,6 +6,8 @@
 
 local mv      = require("scripts.movement_speed")
 local ambient = require("scripts.ambient_movement")
+-- Retained-yield collection (#2550), shared with auto-harvest.
+local yieldCollect = require("scripts.unit_ai_yield")
 
 local M = {}
 
@@ -333,6 +335,12 @@ local function findGroundFood(uid, ux, uy, radius)
 end
 
 local function forageUtility(uid, s, params)
+    -- #2550's collection-approach budget is sampled here, ahead of
+    -- every early return below: utility is the only path that runs on
+    -- every thought tick. unit_ai_yield.tickCollection says why an
+    -- execute-side sample can never expire. Ranks nothing -- it only
+    -- ends a collection whose yield the forager cannot reach.
+    yieldCollect.tickCollection(uid, s, yieldCollect.FORAGE)
     local need, hungerFrac = forageNeed(uid)
     if hungerFrac >= params.forage_max_fraction then return -math.huge end
     -- Carrying food? Eating it (eat_from_inventory) is the better
@@ -386,14 +394,30 @@ local function forageExecute(uid, s, params)
     -- is the right answer to both -- the stale gids are retired rather
     -- than retried every tick, and the next decision re-finds whatever
     -- is actually still there.
+    --
+    -- PROXIMITY FIRST (#2550), through the same unit_ai_yield helper
+    -- auto-harvest's identical phase uses: the phase survives an
+    -- interruption and item.pickupGround compares no positions, so a
+    -- forager could otherwise pull its old yields in from across the
+    -- map. It peeks the tail gid, re-resolves it on THIS unit's page,
+    -- and hands it over or walks to the RESOLVED row -- never to
+    -- s.forageTarget, which forageUtility rewrites every scoring pass.
+    -- Still ungated on capacity: an approach is a distance test.
     if s.foragePhase == "collecting" then
-        local loot = s.forageLoot or {}
-        local nextGid = table.remove(loot)
-        if not nextGid or not item.pickupGround(uid, nextGid) then
-            s.foragePhase  = nil
-            s.forageLoot   = nil
-            s.forageTarget = nil
+        local loot = s.forageLoot
+        local need = forageNeed(uid)
+        local speed = (need > 0.8) and mv.ordered(uid) or mv.comfort(uid)
+        local outcome, nextGid = yieldCollect.nextYield(
+            uid, s, yieldCollect.FORAGE, speed)
+        if outcome == "approach" then return end
+        if outcome == "reach" and item.pickupGround(uid, nextGid) then
+            table.remove(loot)
+            return
         end
+        s.foragePhase   = nil
+        s.forageLoot    = nil
+        s.forageTarget  = nil
+        s.forageCollect = nil
         return
     end
 

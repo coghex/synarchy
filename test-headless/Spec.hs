@@ -388,6 +388,7 @@ import qualified Test.Headless.Lua.UnitAiCombatMove as LuaUnitAiCombatMove
 import qualified Test.Headless.Lua.UnitAiEncounter as LuaUnitAiEncounter
 import qualified Test.Headless.Lua.UnitAiStall as LuaUnitAiStall
 import qualified Test.Headless.Lua.UnitAiHarvest as LuaUnitAiHarvest
+import qualified Test.Headless.Lua.UnitAiYieldProximity as LuaUnitAiYieldProximity
 import qualified Test.Headless.Lua.UnitAiLogisticsTargets as LuaUnitAiLogisticsTargets
 import qualified Test.Headless.Lua.UnitAiPageTargets as LuaUnitAiPageTargets
 import qualified Test.Headless.Lua.UnitAiLoadReset as LuaUnitAiLoadReset
@@ -922,6 +923,7 @@ main = hspec $ do
     LuaUnitAiEncounter.spec
     LuaUnitAiStall.spec
     LuaUnitAiHarvest.spec
+    LuaUnitAiYieldProximity.spec
     LuaUnitAiLogisticsTargets.spec
     LuaUnitAiPageTargets.spec
     LuaUnitAiLoadReset.spec

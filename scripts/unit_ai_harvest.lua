@@ -24,6 +24,10 @@ local roles = require("scripts.unit_roles")
 -- and shares its constant rather than inventing a second one. Requiring
 -- it here is cycle-free -- unit_ai_stall requires nothing.
 local stall = require("scripts.unit_ai_stall")
+-- Retained-yield collection (#2550): the seam-aware proximity test, the
+-- bounded approach, and the peek-don't-pop rule, shared with foraging's
+-- identical collecting phase in scripts/unit_ai_needs.lua.
+local yieldCollect = require("scripts.unit_ai_yield")
 
 -----------------------------------------------------------
 -- Action: auto_harvest (#336, skill-scaled since #1582)
@@ -60,11 +64,13 @@ unitAi.harvest = {}
 -- WORK_TOTAL / (harvest_rate * (0.5 + farming/100)).
 unitAi.harvest.WORK_TOTAL = 1.0
 
--- TRANSIENCE (#1582). s.harvestProgress, s.harvestProgressAt and
--- s.lastHarvestAt are stripped from the lua.unit_ai save payload
+-- TRANSIENCE (#1582, extended by #2550). s.harvestProgress,
+-- s.harvestProgressAt, s.lastHarvestAt and s.harvestCollect are
+-- stripped from the lua.unit_ai save payload
 -- (scripts/unit_ai_save.lua's TRANSIENT_WORK_FIELDS), so a load starts
--- every picker on a fresh plant. That is the honest post-load state,
--- not a loss, for three reasons:
+-- every picker on a fresh plant and every pending collection on a
+-- fresh approach budget. That is the honest post-load state, not a
+-- loss, for three reasons:
 --
 --   * Under four game-seconds of work is re-earned immediately.
 --     Persisting it buys nothing a player could notice, and the same
@@ -81,9 +87,20 @@ unitAi.harvest.WORK_TOTAL = 1.0
 --     valid for the instance standing on it. A load replaces the whole
 --     session, so nothing promises the same plant is still there.
 --
+-- All three apply verbatim to #2550's s.harvestCollect, which is a
+-- closest-approach record plus the same kind of last-sample stamp: a
+-- load boundary charges a pending approach nothing, and the first tick
+-- afterwards re-establishes the closest approach from where the worker
+-- actually stands and gives the collection its full budget again --
+-- the same answer unit_ai_save.lua's TRANSIENT_ORDER_FIELDS note gives
+-- a restored transfer order.
+--
 -- Nothing has to re-populate them: bindProgress below seeds a fresh
--- accumulator on the first adjacent tick. s.harvestTarget is NOT in
--- that set -- it persisted before #1582 and still does.
+-- accumulator on the first adjacent tick, and unit_ai_yield seeds a
+-- fresh approach record on the first out-of-reach one. s.harvestTarget,
+-- s.harvestPhase and s.harvestLoot are NOT in that set -- the pending
+-- collection itself survives a load, which is precisely why its
+-- proximity has to be rechecked.
 
 -- Progress belongs to ONE flora instance, identified by its tile.
 -- Dropping it here is what stops partial work on a plant that vanished,
@@ -126,11 +143,32 @@ function unitAi.harvest.utility(uid, s, params)
     -- execute takes the collecting branch before it reads
     -- s.harvestTarget, so finishing a collection needs no second plant
     -- found, preselected, or searched for. The score is the ordinary
-    -- role-weighted band at full proximity -- the yields are underfoot
-    -- -- which beats idle's registered 0 while staying finite, so
-    -- every higher-priority need, order and combat response still
-    -- preempts it.
-    if s.harvestPhase == "collecting" then
+    -- role-weighted band, undiscounted by distance: since #2550 the
+    -- yields need NOT be underfoot -- an interruption can leave the
+    -- worker tiles away and the branch walks back -- so the band is
+    -- what says a pending collection is worth finishing wherever it
+    -- was left, not a claim about proximity. It beats idle's
+    -- registered 0 while staying finite, so every higher-priority
+    -- need, order and combat response still preempts it, and #2550's
+    -- collection budget is what stops an unreachable yield from
+    -- holding the phase open forever.
+    --
+    -- That budget is SAMPLED HERE rather than in execute, because
+    -- utility is the only one of the two that runs on every thought
+    -- tick: an action that has issued a walk is not re-executed until
+    -- the unit is idle, and unit_ai.lua's stuck-walk watchdog takes
+    -- longer to return it there than stall.MAX_CHARGED_INTERVAL allows
+    -- a single interval to be. unit_ai_yield.tickCollection states the
+    -- whole argument; unit_ai_pickup.lua charges pickup_timeout from
+    -- its own utility for the same reason.
+    --
+    -- tickCollection returns true only when it has just ENDED an
+    -- unreachable collection, and then this tick falls through to the
+    -- ordinary scan below rather than short-circuiting: with nothing
+    -- pending any more there is no reason to skip a plant that is
+    -- standing right there.
+    if s.harvestPhase == "collecting"
+       and not yieldCollect.tickCollection(uid, s, yieldCollect.HARVEST) then
         return params.harvest_base_utility
              * roles.weight(s, "auto_harvest")
     end
@@ -197,23 +235,44 @@ function unitAi.harvest.execute(uid, s, params)
     -- phase rather than returning -math.huge, so the branch no longer
     -- depends on some other ripe plant keeping auto_harvest alive.
     --
-    -- Every exit that is not a completed pickup ends the phase in THIS
-    -- tick (#2293): an exhausted list, an unresolvable row, a refused
-    -- weight, or a pickup that lost its race. The yields were
-    -- materialized as ordinary ground items before collection began
-    -- (World.Forage.Harvest), so whatever is left simply stays where it
-    -- lies -- collectable by another worker, or by this one once it has
-    -- unloaded -- and nothing is deleted or half-moved.
+    -- PROXIMITY FIRST (#2550). The phase survives an interruption -- a
+    -- drink, a combat response, a player order -- so the worker
+    -- resuming it may be anywhere, and item.pickupGround compares no
+    -- positions at all. unit_ai_yield.nextYield re-resolves the tail
+    -- gid on this worker's own page, measures it in Chebyshev tiles
+    -- over the page's cylindrical u-images, and either hands it over
+    -- (adjacent), walks toward it (out of reach, gid still pending), or
+    -- ends the collection (gone, or unreachable for longer than the
+    -- budget). It PEEKS: the gid leaves s.harvestLoot only on the tick
+    -- that actually picks it up.
+    --
+    -- Capacity admission (#2293) is deliberately evaluated only once
+    -- adjacency holds, immediately before item.pickupGround, so a
+    -- multi-tick approach cannot warn once per step -- the refusal
+    -- still warns exactly ONCE and ends the phase in that same tick.
+    --
+    -- Every exit that is not a completed pickup or an approach ends the
+    -- phase in THIS tick (#2293): an exhausted list, an unresolvable
+    -- row, a refused weight, a stalled approach, or a pickup that lost
+    -- its race. The yields were materialized as ordinary ground items
+    -- before collection began (World.Forage.Harvest), so whatever is
+    -- left simply stays where it lies -- collectable by another worker,
+    -- or by this one once it has unloaded -- and nothing is deleted or
+    -- half-moved.
     if s.harvestPhase == "collecting" then
         s.lastHarvestAt = nil
-        local loot = s.harvestLoot or {}
-        local nextGid = table.remove(loot)
-        if nextGid and admitYield(uid, nextGid)
-                   and item.pickupGround(uid, nextGid) then
+        local loot = s.harvestLoot
+        local outcome, nextGid = yieldCollect.nextYield(
+            uid, s, yieldCollect.HARVEST, mv.comfort(uid))
+        if outcome == "approach" then return end
+        if outcome == "reach" and admitYield(uid, nextGid)
+                              and item.pickupGround(uid, nextGid) then
+            table.remove(loot)
             return
         end
-        s.harvestPhase = nil
-        s.harvestLoot  = nil
+        s.harvestPhase   = nil
+        s.harvestLoot    = nil
+        s.harvestCollect = nil
         return
     end
 
@@ -306,6 +365,12 @@ end
 -- Preemption (thirst, combat, player order): the accumulated work on
 -- this plant survives so the pick resumes, but its work clock does
 -- not — the interruption itself must not be charged as picking.
+--
+-- #2550's collection-approach budget takes the same boundary for the
+-- same reason: an interruption is not eligible approach time. Only the
+-- last-sample stamp is dropped, so a partially spent budget stays
+-- spent, exactly as a preempted commanded move's does.
 function unitAi.harvest.onExit(uid, s, params)
     s.lastHarvestAt = nil
+    if s.harvestCollect then s.harvestCollect.stallSeenAt = nil end
 end

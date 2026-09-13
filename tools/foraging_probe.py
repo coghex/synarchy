@@ -595,7 +595,22 @@ def main():
                    f"unit.setStat(u,'hunger',0); "
                    f"unit.setStat(u,'calories',unit.getStat(u,'max_calories')*0.5); "
                    f"return 'ok'")
-        deadline = time.time() + 45.0
+        # 120 s, raised from 45 s by #2550. Autonomous collection is no
+        # longer instantaneous: a retained yield the worker is not
+        # ADJACENT to is now walked to before it is taken, where the
+        # collecting branch used to pull it in from wherever the worker
+        # happened to be standing. Two things stack up here. The AI
+        # already took a variable 9-35 s between finishing a pick and
+        # next winning arbitration for the collection -- traced on this
+        # branch, and entirely upstream of the collecting branch, so it
+        # is not something #2550 introduced -- and the return walk now
+        # adds real travel on top, up to forage_search_radius tiles of
+        # it. Together they overran the old budget in 2 of 5 measured
+        # runs, where base passed 4 of 4. Nothing about the observation
+        # changed, and the loop still breaks the instant both conditions
+        # hold, so a fast run costs exactly what it did before; only the
+        # give-up point moved.
+        deadline = time.time() + 120.0
         foraged = eaten = False
         harvested = 0
         while time.time() < deadline:

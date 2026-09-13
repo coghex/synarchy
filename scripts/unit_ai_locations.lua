@@ -64,7 +64,13 @@ end
 -- world.getWrapWidth reports; zero for a period that is absent,
 -- non-positive, or not a number, which collapses every comparison below
 -- to the plain Cartesian one.
-local function aliasStep(wrapWidth)
+--
+-- EXPORTED (#2550) rather than module-local: scripts/unit_ai_yield.lua
+-- measures a retained ground yield over the same three cylindrical
+-- u-images, in Chebyshev tiles rather than Euclidean ones, and a second
+-- private copy of this arithmetic is exactly the divergence that would
+-- let the two frames disagree about where the seam is.
+function M.aliasStep(wrapWidth)
     if type(wrapWidth) ~= "number" or wrapWidth <= 0 then return 0 end
     return math.floor(wrapWidth / 2)
 end
@@ -97,7 +103,11 @@ end
 -- not guess. Zero (today's plain Euclidean ranking) whenever the engine,
 -- the verb, or the page cannot answer; a nil page falls through to the
 -- verb's own active-world reading.
-local function wrapPeriodFor(page)
+--
+-- EXPORTED (#2550) for the same reason M.aliasStep is: the yield-
+-- collection proximity check needs the ACTING unit's own page period,
+-- and re-deriving the pcall guard would be a second copy of it.
+function M.wrapPeriodFor(page)
     if type(world) ~= "table" or type(world.getWrapWidth) ~= "function" then
         return 0
     end
@@ -131,7 +141,7 @@ end
 function M.nearestKnownLocation(s, page, fromX, fromY, wrapWidth)
     local list = s.knownLocations
     if not list or #list == 0 then return nil end
-    local step = aliasStep(wrapWidth)
+    local step = M.aliasStep(wrapWidth)
     local best, bestD = nil, math.huge
     for _, k in ipairs(list) do
         if k.page == page then
@@ -319,7 +329,7 @@ function M.register(unitAi, aiState)
             fromX, fromY = info.gridX, info.gridY
         end
         return M.nearestKnownLocation(s, page, fromX, fromY,
-                                      wrapPeriodFor(page))
+                                      M.wrapPeriodFor(page))
     end
 
     function unitAi.knowsLocation(uid, page, id)
