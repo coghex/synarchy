@@ -3,9 +3,9 @@
 (issues #1884, #2095).
 
 `tools/location_content_probe.py` is manual-only. It boots engines from
-seven `boot_isolated` CALL SITES, one of which runs twice -- once
+ten `boot_isolated` CALL SITES, one of which runs twice -- once
 visiting the ruins in the same order, once in the exact reverse -- so an
-observable run LAUNCHES eight engine processes across several generated
+observable run LAUNCHES eleven engine processes across several generated
 worlds, and its own acceptance can only be seen by a run nothing in CI
 can make. The contract this file pins is the half that is pure Python
 and would otherwise regress silently: every file one invocation creates
@@ -14,7 +14,8 @@ away again on every handled exit — unless `--keep-artifacts` says
 otherwise.
 
 Since #2095 the scenario assertions live in owners under
-`tools/location_content/` and the probe file is the façade over them, so
+`tools/location_content/` -- five of them since #2505 added the pending
+container shells -- and the probe file is the façade over them, so
 every structural check below scans the COMPLETE reorganized surface --
 the façade plus every module it imports from that package -- and asserts
 its own non-vacuity first. Rooted at the façade alone, the
@@ -22,8 +23,8 @@ exclusion-style properties ("no bare `boot`", "no raw fixture `send`",
 "every log read is this invocation's") would all evaluate True over an
 empty node set: they would report OK while inspecting nothing.
 
-Before #1884 the probe's five fixture YAMLs and its engine log were the
-fixed, process-global names `/tmp/loc_content_probe_bogus.yaml`,
+Before #1884 the probe's five fixture YAMLs -- #2505 has since taken it
+to nine -- and its engine log were the fixed, process-global names `/tmp/loc_content_probe_bogus.yaml`,
 `/tmp/loc_content_probe_bogus_loot.yaml`,
 `/tmp/loc_content_probe_quinoa.yaml`,
 `/tmp/loc_content_probe_quinoa_loot.yaml`,
@@ -36,15 +37,16 @@ invocation-owned resource root and explicitly left these six behind.
 
 Two concurrent runs — a supported mode: `run_probes.py --jobs N`, and
 `probe_flake.py`'s machine-wide port lease — collided on all six. The
-log collision is the sharp one: the probe ASSERTS against that log
-twice (the integrity diagnostic in phase 2, the two unknown-content
-warnings in phase 3), so a foreign truncation could turn a passing phase
-into a failure or a failure into a pass.
+log collision is the sharp one: the probe ASSERTS against that log three
+times (the integrity diagnostic in phase 2, the two unknown-content
+warnings in phase 3, and #2505's load rejection in the last phase), so a
+foreign truncation could turn a passing phase into a failure or a failure
+into a pass.
 
 The properties asserted directly, because each is a way the probe would
 leak, collide, or stop proving what it claims:
 
-  * Two invocations share no path — none of the five fixtures, not the
+  * Two invocations share no path — none of the nine fixtures, not the
     log, not the root — so the fixed logical names inside each tree are
     safe. Every one of those paths is absolute and inside the run's own
     directory, because the engine is chdir'd into the isolated resource
@@ -60,10 +62,10 @@ leak, collide, or stop proving what it claims:
     aimed at whoever holds the port.
   * Every boot goes through the one funnel that hands it this
     invocation's log and registers the process as it is launched, and
-    both log-reading ASSERTIONS read that same log.
-  * Only the façade boots at all, from exactly seven call sites, and the
+    every log-reading ASSERTION reads that same log.
+  * Only the façade boots at all, from exactly ten call sites, and the
     regeneration site is still a loop over the two visit orders -- so the
-    run still LAUNCHES eight processes. A call-site count alone would
+    run still LAUNCHES eleven processes. A call-site count alone would
     accept that loop being unrolled, flattened to one case, or grown to
     three, each of which changes the process count.
   * The façade still offers exactly one `run(args, art, token)` for
@@ -73,7 +75,8 @@ leak, collide, or stop proving what it claims:
     extracted module, and every scan runs over all of them.
   * Every PASS diagnostic and every recorded failure belongs to a
     scenario owner rather than the façade or the shared infrastructure,
-    and the counts are the pre-split file's exactly.
+    and the counts are the pre-split file's plus each scenario added
+    since.
   * No scenario owner keeps cross-scenario state in a mutable module
     global; the values `run` used to accumulate across phases are
     fields of the one handoff record the façade threads.
@@ -140,19 +143,50 @@ LEGACY_PATHS = (
     "/tmp/location_content_engine.log",
 )
 
-#: The five fixtures, by the logical name `RunArtifacts.fixture` is
-#: asked for, in the order the probe REGISTERS them: phase 3's four
-#: (bogus location, bogus loot, quinoa location, quinoa loot) and then
-#: phase 4's `dense` alone.
-FIXTURE_NAMES = ("bogus", "bogus_loot", "quinoa", "quinoa_loot", "dense")
+#: The nine fixtures, by the logical name `RunArtifacts.fixture` is
+#: asked for, in SURFACE (file, line) order — which is the order the
+#: scans below read them in: the container owner's four (#2505's crate
+#: item, its loot profile, the DENSE location pairing them, and the
+#: container-free twin of that location the missing-profile refusal
+#: registers in place of it), then the dispatch owner's four rejection
+#: fixtures and its `dense`.
+#:
+#: Within each owner that IS registration order, which is what the two
+#: order checks below are actually about: the container trio must
+#: register items → profile → location (the location loader resolves a
+#: container entry's item AND profile ids against the live registries and
+#: rejects the whole file on either), and the rejection four must keep
+#: phase 3's own order. Across owners the order is incidental — they
+#: register in different processes. The twin is not part of that trio at
+#: all: it is registered by a LATER process, in place of the real
+#: location, precisely so that process's loot-profile registry stays
+#: empty.
+FIXTURE_NAMES = (
+    "crate_item", "crate_profile", "crate_location", "crate_location_noprofile",
+    "bogus", "bogus_loot", "quinoa", "quinoa_loot", "dense",
+)
 
-#: The loader each of those is registered through, in the same order.
-FIXTURE_LOADERS = (
-    "engine.loadLocationYaml",
-    "engine.loadLootTableYaml",
-    "engine.loadLocationYaml",
-    "engine.loadLootTableYaml",
-    "engine.loadLocationYaml",
+#: Every `load_fixture_yaml` call on the surface, as
+#: `(local variable, loader)` in source order.
+#:
+#: Deliberately its OWN sequence rather than a mapping over
+#: `FIXTURE_NAMES`: one fixture is registered by two different phases.
+#: The crate item is needed by the pending-shell world AND by the
+#: missing-profile refusal that follows it, which boots a fresh engine
+#: and so has to register it again. A one-load-per-fixture expectation
+#: would forbid that — and forbidding it is not a contract anybody wants,
+#: it is just what the pre-#2505 shape happened to satisfy.
+FIXTURE_REGISTRATIONS = (
+    ("item_yaml", "engine.loadItemYaml"),
+    ("profile_yaml", "engine.loadLootProfileYaml"),
+    ("location_yaml", "engine.loadLocationYaml"),
+    ("item_yaml", "engine.loadItemYaml"),
+    ("noprofile_yaml", "engine.loadLocationYaml"),
+    ("bogus_yaml", "engine.loadLocationYaml"),
+    ("bogus_loot_yaml", "engine.loadLootTableYaml"),
+    ("quinoa_yaml", "engine.loadLocationYaml"),
+    ("quinoa_loot_yaml", "engine.loadLootTableYaml"),
+    ("dense_yaml", "engine.loadLocationYaml"),
 )
 
 #: The package the scenario owners live in (#2095).
@@ -173,14 +207,22 @@ SURFACE = (Path(probe.__file__).resolve(),
 #: The scenario owners, as distinct from the shared infrastructure the
 #: façade also imports. Named because the checks that say WHERE a
 #: contract lives need both halves of the distinction.
-SCENARIO_OWNERS = ("content", "dispatch", "knowledge", "naming")
+SCENARIO_OWNERS = ("container", "content", "dispatch", "knowledge", "naming")
 INFRASTRUCTURE = ("engine_queries", "invocation")
 
-#: #2095 requirement 11 and the acceptance's process count. Seven
-#: `boot_isolated` call sites, one of them inside a two-element loop over
-#: the visit orders, so a run launches eight engine processes.
-BOOT_CALL_SITES = 7
-PROCESS_LAUNCHES = 8
+#: #2095 requirement 11 and the acceptance's process count. Ten
+#: `boot_isolated` call sites — seven, plus #2505's three (the crate
+#: world, the fresh process that loads its save, and the fresh process
+#: that proves a deregistered profile refuses that load) — one of them
+#: inside a two-element loop over the visit orders, so a run launches
+#: eleven engine processes.
+BOOT_CALL_SITES = 10
+PROCESS_LAUNCHES = 11
+
+#: How many places ASSERT against the engine log: the knowledge owner's
+#: integrity diagnostic, the dispatch owner's unknown-content warnings,
+#: and (#2505) the container owner's load rejection.
+LOG_ASSERTION_SITES = 3
 
 #: The whole surface's diagnostic totals, recounted across every owner.
 #: Moving an assertion between owners is a visible edit here; losing
@@ -188,8 +230,10 @@ PROCESS_LAUNCHES = 8
 #: totals were 45/67; #917's `check_significant_contents` added the six
 #: PASS lines and eight failure records of the guaranteed-contents and
 #: compound-clearance scenario.
-TOTAL_PASS_DIAGNOSTICS = 51
-TOTAL_FAILURE_RECORDS = 75
+#: …and #2505's container owner added the fifteen PASS lines and
+#: twenty-three failure records of the pending-shell scenario.
+TOTAL_PASS_DIAGNOSTICS = 66
+TOTAL_FAILURE_RECORDS = 98
 
 #: The values `run` used to accumulate in local variables across its
 #: phases (#2095's cross-scenario handoff). Each is now a field of the
@@ -198,7 +242,8 @@ TOTAL_FAILURE_RECORDS = 75
 HANDOFF_FIELDS = (
     "placed_all", "ruins", "counts1", "geoms1", "loot1", "r0mem_key",
     "mem_uids", "dangling_uid", "sibling_keys", "saved_content",
-    "saved_naming", "named",
+    "saved_naming", "saved_crate", "named", "crate_slots", "crate_shells",
+    "crate_slot_name",
 )
 
 
@@ -312,6 +357,14 @@ FIXTURE_DIGESTS = {
         "09bc563d2e3daf2c7fbfadca995ef164e0af9ff7d91d145120659d0f76a7bf5a",
     "DENSE_LOCATION_YAML":
         "3e0fc0dbd0b9abf46ba05f85c00b0446b39799393aec0179c520d811226104d0",
+    "CONTAINER_ITEM_YAML":
+        "59a5870edad79a5b5ad13b144a73c9ad119397ed642c008072c12925bfd96f86",
+    "CONTAINER_PROFILE_YAML":
+        "1418a15e9bd66a2c99a8d583e15820b16354d2aeb0686d1250c13d8fab70e4b7",
+    "CONTAINER_LOCATION_YAML":
+        "d0d46f15cb724aad4719f0e435f5211b603f455d935906e90bbd134fa4bd59f1",
+    "CONTAINER_LOCATION_NOPROFILE_YAML":
+        "35218be4a6fca87c197b5e77d362f8bc42ea9e38c13da9928e1900ee855bddc8",
 }
 
 
@@ -424,7 +477,7 @@ def test_two_invocations_share_no_path() -> None:
                    f"the engine-side read")
         expect(first.engine_log != second.engine_log,
                "two concurrent runs cannot truncate one another's engine "
-               "log — which two checks ASSERT against")
+               "log — which three checks ASSERT against")
         expect(first.root != second.root,
                "and each keeps its own resource root, so its save slots too")
 
@@ -449,22 +502,26 @@ def test_every_fixture_path_is_absolute_and_owned() -> None:
                "and all three live under the one directory the invocation "
                "owns, so removing it removes them")
 
-    # …and the five names really are the five the probe asks for, over
-    # the WHOLE surface: a sixth fixture that skipped `RunArtifacts`, or
-    # one asked for from a module this scan does not read, would not be
+    # …and those names really are the ones the probe asks for, over the
+    # WHOLE surface: a further fixture that skipped `RunArtifacts`, or one
+    # asked for from a module this scan does not read, would not be
     # covered by any of the above.
     calls = surface_calls("fixture", attribute=True)
     expect(calls, "the surface really contains `art.fixture(...)` calls — "
                   "an empty scan would make the order check below vacuous")
-    owners = {path for path, _ in calls}
-    expect(len(owners) == 1,
-           f"all five fixtures are asked for by ONE owner, so their source "
-           f"order is their registration order (got "
-           f"{sorted(path.name for path in owners)})")
+    # Each fixture is asked for by the owner that CONSUMES it (#2095
+    # requirement 7), so this is no longer a single owner — it is a set
+    # of them, and what matters is that a fixture never crosses one:
+    # within an owner, source order IS registration order, which is what
+    # both order checks below read.
+    owners = {path.name for path, _ in calls}
+    expect(owners <= {f"{name}.py" for name in SCENARIO_OWNERS},
+           f"every fixture is asked for by a SCENARIO owner, never by the "
+           f"façade or the shared infrastructure (got {sorted(owners)})")
     fixtures = [node.args[0].value for _path, node in calls
                 if node.args and isinstance(node.args[0], ast.Constant)]
     expect(tuple(fixtures) == FIXTURE_NAMES,
-           f"the probe asks for exactly these five fixtures, in this order "
+           f"the probe asks for exactly these fixtures, in this order "
            f"(got {fixtures})")
 
 
@@ -1004,18 +1061,22 @@ def test_registration_order_and_loaders_are_unchanged() -> None:
     loads = surface_calls("load_fixture_yaml")
     expect(loads, "the surface really registers fixtures — an empty scan "
                   "would make both order checks below vacuous")
-    owners = {path for path, _ in loads}
-    expect(len(owners) == 1,
-           f"one owner registers all five, so its source order IS the "
-           f"registration order (got {sorted(path.name for path in owners)})")
+    ask_owners = {path.name for path, _ in surface_calls("fixture",
+                                                        attribute=True)}
+    load_owners = {path.name for path, _ in loads}
+    expect(load_owners == ask_owners,
+           f"the owner that ASKS for a fixture is the one that registers "
+           f"it, so its source order IS that fixture's registration order "
+           f"(asked in {sorted(ask_owners)}, registered in "
+           f"{sorted(load_owners)})")
     loaders = [node.args[1].value for _path, node in loads
                if isinstance(node.args[1], ast.Constant)]
     targets = [node.args[2].id for _path, node in loads
                if isinstance(node.args[2], ast.Name)]
-    expect(targets == [f"{n}_yaml" for n in FIXTURE_NAMES],
-           f"the five fixtures register in the unchanged order "
+    expect(targets == [name for name, _ in FIXTURE_REGISTRATIONS],
+           f"every fixture registers in the unchanged order "
            f"(got {targets})")
-    expect(loaders == list(FIXTURE_LOADERS),
+    expect(loaders == [loader for _, loader in FIXTURE_REGISTRATIONS],
            f"...each through its own loader (got {loaders})")
 
 
@@ -1026,8 +1087,8 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
     # current schema stops the probe at SETUP instead of surfacing as
     # downstream behavioural failures.
     loads = surface_calls("load_fixture_yaml")
-    expect(len(loads) == len(FIXTURE_NAMES),
-           f"every one of the five fixtures is loaded through the checking "
+    expect(len(loads) == len(FIXTURE_REGISTRATIONS),
+           f"every one of the registrations goes through the checking "
            f"helper, and nothing else is (got {len(loads)})")
     sends = surface_calls("send")
     expect(sends, "the surface really calls send() — the exclusion below "
@@ -1069,11 +1130,12 @@ def test_every_fixture_still_goes_through_load_fixture_yaml() -> None:
            "a rejected fixture ends the run rather than a traceback")
 
 
-def test_both_log_assertions_read_this_invocations_log() -> None:
-    print("\ntest_both_log_assertions_read_this_invocations_log")
-    # #1884 requirement 9. Two checks ASSERT against the engine log —
-    # the integrity diagnostic in phase 2 and the two unknown-content
-    # warnings in phase 3 — so a read of anything but this invocation's
+def test_every_log_assertion_reads_this_invocations_log() -> None:
+    print("\ntest_every_log_assertion_reads_this_invocations_log")
+    # #1884 requirement 9. Three checks ASSERT against the engine log —
+    # the integrity diagnostic in phase 2, the two unknown-content
+    # warnings in phase 3, and (#2505) the load rejection naming the
+    # unresolved profile — so a read of anything but this invocation's
     # own log could report another run's evidence as this one's.
     opens = surface_calls("open")
     expect(opens, "the surface really opens files — an empty scan would "
@@ -1082,15 +1144,17 @@ def test_both_log_assertions_read_this_invocations_log() -> None:
              if not any(isinstance(a, ast.Constant) and a.value == "w"
                         for a in node.args[1:])]
     writes = [pair for pair in opens if pair not in reads]
-    expect(len(reads) == 2,
-           f"the probe reads the log in exactly the two places that assert "
+    expect(len(reads) == LOG_ASSERTION_SITES,
+           f"the probe reads the log in exactly the "
+           f"{LOG_ASSERTION_SITES} places that assert "
            f"against it (got {[(p.name, n.lineno) for p, n in reads]})")
-    # The two now sit with the owners that assert on them — the
-    # knowledge owner's integrity diagnostic and the dispatch owner's
-    # unknown-content warnings — and each still takes the invocation's
-    # `RunArtifacts` rather than reaching for a log of its own.
-    expect(len({path for path, _ in reads}) == 2,
-           f"...one in each of the two owners that read it (got "
+    # The three sit with the owners that assert on them — the knowledge
+    # owner's integrity diagnostic, the dispatch owner's unknown-content
+    # warnings, and the container owner's load rejection — and each still
+    # takes the invocation's `RunArtifacts` rather than reaching for a log
+    # of its own.
+    expect(len({path for path, _ in reads}) == LOG_ASSERTION_SITES,
+           f"...one in each of the {LOG_ASSERTION_SITES} owners that read it (got "
            f"{sorted(path.name for path, _ in reads)})")
     expect(all(isinstance(node.args[0], ast.Attribute)
                and node.args[0].attr == "engine_log"
@@ -1102,7 +1166,7 @@ def test_both_log_assertions_read_this_invocations_log() -> None:
            and all(isinstance(node.args[0], ast.Name)
                    and node.args[0].id.endswith("_yaml")
                    for _path, node in writes),
-           f"and every truncating write on the surface is one of the five "
+           f"and every truncating write on the surface is one of the "
            f"fixtures (got {len(writes)})")
 
 
@@ -1149,6 +1213,200 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
 # ---------------------------------------------------------------------
 # Scenario ownership behind the façade (#2095)
 # ---------------------------------------------------------------------
+#: How the topology counts are SPELLED in prose. The owner docstrings and
+#: `tools/README.md` describe this probe's shape in words, and words are
+#: what a reader acts on — so a number that moved in code and not in prose
+#: leaves the authoritative contract stating something false.
+NUMBER_WORDS = {
+    2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
+    8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+}
+
+#: Words that state a count without naming the number, keyed by the count
+#: they mean. A sentence saying "both" of something is exactly as stale as
+#: one saying "two" once there are three, and that was the form which
+#: survived a whole review round — so these are matched wherever a number
+#: word would be, in either position.
+#:
+#: Deliberately spelled as data rather than illustrated in prose: this
+#: file scans ITSELF (see `topology_prose`), so an example sentence here
+#: quoting a stale claim would be found and reported as one.
+ALSO_MEANS = {2: ("both", "twice")}
+
+#: `tools/README.md` documents every probe, so only the parts that
+#: describe THIS one may be read: the companion's own section, and the
+#: probe's row in the index table. Scanning the whole file would judge
+#: another probe's sentences by this probe's counts.
+README = TOOLS / "README.md"
+README_SECTION_HEADING = "### `test_location_content_probe.py`"
+README_TABLE_ROW = "| `location_content_probe.py` |"
+
+
+def readme_prose() -> str:
+    """The README text that is ABOUT this probe, and nothing else."""
+    body = README.read_text(encoding="utf-8")
+    start = body.index(README_SECTION_HEADING)
+    end = body.index("\n### ", start + len(README_SECTION_HEADING))
+    rows = [line for line in body.splitlines()
+            if line.startswith(README_TABLE_ROW)]
+    return body[start:end] + "\n" + "\n".join(rows)
+
+
+def topology_prose() -> tuple[tuple[str, str], ...]:
+    """(name, text) for every prose body that DESCRIBES this probe's
+    topology, as opposed to asserting it.
+
+    The README is included deliberately: it is the tools index a reader
+    reaches first, and it carried the stale counts through two review
+    rounds of #2505 while every structural check below stayed green.
+    """
+    return tuple(
+        [(path.name, module_source(path)) for path in SURFACE]
+        + [(README.name, readme_prose())]
+        # THIS file too. It is the checker, but it is also a contract:
+        # its module docstring and its failure messages tell a reader what
+        # the probe's shape is, and round 4 of #2505 found a stale "both"
+        # in exactly those sentences while every check here passed.
+        + [(Path(__file__).name,
+            Path(__file__).read_text(encoding="utf-8"))]
+    )
+
+#: The quantities those files state in words, each with the phrases that
+#: introduce it. A phrase is matched against the whole prose body, and the
+#: number word immediately before it must be the current one.
+def topology_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """(label, current value, phrases the number is spelled BEFORE).
+
+    Prose that puts the number AFTER its subject ("ASSERTS against that
+    log three times") is covered by 'TRAILING_CLAIMS' instead — the two
+    shapes both occur, and a guard that knew only one would keep passing
+    over the other.
+    """
+    return (
+        ("boot call sites", BOOT_CALL_SITES,
+         ("boot_isolated` call sites", "boot_isolated` CALL SITES",
+          "call sites", "boot CALL SITES")),
+        ("process launches", PROCESS_LAUNCHES,
+         ("engine processes", "launches", "processes from")),
+        ("scenario owners", len(SCENARIO_OWNERS), ("scenario owners",)),
+        ("log assertions", LOG_ASSERTION_SITES,
+         ("checks ASSERT against", "checks below ASSERT against",
+          "places that assert", "log-reading ASSERTION",
+          "owners that read it")),
+    )
+
+
+def trailing_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """(label, current value, phrases the number is spelled AFTER)."""
+    return (
+        ("log assertions", LOG_ASSERTION_SITES,
+         ("ASSERTS against that log",)),
+    )
+
+
+def owner_fixture_counts() -> dict[Path, int]:
+    """How many fixtures each SCENARIO OWNER stages, from its own
+    `art.fixture(...)` calls.
+
+    The fixture total is the one topology count that is legitimately
+    stated per-owner as well as probe-wide — `dispatch` stages five and
+    `container` four — so it cannot be checked against one number. It CAN
+    be checked against the owner's own, which is what this derives: in an
+    owner module, a number word before "fixtures" is a claim about that
+    owner, and the truth is countable from the same file.
+    """
+    counts: dict[Path, int] = {}
+    for path, _node in surface_calls("fixture", attribute=True):
+        counts[path] = counts.get(path, 0) + 1
+    return counts
+
+
+def test_the_topology_prose_states_the_current_counts() -> None:
+    """A stale number word is a contract stating something false.
+
+    Every check in this file reads the CODE; none of them reads the
+    sentences around it. #2505 renumbered the probe and left the owner
+    docstrings and `tools/README.md` describing the pre-change shape
+    through two review rounds, with this suite green the whole time —
+    which is exactly the gap a structural scan cannot see.
+
+    The rule is deliberately narrow: wherever one of these quantities is
+    spelled as a WORD immediately before a phrase that names it, the word
+    must be the current one. It says nothing about prose that gives no
+    count, and nothing about a historical note that names an older number
+    in the past tense — those are qualified by their own sentence, which
+    is why the phrases below are matched with the number attached rather
+    than the number alone.
+    """
+    print("\ntest_the_topology_prose_states_the_current_counts")
+    stale: list[str] = []
+    checked = 0
+    owner_fixtures = {path.name: count
+                      for path, count in owner_fixture_counts().items()}
+    expect(owner_fixtures,
+           "the owners really stage fixtures — an empty derivation would "
+           "make the per-owner fixture claim below vacuous")
+    bodies = topology_prose()
+    expect(any(README.name == name for name, _ in bodies),
+           "the README's own section is among the prose scanned — it is "
+           "where the stale counts survived longest")
+    for name, body in bodies:
+        claims = list(topology_claims())
+        # An owner's WHOLE fixture set, checked only in that owner's file.
+        # Restricted to the phrasings that mean the whole set: an owner
+        # legitimately also counts a SUBSET ("phase 3's four fixtures"),
+        # and elsewhere a number before "fixtures" may be the probe-wide
+        # total or a qualified historical note.
+        if name in owner_fixtures:
+            claims.append(("its own fixture set", owner_fixtures[name],
+                           ("inline YAML fixtures", "YAML fixtures are")))
+        for label, current, phrases in claims:
+            wanted = NUMBER_WORDS[current]
+            spellings = [
+                number for value, number in NUMBER_WORDS.items()
+                if number != wanted
+            ] + [
+                alias
+                for value, aliases in ALSO_MEANS.items() if value != current
+                for alias in aliases
+            ]
+            for phrase in phrases:
+                for number in spellings:
+                    # Only a number word DIRECTLY before the phrase is a
+                    # claim about this quantity. "eight" elsewhere in the
+                    # file (another probe's rule, a historical aside) is
+                    # not one, and must not be rewritten by this check.
+                    for sep in (" ", " `"):
+                        needle = f"{number}{sep}{phrase}"
+                        checked += 1
+                        if needle in body:
+                            stale.append(
+                                f"{name}: {label} is {current} "
+                                f"({wanted}), but the prose says "
+                                f"{needle!r}")
+        for label, current, phrases in trailing_claims():
+            wanted = NUMBER_WORDS[current]
+            spellings = [number for number in NUMBER_WORDS.values()
+                         if number != wanted]
+            spellings += [alias
+                          for value, aliases in ALSO_MEANS.items()
+                          if value != current for alias in aliases]
+            for phrase in phrases:
+                for number in spellings:
+                    needle = f"{phrase} {number}"
+                    checked += 1
+                    if needle in body:
+                        stale.append(
+                            f"{name}: {label} is {current} ({wanted}), but "
+                            f"the prose says {needle!r}")
+    expect(checked > 0,
+           "the prose scan really looked at something — an empty sweep "
+           "would report OK having read nothing")
+    expect(not stale,
+           "every prose statement of this probe's topology names the "
+           "current count (stale: " + "; ".join(stale) + ")")
+
+
 def test_the_reorganized_surface_is_complete() -> None:
     print("\ntest_the_reorganized_surface_is_complete")
     # Every structural scan above runs over SURFACE. If that set could
@@ -1321,8 +1579,8 @@ def test_no_scenario_owner_keeps_cross_scenario_state_in_a_module_global()\
 
 def test_the_handoff_record_carries_every_threaded_value() -> None:
     print("\ntest_the_handoff_record_carries_every_threaded_value")
-    # The twelve values `run` used to accumulate in local variables
-    # across its phases. Each must be a field of the record the façade
+    # Every value `run` used to accumulate in local variables across its
+    # phases. Each must be a field of the record the façade
     # threads, and each must default to something a skipped phase can
     # leave alone — which is what makes the dependent phases skip rather
     # than assert against a value nothing produced.
@@ -1369,8 +1627,9 @@ def main() -> int:
     test_the_fixture_bodies_are_byte_for_byte_unchanged()
     test_registration_order_and_loaders_are_unchanged()
     test_every_fixture_still_goes_through_load_fixture_yaml()
-    test_both_log_assertions_read_this_invocations_log()
+    test_every_log_assertion_reads_this_invocations_log()
     test_the_public_helpers_other_probes_import_are_intact()
+    test_the_topology_prose_states_the_current_counts()
     test_the_reorganized_surface_is_complete()
     test_the_facade_keeps_one_run_entry_point()
     test_the_regeneration_boot_runs_once_per_visit_order()

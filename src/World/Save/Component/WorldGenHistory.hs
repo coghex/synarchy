@@ -2,10 +2,14 @@
 -- | HISTORICAL, decode-only worldgen-parameter wire shapes (issue #2098
 --   owner split of the #760 frozen worldgen graph).
 --
---   Every @WorldGenParamsDTOv1@ … @WorldGenParamsDTOv6@ shape the
+--   Every @WorldGenParamsDTOv1@ … @WorldGenParamsDTOv8@ shape the
 --   @"world-pages"@ component still ACCEPTS lives here, newest first,
 --   each with the version it was the current shape for:
 --
+--   - 'WorldGenParamsDTOv8' — @world-pages@ v10 and v11, pre-#2505 (no
+--     pending container shells).
+--   - 'WorldGenParamsDTOv7' — @world-pages@ v8 and v9, pre-#917 (no
+--     significant obligations).
 --   - 'WorldGenParamsDTOv6' — @world-pages@ v7, pre-#916 (no encounter).
 --   - 'WorldGenParamsDTOv5' — @world-pages@ v6, pre-#1230 (a discovery
 --     margin on every instance).
@@ -38,7 +42,10 @@
 --   The frozen-DTO boundary rule is stated ONCE, in
 --   "World.Save.Component.Types".
 module World.Save.Component.WorldGenHistory
-    ( WorldGenParamsDTOv7(..)
+    ( WorldGenParamsDTOv8(..)
+    , toWorldGenParamsDTOv8
+    , fromWorldGenParamsDTOv8
+    , WorldGenParamsDTOv7(..)
     , toWorldGenParamsDTOv7
     , fromWorldGenParamsDTOv7
     , WorldGenParamsDTOv6(..)
@@ -164,6 +171,99 @@ fromWorldGenParamsDTOv6 d = withVolcanoCtx WorldGenParams
     , wgpLocationStamped         = gp6LocationStamped d
     , wgpRiverNames              = fromRiverNamesDTO (gp6RiverNames d)
     , wgpVolcanoCtx              = emptyVolcanoCtx
+    }
+
+-- Frozen pre-#2505 worldgen params (@world-pages@ v10 and v11) -------
+
+-- | The FROZEN pre-container-shell gen-params shape, carried by BOTH
+--   @world-pages@ v10 and v11: identical to 'WorldGenParamsDTO' except
+--   that its location table is the frozen 'LocationInstancesDTOv6'.
+--
+--   #2471 changed the PAGE, not the gen params, so its own v10 freeze
+--   ('World.Save.Component.PageCore.PageCoreDTOv10') pointed at the live
+--   type — this is the "later schema change" that note anticipated,
+--   repointing that field onto a frozen copy and leaving BOTH versions'
+--   bytes unchanged, exactly as #917 did to #2021's v8 freeze one step
+--   earlier.
+data WorldGenParamsDTOv8 = WorldGenParamsDTOv8
+    { gp8Seed                     ∷ !Word64
+    , gp8WorldSize                ∷ !Int
+    , gp8PlateCount               ∷ !Int
+    , gp8Plates                   ∷ ![TectonicPlateDTO]
+    , gp8Calender                 ∷ !CalendarConfigDTO
+    , gp8SunConfig                ∷ !SunConfigDTO
+    , gp8MoonConfig               ∷ !MoonConfigDTO
+    , gp8GeoTimeline              ∷ !GeoTimeline
+    , gp8OceanMap                 ∷ !OceanMap
+    , gp8OceanDist                ∷ !OceanDistMap
+    , gp8ClimateParams            ∷ !ClimateParamsDTO
+    , gp8ClimateState             ∷ !ClimateStateDTO
+    , gp8ErosionIntensity         ∷ !Float
+    , gp8VolcanicActivity         ∷ !Float
+    , gp8LavaPoolDepth            ∷ !Int
+    , gp8LavaPoolRadius           ∷ !Int
+    , gp8WaterfallQuantum         ∷ !Int
+    , gp8OreLevers                ∷ !OreLeversDTO
+    , gp8TimelineParams           ∷ !TimelineParamsDTO
+    , gp8LocationOverlay          ∷ !LocationOverlay
+    , gp8LocationInstances        ∷ !LocationInstancesDTOv6
+    , gp8LocationStamped          ∷ !(HS.HashSet ChunkCoord)
+    , gp8RiverNames               ∷ !RiverNamesDTO
+    } deriving (Show, Eq, Generic, Serialize)
+
+toWorldGenParamsDTOv8 ∷ WorldGenParams → WorldGenParamsDTOv8
+toWorldGenParamsDTOv8 p = WorldGenParamsDTOv8
+    { gp8Seed                     = wgpSeed p
+    , gp8WorldSize                = wgpWorldSize p
+    , gp8PlateCount               = wgpPlateCount p
+    , gp8Plates                   = map toTectonicPlateDTO (wgpPlates p)
+    , gp8Calender                 = toCalendarConfigDTO (wgpCalender p)
+    , gp8SunConfig                = toSunConfigDTO (wgpSunConfig p)
+    , gp8MoonConfig               = toMoonConfigDTO (wgpMoonConfig p)
+    , gp8GeoTimeline              = wgpGeoTimeline p
+    , gp8OceanMap                 = wgpOceanMap p
+    , gp8OceanDist                = wgpOceanDist p
+    , gp8ClimateParams            = toClimateParamsDTO (wgpClimateParams p)
+    , gp8ClimateState             = toClimateStateDTO (wgpClimateState p)
+    , gp8ErosionIntensity         = wgpErosionIntensity p
+    , gp8VolcanicActivity         = wgpVolcanicActivity p
+    , gp8LavaPoolDepth            = wgpLavaPoolDepth p
+    , gp8LavaPoolRadius           = wgpLavaPoolRadius p
+    , gp8WaterfallQuantum         = wgpWaterfallQuantum p
+    , gp8OreLevers                = toOreLeversDTO (wgpOreLevers p)
+    , gp8TimelineParams           = toTimelineParamsDTO (wgpTimelineParams p)
+    , gp8LocationOverlay          = wgpLocationOverlay p
+    , gp8LocationInstances        = toLocationInstancesDTOv6 (wgpLocationInstances p)
+    , gp8LocationStamped          = wgpLocationStamped p
+    , gp8RiverNames               = toRiverNamesDTO (wgpRiverNames p)
+    }
+
+fromWorldGenParamsDTOv8 ∷ WorldGenParamsDTOv8 → WorldGenParams
+fromWorldGenParamsDTOv8 d = withVolcanoCtx WorldGenParams
+    { wgpSeed                     = gp8Seed d
+    , wgpWorldSize                = gp8WorldSize d
+    , wgpPlateCount               = gp8PlateCount d
+    , wgpPlates                   = map fromTectonicPlateDTO (gp8Plates d)
+    , wgpCalender                 = fromCalendarConfigDTO (gp8Calender d)
+    , wgpSunConfig                = fromSunConfigDTO (gp8SunConfig d)
+    , wgpMoonConfig               = fromMoonConfigDTO (gp8MoonConfig d)
+    , wgpGeoTimeline              = gp8GeoTimeline d
+    , wgpOceanMap                 = gp8OceanMap d
+    , wgpOceanDist                = gp8OceanDist d
+    , wgpClimateParams            = fromClimateParamsDTO (gp8ClimateParams d)
+    , wgpClimateState             = fromClimateStateDTO (gp8ClimateState d)
+    , wgpErosionIntensity         = gp8ErosionIntensity d
+    , wgpVolcanicActivity         = gp8VolcanicActivity d
+    , wgpLavaPoolDepth            = gp8LavaPoolDepth d
+    , wgpLavaPoolRadius           = gp8LavaPoolRadius d
+    , wgpWaterfallQuantum         = gp8WaterfallQuantum d
+    , wgpOreLevers                = fromOreLeversDTO (gp8OreLevers d)
+    , wgpTimelineParams           = fromTimelineParamsDTO (gp8TimelineParams d)
+    , wgpLocationOverlay          = gp8LocationOverlay d
+    , wgpLocationInstances        = fromLocationInstancesDTOv6 (gp8LocationInstances d)
+    , wgpLocationStamped          = gp8LocationStamped d
+    , wgpRiverNames               = fromRiverNamesDTO (gp8RiverNames d)
+    , wgpVolcanoCtx               = emptyVolcanoCtx
     }
 
 -- Frozen pre-#917 worldgen params (@world-pages@ v8 and v9) ---------

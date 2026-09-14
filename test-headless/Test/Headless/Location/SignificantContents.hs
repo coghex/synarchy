@@ -46,6 +46,7 @@ content kind cid count significant = LocationContent
     , lconCountRange  = Nothing
     , lconClearance   = Nothing
     , lconSignificant = significant
+    , lconProfile    = Nothing
     }
 
 encounterContent ∷ Int → Int → LocationContent

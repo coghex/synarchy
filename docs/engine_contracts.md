@@ -1863,8 +1863,11 @@ name.
 
 ### Persistence
 
-`world-pages` v11 (v10 frozen by #2471 as `PageCoreDTOv10`; v9 frozen by
-#917 as
+`world-pages` v12 (v11 frozen by #2505 as
+`PageCoreDTOv11`/`WorldGenParamsDTOv8`/`LocationInstancesDTOv6`/
+`LocationInstanceDTOv6`, which is also where #2471's v10 freeze had its
+gen-params field repointed; v10 frozen by #2471 as `PageCoreDTOv10`;
+v9 frozen by #917 as
 `PageCoreDTOv9`/`WorldGenParamsDTOv7`/`LocationInstancesDTOv5`/
 `LocationInstanceDTOv5`/`LocationEncounterDTOv1`; v7 frozen by #916 as
 `PageCoreDTOv7`/`WorldGenParamsDTOv6`/`LocationInstancesDTOv4`/
@@ -1937,14 +1940,18 @@ the encounter-wide, once-per-episode notification state through
 `hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
 compatibility wrappers resolving to the chunk's first instance.
 
-Persistence: `world-pages` v11, with v10's pre-sub-minute-remainder page
-core frozen as `PageCoreDTOv10` and v9's pre-significant-contents
-location record frozen as `LocationInstanceDTOv5` (its encounter, still
-carrying the clearance-notice flag, as `LocationEncounterDTOv1`) and
-v7's pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
-NOTHING the payload did not carry — `migrateWorldPagesV9` gains no
-significant obligations and `migrateWorldPagesV7` no encounter — rather
-than letting current content reinterpret a materialized world; #917's
+Persistence: `world-pages` v12, with v11's pre-container-shell location
+record frozen as `LocationInstanceDTOv6` (and the gen params carrying it
+as `WorldGenParamsDTOv8`, which v10's page core was repointed onto),
+v10's pre-sub-minute-remainder page core frozen as `PageCoreDTOv10`, and
+v9's pre-significant-contents location record frozen as
+`LocationInstanceDTOv5` (its encounter, still carrying the
+clearance-notice flag, as `LocationEncounterDTOv1`) and v7's
+pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
+NOTHING the payload did not carry — `migrateWorldPagesV11` gains no
+container slots, `migrateWorldPagesV9` no significant obligations and
+`migrateWorldPagesV7` no encounter — rather than letting current content
+reinterpret a materialized world; #917's
 own §Guaranteed significant contents has the detail, including where
 the notice moves to. The frozen v1 DTO's per-chunk flags still decode
 PENDING and resolve against the registry at the load path's
@@ -2123,9 +2130,13 @@ location's exactly-once content lifecycle on a location that could then
 never be cleared. A hand-stamped location has no `LocationInstanceId`,
 so it owes nothing and its incidental contents are unaffected.
 
-**Persistence.** `world-pages` v11. `migrateWorldPagesV9` preserves every
-stored value, lifts the encounter's clearance-notice flag onto the
-instance, and adds NO obligations — reading them off today's YAML would
+**Persistence.** `world-pages` v12 — #2505 took it there, freezing the
+pre-container-shell shape as `PageCoreDTOv11`/`WorldGenParamsDTOv8`/
+`LocationInstancesDTOv6`/`LocationInstanceDTOv6`; the obligations below
+are unchanged by that bump and ride every one of those shapes.
+`migrateWorldPagesV9` preserves every stored value, lifts the
+encounter's clearance-notice flag onto the instance, and adds NO
+obligations — reading them off today's YAML would
 owe a materialized world an item it never spawned, permanently blocking
 a clearance the pre-#917 build had already granted. The v1
 reconstruction discards both for the same reason.
@@ -2194,7 +2205,162 @@ expose `significant` (always an array; `{slot, item, taken}` plus
 "not spawned yet" is expressed) beside `authors_clearance`,
 `clearance_satisfied` and `clear_event_emitted`. The predicate is
 REPORTED rather than left for callers to re-derive, because a second
-implementation is what would drift.
+implementation is what would drift. #2505 adds `containers` beside it,
+under the opposite omission rule; see §Pending container shells.
+
+## Pending container shells (#2505)
+
+Enforced by hspec `--match "Location container shells"` — four layers in
+`Test.Headless.Location.ContainerShells`: a pure spec (placement, the
+authoring RULE SET, decode rules, the provenance graph, the load-time
+profile check, the v11→v12 migration), a YAML spec driving the real
+`engine.loadLocationYaml` against the live item and loot-profile
+registries, an engine spec driving the real
+`world.spawnLocationContainer` and the real `item.pickupGround` refusal,
+and a standalone stubbed-VM spec over `scripts/locations.lua`'s
+incidental dispatch — plus `--match "save migrations"`,
+`tools/save_compat_audit.py`, `tools/persistence_inventory_audit.py`, and
+`tools/location_content_probe.py`'s container scenario — whose last phase
+is the only place the load-time profile refusal below can be seen, since
+it lives in `continueLoad` and needs a real envelope. Design authority:
+`docs/portable_loot_containers.md` D-2, D-3, D-17, D-18, D-22, D-23.
+
+**What a pending shell IS.** A portable container enters the world
+unrolled: an ordinary item instance lying on the ground, plus a persisted
+descriptor naming the loot profile its cargo will one day be drawn from.
+The descriptor lives on the placed `LocationInstance` as a
+`LocationContainerSlot` — `{slot, container def name, profile,
+iiInstanceId once bound, realized}` — and the stable SOURCE identity D-2
+asks for is the `(WorldPageId, LocationInstanceId, slot)` address itself,
+so nothing extra is stored for it. This slice creates only
+`realized = false` slots and never transitions one; PLC-15 (#2510) owns
+the atomic `Pending → Realized` step.
+
+**Authoring.** Content kind `container` takes `id` (the container item
+definition) and `profile` (a loot-profile id), plus `position` and
+`count` with `item` semantics. The YAML boundary makes the PAIR
+structural: `profile` is required on that kind and refused on every
+other, and `significant` is refused on it (a container confers no
+clearance obligation, so the flag could never be discharged). Both ids
+resolve against the LIVE registries at load, rejecting the whole file —
+stricter than an ordinary incidental content id, because these two are
+the persisted descriptor rather than a spawn-time lookup: a slot naming
+an unknown profile is exactly what the load boundary below refuses a
+save over, so admitting it from authored data would materialize a world
+this build then declines to reload. Family load order is items → loot
+profiles → locations (`scripts/startup_loader.lua`), which is what makes
+both registries complete when locations load.
+
+**Slots are derived at PLACEMENT, in their OWN address space.**
+`containerSlotsFromDef` numbers the definition's `container` entries in
+authored order then count, independently of `significantItemsFromDef` —
+so one instance can carry container slot 1 and significant slot 1, and
+they are different things. Existing placed instances and every
+historical save decode with NO slots: `migrateWorldPagesV11` and the v1
+reconstruction path both add none, because reading them off today's YAML
+would owe a materialized world a crate it never spawned against an
+instance whose `contents_spawned` guarantees nothing will ever spawn it.
+
+**Spawning is INCIDENTAL, not an obligation (D-18).** This is the
+difference from #917 above, and it runs all the way down.
+`scripts/locations.lua` dispatches `container` entries in the ordinary
+incidental pass; a failure logs a warning and CONTINUES, and the
+instance-level `contents_spawned` marker is written exactly as it is for
+a failed `loot_table` roll — contrast `spawnSignificantContent`, which
+returns and leaves the marker unwritten so the next chunk load retries.
+`conditionsOf` never reads `liContainers`, so a location whose only
+authored content is a crate still authors no clearance and still never
+clears. An already-bound slot is skipped, so a retry cannot duplicate a
+shell, and a hand-stamped location with no placed instance spawns none
+and says why.
+
+**`world.spawnLocationContainer(instanceId, slot, x, y[, pageId])`** is
+the ONE call that spawns AND binds, shaped exactly like
+`world.spawnLocationSignificantItem` and for the same reason: a separate
+public binding verb would let a caller bind an unrelated crate of the
+right definition to an unbound slot, and the location would then never
+mint its own while the substitute carried the slot's pending status. So
+Lua chooses only WHERE. The definition comes from the slot's own
+persisted `lcsItemDefName`, the shell is materialized here, and the
+binding names the instance this call just created — never one looked back
+up off the ground map. Coordinates are validated with the argument
+decode, before the slot is read, before the definition lookup, before
+either salvage roll and before any id is allocated; a failed binding
+takes the just-spawned shell back off the ground. The shell mints through
+the materializer unchanged, authored default contents included (D-22):
+"unrolled" means no PROFILE draw has happened, not an empty tree, and
+this verb never reads `lcsProfile` at all.
+
+**Pickup is REFUSED while a shell is pending, and that is temporary.**
+`pickupGroundOnPage` is remove-first, so the refusal is decided from the
+ground item's `iiInstanceId` BEFORE `takeGroundItemOnPage`, against the
+owning page's container slots, and returns false with the ground map,
+`gisNextId`, the unit's inventory, the cursor and the slot table
+untouched. It is faction-blind and command-blind because every carry path
+in the tree arrives there — `item.pickupGround` is the only
+ground→inventory boundary; the other two `takeGroundItemOnPage` callers
+are the significant-spawn rollback and `item.removeGround`, which deletes
+rather than moves. This is the ONLY pickup behaviour change in the slice,
+and it exists to keep the provenance rule below satisfiable until PLC-15
+realizes the shell atomically in that same function (D-23's fail-closed
+principle).
+
+**Provenance is strict while pending, and stops entirely at
+realization.** `containerProvenanceErrors` hard-fails a bound unrealized
+shell that resolves on another page, in an inventory, in a building's
+store, or nested inside another ground container — "outer" being
+`peGroundItems` rather than the flattened `peItems`, because an id that
+exists only inside a ground container is not pickable as its own ground
+item and could never be realized — that is a different item definition
+from the one the slot names, or whose id is at or above the session's
+item-id cursor. One physical id owned by more than one slot is a hard
+`duplicate-identity` error ACROSS both families: ids come from one global
+allocator, and a shell that was also a significant reward would be an
+item the pickup boundary must simultaneously refuse and latch. That walk
+reports every group containing a container claim, while a group of
+significant claims alone stays `significantProvenanceErrors`' to report,
+so the two partition the cases. A bound-but-ABSENT shell is a tolerated
+warning, because `item.removeGround` can really delete one; the slot then
+stays pending for ever and nothing is realized from it. Once
+`lcsRealized` is true NO rule applies — D-3 discards the profile and the
+source, and the shell is an ordinary item.
+
+**Component decode** (`locationContainerSlotErrors`, run by
+`validatePages`) rejects a slot below 1, a bound id of 0, a duplicated
+slot number, and a realized slot naming no shell. It deliberately has NO
+"contents spawned ⇒ every slot bound" rule: that is #917's obligation
+invariant, and under D-18 a failed container spawn leaves exactly that
+shape.
+
+**Load-time profile validation** is a separate boundary from the YAML
+one. `missingContainerProfileReferences` refuses a load whose UNREALIZED
+slot names an unregistered profile — BOUND or unbound, the deliberate
+divergence from `missingSignificantItemReferences` — counted into
+`continueLoad`'s `allMissing`, and the message names page, instance, slot
+and profile. That gate sits in FRONT of staging, so the refusal is
+synchronous: `engine.loadSave` itself answers false, nothing is staged,
+nothing is published, and the live session is untouched. #763's
+asynchrony begins after it, which is why there is no request to poll for
+this outcome.
+A bound obligation's def name is history; a bound shell's profile is
+still a future draw, and D-23 makes an incompletable realization refuse
+the pickup, so a shell whose profile is gone is a crate nobody could ever
+lift.
+
+**Queries.** `world.listPlacedLocations` / `world.getLocationInstance`
+expose `containers` beside `significant`: `{slot, item, profile,
+realized}` plus `item_instance_id` once bound. The whole FIELD is omitted
+for an instance with no slots — unlike `significant`, which is always an
+array because its cardinality is what makes the clearance predicate
+vacuous. A container confers nothing, so "carries no slots" and "carries
+an empty list" are the same fact.
+
+**The wire.** `world-pages` v12 appends `lidContainers` to
+`LocationInstanceDTO`; v11 is frozen as `PageCoreDTOv11` /
+`WorldGenParamsDTOv8` / `LocationInstancesDTOv6` / `LocationInstanceDTOv6`
+with `migrateWorldPagesV11`. #2471's own v10 freeze had its gen-params
+field repointed onto that same `WorldGenParamsDTOv8`, leaving its bytes
+unchanged — the repointing rule `PageCoreDTOv8` documents.
 
 ## Location discovery, map icons, and per-unit knowledge (#780/#781/#915)
 
@@ -3664,9 +3830,11 @@ The rules that go with it:
   minute total will not fit an `Int`, a minute total that will not fit,
   or an overflowing calendar carry all return the exact input time,
   remainder and date with zero rolled days.
-- **Persistence.** `world-pages` v11 carries it (`pcTimeRemainder`,
-  `wpsTimeRemainder`); `migrateWorldPagesV10` loads every earlier payload
-  with none, which is the value those saves actually recorded. The
+- **Persistence.** `world-pages` has carried it since v11
+  (`pcTimeRemainder`, `wpsTimeRemainder`), and still does at the current
+  v12; `migrateWorldPagesV10` loads every pre-v11 payload with none,
+  which is the value those saves actually recorded, and
+  `migrateWorldPagesV11` carries a v11 one across unchanged. The
   component validator deliberately does not judge it: an out-of-domain
   stored value is repaired to zero by `World.Load.Stage`, with a warning
   naming the page, rather than costing the player the rest of the save.

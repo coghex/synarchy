@@ -65,6 +65,9 @@ module Location.Instance
       -- * Guaranteed significant contents (#917)
     , LocationSignificantItem(..)
     , significantItemsFromDef
+      -- * Pending container shells (#2505)
+    , LocationContainerSlot(..)
+    , containerSlotsFromDef
     , locationEncounterCondition
     , locationSignificantCondition
     , significantRecovered
@@ -103,6 +106,8 @@ module Location.Instance
     , markLocationEncounterCleared
     , registerLocationSignificantSpawn
     , latchLocationSignificantTaken
+    , registerLocationContainerSpawn
+    , pendingContainerSlotFor
     , resolveLocationClearance
       -- * v1 chunk-set migration
     , pendingLegacyFlags
@@ -112,6 +117,8 @@ module Location.Instance
     , locationInstanceBoundsErrors
     , significantEntryErrors
     , locationSignificantItemErrors
+    , containerSlotEntryErrors
+    , locationContainerSlotErrors
     ) where
 
 import UPrelude
@@ -340,6 +347,90 @@ significantItemsFromDef def =
         , _ ← [1 .. lconCount c] ]
     ]
 
+-- * Pending container shells (#2505) ---------------------------------
+
+-- | One PENDING container shell a placed location owes its page (#2505,
+--   epic #1231 PLC-14; design D-2, D-3, D-17, D-18).
+--
+--   Deliberately NOT a second 'LocationSignificantItem'. The two records
+--   look alike and mean opposite things:
+--
+--   * a significant obligation is a CLEARANCE condition — the location
+--     owes it, a failed spawn retries on the next chunk load, and the
+--     compound predicate waits on it;
+--   * a container slot is INCIDENTAL content (D-18). Its whole job is to
+--     be the descriptor's persistence home: it confers no guarantee, a
+--     failed spawn logs and is skipped like a @loot_table@ roll, and
+--     'locationClearanceSatisfied' never consults it. Reusing the
+--     obligation record would have made "the location owes this" the
+--     default reading of every future check.
+--
+--   /What a slot names./ The container ITEM definition and the loot
+--   'LootProfile.Types.lpdId' its cargo will be drawn from, fixed at
+--   PLACEMENT from the authored entry, plus the spawned shell's physical
+--   'Item.Types.iiInstanceId' once one exists. The stable SOURCE
+--   identity D-2 asks for is the @(page, 'LocationInstanceId', slot)@
+--   address itself — nothing extra is stored for it.
+--
+--   /'lcsRealized' is a LATCH, and this slice never sets it./ PLC-15
+--   (#2510) owns the atomic @Pending → Realized@ transition inside
+--   'Engine.Scripting.Lua.API.Items.Ground.pickupGroundOnPage'. Until
+--   then every slot this module can build reads 'False', and the same
+--   boundary REFUSES to pick a bound unrealized shell up at all — which
+--   is what keeps the strict provenance rule in
+--   'World.Save.Integrity' satisfiable while the transition is still
+--   somewhere else. After realization D-3 discards the profile and the
+--   source, so a realized slot keeps only its latch and its bound id.
+data LocationContainerSlot = LocationContainerSlot
+    { lcsSlot        ∷ !Int
+      -- ^ Stable per-instance slot, 1-based in authored order — the
+      --   entry's positional index in 'Location.Types.ldContents'
+      --   first, then its ordinal within that entry's
+      --   'Location.Types.lconCount'. Numbered over the CONTAINER
+      --   entries alone, independently of 'lsiSlot': the two families
+      --   are separate address spaces on one instance, so a location
+      --   owing a significant item and a container both start at 1.
+    , lcsItemDefName ∷ !Text
+      -- ^ the authored 'Location.Types.lconId' — the container item
+      --   definition this slot's shell mints from
+    , lcsProfile     ∷ !Text
+      -- ^ the authored 'Location.Types.lconProfile' — the loot profile
+      --   PLC-15 will realize this shell's cargo from. Validated
+      --   against the live registry at load while the slot is still
+      --   unrealized ('World.Save.Types.missingContainerProfileReferences').
+    , lcsInstanceId  ∷ !(Maybe Word64)
+      -- ^ the spawned shell's 'Item.Types.iiInstanceId'; 'Nothing'
+      --   until the content spawn binds one
+    , lcsRealized    ∷ !Bool
+      -- ^ has this shell's cargo been drawn and installed? Always
+      --   'False' in this slice; see the record haddock.
+    } deriving (Show, Eq, Generic, NFData, Serialize)
+
+-- | The pending container shells a definition's authored contents give
+--   ONE placed instance, in authored order (see 'lcsSlot').
+--
+--   Only @kind: container@ entries contribute, and each carries the
+--   profile the YAML boundary ('Engine.Asset.YamlLocations') already
+--   made mandatory on that kind — so an entry that somehow reached here
+--   without one produces no slot rather than a slot naming @""@, which
+--   nothing could ever realize.
+containerSlotsFromDef ∷ LocationDef → [LocationContainerSlot]
+containerSlotsFromDef def =
+    [ LocationContainerSlot
+        { lcsSlot        = slot
+        , lcsItemDefName = lconId c
+        , lcsProfile     = profile
+        , lcsInstanceId  = Nothing
+        , lcsRealized    = False
+        }
+    | (slot, (c, profile)) ← zip [1 ..]
+        [ (c, profile)
+        | c ← ldContents def
+        , lconKind c ≡ "container"
+        , Just profile ← [lconProfile c]
+        , _ ← [1 .. lconCount c] ]
+    ]
+
 -- | The ENCOUNTER half of the clearance predicate: 'Nothing' when the
 --   instance authors no encounter at all, @Just satisfied@ otherwise.
 locationEncounterCondition ∷ LocationInstance → Maybe Bool
@@ -479,6 +570,18 @@ data LocationInstance = LocationInstance
       --   durable before anything spawns. Empty for a definition that
       --   authors none, and empty for every historical instance —
       --   no migration infers obligations from today's YAML.
+    , liContainers      ∷ ![LocationContainerSlot]
+      -- ^ The PENDING container shells this instance's authored
+      --   contents give it (#2505), fixed at PLACEMENT from
+      --   'containerSlotsFromDef' and numbered independently of
+      --   'liSignificant'. Empty for a definition authoring none, and
+      --   empty for every historical instance — no migration infers a
+      --   shell from today's YAML, exactly as none infers an obligation.
+      --
+      --   Unlike 'liSignificant' this list is NOT a clearance condition
+      --   (D-18): 'conditionsOf' never reads it, so a location whose
+      --   only authored content is a container still authors no
+      --   clearance and still never clears.
     , liClearEventEmitted ∷ !Bool
       -- ^ Has this location's ONE player-facing clearance notice been
       --   spent? Generalized from #916's per-encounter
@@ -656,6 +759,7 @@ newLocationInstanceWithSeed seed namer iid coord def = do
         , liContentsSpawned = False
         , liEncounter       = encounterFromDef seed iid def
         , liSignificant     = significantItemsFromDef def
+        , liContainers      = containerSlotsFromDef def
         , liClearEventEmitted = False
         }
 
@@ -965,10 +1069,77 @@ registerLocationSignificantSpawn iid slot defName itemId lis = do
 isMintedItemId ∷ Word64 → Bool
 isMintedItemId = (> 0)
 
+--   #2505 widened it ACROSS FAMILIES: a container slot's bound shell
+--   and a significant obligation's bound item are drawn from that same
+--   one allocator, so an id claimed by a slot of either kind is claimed
+--   for every kind. Without this, one physical item could be both a
+--   location's guaranteed reward and another's pending shell — a single
+--   pickup would then latch the obligation while the shell refusal
+--   (which reads the container table) tried to forbid that very pickup.
 itemAlreadyOwed ∷ Word64 → LocationInstances → Bool
 itemAlreadyOwed itemId lis = or
-    [ lsiInstanceId e ≡ Just itemId
-    | inst ← HM.elems (lisById lis), e ← liSignificant inst ]
+    [ bound ≡ Just itemId
+    | inst ← HM.elems (lisById lis)
+    , bound ← map lsiInstanceId (liSignificant inst)
+              ⧺ map lcsInstanceId (liContainers inst) ]
+
+-- | Bind one spawned pending shell to its container slot (#2505) —
+--   the shell's physical 'Item.Types.iiInstanceId', recorded by the
+--   content spawn as soon as the spawn succeeds.
+--
+--   The #917 binding's rules, applied to the other family and for the
+--   same reasons: WRITE-ONCE per slot (a retried content spawn cannot
+--   repoint a slot at a second shell and orphan the first), the spawned
+--   item must BE the container definition the slot names, and the item
+--   must be owed by nothing else — 'itemAlreadyOwed' now spanning both
+--   families, so a shell can never also be a significant reward.
+--
+--   Unlike the obligation binding this one is NOT the guard that keeps a
+--   location clearable — a container confers no clearance condition
+--   (D-18). What it does guard is the pickup refusal: the refusal reads
+--   the bound id off this table, so a slot bound to an item that is not
+--   the shell just spawned would refuse the wrong pickup and permit the
+--   right one.
+--
+--   'Nothing' when the instance or slot is unknown, the slot is already
+--   bound (the edge a resuming spawn uses to skip it), the item is the
+--   wrong definition, the item is already owed somewhere, or the
+--   RESULTING entry would fail 'containerSlotEntryErrors' — the same
+--   decode rules, consulted here so a rule added there binds the live
+--   API too.
+registerLocationContainerSpawn
+    ∷ LocationInstanceId → Int → Text → Word64 → LocationInstances
+    → Maybe LocationInstances
+registerLocationContainerSpawn iid slot defName itemId lis = do
+    inst ← lookupLocationInstance iid lis
+    entry ← find ((≡ slot) . lcsSlot) (liContainers inst)
+    guard (isNothing (lcsInstanceId entry))
+    guard (lcsItemDefName entry ≡ defName)
+    guard (not (itemAlreadyOwed itemId lis))
+    guard (null (containerSlotEntryErrors
+                     (entry { lcsInstanceId = Just itemId })))
+    pure $ adjustLocationInstance iid (\i → i
+        { liContainers =
+            [ if lcsSlot e ≡ slot then e { lcsInstanceId = Just itemId } else e
+            | e ← liContainers i ]
+        }) lis
+
+-- | The UNBOUND container slot @slot@ of instance @iid@, if there is
+--   one — the definition and profile a spawn is about to mint from.
+--
+--   Answers 'Nothing' for an unknown instance, an unknown slot, and a
+--   slot that is ALREADY bound, which is what makes a retried content
+--   spawn skip a shell it has already placed rather than mint a second.
+--   Kept here, beside the binding it pairs with, so the spawn verb
+--   reads the slot through the same module that will refuse the write.
+pendingContainerSlotFor
+    ∷ LocationInstanceId → Int → LocationInstances
+    → Maybe LocationContainerSlot
+pendingContainerSlotFor iid slot lis = do
+    inst ← lookupLocationInstance iid lis
+    entry ← find ((≡ slot) . lcsSlot) (liContainers inst)
+    guard (isNothing (lcsInstanceId entry))
+    pure entry
 
 -- | Latch @taken@ on whichever obligation of ANY instance on this page
 --   owns @itemId@ (#917 requirement 3), the first time that physical
@@ -1102,6 +1273,13 @@ resolveLegacyLocationInstances registry overlay lis =
         -- unclearable location invented at load. A pre-#911 payload owes
         -- none, and its notice is unspent because it never cleared.
         , liSignificant = []
+        -- #2505, on exactly that rule: a pre-#911 payload has no
+        -- instance table at all, so reading container entries off
+        -- today's YAML would hand a materialized world pending shells
+        -- it never spawned — bound to nothing, realizable by nobody,
+        -- and (contents_spawned already true) never spawned later
+        -- either.
+        , liContainers = []
         , liClearEventEmitted = False
         }
 
@@ -1347,4 +1525,102 @@ locationSignificantItemErrors lis =
         , e ← liSignificant inst
         , Just iid ← [lsiInstanceId e] ]))
     , length owners > 1
+    ]
+
+-- | Everything that can be wrong with ONE container slot on its own
+--   (#2505). Messages are unattributed; callers add the instance.
+--
+--   THE single per-entry rule set, consulted by both boundaries that can
+--   admit a slot — component decode below, and
+--   'registerLocationContainerSpawn', which refuses a binding whose
+--   RESULTING entry would fail here. Same discipline, and the same
+--   reason, as 'significantEntryErrors'.
+--
+--   Deliberately SHORTER than the obligation rule set, because two of
+--   those rules are about a clearance guarantee a container does not
+--   make. There is no "contents spawned but this slot names no item"
+--   rule: a failed container spawn is warned about and SKIPPED (D-18),
+--   so @contents_spawned@ with an unbound slot is the ordinary,
+--   recoverable-by-nothing-but-harmless outcome rather than an
+--   unreachable corruption.
+containerSlotEntryErrors ∷ LocationContainerSlot → [Text]
+containerSlotEntryErrors e =
+    -- Below the floor no spawn could ever address the slot, so it could
+    -- never be bound and its shell would be re-minted on every retry —
+    -- the same reason the obligation floor exists.
+    [ "declares container slot " <> tshow (lcsSlot e)
+        <> ", below the first valid slot (1)"
+    | lcsSlot e < 1 ]
+    ⧺
+    -- 0 is the never-minted "no id given" sentinel
+    -- ('Item.Types.itemMatches' falls back on it), so a slot naming it
+    -- names no shell that ever existed while reading as bound — and a
+    -- bound slot is exactly what the pickup refusal keys on.
+    [ "container slot " <> tshow (lcsSlot e)
+        <> " names item instance " <> tshow itemId
+        <> ", which no allocator can ever have minted"
+    | Just itemId ← [lcsInstanceId e], not (isMintedItemId itemId) ]
+    ⧺
+    -- Nothing can realize a shell that was never minted, so a realized
+    -- slot names the shell that was realized. The other shape would
+    -- claim cargo was installed into an item with no identity.
+    [ "container slot " <> tshow (lcsSlot e)
+        <> " is marked realized but names no item instance"
+    | lcsRealized e, isNothing (lcsInstanceId e) ]
+
+-- | Component-local container-slot invariants for a decoded table
+--   (#2505): every per-entry rule above, a slot number declared twice on
+--   one instance, and CROSS-FAMILY duplicate ownership.
+--
+--   That last rule is why this is not simply the container half of
+--   'locationSignificantItemErrors'. Item instance ids come from ONE
+--   global allocator, so an id claimed by a container slot AND a
+--   significant obligation — on the same instance or on two — can never
+--   be two real items. Reported HERE, once, for every group containing
+--   at least one CONTAINER claim; a group of significant claims alone
+--   stays 'locationSignificantItemErrors'' to report, so the two walks
+--   partition the cases rather than double-reporting the overlap.
+--
+--   Addressed by instance and slot, each violation once, in a
+--   deterministic order.
+locationContainerSlotErrors ∷ LocationInstances → [Text]
+locationContainerSlotErrors lis =
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " " <> msg
+    | inst ← instancesToList lis
+    , e ← sortOn lcsSlot (liContainers inst)
+    , msg ← containerSlotEntryErrors e
+    ]
+    ⧺
+    [ "location instance #" <> tshow (unLocationInstanceId (liId inst))
+        <> " declares container slot " <> tshow slot <> " more than once"
+    | inst ← instancesToList lis
+    , (slot, n) ← sortOn fst (HM.toList (HM.fromListWith (+)
+        [ (lcsSlot e, 1 ∷ Int) | e ← liContainers inst ]))
+    , n > 1
+    ]
+    ⧺
+    [ "item instance " <> tshow itemId
+        <> " is owned by more than one location slot: "
+        <> T.intercalate ", " (map snd owners)
+    | (itemId, owners) ← sortOn fst (HM.toList (HM.fromListWith (flip (⧺))
+        (ownerClaims lis)))
+    , length owners > 1
+    , any fst owners
+    ]
+
+-- | Every @(item id, (is a container claim, rendered address))@ pair on
+--   the page, across BOTH slot families — the one enumeration the
+--   cross-family duplicate walk above runs over.
+ownerClaims ∷ LocationInstances → [(Word64, [(Bool, Text)])]
+ownerClaims lis =
+    [ (itemId, [(isContainer, address)])
+    | inst ← instancesToList lis
+    , (isContainer, slot, mItemId) ←
+        [ (False, lsiSlot e, lsiInstanceId e) | e ← liSignificant inst ]
+        ⧺ [ (True, lcsSlot e, lcsInstanceId e) | e ← liContainers inst ]
+    , Just itemId ← [mItemId]
+    , let address = "#" <> tshow (unLocationInstanceId (liId inst))
+              <> (if isContainer then " container slot " else " significant slot ")
+              <> tshow slot
     ]

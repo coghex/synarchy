@@ -21,8 +21,9 @@ import Location.Anchor (LocationAnchor)
 import Location.Bounds (RelBounds(..))
 
 -- | One piece of content a location places when it is stamped — a
---   building, unit, ground item, or loot-table roll, addressed by its
---   raw id string. The ids are NOT validated or resolved here: the
+--   building, unit, ground item, loot-table roll, or (since #2505) a
+--   PENDING CONTAINER shell, addressed by its raw id string. The ids
+--   are NOT validated or resolved here: the
 --   content-spawning pass (#90) resolves them at spawn time. `kind` is
 --   held as 'Text' rather than a sum, but the VOCABULARY is closed
 --   (#1708) at the YAML boundary by
@@ -31,8 +32,9 @@ import Location.Bounds (RelBounds(..))
 --   reaches a registered def.
 data LocationContent = LocationContent
     { lconKind     ∷ !Text            -- ^ "building" | "unit" | "item"
-                                      --   | "loot_table" — the closed
-                                      --   #1708 vocabulary
+                                      --   | "loot_table" | "container"
+                                      --   — the closed #1708\/#2505
+                                      --   vocabulary
     , lconId       ∷ !Text            -- ^ raw id string, resolved at spawn time
     , lconCount    ∷ !Int             -- ^ how many to place (defaults to 1;
                                       --   ignored by "loot_table", which
@@ -69,6 +71,25 @@ data LocationContent = LocationContent
                                       --   what it rolls. Defaults to 'False':
                                       --   an entry is incidental unless it
                                       --   says otherwise.
+    , lconProfile ∷ !(Maybe Text)     -- ^ #2505 (epic #1231, PLC-14): the
+                                      --   'LootProfile.Types.lpdId' a
+                                      --   @kind: container@ entry's shell
+                                      --   will be realized from. REQUIRED
+                                      --   on that kind and rejected on
+                                      --   every other by the YAML boundary
+                                      --   ('Engine.Asset.YamlLocations'),
+                                      --   so the 'Maybe' is a wire shape
+                                      --   rather than an optional
+                                      --   authoring choice: a registered
+                                      --   container entry always carries
+                                      --   'Just'. Validated against the
+                                      --   live loot-profile registry at
+                                      --   LOAD (design D-20\/D-18), unlike
+                                      --   'lconId' on an incidental entry,
+                                      --   because a pending shell's
+                                      --   descriptor is persisted and a
+                                      --   profile that never resolves
+                                      --   could never be realized.
     } deriving (Show, Eq, Generic)
 
 -- | The authored naming scheme a definition's placed instances draw
