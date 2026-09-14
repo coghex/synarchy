@@ -5341,7 +5341,8 @@ reversing it).
 Event log: `engine.getEventLog()`, emit via `engine.emitEvent(cat,text)`
 / `emitEventAt` / `emitEventForUnit(cat,text,uid[,gx,gy])`; a category
 lands only if its notifications YAML has `log: true`. Combat:
-`combat.drainEvents()`. Injury (NON-combat only — falls, hazards, wound
+`combat.drainEvents()`. Injury (NON-combat only — falls,
+hazards including a solidifying cell closing over a unit (#2490), wound
 deaths): `injury.drainEvents()`. These are DRAINED streams — don't
 drain manually in a test while the panel script is loaded, or you'll
 race it. Gate: `injury_log_probe.py`.
