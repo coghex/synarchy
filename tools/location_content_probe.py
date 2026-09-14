@@ -188,7 +188,7 @@ def main() -> int:
     # One artifact directory per invocation, holding the throwaway
     # resource root (#1620 requirement 5 — slot names carry that root's
     # own random token, so no developer-visible save slot is created,
-    # mutated or rotated) AND, since #1884, the five fixture YAMLs and
+    # mutated or rotated) AND, since #1884, the fixture YAMLs and
     # the engine log that used to be fixed /tmp names.
     #
     # The guard starts HERE, one statement after that directory exists,

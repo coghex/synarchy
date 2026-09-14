@@ -12,7 +12,7 @@ threads from one scenario owner to the next.
 Split out of the probe itself by #2095. Nothing here decides what a
 scenario proves, and nothing here boots on its own behalf --
 `location_content_probe.run` owns the process sequence and calls
-`boot_isolated` at each of its seven call sites.
+`boot_isolated` at each of its ten call sites.
 """
 from __future__ import annotations
 
@@ -387,7 +387,7 @@ class ScenarioState:
     across its phases.
 
     Deliberately NOT here: the probe's import-time `FAILURE` emitter,
-    `REPO`, `ROOT_PREFIX` and the five fixture bodies. Those are
+    `REPO`, `ROOT_PREFIX` and the nine fixture bodies. Those are
     infrastructure and immutable configuration -- not state one scenario
     produces for another -- and moving them into this record would
     rebuild them per run for no gain.

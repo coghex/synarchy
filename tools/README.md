@@ -1400,16 +1400,18 @@ python3 tools/test_flora_growth_probe.py
 
 The same split, one probe over. `location_content_probe.py` already owned
 an isolated resource root and removed it on every exit path (#1620) — but
-again only its SAVE slots had moved there. Its five fixture YAMLs and its
-engine log stayed at the fixed, process-global names
+again only its SAVE slots had moved there. Its five fixture YAMLs — #2505
+has since taken it to nine — and its engine log stayed at the fixed,
+process-global names
 `/tmp/loc_content_probe_bogus.yaml`, `…_bogus_loot.yaml`, `…_quinoa.yaml`,
 `…_quinoa_loot.yaml`, `…_dense.yaml` and
 `/tmp/location_content_engine.log`, each written with a truncating
 `open(..., "w")`, none carrying any invocation identity, and none removed
 by anything. Two concurrent runs collided on all six. The log collision is
-the sharp one here: this probe ASSERTS against that log twice — the
-integrity diagnostic after phase 2's load, and phase 3's two
-unknown-content warnings — so a foreign truncation could turn a passing
+the sharp one here: this probe ASSERTS against that log three times — the
+integrity diagnostic after phase 2's load, phase 3's two unknown-content
+warnings, and #2505's load rejection in the last phase — so a foreign
+truncation could turn a passing
 phase into a failure or a failure into a pass, not merely muddle a
 post-mortem. All six now live inside the directory the invocation already
 owned.
@@ -1417,7 +1419,7 @@ owned.
 `python3 tools/test_location_content_probe.py` drives the probe's REAL
 `main()` with `run` substituted, so the guard's own paths are exercised
 without an engine: two invocations share no fixture, log or root path;
-all five fixture paths are absolute (the engine is chdir'd into the
+every fixture path is absolute (the engine is chdir'd into the
 isolated root, so a relative one would resolve elsewhere) and inside the
 run's own tree; no `/tmp` literal is left in the module at all, and a
 real run leaves each of the six legacy paths exactly as it found it —
@@ -1433,13 +1435,15 @@ that was never created says so rather than being called empty); a default
 failing run says its log went with the tree and points at the flag; and a
 cleanup that cannot finish makes an otherwise passing run non-zero,
 through #1620's own `remove_isolated_root` reporting. It also pins what
-the probe still proves after the move: all seven boot CALL SITES go
+the probe still proves after the move: all ten boot CALL SITES go
 through the one funnel that hands each this invocation's log and
-registers its process as it is launched; both log-reading ASSERTIONS
-read that same log; the five fixture bodies are pinned by `sha256`;
-their registration order and loaders are unchanged (placement and loot
-draws are order- and content-sensitive); `load_fixture_yaml` still
-guards every one of them (#1342); and `make_isolated_root`,
+registers its process as it is launched; every log-reading ASSERTION
+reads that same log; the fixture bodies are pinned by `sha256`; the
+registration SEQUENCE and its loaders are unchanged (placement and loot
+draws are order- and content-sensitive, and one fixture is legitimately
+registered by two phases in two processes, so the sequence rather than a
+per-fixture count is what is pinned); `load_fixture_yaml` still guards
+every registration (#1342); and `make_isolated_root`,
 `remove_isolated_root` and `save_and_wait` are still the shapes
 `portal_ghost_probe.py` imports.
 
@@ -1451,15 +1455,15 @@ because an exclusion-style property ("no bare `boot`", "no raw fixture
 node set and would otherwise report OK while inspecting nothing once the
 assertion bodies left `run`. It also pins the scenario split itself:
 only the façade boots; the regeneration call site is still a loop over
-the same and reversed visit orders, so the run still LAUNCHES eight
-processes from seven call sites; each fixture constant has exactly one
+the same and reversed visit orders, so the run still LAUNCHES eleven
+processes from ten call sites; each fixture constant has exactly one
 definition, resolved wherever its owner keeps it; the façade offers one
 `run(args, art, token)`; every PASS diagnostic and recorded failure
 belongs to an owner rather than the façade; and no owner keeps
 cross-scenario state in a mutable module global.
 
-The probe is manual-only. It boots from seven call sites and launches
-eight engine processes across several generated worlds, so without this
+The probe is manual-only. It boots from ten call sites and launches
+eleven engine processes across several generated worlds, so without this
 companion the contract is only ever observed by a run nothing in CI can
 make. Engine-free, GPU-free, network-free, about a second; blocking CI
 step alongside `test_flora_growth_probe.py`.

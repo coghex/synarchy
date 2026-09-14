@@ -37,15 +37,16 @@ invocation-owned resource root and explicitly left these six behind.
 
 Two concurrent runs — a supported mode: `run_probes.py --jobs N`, and
 `probe_flake.py`'s machine-wide port lease — collided on all six. The
-log collision is the sharp one: the probe ASSERTS against that log
-twice (the integrity diagnostic in phase 2, the two unknown-content
-warnings in phase 3), so a foreign truncation could turn a passing phase
-into a failure or a failure into a pass.
+log collision is the sharp one: the probe ASSERTS against that log three
+times (the integrity diagnostic in phase 2, the two unknown-content
+warnings in phase 3, and #2505's load rejection in the last phase), so a
+foreign truncation could turn a passing phase into a failure or a failure
+into a pass.
 
 The properties asserted directly, because each is a way the probe would
 leak, collide, or stop proving what it claims:
 
-  * Two invocations share no path — none of the five fixtures, not the
+  * Two invocations share no path — none of the nine fixtures, not the
     log, not the root — so the fixed logical names inside each tree are
     safe. Every one of those paths is absolute and inside the run's own
     directory, because the engine is chdir'd into the isolated resource
@@ -61,7 +62,7 @@ leak, collide, or stop proving what it claims:
     aimed at whoever holds the port.
   * Every boot goes through the one funnel that hands it this
     invocation's log and registers the process as it is launched, and
-    both log-reading ASSERTIONS read that same log.
+    every log-reading ASSERTION reads that same log.
   * Only the façade boots at all, from exactly ten call sites, and the
     regeneration site is still a loop over the two visit orders -- so the
     run still LAUNCHES eleven processes. A call-site count alone would
@@ -209,7 +210,7 @@ SURFACE = (Path(probe.__file__).resolve(),
 SCENARIO_OWNERS = ("container", "content", "dispatch", "knowledge", "naming")
 INFRASTRUCTURE = ("engine_queries", "invocation")
 
-#: #2095 requirement 11 and the acceptance's process count. Nine
+#: #2095 requirement 11 and the acceptance's process count. Ten
 #: `boot_isolated` call sites — seven, plus #2505's three (the crate
 #: world, the fresh process that loads its save, and the fresh process
 #: that proves a deregistered profile refuses that load) — one of them
@@ -217,6 +218,11 @@ INFRASTRUCTURE = ("engine_queries", "invocation")
 #: eleven engine processes.
 BOOT_CALL_SITES = 10
 PROCESS_LAUNCHES = 11
+
+#: How many places ASSERT against the engine log: the knowledge owner's
+#: integrity diagnostic, the dispatch owner's unknown-content warnings,
+#: and (#2505) the container owner's load rejection.
+LOG_ASSERTION_SITES = 3
 
 #: The whole surface's diagnostic totals, recounted across every owner.
 #: Moving an assertion between owners is a visible edit here; losing
@@ -471,7 +477,7 @@ def test_two_invocations_share_no_path() -> None:
                    f"the engine-side read")
         expect(first.engine_log != second.engine_log,
                "two concurrent runs cannot truncate one another's engine "
-               "log — which two checks ASSERT against")
+               "log — which three checks ASSERT against")
         expect(first.root != second.root,
                "and each keeps its own resource root, so its save slots too")
 
@@ -496,9 +502,9 @@ def test_every_fixture_path_is_absolute_and_owned() -> None:
                "and all three live under the one directory the invocation "
                "owns, so removing it removes them")
 
-    # …and the five names really are the five the probe asks for, over
-    # the WHOLE surface: a sixth fixture that skipped `RunArtifacts`, or
-    # one asked for from a module this scan does not read, would not be
+    # …and those names really are the ones the probe asks for, over the
+    # WHOLE surface: a further fixture that skipped `RunArtifacts`, or one
+    # asked for from a module this scan does not read, would not be
     # covered by any of the above.
     calls = surface_calls("fixture", attribute=True)
     expect(calls, "the surface really contains `art.fixture(...)` calls — "
@@ -1138,16 +1144,17 @@ def test_both_log_assertions_read_this_invocations_log() -> None:
              if not any(isinstance(a, ast.Constant) and a.value == "w"
                         for a in node.args[1:])]
     writes = [pair for pair in opens if pair not in reads]
-    expect(len(reads) == 3,
-           f"the probe reads the log in exactly the three places that assert "
+    expect(len(reads) == LOG_ASSERTION_SITES,
+           f"the probe reads the log in exactly the "
+           f"{LOG_ASSERTION_SITES} places that assert "
            f"against it (got {[(p.name, n.lineno) for p, n in reads]})")
     # The three sit with the owners that assert on them — the knowledge
     # owner's integrity diagnostic, the dispatch owner's unknown-content
     # warnings, and the container owner's load rejection — and each still
     # takes the invocation's `RunArtifacts` rather than reaching for a log
     # of its own.
-    expect(len({path for path, _ in reads}) == 3,
-           f"...one in each of the three owners that read it (got "
+    expect(len({path for path, _ in reads}) == LOG_ASSERTION_SITES,
+           f"...one in each of the {LOG_ASSERTION_SITES} owners that read it (got "
            f"{sorted(path.name for path, _ in reads)})")
     expect(all(isinstance(node.args[0], ast.Attribute)
                and node.args[0].attr == "engine_log"
@@ -1206,6 +1213,96 @@ def test_the_public_helpers_other_probes_import_are_intact() -> None:
 # ---------------------------------------------------------------------
 # Scenario ownership behind the façade (#2095)
 # ---------------------------------------------------------------------
+#: How the topology counts are SPELLED in prose. The owner docstrings and
+#: `tools/README.md` describe this probe's shape in words, and words are
+#: what a reader acts on — so a number that moved in code and not in prose
+#: leaves the authoritative contract stating something false.
+NUMBER_WORDS = {
+    3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight",
+    9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+}
+
+#: Every prose file that DESCRIBES this probe's topology, as opposed to
+#: asserting it. `tools/README.md` is included deliberately: it is the
+#: tools index a reader reaches first, and it carried the stale counts
+#: through two review rounds of #2505 while every structural check below
+#: stayed green.
+TOPOLOGY_PROSE = (
+    *SURFACE,
+    TOOLS / "README.md",
+)
+
+#: The quantities those files state in words, each with the phrases that
+#: introduce it. A phrase is matched against the whole prose body, and the
+#: number word immediately before it must be the current one.
+def topology_claims() -> tuple[tuple[str, int, tuple[str, ...]], ...]:
+    """(label, current value, phrases it is spelled before)."""
+    return (
+        ("boot call sites", BOOT_CALL_SITES,
+         ("boot_isolated` call sites", "boot_isolated` CALL SITES",
+          "call sites", "boot CALL SITES")),
+        ("process launches", PROCESS_LAUNCHES,
+         ("engine processes", "launches", "processes from")),
+        # Deliberately NOT the fixture count. It is legitimately stated
+        # per-OWNER as well as probe-wide -- `dispatch` owns five and
+        # `container` four -- so a number word before "fixtures" cannot be
+        # judged without knowing whose, and a guard that guessed would
+        # force those true sentences to be rewritten into false ones.
+        ("scenario owners", len(SCENARIO_OWNERS), ("scenario owners",)),
+        ("log assertions", LOG_ASSERTION_SITES,
+         ("checks ASSERT against", "places that assert",
+          "log-reading ASSERTION", "owners that read it")),
+    )
+
+
+def test_the_topology_prose_states_the_current_counts() -> None:
+    """A stale number word is a contract stating something false.
+
+    Every check in this file reads the CODE; none of them reads the
+    sentences around it. #2505 renumbered the probe and left the owner
+    docstrings and `tools/README.md` describing the pre-change shape
+    through two review rounds, with this suite green the whole time —
+    which is exactly the gap a structural scan cannot see.
+
+    The rule is deliberately narrow: wherever one of these quantities is
+    spelled as a WORD immediately before a phrase that names it, the word
+    must be the current one. It says nothing about prose that gives no
+    count, and nothing about a historical note that names an older number
+    in the past tense — those are qualified by their own sentence, which
+    is why the phrases below are matched with the number attached rather
+    than the number alone.
+    """
+    print("\ntest_the_topology_prose_states_the_current_counts")
+    stale: list[str] = []
+    checked = 0
+    for path in TOPOLOGY_PROSE:
+        body = module_source(path)
+        for label, current, phrases in topology_claims():
+            wanted = NUMBER_WORDS[current]
+            for phrase in phrases:
+                for word, number in NUMBER_WORDS.items():
+                    if number == wanted:
+                        continue
+                    # Only a number word DIRECTLY before the phrase is a
+                    # claim about this quantity. "eight" elsewhere in the
+                    # file (another probe's rule, a historical aside) is
+                    # not one, and must not be rewritten by this check.
+                    for sep in (" ", " `"):
+                        needle = f"{number}{sep}{phrase}"
+                        checked += 1
+                        if needle in body:
+                            stale.append(
+                                f"{path.name}: {label} is {current} "
+                                f"({wanted}), but the prose says "
+                                f"{needle!r}")
+    expect(checked > 0,
+           "the prose scan really looked at something — an empty sweep "
+           "would report OK having read nothing")
+    expect(not stale,
+           "every prose statement of this probe's topology names the "
+           "current count (stale: " + "; ".join(stale) + ")")
+
+
 def test_the_reorganized_surface_is_complete() -> None:
     print("\ntest_the_reorganized_surface_is_complete")
     # Every structural scan above runs over SURFACE. If that set could
@@ -1428,6 +1525,7 @@ def main() -> int:
     test_every_fixture_still_goes_through_load_fixture_yaml()
     test_both_log_assertions_read_this_invocations_log()
     test_the_public_helpers_other_probes_import_are_intact()
+    test_the_topology_prose_states_the_current_counts()
     test_the_reorganized_surface_is_complete()
     test_the_facade_keeps_one_run_entry_point()
     test_the_regeneration_boot_runs_once_per_visit_order()

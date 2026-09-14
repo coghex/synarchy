@@ -8,8 +8,8 @@ warning-log assertions those produce, the fixed-position `kind: item`
 branch #921 left no shipped location using, and the valid unit and
 building content that dispatches onto a hidden, non-active page.
 
-It also owns all five inline YAML fixtures, because it is the scenario
-that consumes them (#2095 requirement 7). Their bodies are load-bearing
+It also owns the five inline YAML fixtures ITS scenarios consume (#2095
+requirement 7); the container owner holds its own four on the same rule. Their bodies are load-bearing
 content -- which ids they name is what the unknown-id checks read back,
 the single-entry loot tables are what make a specific item spawn
 whatever the draw selects, and the fixed `position` is what is asserted
