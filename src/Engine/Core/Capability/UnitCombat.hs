@@ -101,7 +101,8 @@ import Engine.Core.State
 data UnitCombatCapability = UnitCombatCapability
   { ucUnitManagerRef   ∷ IORef UnitManager
     -- ^ Session-replaced, multi-writer. Written by @UnitThread@
-    --   (@Thread.Command.Lifecycle@\/@Command.Pose@), @CombatThread@
+    --   (@Thread.Command.Lifecycle@\/@Command.Pose@, and since #2490
+    --   @Command.Solidify@'s corpse-height correction), @CombatThread@
     --   (wound application, periodic wound ticks, weapon wear — all via
     --   @atomicModifyIORef'@), @WorldThread@ (load publish) and
     --   @LuaThread@ (@unit.spawn@'s unit-id allocation); read by those
@@ -109,7 +110,9 @@ data UnitCombatCapability = UnitCombatCapability
   , ucUnitQueue        ∷ Q.Queue UnitCommand
     -- ^ Drained by @UnitThread@ only; produced by @CombatThread@
     --   (@UnitKill@\/@UnitCollapse@ from wound ticks and resolution
-    --   events), @WorldThread@ (basic\/dig\/terrain edits, and the load
+    --   events), @WorldThread@ (basic\/dig\/terrain edits, #2490's
+    --   @World.Reaction.Occupants@ sending one
+    --   @UnitSolidifyOccupants@ per solidified tile, and the load
     --   publish's stale-queue discard) and @LuaThread@ (@unit.spawn@).
     --   __Shutdown ordering:__ the combat thread is a producer here, so
     --   it is stopped __before__ the unit thread that consumes this
