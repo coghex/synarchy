@@ -142,7 +142,7 @@ data WorldSimCapability = WorldSimCapability
     --
     --   HOLDING the mutex is wider than bumping the counter: every
     --   pause-epoch transition takes it through
-    --   'World.Pause.withEpochLock', so @WorldThread@, @LuaThread@
+    --   @World.Pause.withEpochLock@, so @WorldThread@, @LuaThread@
     --   and — since #2490 — @UnitThread@ all enter this section
     --   without changing the value. That unit-thread call is
     --   deliberately made with 'wsPageLifecycleLock' RELEASED: no

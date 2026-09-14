@@ -74,7 +74,7 @@
 --   * A page REINCARNATION cannot straddle the two reads either, but
 --     for the opposite reason: it adds nothing. What it does is RETIRE
 --     the outgoing incarnation's rows
---     ('World.Thread.Command.Init.registerPageIncarnation' calls
+--     (@World.Thread.Command.Init.registerPageIncarnation@ calls
 --     @retirePageUnits@), and it is a holder, so that removal lands on
 --     one side of the pair or the other.
 --   * REMOVALS are NOT excluded, and this lock does not make them
@@ -259,7 +259,7 @@ snapshotSolidificationOccupants uc wsc betweenReads pageId ws tiles
 
 -- | Destroy everything caught at the tiles this commit turned to stone.
 --
---   Called by 'World.Thread.Command.Reaction.publishCommit' INSTEAD of
+--   Called by @World.Thread.Command.Reaction.publishCommit@ INSTEAD of
 --   the add-tile path's @UnitReGround@, once per commit, with the
 --   snapshot taken before the first edit landed. A commit that
 --   solidified nothing reaches this with an empty snapshot and does

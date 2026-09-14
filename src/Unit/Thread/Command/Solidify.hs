@@ -168,7 +168,7 @@ handleUnitSolidifyOccupantsCommandWith
     -- | Phase one: revalidate and mutate, inside the page lifecycle
     --   lock, in one critical section — exactly as
     --   'Unit.Thread.Command.Spawn.handleUnitSpawnCommandWith' does.
-    --   'World.Thread.Command.Init.registerPageIncarnation' holds this
+    --   @World.Thread.Command.Init.registerPageIncarnation@ holds this
     --   same lock across retiring the outgoing incarnation's rows and
     --   registering the replacement, so a transition cannot interleave
     --   between the revalidation and the kills. Without it the early-out
