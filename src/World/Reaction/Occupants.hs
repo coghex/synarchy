@@ -74,7 +74,11 @@
 --     @Unit.Thread.Command.Lifecycle@'s @UnitDestroy@ and the page
 --     clears drop a row from BOTH stores without this lock, so one
 --     landing between the two reads contributes no victim — the right
---     answer for a unit that is gone.
+--     answer for a unit that is gone. So the pair is not "one instant"
+--     of the roster, and nothing here rests on it being one: it rests
+--     on additions being excluded, and on the CONSUMER re-reading the
+--     roster and the page epoch before acting on any name this carried
+--     ('Unit.Thread.Command.Solidify').
 --   * POSITIONS are not frozen. @Unit.Thread@'s movement tick writes
 --     them, and so do @UnitTeleport@ and the re-ground handlers; none
 --     takes anything this thread could hold, and no lock-free

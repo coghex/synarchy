@@ -541,16 +541,22 @@ data EngineEnv = EngineEnv
     --   `World.Reaction.Occupants.snapshotSolidificationOccupants` —
     --   holds it across two `readIORef`s, the unit roster and the
     --   authoritative positions, and writes nothing: it is here only so
-    --   that no MEMBERSHIP change can land between the two.
+    --   that no ADDITION can land between the two.
     --
-    --   Removals are deliberately NOT covered, and do not need to be: a
-    --   `UnitDestroy` or a page clear drops a row from both stores
-    --   without this lock, so one landing between those two reads
-    --   contributes nothing — the right answer for a unit that is gone.
-    --   Positions are not frozen either; the movement tick,
-    --   `UnitTeleport` and the re-ground handlers all write them, and
-    --   one `readIORef` of that map is one coherent instant of all of
-    --   them, which is all the read claims.
+    --   Additions are the direction that matters, and the only sites
+    --   creating new membership in a live session — the spawn commit
+    --   above and a page reincarnation — are holders. Removals are
+    --   deliberately NOT covered and do not need to be: a `UnitDestroy`
+    --   or a page clear drops a row from both stores without this lock,
+    --   so whichever read it straddles the row drops out of the
+    --   selection — the right answer for a unit that is gone. So the
+    --   pair is NOT "one instant" of the roster; it is a reading free
+    --   of phantom additions, and the consumer re-reads the roster and
+    --   the page epoch before acting on any name in it. Positions are
+    --   not frozen at all; the movement tick, `UnitTeleport` and the
+    --   re-ground handlers all write them, and one `readIORef` of that
+    --   map is one coherent instant of every POSITION at once, which is
+    --   all that half claims.
     --
     --   Of the five, the spawn COMMIT and the solidification KILL are a
     --   FENCE rather than a check. The epoch a spawn command carries is
@@ -564,7 +570,7 @@ data EngineEnv = EngineEnv
     --   it. The COHERENT READ is not a fence and revalidates nothing:
     --   it writes nothing at all, and holds the mutex solely so that
     --   its two reads land on one side or the other of every
-    --   membership change rather than straddling one.
+    --   ADDITION rather than straddling one.
     --
     --   The no-second-lock rule below is why that kill FILES its
     --   player-event and injury rows after releasing this, not inside

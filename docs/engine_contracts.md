@@ -5126,6 +5126,11 @@ the narrower statement is the one to rely on:
   half-moved — and *which* instant it is remains the residual window
   described above.
 
+So the pair is not "one instant" of the roster, and correctness does not
+rest on it being one. It rests on two things together: the lock excludes
+new-membership commits, and the CONSUMER re-reads the roster and the
+page epoch before acting on any name the snapshot carried.
+
 Positions are not atomic against the unit thread, and no lock-free
 arrangement could make them so: every writer of `utsSimStates` is on
 that thread and takes nothing the world thread could hold. What the

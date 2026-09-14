@@ -182,7 +182,8 @@ data WorldSimCapability = WorldSimCapability
     --   thread take it for a READ that writes nothing:
     --   @World.Reaction.Occupants.snapshotSolidificationOccupants@
     --   reads the roster and the authoritative positions inside one
-    --   section so no membership change lands between them. No holder
+    --   section, so no ADDITION can land between them (a removal can,
+    --   and takes both stores, so it drops out either way). No holder
     --   may take another lock underneath it: that is why the
     --   solidification kill reports its deaths after releasing this
     --   rather than inside it. Process-lifetime: unlike every other field here
@@ -300,10 +301,21 @@ restoreIfPlayerIdle wsc expected act =
 --   * A __coherent read__ (#2490:
 --     @World.Reaction.Occupants.snapshotSolidificationOccupants@, on
 --     the world thread) takes two 'Data.IORef.readIORef's — the unit
---     roster and the authoritative positions — inside one call, so no
---     MEMBERSHIP change can land between them. It writes nothing; the
---     lock is here purely to make the pair one instant. Alone among
---     the five it is not a fence and revalidates nothing.
+--     roster and the authoritative positions — inside one call.
+--     It writes nothing, and alone among the five it is not a fence and
+--     revalidates nothing.
+--
+--     What that buys is precise and narrow: no ADDITION can land
+--     between the two reads, because the only sites that create new
+--     membership (the spawn commit above, and a page reincarnation) are
+--     holders too. A REMOVAL still can — @UnitDestroy@ and the page
+--     clears bypass this lock — and does not need to be excluded,
+--     because it takes BOTH stores: whichever read it straddles, the
+--     row drops out of the selection, which is the right answer for a
+--     unit that is gone. The pair is therefore NOT \"one instant\" of
+--     the roster; what it is, is free of phantom ADDITIONS. Correctness
+--     also leans on the consumer: the solidification kill re-reads the
+--     roster and the page epoch before it acts on any named victim.
 --
 --   None can interleave with another, so an id allocated before a
 --   transition is provably below that transition's cutoff and one
