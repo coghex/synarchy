@@ -41,6 +41,7 @@ import Unit.Thread.Command.Pose
     , handleUnitPickupCommand
     , handleUnitTransitionToCommand
     )
+import Unit.Thread.Command.Solidify (handleUnitSolidifyOccupantsCommand)
 
 -- | Drain the unit command queue, stopping at the Exit-to-Menu session
 --   boundary (#2291). Answers @True@ when this pass consumed a
@@ -80,6 +81,10 @@ handleUnitCommand env utsRef (UnitTeleport uid gx gy mGz)
   = handleUnitTeleportCommand env utsRef uid gx gy mGz
 handleUnitCommand env utsRef (UnitReGround pageId gx gy)
   = handleUnitReGroundCommand env utsRef pageId gx gy
+handleUnitCommand env utsRef
+                  (UnitSolidifyOccupants pageId epoch gx gy top victims)
+  = handleUnitSolidifyOccupantsCommand env utsRef pageId epoch gx gy top
+                                       victims
 handleUnitCommand env utsRef (UnitMoveTo uid tx ty speed hazard)
   = handleUnitMoveToCommand env utsRef uid tx ty speed hazard
 handleUnitCommand env utsRef (UnitSetMoveSpeed uid speed)

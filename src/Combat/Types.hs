@@ -82,10 +82,11 @@ emptyEventQueue = Seq.empty
 
 -- | Append a NON-combat injury event to a stream buffer (the victim
 --   rides in `ceTarget`, no attacker). Shared by the engine-side injury
---   producers — Unit.Fall and unit.injure — so they don't each
+--   producers — Unit.Fall, Unit.Thread.Command.Solidify (#2490's deaths
+--   at a solidifying cell) and unit.injure — so they don't each
 --   re-spell the CombatEvent construction. The Lua-side producer uses
---   `injury.emit`; both feed the same `injuryEventsRef` the injury-log
---   UI drains.
+--   `injury.emit`; all of them feed the same `injuryEventsRef` the
+--   injury-log UI drains.
 pushInjuryEvent
     ∷ IORef (Seq.Seq CombatEvent)  -- ^ injuryEventsRef
     → Double                       -- ^ game-time

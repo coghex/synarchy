@@ -386,6 +386,14 @@ CAPABILITY_WRITER_MODULES: dict[str, frozenset[str]] = {
         "Unit.Thread",
         "Unit.Thread.Command.Lifecycle",
         "Unit.Thread.Command.Pose",
+        # #2490: the corpse-height correction a solidification applies
+        # to the occupants it just killed. It mirrors the raised z into
+        # the render-facing instance for the same reason
+        # `Unit.Thread.Command.Lifecycle`'s re-ground does -- a body
+        # whose visual z lagged a tick would be drawn inside the stone
+        # it is resting on -- and the kill itself is delegated to
+        # `Unit.Thread.Command.Pose`, not restated here.
+        "Unit.Thread.Command.Solidify",
         "Unit.Thread.Command.Spawn",
         "Unit.Thread.Movement",
         "World.Thread.ItemTemp",

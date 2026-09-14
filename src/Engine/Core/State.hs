@@ -348,7 +348,13 @@ data EngineEnv = EngineEnv
     --   path, *Until timers). Lives on EngineEnv (not encapsulated in
     --   the unit thread) so the save/load handler can snapshot and
     --   restore it; the unit thread treats it as the sole authority
-    --   for movement and timed states.
+    --   for movement and timed states, and is its only WRITER.
+    --   Other threads read it where they need the authoritative
+    --   answer rather than the once-per-tick render mirror: the save
+    --   capture and @unit.getInfo@, and since #2490 the world
+    --   thread's solidification commit, which resolves the occupants
+    --   of the cell it just turned to stone from these positions
+    --   ("World.Reaction.Occupants").
   , statRNGRef          ∷ IORef StdGen
     -- ^ Runtime RNG for stat rolls. Seeded from system entropy at
     --   startup; not tied to the world seed (stats are non-deterministic
@@ -420,8 +426,10 @@ data EngineEnv = EngineEnv
   , injuryEventsRef     ∷ IORef (Seq Combat.Types.CombatEvent)
     -- ^ NON-combat injury stream (falls / hazards / wound-caused
     --   deaths) → Lua. Reuses the CombatEvent shape (target = victim).
-    --   Producers: Unit.Fall, unit.injure, and `injury.emit` from Lua;
-    --   drained via `injury.drainEvents` into the injury-log UI.
+    --   Producers: Unit.Fall, Unit.Thread.Command.Solidify (#2490's
+    --   deaths at a solidifying cell), unit.injure, and `injury.emit`
+    --   from Lua; drained via `injury.drainEvents` into the injury-log
+    --   UI.
     --   Runtime only, not persisted.
   , thoughtEventsRef    ∷ IORef (Seq Combat.Types.CombatEvent)
     -- ^ Per-unit thought stream (#351) → Lua. Purely Lua-produced —
@@ -512,7 +520,7 @@ data EngineEnv = EngineEnv
     -- ^ #2476: the PROCESS-LIFETIME mutex that linearises a world
     --   page's entity lifecycle against every entity admission.
     --
-    --   Three kinds of holder take it. A LIFECYCLE transition —
+    --   Five kinds of holder take it. A LIFECYCLE transition —
     --   `world.destroy` on a single page, and either `world.init` /
     --   `world.initArena` that REPLACES a registered page id — holds it
     --   while it reads the live `umNextId`/`bmNextId`, enqueues the
@@ -527,14 +535,57 @@ data EngineEnv = EngineEnv
     --   `handleUnitSpawnCommand` and `applyBuildingSpawn`, plus #1602's
     --   bound route into the latter on the world thread — holds it
     --   across the re-read of the target page's incarnation epoch and
-    --   the manager insertion itself.
+    --   the manager insertion itself. A SOLIDIFICATION KILL (#2490) —
+    --   the unit thread's `handleUnitSolidifyOccupantsCommand` — holds
+    --   it on the same terms across the re-read of the reaction page's
+    --   epoch, the roster and pose decision, the kills and the corpse
+    --   height correction. A COHERENT READ (#2490) — the world thread's
+    --   `World.Reaction.Occupants.snapshotSolidificationOccupants` —
+    --   holds it across two `readIORef`s, the unit roster and the
+    --   authoritative positions, and writes nothing: it is here only so
+    --   that no ADDITION can land between the two.
     --
-    --   That third holder is a FENCE, not a check: the epoch a spawn
-    --   command carries is verified at the top of a handler that then
-    --   rolls stats, sheds inventory and commits a footprint before it
-    --   writes, so a transition could otherwise outlive the check and
-    --   the handler would insert a departed incarnation's entity under
-    --   the replacement's reused name.
+    --   Additions are the direction this covers, and the only site
+    --   creating new unit membership in a live session — the spawn
+    --   commit above — is a holder. (A page reincarnation adds nothing;
+    --   it RETIRES the outgoing incarnation's rows, and being a holder
+    --   its removal cannot straddle a coherent read either.) Other
+    --   removals are NOT covered: a `UnitDestroy` retires the roster
+    --   row and the sim row
+    --   in two separate `atomicModifyIORef'` calls, in the same order a
+    --   coherent read takes them, so one landing between those reads is
+    --   seen in both and enters the selection as a STALE CANDIDATE.
+    --   What makes that harmless is not this lock but the consumer,
+    --   which re-reads the roster and the page epoch before acting on
+    --   any name it was handed. So the pair is NOT "one instant" of the
+    --   roster; it is a reading free of phantom ADDITIONS. Positions are
+    --   not frozen at all: the movement tick and `UnitTeleport` write
+    --   the horizontal position, the re-ground handlers and #2490's
+    --   corpse settle write the vertical, and one `readIORef` of that
+    --   map is one coherent instant of every POSITION at once, which is
+    --   all that half claims.
+    --
+    --   Of the five, the spawn COMMIT and the solidification KILL are a
+    --   FENCE rather than a check. The epoch a spawn command carries is
+    --   verified at the top of a handler that then rolls stats, sheds
+    --   inventory and commits a footprint before it writes, so a
+    --   transition could otherwise outlive the check and the handler
+    --   would insert a departed incarnation's entity under the
+    --   replacement's reused name; a solidification kill has the same
+    --   shape, and would otherwise kill an orphan off its own captured
+    --   victim list and attribute the death to the page that replaced
+    --   it. The COHERENT READ is not a fence and revalidates nothing:
+    --   it writes nothing at all, and holds the mutex solely so that
+    --   its two reads land on one side or the other of every
+    --   ADDITION rather than straddling one.
+    --
+    --   The no-second-lock rule below is why that kill FILES its
+    --   player-event and injury rows after releasing this, not inside
+    --   it: a notification category the player has set to pause routes
+    --   `Engine.PlayerEvent.Emit.emitEventFullOnPage` through
+    --   `World.Pause.imposePause`, which takes the pause epoch's own
+    --   mutex. The deaths are committed inside; only the reporting is
+    --   outside, so nothing observable is reordered.
     --
     --   That is what makes the cutoffs mean anything: an admission
     --   completed before a teardown provably holds an id BELOW the
@@ -664,9 +715,12 @@ data EngineEnv = EngineEnv
     --   ('Engine.PlayerEvent.EventStore', #1714). Per-session only —
     --   not serialized to save files.
     --   An STM TVar, so pushes from any thread are safe; the call
-    --   sites that actually exist today are the world thread and the
-    --   Lua thread, both via 'Engine.PlayerEvent.emitEvent' (no unit-
-    --   or combat-thread emitter exists). Read atomically by Lua-side
+    --   sites that actually exist today are the world thread, the Lua
+    --   thread and the unit thread, all via
+    --   'Engine.PlayerEvent.emitEvent'. The unit-thread one is
+    --   #2490's: a solidification death is decided on the thread that
+    --   owns the pose, so that is where it is reported. No
+    --   combat-thread emitter exists. Read atomically by Lua-side
     --   queries (e.g. the event-log panel).
     --
     --   Rows and counter share this ONE ref so a sequence is assigned

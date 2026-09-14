@@ -55,12 +55,18 @@ import World.Pause (imposePause)
 --   STM-backed, and the pause is one 'World.Pause.imposePause' call,
 --   whose flag write is a single atomic read-modify-write, so
 --   concurrent callers on any thread are safe. That is a property
---   of the primitive, not a claim about who calls it: the only call
---   sites that exist today are on the @WorldThread@
---   ("World.Thread.Discovery", @World.Thread.Command.Save.WriteWorld@)
---   and the @LuaThread@ ("Engine.Scripting.Lua.API.PlayerEvent",
---   @Engine.Scripting.Lua.API.Save@) — no unit- or combat-thread
---   emitter exists.
+--   of the primitive, not a claim about who calls it: the call sites
+--   that exist today are on the @WorldThread@
+--   ("World.Thread.Discovery", @World.Thread.Command.Save.WriteWorld@),
+--   the @LuaThread@ ("Engine.Scripting.Lua.API.PlayerEvent",
+--   @Engine.Scripting.Lua.API.Save@) and — since #2490 —
+--   the @UnitThread@ ("Unit.Thread.Command.Solidify", one row per
+--   unit the lava-water reaction entombed). No combat-thread emitter
+--   exists. The unit-thread one is deliberately there rather than on
+--   the world thread that commits the stone: whether a named occupant
+--   was still alive is only answerable from the sim state the unit
+--   thread owns, so reporting from anywhere else could file a death
+--   for a unit that had already died of something else.
 emitEvent ∷ EngineEnv
           → Text     -- ^ category id (e.g. "save_load")
           → Text     -- ^ source tag for dev debug (e.g. "World.Save")

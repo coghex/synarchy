@@ -120,7 +120,10 @@ data WorldSimCapability = WorldSimCapability
     -- ^ Global pause flag, persisted exactly and __authoritative over
     --   any Lua-side copy__. Written by @LuaThread@
     --   (@engine.setPaused@) and @WorldThread@ (load publish — a load
-    --   always comes up paused). @WorldThread@\/@UnitThread@\/
+    --   always comes up paused), and by any thread emitting a player
+    --   event under a category the player has set to @pause@, through
+    --   'World.Pause.imposePause' — @WorldThread@, @LuaThread@ and,
+    --   since #2490's solidification deaths, @UnitThread@. @WorldThread@\/@UnitThread@\/
     --   @SimThread@\/@CombatThread@ skip advancing simulated state
     --   while it is true; @MainRender@ keeps rendering and dispatching
     --   input regardless.
@@ -136,13 +139,25 @@ data WorldSimCapability = WorldSimCapability
     --   restore — see 'withPlayerIntent' \/ 'restoreIfPlayerIdle' and
     --   'Engine.Core.State's field haddock (which also covers why
     --   engine-internal pause\/scale writes must NOT bump it).
+    --
+    --   HOLDING the mutex is wider than bumping the counter: every
+    --   pause-epoch transition takes it through
+    --   @World.Pause.withEpochLock@, so @WorldThread@, @LuaThread@
+    --   and — since #2490 — @UnitThread@ all enter this section
+    --   without changing the value. That unit-thread call is
+    --   deliberately made with 'wsPageLifecycleLock' RELEASED: no
+    --   holder of that outermost boundary may take a second lock
+    --   underneath it.
   , wsEnginePauseGenRef   ∷ IORef Word64
     -- ^ #1730's engine-pause generation: how many times a pause source
     --   INDEPENDENT of any running save has asserted a pause. Bumped by
-    --   @WorldThread@ and @LuaThread@ alike through
-    --   'World.Pause.imposePause' (a @pause: true@ notification
-    --   category, an @engine.loadSave@ acceptance); read by @LuaThread@
-    --   at an autosave's acceptance and by @WorldThread@ at its restore.
+    --   @WorldThread@, @LuaThread@ and (since #2490) @UnitThread@
+    --   alike through 'World.Pause.imposePause' (a @pause: true@
+    --   notification category — the unit thread reaches it when
+    --   @Unit.Thread.Command.Solidify@ reports a solidification death
+    --   and the player has set that category to pause — or an
+    --   @engine.loadSave@ acceptance); read by @LuaThread@ at an
+    --   autosave's acceptance and by @WorldThread@ at its restore.
     --   Never touched outside the 'wsPlayerIntentGenRef' critical
     --   section — every epoch transition and both of those sites hold
     --   that mutex — which is what makes \"has anyone else paused since
@@ -158,9 +173,21 @@ data WorldSimCapability = WorldSimCapability
     --   it while it captures the entity allocators' current readings,
     --   enqueues the page-scoped clears carrying them as exclusive
     --   cutoffs, and rewrites 'wsWorldManagerRef'. Taken by
-    --   @WorldThread@ (those three handlers) and @LuaThread@ (the three
-    --   entity-admission verbs), through 'withPageLifecycle' and
-    --   nothing else. Process-lifetime: unlike every other field here
+    --   @WorldThread@ (those three handlers), @LuaThread@ (the three
+    --   entity-admission verbs) and @UnitThread@ (two fences of its
+    --   own: @Unit.Thread.Command.Spawn@'s insertion, and since #2490
+    --   @Unit.Thread.Command.Solidify@'s kill — separate roles, since
+    --   the kill allocates no id and takes no cutoff), through
+    --   'withPageLifecycle' and nothing else. #2490 also made the WORLD
+    --   thread take it for a READ that writes nothing:
+    --   @World.Reaction.Occupants.snapshotSolidificationOccupants@
+    --   reads the roster and the authoritative positions inside one
+    --   section, so no ADDITION can land between them (a removal can,
+    --   leaving a stale candidate the consumer's own roster recheck
+    --   drops). No holder
+    --   may take another lock underneath it: that is why the
+    --   solidification kill reports its deaths after releasing this
+    --   rather than inside it. Process-lifetime: unlike every other field here
     --   it survives a session boundary and a load untouched, because it
     --   is a critical section rather than state. See 'EngineEnv's field
     --   haddock for why the id ordering it establishes is the whole
@@ -237,10 +264,11 @@ restoreIfPlayerIdle wsc expected act =
       then pure (g, Nothing)
       else (\r → (g, Just r)) ⊚ act
 
--- | Run one PAGE\/ENTITY LIFECYCLE transition, or one entity
---   ADMISSION, as a single critical section (#2476).
+-- | Run one PAGE\/ENTITY LIFECYCLE transition, one entity ADMISSION,
+--   or one read that has to be coherent against either, as a single
+--   critical section (#2476).
 --
---   The three callers hold it for different halves of the same
+--   The five callers hold it for different halves of the same
 --   boundary, which is why they must be the same lock:
 --
 --   * A __lifecycle transition__ (a single-page @world.destroy@; either
@@ -260,6 +288,43 @@ restoreIfPlayerIdle wsc expected act =
 --     inside one call. The epoch its command carries was checked at the
 --     top of a handler that does a great deal of work before writing, so
 --     only holding the lock across BOTH makes it a fence.
+--   * A __solidification kill__ (#2490:
+--     @Unit.Thread.Command.Solidify@'s handler, on the unit thread)
+--     re-reads the reaction page's incarnation epoch and then decides
+--     the roster, kills and corrects the corpses, inside one call. The
+--     same fence shape as the spawn commit and for the same reason:
+--     without it a replacement landing after its own early-out check
+--     would leave it killing an orphan off a captured victim list and
+--     filing that death against the page that replaced it. It is its
+--     own role rather than a spawn commit because it INSERTS nothing —
+--     it allocates no id and takes no cutoff — so the id-ordering
+--     argument below is not what it rests on.
+--   * A __coherent read__ (#2490:
+--     @World.Reaction.Occupants.snapshotSolidificationOccupants@, on
+--     the world thread) takes two 'Data.IORef.readIORef's — the unit
+--     roster and the authoritative positions — inside one call.
+--     It writes nothing, and alone among the five it is not a fence and
+--     revalidates nothing.
+--
+--     What that buys is precise and narrow: no ADDITION can land
+--     between the two reads, because the only site that creates new
+--     unit membership in a live session — the spawn commit above — is a
+--     holder too. A page reincarnation cannot straddle them either, but
+--     because it ADDS nothing: it retires the outgoing incarnation's
+--     rows, and it is a holder, so that removal lands on one side of
+--     the pair or the other.
+--
+--     A REMOVAL still can, and is NOT made harmless by this lock.
+--     @UnitDestroy@ bypasses it and retires the two stores in two
+--     separate 'Data.IORef.atomicModifyIORef'' calls, in the same order
+--     the read takes them — roster first, sim state second — so one
+--     landing between the two reads is seen present in BOTH and enters
+--     the selection as a STALE CANDIDATE. That is harmless for a
+--     different reason: the consumer re-reads the roster and the page
+--     epoch before acting on any name it was handed, and a row that is
+--     gone by then is skipped. The pair is therefore NOT \"one
+--     instant\" of the roster; what it is, is free of phantom
+--     ADDITIONS, and the consumer's recheck is what covers the rest.
 --
 --   None can interleave with another, so an id allocated before a
 --   transition is provably below that transition's cutoff and one
@@ -268,11 +333,27 @@ restoreIfPlayerIdle wsc expected act =
 --   the queued clear retires only the rows below its cutoff, on its own
 --   page, and leaves the replacement's alone.
 --
+--   __What it does NOT cover.__ Only the callers listed above take it.
+--   A unit REMOVAL does not: @Unit.Thread.Command.Lifecycle@'s
+--   @UnitDestroy@ and the page clears drop a row from the roster and
+--   from the sim states without it, and not even atomically with each
+--   other — so one can leave a coherent read holding a stale candidate,
+--   which that read's consumer filters by rechecking the roster. New
+--   MEMBERSHIP is the direction this lock actually covers, and the only
+--   site that creates it in a live session is the spawn commit above. (A load publish replaces the
+--   whole session's roster outside this lock; a reaction cannot survive
+--   one either way — its page-incarnation fence refuses it.) Unit
+--   POSITIONS are likewise not frozen: the movement tick and
+--   @UnitTeleport@ write the horizontal position, and the re-ground
+--   handlers and #2490's own corpse settle write the vertical. One
+--   'Data.IORef.readIORef' of that map is still one coherent instant of
+--   every position at once, which is all the coherent read claims.
+--
 --   __Ordering rule.__ This is the OUTERMOST coordination boundary an
 --   admission or commit takes: no holder may acquire another page or
 --   entity lock underneath it. What runs inside is
---   'Data.IORef.atomicModifyIORef''
---   transitions and non-blocking queue writes, neither of which can
+--   'Data.IORef.readIORef' reads, 'Data.IORef.atomicModifyIORef''
+--   transitions and non-blocking queue writes, none of which can
 --   wait on a lock. It is also deliberately NOT held across world
 --   generation — the init handlers release it as soon as the
 --   replacement is registered, so a full @world.init@ does not stall

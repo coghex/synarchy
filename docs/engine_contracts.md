@@ -79,7 +79,7 @@ exactly why the detail could move out of the always-loaded file.
 - [Flora visual state and fallback (#2526)](#flora-visual-state-and-fallback-2526)
 - [Loot profiles (#2499)](#loot-profiles-2499)
 - [Farming (#331-#336)](#farming-331-336)
-- [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485)
+- [Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)](#fluid-reaction-unlike-fluid-contact-and-its-stone-2481-2485-2490)
 - [Blood decals: transience (#603)](#blood-decals-transience-603)
 - [Logging streams](#logging-streams)
 - [Audio runtime and authored sounds](#audio-runtime-and-authored-sounds)
@@ -4754,7 +4754,7 @@ gives it a fixture.
 
 ---
 
-## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485)
+## Fluid reaction: unlike-fluid contact and its stone (#2481, #2485, #2490)
 
 Design record: [`docs/fluid_reaction_design.md`](fluid_reaction_design.md)
 (decisions D-1, D-2, D-3, D-5 and D-7). FR-1 of epic #2480 makes the
@@ -4845,9 +4845,11 @@ serialized: see
 **The stone is an EDIT.** Each accepted event appends one
 `World.Edit.Types.WeAddTile` for its column and product material to
 `wsEditsRef` and applies it through the same `World.Edit.Apply.applyEdit`,
-`replaceChunkForgettingFlora`, plant/construct revalidation and
-`UnitReGround` a player's own add-tile uses
-(`World.Thread.Command.Reaction`). A fluid writeback could not do this:
+`replaceChunkForgettingFlora` and plant/construct revalidation a player's
+own add-tile uses (`World.Thread.Command.Reaction`). The one step it does
+NOT share is that path's `UnitReGround`: since #2490 an occupant of a
+solidifying cell is destroyed rather than lifted, so the commit sends
+`UnitSolidifyOccupants` instead — see §Occupants of a solidifying cell. A fluid writeback could not do this:
 `applyOneWriteback` replaces a chunk's sim-owned fields in memory and
 appends nothing, so terrain written that way would vanish on eviction and
 never reach a save. Replay over regenerated terrain and a fresh-process
@@ -5049,6 +5051,207 @@ against the old one, and the commit drops them directly too, so a
 refreshed summary shows on the very next bake rather than waiting for the
 upload.
 
+### Occupants of a solidifying cell are destroyed (#2490)
+
+**The lift is replaced, not joined.** A player's add-tile settles
+whoever is standing on the tile by re-grounding them
+(`Unit.Command.Types.UnitReGround`), and #2485 inherited that. An
+accepted solidification does NOT: the owner's decision (epic #2480, D-3
+and D-6) is that anything occupying the cell is destroyed instantly, so
+`World.Thread.Command.Reaction.publishCommit` sends
+`UnitSolidifyOccupants` INSTEAD of the re-ground for every tile that
+received stone. Displacement and damage-and-lift were considered and
+rejected. Every other terrain edit keeps the lift unchanged.
+
+**Each half runs where its state lives.** Ground items are removed on
+the WORLD thread, by `World.Reaction.Occupants`, through
+`World.GroundItems.takeGroundItemsOnPage` — the same page ground-item
+lock a selection takes, so a removal cannot slip between a selection's
+check and its commit. It removes the ids the SNAPSHOT captured, at the
+same cutoff as the units, rather than rescanning the map at removal
+time: that scan runs after every stone of the delivery has landed, so it
+would also take an item dropped onto the cell in between — one that
+never occupied the cell the reaction caught, and that the unit half
+would never have selected. Units are only NAMED there: their sim
+state belongs to the unit thread (#1890), so the kill rides that
+thread's queue and lands in `Unit.Thread.Command.Solidify`, which calls
+the ordinary `handleUnitKillCommand` rather than restating a terminal
+state that could then drift from every other death's.
+
+**The victim set is fixed at the edit and travels with the message.**
+The unit queue is drained on the unit thread's own tick, an unbounded
+delay later. Naming only the tile would kill whoever stood there THEN —
+a unit caught by a reaction it walked into afterwards — and would let
+one that walked off escape a reaction it was in. So the occupants are
+resolved while the stone is landing, and the handler re-reads only each
+named victim's own pose.
+
+Resolved from `utsSimStates`, the AUTHORITATIVE positions, never from
+`umInstances`. `publishToRender` republishes those into `uiGridX`/
+`uiGridY` once per unit tick, so the mirror is up to a whole tick behind
+and a unit that crossed off the cell inside that tick would be killed by
+a reaction it was no longer in. `umInstances` answers one question here:
+which units belong to this page.
+
+And it is a SNAPSHOT taken before the first stone.
+`commitReactions` reads it at its very top, ahead of every `applyEdit`
+of the delivery, and carries the result to `publishCommit`. Two things
+follow: nothing the commit itself does — the terrain writes, the item
+removals, the generation advance, the sim handoff, either presentation
+refresh — can be the reason a unit is in or out of the set; and every
+event of one delivery is judged against ONE roster, so two tiles of the
+same commit cannot be graded against different positions of one walking
+unit. `ReactionCommitSeams` is the seam a test interposes on to drive
+that ordering deterministically, the same shape as `SpawnSeams`.
+
+Both of the snapshot's own reads — the roster from `umInstances` and the
+positions from `utsSimStates` — happen under `pageLifecycleLock`. Read
+separately they are not a snapshot of anything: a spawn commit landing
+between them is in neither the roster already read nor, if an existing
+occupant is also stepped off the cell in that window, the positions read
+afterwards, and a tile occupied throughout would yield no victims at
+all. Nothing blocks inside the section — two `readIORef`s and pure work
+— which is the contract that lock states for every holder.
+
+What that buys is narrower than "roster and positions are frozen", and
+the narrower statement is the one to rely on:
+
+* **New membership cannot appear.** The only site that puts a new
+  `UnitId` into `umInstances` in a live session is the spawn commit, and
+  it holds this same mutex. (A load publish replaces the whole roster
+  outside the lock; a reaction cannot survive one either way — the
+  page-incarnation fence refuses it.)
+* **A page reincarnation cannot straddle the reads either**, for the
+  opposite reason: it adds nothing. `registerPageIncarnation` RETIRES
+  the outgoing incarnation's rows, and it is a holder, so that removal
+  lands on one side of the pair or the other.
+* **Removals are not excluded, and the lock does not make them
+  harmless.** `UnitDestroy` bypasses it and retires the roster row and
+  the sim row in two separate `atomicModifyIORef'` calls — in the same
+  order the snapshot reads them — so one landing between the two reads
+  is seen present in both and enters the victim list as a *stale
+  candidate*. What covers that is the consumer, not this lock: the kill
+  handler re-reads the roster and the page epoch and skips a name the
+  roster no longer holds (its documented "Gone" case).
+* **Positions are not frozen.** The movement tick and `UnitTeleport`
+  write the horizontal position; the re-ground handlers and this
+  reaction's own corpse settle write the vertical. One `readIORef` of
+  that map is one coherent instant of every position at once — no unit
+  is seen half-moved — and *which* instant it is remains the residual
+  window described above.
+
+So the pair is not "one instant" of the roster, and correctness does not
+rest on it being one. It rests on two things together, one at each end:
+the lock excludes new-membership commits, and the consumer filters the
+stale names a concurrent removal can leave behind.
+
+Positions are not atomic against the unit thread, and no lock-free
+arrangement could make them so: every writer of `utsSimStates` is on
+that thread and takes nothing the world thread could hold. What the
+residual window is bounded BY is that thread's own cadence, not by
+anything the commit does — and it is far narrower than what it replaces.
+Selecting at the drain would read positions an unbounded number of ticks
+later, behind however much of the queue was already waiting.
+
+**Occupancy is a floor in the canonical frame.** A unit's position is a
+sub-tile float, so the tile it is on is `floor` of it — which is why a
+unit mid-crossing occupies the tile it is currently over and dies,
+though `UnitReGround` (idle-only) would have skipped it. Both sides are
+moved into the stored frame with `canonicalTile`, so a position naming a
+u-alias of the solidified tile still matches (§Tile-coordinate seam
+frame); ground items match the same way, from `floor` of their own
+stored float position. Identity away from the seam.
+
+**A death is recorded twice, and only for a unit that was alive.** An
+injury-stream `"death"` event naming the victim, whose `cause` names the
+reaction and the tile (`scripts/injury_log.lua`'s `deathLine` renders it
+as "… died of …"), and a player event-log row attributed to the unit at
+the reaction PAGE's coordinates, under the existing `unit_warning`
+category whose shipped defaults log it — no category was added. Both are
+emitted from the unit thread, not from the world thread that commits the
+stone, because whether a named occupant was still alive is only
+answerable from the sim state the unit thread owns. An occupant that was
+ALREADY dead keeps its terminal state and produces neither event, and
+one the ROSTER no longer holds on this page is skipped entirely — a
+teardown or a same-id re-init drops the manager rows at once and leaves
+the sim rows to a queued `UnitClearPage` that can still be behind this
+kill, so a sim-state-only check would kill and report an orphan. The
+whole message additionally carries the page's incarnation, and the
+revalidation plus every write it authorises happen inside
+`pageLifecycleLock` — the same commit FENCE `UnitSpawn` uses
+(#2476/#2477), and for the same reason: `registerPageIncarnation` holds
+that lock across retiring the outgoing incarnation's rows and
+registering the replacement, so a bare check before the act would be
+pure time-of-check-to-time-of-use. Without it a replacement landing in
+that gap would leave the handler killing an orphan off its own captured
+list and attributing the death to the page that replaced it.
+`SolidifySeams` is the seam a test interposes on to land exactly that
+schedule.
+
+What the lock does NOT cover is the reporting. That lock is the
+outermost coordination boundary and no holder may take another
+underneath it, so the two event rows are filed after it is released: a
+notification category the player has set to pause routes
+`emitEventFullOnPage` through `World.Pause.imposePause`, which takes the
+pause epoch's own mutex. The kills and the height correction are
+committed inside; only the rows are outside, and the unit thread is the
+only producer of them, so nothing observable is reordered.
+
+**Nothing is buried, and nothing else moves.** Everything standing on
+the tile afterwards is raised clear of the terrain it is on where it is
+below it, in the sim state and the render-facing instance together. That
+set is deliberately WIDER than the victim set: the corpses this reaction
+just made, an older corpse it left alone, AND any unit that stepped onto
+the cell after the snapshot. The cutoff decides who DIES, not who gets
+kept out of the rock — and because this path replaced the ordinary
+`UnitReGround`, settling only the victims would leave such a late
+entrant permanently inside the stone. That is not the lift requirement 4
+forbids: that rule governs the occupants this reaction CAUGHT, and it is
+honoured by killing them rather than raising them; a unit it did not
+catch gets exactly what any other terrain edit would have given it. That is a `max`, not a snap: it is the
+minimum correction that keeps a body out of the ground, and it never
+moves one horizontally.
+
+BOTH heights are corrected, each by its own `max`: the discrete `gridZ`
+and the continuous `realZ`/`uiRealZ`. They are separate fields that
+separate things read, and a unit killed mid-ascent can have one already
+clear while the other is not — a one-level pull-up commits `gridZ` to
+the ledge while `realZ` is still lerping up from the start. Gating on
+`gridZ` alone would decline to touch either, and `handleUnitKillCommand`
+has just cleared the climb endpoints and the transition timer, so no
+later tick would ever finish the lerp: the corpse would render inside
+the rock permanently. Correcting each field independently also means
+clearing one never drags the other down. Which column depends on where the body ended up. A victim
+that MOVED is corrected against its own current column on its own page,
+live: a victim can move between the commit and the drain — that is the
+very delay the carried set exists to survive — and correcting it to the
+stone column's height would float it over lower ground or leave it
+buried under higher. A victim still ON the solidified cell is corrected
+against the terrain top the commit itself left, CARRIED on the message
+and maxed with a live lookup when one succeeds. The carried height is
+what makes that correction survive an eviction: the queue delay is
+unbounded, the world thread's own tick can evict the reaction chunk
+inside it, and a live-only lookup would then answer nothing at all —
+leaving a body that never moved embedded one z under the stone the
+moment the durable edit is replayed. The terrain top in both cases,
+through
+`Unit.Thread.Command.Lifecycle.lookupTerrainTopZ` and not the
+fluid-inclusive `lookupSurfaceZ` a re-ground reads: an active chunk's
+solidified cell is DISPLACED by one level rather than emptied, so it can
+still hold fluid above its new stone, and correcting to the resolved
+surface would float the corpse on the water instead of resting it on the
+rock. That lookup also canonicalizes its coordinate before the chunk
+read, since `lookupChunk` wraps nothing. A selection naming a destroyed item is cleared with the
+removal (unlike an ordinary pickup, which leaves that to
+`scripts/item_info_panel.lua`'s refresh — a reaction can fire on a page
+with no panel watching); a selection naming any other item is untouched.
+A unit or item on an adjacent tile, or at the same coordinates on
+another page, is not an occupant of this tile at all (#1593). A refused
+result destroys nothing, for the same reason it commits nothing.
+
+No persisted type changes and no save-version bump: the injury and
+event streams stay transient exactly as before.
+
 Gates: hspec `--match "unlike-fluid reaction"`
 (`test-headless/Test/Headless/Sim/Reaction.hs`) — one fixture per branch
 per ordering, plus the live-source, capacity-edge, refill and
@@ -5064,9 +5267,41 @@ results, an evicted participant, convergence, a refused pre-commit
 writeback, acknowledgement ordering, a missing product material, a real
 eviction and regeneration, the cumulative same-chunk zoom refresh, a
 page with no atlas to patch, and the per-page publication queue.
+hspec `--match "solidification occupants"`
+(`test-headless/Test/Headless/World/SolidificationOccupants.hs`) is
+#2490's own group, on the same live world thread with the unit queue
+drained by hand: the death and its two event rows, the corpse's height
+on both surfaces, a mid-crossing victim, an already-dead occupant
+producing no second death, transfer-order retirement and selection
+clearing, a u-alias occupant, a same-coordinate row on another page, a
+refused result, a replayed one, the edit-time victim set surviving
+queue delay (asserting the survivor is settled clear of the stone
+rather than merely spared), a mover whose sim position and render mirror
+disagree, a
+movement committed between the snapshot and the first stone (through
+`ReactionCommitSeams`), a victim that walked onto a higher column before
+the drain, a corpse under fluid the solidified cell retained, a victim
+the roster no longer holds, a page re-initialised under the same id
+before the kill drained, a page replaced AFTER the handler's first epoch
+check (through `SolidifySeams`), the reaction's chunk evicted before the
+drain, a victim killed mid-pull-up whose grid z was already clear while
+its continuous z was not, and a death filed under a category the player
+set to pause (asserting the lifecycle lock is free while the pause epoch
+is held elsewhere), and a real spawn commit that cannot land between the
+snapshot's two reads — plus the occupancy predicate itself.
 `tools/fluid_reaction_probe.py` is the fresh-process durability case,
-and also the alias check for the `world.getMaterialAt` query both probes
-read the product through; `tools/fluid_reaction_visual_probe.py`
+the alias check for the `world.getMaterialAt` query both probes read the
+product through, and #2490's live occupant scenario (a unit and an item
+on the cell, a control pair beside it, graded through the SIM's own
+reaction; it stubs `injury_log_panel`'s tick so it owns the injury
+stream, and `unit_ai`'s so the occupant does not wander off). The stone
+becoming visible is NOT that scenario's finish line — the occupants are
+dispatched after it, the kill rides the unit queue, and inside the
+handler the pose is stamped before the injury event is pushed and the
+event-log row written — so it polls until the COMPLETE outcome is
+present (dead pose, a matching drained `"death"`, and a matching log
+row), accumulating the destructive injury drains rather than reading the
+stream once, and polls the ground listing the same way; `tools/fluid_reaction_visual_probe.py`
 (offscreen, needs a GPU) is the two-presentation evidence. It reacts
 TWICE in one chunk: the first contact's refresh folds every setup edit
 into the atlas, so what the measured one adds is attributable to its own
@@ -5116,7 +5351,8 @@ reversing it).
 Event log: `engine.getEventLog()`, emit via `engine.emitEvent(cat,text)`
 / `emitEventAt` / `emitEventForUnit(cat,text,uid[,gx,gy])`; a category
 lands only if its notifications YAML has `log: true`. Combat:
-`combat.drainEvents()`. Injury (NON-combat only — falls, hazards, wound
+`combat.drainEvents()`. Injury (NON-combat only — falls,
+hazards including a solidifying cell closing over a unit (#2490), wound
 deaths): `injury.drainEvents()`. These are DRAINED streams — don't
 drain manually in a test while the panel script is loaded, or you'll
 race it. Gate: `injury_log_probe.py`.

@@ -101,7 +101,8 @@ import Engine.Core.State
 data UnitCombatCapability = UnitCombatCapability
   { ucUnitManagerRef   ∷ IORef UnitManager
     -- ^ Session-replaced, multi-writer. Written by @UnitThread@
-    --   (@Thread.Command.Lifecycle@\/@Command.Pose@), @CombatThread@
+    --   (@Thread.Command.Lifecycle@\/@Command.Pose@, and since #2490
+    --   @Command.Solidify@'s corpse-height correction), @CombatThread@
     --   (wound application, periodic wound ticks, weapon wear — all via
     --   @atomicModifyIORef'@), @WorldThread@ (load publish) and
     --   @LuaThread@ (@unit.spawn@'s unit-id allocation); read by those
@@ -109,7 +110,9 @@ data UnitCombatCapability = UnitCombatCapability
   , ucUnitQueue        ∷ Q.Queue UnitCommand
     -- ^ Drained by @UnitThread@ only; produced by @CombatThread@
     --   (@UnitKill@\/@UnitCollapse@ from wound ticks and resolution
-    --   events), @WorldThread@ (basic\/dig\/terrain edits, and the load
+    --   events), @WorldThread@ (basic\/dig\/terrain edits, #2490's
+    --   @World.Reaction.Occupants@ sending one
+    --   @UnitSolidifyOccupants@ per solidified tile, and the load
     --   publish's stale-queue discard) and @LuaThread@ (@unit.spawn@).
     --   __Shutdown ordering:__ the combat thread is a producer here, so
     --   it is stopped __before__ the unit thread that consumes this
@@ -117,11 +120,14 @@ data UnitCombatCapability = UnitCombatCapability
     --   rationale on 'ucCombatQueue'.
   , ucUtsRef           ∷ IORef UnitThreadState
     -- ^ Sim-side per-unit state (position, pose, activity, target,
-    --   path, @*Until@ timers). Single-thread-owned by @UnitThread@
-    --   outside a load publish (@WorldThread@) or a save capture
-    --   (@WorldThread@, read-only) — it lives on 'EngineEnv' rather
-    --   than inside the unit thread precisely so those two can reach
-    --   it. Also read by @LuaThread@ for @unit.getInfo@.
+    --   path, @*Until@ timers). WRITTEN by @UnitThread@ alone
+    --   outside a load publish (@WorldThread@) — it lives on
+    --   'EngineEnv' rather than inside the unit thread precisely so
+    --   other roles can reach it. Read by @WorldThread@ for a save
+    --   capture and, since #2490, for the solidification commit's
+    --   occupant resolution (@World.Reaction.Occupants@, which needs
+    --   the authoritative positions rather than the once-per-tick
+    --   render mirror), and by @LuaThread@ for @unit.getInfo@.
   , ucStatRNGRef       ∷ IORef StdGen
     -- ^ Runtime RNG for stat rolls, seeded from system entropy at
     --   startup — deliberately __not__ world-seeded, so stats are
@@ -160,7 +166,8 @@ data UnitCombatCapability = UnitCombatCapability
   , ucInjuryEventsRef  ∷ IORef (Seq Combat.Types.CombatEvent)
     -- ^ NON-combat injury stream (falls, hazards, wound-caused deaths)
     --   → Lua, reusing the @CombatEvent@ shape with the victim in
-    --   @target@. Produced by @UnitThread@ (falls), @LuaThread@
+    --   @target@. Produced by @UnitThread@ (falls, and #2490's deaths
+    --   at a solidifying cell), @LuaThread@
     --   (@unit.injure@, @injury.emit@) and reset by @WorldThread@'s
     --   load publish; __drained__ by @LuaThread@ via
     --   @injury.drainEvents@ into the injury-log UI, with the same

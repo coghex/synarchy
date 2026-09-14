@@ -166,7 +166,8 @@ injuryDrainEventsFn env = drainEventStream (ucInjuryEventsRef (toUnitCombatCapab
 --   Push a NON-COMBAT injury event for the injury log: a fall, a hazard,
 --   or a wound-caused death. `kind` is the event class
 --   ("fall" | "injure" | "death"); the rest fill the payload the
---   injury-log prose reads. Engine-side injury producers (Fall, unit.injure)
+--   injury-log prose reads. Engine-side injury producers (Fall,
+--   Unit.Thread.Command.Solidify's solidification deaths, unit.injure)
 --   push directly; this is the Lua entry point (e.g. failure-meter deaths
 --   in unit_resources). Returns true if the victim id was supplied.
 injuryEmitFn ∷ EngineEnv → Lua.LuaE Lua.Exception Lua.NumResults
