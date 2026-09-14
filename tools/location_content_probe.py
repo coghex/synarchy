@@ -77,7 +77,8 @@ location's chunk loads, end to end:
      rejection naming the location, the slot and the profile id, and the
      old session left live. Its four fixtures (a crate item, a loot
      profile, a DENSE location pairing them, and a container-free twin of
-     that location for the refusal) are the probe's own: no SHIPPED
+     that location, which is what makes the refusal reachable at all) are
+     the probe's own: no SHIPPED
      location authors a container entry yet, because PLC-10 owns the
      wooden crate and the ruin_small entry that will carry it.
   6. Location naming (#1101): a world with a #1092 language provenance
@@ -105,14 +106,14 @@ two concurrent runs collided on: `tools/run_probes.py --jobs N` and
 concurrency a supported mode. `--keep-artifacts` retains the directory
 instead, and names it, for diagnosing a failure -- which matters more
 here than for an ordinary artifact, because the engine log is not only
-diagnostics: two checks below ASSERT against it.
+diagnostics: three checks below ASSERT against it.
 
 Since #2095 this file is the stable FACADE: the CLI, the artifact guard,
-the eight-process sequence, and the compatibility exports other probes
+the eleven-process sequence, and the compatibility exports other probes
 import. Every scenario assertion belongs to an owner under
-`tools/location_content/` -- `content`, `knowledge`, `dispatch` and
-`naming` -- reached with the live port this file opened and the
-`ScenarioState` it threads between them. No owner boots an engine, and
+`tools/location_content/` -- `content`, `knowledge`, `dispatch`,
+`naming` and (since #2505) `container` -- reached with the live port this
+file opened and the `ScenarioState` it threads between them. No owner boots an engine, and
 nothing crosses between them through a module global.
 
 Usage:

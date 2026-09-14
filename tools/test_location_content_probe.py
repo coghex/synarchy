@@ -142,11 +142,13 @@ LEGACY_PATHS = (
     "/tmp/location_content_engine.log",
 )
 
-#: The eight fixtures, by the logical name `RunArtifacts.fixture` is
+#: The nine fixtures, by the logical name `RunArtifacts.fixture` is
 #: asked for, in SURFACE (file, line) order — which is the order the
-#: scans below read them in: the container owner's three (#2505's crate
-#: item, its loot profile, and the DENSE location pairing them), then
-#: the dispatch owner's four rejection fixtures and its `dense`.
+#: scans below read them in: the container owner's four (#2505's crate
+#: item, its loot profile, the DENSE location pairing them, and the
+#: container-free twin of that location the missing-profile refusal
+#: registers in place of it), then the dispatch owner's four rejection
+#: fixtures and its `dense`.
 #:
 #: Within each owner that IS registration order, which is what the two
 #: order checks below are actually about: the container trio must
@@ -154,7 +156,10 @@ LEGACY_PATHS = (
 #: container entry's item AND profile ids against the live registries and
 #: rejects the whole file on either), and the rejection four must keep
 #: phase 3's own order. Across owners the order is incidental — they
-#: register in different processes.
+#: register in different processes. The twin is not part of that trio at
+#: all: it is registered by a LATER process, in place of the real
+#: location, precisely so that process's loot-profile registry stays
+#: empty.
 FIXTURE_NAMES = (
     "crate_item", "crate_profile", "crate_location", "crate_location_noprofile",
     "bogus", "bogus_loot", "quinoa", "quinoa_loot", "dense",

@@ -1863,8 +1863,11 @@ name.
 
 ### Persistence
 
-`world-pages` v11 (v10 frozen by #2471 as `PageCoreDTOv10`; v9 frozen by
-#917 as
+`world-pages` v12 (v11 frozen by #2505 as
+`PageCoreDTOv11`/`WorldGenParamsDTOv8`/`LocationInstancesDTOv6`/
+`LocationInstanceDTOv6`, which is also where #2471's v10 freeze had its
+gen-params field repointed; v10 frozen by #2471 as `PageCoreDTOv10`;
+v9 frozen by #917 as
 `PageCoreDTOv9`/`WorldGenParamsDTOv7`/`LocationInstancesDTOv5`/
 `LocationInstanceDTOv5`/`LocationEncounterDTOv1`; v7 frozen by #916 as
 `PageCoreDTOv7`/`WorldGenParamsDTOv6`/`LocationInstancesDTOv4`/
@@ -1937,14 +1940,18 @@ the encounter-wide, once-per-episode notification state through
 `hasSpawnedLocationContents`/`markLocationContentsSpawned` remain
 compatibility wrappers resolving to the chunk's first instance.
 
-Persistence: `world-pages` v11, with v10's pre-sub-minute-remainder page
-core frozen as `PageCoreDTOv10` and v9's pre-significant-contents
-location record frozen as `LocationInstanceDTOv5` (its encounter, still
-carrying the clearance-notice flag, as `LocationEncounterDTOv1`) and
-v7's pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
-NOTHING the payload did not carry — `migrateWorldPagesV9` gains no
-significant obligations and `migrateWorldPagesV7` no encounter — rather
-than letting current content reinterpret a materialized world; #917's
+Persistence: `world-pages` v12, with v11's pre-container-shell location
+record frozen as `LocationInstanceDTOv6` (and the gen params carrying it
+as `WorldGenParamsDTOv8`, which v10's page core was repointed onto),
+v10's pre-sub-minute-remainder page core frozen as `PageCoreDTOv10`, and
+v9's pre-significant-contents location record frozen as
+`LocationInstanceDTOv5` (its encounter, still carrying the
+clearance-notice flag, as `LocationEncounterDTOv1`) and v7's
+pre-encounter one as `LocationInstanceDTOv4`. Each migration adds
+NOTHING the payload did not carry — `migrateWorldPagesV11` gains no
+container slots, `migrateWorldPagesV9` no significant obligations and
+`migrateWorldPagesV7` no encounter — rather than letting current content
+reinterpret a materialized world; #917's
 own §Guaranteed significant contents has the detail, including where
 the notice moves to. The frozen v1 DTO's per-chunk flags still decode
 PENDING and resolve against the registry at the load path's
@@ -2123,9 +2130,13 @@ location's exactly-once content lifecycle on a location that could then
 never be cleared. A hand-stamped location has no `LocationInstanceId`,
 so it owes nothing and its incidental contents are unaffected.
 
-**Persistence.** `world-pages` v11. `migrateWorldPagesV9` preserves every
-stored value, lifts the encounter's clearance-notice flag onto the
-instance, and adds NO obligations — reading them off today's YAML would
+**Persistence.** `world-pages` v12 — #2505 took it there, freezing the
+pre-container-shell shape as `PageCoreDTOv11`/`WorldGenParamsDTOv8`/
+`LocationInstancesDTOv6`/`LocationInstanceDTOv6`; the obligations below
+are unchanged by that bump and ride every one of those shapes.
+`migrateWorldPagesV9` preserves every stored value, lifts the
+encounter's clearance-notice flag onto the instance, and adds NO
+obligations — reading them off today's YAML would
 owe a materialized world an item it never spawned, permanently blocking
 a clearance the pre-#917 build had already granted. The v1
 reconstruction discards both for the same reason.
@@ -2194,14 +2205,17 @@ expose `significant` (always an array; `{slot, item, taken}` plus
 "not spawned yet" is expressed) beside `authors_clearance`,
 `clearance_satisfied` and `clear_event_emitted`. The predicate is
 REPORTED rather than left for callers to re-derive, because a second
-implementation is what would drift.
+implementation is what would drift. #2505 adds `containers` beside it,
+under the opposite omission rule; see §Pending container shells.
 
 ## Pending container shells (#2505)
 
-Enforced by hspec `--match "Location container shells"` — three layers in
+Enforced by hspec `--match "Location container shells"` — four layers in
 `Test.Headless.Location.ContainerShells`: a pure spec (placement, the
-authoring boundary, decode rules, the provenance graph, load-time profile
-validation, the v11→v12 migration), an engine spec driving the real
+authoring RULE SET, decode rules, the provenance graph, the load-time
+profile check, the v11→v12 migration), a YAML spec driving the real
+`engine.loadLocationYaml` against the live item and loot-profile
+registries, an engine spec driving the real
 `world.spawnLocationContainer` and the real `item.pickupGround` refusal,
 and a standalone stubbed-VM spec over `scripts/locations.lua`'s
 incidental dispatch — plus `--match "save migrations"`,
@@ -3816,9 +3830,11 @@ The rules that go with it:
   minute total will not fit an `Int`, a minute total that will not fit,
   or an overflowing calendar carry all return the exact input time,
   remainder and date with zero rolled days.
-- **Persistence.** `world-pages` v11 carries it (`pcTimeRemainder`,
-  `wpsTimeRemainder`); `migrateWorldPagesV10` loads every earlier payload
-  with none, which is the value those saves actually recorded. The
+- **Persistence.** `world-pages` has carried it since v11
+  (`pcTimeRemainder`, `wpsTimeRemainder`), and still does at the current
+  v12; `migrateWorldPagesV10` loads every pre-v11 payload with none,
+  which is the value those saves actually recorded, and
+  `migrateWorldPagesV11` carries a v11 one across unchanged. The
   component validator deliberately does not judge it: an out-of-domain
   stored value is repaired to zero by `World.Load.Stage`, with a warning
   naming the page, rather than costing the player the rest of the save.

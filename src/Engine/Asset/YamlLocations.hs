@@ -185,8 +185,8 @@ relBoundsContains ∷ LocationYamlBounds → Int → Int → Bool
 relBoundsContains b x y =
     x ≥ lybMinX b ∧ x ≤ lybMaxX b ∧ y ≥ lybMinY b ∧ y ≤ lybMaxY b
 
--- | The authoritative content-kind vocabulary (#1708): the four kinds
---   'scripts/locations.lua' can actually spawn. Closed here, at the
+-- | The authoritative content-kind vocabulary (#1708, #2505): the FIVE
+--   kinds 'scripts/locations.lua' can actually spawn. Closed here, at the
 --   same entry point that already validates bounds, fixed content
 --   positions, and anchor tags below, so an unrecognized kind fails
 --   the whole file's load rather than reaching a stamp-time warning
