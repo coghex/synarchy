@@ -130,6 +130,10 @@ contentEntry name n = ItemContentEntry
 --       it as authored, which is exactly what the simulation's
 --       saturation measure is about.
 --     * @plain_box@ — declares no @storage:@: the refusing shell.
+--     * @456@ — a perfectly ordinary storage container whose NAME is
+--       all digits, which is what makes @loot.simulate@'s refusal of a
+--       Lua @number@ container argument provable: were the argument
+--       coerced, @456@ would resolve rather than fail.
 probeItems ∷ ItemManager
 probeItems = ItemManager $ HM.fromList
     [ ("crate", (bareDef "crate" 2 5)
@@ -141,6 +145,8 @@ probeItems = ItemManager $ HM.fromList
         { idStorage = Just (ItemStorage 4 20)
         , idDefaultContents = [contentEntry "rations" 2] })
     , ("plain_box", bareDef "plain_box" 2 5)
+    , ("456", (bareDef "456" 2 5)
+        { idStorage = Just (ItemStorage 10 10) })
     , ("steel_bar", bareDef "steel_bar" 1 1)
     , ("rations", bareDef "rations" 1 1)
     , ("anvil", bareDef "anvil" 100 100)
@@ -207,6 +213,11 @@ neverProfile = profileOf "probe_never" (1, 1)
 -- | Every lot is bigger than any shell here.
 oversizedProfile ∷ LootProfileDef
 oversizedProfile = profileOf "probe_oversized" (1, 1) [("anvil", 1.0, 1)]
+
+-- | A profile whose ID is all digits, for the same reason @456@ is an
+--   item: a coerced @number@ profile argument would find it.
+digitIdProfile ∷ LootProfileDef
+digitIdProfile = profileOf "123" (1, 1) [("steel_bar", 1.0, 1)]
 
 -- | Names an item nobody registered.
 unknownItemProfile ∷ LootProfileDef
@@ -838,15 +849,43 @@ luaSpec = describe "Loot realization (loot.simulate)" $ do
             ask "return tostring(lootSimulate('probe_vectors', 'crate', 0))"
                 `shouldReturn` Just "nil"
 
-    -- The #2502 spelling of the gotcha `Lua.tointeger` is: it would
-    -- accept "8" and quietly run a simulation the caller did not ask
-    -- for in numbers.
+    -- Lua's three conversions all coerce across the number/string
+    -- line, so all three arguments are type-checked before they are
+    -- read. The two name cases need fixtures whose ids are all digits:
+    -- against any other registry a coerced number would fail to
+    -- resolve anyway, and the example would pass while proving
+    -- nothing.
     it "refuses a numeric STRING sample count rather than coercing it" $
       \env →
         withSimulateFixture env $ \core regs regsView wsc →
             runSimulateLua core regs regsView wsc
                 "return tostring(lootSimulate('probe_vectors', 'crate', '8'))"
                 `shouldReturn` Just "nil"
+
+    it "refuses a NUMBER profile id even when the digits name a \
+       \registered profile" $ \env →
+        withSimulateFixture env $ \core regs regsView wsc →
+            runSimulateLua core regs regsView wsc
+                "return tostring(lootSimulate(123, '456', 8))"
+                `shouldReturn` Just "nil"
+
+    it "refuses a NUMBER container name even when the digits name a \
+       \registered storage item" $ \env →
+        withSimulateFixture env $ \core regs regsView wsc →
+            runSimulateLua core regs regsView wsc
+                "return tostring(lootSimulate('123', 456, 8))"
+                `shouldReturn` Just "nil"
+
+    -- The control that keeps both refusals above honest: spelled as
+    -- STRINGS, those very same digits resolve and simulate.
+    it "and simulates those same digit ids when they arrive as \
+       \strings" $ \env →
+        withSimulateFixture env $ \core regs regsView wsc →
+            runSimulateLua core regs regsView wsc
+                "local r = lootSimulate('123', '456', 8)\n\
+                \if r == nil then return 'nil' end\n\
+                \return r.samples .. '/' .. #r.weight_histogram"
+                `shouldReturn` Just "8/10"
 
     it "pins the report for a profile nothing ever appears in" $ \env →
         withSimulateFixture env $ \core regs regsView wsc →
@@ -949,7 +988,7 @@ withSimulateFixture env action = do
     fixtureRegistry = foldl' (flip registerLootProfile)
                              emptyLootProfileRegistry
                              [ vectorProfile, neverProfile, oversizedProfile
-                             , saturatingProfile ]
+                             , saturatingProfile, digitIdProfile ]
 
 -- | Install the production 'lootSimulateFn' as a global and evaluate
 --   one chunk against it.

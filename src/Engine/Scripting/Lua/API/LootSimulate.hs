@@ -29,6 +29,7 @@ module Engine.Scripting.Lua.API.LootSimulate
     ) where
 
 import UPrelude
+import Data.ByteString (ByteString)
 import qualified Data.Text.Encoding as TE
 import qualified HsLua as Lua
 import Data.IORef (readIORef)
@@ -62,14 +63,21 @@ import World.Types (WorldState(..), WorldGenParams(..))
 --   >   rejected_by_item = { steel_bar = 41, … } }
 --
 --   @nil@, with nothing measured, for: a missing or non-string profile
---   id or container name; a sample count that is not a Lua @number@
---   (a numeric STRING is refused rather than coerced, because
---   'Lua.tointeger' would accept @"200"@ and a typo'd payload should
---   not silently run a simulation); a non-positive count; an unknown
---   profile id; an item definition that is unknown or declares no
---   @storage:@; and no active world page, or one with no generation
---   parameters yet — the same @nil@ @world.getSeed()@ answers there,
---   for the same reason.
+--   id or container name; a sample count that is not a Lua @number@;
+--   a non-positive count; an unknown profile id; an item definition
+--   that is unknown or declares no @storage:@; and no active world
+--   page, or one with no generation parameters yet — the same @nil@
+--   @world.getSeed()@ answers there, for the same reason.
+--
+--   __Every argument is type-checked before it is converted.__ All
+--   three of Lua's conversions coerce across the number\/string line:
+--   'Lua.tointeger' accepts @"200"@ and 'Lua.tostring' turns @123@
+--   into @"123"@. Either coercion would make a typo'd payload run a
+--   simulation the caller did not ask for — and for the two names it
+--   would do so silently, since a registry may legitimately hold a
+--   profile or an item definition whose id is all digits. So each
+--   argument's 'Lua.ltype' decides before its value is read, and a
+--   wrong type is the same @nil@ a missing one is.
 --
 --   Deterministic and side-effect-free in the sense that matters to a
 --   caller: same seed and same arguments, same table, and the engine's
@@ -78,8 +86,8 @@ lootSimulateFn ∷ CoreCapability → ContentRegistriesCapability
                → ContentRegistriesViewCapability → WorldSimCapability
                → Lua.LuaE Lua.Exception Lua.NumResults
 lootSimulateFn core regs regsView wsc = do
-    profileArg   ← Lua.tostring 1
-    containerArg ← Lua.tostring 2
+    profileArg   ← stringArg 1
+    containerArg ← stringArg 2
     countTy      ← Lua.ltype 3
     countArg     ← case countTy of
         Lua.TypeNumber → Lua.tointeger 3
@@ -106,6 +114,17 @@ lootSimulateFn core regs regsView wsc = do
                 Nothing      → Lua.pushnil ≫ return 1
                 Just summary → pushSummary summary ≫ return 1
         _ → Lua.pushnil ≫ return 1
+
+-- | One argument that must be an actual Lua @string@. 'Lua.tostring'
+--   would otherwise coerce a @number@ (and, for the error-object type,
+--   consult a metamethod), so the type is checked first and nothing
+--   else is.
+stringArg ∷ Lua.StackIndex → Lua.LuaE Lua.Exception (Maybe ByteString)
+stringArg ix = do
+    ty ← Lua.ltype ix
+    case ty of
+        Lua.TypeString → Lua.tostring ix
+        _              → pure Nothing
 
 -- | The generation seed of the ACTIVE world page, with exactly
 --   'Engine.Scripting.Lua.API.World.Clock.worldGetSeedFn''s no-argument
